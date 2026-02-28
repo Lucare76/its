@@ -1,0 +1,32 @@
+{
+  "name": "its-server",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node --max-old-space-size=4096 index.js",
+    "dev": "node --max-old-space-size=4096 index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
+    "seed": "node prisma/seed.js",
+    "backup:run": "node scripts/runBackup.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.4.1",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "imapflow": "^1.1.1",
+    "mailparser": "^3.7.4",
+    "node-fetch": "^2.6.12",
+    "multer": "^2.0.2",
+    "nodemailer": "^6.9.15",
+    "pdf-parse": "^1.1.1",
+    "pdfkit": "^0.15.2"
+  },
+  "devDependencies": {
+    "prisma": "^6.4.1"
+  }
+}

@@ -1,0 +1,21 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "prisma-generate-validation",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"prisma:generate"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "prisma-generate-validation",
+			"type": "shell",
+			"command": "npm run prisma:generate",
+			"isBackground": false
+		}
+	]
+}

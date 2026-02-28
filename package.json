@@ -1,0 +1,23 @@
+{
+  "name": "its-root",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -c \"blue,green\" \"npm:server\" \"npm:client\"",
+    "server": "npm --prefix server run dev",
+    "client": "npm --prefix client run dev",
+
+    "dev:reset": "npm run clean:ports && npm run dev",
+
+    "demo": "npm run clean:ports && concurrently \"npm:server\" \"npm:client\" \"npm run open:client\"",
+
+    "clean:ports": "kill-port 4000 5173 5174",
+
+    "open:client": "wait-on tcp:5173 && start \"\" \"http://localhost:5173\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "kill-port": "^2.0.1",
+    "wait-on": "^8.0.1"
+  }
+}
