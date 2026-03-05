@@ -45,6 +45,8 @@ export interface Service {
   meeting_point?: string | null;
   stops?: string[] | null;
   bus_plate?: string | null;
+  share_token?: string | null;
+  share_expires_at?: string | null;
   reminder_status?: ReminderStatus | null;
   message_id?: string | null;
   sent_at?: string | null;

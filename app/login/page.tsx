@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ROLE_COOKIE } from "@/lib/rbac";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
@@ -19,14 +19,22 @@ export default function LoginPage() {
   const [email, setEmail] = useState("operator@demo.com");
   const [role, setRole] = useState<UserRole>("operator");
   const [password, setPassword] = useState("");
+  const [forceDemoMode, setForceDemoMode] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("it-force-demo-login") === "true";
+  });
   const [message, setMessage] = useState<string>("");
+
+  useEffect(() => {
+    window.localStorage.setItem("it-force-demo-login", String(forceDemoMode));
+  }, [forceDemoMode]);
 
   const handleSignIn = async () => {
     setMessage("Caricamento...");
     const redirectTarget = new URLSearchParams(window.location.search).get("redirect") ?? "/dashboard";
-    if (!hasSupabaseEnv || !supabase) {
+    if (forceDemoMode || !hasSupabaseEnv || !supabase) {
       document.cookie = `${ROLE_COOKIE}=${role}; path=/; max-age=86400`;
-      setMessage("Accesso demo locale attivo (Supabase non configurato).");
+      setMessage("Accesso demo locale attivo.");
       router.push(redirectTarget);
       return;
     }
@@ -73,6 +81,14 @@ export default function LoginPage() {
             value={password}
             onChange={(event) => setPassword(event.target.value)}
           />
+        </label>
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={forceDemoMode}
+            onChange={(event) => setForceDemoMode(event.target.checked)}
+          />
+          Forza demo locale (bypass Supabase)
         </label>
         <button
           type="button"

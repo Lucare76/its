@@ -5,9 +5,33 @@ import "@/lib/env-presence-log";
 import "leaflet/dist/leaflet.css";
 import "./globals.css";
 
+const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") || "https://example.com";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(appUrl),
   title: "Ischia Transfer Beta",
-  description: "Demo professionale per agenzie transfer"
+  description: "Demo professionale per agenzie transfer",
+  openGraph: {
+    title: "Ischia Transfer Beta",
+    description: "Gestione transfer Ischia con dispatch, driver app e reminder WhatsApp.",
+    url: appUrl,
+    siteName: "Ischia Transfer",
+    type: "website",
+    images: [
+      {
+        url: "/opengraph-image",
+        width: 1200,
+        height: 630,
+        alt: "Ischia Transfer Beta"
+      }
+    ]
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Ischia Transfer Beta",
+    description: "Gestione transfer Ischia con dispatch, driver app e reminder WhatsApp.",
+    images: ["/opengraph-image"]
+  }
 };
 
 const navItems = [

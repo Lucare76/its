@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added
+- New script `pnpm seed:sample-pdf <path>` to ingest a local PDF via inbound endpoint and create a draft service end-to-end.
+- Public service share route `/share/service/[token]` with dynamic metadata + dedicated OG image for WhatsApp previews.
+- API for admin/operator to generate/revoke share links: `/api/services/share-link`.
+- Migration `0011_service_share_tokens.sql` adding `share_token` and `share_expires_at` to services.
 - Export services route now supports validated querystring filters on `GET /api/exports/services.xlsx` (`dateFrom`, `dateTo`, multi `status`, `ship`, `zone`, `hotel_id`, `search`, `serviceType`).
 - New migration `0009_inbound_attachments_and_needs_review.sql`:
   - status `needs_review`
@@ -12,6 +16,11 @@
 - Health API/UI now exposes `features.excel_export_route_enabled`.
 
 ### Changed
+- PDF/email parser improved for real-world Italian agency confirmations (e.g. `31-mag-26`, `Dalle14:20`, `Cliente`, `Cellulare/Tel.`) with normalized date/phone.
+- Inbox operator view now shows parser confidence badges (`low/medium/high`) per suggested field.
+- Dashboard service detail now includes WhatsApp share UX (generate link, copy, open WhatsApp, revoke).
+- Global metadata now includes full Open Graph and Twitter card defaults.
+- Health endpoint now checks share route and share OG image generator presence.
 - Export workbook generation updated with:
   - fixed sheets `Transfers` and `Bus Tours`
   - `Status events` sheet
@@ -27,4 +36,3 @@
 ### Fixed
 - Route handlers for both `/api/exports/services.xlsx` and `/api/exports/services` now support `GET` in addition to `POST`.
 - Service filters/export schemas now include `needs_review` status consistently.
-

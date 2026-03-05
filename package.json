@@ -13,6 +13,7 @@
     "e2e:ui": "pnpm exec playwright test --ui",
     "e2e:headed": "pnpm exec playwright test --headed",
     "seed:demo": "node scripts/seed-demo.mjs",
+    "seed:sample-pdf": "node scripts/process-sample-pdf.mjs",
     "db:bootstrap": "node scripts/db-sql-editor.mjs bootstrap",
     "db:seed": "node scripts/db-sql-editor.mjs seed"
   },

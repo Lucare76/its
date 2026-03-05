@@ -187,7 +187,8 @@ export async function POST(request: NextRequest) {
       porto: parsedFields.pickup ?? parsedFields.dropoff ?? null,
       nave: parsedFields.vessel ?? null,
       customer_name: parsedFields.customer_name ?? null,
-      phone: parsedFields.phone ?? null
+      phone: parsedFields.phone ?? null,
+      confidence: parsedFields.confidence ?? {}
     },
     review_status: "needs_review",
     attachments: parsed.data.attachments.map((item) => ({

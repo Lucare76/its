@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
 export async function GET() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -30,7 +32,9 @@ export async function GET() {
     WHATSAPP_ALLOW_TEXT_FALLBACK: Boolean(whatsappAllowTextFallback)
   };
   const features = {
-    excel_export_route_enabled: true
+    excel_export_route_enabled: true,
+    share_route_present: existsSync(path.join(process.cwd(), "app", "share", "service", "[token]", "page.tsx")),
+    share_og_image_present: existsSync(path.join(process.cwd(), "app", "share", "service", "[token]", "opengraph-image.tsx"))
   };
 
   if (!supabaseUrl || !serviceRoleKey) {

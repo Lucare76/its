@@ -43,6 +43,9 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
   const [search, setSearch] = useState("");
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const [serverServices, setServerServices] = useState<Service[] | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareMessage, setShareMessage] = useState<string>("");
+  const [shareUrlByServiceId, setShareUrlByServiceId] = useState<Record<string, string>>({});
 
   const assignedMap = useMemo(() => new Map(assignments.map((item) => [item.service_id, item])), [assignments]);
   const drivers = memberships.filter((member) => member.role === "driver");
@@ -119,6 +122,97 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
   }, [assignedMap, baseServices, driverFilter, serviceTypeFilter]);
 
   const selectedService = selectedServiceId ? services.find((item) => item.id === selectedServiceId) : null;
+  const selectedShareUrl = useMemo(() => {
+    if (!selectedService) return "";
+    const fromAction = shareUrlByServiceId[selectedService.id];
+    if (fromAction) return fromAction;
+    if (!selectedService.share_token) return "";
+    const base =
+      process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ??
+      (typeof window !== "undefined" ? window.location.origin : "");
+    if (!base) return "";
+    return `${base}/share/service/${selectedService.share_token}`;
+  }, [selectedService, shareUrlByServiceId]);
+
+  const openWhatsAppShare = (shareUrl: string, service: Service) => {
+    const hotelName = hotels.find((item) => item.id === service.hotel_id)?.name ?? "Hotel da confermare";
+    const text = [
+      "Dettagli transfer Ischia:",
+      `${service.date} ${service.time}`,
+      `Hotel: ${hotelName}`,
+      `Porto/Nave: ${service.vessel}`,
+      `Pax: ${service.pax}`,
+      `Link: ${shareUrl}`
+    ].join("\n");
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
+  };
+
+  const handleGenerateShareLink = async () => {
+    if (!selectedService || !hasSupabaseEnv || !supabase) {
+      setShareMessage("Share link disponibile solo con Supabase configurato.");
+      return;
+    }
+    setShareLoading(true);
+    setShareMessage("Generazione link...");
+    const { data, error } = await supabase.auth.getSession();
+    if (error || !data.session?.access_token) {
+      setShareLoading(false);
+      setShareMessage("Sessione non valida.");
+      return;
+    }
+    const response = await fetch("/api/services/share-link", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${data.session.access_token}`
+      },
+      body: JSON.stringify({
+        service_id: selectedService.id
+      })
+    });
+    const body = (await response.json().catch(() => null)) as { share_url?: string; error?: string } | null;
+    if (!response.ok || !body?.share_url) {
+      setShareLoading(false);
+      setShareMessage(body?.error ?? "Impossibile generare link.");
+      return;
+    }
+    setShareUrlByServiceId((prev) => ({
+      ...prev,
+      [selectedService.id]: body.share_url as string
+    }));
+    setShareLoading(false);
+    setShareMessage("Link generato.");
+  };
+
+  const handleRevokeShareLink = async () => {
+    if (!selectedService || !hasSupabaseEnv || !supabase) return;
+    setShareLoading(true);
+    setShareMessage("Revoca link...");
+    const { data, error } = await supabase.auth.getSession();
+    if (error || !data.session?.access_token) {
+      setShareLoading(false);
+      setShareMessage("Sessione non valida.");
+      return;
+    }
+    const response = await fetch("/api/services/share-link", {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${data.session.access_token}`
+      },
+      body: JSON.stringify({
+        service_id: selectedService.id
+      })
+    });
+    if (!response.ok) {
+      setShareLoading(false);
+      setShareMessage("Revoca non riuscita.");
+      return;
+    }
+    setShareUrlByServiceId((prev) => ({ ...prev, [selectedService.id]: "" }));
+    setShareLoading(false);
+    setShareMessage("Link revocato.");
+  };
   const selectedTimeline = useMemo(() => {
     if (!selectedService) return [];
 
@@ -345,6 +439,42 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
             </>
           ) : null}
           <p className="text-sm">Note: {selectedService.notes}</p>
+          <div className="space-y-2 rounded-xl border border-border bg-surface-2 p-3">
+            <p className="text-sm font-semibold">Condivisione WhatsApp</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-secondary" disabled={shareLoading} onClick={() => void handleGenerateShareLink()}>
+                {shareLoading ? "..." : "Genera link WhatsApp"}
+              </button>
+              <button type="button" className="btn-secondary" disabled={shareLoading || !selectedShareUrl} onClick={() => void handleRevokeShareLink()}>
+                Revoca link
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={!selectedShareUrl}
+                onClick={() => {
+                  if (!selectedShareUrl) return;
+                  openWhatsAppShare(selectedShareUrl, selectedService);
+                }}
+              >
+                Apri WhatsApp
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={!selectedShareUrl}
+                onClick={() => {
+                  if (!selectedShareUrl) return;
+                  void navigator.clipboard.writeText(selectedShareUrl);
+                  setShareMessage("Link copiato.");
+                }}
+              >
+                Copia link
+              </button>
+            </div>
+            {selectedShareUrl ? <p className="break-all text-xs text-muted">{selectedShareUrl}</p> : <p className="text-xs text-muted">Nessun link attivo.</p>}
+            {shareMessage ? <p className="text-xs text-muted">{shareMessage}</p> : null}
+          </div>
           <h4 className="text-sm font-semibold">Timeline</h4>
           <Timeline events={selectedTimeline} />
         </aside>

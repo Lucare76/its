@@ -98,6 +98,12 @@ export default function InboxPage() {
     return services.find((service) => service.inbound_email_id === selectedEmail.id) ?? null;
   }, [selectedEmail, services]);
 
+  const confidenceBadgeClass = (level: string | undefined) => {
+    if (level === "high") return "bg-emerald-100 text-emerald-700";
+    if (level === "medium") return "bg-amber-100 text-amber-700";
+    return "bg-slate-100 text-slate-600";
+  };
+
   const handleSubmit = async (formData: FormData) => {
     if (!selectedEmail) return;
     setSubmitting(true);
@@ -257,11 +263,26 @@ export default function InboxPage() {
 
               <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-slate-700">
                 <p className="font-semibold text-slate-800">Suggerimenti parser (best effort)</p>
-                <p>Data/Ora: {parsedSuggestion?.date ?? "N/D"} {parsedSuggestion?.time ?? ""}</p>
-                <p>Pax: {parsedSuggestion?.pax ?? "N/D"} | Cliente: {parsedSuggestion?.customer_name ?? "N/D"}</p>
-                <p>Hotel/Dropoff: {parsedSuggestion?.hotel ?? parsedSuggestion?.dropoff ?? "N/D"}</p>
-                <p>Porto/Pickup: {parsedSuggestion?.pickup ?? "N/D"}</p>
-                <p>Nave: {parsedSuggestion?.vessel ?? "N/D"} | Telefono: {parsedSuggestion?.phone ?? "N/D"}</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  {[
+                    { label: "Data", value: parsedSuggestion?.date ?? "N/D", confidence: parsedSuggestion?.confidence?.date },
+                    { label: "Ora", value: parsedSuggestion?.time ?? "N/D", confidence: parsedSuggestion?.confidence?.time },
+                    { label: "Pax", value: parsedSuggestion?.pax?.toString() ?? "N/D", confidence: parsedSuggestion?.confidence?.pax },
+                    { label: "Cliente", value: parsedSuggestion?.customer_name ?? "N/D", confidence: parsedSuggestion?.confidence?.customer_name },
+                    { label: "Hotel", value: parsedSuggestion?.hotel ?? parsedSuggestion?.dropoff ?? "N/D", confidence: parsedSuggestion?.confidence?.hotel ?? parsedSuggestion?.confidence?.dropoff },
+                    { label: "Porto/Pickup", value: parsedSuggestion?.pickup ?? "N/D", confidence: parsedSuggestion?.confidence?.pickup },
+                    { label: "Nave", value: parsedSuggestion?.vessel ?? "N/D", confidence: parsedSuggestion?.confidence?.vessel },
+                    { label: "Telefono", value: parsedSuggestion?.phone ?? "N/D", confidence: parsedSuggestion?.confidence?.phone }
+                  ].map((item) => (
+                    <div key={item.label} className="rounded border border-blue-200 bg-white p-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{item.label}</p>
+                      <p className="mt-0.5 text-xs text-slate-800">{item.value}</p>
+                      <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${confidenceBadgeClass(item.confidence)}`}>
+                        {item.confidence ?? "low"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 md:grid-cols-2">

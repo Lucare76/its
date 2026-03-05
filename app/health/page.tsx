@@ -24,6 +24,8 @@ type HealthPayload = {
   };
   features: {
     excel_export_route_enabled: boolean;
+    share_route_present: boolean;
+    share_og_image_present: boolean;
   };
   timestamp: string;
 };
@@ -142,12 +144,18 @@ export default function HealthPage() {
       <article className="card p-4">
         <p className="text-xs uppercase tracking-[0.16em] text-muted">Features</p>
         <div className="mt-3 grid gap-2 md:grid-cols-2">
-          <div className="flex items-center justify-between rounded-xl border border-border bg-surface-2 px-3 py-2">
-            <span className="text-sm text-text">excel_export_route_enabled</span>
-            <span className={`rounded-full px-2 py-1 text-xs font-semibold ${featureState?.excel_export_route_enabled ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
-              {featureState?.excel_export_route_enabled ? "enabled" : "disabled"}
-            </span>
-          </div>
+          {[
+            { key: "excel_export_route_enabled", value: featureState?.excel_export_route_enabled },
+            { key: "share_route_present", value: featureState?.share_route_present },
+            { key: "share_og_image_present", value: featureState?.share_og_image_present }
+          ].map((item) => (
+            <div key={item.key} className="flex items-center justify-between rounded-xl border border-border bg-surface-2 px-3 py-2">
+              <span className="text-sm text-text">{item.key}</span>
+              <span className={`rounded-full px-2 py-1 text-xs font-semibold ${item.value ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                {item.value ? "enabled" : "disabled"}
+              </span>
+            </div>
+          ))}
         </div>
       </article>
 
