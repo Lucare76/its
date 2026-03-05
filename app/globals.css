@@ -1,0 +1,241 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --color-bg: #ffffff;
+  --color-surface: #ffffff;
+  --color-surface-2: #f8fafc;
+  --color-border: #e5e7eb;
+  --color-text: #0f172a;
+  --color-muted: #475569;
+  --color-primary: #2563eb;
+  --color-accent: #3b82f6;
+  --color-success: #16a34a;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+}
+
+.dark {
+  color-scheme: dark;
+  --color-bg: #020817;
+  --color-surface: rgba(15, 23, 42, 0.92);
+  --color-surface-2: rgba(30, 41, 59, 0.95);
+  --color-border: rgba(148, 163, 184, 0.26);
+  --color-text: #e2e8f0;
+  --color-muted: #94a3b8;
+  --color-primary: #3b82f6;
+  --color-accent: #38bdf8;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+}
+
+body {
+  @apply antialiased;
+  color: var(--color-text);
+  background:
+    radial-gradient(900px 320px at 0% -6%, rgba(59, 130, 246, 0.09) 0%, transparent 70%),
+    radial-gradient(900px 320px at 100% -10%, rgba(56, 189, 248, 0.08) 0%, transparent 70%),
+    linear-gradient(180deg, #fcfdff 0%, #f8fafc 100%);
+  min-height: 100vh;
+}
+
+.dark body {
+  background:
+    radial-gradient(900px 320px at 0% -6%, rgba(59, 130, 246, 0.16) 0%, transparent 70%),
+    radial-gradient(900px 320px at 100% -10%, rgba(56, 189, 248, 0.14) 0%, transparent 70%),
+    linear-gradient(180deg, #0b1225 0%, #020817 100%);
+}
+
+h1 {
+  @apply text-3xl font-bold tracking-[-0.02em] md:text-4xl leading-tight;
+}
+
+h2 {
+  @apply text-2xl font-bold tracking-[-0.02em];
+}
+
+h3 {
+  @apply text-xl font-semibold;
+}
+
+h4 {
+  @apply text-lg font-medium;
+}
+
+h5 {
+  @apply text-base font-medium;
+}
+
+h6 {
+  @apply text-sm font-medium;
+}
+
+p,
+label,
+li,
+td,
+th,
+input,
+select,
+textarea,
+button {
+  @apply text-sm leading-6;
+}
+
+.card {
+  @apply rounded-2xl border;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  backdrop-filter: blur(8px);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 6px 20px rgba(15, 23, 42, 0.06);
+  transition: all 200ms ease;
+}
+
+.card:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.92) inset,
+    0 10px 24px rgba(15, 23, 42, 0.1);
+  border-color: color-mix(in srgb, var(--color-primary) 24%, var(--color-border));
+}
+
+.kpi-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.kpi-card::after {
+  content: "";
+  position: absolute;
+  inset: auto -25% -40% -25%;
+  height: 80px;
+  background: radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.12) 0%, transparent 72%);
+  pointer-events: none;
+}
+
+.kpi-top-line {
+  @apply absolute inset-x-0 top-0 h-0.5 rounded-t-2xl;
+  background: linear-gradient(90deg, #2563eb, #60a5fa);
+}
+
+.kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.95) inset,
+    0 16px 28px rgba(15, 23, 42, 0.14);
+}
+
+.status-badge {
+  @apply inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em];
+}
+
+.status-badge-new {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.status-badge-assigned {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.status-badge-partito,
+.status-badge-arrivato {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.status-badge-completato {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-badge-problema {
+  background: #ffe4e6;
+  color: #be123c;
+}
+
+.status-badge-cancelled {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.input-saas {
+  @apply rounded-xl border px-3 py-2 outline-none transition-all duration-200;
+  border-color: var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  min-height: 42px;
+}
+
+.input-saas:focus {
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.btn-primary {
+  @apply rounded-xl px-4 py-2 font-medium text-white transition-all duration-200;
+  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+  box-shadow:
+    0 6px 16px rgba(37, 99, 235, 0.24),
+    0 0 0 1px rgba(59, 130, 246, 0.16) inset;
+  cursor: pointer;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  background: #1d4ed8;
+  box-shadow:
+    0 10px 20px rgba(37, 99, 235, 0.3),
+    0 0 0 1px rgba(59, 130, 246, 0.18) inset;
+}
+
+.btn-primary:active {
+  transform: scale(0.99);
+}
+
+.btn-secondary {
+  @apply rounded-xl border px-4 py-2 font-medium transition-all duration-200;
+  border-color: var(--color-border);
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.btn-secondary:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 24%, var(--color-border));
+  background: #f8fafc;
+  transform: scale(1.01);
+}
+
+button,
+a {
+  @apply transition-all duration-200;
+  cursor: pointer;
+}
+
+.live-dot {
+  @apply inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs font-medium;
+  color: #15803d;
+  background: #dcfce7;
+}
+
+.live-dot::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: #16a34a;
+  box-shadow: 0 0 0 6px rgba(22, 163, 74, 0.12);
+}
