@@ -6,6 +6,7 @@ export async function GET() {
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const inboundToken = process.env.EMAIL_INBOUND_TOKEN;
+  const cronSecret = process.env.CRON_SECRET;
   const whatsappToken = process.env.WHATSAPP_TOKEN;
   const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   const whatsappVerifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
@@ -19,6 +20,7 @@ export async function GET() {
     NEXT_PUBLIC_SUPABASE_ANON_KEY: Boolean(anonKey),
     SUPABASE_SERVICE_ROLE_KEY: Boolean(serviceRoleKey),
     EMAIL_INBOUND_TOKEN: Boolean(inboundToken),
+    CRON_SECRET: Boolean(cronSecret),
     WHATSAPP_TOKEN: Boolean(whatsappToken),
     WHATSAPP_PHONE_NUMBER_ID: Boolean(whatsappPhoneNumberId),
     WHATSAPP_VERIFY_TOKEN: Boolean(whatsappVerifyToken),

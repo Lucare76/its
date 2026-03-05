@@ -41,11 +41,18 @@ export interface SendReminderOptions {
   allowTextFallback?: boolean;
 }
 
+export interface SendWhatsAppMessageInput {
+  to: string;
+  template: string;
+  variables: Record<string, string>;
+  languageCode?: string;
+}
+
 export interface WhatsAppEventInsert {
   tenant_id: string;
   service_id: string | null;
   to_phone: string;
-  kind?: "24h" | "2h" | "manual" | "webhook" | null;
+  kind?: "24h" | "2h" | "24h_reminder" | "manual" | "webhook" | null;
   template: string | null;
   status: WhatsAppEventStatus;
   provider_message_id: string | null;
@@ -169,6 +176,32 @@ async function sendTemplateMessage(phoneNumberId: string, accessToken: string, t
     ok: response.ok,
     messageId: payload?.messages?.[0]?.id ?? null,
     error: payload?.error?.message ?? (response.ok ? null : `WhatsApp API error (${response.status})`)
+  };
+}
+
+export async function sendWhatsAppMessage(input: SendWhatsAppMessageInput) {
+  const phoneNumberId = mustEnv("WHATSAPP_PHONE_NUMBER_ID");
+  const accessToken = mustEnv("WHATSAPP_TOKEN");
+  const toPhone = normalizeE164(input.to);
+  const languageCode = normalizeLanguageCode(input.languageCode ?? process.env.WHATSAPP_TEMPLATE_LANGUAGE ?? "it");
+  const parameters = Object.values(input.variables).map((value) => ({
+    type: "text" as const,
+    text: String(value ?? "").slice(0, 1024)
+  }));
+
+  const response = await sendTemplateMessage(phoneNumberId, accessToken, toPhone, input.template, languageCode, parameters);
+  if (!response.ok) {
+    return {
+      ok: false as const,
+      error: response.error ?? "WhatsApp template send failed",
+      phoneE164: toPhone
+    };
+  }
+
+  return {
+    ok: true as const,
+    messageId: response.messageId,
+    phoneE164: toPhone
   };
 }
 

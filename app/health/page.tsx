@@ -13,6 +13,7 @@ type HealthPayload = {
     NEXT_PUBLIC_SUPABASE_ANON_KEY: boolean;
     SUPABASE_SERVICE_ROLE_KEY: boolean;
     EMAIL_INBOUND_TOKEN: boolean;
+    CRON_SECRET: boolean;
     WHATSAPP_TOKEN: boolean;
     WHATSAPP_PHONE_NUMBER_ID: boolean;
     WHATSAPP_VERIFY_TOKEN: boolean;
@@ -37,6 +38,7 @@ const envOrder: Array<keyof HealthPayload["env"]> = [
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
   "EMAIL_INBOUND_TOKEN",
+  "CRON_SECRET",
   "WHATSAPP_TOKEN",
   "WHATSAPP_PHONE_NUMBER_ID",
   "WHATSAPP_VERIFY_TOKEN",

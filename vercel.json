@@ -1,7 +1,8 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
     {
-      "path": "/api/cron/whatsapp-reminders",
+      "path": "/api/jobs/whatsapp-reminders",
       "schedule": "*/15 * * * *"
     }
   ]
