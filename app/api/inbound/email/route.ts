@@ -270,10 +270,8 @@ export async function POST(request: NextRequest) {
     .filter(Boolean)
     .join(" | ");
 
-  const draftPayload = {
+  const draftBasePayload = {
     tenant_id: tenantId,
-    inbound_email_id: data.id,
-    is_draft: true,
     date: draftDate,
     time: draftTime,
     service_type: "transfer",
@@ -286,16 +284,36 @@ export async function POST(request: NextRequest) {
     notes: draftNotes
   };
 
-  let draftInsert = await admin.from("services").insert({ ...draftPayload, status: "needs_review" }).select("id").single();
-  if (draftInsert.error && /invalid input value for enum .*service_status|needs_review/i.test(draftInsert.error.message ?? "")) {
-    draftInsert = await admin.from("services").insert({ ...draftPayload, status: "new" }).select("id").single();
+  const draftCandidates = [
+    { ...draftBasePayload, inbound_email_id: data.id, is_draft: true, status: "needs_review" },
+    { ...draftBasePayload, inbound_email_id: data.id, is_draft: true, status: "new" },
+    { ...draftBasePayload, status: "needs_review" },
+    { ...draftBasePayload, status: "new" }
+  ];
+
+  let draftInsert: { data: { id: string } | null; error: { message?: string } | null } = { data: null, error: null };
+  for (const candidate of draftCandidates) {
+    const attempt = await admin.from("services").insert(candidate).select("id").single();
+    draftInsert = attempt;
+    if (!attempt.error) break;
   }
 
   const { data: draftService, error: draftError } = draftInsert;
 
   if (draftError) {
     console.error("Inbound draft service insert error", draftError.message);
-    return NextResponse.json({ ok: false, error: "Inbound stored but draft service creation failed" }, { status: 500 });
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Inbound stored but draft service creation failed",
+        details: draftError.message ?? "unknown"
+      },
+      { status: 500 }
+    );
+  }
+
+  if (!draftService?.id) {
+    return NextResponse.json({ ok: false, error: "Inbound stored but draft service creation failed", details: "missing draft id" }, { status: 500 });
   }
 
   const updatedParsedJson = {
