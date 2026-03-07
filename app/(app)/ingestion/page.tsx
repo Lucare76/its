@@ -102,7 +102,10 @@ export default function IngestionPage() {
       | {
           ok?: boolean;
           id?: string;
+          tenant_id?: string;
           draft_service_id?: string;
+          extracted_text?: string | null;
+          parsed_json?: Record<string, unknown>;
           error?: string;
         }
       | null;
@@ -114,9 +117,10 @@ export default function IngestionPage() {
     }
 
     addInboundEmail({
-      tenant_id: "00000000-0000-0000-0000-000000000000",
+      tenant_id: body.tenant_id ?? "00000000-0000-0000-0000-000000000000",
       raw_text: rawEmail,
-      parsed_json: {
+      extracted_text: body.extracted_text ?? null,
+      parsed_json: (body.parsed_json ?? {
         source: "test-mailbox-flow",
         mailbox,
         from_email: fromEmail,
@@ -127,6 +131,27 @@ export default function IngestionPage() {
           mime_type: item.mime_type,
           size_bytes: item.size_bytes
         }))
+      }) as {
+        date?: string;
+        time?: string;
+        vessel?: string;
+        hotel?: string;
+        pickup?: string;
+        dropoff?: string;
+        pax?: number;
+        customer_name?: string;
+        phone?: string;
+        template_key?: string;
+        source?: string;
+        mailbox?: string;
+        from_email?: string;
+        subject?: string;
+        received_at?: string;
+        attachments?: Array<{
+          filename: string;
+          mime_type?: string;
+          size_bytes?: number;
+        }>;
       }
     });
 

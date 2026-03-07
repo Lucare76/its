@@ -287,5 +287,12 @@ export async function POST(request: NextRequest) {
   };
   await admin.from("inbound_emails").update({ parsed_json: updatedParsedJson }).eq("id", data.id).eq("tenant_id", tenantId);
 
-  return NextResponse.json({ ok: true, id: data.id, tenant_id: tenantId, draft_service_id: draftService.id });
+  return NextResponse.json({
+    ok: true,
+    id: data.id,
+    tenant_id: tenantId,
+    draft_service_id: draftService.id,
+    extracted_text: extractedText,
+    parsed_json: updatedParsedJson
+  });
 }
