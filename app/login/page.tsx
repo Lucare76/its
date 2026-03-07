@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { ROLE_COOKIE } from "@/lib/rbac";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { roleSchema } from "@/lib/validation";
@@ -15,7 +14,6 @@ const demoAccounts = [
 ] as const;
 
 export default function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("operator@demo.com");
   const [role, setRole] = useState<UserRole>("operator");
   const [password, setPassword] = useState("");
@@ -29,13 +27,22 @@ export default function LoginPage() {
     window.localStorage.setItem("it-force-demo-login", String(forceDemoMode));
   }, [forceDemoMode]);
 
+  const setRoleCookie = (nextRole: UserRole) => {
+    const secure = typeof window !== "undefined" && window.location.protocol === "https:";
+    document.cookie = `${ROLE_COOKIE}=${nextRole}; path=/; max-age=86400; samesite=lax${secure ? "; secure" : ""}`;
+  };
+
+  const hardRedirect = (target: string) => {
+    window.location.assign(target);
+  };
+
   const handleSignIn = async () => {
     setMessage("Caricamento...");
     const redirectTarget = new URLSearchParams(window.location.search).get("redirect") ?? "/dashboard";
     if (forceDemoMode || !hasSupabaseEnv || !supabase) {
-      document.cookie = `${ROLE_COOKIE}=${role}; path=/; max-age=86400`;
+      setRoleCookie(role);
       setMessage("Accesso demo locale attivo.");
-      router.push(redirectTarget);
+      hardRedirect(redirectTarget);
       return;
     }
     const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -43,8 +50,8 @@ export default function LoginPage() {
       setMessage(error.message);
       return;
     }
-    document.cookie = `${ROLE_COOKIE}=${role}; path=/; max-age=86400`;
-    router.push(redirectTarget);
+    setRoleCookie(role);
+    hardRedirect(redirectTarget);
   };
 
   return (
