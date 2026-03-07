@@ -1,194 +1,239 @@
-# ITS - Ischia Transfer Service
+# Ischia Transfer Beta
 
-Scaffold iniziale per il CMS gestionale richiesto. Questo repository contiene due cartelle principali:
+Beta vendibile per agenzie transfer.
 
-- `server` — backend Node.js + Express + Prisma (SQLite)
-- `client` — frontend Vite + React (demo UI per invio prenotazioni)
+## Stack
+- Next.js App Router + TypeScript strict + Tailwind + pnpm
+- Supabase Free (Auth + Postgres + RLS)
+- Leaflet + OpenStreetMap
+- Deploy target: Vercel Free
 
-Funzionalità incluse nel template:
-- Auth JWT con ruoli `AGENCY` e `OPERATOR`
-- Endpoint API `/api/auth` (register/login)
-- Endpoint API `/api/bookings` (crea/prendi/approva prenotazioni)
-- Endpoint API `/api/dispatch` (pianificazione mezzi su prenotazioni confermate)
-- Endpoint API `/api/hotels` (anagrafica hotel con coordinate geografiche)
-- Endpoint API `/api/vehicles` (flotta mezzi noleggio)
-- Endpoint API `/api/accounting` (estratti conto settimanali agenzie)
-- Export prenotazioni CSV (compatibile Excel) via `/api/bookings/export.csv`
-- Filtri + ordinamento + paginazione su prenotazioni (`status`, `service`, `dateFrom`, `dateTo`, `sortBy`, `sortDir`, `page`, `pageSize`)
-- KPI prenotazioni via `/api/bookings/kpi`
-- Import prenotazioni da file `/api/bookings/import` (`.csv`/`.pdf`, ruolo operatore)
-- Dashboard operatore con sezione `Dispatch e pianificazione mezzi`
-- Ordinamento fermate bus via geolocalizzazione hotel (`/api/dispatch/bus/ordered-stops`)
-- Raggruppamento automatico arrivi nave/treno con suggerimento mezzo (`/api/dispatch/grouped-arrivals`)
-- Database SQLite con Prisma
+## Setup locale
+0. Apri **questa** cartella (`ischia-transfer-beta`) come workspace root nel terminale/IDE.
+1. Copia `.env.example` in `.env.local`
+2. Configura variabili Supabase e token webhook
+3. `pnpm install`
+4. `pnpm dev`
 
-Come avviare (Windows):
+## Variabili ambiente
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `EMAIL_INBOUND_TOKEN`
+- `WHATSAPP_TOKEN`
+- `WHATSAPP_PHONE_NUMBER_ID`
+- `WHATSAPP_VERIFY_TOKEN`
+- `WHATSAPP_TEMPLATE_NAME` (default: `transfer_reminder`)
+- `WHATSAPP_TEMPLATE_LANGUAGE` (default: `it`)
+- `WHATSAPP_ALLOW_TEXT_FALLBACK` (`true|false`, default: `false`)
+- `WHATSAPP_CRON_SECRET`
+- `WHATSAPP_REMINDER_WINDOW_MINUTES` (default: `15`)
+- `WHATSAPP_REMINDER_2H_ENABLED` (`true|false`, default: `false`)
+- `NEXT_PUBLIC_REMINDER_ALERT_MINUTES` (default: `30`)
 
-Metodo veloce (consigliato):
+## Verifica produzione (Vercel)
+1. Apri `Vercel Dashboard -> Project -> Settings -> Environment Variables`.
+2. Verifica che siano presenti, per ogni ambiente richiesto (`Production` almeno):
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `EMAIL_INBOUND_TOKEN`
+- `WHATSAPP_TOKEN`
+- `WHATSAPP_PHONE_NUMBER_ID`
+- `WHATSAPP_VERIFY_TOKEN`
+- `WHATSAPP_TEMPLATE_LANGUAGE`
+- `WHATSAPP_ALLOW_TEXT_FALLBACK`
+3. Se aggiorni una variabile, fai `Redeploy` del progetto.
+4. Apri `/health` sull'app deployata e controlla:
+- `Server Check: OK`
+- `Client Check: OK`
+- env Supabase/Email/WhatsApp tutti `present`
 
-```bash
-cd c:\Users\user\Downloads\its
-npm install
-npm run dev
-```
+## Supabase
+### File SQL
+- Bootstrap schema: `supabase/bootstrap.sql`
+- Seed demo: `supabase/seed_demo.sql`
+- Migration service type v2: `supabase/migrations/0002_service_type_bus_tour.sql`
 
-Se trovi porte occupate (`EADDRINUSE`), usa:
+### Script helper locali
+- `pnpm db:bootstrap` -> mostra percorso file + istruzioni SQL Editor
+- `pnpm db:seed` -> mostra percorso file + istruzioni SQL Editor
 
-```bash
-npm run dev:reset
-```
+Nota: i comandi `db:*` non eseguono SQL automaticamente. L'esecuzione va fatta nel SQL Editor Supabase.
 
-Per avviare tutto e aprire automaticamente il browser:
+### Procedura click-by-click (SQL Editor)
+1. Vai su Supabase Dashboard del tuo progetto.
+2. Menu sinistro -> `SQL Editor`.
+3. Clicca `New query`.
+4. Esegui `pnpm db:bootstrap`.
+5. Copia tutto il contenuto di `supabase/bootstrap.sql`.
+6. Incolla nella query e clicca `Run`.
+7. Clicca di nuovo `New query`.
+8. Esegui `pnpm db:seed`.
+9. Copia tutto il contenuto di `supabase/seed_demo.sql`.
+10. Incolla nella query e clicca `Run`.
 
-```bash
-npm run demo
-```
+### Deploy note: Service Type v2 (transfer + bus_tour)
+Se il database esiste gia:
+1. Apri `SQL Editor` e esegui `supabase/migrations/0002_service_type_bus_tour.sql`.
+2. Questo script:
+- aggiunge `bus_tour` al tipo `service_type`
+- aggiunge colonne `tour_name`, `capacity`, `meeting_point`, `stops`, `bus_plate`
+- converte i legacy type (`excursion`, `shuttle`, `custom`) in `transfer`
+3. Facoltativo: riesegui `supabase/seed_demo.sql` per dati demo aggiornati.
 
-Apri poi `http://localhost:5173` nel browser.
+## Demo users
+### Creazione utenti demo in Supabase Auth
+1. Menu sinistro -> `Authentication` -> `Users`.
+2. Clicca `Add user`.
+3. Crea questi utenti con password `demo123`:
+- `admin@demo.com`
+- `operator@demo.com`
+- `driver@demo.com`
+- `agency@demo.com`
+4. Se richiesto, conferma l'email per ogni utente.
 
-1. Apri due terminali separati.
+### Collega utenti al tenant demo (memberships)
+1. Torna in `SQL Editor` -> `New query`.
+2. Copia/incolla il contenuto di `supabase/attach_demo_users.sql`.
+3. Clicca `Run`.
+4. Esegui questo passaggio solo dopo aver creato i 4 utenti in `Authentication -> Users`.
 
-2. Installare le dipendenze e avviare il server:
+### Configura `.env.local`
+1. In root progetto crea `.env.local` partendo da `.env.example`.
+2. Inserisci:
+- `NEXT_PUBLIC_SUPABASE_URL` dal progetto Supabase
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` da Project Settings -> API
+- `SUPABASE_SERVICE_ROLE_KEY` da Project Settings -> API
+- `EMAIL_INBOUND_TOKEN` a tua scelta
+3. Non committare `.env.local`.
 
-```bash
-cd c:\Users\user\Downloads\its\server
-npm install
-npm run prisma:generate
-npm run prisma:push
-npm run seed
-npm run dev
-```
+## Scope coperto
+- Landing pubblica con CTA, features, come funziona
+- Auth + RBAC ruoli admin/operator/driver/agency
+- Dashboard KPI + filtri + drawer + timeline
+- Nuova prenotazione + area agency + mie prenotazioni
+- Dispatch assegnazione driver/mezzo
+- Driver mobile-first con stati PARTITO/ARRIVATO/COMPLETATO
+- Mappa OSM con hotel + layer servizi + sidebar
+- Email ingestion endpoint + inbox UI + conversione servizio
+- WhatsApp Cloud API: invio reminder, webhook status, cron T-24h, alert mancata consegna
+- Configurazione tenant WhatsApp (template/lingua/2h/fallback testo) via UI admin
 
-3. Installare dipendenze e avviare il client:
+## WhatsApp Cloud API (MVP)
+Guida rapida completa: `docs/whatsapp-setup.md`
 
-```bash
-cd c:\Users\user\Downloads\its\client
-npm install
-npm run dev
-```
+### Endpoint
+- `POST /api/whatsapp/send`
+  - body: `{ "service_id": "<uuid>" }`
+  - auth: `Authorization: Bearer <Supabase access token>`
+  - RBAC: solo `admin`/`operator`
+  - aggiorna su `services`: `phone_e164`, `reminder_status`, `message_id`, `sent_at`
+  - registra eventi in `whatsapp_events`
+- `GET /api/whatsapp/webhook`
+  - verifica webhook Meta (`hub.mode`, `hub.verify_token`, `hub.challenge`)
+- `POST /api/whatsapp/webhook`
+  - riceve stati messaggio (`sent`, `delivered`, `read`, `failed`)
+  - aggiorna `services.reminder_status`
+  - registra eventi in `whatsapp_events`
+- `GET/POST /api/cron/whatsapp-reminders`
+  - job schedulato (Vercel cron) ogni 15 minuti
+  - invia reminder per servizi in finestra `24h` e opzionale `2h`
+  - evita doppio invio per fase usando `whatsapp_events.payload_json.phase`
+  - auth: `Authorization: Bearer <WHATSAPP_CRON_SECRET>`
+- `GET/POST /api/whatsapp/settings` (solo `admin`)
+  - salva configurazione tenant su `tenant_whatsapp_settings`
+
+### UI Admin
+- pagina `/settings/whatsapp`
+  - template default
+  - lingua template
+  - abilita/disabilita reminder 2h
+  - abilita/disabilita fallback messaggio testo
+
+### Configurazione webhook e cron
+1. In Meta Developer Dashboard configura il webhook a:
+   - `https://<tuo-dominio>/api/whatsapp/webhook`
+2. Inserisci in app env:
+   - `WHATSAPP_VERIFY_TOKEN` uguale al token usato in Meta
+3. Crea `vercel.json` con cron su:
+   - `/api/cron/whatsapp-reminders` ogni 15 minuti
+4. Imposta in Vercel lo stesso segreto usato per cron:
+   - `WHATSAPP_CRON_SECRET`
+5. Env scheduler opzionali:
+   - `WHATSAPP_REMINDER_WINDOW_MINUTES` (tolleranza finestra)
+   - `WHATSAPP_REMINDER_2H_ENABLED=true` per secondo promemoria a 2h
+
+### Stima costi (400 messaggi/settimana)
+- WhatsApp Cloud API usa pricing a conversazione/template (varia per paese e categoria).
+- Per 400 reminder/settimana, il costo settimanale tipico e nell'ordine di pochi euro fino a poche decine, a seconda di:
+  - categoria template
+  - paese dei destinatari
+  - eventuali free tier/conversazioni gratuite
+- Formula pratica:
+  - `costo_settimana = conversazioni_billed * prezzo_unitario`
+  - con 400 reminder: `400 * prezzo_unitario`
+- Verifica finale su pricing ufficiale Meta prima del go-live:
+  - https://business.whatsapp.com/products/platform-pricing
+
+## Qualita
+- Zod validation su form e webhook
+- Loading/empty/error states principali
+- Nessun segreto nel repository
+
+## Check
+- `pnpm lint`
+- `pnpm build`
+
+## Smoke E2E (Playwright)
+Suite coperta:
+- login
+- create service
+- assign driver
+- driver cambia stato
+- export excel (smoke in demo mode: verifica messaggio fallback senza Supabase)
+
+### Run locale
+1. Installa dipendenze:
+   - `pnpm install`
+2. Installa browser Playwright:
+   - `pnpm exec playwright install chromium`
+3. Esegui test:
+   - `pnpm e2e`
+
+Comandi utili:
+- UI mode: `pnpm e2e:ui`
+- headed: `pnpm e2e:headed`
 
 Note:
-- Credenziali operatore demo: `lucarenna76@gmail.com` / `operator123`
-- Recupero password:
-	- `POST /api/auth/forgot-password` con `email`
-	- `POST /api/auth/reset-password` con `token` e `newPassword`
-	- invio email reale via SMTP se configurato, altrimenti URL di reset nei log backend
-	- dopo reset riuscito, viene inviata email di conferma cambio password
-	- il sistema salva data e IP dell'ultimo cambio password (`/api/auth/me`)
-	- il link email usa `?resetToken=...` e il frontend precompila automaticamente il campo token
-	- nell'area prenotazioni c'è il bottone `Esporta CSV`
-	- nell'area prenotazioni sono disponibili filtri, ordinamento e paginazione
-	- operatore: bottone `Da validare` + upload file CSV/PDF per import massivo
-	- operatore: pianificazione dispatch con endpoint:
-		- `GET /api/dispatch` lista piani mezzi
-		- `GET /api/dispatch/unplanned` prenotazioni confermate non pianificate
-		- `POST /api/dispatch` crea piano mezzo
-		- `PUT /api/dispatch/:id` aggiorna piano mezzo
-		- `GET /api/dispatch/bus/ordered-stops?date=YYYY-MM-DD&vehicle=...` ordine fermate bus per distanza
-		- `GET /api/dispatch/port-shuttle?date=YYYY-MM-DD&port=ISCHIA_PORTO&service=transfer|bus|all` navetta porto-hotel da arrivi nave
-		  - porti disponibili: ISCHIA_PORTO, CASAMICCIOLA, FORIO, LACCO_AMENO, SANT_ANGELO
-		- `GET /api/dispatch/grouped-arrivals?date=YYYY-MM-DD&mode=SHIP|TRAIN&windowMinutes=30` gruppi arrivi e mezzo suggerito
-		- `POST /api/dispatch/grouped-arrivals/create-dispatch` crea piani dispatch in batch da un gruppo
-		- `GET /api/dispatch/vehicle-availability?vehicle=...&scheduledAt=...` verifica preventiva disponibilità mezzo
-		- `DELETE /api/dispatch/:id` elimina piano dispatch (operatore)
-	- contabilità / estratti conto:
-		- `GET /api/accounting/statements` lista estratti conto
-		- `POST /api/accounting/statements/generate-weekly` genera/aggiorna estratti della settimana precedente
-		- `GET /api/accounting/statements/:id/export.csv` export CSV estratto conto
-		- `GET /api/accounting/statements/:id/export.pdf` export PDF estratto conto
-		- `POST /api/accounting/statements/:id/send-email` invia estratto PDF via email (SMTP richiesto)
-	- anagrafica hotel/geolocalizzazione:
-		- `GET /api/hotels` lista hotel
-		- `POST /api/hotels` crea hotel (operatore)
-		- `POST /api/hotels/import-osm` importa strutture ricettive da OSM/Overpass (body opzionale: `{ "limit": 200 }`)
-		- `PUT /api/hotels/:id` aggiorna hotel (operatore)
-		- `PUT /api/bookings/:id/hotel` assegna hotel a prenotazione (operatore)
-		- `DELETE /api/bookings/:id` elimina prenotazione (operatore, solo senza dispatch)
-	- anagrafica flotta mezzi:
-		- `GET /api/vehicles` lista mezzi disponibili
-		- `POST /api/vehicles` crea mezzo (operatore)
-		- `PUT /api/vehicles/:id` aggiorna mezzo (operatore)
-		- `GET /api/vehicles/unavailability` lista indisponibilità mezzi
-		- `POST /api/vehicles/:id/unavailability` crea indisponibilità oraria mezzo
-		- `DELETE /api/vehicles/unavailability/:entryId` rimuove indisponibilità
-- Configurazione SMTP (file `server/.env`):
-	- `SMTP_HOST` (es. `smtp.gmail.com`)
-	- `SMTP_PORT` (`587` con TLS STARTTLS)
-	- `SMTP_SECURE` (`false` per 587)
-	- `SMTP_USER` (email SMTP)
-	- `SMTP_PASS` (App Password Gmail)
-	- `MAIL_FROM` mittente visibile
-	- `MAIL_LOGO_URL` logo opzionale mostrato nell'email
-	- backup giornaliero database SQLite:
-		- `DAILY_BACKUP_ENABLED` (`true`/`false`, default `true`)
-		- `DAILY_BACKUP_TIME` (formato `HH:mm`, default `02:30`)
-		- `BACKUP_DIR` (cartella backup relativa a `server`, default `backups`)
-		- `BACKUP_RETENTION_COUNT` (numero backup da mantenere, default `7`)
-		- backup manuale: `cd server && npm run backup:run`
-		- ingest email IMAP verso `Da validare`:
-			- endpoint manuale operatore: `POST /api/bookings/inbox/sync` (body opzionale: `{ "limit": 20 }`)
-			- scheduler automatico backend (polling):
-				- `IMAP_INGEST_ENABLED` (`true`/`false`, default `false`)
-				- `IMAP_HOST` (es. `imap.gmail.com`)
-				- `IMAP_PORT` (default `993`)
-				- `IMAP_SECURE` (`true` per SSL/TLS)
-				- `IMAP_USER` (utenza mailbox)
-				- `IMAP_PASS` (password/App Password)
-				- `IMAP_MAILBOX` (default `INBOX`)
-				- `IMAP_POLL_MINUTES` (default `5`)
-				- `IMAP_MAX_MESSAGES` (default `25`)
-				- `IMAP_MARK_SEEN` (`true`/`false`, default `true`)
-				- `IMAP_TLS_REJECT_UNAUTHORIZED` (`true`/`false`, default `true`; usa `false` solo se il provider usa certificati non trusted)
-				- `IMAP_DEFAULT_SERVICE` (`transfer`/`bus`, default `transfer`)
-			- campi email estratti automaticamente (best effort): servizio, pax, hotel, modalità viaggio (SHIP/TRAIN), riferimento viaggio, arrivo, prezzo
-			- deduplica su `Message-ID` email (`sourceMessageId`)
-	- nel form reset è disponibile il pulsante mostra/nascondi password
-	- template email responsive con supporto dark mode e footer legale automatico
-	- nel footer email il contatto supporto è cliccabile (`mailto`)
-- Per parsing automatico email/PDF avanzato e contabilità automatica saranno moduli separati da implementare.
-- Il dispatch ora impedisce assegnazioni su mezzi marcati indisponibili nel relativo intervallo orario.
-- Il dispatch applica un tempo cuscinetto tra servizi sullo stesso mezzo (`DISPATCH_BUFFER_MINUTES`, default `30`).
-- I dispatch con lo stesso identico orario restano consentiti per supportare i gruppi collettivi.
-- Se `prisma db push` non è eseguibile (binari bloccati), refresh token e audit log funzionano in fallback non persistente.
+- la config e2e avvia `pnpm dev` su porta `3123`;
+- per stabilita CI locale, le variabili Supabase sono forzate vuote nel webServer Playwright (modalita demo).
 
-Flotta iniziale pre-caricata (seed):
-- Kassbohrer Setra 315 HDH (55)
-- Mercedes O404 (55)
-- Mercedes 350 SHD (53)
-- Kassbohrer Setra 210 HD (39)
-- Mercedes 413 (17)
-- Mercedes 312 (12)
-- Mercedes E270 (4)
-- Mercedes Vito (8)
-- Mercedes V220 (7)
-- Mercedes E 270 (5)
+### CI
+Workflow presente:
+- `.github/workflows/e2e-smoke.yml`
 
-Formato import consigliato (`CSV` o testo tabellare in `PDF`):
-- `agencyEmail,service,passengers,hotelName,hotelId,travelMode,travelRef,arrivalAt,priceTotal`
-- `hotelName` o `hotelId` sono opzionali ma utili per i servizi bus/transfer
-- `travelMode` accetta `SHIP` o `TRAIN`; `arrivalAt` va in formato ISO (`2026-02-22T08:20:00Z`)
-- esempio: `agenzia@example.com,bus,3,Hotel Ischia Porto,,SHIP,SNAV 08:20,2026-02-22T08:20:00Z,95.50`
+Il job:
+1. installa dipendenze
+2. installa browser Chromium Playwright
+3. esegue `pnpm e2e`
+4. pubblica `playwright-report` come artifact
 
-Prossimi passi raccomandati (posso farli io):
-- Aggiungere DB e migrazioni (Postgres + Prisma o Sequelize)
-- Sistema utenti/ruoli (JWT + bcrypt)
-- Parser email/PDF (worker + queue)
-- Pagine per area agenzie e pannello operatore
+## Test manuale export Excel
+### Caso 1: admin (deve funzionare)
+1. Login come `admin@demo.com`.
+2. Vai in Dashboard o Services list e clicca `Export`.
+3. Imposta filtri (date, stato, nave/zona) e scarica.
+4. Verifica nel file:
+- fogli separati per tipo servizio (`transfer`, `escursione_bus`, ecc.)
+- foglio `status_events` con `service_id, timestamp, old_status, new_status, actor`
 
-Smoke test automatico (PowerShell):
-- `./smoke-test.ps1 -Mode quick` test rapido (health, auth, flotta, indisponibilità, availability, grouped endpoint)
-- `./smoke-test.ps1 -Mode full` test completo end-to-end (include batch dispatch con cleanup automatico)
-- `./smoke-test.ps1 -Mode full -ReportFormat json -ReportDir .\reports` esporta report JSON
-- `./smoke-test.ps1 -Mode full -ReportFormat both -ReportDir .\reports` esporta report JSON + CSV
-- `./smoke-test.ps1 -Mode full -MaxStepDurationMs 2000 -PerfMode warn` segnala step lenti senza fallire il test
-- `./smoke-test.ps1 -Mode full -MaxStepDurationMs 2000 -PerfMode fail` fallisce il test se uno step supera la soglia
-- esecuzione con credenziali sicure (`PSCredential`):
-	- `$op = Get-Credential`
-	- `$ag = Get-Credential`
-	- `./smoke-test.ps1 -Mode full -OperatorCredential $op -AgencyCredential $ag`
-- alternativa con variabili ambiente (senza argomenti password in chiaro):
-	- `$env:SMOKE_OPERATOR_PASSWORD="..."`
-	- `$env:SMOKE_AGENCY_PASSWORD="..."`
-	- `./smoke-test.ps1 -Mode full`
-	- nota: i fallback password in chiaro sono disattivati; senza credenziali sicure lo script termina con errore
-- KPI inclusi nel report: `durationSeconds`, `successRate`, `slowestSteps` e `DurationMs` per ogni step
+### Caso 2: agency (solo servizi associati)
+1. Login come `agency@demo.com`.
+2. Ripeti export con lo stesso range date.
+3. Verifica che nel file compaiano solo servizi associati all'utente agency (beta: servizi con eventi stato effettuati da quell'utente).
+
+### Caso 3: driver (deve essere bloccato)
+1. Login come `driver@demo.com`.
+2. Clicca `Export` e avvia download.
+3. Verifica messaggio errore user-friendly: ruolo non autorizzato all'export.

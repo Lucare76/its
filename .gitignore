@@ -1,4 +1,7 @@
-node_modules/
-dist/
-.env
-.DS_Store
+.vercel
+.env*.local
+.next
+node_modules
+playwright-report
+test-results
+*.log
