@@ -34,7 +34,8 @@ export default function InboxPage() {
     const client = supabase;
 
     const loadSupabaseData = async () => {
-      if (!hasSupabaseEnv || !client) {
+      const forceDemoMode = typeof window !== "undefined" && window.localStorage.getItem("it-force-demo-login") === "true";
+      if (forceDemoMode || !hasSupabaseEnv || !client) {
         if (!active) return;
         setInboundEmails(state.inboundEmails);
         setServices(state.services);
