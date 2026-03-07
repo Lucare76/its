@@ -15,6 +15,26 @@ Beta vendibile per agenzie transfer.
 3. `pnpm install`
 4. `pnpm dev`
 
+## Lavorare da Casa
+Checklist rapida su un nuovo PC:
+1. `git clone https://github.com/Lucare76/its.git`
+2. `cd its`
+3. `git checkout main && git pull`
+4. Crea `.env.local` (non committare) con almeno:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `EMAIL_INBOUND_TOKEN`
+5. `pnpm install`
+6. `pnpm dev --port 3010`
+7. Apri `http://localhost:3010`
+
+Smoke test inbound automatico (senza problemi di escaping `curl`):
+1. In `cmd`: `set EMAIL_INBOUND_TOKEN=<token_reale>`
+2. Opzionale: `set INBOUND_URL=https://ischia-transfer.vercel.app/api/inbound/email`
+3. Esegui: `pnpm inbound:test`
+4. Se `ok: true`, verifica su `/inbox` il `draft_service_id`.
+
 ## Variabili ambiente
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
