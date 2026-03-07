@@ -124,6 +124,7 @@ export default function InboxPage() {
   const handleSubmit = async (formData: FormData) => {
     if (!selectedEmail) return;
     setSubmitting(true);
+    setMessage("");
 
     const rawStops = String(formData.get("stops") ?? "");
     const parsedStops = rawStops
