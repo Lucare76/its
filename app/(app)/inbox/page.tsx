@@ -21,6 +21,7 @@ export default function InboxPage() {
   const [templateKey, setTemplateKey] = useState("agency-default");
   const [message, setMessage] = useState("Seleziona una email in arrivo.");
   const [submitting, setSubmitting] = useState(false);
+  const [hasLoadedInbox, setHasLoadedInbox] = useState(false);
 
   useEffect(() => {
     if (!message) return;
@@ -38,11 +39,18 @@ export default function InboxPage() {
         setInboundEmails(state.inboundEmails);
         setServices(state.services);
         setHotels(state.hotels);
+        setHasLoadedInbox(true);
         return;
       }
 
       const { data: userData, error: userError } = await client.auth.getUser();
-      if (userError || !userData.user || !active) return;
+      if (userError || !userData.user || !active) {
+        if (active) {
+          setMessage("Sessione non valida. Rifai login.");
+          setHasLoadedInbox(true);
+        }
+        return;
+      }
       setActorUserId(userData.user.id);
 
       const { data: membership, error: membershipError } = await client
@@ -51,7 +59,13 @@ export default function InboxPage() {
         .eq("user_id", userData.user.id)
         .maybeSingle();
 
-      if (membershipError || !membership?.tenant_id || !active) return;
+      if (membershipError || !membership?.tenant_id || !active) {
+        if (active) {
+          setMessage("Membership tenant non trovata.");
+          setHasLoadedInbox(true);
+        }
+        return;
+      }
       setTenantId(membership.tenant_id);
 
       const [emailsResult, servicesResult, hotelsResult] = await Promise.all([
@@ -63,12 +77,14 @@ export default function InboxPage() {
       if (!active) return;
       if (emailsResult.error || servicesResult.error || hotelsResult.error) {
         setMessage("Errore caricamento inbox.");
+        setHasLoadedInbox(true);
         return;
       }
 
       setInboundEmails((emailsResult.data ?? []) as InboundEmail[]);
       setServices((servicesResult.data ?? []) as Service[]);
       setHotels((hotelsResult.data ?? []) as Hotel[]);
+      setHasLoadedInbox(true);
     };
 
     void loadSupabaseData();
@@ -77,7 +93,7 @@ export default function InboxPage() {
     };
   }, [state.hotels, state.inboundEmails, state.services]);
 
-  const isLoading = hasSupabaseEnv ? inboundEmails.length === 0 && services.length === 0 && hotels.length === 0 : demoLoading;
+  const isLoading = hasSupabaseEnv ? !hasLoadedInbox : demoLoading;
   const selectedEmail = useMemo(
     () => inboundEmails.find((email) => email.id === selectedId) ?? inboundEmails[0] ?? null,
     [inboundEmails, selectedId]
