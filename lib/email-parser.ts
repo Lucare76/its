@@ -77,12 +77,28 @@ function extractRegexGroup(source: string, pattern?: RegExp, index = 1) {
   return value?.trim();
 }
 
+function cleanExtractedValue(raw?: string) {
+  if (!raw) return undefined;
+  let value = raw.replace(/\s+/g, " ").trim();
+  const stopAt = value.search(
+    /\s(?:data|ora|pax|tel(?:efono)?|phone|cliente|customer|pickup|pick up|drop ?off|dest(?:inazione)?|nave|vessel)\s*[:=-]/i
+  );
+  if (stopAt > 0) value = value.slice(0, stopAt).trim();
+  value = value.replace(/^[,:;.\-\s]+|[,:;.\-\s]+$/g, "");
+  if (value.length < 2) return undefined;
+  return value;
+}
+
 function buildParsingSource(rawText: string, extractedText?: string | null) {
   const parts = [rawText.trim()];
   if (extractedText?.trim()) {
     parts.push(extractedText.trim());
   }
-  return parts.filter(Boolean).join("\n\n---\n\n");
+  return parts
+    .filter(Boolean)
+    .join("\n\n---\n\n")
+    .replace(/\u00a0/g, " ")
+    .replace(/[–—]/g, "-");
 }
 
 function parseItalianDate(raw?: string) {
@@ -92,6 +108,17 @@ function parseItalianDate(raw?: string) {
   const day = match[1].padStart(2, "0");
   const month = italianMonths[match[2].toLowerCase()];
   if (!month) return undefined;
+  const yearRaw = match[3];
+  const year = yearRaw.length === 2 ? `20${yearRaw}` : yearRaw;
+  return `${year}-${month}-${day}`;
+}
+
+function parseSlashDate(raw?: string) {
+  if (!raw) return undefined;
+  const match = raw.match(/\b([0-3]?\d)[\/.-]([01]?\d)[\/.-](\d{2,4})\b/);
+  if (!match) return undefined;
+  const day = match[1].padStart(2, "0");
+  const month = match[2].padStart(2, "0");
   const yearRaw = match[3];
   const year = yearRaw.length === 2 ? `20${yearRaw}` : yearRaw;
   return `${year}-${month}-${day}`;
@@ -109,35 +136,39 @@ export function parseInboundEmail(rawText: string, templateKey?: string, extract
 
   const isoDateMatch = extractRegexGroup(parsingSource, template.date);
   const italianDateMatch = parsingSource.match(/\b\d{1,2}-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4}\b/i)?.[0];
-  const dateMatch = isoDateMatch ?? parseItalianDate(italianDateMatch);
+  const slashDateMatch = parsingSource.match(/\b[0-3]?\d[\/.-][01]?\d[\/.-]\d{2,4}\b/)?.[0];
+  const dateMatch = isoDateMatch ?? parseItalianDate(italianDateMatch) ?? parseSlashDate(slashDateMatch);
   if (isoDateMatch) confidence.date = "high";
   else if (dateMatch) confidence.date = "medium";
 
   const timeMatchRaw =
-    parsingSource.match(template.time ?? /\b([01]\d|2[0-3]):([0-5]\d)\b/i) ??
-    parsingSource.match(/(?:dalle|ore)\s*([01]?\d|2[0-3]):([0-5]\d)/i);
+    parsingSource.match(template.time ?? /\b([01]?\d|2[0-3])[:.h]([0-5]\d)\b/i) ??
+    parsingSource.match(/(?:dalle|ore|h)\s*([01]?\d|2[0-3])(?:[:.h]([0-5]\d))?/i);
   if (timeMatchRaw && parsingSource.match(template.time ?? /\b([01]\d|2[0-3]):([0-5]\d)\b/i)) confidence.time = "high";
   else if (timeMatchRaw) confidence.time = "medium";
 
-  const vesselPrimary = extractRegexGroup(parsingSource, template.vessel);
-  const vesselFallback = parsingSource.match(/\bCON\s+([A-Za-z][A-Za-z0-9]+)/i)?.[1]?.trim();
+  const vesselPrimary = cleanExtractedValue(extractRegexGroup(parsingSource, template.vessel));
+  const vesselFallback = cleanExtractedValue(parsingSource.match(/\bCON\s+([A-Za-z][A-Za-z0-9\s-]{1,40})/i)?.[1]);
   const vesselMatch = vesselPrimary ?? vesselFallback;
   if (vesselPrimary) confidence.vessel = "high";
   else if (vesselMatch) confidence.vessel = "medium";
 
-  const hotelPrimary = extractRegexGroup(parsingSource, template.hotel);
-  const hotelFallback = parsingSource.match(/dest:\s*([^\n]+)/i)?.[1]?.trim();
+  const hotelPrimary = cleanExtractedValue(extractRegexGroup(parsingSource, template.hotel));
+  const hotelFallback = cleanExtractedValue(
+    parsingSource.match(/(?:dest|destinazione|arrivo a)\s*[:=-]\s*([^\n]+)/i)?.[1] ?? parsingSource.match(/dest:\s*([^\n]+)/i)?.[1]
+  );
   const hotelMatch = hotelPrimary ?? hotelFallback;
   if (hotelPrimary) confidence.hotel = "high";
   else if (hotelMatch) confidence.hotel = "medium";
 
   const pickupMatch =
-    extractRegexGroup(parsingSource, template.pickup) ??
-    parsingSource.match(/M\.p\.\s*:\s*([^\n]+?)(?:\s+da:|$)/i)?.[1]?.trim();
+    cleanExtractedValue(extractRegexGroup(parsingSource, template.pickup)) ??
+    cleanExtractedValue(parsingSource.match(/M\.p\.\s*:\s*([^\n]+?)(?:\s+da:|$)/i)?.[1]);
   if (extractRegexGroup(parsingSource, template.pickup)) confidence.pickup = "high";
   else if (pickupMatch) confidence.pickup = "medium";
 
-  const dropoffMatch = extractRegexGroup(parsingSource, template.dropoff) ?? parsingSource.match(/dest:\s*([^\n]+)/i)?.[1]?.trim();
+  const dropoffMatch =
+    cleanExtractedValue(extractRegexGroup(parsingSource, template.dropoff)) ?? cleanExtractedValue(parsingSource.match(/dest:\s*([^\n]+)/i)?.[1]);
   if (extractRegexGroup(parsingSource, template.dropoff)) confidence.dropoff = "high";
   else if (dropoffMatch) confidence.dropoff = "medium";
 
@@ -149,8 +180,8 @@ export function parseInboundEmail(rawText: string, templateKey?: string, extract
   else if (paxMatchRaw) confidence.pax = "medium";
 
   const nameMatch =
-    extractRegexGroup(parsingSource, template.customer_name) ??
-    parsingSource.match(/Cliente:\s*([^\n]+)/i)?.[1]?.trim();
+    cleanExtractedValue(extractRegexGroup(parsingSource, template.customer_name)) ??
+    cleanExtractedValue(parsingSource.match(/Cliente:\s*([^\n]+)/i)?.[1]);
   if (extractRegexGroup(parsingSource, template.customer_name)) confidence.customer_name = "high";
   else if (nameMatch) confidence.customer_name = "medium";
 
@@ -162,7 +193,7 @@ export function parseInboundEmail(rawText: string, templateKey?: string, extract
 
   return {
     date: dateMatch,
-    time: timeMatchRaw ? `${timeMatchRaw[1]}:${timeMatchRaw[2]}` : undefined,
+    time: timeMatchRaw ? `${timeMatchRaw[1].padStart(2, "0")}:${(timeMatchRaw[2] ?? "00").padStart(2, "0")}` : undefined,
     vessel: vesselMatch,
     hotel: hotelMatch,
     pickup: pickupMatch,

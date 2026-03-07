@@ -58,6 +58,20 @@ function tooLarge(text: string, maxBytes: number) {
   return Buffer.byteLength(text, "utf8") > maxBytes;
 }
 
+function isValidIsoDate(value?: string) {
+  if (!value) return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function normalizeTimeOrDefault(value?: string) {
+  if (!value) return "09:00";
+  const match = value.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return "09:00";
+  return `${match[1].padStart(2, "0")}:${match[2]}`;
+}
+
 function rateLimited(ip: string) {
   const now = Date.now();
   const current = rateByIp.get(ip);
@@ -151,9 +165,10 @@ export async function POST(request: NextRequest) {
   const extractedText = pdfTexts.join("\n\n---\n\n") || null;
   const parsedFields = parseInboundEmail([parsed.data.subject, parsed.data.body_text].filter(Boolean).join("\n"), "agency-default", extractedText);
 
-  const draftDate = parsedFields.date ?? new Date().toISOString().slice(0, 10);
-  const draftTime = parsedFields.time ?? "09:00";
-  const draftPax = parsedFields.pax && parsedFields.pax > 0 ? parsedFields.pax : 1;
+  const draftDate = isValidIsoDate(parsedFields.date) ? (parsedFields.date as string) : new Date().toISOString().slice(0, 10);
+  const draftTime = normalizeTimeOrDefault(parsedFields.time);
+  const rawDraftPax = parsedFields.pax && parsedFields.pax > 0 ? parsedFields.pax : 1;
+  const draftPax = Math.max(1, Math.min(16, rawDraftPax));
   const draftCustomer = parsedFields.customer_name?.trim() || "Cliente da verificare";
   const draftPhone = parsedFields.phone?.trim() || "N/D";
   const draftVessel = parsedFields.vessel?.trim() || "Porto/Nave da verificare";
@@ -255,26 +270,28 @@ export async function POST(request: NextRequest) {
     .filter(Boolean)
     .join(" | ");
 
-  const { data: draftService, error: draftError } = await admin
-    .from("services")
-    .insert({
-      tenant_id: tenantId,
-      inbound_email_id: data.id,
-      is_draft: true,
-      date: draftDate,
-      time: draftTime,
-      service_type: "transfer",
-      direction: draftDirection,
-      vessel: draftVessel,
-      pax: draftPax,
-      hotel_id: fallbackHotelId,
-      customer_name: draftCustomer,
-      phone: draftPhone,
-      notes: draftNotes,
-      status: "needs_review"
-    })
-    .select("id")
-    .single();
+  const draftPayload = {
+    tenant_id: tenantId,
+    inbound_email_id: data.id,
+    is_draft: true,
+    date: draftDate,
+    time: draftTime,
+    service_type: "transfer",
+    direction: draftDirection,
+    vessel: draftVessel,
+    pax: draftPax,
+    hotel_id: fallbackHotelId,
+    customer_name: draftCustomer,
+    phone: draftPhone,
+    notes: draftNotes
+  };
+
+  let draftInsert = await admin.from("services").insert({ ...draftPayload, status: "needs_review" }).select("id").single();
+  if (draftInsert.error && /invalid input value for enum .*service_status|needs_review/i.test(draftInsert.error.message ?? "")) {
+    draftInsert = await admin.from("services").insert({ ...draftPayload, status: "new" }).select("id").single();
+  }
+
+  const { data: draftService, error: draftError } = draftInsert;
 
   if (draftError) {
     console.error("Inbound draft service insert error", draftError.message);
