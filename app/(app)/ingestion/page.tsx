@@ -6,13 +6,15 @@ import { inboundWebhookSchema } from "@/lib/validation";
 
 export default function IngestionPage() {
   const { addInboundEmail } = useDemoStore();
+  const defaultRawEmail =
+    "DATA 2026-03-02 ORA 15:30 NAVE Medmar HOTEL Hotel Forio 2 PAX 3 NOME Anna Bianchi TEL +39 333 5558899";
   const [token, setToken] = useState("");
   const [mailbox, setMailbox] = useState("test-mailbox@demo.local");
   const [templateKey, setTemplateKey] = useState("agency-default");
   const [fromEmail, setFromEmail] = useState("agency@demo.com");
   const [subject, setSubject] = useState("Nuovo transfer - arrivo");
   const [rawEmail, setRawEmail] = useState(
-    "DATA 2026-03-02 ORA 15:30 NAVE Medmar HOTEL Hotel Forio 2 PAX 3 NOME Anna Bianchi TEL +39 333 5558899"
+    defaultRawEmail
   );
   const [attachmentsRaw, setAttachmentsRaw] = useState('[{"filename":"voucher.pdf","mime_type":"application/pdf","size_bytes":128400}]');
   const [pdfAttachmentBase64, setPdfAttachmentBase64] = useState<string | null>(null);
@@ -48,10 +50,15 @@ export default function IngestionPage() {
       return;
     }
 
+    const safeBodyText =
+      pdfAttachmentBase64 && (rawEmail.trim().length === 0 || rawEmail.trim() === defaultRawEmail)
+        ? "Dettagli nel PDF allegato. Usa extracted_text."
+        : rawEmail;
+
     const payload = {
       subject,
       from: fromEmail,
-      body_text: rawEmail,
+      body_text: safeBodyText,
       body_html: "",
       attachments: attachments
         .map((item, index) => {
@@ -69,7 +76,7 @@ export default function IngestionPage() {
 
     const validated = inboundWebhookSchema.safeParse({
       tenant_id: "00000000-0000-0000-0000-000000000000",
-      raw_text: payload.body_text,
+      raw_text: safeBodyText,
       source: "test-mailbox-flow",
       template_key: templateKey,
       mailbox,
@@ -118,7 +125,7 @@ export default function IngestionPage() {
 
     addInboundEmail({
       tenant_id: body.tenant_id ?? "00000000-0000-0000-0000-000000000000",
-      raw_text: rawEmail,
+      raw_text: safeBodyText,
       extracted_text: body.extracted_text ?? null,
       parsed_json: (body.parsed_json ?? {
         source: "test-mailbox-flow",
