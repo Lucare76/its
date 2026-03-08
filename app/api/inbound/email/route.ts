@@ -173,7 +173,7 @@ export async function POST(request: NextRequest) {
   const draftCustomer = parsedFields.customer_name?.trim() || "Cliente da verificare";
   const draftPhone = parsedFields.phone?.trim() || "N/D";
   const draftVessel = parsedFields.vessel?.trim() || "Porto/Nave da verificare";
-  const draftDirection: "arrival" | "departure" = "arrival";
+  const draftDirection: "arrival" | "departure" = parsedFields.direction ?? "arrival";
 
   const { data: hotelsData } = await admin
     .from("hotels")
@@ -198,6 +198,7 @@ export async function POST(request: NextRequest) {
     parser_suggestions: {
       date: parsedFields.date ?? null,
       time: parsedFields.time ?? null,
+      direction: parsedFields.direction ?? null,
       pax: parsedFields.pax ?? null,
       hotel: parsedFields.hotel ?? null,
       porto: parsedFields.pickup ?? parsedFields.dropoff ?? null,
