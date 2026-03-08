@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { parseInboundEmail } from "@/lib/email-parser";
 import { extractPdfTextFromBase64, isPdfAttachment } from "@/lib/server/pdf-text";
+import { tryMatchAndApplyPricing } from "@/lib/server/pricing-matching";
 
 export const runtime = "nodejs";
 
@@ -321,6 +322,18 @@ export async function POST(request: NextRequest) {
     draft_service_id: draftService.id
   };
   await admin.from("inbound_emails").update({ parsed_json: updatedParsedJson }).eq("id", data.id).eq("tenant_id", tenantId);
+
+  await tryMatchAndApplyPricing(admin, {
+    tenantId,
+    inboundEmailId: data.id,
+    serviceId: draftService.id,
+    sourceText: [parsed.data.subject, parsed.data.body_text, extractedText ?? ""].filter(Boolean).join("\n"),
+    serviceType: "transfer",
+    direction: draftDirection,
+    date: draftDate,
+    time: draftTime,
+    pax: draftPax
+  });
 
   return NextResponse.json({
     ok: true,

@@ -16,6 +16,8 @@ const appNav = [
   { href: "/driver", label: "Driver", icon: "R" },
   { href: "/map", label: "Map", icon: "M" },
   { href: "/inbox", label: "Inbox", icon: "I" },
+  { href: "/pricing", label: "Pricing", icon: "T" },
+  { href: "/pricing/margins", label: "Margins", icon: "$" },
   { href: "/settings/whatsapp", label: "WA Settings", icon: "W" }
 ];
 

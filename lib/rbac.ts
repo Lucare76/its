@@ -17,6 +17,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/map", roles: ["admin", "operator", "agency"] },
   { prefix: "/ingestion", roles: ["admin", "operator"] },
   { prefix: "/inbox", roles: ["admin", "operator"] },
+  { prefix: "/pricing", roles: ["admin", "operator"] },
   { prefix: "/settings/whatsapp", roles: ["admin"] }
 ];
 
