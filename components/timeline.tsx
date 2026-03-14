@@ -24,7 +24,7 @@ export function Timeline({ events }: TimelineProps) {
           </div>
           {event.detail ? <p className="text-xs text-slate-600">{event.detail}</p> : null}
           <p className="text-xs text-slate-500">{new Date(event.at).toLocaleString("it-IT")}</p>
-          <p className="text-xs text-slate-500">By: {event.by ?? "system"}</p>
+          <p className="text-xs text-slate-500">Da: {event.by ?? "sistema"}</p>
         </li>
       ))}
     </ol>

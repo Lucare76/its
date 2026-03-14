@@ -48,6 +48,73 @@ export const serviceCreateSchema = z.object({
   }
 });
 
+export const agencyBookingServiceKindSchema = z.enum([
+  "transfer_port_hotel",
+  "transfer_airport_hotel",
+  "transfer_train_hotel",
+  "bus_city_hotel",
+  "excursion"
+]);
+
+export const agencyBookingCreateSchema = z
+  .object({
+    customer_first_name: z.string().min(2).max(80),
+    customer_last_name: z.string().min(2).max(80),
+    customer_phone: z.string().min(6).max(30),
+    customer_email: z.string().email().max(160).optional().or(z.literal("")),
+    pax: z.number().int().min(1).max(16),
+    hotel_id: z.string().uuid(),
+    booking_service_kind: agencyBookingServiceKindSchema,
+    arrival_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    arrival_time: z.string().regex(/^\d{2}:\d{2}$/),
+    departure_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    departure_time: z.string().regex(/^\d{2}:\d{2}$/),
+    transport_code: z.string().max(80).optional().or(z.literal("")),
+    bus_city_origin: z.string().max(120).optional().or(z.literal("")),
+    include_ferry_tickets: z.boolean().default(false),
+    ferry_outbound_code: z.string().max(80).optional().or(z.literal("")),
+    ferry_return_code: z.string().max(80).optional().or(z.literal("")),
+    excursion_title: z.string().max(160).optional().or(z.literal("")),
+    notes: z.string().max(2000),
+    agency_id: z.string().uuid().optional().or(z.literal(""))
+  })
+  .superRefine((value, ctx) => {
+    if (
+      (value.booking_service_kind === "transfer_airport_hotel" || value.booking_service_kind === "transfer_train_hotel") &&
+      (!value.transport_code || value.transport_code.trim().length < 2)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Numero volo/treno obbligatorio per aeroporto/stazione.",
+        path: ["transport_code"]
+      });
+    }
+    if (value.booking_service_kind === "bus_city_hotel" && (!value.bus_city_origin || value.bus_city_origin.trim().length < 2)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Citta di partenza bus obbligatoria.",
+        path: ["bus_city_origin"]
+      });
+    }
+    if (value.booking_service_kind === "excursion" && (!value.excursion_title || value.excursion_title.trim().length < 2)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Nome escursione obbligatorio.",
+        path: ["excursion_title"]
+      });
+    }
+
+    const arrivalDateTime = new Date(`${value.arrival_date}T${value.arrival_time}:00`);
+    const departureDateTime = new Date(`${value.departure_date}T${value.departure_time}:00`);
+    if (!Number.isNaN(arrivalDateTime.getTime()) && !Number.isNaN(departureDateTime.getTime()) && departureDateTime < arrivalDateTime) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Partenza non puo essere precedente all'arrivo.",
+        path: ["departure_date"]
+      });
+    }
+  });
+
 export const assignmentSchema = z.object({
   service_id: z.string().uuid(),
   driver_user_id: z.string().uuid(),

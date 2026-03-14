@@ -2,11 +2,22 @@
 
 Beta vendibile per agenzie transfer.
 
+## Stack ufficiale
+- Stack ufficiale: **Next.js + Supabase** (cartelle root `app/`, `components/`, `lib/`, `supabase/`).
+- Legacy congelato read-only: `server/` e `client/` (non usare per nuove feature).
+- Nota tecnica: [docs/official-stack.md](./docs/official-stack.md)
+
 ## Stack
 - Next.js App Router + TypeScript strict + Tailwind + pnpm
 - Supabase Free (Auth + Postgres + RLS)
 - Leaflet + OpenStreetMap
 - Deploy target: Vercel Free
+
+## Beta gratuita
+- La vetrina pubblica e deployabile su Vercel Hobby senza cron e senza backend obbligatorio.
+- Il form preventivo della beta funziona anche solo con `WhatsApp` e `mailto`, direttamente lato client.
+- Configurazione minima: `NEXT_PUBLIC_APP_URL` e `NEXT_PUBLIC_DISABLE_SUPABASE=true`
+- Nota completa: [docs/free-beta-deploy.md](./docs/free-beta-deploy.md)
 
 ## Setup locale
 0. Apri **questa** cartella (`ischia-transfer-beta`) come workspace root nel terminale/IDE.
@@ -224,10 +235,12 @@ Suite coperta:
 Comandi utili:
 - UI mode: `pnpm e2e:ui`
 - headed: `pnpm e2e:headed`
+- ops reali: `E2E_BASE_URL=http://127.0.0.1:3010 pnpm e2e:ops`
 
 Note:
 - la config e2e avvia `pnpm dev` su porta `3123`;
 - per stabilita CI locale, le variabili Supabase sono forzate vuote nel webServer Playwright (modalita demo).
+- per i test operativi reali PDF/dispatch usa un'app gia avviata con Supabase reale (`E2E_BASE_URL`) e credenziali demo valide in `.env.local`.
 
 ### CI
 Workflow presente:

@@ -1,12 +1,11 @@
 import type { UserRole } from "@/lib/types";
 
-export const ROLE_COOKIE = "it_role";
-
 export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/dashboard", roles: ["admin", "operator"] },
   { prefix: "/analytics", roles: ["admin", "operator"] },
   { prefix: "/onboarding", roles: ["admin", "operator"] },
-  { prefix: "/services/new", roles: ["admin", "operator", "agency"] },
+  { prefix: "/services/new", roles: ["admin", "operator"] },
+  { prefix: "/agency/new-booking", roles: ["admin", "agency"] },
   { prefix: "/agency", roles: ["admin", "agency"] },
   { prefix: "/agency/bookings", roles: ["admin", "agency"] },
   { prefix: "/dispatch", roles: ["admin", "operator"] },
@@ -17,6 +16,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/map", roles: ["admin", "operator", "agency"] },
   { prefix: "/ingestion", roles: ["admin", "operator"] },
   { prefix: "/inbox", roles: ["admin", "operator"] },
+  { prefix: "/pdf-imports", roles: ["admin", "operator"] },
   { prefix: "/pricing", roles: ["admin", "operator"] },
   { prefix: "/settings/whatsapp", roles: ["admin"] }
 ];
@@ -34,6 +34,9 @@ export function isAllowed(pathname: string, role: UserRole | null): boolean {
 
 export function parseRole(raw: string | undefined): UserRole | null {
   if (!raw) return null;
-  if (raw === "admin" || raw === "operator" || raw === "driver" || raw === "agency") return raw;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "admin" || normalized === "operator" || normalized === "driver" || normalized === "agency") {
+    return normalized;
+  }
   return null;
 }

@@ -1789,7 +1789,7 @@ export default function App(){
                   Tutte <span className="pill-count">{notifications.length}</span>
                 </button>
                 <button className={`btn btn-ghost ${notificationFilters.type === 'booking' ? 'active' : ''}`} onClick={() => setNotificationFilters({ ...notificationFilters, type: 'booking' })}>
-                  Booking <span className="pill-count">{bookingNotifCount}</span>
+                  Prenotazioni <span className="pill-count">{bookingNotifCount}</span>
                 </button>
                 <button className={`btn btn-ghost ${notificationFilters.type === 'dispatch' ? 'active' : ''}`} onClick={() => setNotificationFilters({ ...notificationFilters, type: 'dispatch' })}>
                   Dispatch <span className="pill-count">{dispatchNotifCount}</span>
@@ -1983,7 +1983,7 @@ export default function App(){
             <section className="card" id="section-kpi">
               <div className="top-row">
                 <h2>Statistiche</h2>
-                <button className="btn" onClick={() => exportKpiTrendCsv(14)}>Export trend 14gg</button>
+                <button className="btn" onClick={() => exportKpiTrendCsv(14)}>Esporta trend 14gg</button>
               </div>
               <div className="grid kpi-grid">
                 <article className="kpi-card"><span>Totale</span><strong>{kpiLoading ? <span className="skeleton skeleton-inline" /> : kpi.total}</strong></article>
@@ -2120,7 +2120,7 @@ export default function App(){
                   </div>
                 )}
                 {importResult && (
-                  <p className="muted">Import: righe {importResult.importedRows}, create {importResult.created}, duplicate {importResult.skipped || 0}, errori {importResult.failed}</p>
+                  <p className="muted">Import: righe {importResult.importedRows}, create {importResult.created}, duplicati {importResult.skipped || 0}, errori {importResult.failed}</p>
                 )}
               </section>
             )}
@@ -2686,7 +2686,7 @@ export default function App(){
               <section className="card" id="section-audit">
                 <div className="top-row">
                   <h2>Audit attività</h2>
-                  <button className="btn" onClick={exportAuditCsv}>Export CSV</button>
+                  <button className="btn" onClick={exportAuditCsv}>Esporta CSV</button>
                 </div>
                 <div className="filters-grid">
                   <input
@@ -2695,7 +2695,7 @@ export default function App(){
                     onChange={e=>setAuditFilters({ ...auditFilters, action: e.target.value })}
                   />
                   <input
-                    placeholder="Entità (es. Booking)"
+                    placeholder="Entità (es. Prenotazione)"
                     value={auditFilters.entityType}
                     onChange={e=>setAuditFilters({ ...auditFilters, entityType: e.target.value })}
                   />

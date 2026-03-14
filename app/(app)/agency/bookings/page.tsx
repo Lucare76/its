@@ -1,75 +1,187 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useDemoStore } from "@/lib/use-demo-store";
-import type { ServiceType } from "@/lib/types";
+import { useEffect, useMemo, useState } from "react";
+import { DataTable, EmptyState, FilterBar, PageHeader } from "@/components/ui";
+import { getClientSessionContext } from "@/lib/supabase/client-session";
+import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+
+type BookingRow = {
+  id: string;
+  date: string;
+  time: string;
+  status: string;
+  pax: number;
+  customer_name: string;
+  service_type: "transfer" | "bus_tour";
+  vessel: string;
+  booking_service_kind: string | null;
+  arrival_date: string | null;
+  arrival_time: string | null;
+  departure_date: string | null;
+  departure_time: string | null;
+  transport_code: string | null;
+  bus_city_origin: string | null;
+  include_ferry_tickets: boolean | null;
+  email_confirmation_status: string | null;
+  email_confirmation_sent_at: string | null;
+  hotel_name: string;
+  hotel_zone: string | null;
+};
+
+const serviceKindLabels: Record<string, string> = {
+  transfer_port_hotel: "Porto - Hotel",
+  transfer_airport_hotel: "Aeroporto - Hotel",
+  transfer_train_hotel: "Stazione - Hotel",
+  bus_city_hotel: "Bus citta - Hotel",
+  excursion: "Escursione"
+};
+
+function formatDateTime(date: string | null, time: string | null) {
+  if (!date) return "-";
+  return `${date}${time ? ` ${time.slice(0, 5)}` : ""}`;
+}
 
 export default function AgencyBookingsPage() {
-  const { state, loading } = useDemoStore();
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
-  const [serviceTypeFilter, setServiceTypeFilter] = useState<ServiceType | "all">("all");
+  const [kindFilter, setKindFilter] = useState("all");
+  const [bookings, setBookings] = useState<BookingRow[]>([]);
 
-  const bookings = useMemo(() => {
-    return state.services.filter((service) => {
-      const bySearch = service.customer_name.toLowerCase().includes(search.toLowerCase());
-      const byType = serviceTypeFilter === "all" || (service.service_type ?? "transfer") === serviceTypeFilter;
-      return bySearch && byType;
+  useEffect(() => {
+    let active = true;
+
+    const load = async () => {
+      const session = await getClientSessionContext();
+      if (!active) return;
+
+      if (session.mode === "demo" || !hasSupabaseEnv || !supabase) {
+        setMessage("Area prenotazioni agenzia disponibile solo con Supabase reale.");
+        setBookings([]);
+        setLoading(false);
+        return;
+      }
+      if (session.role !== "agency" && session.role !== "admin") {
+        setMessage("Ruolo non autorizzato.");
+        setBookings([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) {
+        setMessage("Sessione non valida. Rifai login.");
+        setBookings([]);
+        setLoading(false);
+        return;
+      }
+
+      const response = await fetch("/api/agency/bookings?limit=1000", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const body = (await response.json().catch(() => null)) as { rows?: BookingRow[]; error?: string } | null;
+      if (!active) return;
+
+      if (!response.ok) {
+        setMessage(body?.error ?? "Errore caricamento prenotazioni.");
+        setBookings([]);
+        setLoading(false);
+        return;
+      }
+
+      setBookings(body?.rows ?? []);
+      setLoading(false);
+    };
+
+    void load();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const filtered = useMemo(() => {
+    return bookings.filter((row) => {
+      const bySearch =
+        row.customer_name.toLowerCase().includes(search.toLowerCase()) ||
+        row.hotel_name.toLowerCase().includes(search.toLowerCase()) ||
+        row.vessel.toLowerCase().includes(search.toLowerCase());
+      const byKind = kindFilter === "all" || row.booking_service_kind === kindFilter;
+      return bySearch && byKind;
     });
-  }, [search, serviceTypeFilter, state.services]);
+  }, [bookings, search, kindFilter]);
 
-  if (loading) return <div className="card p-4 text-sm text-slate-500">Caricamento prenotazioni...</div>;
+  if (loading) {
+    return <div className="card p-4 text-sm text-slate-500">Caricamento prenotazioni...</div>;
+  }
 
   return (
-    <section className="space-y-4">
-      <h1 className="text-2xl font-semibold">Le mie prenotazioni</h1>
-      <div className="card grid gap-3 p-3 md:grid-cols-2">
+    <section className="page-section">
+      <PageHeader
+        title="Le mie prenotazioni"
+        breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Agenzia", href: "/agency" }, { label: "Prenotazioni" }]}
+        subtitle="Elenco prenotazioni agenzia su Supabase reale."
+      />
+      <FilterBar colsClassName="md:grid-cols-2">
         <input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Cerca per cliente"
-          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          placeholder="Cerca cliente, hotel o riferimento"
+          className="input-saas"
         />
-        <select
-          value={serviceTypeFilter}
-          onChange={(event) => setServiceTypeFilter(event.target.value as ServiceType | "all")}
-          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-        >
+        <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)} className="input-saas">
           <option value="all">Tipo: tutti</option>
-          <option value="transfer">transfer</option>
-          <option value="bus_tour">bus_tour</option>
+          <option value="transfer_port_hotel">Porto - Hotel</option>
+          <option value="transfer_airport_hotel">Aeroporto - Hotel</option>
+          <option value="transfer_train_hotel">Stazione - Hotel</option>
+          <option value="bus_city_hotel">Bus citta - Hotel</option>
+          <option value="excursion">Escursione</option>
         </select>
-      </div>
-      {bookings.length === 0 ? (
-        <div className="card p-4 text-sm text-slate-500">Nessuna prenotazione trovata.</div>
+      </FilterBar>
+
+      {filtered.length === 0 ? (
+        <EmptyState title={message || "Nessuna prenotazione trovata."} compact />
       ) : (
-        <div className="card overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-left">
-              <tr>
-                <th className="px-4 py-3">Data</th>
-                <th className="px-4 py-3">Cliente</th>
-                <th className="px-4 py-3">Tipo</th>
-                <th className="px-4 py-3">Pax</th>
-                <th className="px-4 py-3">Nave</th>
-                <th className="px-4 py-3">Stato</th>
+        <DataTable toolbar={<p className="text-xs text-muted">Prenotazioni trovate: {filtered.length}</p>}>
+          <thead>
+            <tr>
+              <th className="px-4 py-3">Cliente</th>
+              <th className="px-4 py-3">Servizio</th>
+              <th className="px-4 py-3">Arrivo</th>
+              <th className="px-4 py-3">Partenza</th>
+              <th className="px-4 py-3">Hotel</th>
+              <th className="px-4 py-3">Pax</th>
+              <th className="px-4 py-3">Stato</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((row) => (
+              <tr key={row.id}>
+                <td className="px-4 py-3">
+                  <p className="line-clamp-2 text-safe-wrap">{row.customer_name}</p>
+                  <p className="text-xs text-slate-500">{row.transport_code || row.bus_city_origin || row.vessel}</p>
+                </td>
+                <td className="px-4 py-3">
+                  <p>{serviceKindLabels[row.booking_service_kind ?? ""] ?? "Transfer"}</p>
+                  <p className="text-xs text-slate-500">
+                    {row.include_ferry_tickets ? "Con biglietti nave" : "Senza biglietti nave"}
+                  </p>
+                </td>
+                <td className="px-4 py-3">{formatDateTime(row.arrival_date ?? row.date, row.arrival_time ?? row.time)}</td>
+                <td className="px-4 py-3">{formatDateTime(row.departure_date, row.departure_time)}</td>
+                <td className="px-4 py-3">
+                  <p>{row.hotel_name}</p>
+                  <p className="text-xs text-slate-500">{row.hotel_zone ?? "-"}</p>
+                </td>
+                <td className="px-4 py-3">{row.pax}</td>
+                <td className="px-4 py-3">
+                  <p className="uppercase">{row.status}</p>
+                  <p className="text-xs text-slate-500">{row.email_confirmation_status ?? "-"}</p>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {bookings.map((service) => (
-                <tr key={service.id} className="border-t border-slate-100">
-                  <td className="px-4 py-3">
-                    {service.date} {service.time}
-                  </td>
-                  <td className="px-4 py-3">{service.customer_name}</td>
-                  <td className="px-4 py-3 uppercase">{service.service_type ?? "transfer"}</td>
-                  <td className="px-4 py-3">{service.pax}</td>
-                  <td className="px-4 py-3">{service.vessel}</td>
-                  <td className="px-4 py-3 uppercase">{service.status}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </DataTable>
       )}
     </section>
   );

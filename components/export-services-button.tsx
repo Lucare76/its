@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { SERVICE_STATUS_LABELS, SERVICE_TYPE_LABELS } from "@/lib/ui-labels";
 
 type ServiceTypeFilter = "all" | "transfer" | "bus_tour";
 type StatusFilter = "new" | "assigned" | "partito" | "arrivato" | "completato" | "problema" | "cancelled" | "needs_review";
@@ -33,7 +34,7 @@ export function ExportServicesButton({ defaultDateFrom, defaultDateTo, className
 
   const handleExport = async () => {
     if (!hasSupabaseEnv || !supabase) {
-      setMessage("Export disponibile solo con Supabase configurato.");
+      setMessage("Esportazione disponibile solo con Supabase configurato.");
       return;
     }
     if (isInvalidDateRange) {
@@ -73,7 +74,7 @@ export function ExportServicesButton({ defaultDateFrom, defaultDateTo, className
 
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null;
-        setMessage(body?.error ?? "Export fallito.");
+        setMessage(body?.error ?? "Esportazione fallita.");
         setIsLoading(false);
         return;
       }
@@ -92,10 +93,10 @@ export function ExportServicesButton({ defaultDateFrom, defaultDateTo, className
       link.remove();
       URL.revokeObjectURL(url);
 
-      setMessage("Export completato.");
+      setMessage("Esportazione completata.");
       setIsOpen(false);
     } catch {
-      setMessage("Errore durante l'export.");
+      setMessage("Errore durante l'esportazione.");
     } finally {
       setIsLoading(false);
     }
@@ -104,13 +105,13 @@ export function ExportServicesButton({ defaultDateFrom, defaultDateTo, className
   return (
     <div className={className}>
       <button type="button" onClick={() => setIsOpen((prev) => !prev)} className="btn-secondary">
-        Export
+        Esporta
       </button>
       {isOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="card w-full max-w-3xl space-y-4 p-4">
             <div className="flex items-center justify-between border-b border-border pb-2">
-              <h3 className="text-base font-semibold text-text">Export Excel .xlsx</h3>
+              <h3 className="text-base font-semibold text-text">Esporta Excel (.xlsx)</h3>
               <button type="button" onClick={() => setIsOpen(false)} className="btn-secondary px-3 py-1 text-sm">
                 Chiudi
               </button>
@@ -148,7 +149,7 @@ export function ExportServicesButton({ defaultDateFrom, defaultDateTo, className
                           );
                         }}
                       />
-                      {option}
+                      {SERVICE_STATUS_LABELS[option]}
                     </label>
                   ))}
                 </div>
@@ -156,9 +157,9 @@ export function ExportServicesButton({ defaultDateFrom, defaultDateTo, className
               <label className="text-xs text-muted">
                 Tipo servizio
                 <select className="input-saas mt-1 w-full" value={serviceType} onChange={(event) => setServiceType(event.target.value as ServiceTypeFilter)}>
-                  <option value="all">all</option>
-                  <option value="transfer">transfer</option>
-                  <option value="bus_tour">bus_tour</option>
+                  <option value="all">Tutti</option>
+                  <option value="transfer">{SERVICE_TYPE_LABELS.transfer}</option>
+                  <option value="bus_tour">{SERVICE_TYPE_LABELS.bus_tour}</option>
                 </select>
               </label>
               <label className="text-xs text-muted">
@@ -180,7 +181,7 @@ export function ExportServicesButton({ defaultDateFrom, defaultDateTo, className
                 />
               </label>
               <label className="text-xs text-muted md:col-span-3">
-                Search
+                Ricerca
                 <input
                   className="input-saas mt-1 w-full"
                   value={search}
@@ -196,7 +197,7 @@ export function ExportServicesButton({ defaultDateFrom, defaultDateTo, className
                 disabled={isLoading || isInvalidDateRange}
                 className="btn-primary disabled:opacity-50"
               >
-                {isLoading ? "Exporting..." : "Download .xlsx"}
+                {isLoading ? "Esportazione..." : "Scarica .xlsx"}
               </button>
             </div>
             {message ? <p className="text-xs text-muted">{message}</p> : null}

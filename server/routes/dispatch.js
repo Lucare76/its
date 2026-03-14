@@ -427,7 +427,7 @@ router.post('/', async (req, res) => {
       audience: 'AGENCY',
       message: `Dispatch assegnato per la prenotazione #${plan.bookingId}`,
     });
-  });
+  }
 
   return res.status(201).json(plan);
 });
@@ -502,7 +502,7 @@ router.put('/:id', async (req, res) => {
       audience: 'AGENCY',
       message: `Dispatch aggiornato per la prenotazione #${updated.bookingId}`,
     });
-  });
+  }
 
   return res.json(updated);
 });

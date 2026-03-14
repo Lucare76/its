@@ -53,7 +53,7 @@ export default function WhatsAppSettingsPage() {
       }
       if (!response.ok) {
         setLoading(false);
-        setMessage("Errore caricamento settings.");
+        setMessage("Errore caricamento impostazioni.");
         return;
       }
 
@@ -110,7 +110,7 @@ export default function WhatsAppSettingsPage() {
 
   return (
     <section className="space-y-4">
-      <h1 className="text-2xl font-semibold">WhatsApp Settings (Admin)</h1>
+      <h1 className="text-2xl font-semibold">Impostazioni WhatsApp (Admin)</h1>
       <p className="text-sm text-muted">{message}</p>
 
       {loading ? (

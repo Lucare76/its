@@ -40,9 +40,9 @@ async function main() {
   const filename = path.basename(samplePath);
 
   const payload = {
-    subject: `Inbound sample ${filename}`,
-    from: "agency@example.com",
-    body_text: "Import automatico da PDF allegato.",
+    subject: process.env.INBOUND_SUBJECT || `Inbound sample ${filename}`,
+    from: process.env.INBOUND_FROM || "rennasday@gmail.com",
+    body_text: process.env.INBOUND_BODY_TEXT || "Import automatico da PDF allegato.",
     attachments: [
       {
         filename,

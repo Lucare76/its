@@ -9,11 +9,53 @@ interface HotelListItem {
   name: string;
   zone: string;
   address: string;
-  lat: number;
-  lng: number;
+  city: string | null;
+  lat: number | null;
+  lng: number | null;
+  source: string | null;
+  source_osm_type: "node" | "way" | "relation" | null;
+  source_osm_id: number | null;
+  is_active: boolean;
 }
 
+interface HotelAlias {
+  id: string;
+  hotel_id: string;
+  alias: string;
+}
+
+type HotelEditDraft = {
+  name: string;
+  address: string;
+  city: string;
+  zone: string;
+  lat: string;
+  lng: string;
+  is_active: boolean;
+};
+
 const PAGE_SIZE = 20;
+
+function toEditDraft(hotel: HotelListItem): HotelEditDraft {
+  return {
+    name: hotel.name,
+    address: hotel.address,
+    city: hotel.city ?? "Ischia",
+    zone: hotel.zone ?? "Ischia Porto",
+    lat: hotel.lat == null ? "" : String(hotel.lat),
+    lng: hotel.lng == null ? "" : String(hotel.lng),
+    is_active: hotel.is_active
+  };
+}
+
+function formatCoord(value: number | null) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(5) : "N/D";
+}
+
+function isAddressIncomplete(address: string) {
+  const trimmed = address.trim().toLowerCase();
+  return trimmed.length < 6 || trimmed === "ischia";
+}
 
 export default function HotelsPage() {
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -25,8 +67,14 @@ export default function HotelsPage() {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [csvMessage, setCsvMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<HotelEditDraft | null>(null);
+  const [aliases, setAliases] = useState<HotelAlias[]>([]);
+  const [aliasHotelId, setAliasHotelId] = useState("");
+  const [aliasValue, setAliasValue] = useState("");
 
   const loadHotels = useCallback(
     async (currentTenantId: string, termInput: string, offset: number, append: boolean) => {
@@ -39,17 +87,16 @@ export default function HotelsPage() {
 
       let query = supabase
         .from("hotels")
-        .select("id,name,zone,address,lat,lng", { count: "exact" })
+        .select("id,name,zone,address,city,lat,lng,source,source_osm_type,source_osm_id,is_active", { count: "exact" })
         .eq("tenant_id", currentTenantId)
         .order("name", { ascending: true })
         .range(offset, nextLimit);
 
       if (term) {
-        query = query.or(`name.ilike.%${term}%,zone.ilike.%${term}%,address.ilike.%${term}%`);
+        query = query.or(`name.ilike.%${term}%,zone.ilike.%${term}%,address.ilike.%${term}%,city.ilike.%${term}%`);
       }
 
       const { data, count, error: queryError } = await query;
-
       if (queryError) {
         setError(queryError.message);
         append ? setLoadingMore(false) : setLoading(false);
@@ -63,6 +110,18 @@ export default function HotelsPage() {
     },
     []
   );
+
+  const loadAliases = useCallback(async (currentTenantId: string) => {
+    if (!supabase) return;
+    const { data, error: aliasError } = await supabase
+      .from("hotel_aliases")
+      .select("id,hotel_id,alias")
+      .eq("tenant_id", currentTenantId)
+      .order("alias", { ascending: true })
+      .limit(3000);
+    if (aliasError) return;
+    setAliases((data ?? []) as HotelAlias[]);
+  }, []);
 
   useEffect(() => {
     let isActive = true;
@@ -100,20 +159,20 @@ export default function HotelsPage() {
       }
 
       if (!isActive) return;
-
       setTenantId(membership.tenant_id);
       setRole(membership.role);
       setInitializing(false);
-      await loadHotels(membership.tenant_id, "", 0, false);
+      await Promise.all([loadHotels(membership.tenant_id, "", 0, false), loadAliases(membership.tenant_id)]);
     };
 
     void loadTenant();
     return () => {
       isActive = false;
     };
-  }, [loadHotels]);
+  }, [loadAliases, loadHotels]);
 
   const hasMore = items.length < totalCount;
+  const canManageHotels = role === "admin" || role === "operator";
   const groupedItems = useMemo(() => {
     const groups = new Map<string, HotelListItem[]>();
     for (const hotel of items) {
@@ -126,11 +185,21 @@ export default function HotelsPage() {
   }, [items]);
 
   const missingCoordsCount = items.filter((hotel) => isMissingCoordinates(hotel.lat, hotel.lng)).length;
+  const aliasByHotel = useMemo(() => {
+    const map = new Map<string, HotelAlias[]>();
+    for (const row of aliases) {
+      const bucket = map.get(row.hotel_id) ?? [];
+      bucket.push(row);
+      map.set(row.hotel_id, bucket);
+    }
+    return map;
+  }, [aliases]);
 
   const applyAutoFillMissingCoords = async () => {
     if (!tenantId || !supabase) return;
     setImporting(true);
-    setCsvMessage("");
+    setMessage("");
+    setError("");
 
     const { data, error: fetchError } = await supabase
       .from("hotels")
@@ -139,11 +208,19 @@ export default function HotelsPage() {
 
     if (fetchError) {
       setImporting(false);
-      setCsvMessage(fetchError.message);
+      setError(fetchError.message);
       return;
     }
 
-    const rows = (data ?? []) as HotelListItem[];
+    const rows = (data ?? []) as Array<{
+      id: string;
+      name: string;
+      address: string;
+      zone: string | null;
+      lat: number | null;
+      lng: number | null;
+    }>;
+
     const updates = rows
       .filter((hotel) => isMissingCoordinates(hotel.lat, hotel.lng) || !hotel.zone)
       .map((hotel) => {
@@ -160,7 +237,7 @@ export default function HotelsPage() {
 
     if (updates.length === 0) {
       setImporting(false);
-      setCsvMessage("Nessun hotel da aggiornare.");
+      setMessage("Nessun hotel da aggiornare.");
       return;
     }
 
@@ -168,7 +245,7 @@ export default function HotelsPage() {
     for (const row of updates) {
       const { error: updateError } = await supabase
         .from("hotels")
-        .update({ zone: row.zone, lat: row.lat, lng: row.lng })
+        .update({ zone: row.zone, lat: row.lat, lng: row.lng, updated_at: new Date().toISOString() })
         .eq("id", row.id)
         .eq("tenant_id", tenantId);
       if (!updateError) updated += 1;
@@ -176,7 +253,56 @@ export default function HotelsPage() {
 
     await loadHotels(tenantId, search, 0, false);
     setImporting(false);
-    setCsvMessage(`Aggiornati ${updated} hotel (auto-fill coordinate/zone).`);
+    setMessage(`Aggiornati ${updated} hotel (compilazione automatica coordinate/zona).`);
+  };
+
+  const triggerOverpassImport = async () => {
+    if (!supabase || !tenantId) return;
+    setImporting(true);
+    setMessage("");
+    setError("");
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) {
+        setError("Sessione non valida. Rifai login.");
+        setImporting(false);
+        return;
+      }
+
+      const response = await fetch("/api/admin/import-hotels-ischia", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({})
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            ok?: boolean;
+            error?: string;
+            report?: { created: number; updated: number; skipped: number; invalid: number; fetched: number };
+          }
+        | null;
+      if (!response.ok || !payload?.ok || !payload.report) {
+        setError(payload?.error ?? "Import OSM non riuscito.");
+        setImporting(false);
+        return;
+      }
+
+      const report = payload.report;
+      setMessage(
+        `Import OSM completato. Trovati: ${report.fetched}, creati: ${report.created}, aggiornati: ${report.updated}, saltati: ${report.skipped}, invalidi: ${report.invalid}.`
+      );
+      await loadHotels(tenantId, search, 0, false);
+      await loadAliases(tenantId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Errore import OSM.");
+    } finally {
+      setImporting(false);
+    }
   };
 
   const parseCsv = (raw: string) => {
@@ -203,13 +329,14 @@ export default function HotelsPage() {
   const handleCsvUpload = async (file: File) => {
     if (!tenantId || !supabase) return;
     setImporting(true);
-    setCsvMessage("");
+    setMessage("");
+    setError("");
 
     const csvText = await file.text();
     const rows = parseCsv(csvText);
     if (rows.length === 0) {
       setImporting(false);
-      setCsvMessage("CSV vuoto o formato non valido.");
+      setError("CSV vuoto o formato non valido.");
       return;
     }
 
@@ -220,11 +347,19 @@ export default function HotelsPage() {
 
     if (allHotelsError) {
       setImporting(false);
-      setCsvMessage(allHotelsError.message);
+      setError(allHotelsError.message);
       return;
     }
 
-    const allHotels = (allHotelsData ?? []) as HotelListItem[];
+    const allHotels = (allHotelsData ?? []) as Array<{
+      id: string;
+      name: string;
+      address: string;
+      zone: string;
+      lat: number | null;
+      lng: number | null;
+    }>;
+
     const indexedById = new Map(allHotels.map((hotel) => [hotel.id, hotel]));
     const indexedByName = new Map(allHotels.map((hotel) => [hotel.name.toLowerCase(), hotel]));
 
@@ -248,7 +383,8 @@ export default function HotelsPage() {
         zone: nextZone,
         address: row.address || target.address,
         lat: Number.isFinite(parsedLat) ? Number(parsedLat) : isMissingCoordinates(target.lat, target.lng) ? centroid.lat : target.lat,
-        lng: Number.isFinite(parsedLng) ? Number(parsedLng) : isMissingCoordinates(target.lat, target.lng) ? centroid.lng : target.lng
+        lng: Number.isFinite(parsedLng) ? Number(parsedLng) : isMissingCoordinates(target.lat, target.lng) ? centroid.lng : target.lng,
+        updated_at: new Date().toISOString()
       };
 
       const { error: updateError } = await supabase
@@ -264,16 +400,112 @@ export default function HotelsPage() {
       }
     }
 
-    await loadHotels(tenantId, search, 0, false);
+      await Promise.all([loadHotels(tenantId, search, 0, false), loadAliases(tenantId)]);
     setImporting(false);
-    setCsvMessage(`CSV import completato. Aggiornati: ${updated}. Skippati: ${skipped}.`);
+    setMessage(`Import CSV completato. Aggiornati: ${updated}. Saltati: ${skipped}.`);
+  };
+
+  const addAlias = async () => {
+    if (!tenantId || !supabase || !aliasHotelId || !aliasValue.trim()) return;
+    const alias = aliasValue.trim();
+    const aliasNormalized = alias
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/\p{Diacritic}/gu, "")
+      .replace(/[^\p{Letter}\p{Number}\s]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!aliasNormalized) {
+      setError("Alias non valido.");
+      return;
+    }
+    const { error: insertError } = await supabase.from("hotel_aliases").insert({
+      tenant_id: tenantId,
+      hotel_id: aliasHotelId,
+      alias,
+      alias_normalized: aliasNormalized,
+      source: "manual"
+    });
+    if (insertError) {
+      setError(insertError.message);
+      return;
+    }
+    setAliasValue("");
+    setMessage("Alias salvato.");
+    await loadAliases(tenantId);
+  };
+
+  const removeAlias = async (id: string) => {
+    if (!tenantId || !supabase) return;
+    const { error: deleteError } = await supabase.from("hotel_aliases").delete().eq("id", id).eq("tenant_id", tenantId);
+    if (deleteError) {
+      setError(deleteError.message);
+      return;
+    }
+    await loadAliases(tenantId);
+  };
+
+  const startEdit = (hotel: HotelListItem) => {
+    setEditingId(hotel.id);
+    setEditDraft(toEditDraft(hotel));
+    setMessage("");
+    setError("");
+  };
+
+  const saveEdit = async (hotelId: string) => {
+    if (!tenantId || !supabase || !editDraft) return;
+    setSaving(true);
+    setError("");
+
+    const parsedLat = Number(editDraft.lat);
+    const parsedLng = Number(editDraft.lng);
+    if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLng)) {
+      setSaving(false);
+      setError("Coordinate non valide.");
+      return;
+    }
+
+    const payload = {
+      name: editDraft.name.trim(),
+      normalized_name: editDraft.name.trim().toLowerCase().replace(/\s+/g, " "),
+      address: editDraft.address.trim(),
+      city: editDraft.city.trim() || "Ischia",
+      zone: editDraft.zone.trim() || "Ischia Porto",
+      lat: parsedLat,
+      lng: parsedLng,
+      is_active: editDraft.is_active,
+      updated_at: new Date().toISOString()
+    };
+
+    if (!payload.name || !payload.address) {
+      setSaving(false);
+      setError("Nome e indirizzo sono obbligatori.");
+      return;
+    }
+
+    const { error: updateError } = await supabase
+      .from("hotels")
+      .update(payload)
+      .eq("id", hotelId)
+      .eq("tenant_id", tenantId);
+
+    setSaving(false);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+
+    setEditingId(null);
+    setEditDraft(null);
+    setMessage("Hotel aggiornato.");
+    await loadHotels(tenantId, search, 0, false);
   };
 
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">Hotels</h1>
+          <h1 className="text-2xl font-semibold">Hotel</h1>
           <p className="text-sm text-slate-600">
             Totale: {totalCount} | Coordinate mancanti (pagina corrente): {missingCoordsCount}
           </p>
@@ -285,36 +517,42 @@ export default function HotelsPage() {
             onChange={(event) => {
               const nextSearch = event.target.value;
               setSearch(nextSearch);
-              if (tenantId) {
-                void loadHotels(tenantId, nextSearch, 0, false);
-              }
+              if (tenantId) void loadHotels(tenantId, nextSearch, 0, false);
             }}
             placeholder="Nome, zona, indirizzo"
-            className="ml-2 w-72 rounded-lg border border-slate-300 px-3 py-2"
+            className="ml-2 w-72 max-w-full rounded-lg border border-slate-300 px-3 py-2"
           />
         </label>
       </div>
 
-      {initializing || loading ? (
-        <div className="card p-4 text-sm text-slate-500">Caricamento hotel...</div>
-      ) : error ? (
-        <div className="card p-4 text-sm text-red-600">{error}</div>
-      ) : (
+      {initializing || loading ? <div className="card p-4 text-sm text-slate-500">Caricamento hotel...</div> : null}
+      {!initializing && !loading && error ? <div className="card p-4 text-sm text-red-600">{error}</div> : null}
+      {!initializing && !loading && message ? <div className="card p-4 text-sm text-emerald-700">{message}</div> : null}
+
+      {!initializing && !loading && !error ? (
         <>
-          {role === "admin" ? (
+          {canManageHotels ? (
             <article className="card space-y-3 p-4">
-              <h2 className="text-sm font-semibold uppercase tracking-[0.1em] text-slate-600">Admin geocoding tool</h2>
+              <h2 className="text-sm font-semibold uppercase tracking-[0.1em] text-slate-600">Strumenti admin hotel</h2>
               <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void triggerOverpassImport()}
+                  disabled={importing}
+                  className="input-saas font-medium disabled:opacity-50"
+                >
+                  {importing ? "Import in corso..." : "Importa hotel da OpenStreetMap"}
+                </button>
                 <button
                   type="button"
                   onClick={() => void applyAutoFillMissingCoords()}
                   disabled={importing}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium disabled:opacity-50"
+                  className="input-saas font-medium disabled:opacity-50"
                 >
-                  {importing ? "Aggiornamento..." : "Auto-fill missing lat/lng"}
+                  {importing ? "Aggiornamento..." : "Compila lat/lng mancanti"}
                 </button>
-                <label className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-slate-50">
-                  CSV upload (id,name,address,zone,lat,lng)
+                <label className="input-saas font-medium hover:bg-slate-50">
+                  Carica CSV (id,name,address,zone,lat,lng)
                   <input
                     type="file"
                     accept=".csv,text/csv"
@@ -330,57 +568,217 @@ export default function HotelsPage() {
               <p className="text-xs text-slate-500">
                 Zone supportate: {HOTEL_ZONES.join(", ")}. Se lat/lng mancano, viene usato il centroide zona.
               </p>
-              {csvMessage ? <p className="text-sm text-slate-700">{csvMessage}</p> : null}
+              <div className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                <select
+                  value={aliasHotelId}
+                  onChange={(event) => setAliasHotelId(event.target.value)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="">Seleziona hotel per alias</option>
+                  {items.map((hotel) => (
+                    <option key={hotel.id} value={hotel.id}>
+                      {hotel.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={aliasValue}
+                  onChange={(event) => setAliasValue(event.target.value)}
+                  placeholder="Alias manuale (nome alternativo)"
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+                <button type="button" onClick={() => void addAlias()} className="input-saas text-sm font-medium">
+                  Salva alias
+                </button>
+              </div>
             </article>
           ) : null}
 
-          {items.length === 0 ? (
-            <div className="card p-4 text-sm text-slate-500">Nessun hotel trovato.</div>
-          ) : (
-            groupedItems.map(([zone, hotels]) => (
-              <article key={zone} className="card overflow-x-auto">
-                <div className="border-b border-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
-                  {zone} ({hotels.length})
-                </div>
-                <table className="min-w-full text-sm">
-                  <thead className="bg-slate-50 text-left text-slate-600">
-                    <tr>
-                      <th className="px-3 py-2 font-medium">Name</th>
-                      <th className="px-3 py-2 font-medium">Address</th>
-                      <th className="px-3 py-2 font-medium">Lat</th>
-                      <th className="px-3 py-2 font-medium">Lng</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {hotels.map((hotel) => (
-                      <tr key={hotel.id} className="border-t border-slate-100">
-                        <td className="px-3 py-2">{hotel.name}</td>
-                        <td className="px-3 py-2">{hotel.address}</td>
-                        <td className="px-3 py-2">{hotel.lat.toFixed(5)}</td>
-                        <td className="px-3 py-2">{hotel.lng.toFixed(5)}</td>
+          {items.length === 0 ? <div className="card p-4 text-sm text-slate-500">Nessun hotel trovato.</div> : null}
+
+          {groupedItems.map(([zone, hotels]) => (
+            <article key={zone} className="card overflow-x-auto">
+              <div className="border-b border-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+                {zone} ({hotels.length})
+              </div>
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-left text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Nome</th>
+                    <th className="px-3 py-2 font-medium">Indirizzo</th>
+                    <th className="px-3 py-2 font-medium">Citta</th>
+                    <th className="px-3 py-2 font-medium">Lat</th>
+                    <th className="px-3 py-2 font-medium">Lng</th>
+                    <th className="px-3 py-2 font-medium">Fonte</th>
+                    <th className="px-3 py-2 font-medium">Alias</th>
+                    <th className="px-3 py-2 font-medium">Stato</th>
+                    <th className="px-3 py-2 font-medium">Azioni</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hotels.map((hotel) => {
+                    const isEditing = editingId === hotel.id && editDraft !== null;
+                    const hasMissingCoords = isMissingCoordinates(hotel.lat, hotel.lng);
+                    const hasWeakAddress = isAddressIncomplete(hotel.address);
+                    return (
+                      <tr key={hotel.id} className="border-t border-slate-100 align-top">
+                        <td className="max-w-72 px-3 py-2">
+                          {isEditing ? (
+                            <input
+                              value={editDraft.name}
+                              onChange={(event) => setEditDraft({ ...editDraft, name: event.target.value })}
+                              className="w-56 rounded-md border border-slate-300 px-2 py-1"
+                            />
+                          ) : (
+                            <span className="line-clamp-2 break-words">{hotel.name}</span>
+                          )}
+                        </td>
+                        <td className="max-w-80 px-3 py-2">
+                          {isEditing ? (
+                            <input
+                              value={editDraft.address}
+                              onChange={(event) => setEditDraft({ ...editDraft, address: event.target.value })}
+                              className="w-64 rounded-md border border-slate-300 px-2 py-1"
+                            />
+                          ) : (
+                            <span className="line-clamp-2 break-words">{hotel.address}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <input
+                              value={editDraft.city}
+                              onChange={(event) => setEditDraft({ ...editDraft, city: event.target.value })}
+                              className="w-32 rounded-md border border-slate-300 px-2 py-1"
+                            />
+                          ) : (
+                            hotel.city ?? "Ischia"
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <input
+                              value={editDraft.lat}
+                              onChange={(event) => setEditDraft({ ...editDraft, lat: event.target.value })}
+                              className="w-24 rounded-md border border-slate-300 px-2 py-1"
+                            />
+                          ) : (
+                            formatCoord(hotel.lat)
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <input
+                              value={editDraft.lng}
+                              onChange={(event) => setEditDraft({ ...editDraft, lng: event.target.value })}
+                              className="w-24 rounded-md border border-slate-300 px-2 py-1"
+                            />
+                          ) : (
+                            formatCoord(hotel.lng)
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className="rounded-md bg-slate-100 px-2 py-1 text-xs uppercase tracking-wide text-slate-600">
+                            {hotel.source ?? "manual"}
+                          </span>
+                          {hotel.source_osm_type && hotel.source_osm_id ? (
+                            <div className="mt-1 text-xs text-slate-500">
+                              {hotel.source_osm_type}:{hotel.source_osm_id}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-wrap gap-1">
+                            {(aliasByHotel.get(hotel.id) ?? []).map((alias) => (
+                              <button
+                                key={alias.id}
+                                type="button"
+                                onClick={() => (canManageHotels ? void removeAlias(alias.id) : undefined)}
+                                className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600"
+                                title={canManageHotels ? "Clicca per rimuovere alias" : "Alias"}
+                              >
+                                {alias.alias}
+                              </button>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <select
+                              value={editDraft.is_active ? "true" : "false"}
+                              onChange={(event) => setEditDraft({ ...editDraft, is_active: event.target.value === "true" })}
+                              className="w-24 rounded-md border border-slate-300 px-2 py-1"
+                            >
+                              <option value="true">Attivo</option>
+                              <option value="false">Disattivo</option>
+                            </select>
+                          ) : hotel.is_active ? (
+                            <span className="text-emerald-700">Attivo</span>
+                          ) : (
+                            <span className="text-slate-500">Disattivo</span>
+                          )}
+                          {hasMissingCoords ? <div className="text-xs text-amber-700">Coordinate da verificare</div> : null}
+                          {hasWeakAddress ? <div className="text-xs text-amber-700">Indirizzo incompleto</div> : null}
+                        </td>
+                        <td className="px-3 py-2">
+                          {canManageHotels ? (
+                            isEditing ? (
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  disabled={saving}
+                                  onClick={() => void saveEdit(hotel.id)}
+                                  className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium"
+                                >
+                                  {saving ? "Salvataggio..." : "Salva"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingId(null);
+                                    setEditDraft(null);
+                                  }}
+                                  className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                                >
+                                  Annulla
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => startEdit(hotel)}
+                                className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                              >
+                                Modifica
+                              </button>
+                            )
+                          ) : (
+                            <span className="text-xs text-slate-400">Solo admin/operator</span>
+                          )}
+                        </td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </article>
-            ))
-          )}
+                    );
+                  })}
+                </tbody>
+              </table>
+            </article>
+          ))}
 
           {hasMore ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!tenantId) return;
-                  void loadHotels(tenantId, search, items.length, true);
-                }}
-                disabled={loadingMore}
-                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium disabled:opacity-50"
-              >
+            <button
+              type="button"
+              onClick={() => {
+                if (!tenantId) return;
+                void loadHotels(tenantId, search, items.length, true);
+              }}
+              disabled={loadingMore}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium disabled:opacity-50"
+            >
               {loadingMore ? "Caricamento..." : "Carica altri"}
             </button>
           ) : null}
         </>
-      )}
+      ) : null}
     </section>
   );
 }

@@ -2,6 +2,8 @@ export interface ParsedInboundFields {
   date?: string;
   time?: string;
   direction?: "arrival" | "departure";
+  departure_date?: string;
+  departure_time?: string;
   vessel?: string;
   hotel?: string;
   pickup?: string;
@@ -50,7 +52,7 @@ const templates: ParsingTemplate[] = [
     hotel: /(?:hotel|dropoff|drop off)\s*[:=-]?\s*([A-Za-z0-9\s']+)/i,
     pickup: /(?:pickup|pick up|ritiro|partenza da)\s*[:=-]?\s*([A-Za-z0-9\s',.-]+)/i,
     dropoff: /(?:dropoff|drop off|arrivo a|destinazione)\s*[:=-]?\s*([A-Za-z0-9\s',.-]+)/i,
-    pax: /(?:pax|persone|passengers?)\s*[:=-]?\s*(\d{1,2})/i,
+    pax: /(?:pax|persone|passengers?)\s*[:=-]?\s*(\d{1,2})(?!\s*\/)/i,
     customer_name: /(?:nome|name|customer)\s*[:=-]?\s*([A-Za-z\s']+)/i,
     phone: /(?:tel|telefono|phone|mobile)\s*[:=-]?\s*(\+?\d[\d\s-]{6,})/i
   },
@@ -60,7 +62,7 @@ const templates: ParsingTemplate[] = [
     time: /\bora\s*[:=-]?\s*([01]\d|2[0-3]):([0-5]\d)\b/i,
     vessel: /\bnave\s*[:=-]?\s*([A-Za-z0-9\s]+)/i,
     hotel: /\bhotel\s*[:=-]?\s*([A-Za-z0-9\s']+)/i,
-    pax: /\bpax\s*[:=-]?\s*(\d{1,2})/i,
+    pax: /\bpax\s*[:=-]?\s*(\d{1,2})(?!\s*\/)/i,
     customer_name: /\bnome\s*[:=-]?\s*([A-Za-z\s']+)/i,
     phone: /\b(?:tel|telefono)\s*[:=-]?\s*(\+?\d[\d\s-]{6,})/i
   }
@@ -130,21 +132,83 @@ function normalizePhone(raw?: string) {
   return raw.replace(/\s+/g, " ").trim();
 }
 
+type TransferLeg = {
+  date?: string;
+  time?: string;
+  pickup?: string;
+  from?: string;
+  to?: string;
+  dest?: string;
+  direction?: "arrival" | "departure";
+};
+
+function inferDirectionFromLeg(leg: TransferLeg): "arrival" | "departure" | undefined {
+  const from = `${leg.from ?? ""} ${leg.pickup ?? ""}`.toLowerCase();
+  const dest = `${leg.dest ?? ""}`.toLowerCase();
+  const to = `${leg.to ?? ""}`.toLowerCase();
+
+  const departureHints = /(porto|stazione|aeroporto|napoli|molo)/i;
+  if (departureHints.test(dest)) return "departure";
+  if (departureHints.test(to)) return "departure";
+  if (departureHints.test(from)) return "arrival";
+  return undefined;
+}
+
+function extractTransferLegs(source: string): TransferLeg[] {
+  const legs: TransferLeg[] = [];
+  const lines = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const dateMatch = lines[index].match(/^Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})/i);
+    if (!dateMatch) continue;
+    const date = parseItalianDate(dateMatch[1]);
+    const detailCandidates = [index, index + 1, index + 2, index + 3];
+    const detailIndex = detailCandidates.find((lineIndex) => typeof lines[lineIndex] === "string" && /Dalle\s*[0-2]?\d[:.h][0-5]\d/i.test(lines[lineIndex])) ?? -1;
+    const detailLine = detailIndex >= 0 ? lines[detailIndex] : "";
+    if (!detailLine) continue;
+
+    const timeMatch = detailLine.match(/Dalle\s*([01]?\d|2[0-3])[:.h]([0-5]\d)/i);
+    let dest = cleanExtractedValue(detailLine.match(/\bdest:\s*(.+)$/i)?.[1]);
+    const nextLine = detailIndex >= 0 ? lines[detailIndex + 1] : undefined;
+    if (dest && dest.length <= 4 && nextLine && !/^(Il\s*\d|Dalle|Cliente:)/i.test(nextLine)) {
+      dest = cleanExtractedValue(`${dest} ${nextLine}`);
+    }
+    const leg: TransferLeg = {
+      date,
+      time: timeMatch ? `${timeMatch[1].padStart(2, "0")}:${timeMatch[2].padStart(2, "0")}` : undefined,
+      pickup: cleanExtractedValue(detailLine.match(/M\.p\.\s*:\s*(.+?)\s+da:/i)?.[1]),
+      from: cleanExtractedValue(detailLine.match(/\bda:\s*(.+?)\s+\ba:/i)?.[1]),
+      to: cleanExtractedValue(detailLine.match(/\ba:\s*(.+?)\s+\bdest:/i)?.[1]),
+      dest
+    };
+    leg.direction = inferDirectionFromLeg(leg);
+    legs.push(leg);
+  }
+  return legs;
+}
+
 export function parseInboundEmail(rawText: string, templateKey?: string, extractedText?: string | null): ParsedInboundFields {
   const template = chooseTemplate(templateKey);
   const parsingSource = buildParsingSource(rawText, extractedText);
   const confidence: ParsedInboundFields["confidence"] = {};
 
+  const transferLegs = extractTransferLegs(parsingSource);
+  const arrivalLeg = transferLegs.find((leg) => leg.direction === "arrival") ?? transferLegs[0];
+  const departureLeg = transferLegs.find((leg) => leg.direction === "departure") ?? transferLegs[1];
+
   const transferBlockMatch = parsingSource.match(
     /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})\s*\d*\s*TRANSFER\s*(STAZIONE\s*\/\s*HOTEL|HOTEL\s*\/\s*STAZIONE)?[\s\S]{0,180}?Dalle\s*([01]?\d|2[0-3])[:.h]([0-5]\d)(?:\s*Alle\s*([01]?\d|2[0-3])[:.h]([0-5]\d))?[\s\S]{0,260}?M\.p\.\s*:\s*([^\n\r]+?)\s+da:\s*([^\n\r]+?)\s+a:\s*([^\n\r]+?)\s+dest:\s*([^\n\r]+?)(?:\s+Cliente:|$)/i
   );
-  const transferDate = parseItalianDate(transferBlockMatch?.[1]);
+  const transferDate = arrivalLeg?.date ?? parseItalianDate(transferBlockMatch?.[1]);
   const transferDirectionRaw = transferBlockMatch?.[2]?.replace(/\s+/g, "").toUpperCase();
   const transferDirection: "arrival" | "departure" | undefined =
     transferDirectionRaw === "STAZIONE/HOTEL" ? "arrival" : transferDirectionRaw === "HOTEL/STAZIONE" ? "departure" : undefined;
-  const transferTime = transferBlockMatch?.[3] && transferBlockMatch?.[4] ? `${transferBlockMatch[3].padStart(2, "0")}:${transferBlockMatch[4]}` : undefined;
-  const transferPickup = cleanExtractedValue(transferBlockMatch?.[6]);
-  const transferDropoff = cleanExtractedValue(transferBlockMatch?.[9]);
+  const transferTime = arrivalLeg?.time ?? (transferBlockMatch?.[3] && transferBlockMatch?.[4] ? `${transferBlockMatch[3].padStart(2, "0")}:${transferBlockMatch[4]}` : undefined);
+  const transferPickup = arrivalLeg?.pickup ?? cleanExtractedValue(transferBlockMatch?.[6]);
+  const transferDropoff = arrivalLeg?.dest ?? cleanExtractedValue(transferBlockMatch?.[9]);
   const transferVessel = cleanExtractedValue(transferBlockMatch?.[7]);
 
   const isoDateMatch = extractRegexGroup(parsingSource, template.date);
@@ -210,7 +274,7 @@ export function parseInboundEmail(rawText: string, templateKey?: string, extract
 
   const phoneMatch =
     extractRegexGroup(parsingSource, template.phone) ??
-    parsingSource.match(/(?:Cellulare\/Tel\.?|Cell\.?|Tel\.?)\s*[:.]?\s*(\+?\d[\d\s/-]{6,})/i)?.[1];
+    parsingSource.match(/(?:Cellulare\/Tel\.?|Cell\.?|Tel\.?|CELL\.?)\s*[:.]?\s*(\+?\d[\d\s/-]{6,})/i)?.[1];
   if (extractRegexGroup(parsingSource, template.phone)) confidence.phone = "high";
   else if (phoneMatch) confidence.phone = "medium";
 
@@ -218,6 +282,8 @@ export function parseInboundEmail(rawText: string, templateKey?: string, extract
     date: dateMatch,
     time: timeMatchRaw ? `${timeMatchRaw[1].padStart(2, "0")}:${(timeMatchRaw[2] ?? "00").padStart(2, "0")}` : undefined,
     direction: transferDirection,
+    departure_date: departureLeg?.date,
+    departure_time: departureLeg?.time,
     vessel: vesselMatch,
     hotel: hotelMatch,
     pickup: pickupMatch,

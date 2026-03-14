@@ -17,18 +17,18 @@ export default function Image() {
           display: "flex",
           flexDirection: "column",
           justifyContent: "space-between",
-          padding: "56px",
-          background: "linear-gradient(135deg, #0f172a 0%, #1e3a8a 55%, #0ea5e9 100%)",
+          padding: "64px",
+          background: "linear-gradient(135deg, #0f172a 0%, #1d4ed8 58%, #dbeafe 100%)",
           color: "white",
-          fontFamily: "Arial, sans-serif"
+          fontFamily: "Segoe UI, sans-serif"
         }}
       >
-        <div style={{ display: "flex", fontSize: 28, letterSpacing: 2, opacity: 0.92 }}>ISCHIA TRANSFER</div>
+        <div style={{ display: "flex", fontSize: 24, letterSpacing: 4, opacity: 0.92 }}>GESTIONALE ISCHIA TRANSFER BETA</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ display: "flex", fontSize: 72, fontWeight: 800, lineHeight: 1.05 }}>Transfer Operations</div>
-          <div style={{ display: "flex", fontSize: 34, opacity: 0.9 }}>Dispatch, Driver area e reminder WhatsApp</div>
+          <div style={{ display: "flex", fontSize: 64, fontWeight: 700, lineHeight: 1.02 }}>Piattaforma operativa</div>
+          <div style={{ display: "flex", fontSize: 30, opacity: 0.88 }}>Dashboard, dispatch, agenzia, PDF imports e pricing</div>
         </div>
-        <div style={{ display: "flex", fontSize: 22, opacity: 0.8 }}>ischia-transfer-beta</div>
+        <div style={{ display: "flex", fontSize: 22, opacity: 0.8 }}>Ambiente gestionale interno</div>
       </div>
     ),
     size

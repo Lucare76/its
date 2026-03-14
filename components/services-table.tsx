@@ -3,8 +3,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { ExportServicesButton } from "@/components/export-services-button";
 import { Timeline } from "@/components/timeline";
+import { DataTable, EmptyState, FilterBar } from "@/components/ui";
+import {
+  formatIsoDateShort,
+  formatServiceSlot,
+  getCustomerFullName,
+  getOutboundTime,
+  getOutwardReferenceLabel,
+  getOutwardTimeLabel,
+  getReturnReferenceLabel,
+  getReturnTime,
+  getReturnTimeLabel,
+  getTransportReferenceOutward,
+  getTransportReferenceReturn
+} from "@/lib/service-display";
+import { getServiceOperationalSource, getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { Assignment, Hotel, InboundEmail, Membership, Service, ServiceStatus, ServiceType, StatusEvent } from "@/lib/types";
+import { SERVICE_STATUS_LABELS, SERVICE_TYPE_LABELS } from "@/lib/ui-labels";
 
 interface ServicesTableProps {
   services: Service[];
@@ -40,6 +56,10 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
   const [serviceTypeFilter, setServiceTypeFilter] = useState<ServiceType | "all">("all");
   const [zoneFilter, setZoneFilter] = useState<string>("all");
   const [driverFilter, setDriverFilter] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "pdf" | "agency" | "manual">("all");
+  const [reviewedFilter, setReviewedFilter] = useState<"all" | "yes" | "no">("all");
+  const [agencyFilter, setAgencyFilter] = useState<string>("all");
+  const [qualityFilter, setQualityFilter] = useState<"all" | "low">("all");
   const [search, setSearch] = useState("");
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const [serverServices, setServerServices] = useState<Service[] | null>(null);
@@ -51,6 +71,15 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
   const drivers = memberships.filter((member) => member.role === "driver");
   const vessels = [...new Set(services.map((service) => service.vessel))];
   const zones = [...new Set(hotels.map((hotel) => hotel.zone))];
+  const pdfMetaByServiceId = useMemo(
+    () => new Map(services.map((service) => [service.id, getServicePdfOperationalMeta(service, inboundEmails)])),
+    [inboundEmails, services]
+  );
+  const sourceByServiceId = useMemo(
+    () => new Map(services.map((service) => [service.id, getServiceOperationalSource(service, inboundEmails)])),
+    [inboundEmails, services]
+  );
+  const agencies = [...new Set(services.map((service) => pdfMetaByServiceId.get(service.id)?.agencyName).filter(Boolean))] as string[];
   const tenantId = services[0]?.tenant_id ?? null;
 
   useEffect(() => {
@@ -115,11 +144,19 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
   const filtered = useMemo(() => {
     return baseServices.filter((service) => {
       const assignment = assignedMap.get(service.id);
+      const pdfMeta = pdfMetaByServiceId.get(service.id);
       const byServiceType = serviceTypeFilter === "all" || (service.service_type ?? "transfer") === serviceTypeFilter;
       const byDriver = driverFilter === "all" || assignment?.driver_user_id === driverFilter;
-      return byServiceType && byDriver;
+      const serviceSource = sourceByServiceId.get(service.id) ?? "manual";
+      const bySource = sourceFilter === "all" || serviceSource === sourceFilter;
+      const byReviewed =
+        reviewedFilter === "all" ||
+        (reviewedFilter === "yes" ? Boolean(pdfMeta?.manualReview) : Boolean(pdfMeta?.isPdf && !pdfMeta.manualReview));
+      const byAgency = agencyFilter === "all" || pdfMeta?.agencyName === agencyFilter;
+      const byQuality = qualityFilter === "all" || (pdfMeta?.isPdf && pdfMeta.parsingQuality === "low");
+      return byServiceType && byDriver && bySource && byReviewed && byAgency && byQuality;
     });
-  }, [assignedMap, baseServices, driverFilter, serviceTypeFilter]);
+  }, [agencyFilter, assignedMap, baseServices, driverFilter, pdfMetaByServiceId, qualityFilter, reviewedFilter, serviceTypeFilter, sourceByServiceId, sourceFilter]);
 
   const selectedService = selectedServiceId ? services.find((item) => item.id === selectedServiceId) : null;
   const selectedShareUrl = useMemo(() => {
@@ -138,7 +175,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
     const hotelName = hotels.find((item) => item.id === service.hotel_id)?.name ?? "Hotel da confermare";
     const text = [
       "Dettagli transfer Ischia:",
-      `${service.date} ${service.time}`,
+      formatServiceSlot(service),
       `Hotel: ${hotelName}`,
       `Porto/Nave: ${service.vessel}`,
       `Pax: ${service.pax}`,
@@ -232,10 +269,10 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
             at:
               assignment.created_at ??
               assignedStatusEvent?.at ??
-              `${selectedService.date}T${selectedService.time.length === 5 ? `${selectedService.time}:00` : selectedService.time}`,
+              `${selectedService.date}T${(getOutboundTime(selectedService) ?? selectedService.time).length === 5 ? `${getOutboundTime(selectedService) ?? selectedService.time}:00` : getOutboundTime(selectedService) ?? selectedService.time}`,
             type: "assignment" as const,
-            title: "Assignment updated",
-            detail: `Driver: ${assignedDriverName} | Vehicle: ${assignment.vehicle_label}`,
+            title: "Assegnazione aggiornata",
+            detail: `Autista: ${assignedDriverName} | Veicolo: ${assignment.vehicle_label}`,
             by: assignedStatusEvent?.by_user_id ? usersById.get(assignedStatusEvent.by_user_id) ?? assignedStatusEvent.by_user_id : "operator"
           }
         ]
@@ -244,9 +281,9 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
     const linkedInbound = inboundEmails.filter((email) => {
       const byNotes = selectedService.notes.includes(email.id);
       const byParsedFields =
-        email.parsed_json.customer_name === selectedService.customer_name &&
+        email.parsed_json.customer_name === getCustomerFullName(selectedService) &&
         email.parsed_json.date === selectedService.date &&
-        email.parsed_json.time === selectedService.time;
+        email.parsed_json.time === (getOutboundTime(selectedService) ?? selectedService.time);
       return byNotes || byParsedFields;
     });
 
@@ -254,7 +291,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
       id: `communication-${email.id}`,
       at: email.created_at,
       type: "communication" as const,
-      title: "Inbound communication",
+      title: "Comunicazione in ingresso",
       detail: email.raw_text.slice(0, 140),
       by: "email/inbox"
     }));
@@ -263,8 +300,8 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
       id: `status-${event.id}`,
       at: event.at,
       type: "status" as const,
-      title: `Status -> ${event.status}`,
-      detail: `Service status changed to ${event.status}`,
+      title: `Stato -> ${event.status}`,
+      detail: `Stato servizio aggiornato a ${event.status}`,
       by: event.by_user_id ? usersById.get(event.by_user_id) ?? event.by_user_id : "system"
     }));
 
@@ -273,31 +310,39 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
   const sortedDates = [...new Set(services.map((service) => service.date))].sort();
   const defaultDateFrom = sortedDates[0] ?? new Date().toISOString().slice(0, 10);
   const defaultDateTo = sortedDates[sortedDates.length - 1] ?? defaultDateFrom;
+  const serviceMeta = (service: Service) => {
+    const hotel = hotels.find((item) => item.id === service.hotel_id);
+    const assignment = assignedMap.get(service.id);
+    const driverName = memberships.find((member) => member.user_id === assignment?.driver_user_id)?.full_name ?? "Non assegnato";
+      const pdfMeta = pdfMetaByServiceId.get(service.id);
+      const source = sourceByServiceId.get(service.id) ?? "manual";
+      return { hotel, driverName, pdfMeta, source };
+    };
 
   if (services.length === 0) {
-    return <div className="card p-4 text-sm text-muted">Nessun servizio oggi.</div>;
+    return <EmptyState title="Nessun servizio oggi." compact />;
   }
 
   return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-text">Services list</h2>
+    <section className="page-section">
+      <div className="section-head">
+        <h2 className="section-title text-base">Lista servizi</h2>
         <ExportServicesButton defaultDateFrom={defaultDateFrom} defaultDateTo={defaultDateTo} />
       </div>
-      <div className="card grid gap-3 p-3 md:grid-cols-6">
+      <FilterBar colsClassName="md:grid-cols-9">
         <select
           value={statusFilter}
           onChange={(event) => setStatusFilter(event.target.value as ServiceStatus | "all")}
           className="input-saas"
         >
           <option value="all">Stato: tutti</option>
-          <option value="needs_review">needs_review</option>
-          <option value="new">new</option>
-          <option value="assigned">assigned</option>
-          <option value="partito">partito</option>
-          <option value="arrivato">arrivato</option>
-          <option value="completato">completato</option>
-          <option value="cancelled">cancelled</option>
+          <option value="needs_review">{SERVICE_STATUS_LABELS.needs_review}</option>
+          <option value="new">{SERVICE_STATUS_LABELS.new}</option>
+          <option value="assigned">{SERVICE_STATUS_LABELS.assigned}</option>
+          <option value="partito">{SERVICE_STATUS_LABELS.partito}</option>
+          <option value="arrivato">{SERVICE_STATUS_LABELS.arrivato}</option>
+          <option value="completato">{SERVICE_STATUS_LABELS.completato}</option>
+          <option value="cancelled">{SERVICE_STATUS_LABELS.cancelled}</option>
         </select>
         <select
           value={serviceTypeFilter}
@@ -305,8 +350,8 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
           className="input-saas"
         >
           <option value="all">Tipo: tutti</option>
-          <option value="transfer">transfer</option>
-          <option value="bus_tour">bus_tour</option>
+          <option value="transfer">{SERVICE_TYPE_LABELS.transfer}</option>
+          <option value="bus_tour">{SERVICE_TYPE_LABELS.bus_tour}</option>
         </select>
         <select
           value={vesselFilter}
@@ -344,92 +389,266 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
             </option>
           ))}
         </select>
+        <select data-testid="services-source-filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as "all" | "pdf" | "agency" | "manual")} className="input-saas">
+          <option value="all">Origine: tutte</option>
+          <option value="pdf">Solo PDF</option>
+          <option value="agency">Solo agenzia</option>
+          <option value="manual">Solo manuali</option>
+        </select>
+        <select data-testid="services-reviewed-filter" value={reviewedFilter} onChange={(event) => setReviewedFilter(event.target.value as "all" | "yes" | "no")} className="input-saas">
+          <option value="all">Reviewed: tutti</option>
+          <option value="yes">Reviewed si</option>
+          <option value="no">Reviewed no</option>
+        </select>
+        <select data-testid="services-agency-filter" value={agencyFilter} onChange={(event) => setAgencyFilter(event.target.value)} className="input-saas">
+          <option value="all">Agenzia: tutte</option>
+          {agencies.map((agency) => (
+            <option key={agency} value={agency}>
+              {agency}
+            </option>
+          ))}
+        </select>
+        <select data-testid="services-quality-filter" value={qualityFilter} onChange={(event) => setQualityFilter(event.target.value as "all" | "low")} className="input-saas">
+          <option value="all">Qualita: tutte</option>
+          <option value="low">Qualita low</option>
+        </select>
         <input
+          data-testid="services-search"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Cerca cliente/telefono/nave"
           className="input-saas"
         />
-      </div>
+      </FilterBar>
 
       {filtered.length === 0 ? (
-        <div className="card p-4 text-sm text-muted">Nessun risultato per i filtri impostati.</div>
+        <EmptyState title="Nessun risultato per i filtri impostati." compact />
       ) : (
-        <div className="card overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="sticky top-0 z-10 border-b border-border bg-white text-left text-muted">
-              <tr>
-                <th className="px-4 py-3">Orario</th>
-                <th className="px-4 py-3">Cliente</th>
-                <th className="px-4 py-3">Tipo</th>
-                <th className="px-4 py-3">Nave</th>
-                <th className="px-4 py-3">Zona</th>
-                <th className="px-4 py-3">Driver</th>
-                <th className="px-4 py-3">Stato</th>
-                <th className="px-4 py-3">Azione</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((service) => {
-                const hotel = hotels.find((item) => item.id === service.hotel_id);
-                const assignment = assignedMap.get(service.id);
-                const driverName =
-                  memberships.find((member) => member.user_id === assignment?.driver_user_id)?.full_name ?? "Non assegnato";
-                return (
-                  <tr key={service.id} className="border-t border-border/50 odd:bg-white even:bg-slate-50/60 hover:bg-blue-50/80">
-                    <td className="px-4 py-3">{service.time}</td>
-                    <td className="px-4 py-3">{service.customer_name}</td>
-                    <td className="px-4 py-3">
-                      <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold uppercase tracking-[0.08em] text-blue-700">
-                        {service.service_type ?? "transfer"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">{service.vessel}</td>
-                    <td className="px-4 py-3">{hotel?.zone ?? "N/D"}</td>
-                    <td className="px-4 py-3">{driverName}</td>
-                    <td className="px-4 py-3">
-                      <span className={statusClass(service.status)}>{service.status}</span>
-                      {isUndeliveredReminder(service) ? (
-                        <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700">
-                          Non consegnato
+        <>
+          <div className="space-y-2 md:hidden">
+            <p className="text-xs text-muted">Risultati: {filtered.length}</p>
+            {filtered.map((service) => {
+              const { hotel, driverName, pdfMeta, source } = serviceMeta(service);
+              return (
+                <article key={`mobile-${service.id}`} className="card space-y-2 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm font-semibold">{formatServiceSlot(service)} - {getCustomerFullName(service)}</p>
+                    <span className={statusClass(service.status)}>{SERVICE_STATUS_LABELS[service.status]}</span>
+                  </div>
+                  <p className="text-xs text-muted">
+                    {SERVICE_TYPE_LABELS[(service.service_type ?? "transfer") as ServiceType]} | {service.vessel}
+                  </p>
+                  <p className="text-xs text-muted">
+                    Hotel: {hotel?.name ?? "N/D"} ({hotel?.zone ?? "N/D"}) | Driver: {driverName}
+                  </p>
+                  {source === "pdf" && pdfMeta ? (
+                    <div className="flex flex-wrap gap-1">
+                      <span className="rounded-full bg-blue-100 px-2 py-1 text-[10px] font-semibold uppercase text-blue-700">PDF</span>
+                      {pdfMeta.manualReview ? <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-semibold uppercase text-emerald-700">Reviewed</span> : null}
+                      {pdfMeta.reviewRecommended ? <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase text-amber-700">Attenzione</span> : null}
+                    </div>
+                  ) : source === "agency" ? (
+                    <div className="flex flex-wrap gap-1">
+                      <span className="rounded-full bg-violet-100 px-2 py-1 text-[10px] font-semibold uppercase text-violet-700">Agenzia</span>
+                    </div>
+                  ) : null}
+                  <button type="button" onClick={() => setSelectedServiceId(service.id)} className="btn-secondary w-full px-3 py-1.5 text-xs">
+                    Apri dettagli
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+          <div className="hidden md:block">
+            <DataTable
+              toolbar={
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-muted">Risultati: {filtered.length}</p>
+                  <p className="text-xs text-muted">Scorri orizzontalmente per vedere tutte le colonne.</p>
+                </div>
+              }
+              stickyActions={
+                selectedService ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted">Dettaglio aperto: {getCustomerFullName(selectedService)}</p>
+                    <button type="button" className="btn-secondary px-3 py-1 text-xs" onClick={() => setSelectedServiceId(null)}>
+                      Chiudi dettaglio
+                    </button>
+                  </div>
+                ) : null
+              }
+            >
+              <thead>
+                <tr>
+                  <th className="px-4 py-3">Andata/Ritorno</th>
+                  <th className="px-4 py-3">Cliente</th>
+                  <th className="px-4 py-3">Tipo</th>
+                  <th className="px-4 py-3">Nave</th>
+                  <th className="px-4 py-3">Zona</th>
+                  <th className="px-4 py-3">Origine</th>
+                  <th className="px-4 py-3">Riferimento</th>
+                  <th className="px-4 py-3">Driver</th>
+                  <th className="px-4 py-3">Stato</th>
+                  <th className="px-4 py-3">Azione</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((service) => {
+                  const { hotel, driverName, pdfMeta, source } = serviceMeta(service);
+                  return (
+                    <tr key={service.id}>
+                      <td className="whitespace-nowrap px-4 py-3">{formatServiceSlot(service)}</td>
+                      <td className="px-4 py-3">
+                        <p className="line-clamp-2 max-w-[220px] text-safe-wrap" title={getCustomerFullName(service)}>
+                          {getCustomerFullName(service)}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold uppercase tracking-[0.08em] text-blue-700">
+                          {SERVICE_TYPE_LABELS[(service.service_type ?? "transfer") as ServiceType]}
                         </span>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedServiceId(service.id)}
-                        title="Open"
-                        className="inline-flex items-center gap-2 rounded-full border border-border bg-white px-3 py-1.5 text-xs font-medium text-text hover:bg-slate-100 hover:scale-105"
-                      >
-                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />
-                        Open
-                        <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
-                          <path d="M4 10h10" />
-                          <path d="M10 6l4 4-4 4" />
-                        </svg>
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="line-clamp-2 max-w-[200px] text-safe-wrap" title={service.vessel}>
+                          {service.vessel}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="line-clamp-2 max-w-[180px] text-safe-wrap" title={hotel?.zone ?? "N/D"}>
+                          {hotel?.zone ?? "N/D"}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3">
+                        {source === "pdf" && pdfMeta ? (
+                          <div className="flex flex-wrap gap-1">
+                            <span className="rounded-full bg-blue-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-blue-700">PDF</span>
+                            {pdfMeta.manualReview ? <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700">Reviewed</span> : null}
+                            {pdfMeta.reviewRecommended ? <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700">Attenzione</span> : null}
+                          </div>
+                        ) : source === "agency" ? (
+                          <span className="rounded-full bg-violet-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-violet-700">Agenzia</span>
+                        ) : (
+                          <span className="text-xs text-muted">Manuale</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="max-w-[200px] text-xs text-slate-700">
+                          {source === "pdf" ? (
+                            <>
+                              <p className="truncate" title={pdfMeta?.externalReference ?? ""}>{pdfMeta?.externalReference ?? "-"}</p>
+                              <p className="truncate text-slate-500" title={pdfMeta?.agencyName ?? ""}>{pdfMeta?.agencyName ?? "-"}</p>
+                              <p className="truncate text-slate-500">{pdfMeta?.parserKey ?? "parser n/d"} | {pdfMeta?.parsingQuality ?? "n/d"}</p>
+                            </>
+                          ) : source === "agency" ? (
+                            <>
+                              <p className="truncate" title={service.booking_service_kind ?? ""}>{service.booking_service_kind ?? "agency booking"}</p>
+                              <p className="truncate text-slate-500">{service.customer_email ?? "email n/d"}</p>
+                            </>
+                          ) : (
+                            <p className="truncate text-slate-500">Inserimento operatore</p>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="line-clamp-2 max-w-[200px] text-safe-wrap" title={driverName}>
+                          {driverName}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={statusClass(service.status)}>{SERVICE_STATUS_LABELS[service.status]}</span>
+                        {isUndeliveredReminder(service) ? (
+                          <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700">
+                            Non consegnato
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedServiceId(service.id)}
+                          title="Apri"
+                          className="btn-secondary whitespace-nowrap px-3 py-1.5 text-xs"
+                        >
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />
+                          Apri
+                          <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                            <path d="M4 10h10" />
+                            <path d="M10 6l4 4-4 4" />
+                          </svg>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </DataTable>
+          </div>
+        </>
       )}
 
       {selectedService ? (
-        <aside className="card space-y-3 p-4">
-          <div className="flex items-center justify-between">
+        <aside className="card space-y-3 p-4 md:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="font-semibold">Dettagli servizio</h3>
             <button type="button" onClick={() => setSelectedServiceId(null)} className="text-sm text-muted">
               Chiudi
             </button>
           </div>
-          <p className="text-sm">Cliente: {selectedService.customer_name}</p>
-          <p className="text-sm">Tipo: {selectedService.service_type ?? "transfer"}</p>
+          {(() => {
+            const pdfMeta = pdfMetaByServiceId.get(selectedService.id);
+            const source = sourceByServiceId.get(selectedService.id) ?? "manual";
+            return source === "pdf" && pdfMeta ? (
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold uppercase text-blue-700">PDF</span>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold uppercase text-slate-700">{pdfMeta.parserKey ?? "parser n/d"}</span>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold uppercase text-slate-700">{pdfMeta.parsingQuality ?? "n/d"}</span>
+                {pdfMeta.manualReview ? <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold uppercase text-emerald-700">Reviewed</span> : null}
+              </div>
+            ) : source === "agency" ? (
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full bg-violet-100 px-2 py-1 text-xs font-semibold uppercase text-violet-700">Agenzia</span>
+              </div>
+            ) : null;
+          })()}
+          <p className="text-sm">Cliente: {getCustomerFullName(selectedService)}</p>
+          <p className="text-sm">Data andata: {formatIsoDateShort(selectedService.arrival_date ?? selectedService.date)}</p>
+          <p className="text-sm">{getOutwardTimeLabel(selectedService)}: {getOutboundTime(selectedService) ?? "N/D"}</p>
+          {selectedService.departure_date || getReturnTime(selectedService) ? (
+            <p className="text-sm">{`${formatIsoDateShort(selectedService.departure_date)} ${getReturnTimeLabel(selectedService)}: ${getReturnTime(selectedService) ?? ""}`.trim()}</p>
+          ) : null}
+          {getTransportReferenceOutward(selectedService) ? (
+            <p className="text-sm">{getOutwardReferenceLabel(selectedService)}: {getTransportReferenceOutward(selectedService)}</p>
+          ) : null}
+          {getTransportReferenceReturn(selectedService) ? (
+            <p className="text-sm">{getReturnReferenceLabel(selectedService)}: {getTransportReferenceReturn(selectedService)}</p>
+          ) : null}
+          {selectedService.source_total_amount_cents ? (
+            <p className="text-sm">Costo PDF: {(selectedService.source_total_amount_cents / 100).toFixed(2)} {selectedService.source_amount_currency ?? "EUR"}</p>
+          ) : null}
+          {selectedService.source_price_per_pax_cents ? (
+            <p className="text-sm">Costo PDF/pax: {(selectedService.source_price_per_pax_cents / 100).toFixed(2)} {selectedService.source_amount_currency ?? "EUR"}</p>
+          ) : null}
+          {selectedService.billing_party_name ? <p className="text-sm">Agenzia fatturazione: {selectedService.billing_party_name}</p> : null}
+          <p className="text-sm">Tipo: {selectedService.service_type_code ?? selectedService.service_type ?? "transfer"}</p>
           <p className="text-sm">Nave: {selectedService.vessel}</p>
           <p className="text-sm">Hotel: {hotels.find((item) => item.id === selectedService.hotel_id)?.name ?? "N/D"}</p>
+          {(() => {
+            const pdfMeta = pdfMetaByServiceId.get(selectedService.id);
+            const source = sourceByServiceId.get(selectedService.id) ?? "manual";
+            return source === "pdf" && pdfMeta ? (
+              <>
+                <p className="text-sm">Agenzia: {pdfMeta.agencyName ?? "N/D"}</p>
+                <p className="text-sm">External ref: {pdfMeta.externalReference ?? "N/D"}</p>
+                <p className="text-sm">Import state: {pdfMeta.importState ?? "N/D"}</p>
+              </>
+            ) : source === "agency" ? (
+              <>
+                <p className="text-sm">Origine: booking agenzia</p>
+                <p className="text-sm">Booking kind: {selectedService.booking_service_kind ?? "N/D"}</p>
+                <p className="text-sm">Email cliente: {selectedService.customer_email ?? "N/D"}</p>
+              </>
+            ) : null;
+          })()}
           {(selectedService.service_type ?? "transfer") === "bus_tour" ? (
             <>
               <p className="text-sm">Tour: {selectedService.tour_name ?? "N/D"}</p>
@@ -482,3 +701,4 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
     </section>
   );
 }
+

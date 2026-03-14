@@ -1,57 +1,44 @@
 import Link from "next/link";
 
-const features = [
-  "Login Supabase con RBAC: admin, operator, agency, driver",
-  "Dashboard servizi oggi con filtri e timeline eventi",
-  "Assegnazione driver/mezzo con dispatch rapido",
-  "Mappa Leaflet OSM con layer hotel e servizi",
-  "Driver area mobile-first con cambi stato live",
-  "Email ingestion con parser regex e conversione servizio"
-];
-
-const howItWorks = [
-  "Le agenzie creano prenotazioni in pochi secondi.",
-  "L'operatore assegna driver e mezzo dal dispatch.",
-  "Il driver aggiorna stato in tempo reale dal telefono.",
-  "La dashboard mostra KPI e criticita operative."
-];
-
-export default function LandingPage() {
+export default function HomePage() {
   return (
-    <section className="space-y-8">
-      <div className="card bg-gradient-to-r from-brand-700 to-brand-500 p-8 text-white">
-        <p className="text-sm uppercase tracking-[0.2em]">Beta Demo Vendibile</p>
-        <h1 className="mt-2 text-4xl font-bold">Ischia Transfer</h1>
-        <p className="mt-3 max-w-2xl text-white/90">
-          Piattaforma multi-tenant per agenzie transfer: operativita in tempo reale, dispatch driver e ingestion
-          email.
-        </p>
-        <div className="mt-5 flex gap-3">
-          <Link href="/login" className="rounded-xl bg-white px-4 py-2 font-medium text-brand-700">
-            Entra nella Demo
-          </Link>
-          <Link href="/dashboard" className="rounded-xl border border-white/50 px-4 py-2 font-medium">
-            Vai a Dashboard
-          </Link>
+    <main className="mx-auto flex min-h-screen max-w-3xl items-center px-6 py-16">
+      <section className="card w-full space-y-6 p-8 md:p-10">
+        <div className="space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">Ischia Transfer Beta</p>
+          <h1 className="text-3xl font-semibold text-text md:text-4xl">Gestionale operativo</h1>
+          <p className="max-w-2xl text-sm leading-7 text-muted md:text-base">
+            Questo progetto e focalizzato sul gestionale interno: accesso utenti, dashboard, dispatch, area agenzia,
+            import PDF, pricing e flussi operativi su Supabase.
+          </p>
         </div>
-      </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        {features.map((feature) => (
-          <article key={feature} className="card p-4 text-sm text-slate-700">
-            {feature}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <article className="rounded-2xl border border-border bg-surface p-5">
+            <h2 className="text-base font-semibold text-text">Accesso</h2>
+            <p className="mt-2 text-sm text-muted">
+              Entra con credenziali Supabase reali per usare dashboard, dispatch, area agenzia e moduli operativi.
+            </p>
+            <div className="mt-4">
+              <Link href="/login" className="btn-primary inline-flex px-4 py-2 text-sm">
+                Vai al login
+              </Link>
+            </div>
           </article>
-        ))}
-      </div>
-      <section className="card p-6">
-        <h2 className="text-xl font-semibold">Come funziona</h2>
-        <ol className="mt-3 grid gap-2 text-sm text-slate-700 md:grid-cols-2">
-          {howItWorks.map((item, index) => (
-            <li key={item}>
-              {index + 1}. {item}
-            </li>
-          ))}
-        </ol>
+
+          <article className="rounded-2xl border border-border bg-surface p-5">
+            <h2 className="text-base font-semibold text-text">Controllo tecnico</h2>
+            <p className="mt-2 text-sm text-muted">
+              La pagina health consente una verifica rapida di ambiente, API e configurazione server/client.
+            </p>
+            <div className="mt-4">
+              <Link href="/health" className="btn-secondary inline-flex px-4 py-2 text-sm">
+                Apri health
+              </Link>
+            </div>
+          </article>
+        </div>
       </section>
-    </section>
+    </main>
   );
 }

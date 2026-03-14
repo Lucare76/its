@@ -17,17 +17,41 @@ const config: Config = {
         warning: "var(--color-warning)",
         danger: "var(--color-danger)",
         brand: {
-          50: "#ecfeff",
-          100: "#cffafe",
-          200: "#a5f3fc",
-          300: "#67e8f9",
-          400: "#22d3ee",
-          500: "#06b6d4",
-          600: "#0891b2",
-          700: "#0e7490",
-          800: "#155e75",
-          900: "#164e63"
+          50: "#f3f9fe",
+          100: "#e1eef9",
+          200: "#c8def0",
+          300: "#a2c2e1",
+          400: "#8ab3da",
+          500: "#6f9fc8",
+          600: "#587faa",
+          700: "#486789",
+          800: "#3f566e",
+          900: "#3e4c59",
+          950: "#2f3d49"
+        },
+        sand: {
+          50: "#fff8f3",
+          100: "#fde9dd",
+          200: "#fadcc9",
+          300: "#fad4c0",
+          400: "#f6c3aa",
+          500: "#eca884"
+        },
+        mint: {
+          50: "#f1fbf9",
+          100: "#ddf4f0",
+          200: "#cdeee8",
+          300: "#b8e1dd",
+          400: "#9fd4cf",
+          500: "#78b7b0"
         }
+      },
+      boxShadow: {
+        soft: "0 18px 55px rgba(7, 26, 44, 0.08)"
+      },
+      fontFamily: {
+        "serif-display": ['"Iowan Old Style"', '"Palatino Linotype"', '"Book Antiqua"', "serif"],
+        sans: ['"Avenir Next"', '"Segoe UI"', "sans-serif"]
       }
     }
   },

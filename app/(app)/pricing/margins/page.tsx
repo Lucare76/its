@@ -81,7 +81,7 @@ export default function PricingMarginsPage() {
               setDays(next);
               void loadMargins(next);
             }}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            className="input-saas"
           >
             <option value={7}>7 giorni</option>
             <option value={30}>30 giorni</option>
@@ -164,4 +164,5 @@ export default function PricingMarginsPage() {
     </section>
   );
 }
+
 

@@ -10,7 +10,11 @@ type MatchInput = {
   date: string;
   time: string;
   pax: number;
+  bookingKind?: "transfer_port_hotel" | "transfer_airport_hotel" | "transfer_train_hotel" | "bus_city_hotel" | "excursion" | null;
+  serviceVariant?: "train_station_hotel" | "ferry_naples_transfer" | "auto_ischia_hotel" | null;
 };
+
+type MatchQuality = "certain" | "partial" | "review";
 
 function normalize(value?: string | null) {
   return (value ?? "")
@@ -43,6 +47,62 @@ function scoreTokenOverlap(sourceTokens: string[], candidateTokens: string[]) {
     if (sourceSet.has(token)) hit += 1;
   }
   return Math.round((hit / candidateTokens.length) * 100);
+}
+
+function inferVehicleType(sourceText: string) {
+  const text = normalize(sourceText);
+  if (!text) return null;
+  if (/\b(bus|pullman|coach)\b/.test(text)) return "BUS";
+  if (/\b(van|minivan|vito|van8|van 8)\b/.test(text)) return "VAN";
+  if (/\b(car|auto|taxi|sedan)\b/.test(text)) return "CAR";
+  return null;
+}
+
+function deriveMatchQuality(hasRule: boolean, agencyScore: number, routeScore: number, forcedReview: boolean): MatchQuality {
+  if (!hasRule || forcedReview) return "review";
+  if (agencyScore >= 80 && routeScore >= 80) return "certain";
+  if (agencyScore >= 55 || routeScore >= 70) return "partial";
+  return "review";
+}
+
+function routeIntentBoost(
+  normalizedSource: string,
+  route: { name: string; origin_label: string; destination_label: string },
+  bookingKind?: MatchInput["bookingKind"],
+  serviceVariant?: MatchInput["serviceVariant"]
+) {
+  const routeText = [route.name, route.origin_label, route.destination_label].map(normalize).join(" ");
+  let boost = 0;
+
+  if (bookingKind === "transfer_train_hotel" || /(stazione|treno|italo|trenitalia)/i.test(normalizedSource)) {
+    if (/(stazione|treno|centrale)/i.test(routeText) && /(hotel|ischia|verde)/i.test(routeText)) boost = Math.max(boost, 25);
+  }
+
+  if (serviceVariant === "train_station_hotel") {
+    if (/(stazione|treno|centrale)/i.test(routeText) && /(hotel|ischia|verde)/i.test(routeText)) boost = Math.max(boost, 35);
+  }
+
+  if (bookingKind === "transfer_port_hotel" || /(porto|traghetto|aliscafo|napoli)/i.test(normalizedSource)) {
+    if (/(porto|napoli|molo|terminal)/i.test(routeText) && /(hotel|ischia|verde)/i.test(routeText)) boost = Math.max(boost, 25);
+  }
+
+  if (serviceVariant === "ferry_naples_transfer") {
+    if (/(porto|napoli|molo|massa)/i.test(routeText) && /(hotel|ischia|villa)/i.test(routeText)) boost = Math.max(boost, 35);
+  }
+
+  if (serviceVariant === "auto_ischia_hotel") {
+    if (/(ischia|porto)/i.test(routeText) && /(hotel|villa|resort)/i.test(routeText)) boost = Math.max(boost, 30);
+  }
+
+  if (bookingKind === "transfer_airport_hotel" || /(aeroporto|airport|capodichino)/i.test(normalizedSource)) {
+    if (/(aeroporto|airport|capodichino)/i.test(routeText) && /(hotel|ischia|verde)/i.test(routeText)) boost = Math.max(boost, 25);
+  }
+
+  if (bookingKind === "bus_city_hotel" || /(bus|pullman|coach)/i.test(normalizedSource)) {
+    if (/(bus|pullman|coach|city)/i.test(routeText)) boost = Math.max(boost, 20);
+  }
+
+  return boost;
 }
 
 export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchInput) {
@@ -87,23 +147,40 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
       const byDestination = scoreTokenOverlap(sourceTokens, tokenize(destination));
       const byPoints = origin && destination && normalizedSource.includes(origin) && normalizedSource.includes(destination) ? 85 : 0;
       const byPortHints = portHints.some((hint) => normalizedSource.includes(hint)) ? 10 : 0;
-      const score = Math.max(byName, byNameTokens, Math.round((byOrigin + byDestination) / 2), byPoints) + byPortHints;
+      const byIntent = routeIntentBoost(normalizedSource, route, input.bookingKind, input.serviceVariant);
+      const score = Math.max(byName, byNameTokens, Math.round((byOrigin + byDestination) / 2), byPoints) + byPortHints + byIntent;
       if (score > (routeMatch?.confidence ?? 0)) routeMatch = { id: route.id, confidence: score };
     }
 
     const serviceDate = input.date;
+    const serviceTime = (input.time || "00:00").slice(0, 5);
+    const vehicleTypeHint = inferVehicleType(input.sourceText);
     const { data: priceLists } = await admin
       .from("price_lists")
-      .select("id, currency, is_default, valid_from, valid_to, active")
+      .select("id, currency, is_default, valid_from, valid_to, active, agency_id")
       .eq("tenant_id", input.tenantId)
       .eq("active", true)
       .lte("valid_from", serviceDate)
       .or(`valid_to.is.null,valid_to.gte.${serviceDate}`)
-      .order("is_default", { ascending: false })
-      .order("valid_from", { ascending: false })
       .limit(20);
 
-    const selectedPriceList = (priceLists ?? [])[0] as
+    const sortedPriceLists = ((priceLists ?? []) as Array<{
+      id: string;
+      currency: string;
+      is_default: boolean;
+      valid_from: string;
+      valid_to: string | null;
+      active: boolean;
+      agency_id: string | null;
+    }>).sort((a, b) => {
+      const aAgencyScore = agencyMatch?.id && a.agency_id === agencyMatch.id ? 2 : a.agency_id === null ? 1 : 0;
+      const bAgencyScore = agencyMatch?.id && b.agency_id === agencyMatch.id ? 2 : b.agency_id === null ? 1 : 0;
+      if (aAgencyScore !== bAgencyScore) return bAgencyScore - aAgencyScore;
+      if (a.is_default !== b.is_default) return Number(b.is_default) - Number(a.is_default);
+      return b.valid_from.localeCompare(a.valid_from);
+    });
+
+    const selectedPriceList = sortedPriceLists[0] as
       | { id: string; currency: string; is_default: boolean; valid_from: string; valid_to: string | null; active: boolean }
       | undefined;
 
@@ -121,13 +198,14 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
           public_price_cents: number;
           agency_price_cents: number | null;
           priority: number;
+          needs_manual_review: boolean;
         }
       | null = null;
 
     if (selectedPriceList?.id && routeMatch?.id) {
       const { data: rules } = await admin
         .from("pricing_rules")
-        .select("id, route_id, agency_id, service_type, direction, pax_min, pax_max, rule_kind, internal_cost_cents, public_price_cents, agency_price_cents, priority")
+        .select("id, route_id, agency_id, service_type, direction, pax_min, pax_max, rule_kind, internal_cost_cents, public_price_cents, agency_price_cents, priority, vehicle_type, time_from, time_to, season_from, season_to, needs_manual_review")
         .eq("tenant_id", input.tenantId)
         .eq("active", true)
         .eq("price_list_id", selectedPriceList.id)
@@ -148,6 +226,12 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
         public_price_cents: number;
         agency_price_cents: number | null;
         priority: number;
+        vehicle_type: string | null;
+        time_from: string | null;
+        time_to: string | null;
+        season_from: string | null;
+        season_to: string | null;
+        needs_manual_review: boolean;
       }>;
 
       const filtered = candidates.filter((rule) => {
@@ -155,7 +239,10 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
         const typeOk = rule.service_type === null || rule.service_type === input.serviceType;
         const directionOk = rule.direction === null || rule.direction === input.direction;
         const paxOk = input.pax >= rule.pax_min && (rule.pax_max === null || input.pax <= rule.pax_max);
-        return Boolean(agencyOk && typeOk && directionOk && paxOk);
+        const vehicleOk = rule.vehicle_type === null || (vehicleTypeHint !== null && rule.vehicle_type === vehicleTypeHint);
+        const timeOk = (rule.time_from === null || serviceTime >= rule.time_from.slice(0, 5)) && (rule.time_to === null || serviceTime <= rule.time_to.slice(0, 5));
+        const seasonOk = (rule.season_from === null || serviceDate >= rule.season_from) && (rule.season_to === null || serviceDate <= rule.season_to);
+        return Boolean(agencyOk && typeOk && directionOk && paxOk && vehicleOk && timeOk && seasonOk);
       });
 
       filtered.sort((a, b) => {
@@ -169,8 +256,12 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
       selectedRule = filtered[0] ?? null;
     }
 
-    const matchConfidence = Math.min(100, Math.max(agencyMatch?.confidence ?? 0, routeMatch?.confidence ?? 0));
-    const matchStatus = selectedRule ? "matched" : "needs_review";
+    const agencyScore = agencyMatch?.confidence ?? 0;
+    const routeScore = routeMatch?.confidence ?? 0;
+    const matchConfidence = Math.min(100, Math.max(agencyScore, routeScore));
+    const matchQuality = deriveMatchQuality(Boolean(selectedRule), agencyScore, routeScore, Boolean(selectedRule?.needs_manual_review));
+    const reviewRequired = !selectedRule || matchQuality !== "certain" || Boolean(selectedRule?.needs_manual_review);
+    const matchStatus = reviewRequired ? "needs_review" : "matched";
     const sourceType = normalizedSource.includes("pdf") ? "pdf_attachment" : "email_body";
 
     const importPayload = {
@@ -185,7 +276,9 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
         direction: input.direction,
         date: input.date,
         time: input.time,
-        pax: input.pax
+        pax: input.pax,
+        booking_kind: input.bookingKind ?? null,
+        service_variant: input.serviceVariant ?? null
       },
       normalized_agency_name: agencyMatch?.id ? activeAgencies.find((item) => item.id === agencyMatch.id)?.name ?? null : null,
       normalized_route_name: routeMatch?.id ? activeRoutes.find((item) => item.id === routeMatch.id)?.name ?? null : null,
@@ -196,8 +289,14 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
       route_id: routeMatch?.id ?? null,
       pricing_rule_id: selectedRule?.id ?? null,
       match_status: matchStatus,
+      match_quality: matchQuality,
       match_confidence: matchConfidence || null,
-      match_notes: selectedRule ? "Auto match rule" : "No pricing rule matched"
+      review_required: reviewRequired,
+      match_notes: selectedRule
+        ? reviewRequired
+          ? "Regola trovata, revisione operatore consigliata"
+          : "Regola trovata con confidenza alta"
+        : "Nessuna regola tariffaria trovata"
     };
 
     const { data: importRow } = await admin.from("inbound_booking_imports").insert(importPayload).select("id").single();
@@ -241,11 +340,14 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
       final_price_cents: finalPrice,
       apply_mode: "auto_rule",
       confidence: matchConfidence || null,
+      manual_override: false,
       snapshot_json: {
         rule_kind: selectedRule.rule_kind,
         multiplier,
         matched_agency_id: agencyMatch?.id ?? null,
-        matched_route_id: routeMatch?.id ?? null
+        matched_route_id: routeMatch?.id ?? null,
+        match_quality: matchQuality,
+        vehicle_type_hint: vehicleTypeHint
       },
       created_at: new Date().toISOString()
     });
@@ -266,6 +368,7 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
         margin_cents: margin,
         pricing_apply_mode: "auto_rule",
         pricing_confidence: matchConfidence || null,
+        pricing_manual_override: false,
         pricing_applied_at: new Date().toISOString()
       })
       .eq("id", input.serviceId)

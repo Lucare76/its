@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { parseRole } from "@/lib/rbac";
 import { onboardingTenantSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -50,14 +51,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ hasTenant: false }, { status: 200 });
     }
 
-    const membership = memberships[0] as { tenant_id: string; role: string };
+    const membershipRows = memberships as Array<{ tenant_id: string | null; role: string | null }>;
+    const membership =
+      membershipRows.find((item) => Boolean(item.tenant_id) && parseRole(item.role ?? undefined) !== null) ?? null;
+    if (!membership?.tenant_id) {
+      return NextResponse.json({ hasTenant: false }, { status: 200 });
+    }
     const { data: tenant } = await admin!.from("tenants").select("id, name").eq("id", membership.tenant_id).maybeSingle();
 
     return NextResponse.json(
       {
         hasTenant: true,
         tenant: tenant ?? { id: membership.tenant_id, name: "" },
-        role: membership.role
+        role: parseRole(membership.role ?? undefined) ?? "admin"
       },
       { status: 200 }
     );
@@ -88,14 +94,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: existingMembershipsError.message }, { status: 500 });
     }
 
-    if (existingMemberships && existingMemberships.length > 0) {
-      const membership = existingMemberships[0] as { tenant_id: string; role: string };
-      const { data: tenant } = await admin!.from("tenants").select("id, name").eq("id", membership.tenant_id).maybeSingle();
+    const membershipRows = (existingMemberships ?? []) as Array<{ tenant_id: string | null; role: string | null }>;
+    const existingValidMembership =
+      membershipRows.find((item) => Boolean(item.tenant_id) && parseRole(item.role ?? undefined) !== null) ?? null;
+
+    if (existingValidMembership?.tenant_id) {
+      const { data: tenant } = await admin!.from("tenants").select("id, name").eq("id", existingValidMembership.tenant_id).maybeSingle();
       return NextResponse.json(
         {
           created: false,
-          tenant: tenant ?? { id: membership.tenant_id, name: parsed.data.company_name },
-          role: membership.role
+          tenant: tenant ?? { id: existingValidMembership.tenant_id, name: parsed.data.company_name },
+          role: parseRole(existingValidMembership.role ?? undefined) ?? "admin"
         },
         { status: 200 }
       );

@@ -1,22 +1,22 @@
-import { expect, test, type Page } from "@playwright/test";
-
-async function loginAs(page: Page, role: "admin" | "operator") {
-  const redirectTarget = "/pricing";
-  await page.goto(`/login?redirect=${encodeURIComponent(redirectTarget)}`);
-  await page.selectOption("select", role);
-  await page.fill('input[type="email"]', `${role}@demo.com`);
-  await page.fill('input[type="password"]', "demo-password");
-  await page.getByRole("button", { name: "Accedi" }).click();
-}
+import { expect, test } from "@playwright/test";
 
 test.describe("Pricing pages smoke", () => {
-  test("operator can open pricing and margins pages", async ({ page }) => {
-    await loginAs(page, "operator");
-    await expect(page).toHaveURL(/\/pricing$/);
-    await expect(page.getByRole("heading", { name: "Tariffe e Margini" })).toBeVisible();
+  test("pricing route richiede login reale", async ({ page }) => {
+    await page.goto("/pricing");
+    await expect(page).toHaveURL(/\/login\?redirect=%2Fpricing/);
+    await expect(page.getByRole("heading", { name: "Login Supabase" })).toBeVisible();
+  });
 
+  test("margins route richiede login reale", async ({ page }) => {
     await page.goto("/pricing/margins");
-    await expect(page.getByRole("heading", { name: "KPI Margini" })).toBeVisible();
+    await expect(page).toHaveURL(/\/login\?redirect=%2Fpricing%2Fmargins/);
+    await expect(page.getByRole("heading", { name: "Login Supabase" })).toBeVisible();
+  });
+
+  test("login non mostra controlli demo legacy", async ({ page }) => {
+    await page.goto("/login");
+    await expect(page.getByText("Forza demo locale (bypass Supabase)")).toHaveCount(0);
+    await expect(page.locator("select")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Invia link magico via email" })).toBeVisible();
   });
 });
-

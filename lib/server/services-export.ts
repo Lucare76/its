@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { z } from "zod";
+import { formatIsoDateShort } from "@/lib/service-display";
 import { buildServicesQuery } from "@/lib/server/services-filter-builder";
 
 const statusEnum = z.enum(["new", "assigned", "partito", "arrivato", "completato", "problema", "cancelled", "needs_review"]);
@@ -36,6 +37,13 @@ type ServiceRow = {
   pax: number;
   hotel_id: string;
   customer_name: string;
+  billing_party_name: string | null;
+  outbound_time: string | null;
+  return_time: string | null;
+  departure_date: string | null;
+  source_total_amount_cents: number | null;
+  source_price_per_pax_cents: number | null;
+  source_amount_currency: string | null;
   phone: string;
   notes: string;
   meeting_point: string | null;
@@ -148,7 +156,13 @@ function applySheetFormatting(sheet: XLSX.WorkSheet, rows: unknown[][]) {
 function buildSheet(rows: Array<Record<string, string | number>>) {
   const header = [
     "ID",
-    "Data/Ora",
+    "Data andata",
+    "Ora andata",
+    "Data ritorno",
+    "Ora ritorno",
+    "Costo PDF",
+    "Costo PDF/pax",
+    "Valuta PDF",
     "Cliente",
     "Telefono",
     "Pax",
@@ -230,7 +244,7 @@ export async function buildServicesExportXlsx(request: NextRequest) {
         search: filters.search,
         agency_id: role === "agency" ? user.id : undefined
       },
-      select: "id, tenant_id, date, time, service_type, direction, vessel, pax, hotel_id, customer_name, phone, notes, meeting_point, bus_plate, status"
+        select: "id, tenant_id, date, time, service_type, direction, vessel, pax, hotel_id, customer_name, billing_party_name, outbound_time, return_time, departure_date, source_total_amount_cents, source_price_per_pax_cents, source_amount_currency, phone, notes, meeting_point, bus_plate, status"
     })) as any;
 
     let servicesQuery = builtBaseQuery.order("date", { ascending: true }).order("time", { ascending: true });
@@ -297,8 +311,15 @@ export async function buildServicesExportXlsx(request: NextRequest) {
 
       return {
         ID: service.id,
-        "Data/Ora": `${service.date} ${normalizeTime(service.time)}`,
+        "Data andata": formatIsoDateShort(service.date),
+        "Ora andata": normalizeTime(service.outbound_time ?? service.time),
+        "Data ritorno": service.departure_date ? formatIsoDateShort(service.departure_date) : "",
+        "Ora ritorno": normalizeTime(service.return_time ?? ""),
+        "Costo PDF": service.source_total_amount_cents === null ? "" : (service.source_total_amount_cents / 100).toFixed(2),
+        "Costo PDF/pax": service.source_price_per_pax_cents === null ? "" : (service.source_price_per_pax_cents / 100).toFixed(2),
+        "Valuta PDF": service.source_amount_currency ?? "",
         Cliente: service.customer_name,
+        "Agenzia fatturazione": service.billing_party_name ?? "",
         Telefono: service.phone ?? "",
         Pax: service.pax,
         Hotel: hotel?.name ?? "",

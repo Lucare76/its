@@ -1,120 +1,139 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ROLE_COOKIE } from "@/lib/rbac";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
-import { roleSchema } from "@/lib/validation";
-import type { UserRole } from "@/lib/types";
-
-const demoAccounts = [
-  { role: "admin", email: "admin@demo.com" },
-  { role: "operator", email: "operator@demo.com" },
-  { role: "agency", email: "agency@demo.com" },
-  { role: "driver", email: "driver@demo.com" }
-] as const;
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("operator@demo.com");
-  const [role, setRole] = useState<UserRole>("operator");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [forceDemoMode, setForceDemoMode] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem("it-force-demo-login") === "true";
-  });
-  const [message, setMessage] = useState<string>("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<string>("Usa un utente reale Supabase.");
 
   useEffect(() => {
-    window.localStorage.setItem("it-force-demo-login", String(forceDemoMode));
-  }, [forceDemoMode]);
-
-  const setRoleCookie = (nextRole: UserRole) => {
-    const secure = typeof window !== "undefined" && window.location.protocol === "https:";
-    document.cookie = `${ROLE_COOKIE}=${nextRole}; path=/; max-age=86400; samesite=lax${secure ? "; secure" : ""}`;
-  };
+    if (!hasSupabaseEnv || !supabase) {
+      setMessage("Supabase non configurato: imposta le variabili ambiente prima del login.");
+      return;
+    }
+  }, []);
 
   const hardRedirect = (target: string) => {
     window.location.assign(target);
   };
 
+  const ensureSessionReady = async () => {
+    if (!supabase) return false;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const [{ data: sessionData }, { data: userData }] = await Promise.all([supabase.auth.getSession(), supabase.auth.getUser()]);
+      if (sessionData.session && userData.user) {
+        return true;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+    }
+    return false;
+  };
+
   const handleSignIn = async () => {
+    if (loading) return;
+    setLoading(true);
     setMessage("Caricamento...");
     const redirectTarget = new URLSearchParams(window.location.search).get("redirect") ?? "/dashboard";
-    if (forceDemoMode || !hasSupabaseEnv || !supabase) {
-      setRoleCookie(role);
-      setMessage("Accesso demo locale attivo.");
+    try {
+      if (!hasSupabaseEnv || !supabase) {
+        setMessage("Supabase non configurato: login non disponibile.");
+        return;
+      }
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        setMessage(`Login non riuscito: ${error.message}`);
+        return;
+      }
+      const sessionReady = await ensureSessionReady();
+      if (!sessionReady) {
+        setMessage("Login completato ma sessione client non ancora pronta. Riprova tra pochi secondi.");
+        return;
+      }
       hardRedirect(redirectTarget);
-      return;
+    } catch (error) {
+      setMessage(error instanceof Error ? `Errore login: ${error.message}` : "Errore login inatteso.");
+    } finally {
+      setLoading(false);
     }
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setMessage(error.message);
-      return;
+  };
+
+  const handleMagicLink = async () => {
+    if (loading) return;
+    setLoading(true);
+    setMessage("Invio link magico...");
+    try {
+      if (!hasSupabaseEnv || !supabase) {
+        setMessage("Supabase non configurato: impossibile inviare il link.");
+        return;
+      }
+      const emailRedirectTo = `${window.location.origin}/dashboard`;
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo }
+      });
+      if (error) {
+        setMessage(`Invio link non riuscito: ${error.message}`);
+        return;
+      }
+      setMessage(`Link inviato a ${email}. Apri la mail e completa l'accesso.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Errore invio link: ${error.message}` : "Errore invio link inatteso.");
+    } finally {
+      setLoading(false);
     }
-    setRoleCookie(role);
-    hardRedirect(redirectTarget);
   };
 
   return (
-    <section className="mx-auto max-w-lg space-y-4">
-      <h1 className="text-2xl font-semibold">Login Supabase</h1>
+    <section className="mx-auto max-w-lg page-section">
+      <h1 className="section-title">Login Supabase</h1>
       <div className="card space-y-3 p-4">
         <label className="block text-sm">
           Email
           <input
-            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+            data-testid="login-email"
+            className="input-saas mt-1"
             type="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
         </label>
         <label className="block text-sm">
-          Ruolo demo
-          <select
-            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
-            value={role}
-            onChange={(event) => setRole(roleSchema.parse(event.target.value))}
-          >
-            <option value="admin">admin</option>
-            <option value="operator">operator</option>
-            <option value="agency">agency</option>
-            <option value="driver">driver</option>
-          </select>
-        </label>
-        <label className="block text-sm">
           Password
-          <input
-            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </label>
-        <label className="flex items-center gap-2 text-sm text-slate-700">
-          <input
-            type="checkbox"
-            checked={forceDemoMode}
-            onChange={(event) => setForceDemoMode(event.target.checked)}
-          />
-          Forza demo locale (bypass Supabase)
+          <div className="relative mt-1">
+            <input
+              data-testid="login-password"
+              className="input-saas pr-20"
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((prev) => !prev)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+              aria-label={showPassword ? "Nascondi password" : "Mostra password"}
+            >
+              {showPassword ? "Nascondi" : "Mostra"}
+            </button>
+          </div>
         </label>
         <button
+          data-testid="login-submit"
           type="button"
           onClick={handleSignIn}
-          className="w-full rounded-lg bg-brand-600 px-4 py-2 font-medium text-white"
+          disabled={loading}
+          className="btn-primary w-full disabled:opacity-60"
         >
-          Accedi
+          {loading ? "Attendi..." : "Accedi"}
         </button>
-        <p className="text-sm text-slate-600">{message || "Usa gli account demo dal seed SQL."}</p>
-      </div>
-      <div className="card p-4 text-sm">
-        <p className="font-medium text-slate-700">Account demo</p>
-        <ul className="mt-2 space-y-1 text-slate-600">
-          {demoAccounts.map((item) => (
-            <li key={item.email}>
-              {roleSchema.parse(item.role)}: {item.email}
-            </li>
-          ))}
-        </ul>
+        <button type="button" onClick={handleMagicLink} disabled={loading} className="btn-secondary w-full disabled:opacity-60">
+          Invia link magico via email
+        </button>
+        <p className="text-sm text-slate-600">{message}</p>
       </div>
     </section>
   );

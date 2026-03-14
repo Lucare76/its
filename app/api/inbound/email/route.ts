@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { createDraftFromPdfUpload } from "@/lib/server/agency-pdf-import";
 import { parseInboundEmail } from "@/lib/email-parser";
 import { extractPdfTextFromBase64, isPdfAttachment } from "@/lib/server/pdf-text";
 import { tryMatchAndApplyPricing } from "@/lib/server/pricing-matching";
+import { selectAgencyPdfParser } from "@/lib/server/agency-pdf-parser-registry";
 
 export const runtime = "nodejs";
 
@@ -73,6 +75,14 @@ function normalizeTimeOrDefault(value?: string) {
   return `${match[1].padStart(2, "0")}:${match[2]}`;
 }
 
+function extractPracticeNumber(...sources: Array<string | null | undefined>) {
+  for (const source of sources) {
+    const hit = source?.match(/(\d{2}\/\d{6})/);
+    if (hit?.[1]) return hit[1];
+  }
+  return null;
+}
+
 function rateLimited(ip: string) {
   const now = Date.now();
   const current = rateByIp.get(ip);
@@ -90,16 +100,13 @@ async function resolveTenantId(admin: any) {
   const envTenant = process.env.INBOUND_DEFAULT_TENANT_ID;
   if (envTenant) return envTenant;
 
-  const { data: demoTenant } = (await admin
-    .from("tenants")
-    .select("id")
-    .eq("name", "Demo Ischia")
-    .maybeSingle()) as { data: { id?: string } | null };
-  if (demoTenant?.id) return demoTenant.id;
-
-  const { data: firstTenant } = (await admin.from("tenants").select("id").limit(1).maybeSingle()) as {
+  const { data: firstTenant, error: firstTenantError } = (await admin.from("tenants").select("id").limit(1).maybeSingle()) as {
     data: { id?: string } | null;
+    error?: { message?: string } | null;
   };
+  if (firstTenantError) {
+    throw new Error(`Tenant lookup failed: ${firstTenantError.message ?? "unknown error"}`);
+  }
   return firstTenant?.id ?? null;
 }
 
@@ -163,8 +170,82 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "No tenant available" }, { status: 400 });
   }
 
+  const firstPdfAttachment = parsed.data.attachments.find((attachment) => isPdfAttachment(attachment.filename, attachment.mimetype));
+  if (firstPdfAttachment) {
+    try {
+      const pdfBytes = Buffer.from(firstPdfAttachment.base64, "base64");
+      const autoImport = await createDraftFromPdfUpload(
+        {
+          admin,
+          user: { id: null },
+          membership: { tenant_id: tenantId, role: "system" }
+        },
+        {
+          senderEmail: parsed.data.from,
+          subject: parsed.data.subject,
+          filename: firstPdfAttachment.filename,
+          bodyText: parsed.data.body_text,
+          fileBytes: pdfBytes,
+          fileSize: pdfBytes.byteLength
+        }
+      );
+
+      if ("draft_service_id" in autoImport && typeof autoImport.draft_service_id === "string") {
+        const pricingSourceText = [
+          parsed.data.subject,
+          parsed.data.body_text,
+          autoImport.normalized.notes,
+          autoImport.normalized.booking_kind === "transfer_train_hotel" ? "transfer stazione hotel transfer hotel stazione treno" : null,
+          autoImport.normalized.transport_code,
+          autoImport.normalized.arrival_transport_code,
+          autoImport.normalized.departure_transport_code,
+          autoImport.normalized.arrival_place,
+          autoImport.normalized.hotel_or_destination
+        ]
+          .filter(Boolean)
+          .join("\n");
+
+        await tryMatchAndApplyPricing(admin, {
+          tenantId,
+          inboundEmailId: "inbound_email_id" in autoImport ? autoImport.inbound_email_id : null,
+          serviceId: autoImport.draft_service_id,
+          sourceText: pricingSourceText,
+          serviceType: "transfer",
+          direction: "arrival",
+          date: autoImport.normalized.arrival_date,
+          time: autoImport.normalized.outbound_time,
+          pax: autoImport.normalized.passengers,
+          bookingKind: autoImport.normalized.booking_kind,
+          serviceVariant: autoImport.normalized.service_variant
+        });
+      }
+
+      return NextResponse.json({
+        ...autoImport,
+        id: "inbound_email_id" in autoImport && typeof autoImport.inbound_email_id === "string" ? autoImport.inbound_email_id : null,
+        tenant_id: tenantId
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: error instanceof Error ? error.message : "Inbound PDF import failed"
+        },
+        { status: 500 }
+      );
+    }
+  }
+
   const extractedText = pdfTexts.join("\n\n---\n\n") || null;
   const parsedFields = parseInboundEmail([parsed.data.subject, parsed.data.body_text].filter(Boolean).join("\n"), "agency-default", extractedText);
+  const parserSelection = extractedText
+    ? selectAgencyPdfParser({
+        senderEmail: parsed.data.from,
+        subject: parsed.data.subject,
+        filename: parsed.data.attachments[0]?.filename ?? null,
+        extractedText
+      })
+    : null;
 
   const draftDate = isValidIsoDate(parsedFields.date) ? (parsedFields.date as string) : new Date().toISOString().slice(0, 10);
   const draftTime = normalizeTimeOrDefault(parsedFields.time);
@@ -174,12 +255,17 @@ export async function POST(request: NextRequest) {
   const draftPhone = parsedFields.phone?.trim() || "N/D";
   const draftVessel = parsedFields.vessel?.trim() || "Porto/Nave da verificare";
   const draftDirection: "arrival" | "departure" = parsedFields.direction ?? "arrival";
+  const practiceNumber = extractPracticeNumber(parsed.data.subject, parsed.data.body_text, extractedText);
+  const practiceMarker = practiceNumber ? `[practice:${practiceNumber}]` : null;
 
-  const { data: hotelsData } = await admin
+  const { data: hotelsData, error: hotelsError } = await admin
     .from("hotels")
     .select("id, name")
     .eq("tenant_id", tenantId)
     .limit(200);
+  if (hotelsError) {
+    return NextResponse.json({ ok: false, error: `Hotel lookup failed: ${hotelsError.message}` }, { status: 500 });
+  }
   const hotels = (hotelsData ?? []) as Array<{ id: string; name: string }>;
   const matchedHotel = hotels.find((hotel) =>
     parsedFields.hotel ? hotel.name.toLowerCase().includes(parsedFields.hotel.toLowerCase()) : false
@@ -198,6 +284,8 @@ export async function POST(request: NextRequest) {
     parser_suggestions: {
       date: parsedFields.date ?? null,
       time: parsedFields.time ?? null,
+      departure_date: parsedFields.departure_date ?? null,
+      departure_time: parsedFields.departure_time ?? null,
       direction: parsedFields.direction ?? null,
       pax: parsedFields.pax ?? null,
       hotel: parsedFields.hotel ?? null,
@@ -208,6 +296,12 @@ export async function POST(request: NextRequest) {
       confidence: parsedFields.confidence ?? {}
     },
     review_status: "needs_review",
+    pdf_parser: parserSelection
+      ? {
+          key: parserSelection.parserKey,
+          score: parserSelection.score
+        }
+      : null,
     attachments: parsed.data.attachments.map((item) => ({
       filename: item.filename,
       mime_type: item.mimetype,
@@ -264,6 +358,7 @@ export async function POST(request: NextRequest) {
 
   const draftNotes = [
     "[needs_review] Draft creato da inbound email",
+    practiceMarker ?? "",
     `from: ${parsed.data.from}`,
     `subject: ${parsed.data.subject}`,
     parsedFields.pickup ? `pickup/porto: ${parsedFields.pickup}` : "",
@@ -293,16 +388,33 @@ export async function POST(request: NextRequest) {
     { ...draftBasePayload, status: "new" }
   ];
 
-  let draftInsert: { data: { id: string } | null; error: { message?: string } | null } = { data: null, error: null };
-  for (const candidate of draftCandidates) {
-    const attempt = await admin.from("services").insert(candidate).select("id").single();
-    draftInsert = attempt;
-    if (!attempt.error) break;
+  let draftServiceId: string | null = null;
+  if (practiceNumber) {
+    const { data: existingByPractice } = await admin
+      .from("services")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .ilike("notes", `%[practice:${practiceNumber}]%`)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    draftServiceId = existingByPractice?.id ?? null;
   }
 
-  const { data: draftService, error: draftError } = draftInsert;
+  let draftInsert: { data: { id: string } | null; error: { message?: string } | null } = { data: null, error: null };
+  if (!draftServiceId) {
+    for (const candidate of draftCandidates) {
+      const attempt = await admin.from("services").insert(candidate).select("id").single();
+      draftInsert = attempt;
+      if (!attempt.error) {
+        draftServiceId = attempt.data?.id ?? null;
+        break;
+      }
+    }
+  }
 
-  if (draftError) {
+  const draftError = draftInsert.error;
+  if (draftError && !draftServiceId) {
     console.error("Inbound draft service insert error", draftError.message);
     return NextResponse.json(
       {
@@ -314,20 +426,20 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!draftService?.id) {
+  if (!draftServiceId) {
     return NextResponse.json({ ok: false, error: "Inbound stored but draft service creation failed", details: "missing draft id" }, { status: 500 });
   }
 
   const updatedParsedJson = {
     ...(data.parsed_json as Record<string, unknown>),
-    draft_service_id: draftService.id
+    draft_service_id: draftServiceId
   };
   await admin.from("inbound_emails").update({ parsed_json: updatedParsedJson }).eq("id", data.id).eq("tenant_id", tenantId);
 
   await tryMatchAndApplyPricing(admin, {
     tenantId,
     inboundEmailId: data.id,
-    serviceId: draftService.id,
+    serviceId: draftServiceId,
     sourceText: [parsed.data.subject, parsed.data.body_text, extractedText ?? ""].filter(Boolean).join("\n"),
     serviceType: "transfer",
     direction: draftDirection,
@@ -340,7 +452,7 @@ export async function POST(request: NextRequest) {
     ok: true,
     id: data.id,
     tenant_id: tenantId,
-    draft_service_id: draftService.id,
+    draft_service_id: draftServiceId,
     extracted_text: extractedText,
     parsed_json: updatedParsedJson
   });

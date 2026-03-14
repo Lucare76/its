@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { inferZoneFromText, zoneCentroids } from "@/lib/hotel-geocoding";
@@ -88,6 +90,7 @@ function parseHotelCsv(text: string): ParsedHotel[] {
 }
 
 export default function OnboardingPage() {
+  const router = useRouter();
   const [step, setStep] = useState<WizardStep>(1);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [companyName, setCompanyName] = useState("");
@@ -102,12 +105,7 @@ export default function OnboardingPage() {
   const [hotelRows, setHotelRows] = useState<ParsedHotel[]>([]);
   const [zonesText, setZonesText] = useState("");
   const [portsText, setPortsText] = useState("");
-
-  useEffect(() => {
-    if (!message) return;
-    const timeout = window.setTimeout(() => setMessage(""), 2500);
-    return () => window.clearTimeout(timeout);
-  }, [message]);
+  const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
 
   const loadContext = async () => {
     if (!hasSupabaseEnv || !supabase) {
@@ -137,6 +135,7 @@ export default function OnboardingPage() {
       setTenantId(body.tenant.id);
       setCompanyName(body.tenant.name ?? "");
       setStep(2);
+      setShowAdvancedSetup(false);
       await loadGeoSettings(body.tenant.id);
     } else {
       setStep(1);
@@ -214,8 +213,12 @@ export default function OnboardingPage() {
       setTenantId(body.tenant.id);
       setCompanyName(body.tenant.name);
       setStep(2);
-      setMessage("Step 1 completato.");
+      setShowAdvancedSetup(false);
+      setMessage("Step 1 completato. Reindirizzamento alla dashboard...");
       await loadGeoSettings(body.tenant.id);
+      window.setTimeout(() => {
+        router.push("/dashboard");
+      }, 450);
     } finally {
       setLoading(false);
     }
@@ -292,7 +295,7 @@ export default function OnboardingPage() {
           return;
         }
         if ((body?.failed?.length ?? 0) > 0) {
-          setMessage(`Driver creati con warning: ${body?.failed?.length} non inseriti.`);
+          setMessage(`Driver creati con avviso: ${body?.failed?.length} non inseriti.`);
         }
       }
 
@@ -316,7 +319,7 @@ export default function OnboardingPage() {
       setDrivers([]);
       setVehicles([]);
       setStep(3);
-      setMessage("Step 2 completato.");
+      setMessage("Passo 2 completato.");
     } finally {
       setLoading(false);
     }
@@ -418,19 +421,27 @@ export default function OnboardingPage() {
     <section className="mx-auto max-w-4xl space-y-4 pb-8">
       <header className="card space-y-3 p-4">
         <h1 className="text-xl font-semibold">Onboarding Tenant</h1>
-        <p className="text-sm text-muted">Wizard iniziale: azienda, driver/mezzi, hotel CSV, zone/porti.</p>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {stepBadges.map((item) => (
-            <div
-              key={item.id}
-              className={`rounded-xl border px-3 py-2 text-xs ${
-                step >= (item.id as WizardStep) ? "border-blue-300 bg-blue-50 text-blue-900" : "border-border text-muted"
-              }`}
-            >
-              Step {item.id}: {item.label}
-            </div>
-          ))}
+        <p className="text-sm text-muted">Per iniziare la demo basta creare l&apos;azienda (Step 1).</p>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-surface-2 p-3 text-xs">
+          <p className="text-muted">Setup avanzato (driver, mezzi, hotel CSV, zone) opzionale: puoi farlo anche dopo.</p>
+          <button type="button" onClick={() => setShowAdvancedSetup((prev) => !prev)} className="btn-secondary px-3 py-1.5 text-xs">
+            {showAdvancedSetup ? "Nascondi setup avanzato" : "Mostra setup avanzato"}
+          </button>
         </div>
+        {showAdvancedSetup ? (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {stepBadges.map((item) => (
+              <div
+                key={item.id}
+                className={`rounded-xl border px-3 py-2 text-xs ${
+                  step >= (item.id as WizardStep) ? "border-blue-300 bg-blue-50 text-blue-900" : "border-border text-muted"
+                }`}
+              >
+                Step {item.id}: {item.label}
+              </div>
+            ))}
+          </div>
+        ) : null}
       </header>
 
       <article className="card space-y-3 p-4">
@@ -446,12 +457,19 @@ export default function OnboardingPage() {
             {loading ? "Salvataggio..." : "Salva Step 1"}
           </button>
         </div>
-        {tenantId ? <p className="text-xs text-muted">Tenant attivo: {tenantId}</p> : null}
+        {tenantId ? (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-muted">Tenant attivo: {tenantId}</p>
+            <Link href="/dashboard" className="btn-secondary px-3 py-1.5 text-xs">
+              Vai alla dashboard
+            </Link>
+          </div>
+        ) : null}
       </article>
 
-      {step >= 2 ? (
+      {showAdvancedSetup && step >= 2 ? (
         <article className="card space-y-4 p-4">
-          <h2 className="text-base font-semibold">Step 2 - Driver e mezzi</h2>
+          <h2 className="text-base font-semibold">Passo 2 - Driver e mezzi</h2>
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="space-y-2 rounded-xl border border-border p-3">
               <p className="text-sm font-medium">Aggiungi driver</p>
@@ -524,12 +542,12 @@ export default function OnboardingPage() {
             </div>
           </div>
           <button type="button" onClick={() => void saveStep2()} disabled={loading} className="btn-primary h-[42px] px-4 disabled:opacity-50">
-            {loading ? "Salvataggio..." : "Salva Step 2"}
+            {loading ? "Salvataggio..." : "Salva Passo 2"}
           </button>
         </article>
       ) : null}
 
-      {step >= 3 ? (
+      {showAdvancedSetup && step >= 3 ? (
         <article className="card space-y-3 p-4">
           <h2 className="text-base font-semibold">Step 3 - Import hotel CSV</h2>
           <p className="text-xs text-muted">CSV semplice con header: `name,address,zone,lat,lng` (lat/lng opzionali).</p>
@@ -549,7 +567,7 @@ export default function OnboardingPage() {
         </article>
       ) : null}
 
-      {step >= 4 ? (
+      {showAdvancedSetup && step >= 4 ? (
         <article className="card space-y-3 p-4">
           <h2 className="text-base font-semibold">Step 4 - Zone e porti</h2>
           <div className="grid gap-3 sm:grid-cols-2">

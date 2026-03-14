@@ -1,12 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ExportServicesButton } from "@/components/export-services-button";
 import { KpiCard } from "@/components/kpi-card";
 import { ServicesTable } from "@/components/services-table";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
-import { useDemoStore } from "@/lib/use-demo-store";
+import { EmptyState, PageHeader, SidePanel } from "@/components/ui";
+import { needsInboxReview } from "@/lib/inbox-review";
+import { formatServiceSlot, getCustomerFullName, getOutboundTime } from "@/lib/service-display";
+import { getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
+import { supabase } from "@/lib/supabase/client";
+import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import type { Hotel, Service } from "@/lib/types";
 
 interface SuggestedGroup {
@@ -28,164 +32,13 @@ function floorToThirtyMinutes(time: string) {
 }
 
 export default function OperatorDashboardPage() {
-  const { state, loading, upsertAssignment, markServiceAssigned, replaceTenantOperationalData } = useDemoStore();
-  const [hotelsCount, setHotelsCount] = useState<string>("...");
+  const { loading, liveConnected, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData({ includeInboundEmails: true });
   const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
   const [appliedGroupIds, setAppliedGroupIds] = useState<string[]>([]);
   const [skippedGroupIds, setSkippedGroupIds] = useState<string[]>([]);
   const [applyingGroupId, setApplyingGroupId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [liveConnected, setLiveConnected] = useState(false);
   const [alertNowMs, setAlertNowMs] = useState(0);
-
-  useEffect(() => {
-    let isActive = true;
-
-    const loadHotelsCount = async () => {
-      if (!hasSupabaseEnv || !supabase) {
-        if (isActive) setHotelsCount(String(state.hotels.length));
-        return;
-      }
-
-      const { data: userData, error: userError } = await supabase.auth.getUser();
-      if (userError || !userData.user) {
-        if (isActive) setHotelsCount("N/D");
-        return;
-      }
-
-      const { data: membership, error: membershipError } = await supabase
-        .from("memberships")
-        .select("tenant_id")
-        .eq("user_id", userData.user.id)
-        .maybeSingle();
-
-      if (membershipError || !membership?.tenant_id) {
-        if (isActive) setHotelsCount("N/D");
-        return;
-      }
-
-      const { count, error: countError } = await supabase
-        .from("hotels")
-        .select("id", { count: "exact", head: true })
-        .eq("tenant_id", membership.tenant_id);
-
-      if (countError) {
-        if (isActive) setHotelsCount("N/D");
-        return;
-      }
-
-      if (isActive) setHotelsCount(String(count ?? 0));
-    };
-
-    void loadHotelsCount();
-    return () => {
-      isActive = false;
-    };
-  }, [state.hotels.length]);
-
-  useEffect(() => {
-    const client = supabase;
-    if (!hasSupabaseEnv || !client) return;
-
-    let isActive = true;
-    let refreshTimeout: number | null = null;
-    let fallbackInterval: number | null = null;
-
-    const loadTenantData = async (tenantId: string) => {
-      const [servicesResult, assignmentsResult, statusEventsResult, hotelsResult, membershipsResult] = await Promise.all([
-        client.from("services").select("*").eq("tenant_id", tenantId),
-        client.from("assignments").select("*").eq("tenant_id", tenantId),
-        client.from("status_events").select("*").eq("tenant_id", tenantId),
-        client.from("hotels").select("*").eq("tenant_id", tenantId),
-        client.from("memberships").select("*").eq("tenant_id", tenantId)
-      ]);
-
-      if (
-        servicesResult.error ||
-        assignmentsResult.error ||
-        statusEventsResult.error ||
-        hotelsResult.error ||
-        membershipsResult.error
-      ) {
-        return;
-      }
-
-      if (!isActive) return;
-
-      replaceTenantOperationalData(tenantId, {
-        services: servicesResult.data ?? [],
-        assignments: assignmentsResult.data ?? [],
-        statusEvents: statusEventsResult.data ?? [],
-        hotels: hotelsResult.data ?? [],
-        memberships: membershipsResult.data ?? []
-      });
-    };
-
-    const initRealtime = async () => {
-      const { data: userData, error: userError } = await client.auth.getUser();
-      if (userError || !userData.user || !isActive) return;
-
-      const { data: membership, error: membershipError } = await client
-        .from("memberships")
-        .select("tenant_id")
-        .eq("user_id", userData.user.id)
-        .maybeSingle();
-
-      if (membershipError || !membership?.tenant_id || !isActive) return;
-
-      const tenantId = membership.tenant_id;
-      await loadTenantData(tenantId);
-
-      const scheduleRefresh = () => {
-        if (!isActive) return;
-        if (refreshTimeout) window.clearTimeout(refreshTimeout);
-        refreshTimeout = window.setTimeout(() => {
-          void loadTenantData(tenantId);
-        }, 400);
-      };
-
-      const channel = client
-        .channel(`operator-live-${tenantId}`)
-        .on("postgres_changes", { event: "*", schema: "public", table: "services", filter: `tenant_id=eq.${tenantId}` }, scheduleRefresh)
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "assignments", filter: `tenant_id=eq.${tenantId}` },
-          scheduleRefresh
-        )
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "status_events", filter: `tenant_id=eq.${tenantId}` },
-          scheduleRefresh
-        );
-
-      channel.subscribe((status) => {
-        if (!isActive) return;
-        setLiveConnected(status === "SUBSCRIBED");
-      });
-
-      fallbackInterval = window.setInterval(() => {
-        void loadTenantData(tenantId);
-      }, 20000);
-
-      return channel;
-    };
-
-    let activeChannel: ReturnType<typeof client.channel> | null = null;
-    void initRealtime().then((channel) => {
-      if (!channel || !isActive) return;
-      activeChannel = channel;
-    });
-
-    return () => {
-      isActive = false;
-      setLiveConnected(false);
-      if (refreshTimeout) window.clearTimeout(refreshTimeout);
-      if (fallbackInterval) window.clearInterval(fallbackInterval);
-      if (activeChannel) {
-        void client.removeChannel(activeChannel);
-      }
-    };
-  }, [replaceTenantOperationalData]);
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -203,28 +56,28 @@ export default function OperatorDashboardPage() {
   if (loading) {
     return <div className="card p-4 text-sm text-slate-500">Caricamento dashboard...</div>;
   }
+  if (errorMessage) {
+    return (
+      <div className="card space-y-2 p-4 text-sm text-muted">
+        <p>{errorMessage}</p>
+        {errorMessage.toLowerCase().includes("onboarding") ? (
+          <Link href="/onboarding" className="btn-primary inline-flex px-3 py-1.5 text-xs">
+            Vai a onboarding
+          </Link>
+        ) : null}
+      </div>
+    );
+  }
 
-  const tenantId = state.memberships[0]?.tenant_id ?? state.services[0]?.tenant_id ?? null;
-  const tenantServices = tenantId ? state.services.filter((service) => service.tenant_id === tenantId) : state.services;
-  const todayServices = state.services.filter((service) => service.date === "2026-03-02");
-  const tenantTodayServices = tenantId ? todayServices.filter((service) => service.tenant_id === tenantId) : todayServices;
-  const tenantHotels = tenantId ? state.hotels.filter((hotel) => hotel.tenant_id === tenantId) : state.hotels;
-  const tenantAssignments = tenantId
-    ? state.assignments.filter((assignment) => assignment.tenant_id === tenantId)
-    : state.assignments;
-  const tenantMemberships = tenantId
-    ? state.memberships.filter((membership) => membership.tenant_id === tenantId)
-    : state.memberships;
-  const tenantStatusEvents = tenantId
-    ? state.statusEvents.filter((event) => event.tenant_id === tenantId)
-    : state.statusEvents;
-  const tenantInboundEmails = tenantId
-    ? state.inboundEmails.filter((email) => email.tenant_id === tenantId)
-    : state.inboundEmails;
-  const hotelsById = new Map(tenantHotels.map((hotel) => [hotel.id, hotel]));
-  const assignmentsByServiceId = new Map(tenantAssignments.map((assignment) => [assignment.service_id, assignment]));
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayServices = data.services.filter((service) => service.date === todayIso);
+  const todayPdfServices = todayServices.filter((service) => getServicePdfOperationalMeta(service, data.inboundEmails).isPdf);
+  const todayPdfNeedsAttention = todayServices.filter((service) => getServicePdfOperationalMeta(service, data.inboundEmails).reviewRecommended);
+  const inboxToReview = data.inboundEmails.filter((email) => needsInboxReview(email.parsed_json));
+  const hotelsById = new Map(data.hotels.map((hotel) => [hotel.id, hotel]));
+  const assignmentsByServiceId = new Map(data.assignments.map((assignment) => [assignment.service_id, assignment]));
 
-  const unassignedServices = tenantTodayServices.filter(
+  const unassignedServices = todayServices.filter(
     (service) => service.status === "new" || (service.status as string) === "unassigned" || !assignmentsByServiceId.has(service.id)
   );
 
@@ -233,7 +86,7 @@ export default function OperatorDashboardPage() {
     const hotel = hotelsById.get(service.hotel_id);
     if (!hotel) continue;
 
-    const windowLabel = floorToThirtyMinutes(service.time);
+    const windowLabel = floorToThirtyMinutes(getOutboundTime(service) ?? service.time);
     const key = `${service.date}|${service.vessel}|${windowLabel}|${hotel.zone}`;
     const existing = groupsMap.get(key);
 
@@ -264,149 +117,100 @@ export default function OperatorDashboardPage() {
   const reminderAlertMinutes = Number(process.env.NEXT_PUBLIC_REMINDER_ALERT_MINUTES ?? "30");
   const reminderAlertThresholdMs = (Number.isFinite(reminderAlertMinutes) ? reminderAlertMinutes : 30) * 60 * 1000;
   const nowMs = alertNowMs;
-  const undeliveredReminderAlerts = tenantServices.filter((service) => {
+  const undeliveredReminderAlerts = data.services.filter((service) => {
     if (service.reminder_status !== "sent" || !service.sent_at) return false;
     const sentAtMs = new Date(service.sent_at).getTime();
     if (!Number.isFinite(sentAtMs)) return false;
     return nowMs - sentAtMs > reminderAlertThresholdMs;
   });
-  const pending = tenantTodayServices.filter((service) => service.status === "new").length;
-  const activeDrivers = new Set(tenantAssignments.map((assignment) => assignment.driver_user_id).filter(Boolean)).size;
-  const totalPax = tenantTodayServices.reduce((sum, service) => sum + service.pax, 0);
-  const sortedDates = [...new Set(tenantTodayServices.map((service) => service.date))].sort();
-  const defaultDateFrom = sortedDates[0] ?? "2026-03-02";
+  const pending = todayServices.filter((service) => service.status === "new").length;
+  const activeDrivers = new Set(data.assignments.map((assignment) => assignment.driver_user_id).filter(Boolean)).size;
+  const totalPax = todayServices.reduce((sum, service) => sum + service.pax, 0);
+  const sortedDates = [...new Set(todayServices.map((service) => service.date))].sort();
+  const defaultDateFrom = sortedDates[0] ?? todayIso;
   const defaultDateTo = sortedDates[sortedDates.length - 1] ?? defaultDateFrom;
 
   const applySuggestion = async (group: SuggestedGroup) => {
-    if (applyingGroupId || appliedGroupIds.includes(group.id) || skippedGroupIds.includes(group.id)) return;
+    if (!supabase || !tenantId || !userId || applyingGroupId || appliedGroupIds.includes(group.id) || skippedGroupIds.includes(group.id)) return;
 
     const serviceIds = group.services.map((service) => service.id);
-    const fallbackByUserId = tenantMemberships.find((membership) => membership.role === "operator")?.user_id ?? "system";
     setApplyingGroupId(group.id);
 
-    if (hasSupabaseEnv && supabase) {
-      const { data: userData, error: userError } = await supabase.auth.getUser();
-      if (userError || !userData.user) {
-        setApplyingGroupId(null);
-        setToastMessage("Apply failed: user not authenticated");
-        return;
-      }
+    const { data: existingAssignments, error: readAssignmentsError } = await supabase
+      .from("assignments")
+      .select("id, service_id, driver_user_id")
+      .eq("tenant_id", tenantId)
+      .in("service_id", serviceIds);
 
-      const byUserId = userData.user.id;
-      const { data: membership, error: membershipError } = await supabase
-        .from("memberships")
-        .select("tenant_id")
-        .eq("user_id", byUserId)
-        .maybeSingle();
+    if (readAssignmentsError) {
+      setApplyingGroupId(null);
+      setToastMessage("Applicazione fallita: errore lettura assegnazioni");
+      return;
+    }
 
-      if (membershipError || !membership?.tenant_id) {
-        setApplyingGroupId(null);
-        setToastMessage("Apply failed: tenant not found");
-        return;
-      }
-
-      const { data: existingAssignments, error: readAssignmentsError } = await supabase
+    const existingByService = new Map((existingAssignments ?? []).map((row) => [row.service_id, row]));
+    for (const serviceId of serviceIds) {
+      const existing = existingByService.get(serviceId);
+      if (!existing) continue;
+      const { error: updateError } = await supabase
         .from("assignments")
-        .select("id, service_id, driver_user_id")
-        .eq("tenant_id", membership.tenant_id)
-        .in("service_id", serviceIds);
-
-      if (readAssignmentsError) {
+        .update({ vehicle_label: group.suggestedVehicle, driver_user_id: existing.driver_user_id })
+        .eq("id", existing.id)
+        .eq("tenant_id", tenantId);
+      if (updateError) {
         setApplyingGroupId(null);
-        setToastMessage("Apply failed: assignments read error");
+        setToastMessage("Applicazione fallita: errore aggiornamento assegnazione");
         return;
-      }
-
-      const existingByService = new Map((existingAssignments ?? []).map((row) => [row.service_id, row]));
-
-      for (const serviceId of serviceIds) {
-        const existing = existingByService.get(serviceId);
-        if (!existing) continue;
-        const { error: updateError } = await supabase
-          .from("assignments")
-          .update({ vehicle_label: group.suggestedVehicle, driver_user_id: existing.driver_user_id })
-          .eq("id", existing.id)
-          .eq("tenant_id", membership.tenant_id);
-        if (updateError) {
-          setApplyingGroupId(null);
-          setToastMessage("Apply failed: assignment update error");
-          return;
-        }
-      }
-
-      const inserts = serviceIds
-        .filter((serviceId) => !existingByService.has(serviceId))
-        .map((serviceId) => ({
-          tenant_id: membership.tenant_id,
-          service_id: serviceId,
-          vehicle_label: group.suggestedVehicle,
-          driver_user_id: null as string | null
-        }));
-
-      if (inserts.length > 0) {
-        const { error: insertError } = await supabase.from("assignments").insert(inserts);
-        if (insertError) {
-          setApplyingGroupId(null);
-          setToastMessage(`Apply failed: ${insertError.message}`);
-          return;
-        }
-      }
-
-      const { error: serviceUpdateError } = await supabase
-        .from("services")
-        .update({ status: "assigned" })
-        .eq("tenant_id", membership.tenant_id)
-        .in("id", serviceIds)
-        .neq("status", "assigned");
-
-      if (serviceUpdateError) {
-        setApplyingGroupId(null);
-        setToastMessage("Apply failed: service update error");
-        return;
-      }
-
-      const { data: existingAssignedEvents, error: readEventsError } = await supabase
-        .from("status_events")
-        .select("service_id")
-        .eq("tenant_id", membership.tenant_id)
-        .eq("status", "assigned")
-        .in("service_id", serviceIds);
-
-      if (readEventsError) {
-        setApplyingGroupId(null);
-        setToastMessage("Apply failed: status events read error");
-        return;
-      }
-
-      const existingEventServiceIds = new Set((existingAssignedEvents ?? []).map((row) => row.service_id));
-      const statusEventsToInsert = serviceIds
-        .filter((serviceId) => !existingEventServiceIds.has(serviceId))
-        .map((serviceId) => ({
-          tenant_id: membership.tenant_id,
-          service_id: serviceId,
-          status: "assigned" as const,
-          by_user_id: byUserId
-        }));
-
-      if (statusEventsToInsert.length > 0) {
-        const { error: insertEventsError } = await supabase.from("status_events").insert(statusEventsToInsert);
-        if (insertEventsError) {
-          setApplyingGroupId(null);
-          setToastMessage("Apply failed: status events insert error");
-          return;
-        }
       }
     }
 
-    for (const service of group.services) {
-      const existing = assignmentsByServiceId.get(service.id);
-      upsertAssignment(service.id, group.suggestedVehicle, existing?.driver_user_id ?? null);
-      markServiceAssigned(service.id, fallbackByUserId);
+    const inserts = serviceIds
+      .filter((serviceId) => !existingByService.has(serviceId))
+      .map((serviceId) => ({
+        tenant_id: tenantId,
+        service_id: serviceId,
+        vehicle_label: group.suggestedVehicle,
+        driver_user_id: null as string | null
+      }));
+    if (inserts.length > 0) {
+      const { error: insertError } = await supabase.from("assignments").insert(inserts);
+      if (insertError) {
+        setApplyingGroupId(null);
+        setToastMessage(`Applicazione fallita: ${insertError.message}`);
+        return;
+      }
     }
 
+    const { error: serviceUpdateError } = await supabase.from("services").update({ status: "assigned" }).eq("tenant_id", tenantId).in("id", serviceIds).neq("status", "assigned");
+    if (serviceUpdateError) {
+      setApplyingGroupId(null);
+      setToastMessage("Applicazione fallita: errore aggiornamento servizio");
+      return;
+    }
+
+    const { data: existingAssignedEvents } = await supabase
+      .from("status_events")
+      .select("service_id")
+      .eq("tenant_id", tenantId)
+      .eq("status", "assigned")
+      .in("service_id", serviceIds);
+    const existingEventServiceIds = new Set((existingAssignedEvents ?? []).map((row) => row.service_id));
+    const statusEventsToInsert = serviceIds
+      .filter((serviceId) => !existingEventServiceIds.has(serviceId))
+      .map((serviceId) => ({
+        tenant_id: tenantId,
+        service_id: serviceId,
+        status: "assigned" as const,
+        by_user_id: userId
+      }));
+    if (statusEventsToInsert.length > 0) {
+      await supabase.from("status_events").insert(statusEventsToInsert);
+    }
+
+    await refresh();
     setAppliedGroupIds((prev) => (prev.includes(group.id) ? prev : [...prev, group.id]));
     setApplyingGroupId(null);
-    setToastMessage(`Applied to ${group.services.length} services`);
+    setToastMessage(`Applicato a ${group.services.length} servizi`);
   };
 
   const skipSuggestion = (groupId: string) => {
@@ -414,150 +218,137 @@ export default function OperatorDashboardPage() {
   };
 
   return (
-    <section className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">Dashboard Oggi</h1>
-          <span className={liveConnected ? "live-dot" : "inline-flex items-center gap-2 rounded-full bg-surface-2 px-2.5 py-1 text-xs text-muted"}>
-            {liveConnected ? "Live" : "Offline"}
-          </span>
+    <section className="page-section">
+      <PageHeader
+        title="Dashboard Oggi"
+        breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Cruscotto" }]}
+        badge={<span className={liveConnected ? "live-dot" : "inline-flex items-center gap-2 rounded-full bg-surface-2 px-2.5 py-1 text-xs text-muted"}>{liveConnected ? "In tempo reale" : "Non in linea"}</span>}
+        actions={
+          <>
+            <ExportServicesButton defaultDateFrom={defaultDateFrom} defaultDateTo={defaultDateTo} />
+            <button type="button" onClick={() => setIsSuggestionsOpen(true)} className="btn-secondary">
+              Suggerimenti Dispatch
+            </button>
+            <Link href="/services/new" className="btn-primary">
+              Nuova prenotazione
+            </Link>
+            <Link href="/dispatch" className="btn-secondary">
+              Assegnazioni
+            </Link>
+          </>
+        }
+      />
+      <article className="card space-y-3 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-text">Demo Rapida (5 minuti)</p>
+          <p className="text-xs text-muted">Sequenza consigliata per presentazione commerciale</p>
         </div>
-        <div className="flex gap-2">
-          <ExportServicesButton defaultDateFrom={defaultDateFrom} defaultDateTo={defaultDateTo} />
-          <button
-            type="button"
-            onClick={() => setIsSuggestionsOpen(true)}
-            className="btn-secondary"
-          >
-            Suggested Dispatch
-          </button>
-          <Link href="/services/new" className="btn-primary">
-            Nuova prenotazione
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <Link href="/agency/new-booking" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
+            1. Nuova prenotazione agenzia
           </Link>
-          <Link href="/dispatch" className="btn-secondary">
-            Dispatch
+          <Link href="/inbox" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
+            2. Inbox / Upload PDF draft
+          </Link>
+          <Link href="/dispatch" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
+            3. Assegna driver e mezzo
+          </Link>
+          <Link href="/driver" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
+            4. Verifica area autista
           </Link>
         </div>
-      </div>
-      <div className="grid gap-3 md:grid-cols-6">
-        <KpiCard label="Servizi oggi" value={String(tenantTodayServices.length)} hint="Operativita giornaliera" />
+      </article>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+        <KpiCard label="Servizi oggi" value={String(todayServices.length)} hint="Operativita giornaliera" />
         <KpiCard label="Da assegnare" value={String(pending)} hint="Servizi stato new" />
         <KpiCard label="Driver attivi" value={String(activeDrivers)} hint="Con almeno un servizio" />
         <KpiCard label="Pax oggi" value={String(totalPax)} hint="Totale passeggeri" />
-        <KpiCard
-          label="Non consegnato"
-          value={String(undeliveredReminderAlerts.length)}
-          hint={`Reminder > ${Number.isFinite(reminderAlertMinutes) ? reminderAlertMinutes : 30} min in stato sent`}
-        />
+        <KpiCard label="Booking PDF oggi" value={String(todayPdfServices.length)} hint="Import confermati da PDF" />
+        <KpiCard label="PDF da verificare" value={String(todayPdfNeedsAttention.length)} hint="Quality low o review consigliata" />
+        <KpiCard label="Non consegnato" value={String(undeliveredReminderAlerts.length)} hint={`Reminder > ${Number.isFinite(reminderAlertMinutes) ? reminderAlertMinutes : 30} min in stato sent`} />
+        <Link href="/inbox" className="block">
+          <KpiCard label="Inbox da revisionare" value={String(inboxToReview.length)} hint="Email nuove o in needs_review" />
+        </Link>
         <Link href="/hotels" className="block">
-          <KpiCard label="Hotels" value={hotelsCount} hint="Totale hotel tenant corrente" />
+          <KpiCard label="Hotel" value={String(data.hotels.length)} hint="Totale hotel tenant corrente" />
         </Link>
       </div>
       <p className="text-sm text-muted">
-        Unassigned oggi: <span className="font-semibold">{unassignedServices.length}</span> | Coperti dai suggerimenti:{" "}
+        Non assegnati oggi: <span className="font-semibold">{unassignedServices.length}</span> | Coperti dai suggerimenti:{" "}
         <span className="font-semibold">{coveredBySuggestions}</span>
       </p>
       {undeliveredReminderAlerts.length > 0 ? (
         <article className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           <p className="font-semibold">
-            Reminder non consegnati oltre {Number.isFinite(reminderAlertMinutes) ? reminderAlertMinutes : 30} minuti:{" "}
-            {undeliveredReminderAlerts.length}
+            Reminder non consegnati oltre {Number.isFinite(reminderAlertMinutes) ? reminderAlertMinutes : 30} minuti: {undeliveredReminderAlerts.length}
           </p>
           <ul className="mt-1 space-y-1">
             {undeliveredReminderAlerts.slice(0, 5).map((service) => (
               <li key={service.id}>
-                {service.date} {service.time} | {service.customer_name}
+                {formatServiceSlot(service)} | {getCustomerFullName(service)}
               </li>
             ))}
           </ul>
         </article>
       ) : null}
-      <ServicesTable
-        services={tenantTodayServices}
-        hotels={tenantHotels}
-        assignments={tenantAssignments}
-        memberships={tenantMemberships}
-        statusEvents={tenantStatusEvents}
-        inboundEmails={tenantInboundEmails}
-      />
-      {isSuggestionsOpen ? (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/30">
-          <aside className="h-full w-full max-w-2xl overflow-y-auto bg-white p-4 shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-              <div>
-                <h2 className="text-lg font-semibold">Suggested Dispatch</h2>
-                <p className="text-sm text-slate-500">Preview deterministico per i servizi di oggi non assegnati.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsSuggestionsOpen(false)}
-                className="btn-secondary px-3 py-1 text-sm"
-              >
-                Chiudi
-              </button>
-            </div>
-            <div className="mt-4 space-y-3">
-              {suggestedGroups.filter((group) => !appliedGroupIds.includes(group.id) && !skippedGroupIds.includes(group.id)).length ===
-              0 ? (
-                <p className="card p-3 text-sm text-slate-500">Nessun suggerimento disponibile.</p>
-              ) : (
-                suggestedGroups
-                  .filter((group) => !appliedGroupIds.includes(group.id) && !skippedGroupIds.includes(group.id))
-                  .map((group) => {
-                  const isApplied = appliedGroupIds.includes(group.id);
-                  const isSkipped = skippedGroupIds.includes(group.id);
-                  return (
-                    <article key={group.id} className="card space-y-2 p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-medium">
-                          {group.vessel} | {group.windowLabel} | {group.zone}
-                        </p>
-                        <p className="text-sm text-muted">
-                          Totale pax: <span className="font-semibold">{group.totalPax}</span> | Veicolo:{" "}
-                          <span className="font-semibold">{group.suggestedVehicle}</span>
-                        </p>
-                      </div>
-                      <ul className="space-y-1 text-sm text-slate-700">
-                        {group.services.map((service) => {
-                          const hotel = hotelsById.get(service.hotel_id);
-                          return (
-                            <li key={service.id}>
-                              {service.customer_name} | pax {service.pax} | {hotel?.name ?? "Hotel N/D"}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                      <div className="flex gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => void applySuggestion(group)}
-                          disabled={isApplied || isSkipped || applyingGroupId === group.id}
-                          className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50"
-                        >
-                          {applyingGroupId === group.id ? "Applying..." : isApplied ? "Applied" : "Apply suggestion"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => skipSuggestion(group.id)}
-                          disabled={isApplied || isSkipped}
-                          className="btn-secondary px-3 py-1.5 text-sm disabled:opacity-50"
-                        >
-                          {isSkipped ? "Skipped" : "Skip"}
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })
-              )}
-            </div>
-          </aside>
-        </div>
+      {inboxToReview.length > 0 ? (
+        <article className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+          <p className="font-semibold">Inbox da processare: {inboxToReview.length}</p>
+          <p className="mt-1 text-red-800">
+            Apri{" "}
+            <Link href="/inbox" className="underline">
+              Posta in arrivo
+            </Link>{" "}
+            per revisionare email e confermare i draft servizio.
+          </p>
+        </article>
       ) : null}
-      {toastMessage ? (
-        <div className="fixed bottom-4 right-4 z-[60] rounded-lg bg-slate-900 px-4 py-2 text-sm text-white shadow-lg">
-          {toastMessage}
+      <ServicesTable services={todayServices} hotels={data.hotels} assignments={data.assignments} memberships={data.memberships} statusEvents={data.statusEvents} inboundEmails={data.inboundEmails} />
+      <SidePanel open={isSuggestionsOpen} onClose={() => setIsSuggestionsOpen(false)} title="Suggerimenti Dispatch" subtitle="Anteprima deterministica per i servizi di oggi non assegnati.">
+        <div className="mt-4 space-y-3">
+          {suggestedGroups.filter((group) => !appliedGroupIds.includes(group.id) && !skippedGroupIds.includes(group.id)).length === 0 ? (
+            <EmptyState title="Nessun suggerimento disponibile." compact />
+          ) : (
+            suggestedGroups
+              .filter((group) => !appliedGroupIds.includes(group.id) && !skippedGroupIds.includes(group.id))
+              .map((group) => {
+                const isApplied = appliedGroupIds.includes(group.id);
+                const isSkipped = skippedGroupIds.includes(group.id);
+                return (
+                  <article key={group.id} className="card space-y-2 p-3 md:p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="line-clamp-2 font-medium">
+                        {group.vessel} | {group.windowLabel} | {group.zone}
+                      </p>
+                      <p className="text-sm text-muted">
+                        Totale pax: <span className="font-semibold">{group.totalPax}</span> | Veicolo: <span className="font-semibold">{group.suggestedVehicle}</span>
+                      </p>
+                    </div>
+                    <ul className="space-y-1 text-sm text-slate-700">
+                      {group.services.map((service) => {
+                        const hotel = hotelsById.get(service.hotel_id);
+                        return (
+                          <li key={service.id} className="text-safe-wrap">
+                            {getCustomerFullName(service)} | pax {service.pax} | {hotel?.name ?? "Hotel N/D"}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <div className="flex gap-2 pt-1">
+                      <button type="button" onClick={() => void applySuggestion(group)} disabled={isApplied || isSkipped || applyingGroupId === group.id} className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50">
+                        {applyingGroupId === group.id ? "Applicazione..." : isApplied ? "Applicato" : "Applica suggerimento"}
+                      </button>
+                      <button type="button" onClick={() => skipSuggestion(group.id)} disabled={isApplied || isSkipped} className="btn-secondary px-3 py-1.5 text-sm disabled:opacity-50">
+                        {isSkipped ? "Saltato" : "Salta"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })
+          )}
         </div>
-      ) : null}
+      </SidePanel>
+      {toastMessage ? <div className="fixed bottom-4 right-4 z-[60] rounded-lg bg-slate-900 px-4 py-2 text-sm text-white shadow-lg">{toastMessage}</div> : null}
     </section>
   );
 }

@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Audit Tecnico Funzionale - Ischia Transfer Beta - 10/03/2026</title>
+    <style>
+      :root {
+        --text: #0f172a;
+        --muted: #475569;
+        --line: #cbd5e1;
+        --bg: #ffffff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 36px;
+        font-family: Arial, Helvetica, sans-serif;
+        color: var(--text);
+        background: var(--bg);
+        line-height: 1.45;
+        font-size: 12px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 22px;
+      }
+      h2 {
+        margin: 20px 0 8px;
+        font-size: 15px;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 4px;
+      }
+      h3 {
+        margin: 14px 0 6px;
+        font-size: 13px;
+      }
+      p {
+        margin: 6px 0;
+      }
+      ul {
+        margin: 6px 0 10px 18px;
+        padding: 0;
+      }
+      li {
+        margin: 3px 0;
+      }
+      .meta {
+        color: var(--muted);
+        margin-bottom: 12px;
+      }
+      .box {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin: 10px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Audit Tecnico e Funzionale - Ischia Transfer Beta</h1>
+    <p class="meta">Data audit: 10/03/2026</p>
+    <p class="meta">Scope: fotografia completa della codebase attuale, senza modifiche distruttive.</p>
+
+    <h2>1. Stack tecnologico effettivo</h2>
+    <ul>
+      <li>Stack principale attivo: Next.js App Router, TypeScript strict, Tailwind, Supabase, Leaflet/OSM, Zod, XLSX, parser PDF/email.</li>
+      <li>Stack legacy ancora presente: Express + Prisma (SQLite) + client React Vite.</li>
+    </ul>
+
+    <h2>2. Struttura cartelle e moduli principali</h2>
+    <ul>
+      <li>Core app: <code>app/</code>, <code>components/</code>, <code>lib/</code>, <code>supabase/</code>, <code>scripts/</code>, <code>tests/</code>.</li>
+      <li>API server in App Router: <code>app/api/*</code>.</li>
+      <li>Schema DB in <code>supabase/migrations/*</code> + <code>supabase/bootstrap.sql</code>.</li>
+      <li>Codice legacy separato in <code>server/</code> e <code>client/</code>.</li>
+    </ul>
+
+    <h2>3. Pagine già presenti</h2>
+    <ul>
+      <li>Operative: dashboard, dispatch, driver, map, planning, bus-tours, inbox, services/new, hotels, analytics, pricing, onboarding, settings/whatsapp.</li>
+      <li>Agency: area agenzia + mie prenotazioni.</li>
+      <li>Supporto: login, health, share service pubblico.</li>
+    </ul>
+
+    <h2>4. Componenti principali esistenti</h2>
+    <ul>
+      <li>UI kit: DataTable, PageHeader, FilterBar, SidePanel, EmptyState, StatCard.</li>
+      <li>Componenti operativi: services-table, leaflet-map, timeline, export-services-button.</li>
+    </ul>
+
+    <h2>5. API o route server implementate</h2>
+    <ul>
+      <li>Import hotel OSM: <code>/api/admin/import-hotels-ischia</code>.</li>
+      <li>Inbound email/PDF: <code>/api/inbound/email</code>, <code>/api/email/inbound</code>, <code>/api/email/import-pdf</code>, <code>/api/email/test-import</code>.</li>
+      <li>Pricing: history, margins, matches, override.</li>
+      <li>Export: servizi e analytics in XLSX.</li>
+      <li>WhatsApp: send, webhook, settings, cron/job reminders.</li>
+      <li>Onboarding: tenant e driver.</li>
+    </ul>
+
+    <h2>6. Stato autenticazione e ruoli</h2>
+    <ul>
+      <li>Ruoli previsti: admin, operator, driver, agency.</li>
+      <li>Protezione pagine via <code>proxy.ts</code> su cookie ruolo.</li>
+      <li>Protezione API sensibili via bearer token Supabase + membership tenant.</li>
+    </ul>
+
+    <h2>7. Stato database / Supabase / tabelle usate</h2>
+    <ul>
+      <li>Multi-tenant e RLS molto estesi.</li>
+      <li>Tabelle core: tenants, memberships, hotels, services, assignments, status_events, inbound_emails, whatsapp_events.</li>
+      <li>Tabelle avanzate pricing: agencies, routes, price_lists, pricing_rules, inbound_booking_imports, service_pricing, pricing_audits.</li>
+      <li>Tabelle hotel OSM: hotel_aliases, hotel_import_runs.</li>
+    </ul>
+
+    <h2>8. Funzioni presenti per area</h2>
+    <ul>
+      <li>Prenotazioni: presenti, ma in parte ancora demo-store.</li>
+      <li>Servizi/dispatch/autisti: completi con realtime e aggiornamento stato.</li>
+      <li>Agenzie: area base + elementi pricing.</li>
+      <li>Pricing: modulo avanzato e operativo.</li>
+      <li>PDF/email: import manuale PDF e pipeline inbound.</li>
+      <li>Excel: export servizi e analytics.</li>
+      <li>Pagamenti: non presenti moduli online strutturati nel ramo Next.</li>
+    </ul>
+
+    <h2>9. Cosa è solo abbozzato</h2>
+    <ul>
+      <li>Agency bookings e nuova prenotazione in parte ancora dipendenti da demo mode.</li>
+      <li>Ingestion page più orientata a test/manuale che a flusso produzione finalizzato.</li>
+    </ul>
+
+    <h2>10. Cosa è rotto o incoerente</h2>
+    <ul>
+      <li>Coesistenza doppio stack (Next/Supabase + legacy Express/Prisma/Vite).</li>
+      <li>Dashboard con data "oggi" hardcoded su 2026-03-02.</li>
+      <li>Gating pagine via cookie ruolo non sempre allineato a sessione/ruolo Supabase.</li>
+      <li>Messaggi "Tenant non disponibile" quando manca membership reale in Supabase.</li>
+      <li><code>POST /api/email/test-import</code> senza auth esplicita.</li>
+      <li>Inbound con fallback tenant potenzialmente ambiguo se non configurato.</li>
+    </ul>
+
+    <h2>11. Cosa conviene tenere</h2>
+    <ul>
+      <li>Modulo pricing completo.</li>
+      <li>Pipeline inbox/email/PDF con draft.</li>
+      <li>Import hotel OSM + alias + run log.</li>
+      <li>Export analytics/servizi e driver app realtime/offline queue.</li>
+      <li>Base RLS multi-tenant in Supabase.</li>
+    </ul>
+
+    <h2>12. Cosa conviene rifare</h2>
+    <ul>
+      <li>Nuova prenotazione e area agenzia in Supabase-first reale (ridurre demo-store).</li>
+      <li>Autorizzazione pagine allineata a sessione Supabase, non solo cookie.</li>
+      <li>Consolidamento endpoint inbound e regole tenant esplicite.</li>
+      <li>Refactor file monolitici (inbox, pricing).</li>
+    </ul>
+
+    <h2>13. Rischi tecnici principali</h2>
+    <ul>
+      <li>Debito architetturale da doppio stack nello stesso repository.</li>
+      <li>Rischi auth/coerenza ruolo tra UI routing e backend.</li>
+      <li>Rischio dati su fallback tenant inbound.</li>
+      <li>Rischio demo: differenze tra modalità demo e modalità Supabase reale.</li>
+    </ul>
+
+    <h2>Report finale per stato</h2>
+    <h3>Già fatto</h3>
+    <ul>
+      <li>Base piattaforma Next/Supabase multi-tenant con RLS.</li>
+      <li>Dashboard, dispatch, driver, mappa, planning, bus tours.</li>
+      <li>Inbox + import email/PDF + draft workflow.</li>
+      <li>Pricing avanzato, import hotel OSM, export Excel, WhatsApp reminders.</li>
+    </ul>
+
+    <h3>Parzialmente fatto</h3>
+    <ul>
+      <li>Flussi agenzia e prenotazioni completamente production-ready.</li>
+      <li>Onboarding dipendente da coerenza membership tenant.</li>
+      <li>Coverage test orientata soprattutto alla demo mode.</li>
+    </ul>
+
+    <h3>Mancante</h3>
+    <ul>
+      <li>Modulo pagamenti/fatturazione online nel ramo Next.</li>
+      <li>Hardening uniforme auth su tutte le superfici UI/API.</li>
+      <li>Pipeline inbound unificata senza ambiguità tenant.</li>
+    </ul>
+
+    <h3>Da rifattorizzare</h3>
+    <ul>
+      <li>Separazione netta demo mode vs production mode.</li>
+      <li>Refactor file ad alta complessità.</li>
+      <li>Allineamento bootstrap SQL, migrations e documentazione.</li>
+    </ul>
+
+    <h3>Da eliminare</h3>
+    <ul>
+      <li>Stack legacy <code>server/</code> + <code>client/</code> (o da separare in repo dedicato).</li>
+      <li>Asset/log/backups legacy nel repo applicativo principale.</li>
+    </ul>
+
+    <div class="box">
+      <strong>Verifiche tecniche eseguite</strong>
+      <ul>
+        <li><code>pnpm lint</code>: OK con 5 warning nel client legacy.</li>
+        <li><code>pnpm build</code>: OK, build Next completata.</li>
+      </ul>
+    </div>
+  </body>
+</html>

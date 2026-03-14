@@ -1,11 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useDemoStore } from "@/lib/use-demo-store";
 import { inboundWebhookSchema } from "@/lib/validation";
 
 export default function IngestionPage() {
-  const { addInboundEmail } = useDemoStore();
   const defaultRawEmail =
     "DATA 2026-03-02 ORA 15:30 NAVE Medmar HOTEL Hotel Forio 2 PAX 3 NOME Anna Bianchi TEL +39 333 5558899";
   const [token, setToken] = useState("");
@@ -123,92 +121,53 @@ export default function IngestionPage() {
       return;
     }
 
-    addInboundEmail({
-      tenant_id: body.tenant_id ?? "00000000-0000-0000-0000-000000000000",
-      raw_text: safeBodyText,
-      extracted_text: body.extracted_text ?? null,
-      parsed_json: (body.parsed_json ?? {
-        source: "test-mailbox-flow",
-        mailbox,
-        from_email: fromEmail,
-        subject,
-        received_at: new Date().toISOString(),
-        attachments: attachments.map((item) => ({
-          filename: item.filename,
-          mime_type: item.mime_type,
-          size_bytes: item.size_bytes
-        }))
-      }) as {
-        date?: string;
-        time?: string;
-        vessel?: string;
-        hotel?: string;
-        pickup?: string;
-        dropoff?: string;
-        pax?: number;
-        customer_name?: string;
-        phone?: string;
-        template_key?: string;
-        source?: string;
-        mailbox?: string;
-        from_email?: string;
-        subject?: string;
-        received_at?: string;
-        attachments?: Array<{
-          filename: string;
-          mime_type?: string;
-          size_bytes?: number;
-        }>;
-      }
-    });
-
     setLoading(false);
-    setMessage(`Email inbound salvata con id ${body.id}. Draft service: ${body.draft_service_id ?? "n/a"}. Vai su Inbox.`);
+    setMessage(`Email inbound salvata con id ${body.id}. Servizio bozza: ${body.draft_service_id ?? "n/d"}. Vai su Posta in arrivo.`);
   };
 
   return (
     <section className="mx-auto max-w-4xl space-y-4">
-      <h1 className="text-2xl font-semibold">Inbound Email Ingestion (MVP)</h1>
+      <h1 className="text-2xl font-semibold">Acquisizione Email Inbound (MVP)</h1>
       <article className="card space-y-3 p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-600">Dedicated test mailbox flow</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-600">Flusso mailbox di test dedicato</h2>
         <div className="grid gap-3 md:grid-cols-2">
           <label className="text-sm">
             EMAIL_INBOUND_TOKEN
-            <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="Inserisci token" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" />
+            <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="Inserisci token" className="mt-1 input-saas" />
           </label>
           <label className="text-sm">
             Mailbox
-            <input value={mailbox} onChange={(event) => setMailbox(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" />
+            <input value={mailbox} onChange={(event) => setMailbox(event.target.value)} className="mt-1 input-saas" />
           </label>
           <label className="text-sm">
-            Template key
-            <select value={templateKey} onChange={(event) => setTemplateKey(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2">
+            Chiave template
+            <select value={templateKey} onChange={(event) => setTemplateKey(event.target.value)} className="mt-1 input-saas">
               <option value="agency-default">agency-default</option>
               <option value="agency-compact">agency-compact</option>
             </select>
           </label>
           <label className="text-sm">
-            From
-            <input value={fromEmail} onChange={(event) => setFromEmail(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" />
+            Mittente
+            <input value={fromEmail} onChange={(event) => setFromEmail(event.target.value)} className="mt-1 input-saas" />
           </label>
           <label className="text-sm md:col-span-2">
-            Subject
-            <input value={subject} onChange={(event) => setSubject(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" />
+            Oggetto
+            <input value={subject} onChange={(event) => setSubject(event.target.value)} className="mt-1 input-saas" />
           </label>
           <label className="text-sm md:col-span-2">
-            Raw email body
-            <textarea rows={5} value={rawEmail} onChange={(event) => setRawEmail(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            Corpo email grezzo
+            <textarea rows={5} value={rawEmail} onChange={(event) => setRawEmail(event.target.value)} className="mt-1 w-full input-saas" />
           </label>
           <label className="text-sm md:col-span-2">
-            Attachments metadata (JSON array)
-            <textarea rows={4} value={attachmentsRaw} onChange={(event) => setAttachmentsRaw(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            Metadati allegati (array JSON)
+            <textarea rows={4} value={attachmentsRaw} onChange={(event) => setAttachmentsRaw(event.target.value)} className="mt-1 w-full input-saas" />
           </label>
           <label className="text-sm md:col-span-2">
-            PDF upload (optional, first attachment receives content_base64)
+            Caricamento PDF (opzionale, il primo allegato riceve content_base64)
             <input
               type="file"
               accept="application/pdf,.pdf"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              className="mt-1 w-full input-saas"
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (!file) {
@@ -225,18 +184,18 @@ export default function IngestionPage() {
               }}
             />
             <p className="mt-1 text-xs text-slate-500">
-              {pdfAttachmentBase64 ? "PDF content attached (base64)." : "No PDF attached."}
+              {pdfAttachmentBase64 ? "Contenuto PDF allegato (base64)." : "Nessun PDF allegato."}
             </p>
           </label>
         </div>
-        <button type="button" onClick={() => void submit()} disabled={loading} className="rounded-lg bg-brand-600 px-4 py-2 text-white disabled:opacity-50">
-          {loading ? "Invio..." : "Send test inbound email"}
+        <button type="button" onClick={() => void submit()} disabled={loading} className="btn-primary disabled:opacity-50">
+          {loading ? "Invio..." : "Invia email inbound di test"}
         </button>
         <p className="text-sm text-slate-600">{message}</p>
       </article>
 
       <article className="card space-y-2 p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-600">Endpoint contract</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-600">Contratto endpoint</h2>
         <p className="text-sm text-slate-600">
           Endpoint: <code>POST /api/inbound/email</code> protetto da header <code>x-inbound-token</code> ={" "}
           <code>EMAIL_INBOUND_TOKEN</code>.
@@ -246,3 +205,4 @@ export default function IngestionPage() {
     </section>
   );
 }
+
