@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { DataTable, EmptyState, FilterBar, PageHeader } from "@/components/ui";
+import { formatIsoDateShort } from "@/lib/service-display";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
@@ -38,7 +39,15 @@ const serviceKindLabels: Record<string, string> = {
 
 function formatDateTime(date: string | null, time: string | null) {
   if (!date) return "-";
-  return `${date}${time ? ` ${time.slice(0, 5)}` : ""}`;
+  return `${formatIsoDateShort(date)}${time ? ` ${time.slice(0, 5)}` : ""}`;
+}
+
+function formatEmailConfirmationStatus(value: string | null) {
+  if (value === "sent") return "Conferma inviata";
+  if (value === "failed") return "Invio fallito";
+  if (value === "pending") return "Invio in attesa";
+  if (value === "skipped") return "Invio saltato";
+  return "-";
 }
 
 export default function AgencyBookingsPage() {
@@ -176,7 +185,7 @@ export default function AgencyBookingsPage() {
                 <td className="px-4 py-3">{row.pax}</td>
                 <td className="px-4 py-3">
                   <p className="uppercase">{row.status}</p>
-                  <p className="text-xs text-slate-500">{row.email_confirmation_status ?? "-"}</p>
+                  <p className="text-xs text-slate-500">{formatEmailConfirmationStatus(row.email_confirmation_status)}</p>
                 </td>
               </tr>
             ))}
