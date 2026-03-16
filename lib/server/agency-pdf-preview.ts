@@ -163,6 +163,10 @@ function deriveBillingPartyName(
     return "Holidayweb";
   }
 
+  if (selection.parserKey === "agency_angelino_tour") {
+    return "Angelino Tour Operator";
+  }
+
   const explicitCandidates = [
     headerText,
     extractedText.match(/(?:Intestatario|Contraente|Agenzia|Agency)\s*[:.-]?\s*([^\n\r]+)/i)?.[1]

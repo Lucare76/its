@@ -38,6 +38,12 @@ function parseEuroAmount(raw?: string | null) {
   return Number.isFinite(value) ? value : null;
 }
 
+function parseAllEuroAmounts(raw?: string | null) {
+  return Array.from(String(raw ?? "").matchAll(/(\d+(?:[.,]\d{2}))/g))
+    .map((match) => Number(match[1].replace(/\./g, "").replace(",", ".")))
+    .filter((value) => Number.isFinite(value));
+}
+
 function normalizeAngelinoOcrText(sourceText: string) {
   return sourceText
     .replace(/\r/g, "\n")
@@ -67,13 +73,22 @@ function parseAngelinoTourPdfText(sourceText: string): ParsedTransferPdfPayload 
   const dateMatches = Array.from(compact.matchAll(/([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/gi))
     .map((match) => parseItalianDate(match[1]))
     .filter((value): value is string => Boolean(value));
-  const outwardDate = dateMatches.find((value) => value !== practiceDate) ?? null;
-  const returnDate = dateMatches.filter((value) => value !== practiceDate).slice(-1)[0] ?? null;
+  const outwardDate =
+    parseItalianDate(compact.match(/([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})\s+[0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4}\s+PERUGIA\s*-\s*ISCHIA/i)?.[1]) ??
+    dateMatches.find((value) => value !== practiceDate) ??
+    null;
+  const returnDate =
+    parseItalianDate(compact.match(/([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})\s+[0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4}\s+ISCHIA\s*-\s*PERUGIA/i)?.[1]) ??
+    dateMatches.filter((value) => value !== practiceDate).slice(-1)[0] ??
+    null;
   const outwardRoute = clean(compact.match(/(\bPERUGIA\s*-\s*ISCHIA\b)/i)?.[1]);
   const returnRoute = clean(compact.match(/(\bISCHIA\s*-\s*PERUGIA\b)/i)?.[1]);
-  const totalAmount =
-    parseEuroAmount(compact.match(/Totale pratica.*?(\d+[.,]\d{2})/i)?.[1]) ??
-    parseEuroAmount(compact.match(/totale\s*(\d+[.,]\d{2})/i)?.[1]);
+  const totalAmountCandidates = [
+    parseEuroAmount(compact.match(/Totale pratica.*?(\d+[.,]\d{2})/i)?.[1]),
+    parseEuroAmount(compact.match(/(\d+[.,]\d{2})\s*Pagina\/Page/i)?.[1]),
+    ...parseAllEuroAmounts(compact)
+  ].filter((value): value is number => value !== null);
+  const totalAmount = totalAmountCandidates.length > 0 ? Math.max(...totalAmountCandidates) : null;
 
   const outwardService: ParsedTransferService = {
     practice_number: practiceNumber,
