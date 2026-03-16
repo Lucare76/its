@@ -60,6 +60,13 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     return "/agency";
   };
 
+  const hardRedirect = (target: string) => {
+    if (typeof window === "undefined") return;
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (current === target) return;
+    window.location.replace(target);
+  };
+
   useEffect(() => {
     let active = true;
 
@@ -72,7 +79,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setAuthTenantId(e2eOverride.tenantId);
         setAuthLoading(false);
         if (!isAllowed(pathname, e2eOverride.role)) {
-          router.replace(redirectByRole(e2eOverride.role));
+          hardRedirect(redirectByRole(e2eOverride.role));
         }
         return;
       }
@@ -83,7 +90,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setAuthRole(null);
         setAuthTenantId(null);
         setAuthLoading(false);
-        router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
+        hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
         return;
       }
 
@@ -94,7 +101,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setAuthRole(null);
         setAuthTenantId(null);
         setAuthLoading(false);
-        router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
+        hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
         return;
       }
 
@@ -106,7 +113,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setAuthRole(null);
         setAuthTenantId(null);
         setAuthLoading(false);
-        router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
+        hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
         return;
       }
 
@@ -130,7 +137,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setAuthTenantId(null);
         setAuthLoading(false);
         if (pathname !== "/onboarding") {
-          router.replace("/onboarding");
+          hardRedirect("/onboarding");
         }
         return;
       }
@@ -140,7 +147,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       setAuthTenantId(resolvedTenantId);
       setAuthLoading(false);
       if (!isAllowed(pathname, resolvedRole)) {
-        router.replace(redirectByRole(resolvedRole));
+        hardRedirect(redirectByRole(resolvedRole));
       }
     };
 

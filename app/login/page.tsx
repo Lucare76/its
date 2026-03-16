@@ -137,7 +137,7 @@ export default function LoginPage() {
           {loading ? "Verifica accesso..." : "Accedi all'area riservata"}
         </button>
         <button type="button" onClick={handleMagicLink} disabled={loading} className="btn-secondary w-full disabled:opacity-60">
-          Ricevi link di accesso via email
+          Invia link magico via email
         </button>
         <p className="text-sm text-slate-600">{message}</p>
         <p className="text-xs text-slate-500">Riceverai una risposta o un link di accesso in breve tempo, quando previsto.</p>

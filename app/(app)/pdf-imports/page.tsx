@@ -382,6 +382,7 @@ export default function PdfImportsPage() {
   const [uploadBusy, setUploadBusy] = useState<"preview" | "draft" | null>(null);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [uploadPreview, setUploadPreview] = useState<UploadPreview | null>(null);
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(true);
 
   const loadRows = async () => {
     setLoading(true);
@@ -442,6 +443,10 @@ export default function PdfImportsPage() {
 
   useEffect(() => {
     setReviewForm(formFromRow(selected));
+  }, [selected]);
+
+  useEffect(() => {
+    setShowTechnicalDetails(selected?.status !== "confirmed");
   }, [selected]);
 
   const stats = useMemo(() => {
@@ -859,6 +864,62 @@ export default function PdfImportsPage() {
                 </div>
               </div>
 
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-slate-900">Riepilogo operativo</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      {selected.status === "confirmed"
+                        ? "Import confermato: la vista tecnica e nascosta di default, ma resta disponibile per audit."
+                        : "Dati operativi principali del PDF importato."}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTechnicalDetails((current) => !current)}
+                    className="btn-secondary px-3 py-2 text-xs"
+                  >
+                    {showTechnicalDetails ? "Nascondi dettagli tecnici" : "Mostra dettagli tecnici"}
+                  </button>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Cliente</p>
+                    <p className="mt-1 font-medium text-slate-800">{selected.customer ?? "Cliente da verificare"}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Agenzia</p>
+                    <p className="mt-1 font-medium text-slate-800">{selected.agency ?? "Agenzia non rilevata"}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Data servizio</p>
+                    <p className="mt-1 font-medium text-slate-800">{formatIsoDateShort(text(selected.effective_normalized.arrival_date) || selected.arrival_date)}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Destinazione</p>
+                    <p className="mt-1 font-medium text-slate-800">{text(selected.effective_normalized.hotel_or_destination) || selected.hotel_or_destination || "N/D"}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <p className="text-xs uppercase tracking-[0.06em] text-slate-500">{getOutwardTimeLabel(reviewContext(reviewForm))}</p>
+                    <p className="mt-1 font-medium text-slate-800">{text(selected.effective_normalized.outbound_time || selected.effective_normalized.arrival_time) || "N/D"}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Numero pratica</p>
+                    <p className="mt-1 font-medium text-slate-800">{text(selected.dedupe.practice_number) || "N/D"}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Service id</p>
+                    <p className="mt-1 font-medium text-slate-800">{selected.linked_service_id ?? "Non creato"}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Stato servizio</p>
+                    <p className="mt-1 font-medium text-slate-800">{selected.linked_service_status ?? "N/D"}</p>
+                  </div>
+                </div>
+              </div>
+
+              {showTechnicalDetails ? (
+                <>
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
                   <p className="font-semibold text-slate-800">Flusso e dedupe</p>
@@ -1029,6 +1090,8 @@ export default function PdfImportsPage() {
                   <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-700">{selected.extracted_text_preview ?? "Nessun testo disponibile."}</pre>
                 </div>
               </div>
+                </>
+              ) : null}
             </>
           )}
         </div>
