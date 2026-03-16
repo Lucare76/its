@@ -34,6 +34,57 @@ function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function bookingContext(kind: BookingKind) {
+  if (kind === "transfer_airport_hotel") {
+    return {
+      arrivalDateLabel: "Data volo andata*",
+      arrivalTimeLabel: "Ora volo andata*",
+      departureDateLabel: "Data volo ritorno*",
+      departureTimeLabel: "Ora volo ritorno*",
+      transportCodeLabel: "Numero volo*",
+      transportCodePlaceholder: "Es. FR1234"
+    };
+  }
+  if (kind === "transfer_train_hotel") {
+    return {
+      arrivalDateLabel: "Data treno andata*",
+      arrivalTimeLabel: "Ora treno andata*",
+      departureDateLabel: "Data treno ritorno*",
+      departureTimeLabel: "Ora treno ritorno*",
+      transportCodeLabel: "Numero treno*",
+      transportCodePlaceholder: "Es. FRECCIAROSSA 9527"
+    };
+  }
+  if (kind === "bus_city_hotel") {
+    return {
+      arrivalDateLabel: "Data bus andata*",
+      arrivalTimeLabel: "Ora bus andata*",
+      departureDateLabel: "Data bus ritorno*",
+      departureTimeLabel: "Ora bus ritorno*",
+      transportCodeLabel: "Riferimento bus",
+      transportCodePlaceholder: "Es. Linea / numero corsa"
+    };
+  }
+  if (kind === "excursion") {
+    return {
+      arrivalDateLabel: "Data escursione*",
+      arrivalTimeLabel: "Ora inizio*",
+      departureDateLabel: "Data rientro*",
+      departureTimeLabel: "Ora rientro*",
+      transportCodeLabel: "Riferimento operativo",
+      transportCodePlaceholder: "Facoltativo"
+    };
+  }
+  return {
+    arrivalDateLabel: "Data andata*",
+    arrivalTimeLabel: "Ora andata*",
+    departureDateLabel: "Data ritorno*",
+    departureTimeLabel: "Ora ritorno*",
+    transportCodeLabel: "Riferimento mezzo",
+    transportCodePlaceholder: "Facoltativo"
+  };
+}
+
 export default function AgencyNewBookingPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("Compila i campi obbligatori e conferma la prenotazione.");
@@ -150,6 +201,7 @@ export default function AgencyNewBookingPage() {
     () => kindOptions.find((item) => item.value === selectedKind)?.label ?? "Servizio",
     [selectedKind]
   );
+  const contextLabels = useMemo(() => bookingContext(selectedKind), [selectedKind]);
 
   const submit = async () => {
     if (!accessToken) {
@@ -348,7 +400,7 @@ export default function AgencyNewBookingPage() {
           </select>
         </label>
         <label className="text-sm">
-          Data arrivo*
+          {contextLabels.arrivalDateLabel}
           <input
             type="date"
             className="input-saas mt-1"
@@ -357,7 +409,7 @@ export default function AgencyNewBookingPage() {
           />
         </label>
         <label className="text-sm">
-          Ora arrivo*
+          {contextLabels.arrivalTimeLabel}
           <input
             type="time"
             className="input-saas mt-1"
@@ -366,7 +418,7 @@ export default function AgencyNewBookingPage() {
           />
         </label>
         <label className="text-sm">
-          Data partenza*
+          {contextLabels.departureDateLabel}
           <input
             type="date"
             className="input-saas mt-1"
@@ -375,7 +427,7 @@ export default function AgencyNewBookingPage() {
           />
         </label>
         <label className="text-sm">
-          Ora partenza*
+          {contextLabels.departureTimeLabel}
           <input
             type="time"
             className="input-saas mt-1"
@@ -384,14 +436,18 @@ export default function AgencyNewBookingPage() {
           />
         </label>
 
-          {isTransportCodeRequired ? (
+        {isTransportCodeRequired || selectedKind === "bus_city_hotel" || selectedKind === "excursion" ? (
           <label className="text-sm md:col-span-2">
-            Numero volo o treno*
+            {contextLabels.transportCodeLabel}
             <input
               className="input-saas mt-1"
+              placeholder={contextLabels.transportCodePlaceholder}
               value={form.transport_code}
               onChange={(event) => setForm((prev) => ({ ...prev, transport_code: event.target.value }))}
             />
+            {!isTransportCodeRequired ? (
+              <span className="mt-1 block text-xs text-slate-500">Campo facoltativo ma utile per riconoscere il mezzo o la corsa.</span>
+            ) : null}
             {fieldErrors.transport_code ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.transport_code}</span> : null}
           </label>
         ) : null}
@@ -486,8 +542,9 @@ export default function AgencyNewBookingPage() {
             {form.customer_first_name || "Nome"} {form.customer_last_name || "Cognome"} | {serviceKindLabel} | Pax {form.pax || "0"}
           </p>
           <p>
-            Arrivo {form.arrival_date} {form.arrival_time} - Partenza {form.departure_date} {form.departure_time}
+            {contextLabels.arrivalDateLabel.replace("*", "")} {form.arrival_date} {form.arrival_time} - {contextLabels.departureDateLabel.replace("*", "")} {form.departure_date} {form.departure_time}
           </p>
+          {form.transport_code ? <p>{contextLabels.transportCodeLabel}: {form.transport_code}</p> : null}
         </div>
 
         <button type="button" onClick={() => void submit()} disabled={submitting || !isFormValid} className="btn-primary md:col-span-2 disabled:opacity-60">
