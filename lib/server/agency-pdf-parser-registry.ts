@@ -1,6 +1,7 @@
 import type { ParsedTransferPdfPayload } from "@/lib/server/transfer-pdf-parser";
 import { parseTransferBookingPdfText } from "@/lib/server/transfer-pdf-parser";
 import { agencyAlesteViaggiPdfParser } from "@/lib/server/agency-pdf-parsers/agency-aleste-viaggi";
+import { agencyAngelinoTourPdfParser } from "@/lib/server/agency-pdf-parsers/agency-angelino-tour";
 import { agencyBusOperationsPdfParser } from "@/lib/server/agency-pdf-parsers/agency-bus-operations";
 import { agencyDimhotelsVoucherPdfParser } from "@/lib/server/agency-pdf-parsers/agency-dimhotels-voucher";
 import { agencyDefaultPdfParser } from "@/lib/server/agency-pdf-parsers/agency-default";
@@ -55,6 +56,7 @@ function buildStubParser(key: string, label: string, senderDomains: string[], su
 
 const parserDefinitions: AgencyPdfParserImplementation[] = [
   agencyAlesteViaggiPdfParser,
+  agencyAngelinoTourPdfParser,
   agencyRossellaSosandraPdfParser,
   agencyBusOperationsPdfParser,
   agencyDimhotelsVoucherPdfParser,
