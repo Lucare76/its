@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { DataTable, EmptyState, FilterBar, PageHeader } from "@/components/ui";
-import { formatIsoDateShort } from "@/lib/service-display";
+import { formatIsoDateShort, formatIsoDateTimeShort } from "@/lib/service-display";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
@@ -48,6 +48,19 @@ function formatEmailConfirmationStatus(value: string | null) {
   if (value === "pending") return "Invio in attesa";
   if (value === "skipped") return "Invio saltato";
   return "-";
+}
+
+function serviceOperationalDetail(row: BookingRow) {
+  if (row.booking_service_kind === "bus_city_hotel") {
+    return row.bus_city_origin ? `Origine: ${row.bus_city_origin}` : row.vessel;
+  }
+  if (row.booking_service_kind === "transfer_train_hotel") {
+    return row.transport_code ? `Codice treno: ${row.transport_code}` : row.vessel;
+  }
+  if (row.booking_service_kind === "transfer_airport_hotel") {
+    return row.transport_code ? `Codice volo: ${row.transport_code}` : row.vessel;
+  }
+  return row.vessel;
 }
 
 export default function AgencyBookingsPage() {
@@ -168,10 +181,11 @@ export default function AgencyBookingsPage() {
               <tr key={row.id}>
                 <td className="px-4 py-3">
                   <p className="line-clamp-2 text-safe-wrap">{row.customer_name}</p>
-                  <p className="text-xs text-slate-500">{row.transport_code || row.bus_city_origin || row.vessel}</p>
+                  <p className="text-xs text-slate-500">ID: {row.id.slice(0, 8)}</p>
                 </td>
                 <td className="px-4 py-3">
                   <p>{serviceKindLabels[row.booking_service_kind ?? ""] ?? "Transfer"}</p>
+                  <p className="text-xs text-slate-500">{serviceOperationalDetail(row)}</p>
                   <p className="text-xs text-slate-500">
                     {row.include_ferry_tickets ? "Con biglietti nave" : "Senza biglietti nave"}
                   </p>
@@ -186,6 +200,9 @@ export default function AgencyBookingsPage() {
                 <td className="px-4 py-3">
                   <p className="uppercase">{row.status}</p>
                   <p className="text-xs text-slate-500">{formatEmailConfirmationStatus(row.email_confirmation_status)}</p>
+                  {row.email_confirmation_sent_at ? (
+                    <p className="text-xs text-slate-500">{formatIsoDateTimeShort(row.email_confirmation_sent_at)}</p>
+                  ) : null}
                 </td>
               </tr>
             ))}
