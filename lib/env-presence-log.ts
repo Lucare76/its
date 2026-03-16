@@ -20,6 +20,7 @@ if (isDev) {
       IMAP_USER: Boolean(process.env.IMAP_USER),
       IMAP_PASS: Boolean(process.env.IMAP_PASS),
       IMAP_TLS: Boolean(process.env.IMAP_TLS),
+      OCR_SPACE_API_KEY: Boolean(process.env.OCR_SPACE_API_KEY),
       WHATSAPP_TOKEN: Boolean(process.env.WHATSAPP_TOKEN),
       WHATSAPP_PHONE_NUMBER_ID: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
       WHATSAPP_VERIFY_TOKEN: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),

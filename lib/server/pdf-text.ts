@@ -46,6 +46,59 @@ async function runWindowsPdfOcr(contentBase64: string) {
   }
 }
 
+async function runOcrSpacePdfOcr(contentBase64: string) {
+  const apiKey = process.env.OCR_SPACE_API_KEY?.trim() || "helloworld";
+  const endpoint = process.env.OCR_SPACE_ENDPOINT?.trim() || "https://api.ocr.space/parse/image";
+  const language = process.env.OCR_SPACE_LANGUAGE?.trim() || "ita";
+
+  try {
+    const body = new URLSearchParams();
+    body.set("base64Image", `data:application/pdf;base64,${contentBase64}`);
+    body.set("filetype", "PDF");
+    body.set("language", language);
+    body.set("scale", "true");
+    body.set("detectOrientation", "true");
+    body.set("isOverlayRequired", "false");
+    body.set("OCREngine", "2");
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        apikey: apiKey,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: body.toString(),
+      cache: "no-store"
+    });
+
+    if (!response.ok) return "";
+
+    const json = (await response.json()) as {
+      IsErroredOnProcessing?: boolean;
+      ErrorMessage?: string[] | string;
+      ParsedResults?: Array<{ ParsedText?: string | null }>;
+    };
+
+    if (json.IsErroredOnProcessing) return "";
+
+    const text = (json.ParsedResults ?? [])
+      .map((item) => item.ParsedText?.trim() ?? "")
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+
+    return text;
+  } catch {
+    return "";
+  }
+}
+
+async function runServerCompatiblePdfOcr(contentBase64: string) {
+  const windowsText = await runWindowsPdfOcr(contentBase64);
+  if (windowsText.trim()) return windowsText;
+  return runOcrSpacePdfOcr(contentBase64);
+}
+
 export async function extractPdfTextFromBase64(contentBase64: string) {
   try {
     const buffer = Buffer.from(contentBase64, "base64");
@@ -58,13 +111,13 @@ export async function extractPdfTextFromBase64(contentBase64: string) {
       return extracted;
     }
 
-    const ocrText = await runWindowsPdfOcr(contentBase64);
+    const ocrText = await runServerCompatiblePdfOcr(contentBase64);
     return ocrText.trim() || extracted;
   } catch {
-    return runWindowsPdfOcr(contentBase64);
+    return runServerCompatiblePdfOcr(contentBase64);
   }
 }
 
 export async function extractPdfHeaderTextFromBase64(contentBase64: string) {
-  return runWindowsPdfOcr(contentBase64);
+  return runServerCompatiblePdfOcr(contentBase64);
 }

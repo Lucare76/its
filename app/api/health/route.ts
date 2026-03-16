@@ -18,6 +18,7 @@ export async function GET() {
   const imapUser = process.env.IMAP_USER;
   const imapPass = process.env.IMAP_PASS;
   const imapTls = process.env.IMAP_TLS;
+  const ocrSpaceApiKey = process.env.OCR_SPACE_API_KEY;
   const cronSecret = process.env.CRON_SECRET;
   const whatsappToken = process.env.WHATSAPP_TOKEN;
   const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -41,6 +42,7 @@ export async function GET() {
     IMAP_USER: Boolean(imapUser),
     IMAP_PASS: Boolean(imapPass),
     IMAP_TLS: Boolean(imapTls),
+    OCR_SPACE_API_KEY: Boolean(ocrSpaceApiKey),
     CRON_SECRET: Boolean(cronSecret),
     WHATSAPP_TOKEN: Boolean(whatsappToken),
     WHATSAPP_PHONE_NUMBER_ID: Boolean(whatsappPhoneNumberId),
