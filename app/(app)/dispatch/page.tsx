@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { PageHeader, SectionCard } from "@/components/ui";
 import { calculateDriverSuggestions } from "@/lib/dispatch-driver-scoring";
@@ -56,6 +57,7 @@ async function ensureSupabaseClientReady() {
 }
 
 export default function DispatchPage() {
+  const searchParams = useSearchParams();
   const [serviceId, setServiceId] = useState<string>("");
   const [driverId, setDriverId] = useState<string>("");
   const [vehicleLabel, setVehicleLabel] = useState("Mercedes Vito - AA123BB");
@@ -207,7 +209,12 @@ export default function DispatchPage() {
     return a.time.localeCompare(b.time);
     });
 
-  const selectedService = sortedServices.find((service) => service.id === serviceId) ?? sortedServices[0] ?? null;
+  const requestedServiceId = searchParams.get("serviceId");
+  const selectedService =
+    sortedServices.find((service) => service.id === serviceId) ??
+    sortedServices.find((service) => service.id === requestedServiceId) ??
+    sortedServices[0] ??
+    null;
   const selectedServiceZone = selectedService ? hotelsById.get(selectedService.hotel_id)?.zone ?? null : null;
   const suggestions = calculateDriverSuggestions({
     drivers,

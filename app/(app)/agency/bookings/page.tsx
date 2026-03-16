@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DataTable, EmptyState, FilterBar, PageHeader } from "@/components/ui";
 import { formatIsoDateShort, formatIsoDateTimeShort } from "@/lib/service-display";
@@ -203,6 +204,9 @@ export default function AgencyBookingsPage() {
                   {row.email_confirmation_sent_at ? (
                     <p className="text-xs text-slate-500">{formatIsoDateTimeShort(row.email_confirmation_sent_at)}</p>
                   ) : null}
+                  <Link href={`/dispatch?serviceId=${row.id}`} className="mt-2 inline-flex text-xs font-medium text-blue-700 underline underline-offset-2">
+                    Apri in dispatch
+                  </Link>
                 </td>
               </tr>
             ))}
