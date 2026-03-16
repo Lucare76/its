@@ -124,6 +124,9 @@ function deriveAgencyName(
   headerText: string | null | undefined,
   selection: AgencyPdfParserSelectionResult
 ) {
+  const fromParser = agencyNameFromParser(selection);
+  if (fromParser && selection.parserKey !== "agency_bus_operations") return fromParser;
+
   const explicitTextCandidates = [
     headerText,
     extractedText.match(/Ufficio Booking\s*-\s*([^\n\r]+)/i)?.[1],
@@ -141,7 +144,6 @@ function deriveAgencyName(
     if (canonical) return canonical;
   }
 
-  const fromParser = agencyNameFromParser(selection);
   if (fromParser) return fromParser;
 
   const domain = senderDomain(senderEmail);

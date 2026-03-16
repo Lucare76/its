@@ -98,19 +98,23 @@ async function main() {
   const reviewPayload = {
     inbound_email_id: inboundEmailId,
     reviewed_values: {
-      customer_first_name: "GIUSEPPE",
-      customer_last_name: "TESTREVIEW",
+      customer_full_name: "GIUSEPPE TESTREVIEW",
       customer_phone: "3330009999",
       customer_email: "review@example.com",
       arrival_date: "2026-06-01",
-      arrival_time: "15:10",
+      outbound_time: "15:10",
       departure_date: "2026-06-05",
-      departure_time: "09:40",
+      return_time: "09:40",
       arrival_place: "PORTO DI ISCHIA",
       hotel_or_destination: "HOTEL PARADISO REVIEW",
       passengers: 3,
       booking_kind: "transfer_port_hotel",
-      service_type_deduced: "transfer",
+      service_type: "transfer_port_hotel",
+      transport_mode: "road_transfer",
+      billing_party_name: "Agenzia Test Operativa",
+      source_total_amount_cents: 5000,
+      source_price_per_pax_cents: 1667,
+      source_amount_currency: "EUR",
       practice_number: `REV-${Date.now()}`,
       ns_reference: "OPERATORE CMS",
       notes: "Review manuale test operatore"
@@ -145,7 +149,7 @@ async function main() {
 
   const { data: serviceRow, error: serviceError } = await admin
     .from("services")
-    .select("id, customer_name, phone, customer_email, arrival_date, arrival_time, departure_date, departure_time, pax, notes, status")
+    .select("id, customer_name, phone, customer_email, arrival_date, arrival_time, departure_date, departure_time, pax, notes, status, booking_service_kind, service_type_code, billing_party_name, source_total_amount_cents, source_price_per_pax_cents, source_amount_currency, outbound_time, return_time")
     .eq("id", confirmBody.final_service_id)
     .maybeSingle();
   if (serviceError || !serviceRow?.id) {
