@@ -23,12 +23,12 @@ export default function Image() {
           fontFamily: "Segoe UI, sans-serif"
         }}
       >
-        <div style={{ display: "flex", fontSize: 24, letterSpacing: 4, opacity: 0.92 }}>GESTIONALE ISCHIA TRANSFER BETA</div>
+        <div style={{ display: "flex", fontSize: 24, letterSpacing: 4, opacity: 0.92 }}>ISCHIA TRANSFER SERVICE</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ display: "flex", fontSize: 64, fontWeight: 700, lineHeight: 1.02 }}>Piattaforma operativa</div>
-          <div style={{ display: "flex", fontSize: 30, opacity: 0.88 }}>Dashboard, dispatch, agenzia, PDF imports e pricing</div>
+          <div style={{ display: "flex", fontSize: 64, fontWeight: 700, lineHeight: 1.02 }}>Transfer affidabili dal 2006</div>
+          <div style={{ display: "flex", fontSize: 30, opacity: 0.88 }}>Coordinamento diretto tra aeroporto, porto e hotel</div>
         </div>
-        <div style={{ display: "flex", fontSize: 22, opacity: 0.8 }}>Ambiente gestionale interno</div>
+        <div style={{ display: "flex", fontSize: 22, opacity: 0.8 }}>Esperienza per chi arriva a Ischia</div>
       </div>
     ),
     size

@@ -9,33 +9,36 @@ const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") || "http://lo
 export const metadata: Metadata = {
   metadataBase: new URL(appUrl),
   title: {
-    default: "Gestionale Ischia Transfer Beta",
-    template: "%s | Gestionale Ischia Transfer Beta"
+    default: "Transfer Ischia affidabile | Ischia Transfer Service dal 2006",
+    template: "%s | Ischia Transfer Service dal 2006"
   },
-  description: "Gestionale operativo Ischia Transfer Beta per dashboard, dispatch, area agenzia, pricing e PDF imports.",
+  description:
+    "Transfer Ischia affidabile con servizio attivo dal 2006, coordinamento diretto tra aeroporto, porto e hotel e risposta rapida per gli arrivi sull'isola.",
   robots: {
     index: false,
     follow: false
   },
   openGraph: {
-    title: "Gestionale Ischia Transfer Beta",
-    description: "Gestionale operativo Ischia Transfer Beta.",
+    title: "Transfer Ischia affidabile | Ischia Transfer Service dal 2006",
+    description:
+      "Servizio transfer attivo dal 2006 con coordinamento diretto tra aeroporto, porto e hotel.",
     url: appUrl,
-    siteName: "Gestionale Ischia Transfer Beta",
+    siteName: "Ischia Transfer Service",
     type: "website",
     images: [
       {
         url: "/opengraph-image",
         width: 1200,
         height: 630,
-        alt: "Ischia Transfer Beta"
+        alt: "Ischia Transfer Service dal 2006"
       }
     ]
   },
   twitter: {
     card: "summary_large_image",
-    title: "Gestionale Ischia Transfer Beta",
-    description: "Gestionale operativo Ischia Transfer Beta.",
+    title: "Transfer Ischia affidabile | Ischia Transfer Service dal 2006",
+    description:
+      "Servizio transfer attivo dal 2006 con coordinamento diretto tra aeroporto, porto e hotel.",
     images: ["/opengraph-image"]
   }
 };

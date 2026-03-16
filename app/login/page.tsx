@@ -8,7 +8,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string>("Usa un utente reale Supabase.");
+  const [message, setMessage] = useState<string>("Accesso riservato. Se hai credenziali attive, puoi entrare subito.");
 
   useEffect(() => {
     if (!hasSupabaseEnv || !supabase) {
@@ -91,6 +91,10 @@ export default function LoginPage() {
     <section className="mx-auto max-w-lg page-section">
       <h1 className="section-title">Login Supabase</h1>
       <div className="card space-y-3 p-4">
+        <p className="text-sm leading-6 text-slate-600">
+          Ischia Transfer Service e attivo dal 2006. L&apos;area riservata consente al team di coordinare con rapidita i
+          transfer tra aeroporto, porto e hotel.
+        </p>
         <label className="block text-sm">
           Email
           <input
@@ -99,6 +103,7 @@ export default function LoginPage() {
             type="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
+            placeholder="Inserisci la tua email"
           />
         </label>
         <label className="block text-sm">
@@ -110,6 +115,7 @@ export default function LoginPage() {
               type={showPassword ? "text" : "password"}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
+              placeholder="Inserisci la password"
             />
             <button
               type="button"
@@ -128,12 +134,13 @@ export default function LoginPage() {
           disabled={loading}
           className="btn-primary w-full disabled:opacity-60"
         >
-          {loading ? "Attendi..." : "Accedi"}
+          {loading ? "Verifica accesso..." : "Accedi all'area riservata"}
         </button>
         <button type="button" onClick={handleMagicLink} disabled={loading} className="btn-secondary w-full disabled:opacity-60">
-          Invia link magico via email
+          Ricevi link di accesso via email
         </button>
         <p className="text-sm text-slate-600">{message}</p>
+        <p className="text-xs text-slate-500">Riceverai una risposta o un link di accesso in breve tempo, quando previsto.</p>
       </div>
     </section>
   );
