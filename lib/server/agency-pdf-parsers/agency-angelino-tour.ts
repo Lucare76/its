@@ -23,7 +23,7 @@ function clean(value?: string | null) {
 }
 
 function parseItalianDate(raw?: string | null) {
-  const match = String(raw ?? "").match(/([0-3]?\d)-\s*(gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*(\d{2,4})/i);
+  const match = String(raw ?? "").match(/([0-3]?\d)\s*-\s*(gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*(\d{2,4})/i);
   if (!match) return null;
   const month = IT_MONTHS[match[2].toLowerCase()];
   if (!month) return null;
@@ -64,25 +64,25 @@ function parseAngelinoTourPdfText(sourceText: string): ParsedTransferPdfPayload 
   const compact = normalizeAngelinoOcrText(sourceText);
   const practiceNumber = clean(compact.match(/pratica\s*(\d{2}\/\d{6})/i)?.[1]);
   const orderNumber = clean(compact.match(/CONFERMA D[' ]ORDINE\s*n\.\s*(\d{3,})/i)?.[1]);
-  const practiceDate = parseItalianDate(compact.match(/data\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/i)?.[1]);
+  const practiceDate = parseItalianDate(compact.match(/data\s*([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/i)?.[1]);
   const beneficiary = clean(compact.match(/beneficiario\s*([A-Z][A-Za-z' ]+)/i)?.[1]);
   const secondPassenger = clean(compact.match(/nominativo\s*([A-Z][A-Za-z' ]+)\s*EUR/i)?.[1]);
   const pax = Number(compact.match(/\bpax\s*(\d{1,2})/i)?.[1] ?? 0) || null;
   const reference = clean(compact.match(/ns referente\s*([A-Z][A-Za-z' ]+)/i)?.[1]) ?? orderNumber;
   const hotel = clean(compact.match(/HOTEL\s+([A-Z][A-Za-z' ]+\*?)/i)?.[1]);
-  const dateMatches = Array.from(compact.matchAll(/([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/gi))
+  const dateMatches = Array.from(compact.matchAll(/([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/gi))
     .map((match) => parseItalianDate(match[1]))
     .filter((value): value is string => Boolean(value));
-  const fromDate = parseItalianDate(compact.match(/\bdal\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/i)?.[1]);
-  const toDate = parseItalianDate(compact.match(/\bal\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/i)?.[1]);
+  const fromDate = parseItalianDate(compact.match(/\bdal\s*([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/i)?.[1]);
+  const toDate = parseItalianDate(compact.match(/\bal\s*([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/i)?.[1]);
   const outwardDate =
     fromDate ??
-    parseItalianDate(compact.match(/([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})\s+[0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4}\s+PERUGIA\s*-\s*ISCHIA/i)?.[1]) ??
+    parseItalianDate(compact.match(/([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})\s+[0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4}\s+PERUGIA\s*-\s*ISCHIA/i)?.[1]) ??
     dateMatches.find((value) => value !== practiceDate) ??
     null;
   const returnDate =
     toDate ??
-    parseItalianDate(compact.match(/([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})\s+[0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4}\s+ISCHIA\s*-\s*PERUGIA/i)?.[1]) ??
+    parseItalianDate(compact.match(/([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})\s+[0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4}\s+ISCHIA\s*-\s*PERUGIA/i)?.[1]) ??
     dateMatches.filter((value) => value !== practiceDate).slice(-1)[0] ??
     null;
   const outwardRoute = clean(compact.match(/(\bPERUGIA\s*-\s*ISCHIA\b)/i)?.[1]);
