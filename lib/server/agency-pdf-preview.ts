@@ -157,6 +157,10 @@ function deriveBillingPartyName(
   headerText: string | null | undefined,
   agencyName: string | null
 ) {
+  if (selection.parserKey === "agency_holiday_sud_italia") {
+    return "Holidayweb";
+  }
+
   const explicitCandidates = [
     headerText,
     extractedText.match(/(?:Intestatario|Contraente|Agenzia|Agency)\s*[:.-]?\s*([^\n\r]+)/i)?.[1]
