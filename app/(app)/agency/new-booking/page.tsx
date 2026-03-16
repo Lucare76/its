@@ -202,6 +202,36 @@ export default function AgencyNewBookingPage() {
     [selectedKind]
   );
   const contextLabels = useMemo(() => bookingContext(selectedKind), [selectedKind]);
+  const reviewWarnings = useMemo(() => {
+    const warnings: string[] = [];
+    if (!form.customer_first_name.trim() || !form.customer_last_name.trim()) warnings.push("Completa nome e cognome cliente.");
+    if (!form.customer_phone.trim()) warnings.push("Inserisci un telefono cliente.");
+    if (!form.hotel_id) warnings.push("Seleziona la struttura.");
+    if (!form.notes.trim()) warnings.push("Aggiungi una nota operativa.");
+    if (isTransportCodeRequired && !form.transport_code.trim()) warnings.push(`${contextLabels.transportCodeLabel.replace("*", "")} mancante.`);
+    if (isBusOriginRequired && !form.bus_city_origin.trim()) warnings.push("Citta di partenza bus mancante.");
+    if (isExcursionTitleRequired && !form.excursion_title.trim()) warnings.push("Nome escursione mancante.");
+    if (form.include_ferry_tickets && !form.ferry_outbound_code.trim() && !form.ferry_return_code.trim()) {
+      warnings.push("Hai attivato i biglietti nave ma non hai inserito nessun codice nave.");
+    }
+    return warnings;
+  }, [
+    contextLabels.transportCodeLabel,
+    form.bus_city_origin,
+    form.customer_first_name,
+    form.customer_last_name,
+    form.customer_phone,
+    form.excursion_title,
+    form.ferry_outbound_code,
+    form.ferry_return_code,
+    form.hotel_id,
+    form.include_ferry_tickets,
+    form.notes,
+    form.transport_code,
+    isBusOriginRequired,
+    isExcursionTitleRequired,
+    isTransportCodeRequired
+  ]);
 
   const submit = async () => {
     if (!accessToken) {
@@ -545,7 +575,27 @@ export default function AgencyNewBookingPage() {
             {contextLabels.arrivalDateLabel.replace("*", "")} {form.arrival_date} {form.arrival_time} - {contextLabels.departureDateLabel.replace("*", "")} {form.departure_date} {form.departure_time}
           </p>
           {form.transport_code ? <p>{contextLabels.transportCodeLabel}: {form.transport_code}</p> : null}
+          {form.include_ferry_tickets ? (
+            <p>Biglietti nave: {form.ferry_outbound_code || "-"} / {form.ferry_return_code || "-"}</p>
+          ) : null}
+          {form.notes.trim() ? <p className="line-clamp-2 text-safe-wrap">Note: {form.notes.trim()}</p> : null}
         </div>
+
+        {reviewWarnings.length > 0 ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 md:col-span-2">
+            <p className="font-semibold">Controlli prima della conferma</p>
+            {reviewWarnings.map((warning) => (
+              <p key={warning} className="mt-1">
+                - {warning}
+              </p>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900 md:col-span-2">
+            <p className="font-semibold">Pronto per la conferma</p>
+            <p className="mt-1">I campi principali per questo tipo servizio risultano compilati.</p>
+          </div>
+        )}
 
         <button type="button" onClick={() => void submit()} disabled={submitting || !isFormValid} className="btn-primary md:col-span-2 disabled:opacity-60">
           {submitting ? "Creazione in corso..." : "Conferma prenotazione"}
