@@ -30,6 +30,7 @@
     "mailparser": "^3.9.3",
     "next": "^16.0.0",
     "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^5.5.207",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-hook-form": "^7.53.2",

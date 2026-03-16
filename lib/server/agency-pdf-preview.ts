@@ -95,6 +95,7 @@ function canonicalAgencyNameFromText(value?: string | null) {
   if (/sosandra tour/i.test(normalized) || /rossella viaggi/i.test(normalized)) return "Sosandra Tour By Rossella Viaggi";
   if (/ischia transfer service/i.test(normalized)) return "Ischia Transfer Service";
   if (/dimhotels/i.test(normalized)) return "Dimhotels";
+  if (/holiday sud italia|hollday sud italia/i.test(normalized)) return "Holiday Sud Italia";
   if (/welcome travel/i.test(normalized)) return "Welcome Travel";
   if (/gattinoni/i.test(normalized)) return "Gattinoni";
   if (/made/i.test(normalized)) return "Made";
@@ -105,6 +106,7 @@ function agencyNameFromParser(selection: AgencyPdfParserSelectionResult) {
   if (selection.parserKey === "agency_aleste_viaggi") return "Aleste Viaggi";
   if (selection.parserKey === "agency_rossella_sosandra") return "Sosandra Tour By Rossella Viaggi";
   if (selection.parserKey === "agency_bus_operations") return "Ischia Transfer Service";
+  if (selection.parserKey === "agency_holiday_sud_italia") return "Holiday Sud Italia";
   return null;
 }
 
