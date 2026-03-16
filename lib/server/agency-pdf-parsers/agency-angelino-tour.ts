@@ -73,11 +73,15 @@ function parseAngelinoTourPdfText(sourceText: string): ParsedTransferPdfPayload 
   const dateMatches = Array.from(compact.matchAll(/([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/gi))
     .map((match) => parseItalianDate(match[1]))
     .filter((value): value is string => Boolean(value));
+  const fromDate = parseItalianDate(compact.match(/\bdal\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/i)?.[1]);
+  const toDate = parseItalianDate(compact.match(/\bal\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/i)?.[1]);
   const outwardDate =
+    fromDate ??
     parseItalianDate(compact.match(/([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})\s+[0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4}\s+PERUGIA\s*-\s*ISCHIA/i)?.[1]) ??
     dateMatches.find((value) => value !== practiceDate) ??
     null;
   const returnDate =
+    toDate ??
     parseItalianDate(compact.match(/([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})\s+[0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4}\s+ISCHIA\s*-\s*PERUGIA/i)?.[1]) ??
     dateMatches.filter((value) => value !== practiceDate).slice(-1)[0] ??
     null;
@@ -143,6 +147,7 @@ function parseAngelinoTourPdfText(sourceText: string): ParsedTransferPdfPayload 
     date_from: outwardDate,
     date_to: returnDate,
     total_amount_practice: totalAmount,
+    booking_kind: "bus_city_hotel",
     service_type_code: "bus_line",
     service_rows: [outwardService, returnService].map((service) => ({
       row_text: service.original_row_description ?? service.raw_detail_text,

@@ -378,7 +378,7 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
   ]
     .filter(Boolean)
     .join(" ");
-  const deducedBookingKind = deduceBookingKind(sourceForDeduction);
+  const deducedBookingKind = transferParsed.booking_kind ?? deduceBookingKind(sourceForDeduction);
   const deducedServiceType = transferParsed.service_type_code ?? deduceOperationalServiceType(sourceForDeduction, deducedBookingKind);
   const transportMode = deduceTransportMode(sourceForDeduction, deducedBookingKind, deducedServiceType);
   const arrivalPlace =
