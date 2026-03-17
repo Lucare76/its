@@ -17,8 +17,8 @@ call :KillPort 3010
 call :KillPort 3011
 if not "%PORT%"=="3010" call :KillPort %PORT%
 
-echo Starting Next.js dev server on port %PORT%...
-pnpm exec next dev --port %PORT%
+echo Starting Next.js dev server on port %PORT% and host 0.0.0.0...
+pnpm exec next dev --hostname 0.0.0.0 --port %PORT%
 exit /b %ERRORLEVEL%
 
 :KillPort
@@ -32,4 +32,3 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%TARGET_PORT% .*LISTE
   )
 )
 exit /b 0
-

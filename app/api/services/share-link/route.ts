@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { getRequestAppUrl } from "@/lib/app-url";
 
 export const runtime = "nodejs";
 
@@ -11,11 +12,7 @@ const payloadSchema = z.object({
 });
 
 function appBaseUrl(request: NextRequest) {
-  const fromEnv = process.env.NEXT_PUBLIC_APP_URL?.trim();
-  if (fromEnv) return fromEnv.replace(/\/$/, "");
-  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "";
-  const proto = request.headers.get("x-forwarded-proto") ?? "https";
-  return host ? `${proto}://${host}` : "";
+  return getRequestAppUrl(request.headers);
 }
 
 function newShareToken() {

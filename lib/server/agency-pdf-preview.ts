@@ -161,6 +161,10 @@ function deriveBillingPartyName(
   headerText: string | null | undefined,
   agencyName: string | null
 ) {
+  if (selection.parserKey === "agency_rossella_sosandra") {
+    return agencyName ?? "Sosandra Tour By Rossella Viaggi";
+  }
+
   if (selection.parserKey === "agency_holiday_sud_italia") {
     return "Holidayweb";
   }

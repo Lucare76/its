@@ -12,6 +12,7 @@ type HealthPayload = {
     NEXT_PUBLIC_SUPABASE_URL: boolean;
     NEXT_PUBLIC_SUPABASE_ANON_KEY: boolean;
     SUPABASE_SERVICE_ROLE_KEY: boolean;
+    NEXT_PUBLIC_APP_URL: boolean;
     EMAIL_INBOUND_TOKEN: boolean;
     RESEND_API_KEY: boolean;
     AGENCY_BOOKING_FROM_EMAIL: boolean;
@@ -48,6 +49,7 @@ const envOrder: Array<keyof HealthPayload["env"]> = [
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
+  "NEXT_PUBLIC_APP_URL",
   "EMAIL_INBOUND_TOKEN",
   "RESEND_API_KEY",
   "AGENCY_BOOKING_FROM_EMAIL",

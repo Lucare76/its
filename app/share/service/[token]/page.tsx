@@ -1,14 +1,20 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { getConfiguredAppUrl, getRequestAppUrl } from "@/lib/app-url";
 import { formatServiceDateTime, getSharedServiceByToken } from "@/lib/server/service-share";
 
 interface ShareServicePageProps {
   params: Promise<{ token: string }>;
 }
 
-function appBaseUrl() {
-  return process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") || "https://example.com";
+async function appBaseUrl() {
+  const configured = getConfiguredAppUrl();
+  if (configured) return configured;
+
+  const requestHeaders = await headers();
+  return getRequestAppUrl(requestHeaders);
 }
 
 function buildShareText(url: string, details: { dateTime: string; hotel: string; meetingPoint: string; vessel: string; pax: number }) {
@@ -26,7 +32,7 @@ function buildShareText(url: string, details: { dateTime: string; hotel: string;
 export async function generateMetadata({ params }: ShareServicePageProps): Promise<Metadata> {
   const { token } = await params;
   const service = await getSharedServiceByToken(token);
-  const base = appBaseUrl();
+  const base = await appBaseUrl();
   const url = `${base}/share/service/${token}`;
 
   if (!service) {
@@ -77,7 +83,7 @@ export default async function ShareServicePage({ params }: ShareServicePageProps
   const service = await getSharedServiceByToken(token);
   if (!service) notFound();
 
-  const base = appBaseUrl();
+  const base = await appBaseUrl();
   const shareUrl = `${base}/share/service/${token}`;
   const dateTime = formatServiceDateTime(service.date, service.time);
   const hotel = service.hotel_name ?? "Hotel da confermare";

@@ -9,6 +9,7 @@ export async function GET() {
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const inboundToken = process.env.EMAIL_INBOUND_TOKEN;
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   const resendApiKey = process.env.RESEND_API_KEY;
   const agencyBookingFromEmail = process.env.AGENCY_BOOKING_FROM_EMAIL;
   const agencyBookingBetaRecipient = process.env.AGENCY_BOOKING_BETA_RECIPIENT_EMAIL;
@@ -32,6 +33,7 @@ export async function GET() {
     NEXT_PUBLIC_SUPABASE_URL: Boolean(supabaseUrl),
     NEXT_PUBLIC_SUPABASE_ANON_KEY: Boolean(anonKey),
     SUPABASE_SERVICE_ROLE_KEY: Boolean(serviceRoleKey),
+    NEXT_PUBLIC_APP_URL: Boolean(appUrl),
     EMAIL_INBOUND_TOKEN: Boolean(inboundToken),
     RESEND_API_KEY: Boolean(resendApiKey),
     AGENCY_BOOKING_FROM_EMAIL: Boolean(agencyBookingFromEmail),

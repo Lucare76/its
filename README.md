@@ -32,6 +32,7 @@ Checklist rapida su un nuovo PC:
 2. `cd its`
 3. `git checkout main && git pull`
 4. Crea `.env.local` (non committare) con almeno:
+   - `NEXT_PUBLIC_APP_URL`
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
@@ -39,6 +40,12 @@ Checklist rapida su un nuovo PC:
 5. `pnpm install`
 6. `pnpm dev --port 3010`
 7. Apri `http://localhost:3010`
+
+Note importanti per farlo funzionare anche fuori ufficio o da un altro dispositivo:
+- `NEXT_PUBLIC_APP_URL` deve essere l'URL reale da cui apri l'app, non `localhost`, quando usi un deploy o un tunnel pubblico.
+- In Supabase `Authentication -> URL Configuration`, aggiungi lo stesso dominio in `Site URL` o `Additional Redirect URLs`.
+- Per accesso da altri dispositivi sulla stessa rete locale, il dev server ora espone `0.0.0.0`; apri l'IP del PC ospite, ad esempio `http://192.168.x.x:3010`.
+- Per accesso da reti esterne diverse, non basta Supabase: serve un deploy pubblico (Vercel) oppure un tunnel/reverse proxy verso il PC locale.
 
 Smoke test inbound automatico (senza problemi di escaping `curl`):
 1. In `cmd`: `set EMAIL_INBOUND_TOKEN=<token_reale>`
@@ -133,11 +140,23 @@ Se il database esiste gia:
 ### Configura `.env.local`
 1. In root progetto crea `.env.local` partendo da `.env.example`.
 2. Inserisci:
+- `NEXT_PUBLIC_APP_URL` con il dominio reale dell'app (`http://IP-LOCALE:3010` in LAN, dominio Vercel in deploy)
 - `NEXT_PUBLIC_SUPABASE_URL` dal progetto Supabase
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY` da Project Settings -> API
 - `SUPABASE_SERVICE_ROLE_KEY` da Project Settings -> API
 - `EMAIL_INBOUND_TOKEN` a tua scelta
 3. Non committare `.env.local`.
+
+### Supabase Auth URL Configuration
+Se login o magic link funzionano solo su un PC e non altrove, controlla anche Supabase:
+1. Apri `Authentication -> URL Configuration`.
+2. Imposta `Site URL` con il dominio principale reale dell'app.
+3. Aggiungi in `Additional Redirect URLs` tutti gli URL usati davvero:
+- `http://localhost:3010`
+- `http://127.0.0.1:3010`
+- eventuale `http://192.168.x.x:3010`
+- dominio Vercel o dominio custom
+4. Salva e riprova il login.
 
 ## Scope coperto
 - Landing pubblica con CTA, features, come funziona

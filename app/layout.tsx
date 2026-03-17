@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Script from "next/script";
 import "@/lib/env-presence-log";
+import { getConfiguredAppUrl } from "@/lib/app-url";
 import "leaflet/dist/leaflet.css";
 import "./globals.css";
 
-const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") || "http://localhost:3010";
+const appUrl = getConfiguredAppUrl() ?? "http://127.0.0.1:3010";
 
 export const metadata: Metadata = {
   metadataBase: new URL(appUrl),

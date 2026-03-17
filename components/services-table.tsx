@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ExportServicesButton } from "@/components/export-services-button";
 import { Timeline } from "@/components/timeline";
 import { DataTable, EmptyState, FilterBar } from "@/components/ui";
+import { getBrowserAppUrl } from "@/lib/app-url";
 import {
   formatIsoDateShort,
   formatServiceSlot,
@@ -164,9 +165,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
     const fromAction = shareUrlByServiceId[selectedService.id];
     if (fromAction) return fromAction;
     if (!selectedService.share_token) return "";
-    const base =
-      process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ??
-      (typeof window !== "undefined" ? window.location.origin : "");
+    const base = getBrowserAppUrl();
     if (!base) return "";
     return `${base}/share/service/${selectedService.share_token}`;
   }, [selectedService, shareUrlByServiceId]);
