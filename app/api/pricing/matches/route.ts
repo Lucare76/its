@@ -17,6 +17,7 @@ type ReapplyServiceRow = {
 
 type ReapplyEmailRow = {
   id: string;
+  from_email: string | null;
   raw_text: string | null;
   extracted_text: string | null;
 };
@@ -123,7 +124,7 @@ export async function POST(request: NextRequest) {
           .maybeSingle(),
         admin
           .from("inbound_emails")
-          .select("id, raw_text, extracted_text")
+          .select("id, from_email, raw_text, extracted_text")
           .eq("id", row.inbound_email_id)
           .eq("tenant_id", membership.tenant_id)
           .maybeSingle()
@@ -141,6 +142,7 @@ export async function POST(request: NextRequest) {
         tenantId: membership.tenant_id,
         inboundEmailId: email.id,
         serviceId: service.id,
+        senderEmail: email.from_email,
         sourceText: `${email.raw_text ?? ""}\n${email.extracted_text ?? ""}`.trim(),
         serviceType: (service.service_type ?? "transfer") as "transfer" | "bus_tour",
         direction: service.direction as "arrival" | "departure",

@@ -21,6 +21,39 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/settings/whatsapp", roles: ["admin"] }
 ];
 
+export type AppCapability =
+  | "dashboard:view"
+  | "analytics:view"
+  | "dispatch:manage"
+  | "planning:manage"
+  | "inbox:manage"
+  | "pdf_imports:manage"
+  | "pdf_imports:debug"
+  | "pricing:view"
+  | "pricing:manage"
+  | "agencies:manage"
+  | "agency_bookings:self"
+  | "agency_bookings:manage"
+  | "driver:self"
+  | "whatsapp:manage";
+
+export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
+  "dashboard:view": ["admin", "operator"],
+  "analytics:view": ["admin", "operator"],
+  "dispatch:manage": ["admin", "operator"],
+  "planning:manage": ["admin", "operator"],
+  "inbox:manage": ["admin", "operator"],
+  "pdf_imports:manage": ["admin", "operator"],
+  "pdf_imports:debug": ["admin"],
+  "pricing:view": ["admin", "operator"],
+  "pricing:manage": ["admin"],
+  "agencies:manage": ["admin"],
+  "agency_bookings:self": ["agency"],
+  "agency_bookings:manage": ["admin"],
+  "driver:self": ["driver", "admin"],
+  "whatsapp:manage": ["admin"]
+};
+
 export function isProtectedPath(pathname: string): boolean {
   return routeRoleMap.some((item) => pathname.startsWith(item.prefix));
 }
@@ -39,4 +72,9 @@ export function parseRole(raw: string | undefined): UserRole | null {
     return normalized;
   }
   return null;
+}
+
+export function hasCapability(role: UserRole | null, capability: AppCapability): boolean {
+  if (!role) return false;
+  return capabilityRoleMap[capability].includes(role);
 }

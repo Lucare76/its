@@ -3,6 +3,50 @@ insert into public.tenants (id, name)
 values ('11111111-1111-1111-1111-111111111111', 'Ischia Transfer Demo')
 on conflict (id) do nothing;
 
+insert into public.agencies (
+  id,
+  tenant_id,
+  name,
+  legal_name,
+  billing_name,
+  parser_key_hint,
+  sender_domains,
+  default_enabled_booking_kinds,
+  default_pricing_notes,
+  notes,
+  active
+)
+values (
+  '30000000-0000-0000-0000-000000000001',
+  '11111111-1111-1111-1111-111111111111',
+  'Aleste Viaggi',
+  'ALESTE VIAGGI SRL',
+  'ALESTE VIAGGI SRL',
+  'agency_aleste_viaggi',
+  '[]'::jsonb,
+  '[]'::jsonb,
+  '',
+  'VIA MONTETIGNUSO, 48 | 80077 ISCHIA (NA) | P.IVA 06968571213 | SDI CMBAR97',
+  true
+)
+on conflict (id) do update
+set
+  name = excluded.name,
+  legal_name = excluded.legal_name,
+  billing_name = excluded.billing_name,
+  parser_key_hint = excluded.parser_key_hint,
+  sender_domains = excluded.sender_domains,
+  default_enabled_booking_kinds = excluded.default_enabled_booking_kinds,
+  default_pricing_notes = excluded.default_pricing_notes,
+  notes = excluded.notes,
+  active = excluded.active;
+
+insert into public.agency_aliases (tenant_id, agency_id, alias)
+values
+  ('11111111-1111-1111-1111-111111111111', '30000000-0000-0000-0000-000000000001', 'ALESTE VIAGGI'),
+  ('11111111-1111-1111-1111-111111111111', '30000000-0000-0000-0000-000000000001', 'ALESTE VIAGGI SRL')
+on conflict do nothing;
+
 -- Replace these UUIDs with real auth.users IDs from your Supabase project.
 insert into public.memberships (user_id, tenant_id, role, full_name)
 values

@@ -165,6 +165,10 @@ function deriveBillingPartyName(
     return agencyName ?? "Sosandra Tour By Rossella Viaggi";
   }
 
+  if (selection.parserKey === "agency_aleste_viaggi") {
+    return "Aleste Viaggi";
+  }
+
   if (selection.parserKey === "agency_holiday_sud_italia") {
     return "Holidayweb";
   }
@@ -400,11 +404,11 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
   const operationalOutwardTime =
     extractOperationalTime(arrivalService?.raw_detail_text, "outward") ??
     clean(transferParsed.train_arrival_time ?? null) ??
-    clean(arrivalService?.service_time ?? inboundParsed.time ?? null);
+    clean(arrivalService?.service_time ?? (transportMode === "bus" ? null : inboundParsed.time) ?? null);
   const operationalReturnTime =
     extractOperationalTime(departureService?.raw_detail_text, "return") ??
     clean(transferParsed.train_departure_time ?? null) ??
-    clean(departureService?.service_time ?? inboundParsed.departure_time ?? null);
+    clean(departureService?.service_time ?? (transportMode === "bus" ? null : inboundParsed.departure_time) ?? null);
   const sourceTotalAmount = transferParsed.total_amount_practice ?? null;
   const sourcePricePerPax =
     sourceTotalAmount !== null && Number(transferParsed.pax ?? 0) > 0

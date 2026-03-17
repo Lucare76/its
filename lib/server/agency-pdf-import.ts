@@ -41,7 +41,7 @@ export type NormalizedPdfImport = {
   customer_email: string | null;
   customer_phone: string;
   arrival_date: string;
-  outbound_time: string;
+  outbound_time: string | null;
   departure_date: string | null;
   return_time: string | null;
   arrival_place: string | null;
@@ -87,7 +87,7 @@ export const pdfImportReviewSchema = z.object({
   customer_email: z.string().trim().email().max(160).optional().nullable().or(z.literal("")),
   billing_party_name: z.string().trim().max(240).optional().nullable(),
   arrival_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  outbound_time: z.string().regex(/^([01]?\d|2[0-3]):([0-5]\d)$/),
+  outbound_time: z.string().regex(/^([01]?\d|2[0-3]):([0-5]\d)$/).optional().nullable().or(z.literal("")),
   departure_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable().or(z.literal("")),
   return_time: z.string().regex(/^([01]?\d|2[0-3]):([0-5]\d)$/).optional().nullable().or(z.literal("")),
   arrival_place: z.string().trim().max(200).optional().nullable(),
@@ -150,7 +150,7 @@ function isIsoDate(value?: string | null) {
 
 function normalizeTime(value?: string | null) {
   const match = String(value ?? "").match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
-  if (!match) return "09:00";
+  if (!match) return null;
   return `${match[1].padStart(2, "0")}:${match[2]}`;
 }
 
@@ -257,8 +257,8 @@ function deduceOperationalServiceType(preview: ReturnType<typeof buildAgencyPdfP
   const hasFerry = /(ferry|traghetto|aliscafo|passaggio marittimo|caremar|medmar|snav|alilauro)/i.test(source);
   const hasBus = /(bus|pullman|coach)/i.test(source) || preview.extracted.booking_kind === "bus_city_hotel";
 
-  if (hasExcursion && !hasTransfer) return "excursion";
   if (hasBus) return "bus";
+  if (hasExcursion && !hasTransfer) return "excursion";
   if (hasTransfer) return "transfer";
   if (hasFerry) return "ferry";
   return preview.extracted.service_type_deduced;
@@ -866,7 +866,7 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
       inbound_email_id: inboundInsert.data.id,
       is_draft: true,
       date: parsed.normalized.arrival_date,
-      time: parsed.normalized.outbound_time,
+      time: parsed.normalized.outbound_time ?? "00:00",
       service_type: baseServiceType(parsed.normalized),
       direction: "arrival",
       vessel: parsed.normalized.carrier_company ?? parsed.normalized.arrival_place ?? "Transfer da PDF",
@@ -889,7 +889,7 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
       customer_last_name: null,
       customer_email: parsed.normalized.customer_email,
       arrival_date: parsed.normalized.arrival_date,
-      arrival_time: parsed.normalized.outbound_time,
+      arrival_time: parsed.normalized.outbound_time ?? "00:00",
       departure_date: parsed.normalized.departure_date,
       departure_time: parsed.normalized.return_time,
       transport_code: parsed.normalized.transport_code,
@@ -1010,7 +1010,7 @@ async function syncDraftServiceFromNormalized(
     .from("services")
     .update({
       date: normalized.arrival_date,
-      time: normalized.outbound_time,
+      time: normalized.outbound_time ?? "00:00",
       vessel: normalized.carrier_company ?? normalized.arrival_place ?? "Transfer da PDF",
       pax: normalized.passengers,
       hotel_id: hotelId,
@@ -1032,7 +1032,7 @@ async function syncDraftServiceFromNormalized(
       customer_last_name: null,
       customer_email: normalized.customer_email,
       arrival_date: normalized.arrival_date,
-      arrival_time: normalized.outbound_time,
+      arrival_time: normalized.outbound_time ?? "00:00",
       departure_date: normalized.departure_date,
       departure_time: normalized.return_time,
       transport_code: normalized.transport_code,
@@ -1301,7 +1301,7 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
         is_draft: false,
         status: "new",
         date: normalized.arrival_date,
-        time: normalized.outbound_time,
+        time: normalized.outbound_time ?? "00:00",
         service_type: baseServiceType(normalized),
         direction: "arrival",
         vessel: normalized.carrier_company ?? normalized.arrival_place ?? "Transfer da PDF",
@@ -1323,7 +1323,7 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
         customer_last_name: null,
         customer_email: normalized.customer_email,
         arrival_date: normalized.arrival_date,
-        arrival_time: normalized.outbound_time,
+        arrival_time: normalized.outbound_time ?? "00:00",
         departure_date: normalized.departure_date,
         departure_time: normalized.return_time,
         transport_code: normalized.transport_code,
@@ -1363,7 +1363,7 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
         inbound_email_id: input.inboundEmailId,
         is_draft: false,
         date: normalized.arrival_date,
-        time: normalized.outbound_time,
+        time: normalized.outbound_time ?? "00:00",
         service_type: baseServiceType(normalized),
         direction: "arrival",
         vessel: normalized.carrier_company ?? normalized.arrival_place ?? "Transfer da PDF",
@@ -1386,7 +1386,7 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
         customer_last_name: null,
         customer_email: normalized.customer_email,
         arrival_date: normalized.arrival_date,
-        arrival_time: normalized.outbound_time,
+        arrival_time: normalized.outbound_time ?? "00:00",
         departure_date: normalized.departure_date,
         departure_time: normalized.return_time,
         transport_code: normalized.transport_code,
@@ -1466,11 +1466,12 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
     tenantId,
     inboundEmailId: input.inboundEmailId,
     serviceId: finalServiceId,
+    senderEmail: inboundRow.data.from_email ?? null,
     sourceText: buildPricingSourceText([inboundRow.data.subject ?? "", inboundRow.data.body_text ?? "", inboundRow.data.extracted_text ?? ""], normalized),
     serviceType: "transfer",
     direction: "arrival",
     date: normalized.arrival_date,
-    time: normalized.outbound_time,
+    time: normalized.outbound_time ?? "00:00",
     pax: normalized.passengers,
     bookingKind: normalized.booking_kind,
     serviceVariant: normalized.service_variant

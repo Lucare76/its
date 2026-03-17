@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { findBusStopsByCity, findNearestBusStop } from "@/lib/bus-lines-catalog";
 import {
   formatIsoDateShort,
   formatIsoDateTimeShort,
@@ -115,6 +116,17 @@ type UploadPreview = {
   missing_fields: string[];
 };
 
+type BusSuggestion = {
+  lineCode: string;
+  lineName: string;
+  stop: {
+    city: string;
+    time: string;
+    pickupNote: string | null;
+  };
+  delta?: number;
+};
+
 function text(value: unknown) {
   return typeof value === "string" ? value : value == null ? "" : String(value);
 }
@@ -192,9 +204,9 @@ function formFromRow(row: PdfImportRow | null): ReviewForm {
     customer_phone: text(source.customer_phone),
     customer_email: text(source.customer_email),
     arrival_date: toDisplayDate(source.arrival_date),
-    outbound_time: text(source.outbound_time || source.arrival_time),
+    outbound_time: text(source.outbound_time),
     departure_date: toDisplayDate(source.departure_date),
-    return_time: text(source.return_time || source.departure_time),
+    return_time: text(source.return_time),
     arrival_place: text(source.arrival_place),
     hotel_or_destination: text(source.hotel_or_destination),
     passengers: text(source.passengers || "1"),
@@ -351,6 +363,16 @@ function canEdit(row: PdfImportRow) {
   return row.status === "draft" && row.linked_service_is_draft;
 }
 
+function isBusLikeForm(form: Pick<ReviewForm, "transport_mode" | "service_type" | "booking_kind">) {
+  return (
+    form.transport_mode === "bus" ||
+    form.service_type === "bus_line" ||
+    form.service_type === "excursion" ||
+    form.booking_kind === "bus_city_hotel" ||
+    form.booking_kind === "excursion"
+  );
+}
+
 function originalValue(row: PdfImportRow | null, key: keyof ReviewForm) {
   if (!row) return "";
   if (key === "practice_number") return text(row.dedupe.practice_number);
@@ -383,6 +405,7 @@ export default function PdfImportsPage() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [uploadPreview, setUploadPreview] = useState<UploadPreview | null>(null);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(true);
+  const [busSuggestionStatus, setBusSuggestionStatus] = useState<string | null>(null);
 
   const loadRows = async () => {
     setLoading(true);
@@ -443,6 +466,7 @@ export default function PdfImportsPage() {
 
   useEffect(() => {
     setReviewForm(formFromRow(selected));
+    setBusSuggestionStatus(null);
   }, [selected]);
 
   useEffect(() => {
@@ -463,6 +487,20 @@ export default function PdfImportsPage() {
     if (!selected) return [] as string[];
     const keys = Object.keys(reviewForm) as Array<keyof ReviewForm>;
     return keys.filter((key) => reviewForm[key].trim() !== originalValue(selected, key).trim());
+  }, [reviewForm, selected]);
+
+  const busSuggestions = useMemo(() => {
+    if (!selected || !isBusLikeForm(reviewForm)) return [] as BusSuggestion[];
+    const city = reviewForm.arrival_place.trim() || text(selected.effective_normalized.arrival_place).trim();
+    if (!city) return [] as BusSuggestion[];
+    const time = reviewForm.outbound_time.trim() || text(selected.effective_normalized.outbound_time).trim() || null;
+    const nearest = findNearestBusStop(city, time);
+    const all = findBusStopsByCity(city).slice(0, 5);
+    const deduped = [
+      ...(nearest ? [nearest] : []),
+      ...all.filter((item) => !nearest || `${item.lineCode}-${item.stop.city}-${item.stop.time}` !== `${nearest.lineCode}-${nearest.stop.city}-${nearest.stop.time}`)
+    ];
+    return deduped as BusSuggestion[];
   }, [reviewForm, selected]);
 
   const runAction = async (kind: "confirm" | "ignore" | "delete", inboundEmailId: string) => {
@@ -901,7 +939,7 @@ export default function PdfImportsPage() {
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                     <p className="text-xs uppercase tracking-[0.06em] text-slate-500">{getOutwardTimeLabel(reviewContext(reviewForm))}</p>
-                    <p className="mt-1 font-medium text-slate-800">{text(selected.effective_normalized.outbound_time || selected.effective_normalized.arrival_time) || "N/D"}</p>
+                    <p className="mt-1 font-medium text-slate-800">{text(selected.effective_normalized.outbound_time) || "N/D"}</p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                     <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Numero pratica</p>
@@ -966,6 +1004,46 @@ export default function PdfImportsPage() {
                 <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
                   <p className="font-semibold text-slate-900">Review prima della conferma</p>
                   <p className="mt-1 text-xs text-slate-600">Il parser originale resta salvato. Qui modifichi solo i valori reviewed usati al confirm finale.</p>
+                  {busSuggestions.length > 0 ? (
+                    <div className="mt-3 rounded-xl border border-sky-200 bg-white/80 p-3">
+                      <p className="font-semibold text-slate-900">Suggerimento linea bus</p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Basato sul catalogo bus 2026. Serve solo come aiuto operativo per citta, linea e orario.
+                      </p>
+                      <div className="mt-3 space-y-2">
+                        {busSuggestions.map((item, index) => (
+                          <div key={`${item.lineCode}-${item.stop.city}-${item.stop.time}-${index}`} className="rounded-lg border border-sky-100 bg-sky-50/70 px-3 py-2 text-sm">
+                            <p className="font-medium text-slate-800">
+                              {item.lineName} | {item.stop.city} | {item.stop.time}
+                            </p>
+                            <p className="text-xs text-slate-600">
+                              {item.stop.pickupNote ?? "Punto pickup non specificato"}
+                              {typeof item.delta === "number" ? ` | scarto orario ${item.delta} min` : ""}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReviewForm((current) => ({
+                                  ...current,
+                                  arrival_place: item.stop.city,
+                                  outbound_time: item.stop.time,
+                                  train_arrival_number: item.lineName,
+                                  notes: current.notes
+                                    ? `${current.notes} | ${item.lineName} | ${item.stop.city}`
+                                    : `${item.lineName} | ${item.stop.city}`
+                                }));
+                                setBusSuggestionStatus(`Suggerimento applicato: ${item.lineName} | ${item.stop.city} | ${item.stop.time}`);
+                              }}
+                              className="btn-secondary mt-2 px-3 py-2 text-xs"
+                            >
+                              Applica suggerimento
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      {busSuggestionStatus ? <p className="mt-3 text-xs font-medium text-sky-700">{busSuggestionStatus}</p> : null}
+                    </div>
+                  ) : null}
                   <div className="mt-3 grid gap-3 md:grid-cols-2">
                     {([
                       ["customer_full_name", "Nome completo"],

@@ -22,6 +22,30 @@ function clean(value?: string | null) {
   return normalized.length > 0 ? normalized : null;
 }
 
+function cleanOcrField(value?: string | null) {
+  const normalized = clean(value);
+  if (!normalized) return null;
+  const stopAt = normalized.search(/\b(data prenotazione|trattamento e note|importo|tasse|totale|pagina)\b/i);
+  return clean(stopAt > 0 ? normalized.slice(0, stopAt) : normalized);
+}
+
+function mergeBrokenWords(value?: string | null) {
+  const normalized = clean(value);
+  if (!normalized) return null;
+  const merged = normalized
+    .split(" ")
+    .reduce<string[]>((parts, token) => {
+      if (parts.length === 0) return [token];
+      if (/^[a-z]{1,3}$/i.test(token) && token === token.toLowerCase()) {
+        parts[parts.length - 1] = `${parts[parts.length - 1]}${token}`;
+        return parts;
+      }
+      return [...parts, token];
+    }, [])
+    .join(" ");
+  return clean(merged);
+}
+
 function parseItalianDate(raw?: string | null) {
   const match = String(raw ?? "").match(/([0-3]?\d)-(gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-(\d{2,4})/i);
   if (!match) return null;
@@ -44,12 +68,6 @@ function parseEuroAmount(raw?: string | null) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function parseAllEuroAmounts(raw?: string | null) {
-  return Array.from(String(raw ?? "").matchAll(/(\d+(?:[.,]\d{2}))/g))
-    .map((match) => Number(match[1].replace(/\./g, "").replace(",", ".")))
-    .filter((value) => Number.isFinite(value));
-}
-
 function parseBusOperationsPdfText(sourceText: string): ParsedTransferPdfPayload {
   const compact = sourceText.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim();
   const lines = sourceText
@@ -59,8 +77,17 @@ function parseBusOperationsPdfText(sourceText: string): ParsedTransferPdfPayload
     .filter(Boolean);
 
   const practiceNumber = clean(compact.match(/Pratica\s*(\d{2}\/\d{6})/i)?.[1]);
-  const reference = clean(compact.match(/Ref\.\s*([A-ZÀ-ÖØ-Ý' ]+)/i)?.[1]);
+  const reference =
+    mergeBrokenWords(cleanOcrField(compact.match(/Ref\.\s*(.+?)\s+(?:Data prenotazione|NIJM|DAL|Servizio)/i)?.[1])) ??
+    mergeBrokenWords(clean(compact.match(/Ref\.\s*([A-Z' ]+)/i)?.[1]));
   const practiceDate = parseItalianDate(compact.match(/Data\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})/i)?.[1]);
+
+  const excursionDate = parseItalianDate(compact.match(/\bDal\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})/i)?.[1]);
+  const excursionTitle = clean(compact.match(/(GIRO DELL'ISOLA IN BUS)/i)?.[1]);
+  const excursionBeneficiary = mergeBrokenWords(
+    cleanOcrField(compact.match(/Benefici\s*ari\s+(.+?)\s+Trattamento\s*e\s*note/i)?.[1])
+  );
+  const paxFromCompact = Number(compact.match(/\bPAX\s*(\d{1,2})/i)?.[1] ?? 0) || null;
 
   const firstBusLineIndex = lines.findIndex((line) => /^001BUS\s+DA/i.test(line));
   const firstDelimiterIndex = lines.findIndex((line, index) => index > firstBusLineIndex && /^DALALDESCRIZIONE/i.test(line));
@@ -72,7 +99,7 @@ function parseBusOperationsPdfText(sourceText: string): ParsedTransferPdfPayload
   const beneficiaries = firstBusSegment
     .flatMap((line, index) => {
       if (index === 0) {
-        const firstName = clean(line.match(/^001BUS.*?([A-ZÀ-ÖØ-Ý' ]+\s+[A-ZÀ-ÖØ-Ý' ]+)$/i)?.[1]);
+        const firstName = clean(line.match(/^001BUS.*?([A-Z' ]+\s+[A-Z' ]+)$/i)?.[1]);
         return firstName ? [firstName] : [];
       }
       const value = clean(line);
@@ -80,8 +107,8 @@ function parseBusOperationsPdfText(sourceText: string): ParsedTransferPdfPayload
     })
     .filter(Boolean);
 
-  const firstBeneficiary = beneficiaries[0] ?? null;
-  const pax = beneficiaries.length > 0 ? beneficiaries.length : null;
+  const firstBeneficiary = excursionBeneficiary ?? beneficiaries[0] ?? null;
+  const pax = paxFromCompact ?? (beneficiaries.length > 0 ? beneficiaries.length : null);
 
   const outwardDateLine = lines.find((line) => /^Dal\s+[0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4}$/i.test(line));
   const outwardBusLine = lines.find((line) => /^001BUS\s+DA/i.test(line));
@@ -94,8 +121,8 @@ function parseBusOperationsPdfText(sourceText: string): ParsedTransferPdfPayload
           .find((line) => /^Dal\s+[0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4}$/i.test(line))
       : null;
 
-  const outwardOriginMatch = outwardBusLine?.match(/^001BUS\s+DA\s+([A-ZÀ-ÖØ-Ý' ]+?)\s+([0-2]?\d[.:]\d{2})/i);
-  const returnDestinationMatch = returnBusLine?.match(/^001BUS\s+ISCHIA\s*-\s*([A-ZÀ-ÖØ-Ý' ]+?)\s+RITORNO/i);
+  const outwardOriginMatch = outwardBusLine?.match(/^001BUS\s+DA\s+([A-Z' ]+?)\s+([0-2]?\d[.:]\d{2})/i);
+  const returnDestinationMatch = returnBusLine?.match(/^001BUS\s+ISCHIA\s*-\s*([A-Z' ]+?)\s+RITORNO/i);
 
   const totalAmountMatches = Array.from(compact.matchAll(/TOTALE\s*EUR\s*([0-9]+,[0-9]{2})/gi))
     .map((match) => parseEuroAmount(match[1]))
@@ -104,7 +131,29 @@ function parseBusOperationsPdfText(sourceText: string): ParsedTransferPdfPayload
 
   const parsedServices: ParsedTransferService[] = [];
 
-  if (outwardDateLine && outwardOriginMatch?.[1]) {
+  if (excursionTitle && excursionDate) {
+    parsedServices.push({
+      practice_number: practiceNumber,
+      beneficiary: firstBeneficiary,
+      pax,
+      service_type: "transfer",
+      direction: "andata",
+      service_date: excursionDate,
+      service_time: null,
+      pickup_meeting_point: null,
+      origin: null,
+      destination: "ISCHIA",
+      carrier_company: "BUS",
+      hotel_structure: null,
+      original_row_description: excursionTitle,
+      raw_detail_text: `${excursionTitle} del ${excursionDate}`,
+      parsing_status: "parsed",
+      confidence_level: "medium",
+      semantic_tag: "transfer_arrival"
+    });
+  }
+
+  if (parsedServices.length === 0 && outwardDateLine && outwardOriginMatch?.[1]) {
     parsedServices.push({
       practice_number: practiceNumber,
       beneficiary: firstBeneficiary,
@@ -126,7 +175,7 @@ function parseBusOperationsPdfText(sourceText: string): ParsedTransferPdfPayload
     });
   }
 
-  if (returnDateLine && returnDestinationMatch?.[1]) {
+  if (parsedServices.length > 0 && !excursionTitle && returnDateLine && returnDestinationMatch?.[1]) {
     parsedServices.push({
       practice_number: practiceNumber,
       beneficiary: firstBeneficiary,
@@ -152,15 +201,17 @@ function parseBusOperationsPdfText(sourceText: string): ParsedTransferPdfPayload
     practice_number: practiceNumber,
     practice_date: practiceDate,
     first_beneficiary: firstBeneficiary,
+    customer_full_name: firstBeneficiary,
     ns_reference: reference,
     ns_contact: null,
     pax,
-    program: "BUS",
+    program: excursionTitle ?? "BUS",
     package_description: "ELENCO RICHIESTE CONFERME ANNULLAMENTI SERVIZI",
-    date_from: parsedServices.find((item) => item.direction === "andata")?.service_date ?? null,
+    date_from: parsedServices.find((item) => item.direction === "andata")?.service_date ?? excursionDate ?? null,
     date_to: parsedServices.find((item) => item.direction === "ritorno")?.service_date ?? null,
     total_amount_practice: totalAmount,
-    service_type_code: "bus_line",
+    booking_kind: excursionTitle ? "excursion" : "bus_city_hotel",
+    service_type_code: excursionTitle ? "excursion" : "bus_line",
     service_rows: parsedServices.map((service) => ({
       row_text: service.original_row_description ?? service.raw_detail_text,
       semantic_tag: service.semantic_tag,

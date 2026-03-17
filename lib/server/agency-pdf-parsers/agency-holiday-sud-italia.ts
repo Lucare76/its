@@ -22,6 +22,13 @@ function clean(value?: string | null) {
   return normalized.length > 0 ? normalized : null;
 }
 
+function cleanOcrField(value?: string | null) {
+  const normalized = clean(value);
+  if (!normalized) return null;
+  const stopAt = normalized.search(/\b(ns riferimento|ns referente|importo|tasse|data|dal|al|programma|descrizione)\b/i);
+  return clean(stopAt > 0 ? normalized.slice(0, stopAt) : normalized);
+}
+
 function parseItalianDate(raw?: string | null) {
   const match = String(raw ?? "").match(/([0-3]?\d)-\s*(gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*(\d{2,4})/i);
   if (!match) return null;
@@ -36,6 +43,12 @@ function parseEuroAmount(raw?: string | null) {
   if (!match) return null;
   const value = Number(match[1].replace(/\./g, "").replace(",", "."));
   return Number.isFinite(value) ? value : null;
+}
+
+function parseAllEuroAmounts(raw?: string | null) {
+  return Array.from(String(raw ?? "").matchAll(/(\d+(?:[.,]\d{2}))/g))
+    .map((match) => Number(match[1].replace(/\./g, "").replace(",", ".")))
+    .filter((value) => Number.isFinite(value));
 }
 
 function normalizeHolidayOcrText(sourceText: string) {
@@ -62,7 +75,7 @@ function parseHolidaySudItaliaPdfText(sourceText: string): ParsedTransferPdfPayl
   const orderReference = clean(compact.match(/CONFERMA D[' ]ORDINE\s*n\.\s*(\d{3,})/i)?.[1]);
   const reference = clean(compact.match(/ns referente\s*([A-Z][A-Za-z ]+)/i)?.[1]) ?? orderReference;
   const pax = Number(compact.match(/\bpax\s*(\d{1,2})/i)?.[1] ?? 0) || null;
-  const beneficiary = clean(compact.match(/beneficiario\s*([A-Z][A-Za-z' ]+)/i)?.[1]);
+  const beneficiary = cleanOcrField(compact.match(/beneficiario\s*([A-Z][A-Za-z' ]+)/i)?.[1]);
   const hotel = clean(compact.match(/hotel\s*([A-Z][A-Za-z' ]+\d?\*?)/i)?.[1]);
   const routeOutward = clean(compact.match(/descrizione\s*ISCHIA TRANSFER SERVICE-ISCHIA \(NA\)\s*([A-Z' ]+\s*-\s*ISCHIA)/i)?.[1]);
   const routeReturn = clean(compact.match(/ISCHIA TRANSFER SERVICE-ISCHIA \(NA\)\s*(ISCHIA\s*-\s*[A-Z' ]+)/i)?.[1]);
@@ -71,9 +84,13 @@ function parseHolidaySudItaliaPdfText(sourceText: string): ParsedTransferPdfPayl
     .filter((value): value is string => Boolean(value));
   const outwardDate = routeDates[0] ?? null;
   const returnDate = routeDates.length > 1 ? routeDates[routeDates.length - 1] : null;
-  const totalAmount =
-    parseEuroAmount(compact.match(/Totale pratica.*?(\d+[.,]\d{2})/i)?.[1]) ??
-    parseEuroAmount(compact.match(/totale\s*(\d+[.,]\d{2})/i)?.[1]);
+  const totalAmountCandidates = [
+    parseEuroAmount(compact.match(/Totale pratica.*?(\d+[.,]\d{2})/i)?.[1]),
+    parseEuroAmount(compact.match(/totale\s*pratica.*?(\d+[.,]\d{2})/i)?.[1]),
+    parseEuroAmount(compact.match(/totale\s*(\d+[.,]\d{2})/i)?.[1]),
+    ...parseAllEuroAmounts(compact)
+  ].filter((value): value is number => value !== null);
+  const totalAmount = totalAmountCandidates.length > 0 ? Math.max(...totalAmountCandidates) : null;
 
   const outwardOrigin = clean(routeOutward?.split("-")[0] ?? "ORTE");
   const returnDestination = clean(routeReturn?.split("-")[1] ?? "ORTE");

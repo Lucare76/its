@@ -4,6 +4,7 @@ type MatchInput = {
   tenantId: string;
   inboundEmailId: string;
   serviceId: string;
+  senderEmail?: string | null;
   sourceText: string;
   serviceType: "transfer" | "bus_tour";
   direction: "arrival" | "departure";
@@ -30,6 +31,10 @@ function tokenize(value?: string | null) {
   const normalized = normalize(value);
   if (!normalized) return [];
   return normalized.split(" ").filter((token) => token.length >= 3);
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function scoreContains(haystack: string, needle: string) {
@@ -63,6 +68,12 @@ function deriveMatchQuality(hasRule: boolean, agencyScore: number, routeScore: n
   if (agencyScore >= 80 && routeScore >= 80) return "certain";
   if (agencyScore >= 55 || routeScore >= 70) return "partial";
   return "review";
+}
+
+function emailDomain(value?: string | null) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  const parts = normalized.split("@");
+  return parts.length === 2 ? parts[1] : "";
 }
 
 function routeIntentBoost(
@@ -112,31 +123,71 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
     const portHints = ["ischia porto", "forio", "casamicciola", "procida", "napoli", "pozzuoli", "porto"];
 
     const [{ data: agencies }, { data: aliases }, { data: routes }] = await Promise.all([
-      admin.from("agencies").select("id, name, active").eq("tenant_id", input.tenantId).eq("active", true).limit(500),
+      admin.from("agencies").select("*").eq("tenant_id", input.tenantId).eq("active", true).limit(500),
       admin.from("agency_aliases").select("agency_id, alias").eq("tenant_id", input.tenantId).limit(1000),
       admin.from("routes").select("id, name, origin_label, destination_label, active").eq("tenant_id", input.tenantId).eq("active", true).limit(500)
     ]);
 
-    const activeAgencies = (agencies ?? []) as Array<{ id: string; name: string; active: boolean }>;
+    const activeAgencies = (agencies ?? []) as Array<{
+      id: string;
+      name: string;
+      active: boolean;
+      contact_email?: string | null;
+      booking_email?: string | null;
+      contact_emails?: unknown;
+      booking_emails?: unknown;
+      sender_domains?: unknown;
+    }>;
     const activeRoutes = (routes ?? []) as Array<{ id: string; name: string; origin_label: string; destination_label: string; active: boolean }>;
     const agencyAliases = (aliases ?? []) as Array<{ agency_id: string; alias: string }>;
+    const normalizedSenderEmail = normalize(input.senderEmail);
+    const senderDomain = emailDomain(input.senderEmail);
 
-    let agencyMatch: { id: string; confidence: number } | null = null;
+    let agencyMatch: { id: string; confidence: number; reason: string } | null = null;
     for (const agency of activeAgencies) {
+      const agencyContactEmails = Array.isArray(agency.contact_emails) ? agency.contact_emails.map((item) => String(item).toLowerCase()) : [];
+      const agencyBookingEmails = Array.isArray(agency.booking_emails) ? agency.booking_emails.map((item) => String(item).toLowerCase()) : [];
+      const agencyDomains = Array.isArray(agency.sender_domains) ? agency.sender_domains.map((item) => String(item).toLowerCase()) : [];
+      const exactEmails = uniqueStrings([
+        ...(agency.contact_email ? [String(agency.contact_email).toLowerCase()] : []),
+        ...(agency.booking_email ? [String(agency.booking_email).toLowerCase()] : []),
+        ...agencyContactEmails,
+        ...agencyBookingEmails
+      ]);
       const candidates = [
-        normalize(agency.name),
-        ...agencyAliases.filter((row) => row.agency_id === agency.id).map((row) => normalize(row.alias))
-      ].filter(Boolean);
+        { value: normalize(agency.name), reason: "nome agenzia" },
+        ...agencyAliases
+          .filter((row) => row.agency_id === agency.id)
+          .map((row) => ({ value: normalize(row.alias), reason: "alias agenzia" }))
+      ].filter((item) => item.value);
       let best = 0;
-      for (const candidate of candidates) {
-        const byContains = scoreContains(normalizedSource, candidate);
-        const byTokens = scoreTokenOverlap(sourceTokens, tokenize(candidate));
-        best = Math.max(best, byContains, byTokens);
+      let bestReason = "nome agenzia";
+      if (normalizedSenderEmail && exactEmails.some((email) => normalize(email) === normalizedSenderEmail)) {
+        best = Math.max(best, 100);
+        bestReason = "email esatta";
       }
-      if (best > (agencyMatch?.confidence ?? 0)) agencyMatch = { id: agency.id, confidence: best };
+      if (senderDomain && agencyDomains.includes(senderDomain)) {
+        if (92 > best) {
+          best = 92;
+          bestReason = "dominio mittente";
+        }
+      }
+      for (const candidate of candidates) {
+        const byContains = scoreContains(normalizedSource, candidate.value);
+        const byTokens = scoreTokenOverlap(sourceTokens, tokenize(candidate.value));
+        if (byContains > best) {
+          best = byContains;
+          bestReason = candidate.reason;
+        }
+        if (byTokens > best) {
+          best = byTokens;
+          bestReason = `${candidate.reason} (token overlap)`;
+        }
+      }
+      if (best > (agencyMatch?.confidence ?? 0)) agencyMatch = { id: agency.id, confidence: best, reason: bestReason };
     }
 
-    let routeMatch: { id: string; confidence: number } | null = null;
+    let routeMatch: { id: string; confidence: number; reason: string } | null = null;
     for (const route of activeRoutes) {
       const routeName = normalize(route.name);
       const origin = normalize(route.origin_label);
@@ -148,8 +199,28 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
       const byPoints = origin && destination && normalizedSource.includes(origin) && normalizedSource.includes(destination) ? 85 : 0;
       const byPortHints = portHints.some((hint) => normalizedSource.includes(hint)) ? 10 : 0;
       const byIntent = routeIntentBoost(normalizedSource, route, input.bookingKind, input.serviceVariant);
-      const score = Math.max(byName, byNameTokens, Math.round((byOrigin + byDestination) / 2), byPoints) + byPortHints + byIntent;
-      if (score > (routeMatch?.confidence ?? 0)) routeMatch = { id: route.id, confidence: score };
+      let score = 0;
+      let reason = "nome tratta";
+      if (byName > score) {
+        score = byName;
+        reason = "nome tratta";
+      }
+      if (byNameTokens > score) {
+        score = byNameTokens;
+        reason = "token nome tratta";
+      }
+      const byEndpoints = Math.round((byOrigin + byDestination) / 2);
+      if (byEndpoints > score) {
+        score = byEndpoints;
+        reason = "origine/destinazione";
+      }
+      if (byPoints > score) {
+        score = byPoints;
+        reason = "origine e destinazione complete";
+      }
+      score += byPortHints + byIntent;
+      if (byIntent > 0) reason = `${reason} + intento servizio`;
+      if (score > (routeMatch?.confidence ?? 0)) routeMatch = { id: route.id, confidence: score, reason };
     }
 
     const serviceDate = input.date;
@@ -294,9 +365,9 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
       review_required: reviewRequired,
       match_notes: selectedRule
         ? reviewRequired
-          ? "Regola trovata, revisione operatore consigliata"
-          : "Regola trovata con confidenza alta"
-        : "Nessuna regola tariffaria trovata"
+          ? `Regola trovata, revisione operatore consigliata | agenzia: ${agencyMatch?.reason ?? "n/d"} | tratta: ${routeMatch?.reason ?? "n/d"}`
+          : `Regola trovata con confidenza alta | agenzia: ${agencyMatch?.reason ?? "n/d"} | tratta: ${routeMatch?.reason ?? "n/d"}`
+        : `Nessuna regola tariffaria trovata | agenzia: ${agencyMatch?.reason ?? "n/d"} | tratta: ${routeMatch?.reason ?? "n/d"}`
     };
 
     const { data: importRow } = await admin.from("inbound_booking_imports").insert(importPayload).select("id").single();
