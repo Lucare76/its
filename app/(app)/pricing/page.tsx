@@ -109,6 +109,10 @@ const parseCsv = (value: string, transform?: (item: string) => string) =>
 const unique = (items: string[]) => Array.from(new Set(items));
 const sanitizeEmail = (value: string) => value.trim().toLowerCase();
 const eur = (n: number) => (n / 100).toLocaleString("it-IT", { style: "currency", currency: "EUR" });
+const centsToEuroInput = (value: number | null | undefined) => {
+  if (typeof value !== "number") return "";
+  return (value / 100).toFixed(2).replace(".", ",");
+};
 const parseEuroAmountToCents = (value: FormDataEntryValue | null) => {
   const normalized = String(value ?? "")
     .trim()
@@ -125,6 +129,8 @@ const rowStringArray = (row: LooseRow, key: string) => (Array.isArray(row[key]) 
 const CREATE_AGENCY_PANEL_STORAGE_KEY = "pricing:create-agency-expanded";
 const PRICE_LIST_NAME_PRESETS = ["FORMULA SNAV", "FORMULA MEDMAR", "GIRO ISOLA BUS", "LINEA BUS"];
 const ROUTE_PRESETS = [
+  { name: "FORMULA SNAV", origin_label: "Formula SNAV", destination_label: "Servizio formula" },
+  { name: "FORMULA MEDMAR", origin_label: "Formula MEDMAR", destination_label: "Servizio formula" },
   { name: "TRASFERIMENTO STAZIONE / HOTEL", origin_label: "Stazione Napoli", destination_label: "Hotel Ischia" },
   { name: "TRASFERIMENTO AEROPORTO / HOTEL", origin_label: "Aeroporto Napoli", destination_label: "Hotel Ischia" },
   { name: "TRASFERIMENTO STAZIONE / HOTEL PRIVATO", origin_label: "Stazione Napoli", destination_label: "Hotel / Indirizzo privato Ischia" },
@@ -138,6 +144,19 @@ const RULE_PRESETS = [
   { label: "Transfer Aeroporto / Hotel", routeName: "TRASFERIMENTO AEROPORTO / HOTEL", service_type: "transfer", bus_line_code: "" },
   { label: "Transfer Stazione / Hotel", routeName: "TRASFERIMENTO STAZIONE / HOTEL", service_type: "transfer", bus_line_code: "" },
   { label: "Linea Bus", routeName: "", service_type: "bus_tour", bus_line_code: "LINEA_" }
+] as const;
+type RulePreset = {
+  label: string;
+  routeName: string;
+  service_type: "transfer" | "bus_tour";
+  bus_line_code: string;
+};
+const STANDARD_PRICE_GRID_ROWS = [
+  { key: "snav", label: "FORMULA SNAV", routeName: "FORMULA SNAV", serviceType: "transfer", busLineCode: "" },
+  { key: "medmar", label: "FORMULA MEDMAR", routeName: "FORMULA MEDMAR", serviceType: "transfer", busLineCode: "" },
+  { key: "airport", label: "TRANSFER AEROPORTO / HOTEL", routeName: "TRASFERIMENTO AEROPORTO / HOTEL", serviceType: "transfer", busLineCode: "" },
+  { key: "station", label: "TRANSFER STAZIONE / HOTEL", routeName: "TRASFERIMENTO STAZIONE / HOTEL", serviceType: "transfer", busLineCode: "" },
+  { key: "bus", label: "LINEA BUS", routeName: "LINEA BUS", serviceType: "bus_tour", busLineCode: "LINEA_" }
 ] as const;
 
 function detectMatchBadges(notes: string) {
@@ -284,10 +303,27 @@ export default function PricingAdminPage() {
   const [creatingAgency, setCreatingAgency] = useState(false);
   const [savingAgencyId, setSavingAgencyId] = useState<string | null>(null);
   const [deletingAgencyId, setDeletingAgencyId] = useState<string | null>(null);
+  const [editingPriceListId, setEditingPriceListId] = useState<string | null>(null);
+  const [savingPriceListId, setSavingPriceListId] = useState<string | null>(null);
+  const [deletingPriceListId, setDeletingPriceListId] = useState<string | null>(null);
+  const [savingAllBusLines, setSavingAllBusLines] = useState(false);
+  const [savingAllStandardRows, setSavingAllStandardRows] = useState(false);
+  const [activeRulesExpanded, setActiveRulesExpanded] = useState(false);
   const [listDraft, setListDraft] = useState({ name: "", currency: "EUR", valid_from: "", valid_to: "", agency_id: "", is_default: false });
   const [routeDraft, setRouteDraft] = useState({ name: "", origin_label: "", destination_label: "" });
-  const [busLineSearch, setBusLineSearch] = useState("");
-  const [ruleDraft, setRuleDraft] = useState({ route_id: "", bus_line_code: "", service_type: "" });
+  const [ruleDraft, setRuleDraft] = useState({ price_list_id: "", agency_id: "", route_id: "", bus_line_code: "", service_type: "" });
+  const [preparedAgencyList, setPreparedAgencyList] = useState<{ agencyId: string; agencyName: string } | null>(null);
+  const [standardRowDrafts, setStandardRowDrafts] = useState<Record<string, { internalCost: string; agencyPrice: string; publicPrice: string; busLineCode: string }>>({});
+  const [busLineRowDrafts, setBusLineRowDrafts] = useState<Record<string, { internalCost: string; agencyPrice: string; publicPrice: string }>>({});
+  const [editingCustomRuleId, setEditingCustomRuleId] = useState<string | null>(null);
+  const [customRuleDraft, setCustomRuleDraft] = useState({
+    route_id: "",
+    service_type: "transfer",
+    bus_line_code: "",
+    internalCost: "",
+    agencyPrice: "",
+    publicPrice: ""
+  });
 
   const token = async () => {
     if (!supabase) return null;
@@ -582,13 +618,32 @@ export default function PricingAdminPage() {
 
   const submitListCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const ok = await createList(new FormData(event.currentTarget));
-    if (ok) {
+    const formData = new FormData(event.currentTarget);
+    if (editingPriceListId) {
+      const ok = await updatePriceList(editingPriceListId, formData);
+      if (ok) {
+        setListDraft({ name: "", currency: "EUR", valid_from: "", valid_to: "", agency_id: "", is_default: false });
+      }
+      return;
+    }
+    const createdList = await createList(formData);
+    if (createdList) {
       setListDraft((current) => ({ ...current, name: "", valid_from: "", valid_to: "", is_default: false }));
+      if (preparedAgencyList && createdList.agency_id === preparedAgencyList.agencyId) {
+        setRuleDraft((current) => ({
+          ...current,
+          price_list_id: createdList.id,
+          agency_id: preparedAgencyList.agencyId
+        }));
+        setSection("regole");
+        setMessage(`Listino ${createdList.name} creato. Adesso compila le righe standard in Regole prezzo per ${preparedAgencyList.agencyName}.`);
+      }
     }
   };
 
   const startAgencyPriceList = (agency: Agency) => {
+    setEditingPriceListId(null);
+    setPreparedAgencyList({ agencyId: agency.id, agencyName: agency.name });
     setListDraft({
       name: `Listino ${agency.name}`,
       currency: "EUR",
@@ -601,13 +656,41 @@ export default function PricingAdminPage() {
     setMessage(`Preparazione listino per ${agency.name}. Crea il listino qui, poi inserisci i prezzi in Regole prezzo.`);
   };
 
-  const applyRulePreset = (preset: (typeof RULE_PRESETS)[number]) => {
+  const startEditPriceList = (item: PriceList) => {
+    setEditingPriceListId(item.id);
+    setPreparedAgencyList(null);
+    setListDraft({
+      name: item.name,
+      currency: item.currency,
+      valid_from: item.valid_from,
+      valid_to: item.valid_to ?? "",
+      agency_id: item.agency_id ?? "",
+      is_default: item.is_default
+    });
+    setSection("listini");
+    setMessage(`Modifica listino ${item.name}.`);
+  };
+
+  const openPriceListRules = (item: PriceList) => {
+    setEditingPriceListId(null);
+    setPreparedAgencyList(null);
+    setRuleDraft((current) => ({
+      ...current,
+      price_list_id: item.id,
+      agency_id: item.agency_id ?? ""
+    }));
+    setSection("regole");
+    setMessage(`Stai compilando i prezzi del listino ${item.name}.`);
+  };
+
+  const applyRulePreset = (preset: RulePreset) => {
     const matchedRoute = preset.routeName ? routes.find((route) => route.name.toLowerCase() === preset.routeName.toLowerCase()) : null;
-    setRuleDraft({
+    setRuleDraft((current) => ({
+      ...current,
       route_id: matchedRoute?.id ?? "",
       bus_line_code: preset.bus_line_code,
       service_type: preset.service_type
-    });
+    }));
     setMessage(`Preset regola pronto: ${preset.label}. Inserisci ora solo i prezzi.`);
   };
 
@@ -628,14 +711,52 @@ export default function PricingAdminPage() {
       setMessage(p.error.issues[0]?.message ?? "Tratta non valida.");
       return false;
     }
-    const { error } = await supabase.from("routes").insert({ tenant_id: tenantId, ...p.data, origin_type: "custom", destination_type: "custom", active: true });
-    if (error) {
-      setMessage(error.message);
+    const t = await token();
+    if (!t) {
+      setMessage("Sessione non valida.");
+      return false;
+    }
+    const res = await fetch("/api/pricing/routes", {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+      body: JSON.stringify(p.data)
+    });
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    if (!res.ok) {
+      setMessage(body?.error ?? "Creazione tratta non riuscita.");
       return false;
     }
     setMessage("Tratta creata.");
     await loadBase();
     return true;
+  };
+
+  const ensureRoutePreset = async (routeName: string) => {
+    const existing = routes.find((route) => route.name.toLowerCase() === routeName.toLowerCase());
+    if (existing) return existing.id;
+
+    const preset = ROUTE_PRESETS.find((item) => item.name.toLowerCase() === routeName.toLowerCase());
+    if (!preset) return null;
+
+    const t = await token();
+    if (!t) {
+      setMessage("Sessione non valida.");
+      return null;
+    }
+
+    const res = await fetch("/api/pricing/routes", {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+      body: JSON.stringify(preset)
+    });
+    const body = (await res.json().catch(() => null)) as { error?: string; route?: { id: string } } | null;
+    if (!res.ok || !body?.route?.id) {
+      setMessage(body?.error ?? `Creazione tratta ${routeName} non riuscita.`);
+      return null;
+    }
+
+    await loadBase();
+    return body.route.id;
   };
 
   const createList = async (fd: FormData) => {
@@ -652,14 +773,86 @@ export default function PricingAdminPage() {
       setMessage(p.error.issues[0]?.message ?? "Listino non valido.");
       return false;
     }
-    const { error } = await supabase.from("price_lists").insert({ tenant_id: tenantId, ...p.data, active: true });
-    if (error) {
-      setMessage(error.message);
+    const t = await token();
+    if (!t) {
+      setMessage("Sessione non valida.");
+      return false;
+    }
+    const res = await fetch("/api/pricing/price-lists", {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+      body: JSON.stringify(p.data)
+    });
+    const body = (await res.json().catch(() => null)) as { error?: string; price_list?: { id: string; agency_id: string | null; name: string } } | null;
+    if (!res.ok || !body?.price_list) {
+      setMessage(body?.error ?? "Creazione listino non riuscita.");
       return false;
     }
     setMessage("Listino creato.");
     await loadBase();
+    return body.price_list;
+  };
+
+  const updatePriceList = async (priceListId: string, fd: FormData) => {
+    if (!supabase || !tenantId) return false;
+    const p = priceListSchema.safeParse({
+      name: String(fd.get("name") ?? ""),
+      currency: String(fd.get("currency") ?? "EUR"),
+      valid_from: String(fd.get("valid_from") ?? ""),
+      valid_to: String(fd.get("valid_to") ?? ""),
+      agency_id: String(fd.get("agency_id") ?? ""),
+      is_default: String(fd.get("is_default") ?? "") === "on"
+    });
+    if (!p.success) {
+      setMessage(p.error.issues[0]?.message ?? "Listino non valido.");
+      return false;
+    }
+    const t = await token();
+    if (!t) {
+      setMessage("Sessione non valida.");
+      return false;
+    }
+    setSavingPriceListId(priceListId);
+    const res = await fetch("/api/pricing/price-lists", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+      body: JSON.stringify({ price_list_id: priceListId, ...p.data })
+    });
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    setSavingPriceListId(null);
+    if (!res.ok) {
+      setMessage(body?.error ?? "Aggiornamento listino non riuscito.");
+      return false;
+    }
+    setEditingPriceListId(null);
+    setPreparedAgencyList(null);
+    setMessage("Listino aggiornato.");
+    await loadBase();
     return true;
+  };
+
+  const deletePriceList = async (priceListId: string) => {
+    if (!supabase || !tenantId) return;
+    const confirmed = window.confirm("Vuoi eliminare davvero questo listino? Verranno eliminate anche le regole collegate.");
+    if (!confirmed) return;
+    const t = await token();
+    if (!t) return setMessage("Sessione non valida.");
+    setDeletingPriceListId(priceListId);
+    const res = await fetch("/api/pricing/price-lists", {
+      method: "DELETE",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+      body: JSON.stringify({ price_list_id: priceListId })
+    });
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    setDeletingPriceListId(null);
+    if (!res.ok) return setMessage(body?.error ?? "Eliminazione listino non riuscita.");
+    if (editingPriceListId === priceListId) {
+      setEditingPriceListId(null);
+      setListDraft({ name: "", currency: "EUR", valid_from: "", valid_to: "", agency_id: "", is_default: false });
+    }
+    setPreparedAgencyList(null);
+    setMessage("Listino eliminato.");
+    await loadBase();
   };
 
   const createRule = async (fd: FormData) => {
@@ -700,10 +893,419 @@ export default function PricingAdminPage() {
       tenant_id: tenantId,
       active: true
     };
-    const { error } = await supabase.from("pricing_rules").insert(payload);
-    if (error) return setMessage(error.message);
+    const t = await token();
+    if (!t) return setMessage("Sessione non valida.");
+    const res = await fetch("/api/pricing/rules", {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+      body: JSON.stringify(payload)
+    });
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    if (!res.ok) return setMessage(body?.error ?? "Creazione regola non riuscita.");
     setMessage("Regola creata.");
+    setRuleDraft((current) => ({
+      ...current,
+      route_id: "",
+      bus_line_code: "",
+      service_type: ""
+    }));
     await loadBase();
+  };
+
+  const saveStandardGridRow = async (row: (typeof standardGridRows)[number]) => {
+    if (!supabase || !tenantId) return;
+    if (!ruleDraft.price_list_id) {
+      setMessage("Seleziona prima un listino.");
+      return;
+    }
+    const resolvedRouteId = row.routeId || (row.routeName ? await ensureRoutePreset(row.routeName) : null);
+    if (!resolvedRouteId) {
+      setMessage(`Manca la tratta standard per ${row.label}.`);
+      return;
+    }
+
+    const draft = standardRowDrafts[row.key];
+    const internalCostInput = draft?.internalCost ?? centsToEuroInput(row.existingRule?.internal_cost_cents ?? 0);
+    const agencyPriceInput = draft?.agencyPrice ?? centsToEuroInput(row.existingRule?.agency_price_cents ?? 0);
+    const publicPriceInput = draft?.publicPrice ?? centsToEuroInput(row.existingRule?.public_price_cents ?? 0);
+
+    const internalCostCents = parseEuroAmountToCents(internalCostInput);
+    const agencyPriceCents = parseEuroAmountToCents(agencyPriceInput);
+    const publicPriceCandidate = parseEuroAmountToCents(publicPriceInput);
+
+    if (!Number.isFinite(internalCostCents) || internalCostCents === null) {
+      setMessage(`Inserisci un costo valido per ${row.label}.`);
+      return;
+    }
+
+    const resolvedPublicPrice =
+      typeof publicPriceCandidate === "number" && Number.isFinite(publicPriceCandidate)
+        ? publicPriceCandidate
+        : typeof agencyPriceCents === "number" && Number.isFinite(agencyPriceCents)
+          ? agencyPriceCents
+          : null;
+
+    if (resolvedPublicPrice === null) {
+      setMessage(`Inserisci almeno un prezzo vendita per ${row.label}.`);
+      return;
+    }
+
+    const resolvedAgencyPrice =
+      typeof agencyPriceCents === "number" && Number.isFinite(agencyPriceCents) ? agencyPriceCents : null;
+
+    const payload = {
+      tenant_id: tenantId,
+      price_list_id: ruleDraft.price_list_id,
+      route_id: resolvedRouteId,
+      agency_id: ruleDraft.agency_id || null,
+      bus_line_code: draft?.busLineCode?.trim() || null,
+      service_type: row.serviceType,
+      direction: null,
+      pax_min: 1,
+      pax_max: null,
+      rule_kind: "fixed" as const,
+      internal_cost_cents: internalCostCents,
+      public_price_cents: resolvedPublicPrice,
+      agency_price_cents: resolvedAgencyPrice,
+      priority: row.existingRule?.priority ?? 100,
+      vehicle_type: null,
+      time_from: null,
+      time_to: null,
+      season_from: null,
+      season_to: null,
+      needs_manual_review: false,
+      active: true
+    };
+
+    const t = await token();
+    if (!t) {
+      setMessage("Sessione non valida.");
+      return;
+    }
+
+    if (row.existingRule) {
+      const res = await fetch("/api/pricing/rules", {
+        method: "PATCH",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+        body: JSON.stringify({ rule_id: row.existingRule.id, ...payload })
+      });
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        setMessage(body?.error ?? `Aggiornamento riga ${row.label} non riuscito.`);
+        return;
+      }
+      setMessage(`Riga ${row.label} aggiornata.`);
+    } else {
+      const res = await fetch("/api/pricing/rules", {
+        method: "POST",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+        body: JSON.stringify(payload)
+      });
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        setMessage(body?.error ?? `Creazione riga ${row.label} non riuscita.`);
+        return;
+      }
+      setMessage(`Riga ${row.label} creata.`);
+    }
+
+    await loadBase();
+  };
+
+  const saveAllStandardGridRows = async () => {
+    if (!ruleDraft.price_list_id) {
+      setMessage("Seleziona prima un listino.");
+      return;
+    }
+
+    const rowsToSave = standardGridRows.filter((row) => {
+      const draft = standardRowDrafts[row.key];
+      return Boolean(draft?.internalCost?.trim() || draft?.agencyPrice?.trim() || draft?.publicPrice?.trim() || draft?.busLineCode?.trim());
+    });
+
+    if (rowsToSave.length === 0) {
+      setMessage("Compila almeno una riga standard prima di usare Salva tutte le righe.");
+      return;
+    }
+
+    setSavingAllStandardRows(true);
+    setMessage(`Salvataggio di ${rowsToSave.length} righe standard in corso...`);
+    for (const row of rowsToSave) {
+      await saveStandardGridRow(row);
+    }
+    setSavingAllStandardRows(false);
+    setMessage(`Salvate ${rowsToSave.length} righe standard.`);
+  };
+
+  const deletePricingRuleRow = async (ruleId: string) => {
+    if (!supabase || !tenantId) return;
+    const confirmed = window.confirm("Vuoi eliminare questa riga del listino?");
+    if (!confirmed) return;
+    const t = await token();
+    if (!t) {
+      setMessage("Sessione non valida.");
+      return;
+    }
+    const res = await fetch("/api/pricing/rules", {
+      method: "DELETE",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+      body: JSON.stringify({ rule_id: ruleId })
+    });
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    if (!res.ok) {
+      setMessage(body?.error ?? "Eliminazione riga non riuscita.");
+      return;
+    }
+    setMessage("Riga listino eliminata.");
+    await loadBase();
+  };
+
+  const saveBusLineRule = async (line: (typeof BUS_LINES_2026)[number], options?: { skipReload?: boolean }) => {
+    if (!supabase || !tenantId) return false;
+    if (!ruleDraft.price_list_id) {
+      setMessage("Seleziona prima un listino.");
+      return false;
+    }
+    const resolvedRouteId = lineaBusRoute?.id || (await ensureRoutePreset("LINEA BUS"));
+    if (!resolvedRouteId) {
+      setMessage("Manca la tratta standard LINEA BUS.");
+      return false;
+    }
+
+    const existingRule = busLineListRules.find((rule) => rule.bus_line_code === line.code);
+    const draft = busLineRowDrafts[line.code];
+    const internalCostCents = parseEuroAmountToCents(draft?.internalCost ?? "");
+    const agencyPriceCents = parseEuroAmountToCents(draft?.agencyPrice ?? "");
+    const publicPriceCandidate = parseEuroAmountToCents(draft?.publicPrice ?? "");
+
+    if (!Number.isFinite(internalCostCents) || internalCostCents === null) {
+      setMessage(`Inserisci un costo valido per ${line.name}.`);
+      return false;
+    }
+
+    const resolvedPublicPrice =
+      typeof publicPriceCandidate === "number" && Number.isFinite(publicPriceCandidate)
+        ? publicPriceCandidate
+        : typeof agencyPriceCents === "number" && Number.isFinite(agencyPriceCents)
+          ? agencyPriceCents
+          : null;
+
+    if (resolvedPublicPrice === null) {
+      setMessage(`Inserisci almeno un prezzo vendita per ${line.name}.`);
+      return false;
+    }
+
+    const resolvedAgencyPrice =
+      typeof agencyPriceCents === "number" && Number.isFinite(agencyPriceCents) ? agencyPriceCents : null;
+
+    const payload = {
+      tenant_id: tenantId,
+      price_list_id: ruleDraft.price_list_id,
+      route_id: resolvedRouteId,
+      agency_id: ruleDraft.agency_id || null,
+      bus_line_code: line.code,
+      service_type: "bus_tour" as const,
+      direction: null,
+      pax_min: 1,
+      pax_max: null,
+      rule_kind: "fixed" as const,
+      internal_cost_cents: internalCostCents,
+      public_price_cents: resolvedPublicPrice,
+      agency_price_cents: resolvedAgencyPrice,
+      priority: existingRule?.priority ?? 100,
+      vehicle_type: null,
+      time_from: null,
+      time_to: null,
+      season_from: null,
+      season_to: null,
+      needs_manual_review: false,
+      active: true
+    };
+
+    const t = await token();
+    if (!t) {
+      setMessage("Sessione non valida.");
+      return false;
+    }
+
+    if (existingRule) {
+      const res = await fetch("/api/pricing/rules", {
+        method: "PATCH",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+        body: JSON.stringify({ rule_id: existingRule.id, ...payload })
+      });
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        setMessage(body?.error ?? `Aggiornamento linea ${line.code} non riuscito.`);
+        return false;
+      }
+      setMessage(`Linea ${line.code} aggiornata.`);
+    } else {
+      const res = await fetch("/api/pricing/rules", {
+        method: "POST",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+        body: JSON.stringify(payload)
+      });
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        setMessage(body?.error ?? `Creazione linea ${line.code} non riuscita.`);
+        return false;
+      }
+      setMessage(`Linea ${line.code} creata.`);
+    }
+
+    if (!options?.skipReload) {
+      await loadBase();
+    }
+    return true;
+  };
+
+  const saveAllBusLineRules = async () => {
+    if (!ruleDraft.price_list_id) {
+      setMessage("Seleziona prima un listino.");
+      return;
+    }
+
+    const linesToSave = BUS_LINES_2026.filter((line) => {
+      const draft = busLineRowDrafts[line.code];
+      const existingRule = busLineListRules.find((rule) => rule.bus_line_code === line.code);
+      const internalCostInput = draft?.internalCost ?? centsToEuroInput(existingRule?.internal_cost_cents ?? null);
+      const agencyPriceInput = draft?.agencyPrice ?? centsToEuroInput(existingRule?.agency_price_cents ?? null);
+      const publicPriceInput = draft?.publicPrice ?? centsToEuroInput(existingRule?.public_price_cents ?? null);
+      return Boolean(internalCostInput?.trim() || agencyPriceInput?.trim() || publicPriceInput?.trim());
+    });
+
+    if (linesToSave.length === 0) {
+      setMessage("Compila almeno una linea bus prima di usare Salva tutte le linee.");
+      return;
+    }
+
+    setSavingAllBusLines(true);
+    setMessage(`Salvataggio di ${linesToSave.length} linee bus in corso...`);
+    for (const line of linesToSave) {
+      const ok = await saveBusLineRule(line, { skipReload: true });
+      if (!ok) {
+        setSavingAllBusLines(false);
+        return;
+      }
+    }
+
+    setSavingAllBusLines(false);
+    await loadBase();
+    setMessage(`Salvate ${linesToSave.length} linee bus.`);
+  };
+
+  const saveCustomRuleRow = async () => {
+    if (!supabase || !tenantId) return;
+    if (!ruleDraft.price_list_id) {
+      setMessage("Seleziona prima un listino.");
+      return;
+    }
+    if (!customRuleDraft.route_id) {
+      setMessage("Seleziona una tratta per la voce custom.");
+      return;
+    }
+
+    const internalCostCents = parseEuroAmountToCents(customRuleDraft.internalCost);
+    const agencyPriceCents = parseEuroAmountToCents(customRuleDraft.agencyPrice);
+    const publicPriceCents = parseEuroAmountToCents(customRuleDraft.publicPrice);
+
+    if (!Number.isFinite(internalCostCents) || internalCostCents === null) {
+      setMessage("Inserisci un costo valido per la voce custom.");
+      return;
+    }
+
+    const resolvedPublicPrice =
+      typeof publicPriceCents === "number" && Number.isFinite(publicPriceCents)
+        ? publicPriceCents
+        : typeof agencyPriceCents === "number" && Number.isFinite(agencyPriceCents)
+          ? agencyPriceCents
+          : null;
+
+    if (resolvedPublicPrice === null) {
+      setMessage("Inserisci almeno un prezzo vendita per la voce custom.");
+      return;
+    }
+
+    const resolvedAgencyPrice =
+      typeof agencyPriceCents === "number" && Number.isFinite(agencyPriceCents) ? agencyPriceCents : null;
+
+    const payload = {
+      tenant_id: tenantId,
+      price_list_id: ruleDraft.price_list_id,
+      route_id: customRuleDraft.route_id,
+      agency_id: ruleDraft.agency_id || null,
+      bus_line_code: customRuleDraft.bus_line_code.trim() || null,
+      service_type: customRuleDraft.service_type || null,
+      direction: null,
+      pax_min: 1,
+      pax_max: null,
+      rule_kind: "fixed",
+      internal_cost_cents: internalCostCents,
+      public_price_cents: resolvedPublicPrice,
+      agency_price_cents: resolvedAgencyPrice,
+      priority: 100,
+      vehicle_type: null,
+      time_from: null,
+      time_to: null,
+      season_from: null,
+      season_to: null,
+      needs_manual_review: false,
+      active: true
+    };
+    const t = await token();
+    if (!t) {
+      setMessage("Sessione non valida.");
+      return;
+    }
+    const res = await fetch("/api/pricing/rules", {
+      method: editingCustomRuleId ? "PATCH" : "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+      body: JSON.stringify(editingCustomRuleId ? { rule_id: editingCustomRuleId, ...payload } : payload)
+    });
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    if (!res.ok) {
+      setMessage(body?.error ?? (editingCustomRuleId ? "Aggiornamento voce custom non riuscito." : "Creazione voce custom non riuscita."));
+      return;
+    }
+
+    setCustomRuleDraft({
+      route_id: "",
+      service_type: "transfer",
+      bus_line_code: "",
+      internalCost: "",
+      agencyPrice: "",
+      publicPrice: ""
+    });
+    setEditingCustomRuleId(null);
+    setMessage(editingCustomRuleId ? "Voce custom aggiornata." : "Voce custom creata.");
+    await loadBase();
+  };
+
+  const startEditCustomRule = (rule: PricingRule) => {
+    setEditingCustomRuleId(rule.id);
+    setCustomRuleDraft({
+      route_id: rule.route_id,
+      service_type: (rule.service_type as "transfer" | "bus_tour") ?? "transfer",
+      bus_line_code: rule.bus_line_code ?? "",
+      internalCost: centsToEuroInput(rule.internal_cost_cents),
+      agencyPrice: centsToEuroInput(rule.agency_price_cents),
+      publicPrice: centsToEuroInput(rule.public_price_cents)
+    });
+    setMessage("Modifica voce custom pronta.");
+  };
+
+  const cancelEditCustomRule = () => {
+    setEditingCustomRuleId(null);
+    setCustomRuleDraft({
+      route_id: "",
+      service_type: "transfer",
+      bus_line_code: "",
+      internalCost: "",
+      agencyPrice: "",
+      publicPrice: ""
+    });
+    setMessage("Modifica voce custom annullata.");
   };
 
   const toggle = async (table: "agencies" | "routes" | "price_lists" | "pricing_rules", id: string, current: boolean) => {
@@ -755,14 +1357,39 @@ export default function PricingAdminPage() {
     const agencyLists = priceLists.filter((item) => Boolean(item.agency_id));
     return { privateLists, agencyLists };
   }, [priceLists]);
-  const filteredBusLines = useMemo(() => {
-    const query = busLineSearch.trim().toLowerCase();
-    if (!query) return BUS_LINES_2026;
-    return BUS_LINES_2026.filter((line) => {
-      const haystack = [line.code, line.name, line.notes ?? "", ...line.stops.map((stop) => stop.city)].join(" ").toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [busLineSearch]);
+  const editingPriceList = editingPriceListId ? priceLists.find((item) => item.id === editingPriceListId) ?? null : null;
+  const lineaBusRoute = routes.find((item) => item.name.toLowerCase() === "linea bus");
+  const standardGridRows = STANDARD_PRICE_GRID_ROWS.map((row) => {
+    const route = row.routeName ? routes.find((item) => item.name.toLowerCase() === row.routeName.toLowerCase()) : null;
+    const existingRule = rules.find(
+      (rule) =>
+        rule.price_list_id === ruleDraft.price_list_id &&
+        rule.agency_id === (ruleDraft.agency_id || null) &&
+        ((route && rule.route_id === route.id) || (!route && row.busLineCode && rule.bus_line_code?.startsWith(row.busLineCode)))
+    );
+    return {
+      ...row,
+      routeId: route?.id ?? "",
+      routeReady: Boolean(route) || row.busLineCode.length > 0,
+      existingRule
+    };
+  });
+  const standardRuleIds = new Set(standardGridRows.flatMap((row) => (row.existingRule ? [row.existingRule.id] : [])));
+  const busLineListRules = rules.filter(
+    (rule) =>
+      rule.price_list_id === ruleDraft.price_list_id &&
+      rule.agency_id === (ruleDraft.agency_id || null) &&
+      Boolean(rule.bus_line_code) &&
+      (rule.route_id === (lineaBusRoute?.id ?? "") || rule.service_type === "bus_tour" || routes.find((item) => item.id === rule.route_id)?.name === "LINEA BUS")
+  );
+  const busLineRuleIds = new Set(busLineListRules.map((rule) => rule.id));
+  const customListRules = rules.filter(
+    (rule) =>
+      rule.price_list_id === ruleDraft.price_list_id &&
+      rule.agency_id === (ruleDraft.agency_id || null) &&
+      !standardRuleIds.has(rule.id) &&
+      !busLineRuleIds.has(rule.id)
+  );
   if (loading) return <div className="card p-4 text-sm text-slate-500">Caricamento tariffe...</div>;
 
   return (
@@ -789,6 +1416,11 @@ export default function PricingAdminPage() {
             Qui crei il contenitore del listino, di solito uno per agenzia e uno per i privati.
             I prezzi veri si inseriscono dopo nella sezione `Regole prezzo`.
           </div>
+          {editingPriceList ? (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-900">
+              Stai modificando <span className="font-semibold">{editingPriceList.name}</span>.
+            </div>
+          ) : null}
           <form onSubmit={submitListCreate} className="grid gap-2 md:grid-cols-5">
             <div className="rounded-xl border border-slate-200 px-3 py-3 md:col-span-5">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Preset rapidi listino</p>
@@ -828,7 +1460,25 @@ export default function PricingAdminPage() {
             <label className="inline-flex items-center gap-2 text-sm md:col-span-5">
               <input type="checkbox" name="is_default" checked={listDraft.is_default} onChange={(event) => setListDraft((current) => ({ ...current, is_default: event.target.checked }))} /> Listino predefinito per il contesto selezionato
             </label>
-            <button className="btn-primary px-4 py-2 text-sm md:col-span-5">Crea Listino</button>
+            <div className="flex flex-wrap gap-2 md:col-span-5">
+              <button className="btn-primary px-4 py-2 text-sm" type="submit">
+                {editingPriceListId ? (savingPriceListId === editingPriceListId ? "Salvataggio..." : "Salva Modifiche") : "Crea Listino"}
+              </button>
+              {editingPriceListId ? (
+                <button
+                  className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700"
+                  type="button"
+                  onClick={() => {
+                    setEditingPriceListId(null);
+                    setPreparedAgencyList(null);
+                    setListDraft({ name: "", currency: "EUR", valid_from: "", valid_to: "", agency_id: "", is_default: false });
+                    setMessage("Modifica listino annullata.");
+                  }}
+                >
+                  Annulla
+                </button>
+              ) : null}
+            </div>
           </form>
 
           <div className="space-y-4 text-sm">
@@ -840,10 +1490,22 @@ export default function PricingAdminPage() {
                     <span className="font-medium">{item.name}</span> | {item.currency} | {item.valid_from}
                     {item.valid_to ? ` -> ${item.valid_to}` : " -> aperto"} | Privati
                     {item.is_default ? " | Default" : ""}
+                    {editingPriceListId === item.id ? " | In modifica" : ""}
                   </p>
-                  <button className="text-xs underline" onClick={() => void toggle("price_lists", item.id, item.active)} type="button">
-                    {item.active ? "Disattiva" : "Attiva"}
-                  </button>
+                  <div className="flex items-center gap-2 text-xs">
+                    <button className="rounded-lg border border-sky-300 px-2 py-1 font-medium text-sky-700" onClick={() => openPriceListRules(item)} type="button">
+                      Prezzi
+                    </button>
+                    <button className="rounded-lg border border-slate-300 px-2 py-1 font-medium text-slate-700" onClick={() => startEditPriceList(item)} type="button">
+                      Modifica dati
+                    </button>
+                    <button className="rounded-lg border border-rose-300 px-2 py-1 font-medium text-rose-700" onClick={() => void deletePriceList(item.id)} type="button">
+                      {deletingPriceListId === item.id ? "Eliminazione..." : "Elimina"}
+                    </button>
+                    <button className="rounded-lg border border-slate-300 px-2 py-1 font-medium text-slate-700" onClick={() => void toggle("price_lists", item.id, item.active)} type="button">
+                      {item.active ? "Disattiva" : "Attiva"}
+                    </button>
+                  </div>
                 </div>
               )) : <div className="rounded-xl border border-dashed border-slate-200 px-3 py-2 text-slate-500">Nessun listino privati.</div>}
             </div>
@@ -856,10 +1518,22 @@ export default function PricingAdminPage() {
                     <span className="font-medium">{item.name}</span> | {item.currency} | {item.valid_from}
                     {item.valid_to ? ` -> ${item.valid_to}` : " -> aperto"} | Agenzia: {agencies.find((agency) => agency.id === item.agency_id)?.name ?? "n/d"}
                     {item.is_default ? " | Default" : ""}
+                    {editingPriceListId === item.id ? " | In modifica" : ""}
                   </p>
-                  <button className="text-xs underline" onClick={() => void toggle("price_lists", item.id, item.active)} type="button">
-                    {item.active ? "Disattiva" : "Attiva"}
-                  </button>
+                  <div className="flex items-center gap-2 text-xs">
+                    <button className="rounded-lg border border-sky-300 px-2 py-1 font-medium text-sky-700" onClick={() => openPriceListRules(item)} type="button">
+                      Prezzi
+                    </button>
+                    <button className="rounded-lg border border-slate-300 px-2 py-1 font-medium text-slate-700" onClick={() => startEditPriceList(item)} type="button">
+                      Modifica dati
+                    </button>
+                    <button className="rounded-lg border border-rose-300 px-2 py-1 font-medium text-rose-700" onClick={() => void deletePriceList(item.id)} type="button">
+                      {deletingPriceListId === item.id ? "Eliminazione..." : "Elimina"}
+                    </button>
+                    <button className="rounded-lg border border-slate-300 px-2 py-1 font-medium text-slate-700" onClick={() => void toggle("price_lists", item.id, item.active)} type="button">
+                      {item.active ? "Disattiva" : "Attiva"}
+                    </button>
+                  </div>
                 </div>
               )) : <div className="rounded-xl border border-dashed border-slate-200 px-3 py-2 text-slate-500">Nessun listino agenzia.</div>}
             </div>
@@ -900,54 +1574,376 @@ export default function PricingAdminPage() {
             <button className="btn-primary px-4 py-2 text-sm">Crea Tratta</button>
           </form>
 
-          <div className="card space-y-3 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-base font-semibold">Catalogo linee bus 2026</h2>
-              <p className="text-xs text-slate-500">{filteredBusLines.length} linee</p>
-            </div>
-            <input
-              value={busLineSearch}
-              onChange={(event) => setBusLineSearch(event.target.value)}
-              placeholder="Cerca per codice linea o nome"
-              className="input-saas"
-            />
-            <div className="space-y-2">
-              {filteredBusLines.slice(0, 16).map((line) => {
-                return (
-                  <div key={line.code} className="rounded-xl border border-slate-200 px-3 py-3 text-sm">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <p className="font-medium text-slate-900">
-                          {line.name} <span className="text-xs font-normal text-slate-500">({line.code})</span>
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {line.notes ?? "Linea da PDF 2026"} | {line.validFrom ?? "data aperta"} {line.validTo ? `-> ${line.validTo}` : ""}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        className="text-xs underline"
-                        onClick={() =>
-                          setRouteDraft({
-                            name: line.name,
-                            origin_label: line.code,
-                            destination_label: "Prezzo per linea"
-                          })
-                        }
-                      >
-                        Usa linea
-                      </button>
-                    </div>
-                    <p className="mt-2 text-xs text-slate-500">Prezzo da assegnare alla linea {line.code} senza dettagliare tutte le fermate.</p>
-                  </div>
-                );
-              })}
-              {filteredBusLines.length === 0 ? <div className="rounded-xl border border-dashed border-slate-200 px-3 py-2 text-sm text-slate-500">Nessuna linea trovata.</div> : null}
-            </div>
-          </div>
-
           <form action={createRule} className="card grid gap-2 p-4 md:grid-cols-4">
             <h2 className="text-base font-semibold md:col-span-4">Nuova Regola Prezzo</h2>
+            {ruleDraft.price_list_id ? (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900 md:col-span-4">
+                Stai compilando il listino{" "}
+                <span className="font-semibold">
+                  {priceLists.find((item) => item.id === ruleDraft.price_list_id)?.name ?? "selezionato"}
+                </span>
+                {ruleDraft.agency_id
+                  ? ` per ${agencies.find((item) => item.id === ruleDraft.agency_id)?.name ?? "agenzia selezionata"}`
+                  : ""}.
+              </div>
+            ) : null}
+            {ruleDraft.price_list_id ? (
+              <div className="rounded-xl border border-slate-200 px-3 py-3 md:col-span-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Griglia standard listino</p>
+                  <div className="flex items-center gap-3">
+                    <p className="text-xs text-slate-500">Costo + prezzo vendita. Puoi aggiungere poi altre voci custom dal form sotto.</p>
+                    <button className="rounded-lg border border-sky-300 px-3 py-1 text-xs font-medium text-sky-700" type="button" onClick={() => void saveAllStandardGridRows()}>
+                      {savingAllStandardRows ? "Salvataggio..." : "Salva tutte le righe"}
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 overflow-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left">
+                        <th className="px-2 py-2">Voce</th>
+                        <th className="px-2 py-2">Stato</th>
+                        <th className="px-2 py-2">Costo</th>
+                        <th className="px-2 py-2">Prezzo vendita</th>
+                        <th className="px-2 py-2">Prezzo privati</th>
+                        <th className="px-2 py-2">Linea bus</th>
+                        <th className="px-2 py-2">Azione</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {standardGridRows.map((row) => {
+                        const preset: RulePreset = {
+                          label: row.label,
+                          routeName: row.routeName,
+                          service_type: row.serviceType,
+                          bus_line_code: row.busLineCode
+                        };
+                        return (
+                          <tr key={row.key} className="border-b border-slate-100">
+                            <td className="px-2 py-2 font-medium">{row.label}</td>
+                            <td className="px-2 py-2">
+                              {row.existingRule ? (
+                                <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">Configurata</span>
+                              ) : row.routeReady ? (
+                                <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">Da compilare</span>
+                              ) : (
+                                <span className="rounded-full bg-rose-100 px-2 py-1 text-xs font-semibold text-rose-700">Manca tratta</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-2">
+                              <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                                <span className="text-xs text-slate-500">EUR</span>
+                                <input
+                                  value={standardRowDrafts[row.key]?.internalCost ?? centsToEuroInput(row.existingRule?.internal_cost_cents)}
+                                  onChange={(event) =>
+                                    setStandardRowDrafts((current) => ({
+                                      ...current,
+                                      [row.key]: { ...current[row.key], internalCost: event.target.value }
+                                    }))
+                                  }
+                                  inputMode="decimal"
+                                  placeholder="0,00"
+                                  className="min-w-0 flex-1 bg-transparent outline-none"
+                                />
+                              </label>
+                            </td>
+                            <td className="px-2 py-2">
+                              <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                                <span className="text-xs text-slate-500">EUR</span>
+                                <input
+                                  value={standardRowDrafts[row.key]?.agencyPrice ?? centsToEuroInput(row.existingRule?.agency_price_cents ?? null)}
+                                  onChange={(event) =>
+                                    setStandardRowDrafts((current) => ({
+                                      ...current,
+                                      [row.key]: { ...current[row.key], agencyPrice: event.target.value }
+                                    }))
+                                  }
+                                  inputMode="decimal"
+                                  placeholder="0,00"
+                                  className="min-w-0 flex-1 bg-transparent outline-none"
+                                />
+                              </label>
+                            </td>
+                            <td className="px-2 py-2">
+                              <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                                <span className="text-xs text-slate-500">EUR</span>
+                                <input
+                                  value={standardRowDrafts[row.key]?.publicPrice ?? centsToEuroInput(row.existingRule?.public_price_cents)}
+                                  onChange={(event) =>
+                                    setStandardRowDrafts((current) => ({
+                                      ...current,
+                                      [row.key]: { ...current[row.key], publicPrice: event.target.value }
+                                    }))
+                                  }
+                                  inputMode="decimal"
+                                  placeholder="0,00"
+                                  className="min-w-0 flex-1 bg-transparent outline-none"
+                                />
+                              </label>
+                            </td>
+                            <td className="px-2 py-2">
+                              {row.serviceType === "bus_tour" ? (
+                                <input
+                                  value={standardRowDrafts[row.key]?.busLineCode ?? row.existingRule?.bus_line_code ?? row.busLineCode}
+                                  onChange={(event) =>
+                                    setStandardRowDrafts((current) => ({
+                                      ...current,
+                                      [row.key]: { ...current[row.key], busLineCode: event.target.value }
+                                    }))
+                                  }
+                                  placeholder="LINEA_"
+                                  className="input-saas min-w-[140px]"
+                                />
+                              ) : (
+                                <span className="text-slate-400">-</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-2">
+                              <div className="flex flex-col gap-2">
+                                <button className="text-xs underline" type="button" onClick={() => applyRulePreset(preset)}>
+                                  {row.existingRule ? "Carica preset" : "Compila da preset"}
+                                </button>
+                                <button className="text-xs font-semibold text-sky-700 underline" type="button" onClick={() => void saveStandardGridRow(row)}>
+                                  {row.existingRule ? "Salva aggiornamento" : "Salva riga"}
+                                </button>
+                                {row.existingRule ? (
+                                  <button className="text-xs text-rose-700 underline" type="button" onClick={() => void deletePricingRuleRow(row.existingRule!.id)}>
+                                    Elimina riga
+                                  </button>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+            {ruleDraft.price_list_id ? (
+              <div className="rounded-xl border border-slate-200 px-3 py-3 md:col-span-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Voci custom del listino</p>
+                  <p className="text-xs text-slate-500">Qui aggiungi servizi extra oltre alle righe standard.</p>
+                </div>
+                <div className="mt-3 overflow-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left">
+                        <th className="px-2 py-2">Servizio</th>
+                        <th className="px-2 py-2">Tipo</th>
+                        <th className="px-2 py-2">Costo</th>
+                        <th className="px-2 py-2">Vendita</th>
+                        <th className="px-2 py-2">Privati</th>
+                        <th className="px-2 py-2">Linea bus</th>
+                        <th className="px-2 py-2">Azioni</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b border-slate-100">
+                        <td className="px-2 py-2">
+                          <select
+                            className="input-saas"
+                            value={customRuleDraft.route_id}
+                            onChange={(event) => setCustomRuleDraft((current) => ({ ...current, route_id: event.target.value }))}
+                          >
+                            <option value="">Seleziona tratta/voce</option>
+                            {routes.map((route) => (
+                              <option key={route.id} value={route.id}>
+                                {route.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-2 py-2">
+                          <select
+                            className="input-saas"
+                            value={customRuleDraft.service_type}
+                            onChange={(event) => setCustomRuleDraft((current) => ({ ...current, service_type: event.target.value as "transfer" | "bus_tour" }))}
+                          >
+                            <option value="transfer">transfer</option>
+                            <option value="bus_tour">bus_tour</option>
+                          </select>
+                        </td>
+                        <td className="px-2 py-2">
+                          <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                            <span className="text-xs text-slate-500">EUR</span>
+                            <input value={customRuleDraft.internalCost} onChange={(event) => setCustomRuleDraft((current) => ({ ...current, internalCost: event.target.value }))} inputMode="decimal" placeholder="0,00" className="min-w-0 flex-1 bg-transparent outline-none" />
+                          </label>
+                        </td>
+                        <td className="px-2 py-2">
+                          <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                            <span className="text-xs text-slate-500">EUR</span>
+                            <input value={customRuleDraft.agencyPrice} onChange={(event) => setCustomRuleDraft((current) => ({ ...current, agencyPrice: event.target.value }))} inputMode="decimal" placeholder="0,00" className="min-w-0 flex-1 bg-transparent outline-none" />
+                          </label>
+                        </td>
+                        <td className="px-2 py-2">
+                          <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                            <span className="text-xs text-slate-500">EUR</span>
+                            <input value={customRuleDraft.publicPrice} onChange={(event) => setCustomRuleDraft((current) => ({ ...current, publicPrice: event.target.value }))} inputMode="decimal" placeholder="0,00" className="min-w-0 flex-1 bg-transparent outline-none" />
+                          </label>
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            className="input-saas min-w-[140px]"
+                            value={customRuleDraft.bus_line_code}
+                            onChange={(event) => setCustomRuleDraft((current) => ({ ...current, bus_line_code: event.target.value }))}
+                            placeholder="LINEA_"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <div className="flex items-center gap-2">
+                            <button className="text-xs font-semibold text-sky-700 underline" type="button" onClick={() => void saveCustomRuleRow()}>
+                              {editingCustomRuleId ? "Salva modifica" : "Aggiungi voce"}
+                            </button>
+                            {editingCustomRuleId ? (
+                              <button className="text-xs text-slate-600 underline" type="button" onClick={cancelEditCustomRule}>
+                                Annulla
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                      {customListRules.map((rule) => (
+                        <tr key={rule.id} className="border-b border-slate-100">
+                          <td className="px-2 py-2">{routes.find((route) => route.id === rule.route_id)?.name ?? rule.route_id.slice(0, 8)}</td>
+                          <td className="px-2 py-2">{rule.service_type ?? "-"}</td>
+                          <td className="px-2 py-2">{eur(rule.internal_cost_cents)}</td>
+                          <td className="px-2 py-2">{rule.agency_price_cents !== null ? eur(rule.agency_price_cents) : "-"}</td>
+                          <td className="px-2 py-2">{eur(rule.public_price_cents)}</td>
+                          <td className="px-2 py-2">{rule.bus_line_code ?? "-"}</td>
+                          <td className="px-2 py-2">
+                            <div className="flex items-center gap-2">
+                              <button className="text-xs text-sky-700 underline" type="button" onClick={() => startEditCustomRule(rule)}>
+                                Modifica
+                              </button>
+                              <button className="text-xs text-rose-700 underline" type="button" onClick={() => void deletePricingRuleRow(rule.id)}>
+                                Elimina riga
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+            {ruleDraft.price_list_id ? (
+              <div className="rounded-xl border border-slate-200 px-3 py-3 md:col-span-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Prezzi linee bus</p>
+                    <p className="text-xs text-slate-500">Le linee arrivano già col loro nome. Tu inserisci solo costo e prezzo.</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <p className="text-xs text-slate-500">{BUS_LINES_2026.length} linee tariffarie</p>
+                    <button className="rounded-lg border border-sky-300 px-3 py-1 text-xs font-medium text-sky-700" type="button" onClick={() => void saveAllBusLineRules()}>
+                      {savingAllBusLines ? "Salvataggio..." : "Salva tutte le linee"}
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 overflow-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left">
+                        <th className="px-2 py-2">Linea</th>
+                        <th className="px-2 py-2">Stato</th>
+                        <th className="px-2 py-2">Costo</th>
+                        <th className="px-2 py-2">Prezzo vendita</th>
+                        <th className="px-2 py-2">Prezzo privati</th>
+                        <th className="px-2 py-2">Azione</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {BUS_LINES_2026.map((line) => {
+                        const existingRule = busLineListRules.find((rule) => rule.bus_line_code === line.code);
+                        return (
+                          <tr key={line.code} className="border-b border-slate-100">
+                            <td className="px-2 py-2">
+                              <div className="font-medium">{line.name}</div>
+                              <div className="text-xs text-slate-500">{line.code}</div>
+                            </td>
+                            <td className="px-2 py-2">
+                              {existingRule ? (
+                                <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">Configurata</span>
+                              ) : (
+                                <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">Da compilare</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-2">
+                              <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                                <span className="text-xs text-slate-500">EUR</span>
+                                <input
+                                  value={busLineRowDrafts[line.code]?.internalCost ?? centsToEuroInput(existingRule?.internal_cost_cents)}
+                                  onChange={(event) =>
+                                    setBusLineRowDrafts((current) => ({
+                                      ...current,
+                                      [line.code]: { ...current[line.code], internalCost: event.target.value }
+                                    }))
+                                  }
+                                  inputMode="decimal"
+                                  placeholder="0,00"
+                                  className="min-w-0 flex-1 bg-transparent outline-none"
+                                />
+                              </label>
+                            </td>
+                            <td className="px-2 py-2">
+                              <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                                <span className="text-xs text-slate-500">EUR</span>
+                                <input
+                                  value={busLineRowDrafts[line.code]?.agencyPrice ?? centsToEuroInput(existingRule?.agency_price_cents ?? null)}
+                                  onChange={(event) =>
+                                    setBusLineRowDrafts((current) => ({
+                                      ...current,
+                                      [line.code]: { ...current[line.code], agencyPrice: event.target.value }
+                                    }))
+                                  }
+                                  inputMode="decimal"
+                                  placeholder="0,00"
+                                  className="min-w-0 flex-1 bg-transparent outline-none"
+                                />
+                              </label>
+                            </td>
+                            <td className="px-2 py-2">
+                              <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                                <span className="text-xs text-slate-500">EUR</span>
+                                <input
+                                  value={busLineRowDrafts[line.code]?.publicPrice ?? centsToEuroInput(existingRule?.public_price_cents)}
+                                  onChange={(event) =>
+                                    setBusLineRowDrafts((current) => ({
+                                      ...current,
+                                      [line.code]: { ...current[line.code], publicPrice: event.target.value }
+                                    }))
+                                  }
+                                  inputMode="decimal"
+                                  placeholder="0,00"
+                                  className="min-w-0 flex-1 bg-transparent outline-none"
+                                />
+                              </label>
+                            </td>
+                            <td className="px-2 py-2">
+                              <div className="flex flex-col gap-2">
+                                <button className="text-xs font-semibold text-sky-700 underline" type="button" onClick={() => void saveBusLineRule(line)}>
+                                  {existingRule ? "Salva aggiornamento" : "Salva riga"}
+                                </button>
+                                {existingRule ? (
+                                  <button className="text-xs text-rose-700 underline" type="button" onClick={() => void deletePricingRuleRow(existingRule.id)}>
+                                    Elimina riga
+                                  </button>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
             <div className="rounded-xl border border-slate-200 px-3 py-3 md:col-span-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Preset rapidi regola</p>
               <div className="mt-2 flex flex-wrap gap-2">
@@ -964,7 +1960,7 @@ export default function PricingAdminPage() {
               </div>
               <p className="mt-2 text-xs text-slate-500">Usa questi pulsanti per precompilare SNAV, MEDMAR, transfer standard e linee bus.</p>
             </div>
-            <select name="price_list_id" className="input-saas">
+            <select name="price_list_id" className="input-saas" value={ruleDraft.price_list_id} onChange={(event) => setRuleDraft((current) => ({ ...current, price_list_id: event.target.value }))}>
               {priceLists.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
@@ -978,7 +1974,7 @@ export default function PricingAdminPage() {
                 </option>
               ))}
             </select>
-            <select name="agency_id" className="input-saas">
+            <select name="agency_id" className="input-saas" value={ruleDraft.agency_id} onChange={(event) => setRuleDraft((current) => ({ ...current, agency_id: event.target.value }))}>
               <option value="">(tutte le agenzie)</option>
               {agencies.map((item) => (
                 <option key={item.id} value={item.id}>
@@ -1033,60 +2029,76 @@ export default function PricingAdminPage() {
           </form>
 
           <div className="card p-4">
-            <h2 className="mb-2 text-base font-semibold">Regole attive ({rules.length})</h2>
-            <div className="overflow-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-left">
-                    <th className="px-2 py-2">Priorita</th>
-                    <th className="px-2 py-2">Tratta</th>
-                    <th className="px-2 py-2">Linea bus</th>
-                    <th className="px-2 py-2">Pax</th>
-                    <th className="px-2 py-2">Veicolo/Fascia/Stagione</th>
-                    <th className="px-2 py-2">Prezzi</th>
-                    <th className="px-2 py-2">Azioni</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rules.map((rule) => (
-                    <tr key={rule.id} className="border-b border-slate-100">
-                      <td className="px-2 py-2">{rule.priority}</td>
-                      <td className="px-2 py-2">{routes.find((route) => route.id === rule.route_id)?.name ?? rule.route_id.slice(0, 8)}</td>
-                      <td className="px-2 py-2">{rule.bus_line_code ?? "-"}</td>
-                      <td className="px-2 py-2">
-                        {rule.pax_min} - {rule.pax_max ?? "*"}
-                      </td>
-                      <td className="px-2 py-2">
-                        {rule.vehicle_type ?? "*"} | {rule.time_from ?? "00:00"} - {rule.time_to ?? "23:59"} | {rule.season_from ?? "-"} {rule.season_to ? `-> ${rule.season_to}` : ""}
-                      </td>
-                      <td className="px-2 py-2">
-                        <div className="space-y-1">
-                          <p>
-                            <span className="font-medium">Costo:</span> {eur(rule.internal_cost_cents)}
-                          </p>
-                          <p>
-                            <span className="font-medium">Privati:</span> {eur(rule.public_price_cents)}
-                          </p>
-                          <p>
-                            <span className="font-medium">Agenzia:</span> {rule.agency_price_cents !== null ? eur(rule.agency_price_cents) : "-"}
-                          </p>
-                        </div>
-                      </td>
-                      <td className="px-2 py-2">
-                        <div className="flex gap-2">
-                          <button className="text-xs underline" type="button" onClick={() => void toggle("pricing_rules", rule.id, rule.active)}>
-                            {rule.active ? "Disattiva" : "Attiva"}
-                          </button>
-                          <button className="text-xs text-rose-700 underline" type="button" onClick={() => void delRule(rule.id)}>
-                            Elimina
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold">Regole attive ({rules.length})</h2>
+                <p className="text-xs text-slate-500">Riepilogo tecnico per controlli rapidi, debug e pulizia dei duplicati.</p>
+              </div>
+              <button
+                type="button"
+                className="text-xs underline"
+                onClick={() => setActiveRulesExpanded((value) => !value)}
+              >
+                {activeRulesExpanded ? "Nascondi riepilogo" : "Mostra riepilogo"}
+              </button>
             </div>
+            {activeRulesExpanded ? (
+              <div className="mt-3 overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left">
+                      <th className="px-2 py-2">Priorita</th>
+                      <th className="px-2 py-2">Tratta</th>
+                      <th className="px-2 py-2">Linea bus</th>
+                      <th className="px-2 py-2">Pax</th>
+                      <th className="px-2 py-2">Veicolo/Fascia/Stagione</th>
+                      <th className="px-2 py-2">Prezzi</th>
+                      <th className="px-2 py-2">Azioni</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rules.map((rule) => (
+                      <tr key={rule.id} className="border-b border-slate-100">
+                        <td className="px-2 py-2">{rule.priority}</td>
+                        <td className="px-2 py-2">{routes.find((route) => route.id === rule.route_id)?.name ?? rule.route_id.slice(0, 8)}</td>
+                        <td className="px-2 py-2">{rule.bus_line_code ?? "-"}</td>
+                        <td className="px-2 py-2">
+                          {rule.pax_min} - {rule.pax_max ?? "*"}
+                        </td>
+                        <td className="px-2 py-2">
+                          {rule.vehicle_type ?? "*"} | {rule.time_from ?? "00:00"} - {rule.time_to ?? "23:59"} | {rule.season_from ?? "-"} {rule.season_to ? `-> ${rule.season_to}` : ""}
+                        </td>
+                        <td className="px-2 py-2">
+                          <div className="space-y-1">
+                            <p>
+                              <span className="font-medium">Costo:</span> {eur(rule.internal_cost_cents)}
+                            </p>
+                            <p>
+                              <span className="font-medium">Privati:</span> {eur(rule.public_price_cents)}
+                            </p>
+                            <p>
+                              <span className="font-medium">Agenzia:</span> {rule.agency_price_cents !== null ? eur(rule.agency_price_cents) : "-"}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-2 py-2">
+                          <div className="flex gap-2">
+                            <button className="text-xs underline" type="button" onClick={() => void toggle("pricing_rules", rule.id, rule.active)}>
+                              {rule.active ? "Disattiva" : "Attiva"}
+                            </button>
+                            <button className="text-xs text-rose-700 underline" type="button" onClick={() => void delRule(rule.id)}>
+                              Elimina
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-slate-500">Chiuso di default per lasciare più spazio al lavoro sul listino.</p>
+            )}
           </div>
         </div>
       ) : null}

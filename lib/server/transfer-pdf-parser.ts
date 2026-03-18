@@ -115,6 +115,8 @@ function isPortOrStationText(value?: string | null) {
 
 function deriveDirectionFromTexts(description: string, meetingPoint?: string | null, dest?: string | null): ParsedTransferDirection {
   const source = description.toLowerCase();
+  if (/transfer\s+aeroporto\s*\/\s*hotel/.test(source)) return "andata";
+  if (/transfer\s+hotel(?:\s+ischia)?\s*\/\s*aeroporto/.test(source)) return "ritorno";
   if (/transfer\s+hotel\s*\/\s*stazione/.test(source)) return "ritorno";
   if (/transfer\s+stazione\s*\/\s*hotel/.test(source)) return "andata";
   if (/aliscafo\s+per\s+napoli/.test(source)) return "ritorno";
@@ -248,7 +250,10 @@ function extractOperationalLegs(source: string): OperationalLeg[] {
     const head = lines[i].match(/^Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})\b/i);
     if (!head) continue;
     const descriptionLine = lines[i] ?? null;
-    const detailLine = [lines[i + 1], lines[i + 2], lines[i + 3]].find((line) => typeof line === "string" && /\bDalle\s*[0-2]?\d[:.h][0-5]\d/i.test(line ?? "")) ?? null;
+    const detailLine =
+      [lines[i + 1], lines[i + 2], lines[i + 3]].find(
+        (line) => typeof line === "string" && /\b(?:Dalle|Alle)\s*[0-2]?\d[:.h][0-5]\d/i.test(line ?? "")
+      ) ?? null;
     if (!detailLine) continue;
     const detailContinuation = [lines[i + 2], lines[i + 3], lines[i + 4]]
       .filter(
@@ -258,7 +263,7 @@ function extractOperationalLegs(source: string): OperationalLeg[] {
           !/^Il\s*[0-3]?\d-/i.test(line) &&
           !/^Cliente:/i.test(line) &&
           !/^Cellulare/i.test(line) &&
-          !/^Dalle\s*[0-2]?\d[:.h][0-5]\d/i.test(line)
+          !/^(?:Dalle|Alle)\s*[0-2]?\d[:.h][0-5]\d/i.test(line)
       )
       .join(" ");
     const mergedDetail = `${detailLine} ${detailContinuation}`.replace(/\s+/g, " ").trim();
@@ -304,10 +309,17 @@ function extractOperationalLegs(source: string): OperationalLeg[] {
 function buildParsedServices(core: ReturnType<typeof extractPracticeCore>, rows: ReturnType<typeof extractServiceRows>, legs: OperationalLeg[]) {
   const services: ParsedTransferService[] = [];
   for (const [index, leg] of legs.entries()) {
-    const row = rows.find((item) => item.direction === leg.direction) ?? rows[index] ?? null;
+    const descriptionSource = `${leg.description_line ?? ""} ${leg.raw_detail_text}`;
+    const isExplicitAirportTransfer = /AEROPORTO/i.test(descriptionSource);
+    const isExplicitStationTransfer = /STAZIONE/i.test(descriptionSource);
+    const matchedRow = rows.find((item) => item.direction === leg.direction) ?? rows[index] ?? null;
+    const row = isExplicitAirportTransfer || isExplicitStationTransfer ? null : matchedRow;
     const direction = leg.direction ?? row?.direction ?? "andata";
-    const isAutoPortTransfer = isAutoIschiaHotelRow(row?.row_text) || /ALISCAFO|SNAV|CAREMAR|MEDMAR|ALILAURO/i.test(leg.raw_detail_text);
-    const semanticTag = normalizeSemanticTag(direction, `${row?.row_text ?? ""} ${leg.description_line ?? ""}`);
+    const isAutoPortTransfer =
+      !isExplicitAirportTransfer &&
+      !isExplicitStationTransfer &&
+      (isAutoIschiaHotelRow(row?.row_text) || /ALISCAFO|SNAV|CAREMAR|MEDMAR|ALILAURO/i.test(leg.raw_detail_text));
+    const semanticTag = normalizeSemanticTag(direction, `${leg.description_line ?? ""} ${row?.row_text ?? ""}`);
     const hotelStructure =
       direction === "andata"
         ? (isPortOrStationText(leg.dest_text) ? null : leg.dest_text)
@@ -340,7 +352,7 @@ function buildParsedServices(core: ReturnType<typeof extractPracticeCore>, rows:
       destination,
       carrier_company: carrierCompany,
       hotel_structure: hotelStructure,
-      original_row_description: row?.row_text ?? leg.description_line,
+      original_row_description: leg.description_line ?? row?.row_text ?? null,
       raw_detail_text: leg.raw_detail_text,
       parsing_status: "parsed",
       confidence_level: "high",

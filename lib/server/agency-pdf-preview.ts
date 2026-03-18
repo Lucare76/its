@@ -72,6 +72,12 @@ function clean(value?: string | null) {
   return normalized.length > 0 ? normalized : null;
 }
 
+function sanitizeHotelOrDestination(value?: string | null) {
+  const normalized = clean(value);
+  if (!normalized) return null;
+  return clean(normalized.replace(/\b(num|num\.|numero|pagina|pax)\b.*$/i, ""));
+}
+
 function senderDomain(email: string) {
   const parts = clean(email)?.toLowerCase().split("@") ?? [];
   return parts.length > 1 ? parts[1] : null;
@@ -227,6 +233,82 @@ function splitCustomerName(fullName: string | null) {
   };
 }
 
+function normalizeAngelinoCustomerSource(value: string) {
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/descri\s*zi\s*one/gi, "descrizione")
+    .replace(/nomi\s*nati\s*vo/gi, "nominativo")
+    .replace(/prati\s*ca/gi, "pratica")
+    .replace(/ri\s*feri\s*mento/gi, "riferimento")
+    .trim();
+}
+
+function pickAngelinoUppercaseCustomer(source: string) {
+  const blocked = [
+    "ANGELINO TOUR OPERATOR",
+    "ISCHIA TRANSFER SERVICE",
+    "HOTEL TERME",
+    "TRASFERIMENTO",
+    "TOTALE PRATICA",
+    "PAGINA",
+    "PROGRAMMA",
+    "BENEFICIARIO",
+    "NOMINATIVO",
+    "DESCRIZIONE",
+    "NS RIFERIMENTO",
+    "NS REFERENTE",
+    "SPETT LE"
+  ];
+
+  const matches = Array.from(source.matchAll(/\b([A-ZÀ-ÖØ-Ý][A-ZÀ-ÖØ-Ý' ]{5,})\b/g))
+    .map((match) => clean(match[1]))
+    .filter((value): value is string => Boolean(value))
+    .filter((value) => value.split(" ").length >= 2)
+    .filter((value) => !blocked.some((token) => value.includes(token)))
+    .filter((value) => !/\b(HOTEL|PORTO|PAX|EUR|ITALIA|FORIO|ISCHIA|TRANSFER)\b/.test(value));
+
+  return matches[0] ?? null;
+}
+
+function deriveCustomerFullName(
+  selection: AgencyPdfParserSelectionResult,
+  transferParsed: AgencyPdfParserSelectionResult["parsed"],
+  extractedText: string,
+  headerText: string | null | undefined,
+  inboundCustomerName: string | null | undefined
+) {
+  const direct = clean(transferParsed.customer_full_name ?? transferParsed.first_beneficiary ?? inboundCustomerName ?? null);
+  if (direct) return direct;
+
+  if (selection.parserKey === "agency_angelino_tour") {
+    const source = normalizeAngelinoCustomerSource([headerText, extractedText].filter(Boolean).join(" "));
+    const hotelHint = clean(
+      transferParsed.parsed_services.find((service) => service.hotel_structure)?.hotel_structure ??
+        transferParsed.parsed_services.find((service) => service.destination)?.destination ??
+        null
+    );
+    const candidates = [
+      source.match(/\b([A-ZÀ-ÖØ-Ý][A-ZÀ-ÖØ-Ý' ]{5,})\s+descrizione\s+HOTEL\b/i)?.[1],
+      source.match(/beneficiario.*?\b([A-ZÀ-ÖØ-Ý][A-ZÀ-ÖØ-Ý' ]{5,})(?=\s+descrizione|\s+HOTEL|\s+nominativo|\s+tasse|\s+Totale|\s+num\b|$)/i)?.[1],
+      source.match(/nominativo\s*(?:\([^)]+\)\s*)?(?:\d+\s+)?([A-ZÀ-ÖØ-Ý][A-ZÀ-ÖØ-Ý' ]{5,})(?=\s+tasse|\s+Totale|\s+num\b|$)/i)?.[1],
+      source.match(/\b([A-ZÀ-ÖØ-Ý][A-ZÀ-ÖØ-Ý' ]{5,})\s+HOTEL\s+TERME\b/i)?.[1],
+      hotelHint
+        ? source.match(
+            new RegExp(`\\b([A-ZÀ-ÖØ-Ý][A-ZÀ-ÖØ-Ý' ]{5,})\\s+(?:descrizione\\s+)?HOTEL\\s+${hotelHint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}\\b`, "i")
+          )?.[1]
+        : null,
+      pickAngelinoUppercaseCustomer(source)
+    ];
+
+    for (const candidate of candidates) {
+      const cleaned = clean(candidate);
+      if (cleaned) return cleaned;
+    }
+  }
+
+  return null;
+}
+
 function deduceOperationalServiceType(source: string, bookingKind: BookingKind | null): ServiceTypeCode {
   const normalized = source.toLowerCase();
   if (/(bus|pullman|coach)/i.test(normalized) || bookingKind === "bus_city_hotel") return "bus_line";
@@ -246,10 +328,10 @@ function deduceOperationalServiceType(source: string, bookingKind: BookingKind |
 function deduceBookingKind(source: string) {
   const normalized = source.toLowerCase();
   if (/(excursion|escursione|\btour\b(?!\s+by))/i.test(normalized)) return "excursion";
-  if (/(bus|pullman|coach)/i.test(normalized)) return "bus_city_hotel";
   if (/(transfer stazione ?\/ ?hotel|transfer hotel ?\/ ?stazione|stazione\s+hotel|hotel\s+stazione|treno)/i.test(normalized)) {
     return "transfer_train_hotel";
   }
+  if (/(bus|pullman|coach|flixbus)/i.test(normalized)) return "bus_city_hotel";
   if (/(aeroporto|airport|capodichino)/i.test(normalized)) return "transfer_airport_hotel";
   if (/(traghetto napoli|aliscafo|porto|port|molo|snav|caremar|medmar|alilauro)/i.test(normalized)) return "transfer_port_hotel";
   if (/(auto ischia ?\/ ?hotel|auto hotel ?\/ ?ischia|transfer porto ?\/ ?hotel|transfer hotel ?\/ ?porto)/i.test(normalized)) {
@@ -275,13 +357,23 @@ function deduceServiceType(source: string) {
 function extractTransportReference(value?: string | null) {
   const normalized = clean(value);
   if (!normalized) return null;
-  const match = normalized.match(/\b(ITALO|ITA|FRECCIAROSSA|FR|INTERCITY|IC|SNAV|CAREMAR|MEDMAR|ALILAURO)\s*(\d{3,5})\b/i);
-  if (!match) return null;
-  const carrier = match[1].toUpperCase();
-  if (carrier === "ITA" || carrier === "ITALO") return `ITALO ${match[2]}`;
-  if (carrier === "FR" || carrier === "FRECCIAROSSA") return `FRECCIAROSSA ${match[2]}`;
-  if (carrier === "IC" || carrier === "INTERCITY") return `INTERCITY ${match[2]}`;
-  return `${carrier} ${match[2]}`;
+  const match = normalized.match(
+    /\b(ITALO|ITA|FRECCIAROSSA|FR|INTERCITY|IC|SNAV|CAREMAR|MEDMAR|ALILAURO|EASYJET|RYANAIR|VOLOTEA|WIZZ\s*AIR|WIZZ|NEOS|LUFTHANSA|AIR\s*FRANCE|BRITISH\s*AIRWAYS|KLM|EDELWEISS|VUELING)\s*([A-Z]{0,2}\d{2,5}|\d{3,5})\b/i
+  );
+  if (!match) {
+    const byOperationalLine = normalized.match(/\bda:\s*([A-Z][A-Z ]{2,24}?)\s+([A-Z]{0,2}\d{2,5}|\d{3,5})\b/i);
+    if (!byOperationalLine) return null;
+    const carrier = byOperationalLine[1].replace(/\s+/g, " ").trim().toUpperCase();
+    const code = byOperationalLine[2].trim().toUpperCase();
+    return `${carrier} ${code}`;
+  }
+  const carrier = match[1].replace(/\s+/g, " ").trim().toUpperCase();
+  const code = match[2].trim().toUpperCase();
+  if (carrier === "ITA" || carrier === "ITALO") return `ITALO ${code}`;
+  if (carrier === "FR" || carrier === "FRECCIAROSSA") return `FRECCIAROSSA ${code}`;
+  if (carrier === "IC" || carrier === "INTERCITY") return `INTERCITY ${code}`;
+  if (carrier === "WIZZ") return `WIZZ AIR ${code}`;
+  return `${carrier} ${code}`;
 }
 
 function extractOperationalTime(rawDetailText?: string | null, kind?: "outward" | "return") {
@@ -292,6 +384,12 @@ function extractOperationalTime(rawDetailText?: string | null, kind?: "outward" 
   const fromTime = fromMatch ? `${fromMatch[1].padStart(2, "0")}:${fromMatch[2]}` : null;
   const toTime = toMatch ? `${toMatch[1].padStart(2, "0")}:${toMatch[2]}` : null;
 
+  if (/TRANSFER\s+AEROPORTO\s*\/\s*HOTEL/i.test(source)) {
+    return kind === "outward" ? (toTime ?? fromTime) : (fromTime ?? toTime);
+  }
+  if (/TRANSFER\s+HOTEL(?:\s+ISCHIA)?\s*\/\s*AEROPORTO/i.test(source)) {
+    return kind === "return" ? (fromTime ?? toTime) : (toTime ?? fromTime);
+  }
   if (/TRANSFER\s+STAZIONE\s*\/\s*HOTEL/i.test(source)) {
     return kind === "outward" ? (toTime ?? fromTime) : (fromTime ?? toTime);
   }
@@ -359,14 +457,40 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
   });
 
   const transferParsed = selection.parsed;
-  const arrivalService = transferParsed.parsed_services.find((service) => service.direction === "andata") ?? transferParsed.parsed_services[0] ?? null;
-  const departureService = transferParsed.parsed_services.find((service) => service.direction === "ritorno") ?? null;
-  const customer = splitCustomerName(transferParsed.first_beneficiary ?? inboundParsed.customer_name ?? null);
+  const airportArrivalService =
+    transferParsed.parsed_services.find((service) =>
+      /TRANSFER\s+AEROPORTO\s*\/\s*HOTEL/i.test(service.raw_detail_text) ||
+      /TRANSFER\s+AEROPORTO\s*\/\s*HOTEL/i.test(service.original_row_description ?? "")
+    ) ?? null;
+  const airportDepartureService =
+    transferParsed.parsed_services.find((service) =>
+      /TRANSFER\s+HOTEL(?:\s+ISCHIA)?\s*\/\s*AEROPORTO/i.test(service.raw_detail_text) ||
+      /TRANSFER\s+HOTEL(?:\s+ISCHIA)?\s*\/\s*AEROPORTO/i.test(service.original_row_description ?? "")
+    ) ?? null;
+  const arrivalService =
+    airportArrivalService ??
+    transferParsed.parsed_services.find((service) => service.direction === "andata") ??
+    transferParsed.parsed_services[0] ??
+    null;
+  const departureService =
+    airportDepartureService ??
+    transferParsed.parsed_services.find((service) => service.direction === "ritorno") ??
+    null;
+  const resolvedCustomerFullName = deriveCustomerFullName(
+    selection,
+    transferParsed,
+    input.extractedText,
+    input.headerText,
+    inboundParsed.customer_name ?? null
+  );
+  const customer = splitCustomerName(resolvedCustomerFullName);
 
   const rawArrivalPlace = clean(
     arrivalService?.pickup_meeting_point ?? arrivalService?.origin ?? inboundParsed.pickup ?? inboundParsed.vessel ?? null
   );
-  const hotelOrDestination = clean(arrivalService?.hotel_structure ?? arrivalService?.destination ?? inboundParsed.hotel ?? inboundParsed.dropoff ?? null);
+  const hotelOrDestination = sanitizeHotelOrDestination(
+    arrivalService?.hotel_structure ?? arrivalService?.destination ?? inboundParsed.hotel ?? inboundParsed.dropoff ?? null
+  );
   const notes = clean(
     [
       transferParsed.practice_number ? `Pratica ${transferParsed.practice_number}` : null,
@@ -392,9 +516,11 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
   const deducedServiceType = transferParsed.service_type_code ?? deduceOperationalServiceType(sourceForDeduction, deducedBookingKind);
   const transportMode = deduceTransportMode(sourceForDeduction, deducedBookingKind, deducedServiceType);
   const arrivalPlace =
-    deducedServiceType === "transfer_station_hotel" && transportMode === "train"
-      ? "STAZIONE DI NAPOLI"
-      : rawArrivalPlace;
+    deducedServiceType === "transfer_station_hotel"
+      ? "STAZIONE"
+      : deducedBookingKind === "transfer_airport_hotel"
+        ? clean(rawArrivalPlace ?? arrivalService?.pickup_meeting_point ?? "AEROPORTO")
+        : rawArrivalPlace;
   const transportReferenceOutward =
     clean(transferParsed.train_arrival_number ?? null) ??
     extractTransportReference(arrivalService?.raw_detail_text ?? arrivalService?.original_row_description ?? null);
@@ -422,12 +548,12 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
     booking_kind: deducedBookingKind,
     service_type: deducedServiceType,
     service_type_deduced: deduceServiceType(sourceForDeduction),
-    customer_full_name: clean(transferParsed.customer_full_name ?? customer.fullName),
+    customer_full_name: clean(resolvedCustomerFullName ?? customer.fullName),
     customer_email: null,
     customer_phone: normalizeCustomerPhone(selection, transferParsed, inboundParsed),
-    arrival_date: clean(arrivalService?.service_date ?? inboundParsed.date ?? null),
+    arrival_date: clean(arrivalService?.service_date ?? transferParsed.date_from ?? inboundParsed.date ?? null),
     outbound_time: operationalOutwardTime,
-    departure_date: clean(departureService?.service_date ?? inboundParsed.departure_date ?? null),
+    departure_date: clean(departureService?.service_date ?? transferParsed.date_to ?? inboundParsed.departure_date ?? null),
     return_time: operationalReturnTime,
     transport_mode: transportMode,
     transport_reference_outward: transportReferenceOutward,

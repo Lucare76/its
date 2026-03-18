@@ -22,11 +22,34 @@ function clean(value?: string | null) {
   return normalized.length > 0 ? normalized : null;
 }
 
+function normalizeHotelName(value?: string | null) {
+  const normalized = clean(value);
+  if (!normalized) return null;
+  return clean(normalized.replace(/\s+\d\*?$/i, ""));
+}
+
 function cleanOcrField(value?: string | null) {
   const normalized = clean(value);
   if (!normalized) return null;
-  const stopAt = normalized.search(/\b(ns riferimento|ns referente|importo|tasse|data|dal|al|programma|descrizione|pax|num|pagina)\b/i);
+  const stopAt = normalized.search(/\b(ns riferimento|ns referente|importo|tasse|data|dal|al|programma|descrizione|pax|num|pagina|hotel)\b/i);
   return clean(stopAt > 0 ? normalized.slice(0, stopAt) : normalized);
+}
+
+function extractBeneficiary(compact: string) {
+  const candidates = [
+    compact.match(/beneficiario\s*([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÖØ-öø-ÿ' ]+)/i)?.[1],
+    compact.match(/beneficiario.*?\b([A-ZÀ-ÖØ-Ý][A-ZÀ-ÖØ-Ý' ]{5,})(?=\s+descrizione|\s+HOTEL|\s+nominativo|\s+tasse|\s+Totale|\s+num\b|$)/i)?.[1],
+    compact.match(/nominativo\s*(?:\([^)]+\)\s*)?(?:\d+\s+)?([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÖØ-öø-ÿ' ]+)/i)?.[1],
+    compact.match(/\)\s*\d+\s+([A-ZÀ-ÖØ-Ý][A-ZÀ-ÖØ-Ý' ]{5,})(?=\s+tasse|\s+Totale|\s+num\b|$)/i)?.[1],
+    compact.match(/\b([A-ZÀ-ÖØ-Ý][A-ZÀ-ÖØ-Ý' ]{5,})\s+descrizione\s+HOTEL\b/i)?.[1]
+  ];
+
+  for (const candidate of candidates) {
+    const cleaned = cleanOcrField(candidate);
+    if (cleaned) return cleaned;
+  }
+
+  return null;
 }
 
 function parseItalianDate(raw?: string | null, fallbackYear?: string | null) {
@@ -44,6 +67,30 @@ function parseItalianDate(raw?: string | null, fallbackYear?: string | null) {
     return fallbackYear ? `${fallbackYear}-${month}-${match[1].padStart(2, "0")}` : null;
   }
   return `${String(numericYear)}-${month}-${match[1].padStart(2, "0")}`;
+}
+
+function parseItalianDateLoose(raw?: string | null, fallbackYear?: string | null) {
+  return parseItalianDate(raw, fallbackYear);
+}
+
+function parseShortItalianDate(raw?: string | null, fallbackYear?: string | null) {
+  const match = String(raw ?? "").match(/([0-3]?\d)\s*-\s*(gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)\b/i);
+  if (!match || !fallbackYear) return null;
+  const month = IT_MONTHS[match[2].toLowerCase()];
+  if (!month) return null;
+  return `${fallbackYear}-${month}-${match[1].padStart(2, "0")}`;
+}
+
+function parseShortItalianDateRelative(raw?: string | null, anchorDate?: string | null) {
+  const anchor = clean(anchorDate);
+  if (!anchor) return null;
+  const base = parseShortItalianDate(raw, anchor.slice(0, 4));
+  if (!base) return null;
+  if (base >= anchor) return base;
+  const match = base.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return base;
+  const nextYear = String(Number(match[1]) + 1).padStart(4, "0");
+  return `${nextYear}-${match[2]}-${match[3]}`;
 }
 
 function parseEuroAmount(raw?: string | null) {
@@ -83,23 +130,50 @@ function parseAngelinoTourPdfText(sourceText: string): ParsedTransferPdfPayload 
   const orderNumber = clean(compact.match(/CONFERMA D[' ]ORDINE\s*n\.\s*(\d{3,})/i)?.[1]);
   const practiceDate = parseItalianDate(compact.match(/data\s*([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/i)?.[1]);
   const fallbackYear = practiceDate?.slice(0, 4) ?? null;
-  const beneficiary = cleanOcrField(compact.match(/beneficiario\s*([A-Z][A-Za-z' ]+)/i)?.[1]);
+  const beneficiary = extractBeneficiary(compact);
   const secondPassenger = clean(compact.match(/nominativo\s*([A-Z][A-Za-z' ]+)\s*EUR/i)?.[1]);
   const pax = Number(compact.match(/\bpax\s*(\d{1,2})/i)?.[1] ?? 0) || null;
   const reference = cleanOcrField(compact.match(/ns referente\s*([A-Z][A-Za-z' ]+)/i)?.[1]) ?? orderNumber;
-  const hotel = clean(compact.match(/HOTEL\s+([A-Z][A-Za-z' ]+\*?)/i)?.[1]);
+  const hotel =
+    normalizeHotelName(compact.match(/beneficiario\s+[A-Z' ]+\s+HOTEL\s+([A-Z0-9][A-Za-z0-9' ]+?)(?=\s+descrizione|\s+ri\s*feri\s*mento|\s+tasse|\s+Totale|\s+num\b|$)/i)?.[1]) ??
+    normalizeHotelName(compact.match(/HOTEL\s+([A-Z0-9][A-Za-z0-9' ]+?)(?=\s+descrizione|\s+ri\s*feri\s*mento|\s+tasse|\s+Totale|\s+num\b|$)/i)?.[1]);
   const dateMatches = Array.from(compact.matchAll(/([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[.-]?\s*\d{2,4})/gi))
     .map((match) => parseItalianDate(match[1], fallbackYear))
     .filter((value): value is string => Boolean(value));
   const fromDate = parseItalianDate(compact.match(/\bdal\s*([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:[.-]?\s*\d{2,4})?)/i)?.[1], fallbackYear);
   const toDate = parseItalianDate(compact.match(/\bal\s*([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:[.-]?\s*\d{2,4})?)/i)?.[1], fallbackYear);
+  const outwardTransferDateRaw = compact.match(/([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))(?:\s+\1)?\s+TRASFERIMENTO\s+PORTO\s*-\s*HOTEL/i)?.[1];
+  const returnTransferDateRaw = compact.match(/([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))(?:\s+\1)?\s+TRASFERIMENTO\s+HOTEL\s*-\s*PORTO/i)?.[1];
+  const outwardStationDateRaw = compact.match(/([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))(?:\s+\1)?\s+TRASFERIMENTO\s+STAZIONE\s+NAPOLI\s*-\s*HOTEL/i)?.[1];
+  const returnStationDateRaw = compact.match(/([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))(?:\s+\1)?\s+TRASFERIMENTO\s+HOTEL\s+ISCHIA\s*-\s*STAZIONE/i)?.[1];
+  const outwardTransferDate =
+    parseShortItalianDate(outwardTransferDateRaw, fromDate?.slice(0, 4) ?? fallbackYear) ??
+    parseItalianDateLoose(outwardTransferDateRaw, fromDate?.slice(0, 4) ?? fallbackYear);
+  const returnTransferDate =
+    parseShortItalianDateRelative(returnTransferDateRaw, outwardTransferDate ?? fromDate ?? null) ??
+    parseItalianDateLoose(returnTransferDateRaw, toDate?.slice(0, 4) ?? fallbackYear);
+  const outwardStationDate =
+    parseShortItalianDate(outwardStationDateRaw, fromDate?.slice(0, 4) ?? fallbackYear) ??
+    parseItalianDateLoose(outwardStationDateRaw, fromDate?.slice(0, 4) ?? fallbackYear);
+  const returnStationDate =
+    parseShortItalianDateRelative(returnStationDateRaw, outwardStationDate ?? fromDate ?? null) ??
+    parseItalianDateLoose(returnStationDateRaw, toDate?.slice(0, 4) ?? fallbackYear);
+  const hasPortTransferRows = /TRASFERIMENTO\s+PORTO\s*-\s*HOTEL/i.test(compact) || /TRASFERIMENTO\s+HOTEL\s*-\s*PORTO/i.test(compact);
+  const hasStationTransferRows =
+    /TRASFERIMENTO\s+STAZIONE\s+NAPOLI\s*-\s*HOTEL/i.test(compact) ||
+    /TRASFERIMENTO\s+HOTEL\s+ISCHIA\s*-\s*STAZIONE/i.test(compact);
+  const transferDatesLocked = hasPortTransferRows || hasStationTransferRows;
   const outwardDate =
-    fromDate ??
+    outwardStationDate ??
+    outwardTransferDate ??
+    (transferDatesLocked ? null : fromDate) ??
     parseItalianDate(compact.match(/([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:[.-]?\s*\d{2,4})?)\s+[0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:[.-]?\s*\d{2,4})?\s+(?:PERUGIA|TERNI)\s*-\s*ISCHIA/i)?.[1], fallbackYear) ??
     dateMatches.find((value) => value !== practiceDate && value !== toDate) ??
     null;
   const returnDate =
-    toDate ??
+    returnStationDate ??
+    returnTransferDate ??
+    (transferDatesLocked ? null : toDate) ??
     parseItalianDate(compact.match(/([0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:[.-]?\s*\d{2,4})?)\s+[0-3]?\d\s*-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:[.-]?\s*\d{2,4})?\s+ISCHIA\s*-\s*(?:PERUGIA|TERNI)/i)?.[1], fallbackYear) ??
     dateMatches.filter((value) => value !== practiceDate && value !== outwardDate).slice(-1)[0] ??
     null;
@@ -121,13 +195,21 @@ function parseAngelinoTourPdfText(sourceText: string): ParsedTransferPdfPayload 
     direction: "andata",
     service_date: outwardDate,
     service_time: null,
-    pickup_meeting_point: clean(outwardRoute?.split("-")[0]) ?? "TERNI",
-    origin: clean(outwardRoute?.split("-")[0]) ?? "TERNI",
+    pickup_meeting_point: hasStationTransferRows ? "STAZIONE" : hasPortTransferRows ? "PORTO" : clean(outwardRoute?.split("-")[0]) ?? "TERNI",
+    origin: hasStationTransferRows ? "STAZIONE" : hasPortTransferRows ? "PORTO" : clean(outwardRoute?.split("-")[0]) ?? "TERNI",
     destination: hotel ?? "ISCHIA",
-    carrier_company: "BUS",
+    carrier_company: hasPortTransferRows || hasStationTransferRows ? null : "BUS",
     hotel_structure: hotel,
-    original_row_description: outwardRoute ?? "TERNI - ISCHIA",
-    raw_detail_text: `Bus andata da ${clean(outwardRoute?.split("-")[0]) ?? "Terni"} verso ${hotel ?? "Ischia"}`,
+    original_row_description: hasStationTransferRows
+      ? "TRASFERIMENTO STAZIONE NAPOLI - HOTEL ISCHIA"
+      : hasPortTransferRows
+        ? "TRASFERIMENTO PORTO - HOTEL"
+        : outwardRoute ?? "TERNI - ISCHIA",
+    raw_detail_text: hasStationTransferRows
+      ? `Transfer andata stazione-hotel verso ${hotel ?? "Ischia"}`
+      : hasPortTransferRows
+      ? `Transfer andata porto-hotel verso ${hotel ?? "Ischia"}`
+      : `Bus andata da ${clean(outwardRoute?.split("-")[0]) ?? "Terni"} verso ${hotel ?? "Ischia"}`,
     parsing_status: "parsed",
     confidence_level: "medium",
     semantic_tag: "transfer_arrival"
@@ -143,11 +225,19 @@ function parseAngelinoTourPdfText(sourceText: string): ParsedTransferPdfPayload 
     service_time: null,
     pickup_meeting_point: hotel ?? "ISCHIA",
     origin: hotel ?? "ISCHIA",
-    destination: clean(returnRoute?.split("-")[1]) ?? "TERNI",
-    carrier_company: "BUS",
+    destination: hasStationTransferRows ? "STAZIONE" : hasPortTransferRows ? "PORTO" : clean(returnRoute?.split("-")[1]) ?? "TERNI",
+    carrier_company: hasPortTransferRows || hasStationTransferRows ? null : "BUS",
     hotel_structure: hotel,
-    original_row_description: returnRoute ?? "ISCHIA - TERNI",
-    raw_detail_text: `Bus ritorno da ${hotel ?? "Ischia"} verso ${clean(returnRoute?.split("-")[1]) ?? "Terni"}`,
+    original_row_description: hasStationTransferRows
+      ? "TRASFERIMENTO HOTEL ISCHIA - STAZIONE NAPOLI"
+      : hasPortTransferRows
+        ? "TRASFERIMENTO HOTEL - PORTO"
+        : returnRoute ?? "ISCHIA - TERNI",
+    raw_detail_text: hasStationTransferRows
+      ? `Transfer ritorno hotel-stazione da ${hotel ?? "Ischia"}`
+      : hasPortTransferRows
+      ? `Transfer ritorno hotel-porto da ${hotel ?? "Ischia"}`
+      : `Bus ritorno da ${hotel ?? "Ischia"} verso ${clean(returnRoute?.split("-")[1]) ?? "Terni"}`,
     parsing_status: "parsed",
     confidence_level: "medium",
     semantic_tag: "transfer_departure"
@@ -166,8 +256,8 @@ function parseAngelinoTourPdfText(sourceText: string): ParsedTransferPdfPayload 
     date_from: outwardDate,
     date_to: returnDate,
     total_amount_practice: totalAmount,
-    booking_kind: "bus_city_hotel",
-    service_type_code: "bus_line",
+    booking_kind: hasStationTransferRows ? "transfer_train_hotel" : hasPortTransferRows ? "transfer_port_hotel" : "bus_city_hotel",
+    service_type_code: hasStationTransferRows ? "transfer_station_hotel" : hasPortTransferRows ? "transfer_port_hotel" : "bus_line",
     service_rows: [outwardService, returnService].map((service) => ({
       row_text: service.original_row_description ?? service.raw_detail_text,
       semantic_tag: service.semantic_tag,

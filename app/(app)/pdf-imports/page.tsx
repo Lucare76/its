@@ -356,7 +356,7 @@ function canIgnore(row: PdfImportRow) {
 }
 
 function canDelete(row: PdfImportRow) {
-  return row.status !== "confirmed" && (row.linked_service_id === null || row.linked_service_is_draft);
+  return row.linked_service_id === null || row.linked_service_is_draft || row.status === "confirmed";
 }
 
 function canEdit(row: PdfImportRow) {
@@ -891,7 +891,7 @@ export default function PdfImportsPage() {
                     type="button"
                     onClick={() => {
                       if (!canDelete(selected)) return;
-                      if (!window.confirm("Eliminare questo PDF importato e l'eventuale draft collegato?")) return;
+                      if (!window.confirm("Eliminare questo PDF importato e l'eventuale servizio collegato?")) return;
                       void runAction("delete", selected.inbound_email_id);
                     }}
                     disabled={!canDelete(selected) || busyId === selected.inbound_email_id}

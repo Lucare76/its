@@ -35,10 +35,6 @@ export async function POST(request: NextRequest) {
       ((inboundRow.parsed_json as Record<string, any>)?.pdf_import?.linked_service_id as string | null | undefined) ?? ""
     );
 
-    if (currentState === "imported") {
-      return NextResponse.json({ ok: false, error: "Non puoi eliminare un import gia confermato." }, { status: 409 });
-    }
-
     if (linkedServiceId) {
       const { data: linkedService, error: linkedServiceError } = await auth.admin
         .from("services")
@@ -48,9 +44,6 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
       if (linkedServiceError) {
         return NextResponse.json({ ok: false, error: linkedServiceError.message }, { status: 500 });
-      }
-      if (linkedService?.id && linkedService.is_draft === false) {
-        return NextResponse.json({ ok: false, error: "Non puoi eliminare un servizio finale collegato." }, { status: 409 });
       }
       if (linkedService?.id) {
         const { error: deleteServiceError } = await auth.admin
@@ -89,7 +82,7 @@ export async function POST(request: NextRequest) {
       role: auth.membership.role,
       inboundEmailId: inboundRow.id,
       serviceId: linkedServiceId || null,
-      outcome: "deleted"
+      outcome: currentState === "imported" ? "deleted_confirmed_import" : "deleted"
     });
 
     return NextResponse.json({
