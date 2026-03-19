@@ -1,6 +1,7 @@
 import type { ParsedTransferPdfPayload, ParsedTransferService } from "@/lib/server/transfer-pdf-parser";
 import type { AgencyPdfParserImplementation } from "@/lib/server/agency-pdf-parsers/types";
 import { buildParserMatch } from "@/lib/server/agency-pdf-parsers/utils";
+import { SNAV_SCHEDULE } from "@/lib/server/snav-schedule";
 
 function clean(value?: string | null) {
   const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
@@ -11,6 +12,8 @@ function cleanCustomerChunk(value?: string | null) {
   return (
     clean(value)
       ?.replace(/^it\s+/i, "")
+      .replace(/\s+data\s+di\s+arrivo.*$/i, "")
+      .replace(/\s+data\s+di\s+partenza.*$/i, "")
       .replace(/\s+(?:nome|cognome)\s*:?.*$/i, "")
       .trim() ?? null
   );
@@ -97,9 +100,27 @@ function parseChosenVoucherTimes(sourceText: string) {
     return plain.find(Boolean) ?? null;
   };
 
+  const pickKnownScheduleTime = (value: string | null | undefined, validTimes: readonly string[]) => {
+    const timesInOrder = Array.from(String(value ?? "").matchAll(/([0-2]?\d[:.,][0-5]\d)/g))
+      .map((match) => normalizeTime(match[1]))
+      .filter((time): time is string => Boolean(time) && validTimes.includes(time as (typeof validTimes)[number]));
+
+    if (timesInOrder.length === 0) return null;
+    if (timesInOrder.length === 1) return timesInOrder[0];
+
+    if (validTimes === SNAV_SCHEDULE.casamicciolaToNapoliBeverello && timesInOrder.includes("09:45")) {
+      return "09:45";
+    }
+
+    return timesInOrder[0];
+  };
+
+  const outwardMarked = pickMarkedTime(outwardBlock);
+  const returnMarked = pickMarkedTime(returnBlock);
+
   return {
-    outwardTime: pickMarkedTime(outwardBlock),
-    returnTime: pickMarkedTime(returnBlock)
+    outwardTime: outwardMarked ?? pickKnownScheduleTime(outwardBlock, SNAV_SCHEDULE.napoliBeverelloToCasamicciola),
+    returnTime: returnMarked ?? pickKnownScheduleTime(returnBlock, SNAV_SCHEDULE.casamicciolaToNapoliBeverello)
   };
 }
 
