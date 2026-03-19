@@ -111,7 +111,7 @@ Nota: i comandi `db:*` non eseguono SQL automaticamente. L'esecuzione va fatta n
 9. Copia tutto il contenuto di `supabase/seed_demo.sql`.
 10. Incolla nella query e clicca `Run`.
 
-### Deploy note: Service Type v2 (transfer + bus_tour)
+### Deploy note: Service Type v2 (transfer + bus_tour) 
 Se il database esiste gia:
 1. Apri `SQL Editor` e esegui `supabase/migrations/0002_service_type_bus_tour.sql`.
 2. Questo script:
