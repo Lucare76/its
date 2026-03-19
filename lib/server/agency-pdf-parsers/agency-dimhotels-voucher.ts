@@ -100,6 +100,14 @@ function parseChosenVoucherTimes(sourceText: string) {
     return plain.find(Boolean) ?? null;
   };
 
+  const pickExplicitMarkedTime = (value?: string | null) => {
+    const marked = Array.from(String(value ?? "").matchAll(/(?:^|[\s([{])([^0-9\s])\s*([0-2]?\d[:.,][0-5]\d)\b/gi)).map((match) => ({
+      marker: match[1].toLowerCase(),
+      time: normalizeTime(match[2])
+    }));
+    return marked.find((item) => item.time && !["c", "o", "0", "(", "[", "{", "-", "â€¢"].includes(item.marker))?.time ?? null;
+  };
+
   const pickKnownScheduleTime = (value: string | null | undefined, validTimes: readonly string[]) => {
     const timesInOrder = Array.from(String(value ?? "").matchAll(/([0-2]?\d[:.,][0-5]\d)/g))
       .map((match) => normalizeTime(match[1]))
@@ -115,8 +123,8 @@ function parseChosenVoucherTimes(sourceText: string) {
     return timesInOrder[0];
   };
 
-  const outwardMarked = pickMarkedTime(outwardBlock);
-  const returnMarked = pickMarkedTime(returnBlock);
+  const outwardMarked = pickExplicitMarkedTime(outwardBlock);
+  const returnMarked = pickExplicitMarkedTime(returnBlock);
 
   return {
     outwardTime: outwardMarked ?? pickKnownScheduleTime(outwardBlock, SNAV_SCHEDULE.napoliBeverelloToCasamicciola),
