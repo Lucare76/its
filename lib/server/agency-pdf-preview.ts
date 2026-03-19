@@ -1,5 +1,6 @@
 import { parseInboundEmail } from "@/lib/email-parser";
 import { resolveBillingPartyFromRegistry } from "@/lib/server/billing-party-registry";
+import { canonicalizeKnownHotelName } from "@/lib/server/hotel-aliases";
 import { selectAgencyPdfParser, type AgencyPdfParserSelectionResult } from "@/lib/server/agency-pdf-parser-registry";
 
 type BookingKind = "transfer_port_hotel" | "transfer_airport_hotel" | "transfer_train_hotel" | "bus_city_hotel" | "excursion";
@@ -75,7 +76,53 @@ function clean(value?: string | null) {
 function sanitizeHotelOrDestination(value?: string | null) {
   const normalized = clean(value);
   if (!normalized) return null;
-  return clean(normalized.replace(/\b(num|num\.|numero|pagina|pax)\b.*$/i, ""));
+  return canonicalizeKnownHotelName(
+    clean(normalized.replace(/\b(num|num\.|numero|pagina|pax)\b.*$/i, "").replace(/^holiday\s+al\s+/i, "").replace(/\s+hotel$/i, ""))
+  );
+}
+
+const IT_MONTHS_PREVIEW: Record<string, string> = {
+  gen: "01",
+  feb: "02",
+  mar: "03",
+  apr: "04",
+  mag: "05",
+  giu: "06",
+  lug: "07",
+  ago: "08",
+  set: "09",
+  ott: "10",
+  nov: "11",
+  dic: "12"
+};
+
+function normalizeHolidayPreviewText(value: string) {
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/0tt/gi, "ott")
+    .replace(/hollday/gi, "holiday")
+    .replace(/descri\s*zi\s*one/gi, "descrizione")
+    .replace(/prati\s*ca/gi, "pratica")
+    .trim();
+}
+
+function parseHolidayShortDate(raw?: string | null, fallbackYear?: string | null) {
+  const match = String(raw ?? "").match(/([0-3]?\d)-\s*(gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)\b/i);
+  if (!match || !fallbackYear) return null;
+  const month = IT_MONTHS_PREVIEW[match[2].toLowerCase()];
+  if (!month) return null;
+  return `${fallbackYear}-${month}-${match[1].padStart(2, "0")}`;
+}
+
+function deriveHolidayPreviewDates(extractedText: string, headerText?: string | null) {
+  const source = normalizeHolidayPreviewText([headerText, extractedText].filter(Boolean).join(" "));
+  const practiceDateMatch = source.match(/\bdata\s*([0-3]?\d)-\s*(gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*(\d{2,4})/i);
+  const fallbackYear = practiceDateMatch ? (practiceDateMatch[3].length === 2 ? `20${practiceDateMatch[3]}` : practiceDateMatch[3]) : null;
+  const dalBlock = source.match(/\bdal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))(?:\s+\1)?\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))(?:\s+\2)?/i);
+  return {
+    arrivalDate: parseHolidayShortDate(dalBlock?.[1], fallbackYear),
+    departureDate: parseHolidayShortDate(dalBlock?.[2], fallbackYear)
+  };
 }
 
 function senderDomain(email: string) {
@@ -177,6 +224,10 @@ function deriveBillingPartyName(
 
   if (selection.parserKey === "agency_holiday_sud_italia") {
     return "Holidayweb";
+  }
+
+  if (selection.parserKey === "agency_dimhotels_voucher") {
+    return "Sosandra";
   }
 
   if (selection.parserKey === "agency_angelino_tour") {
@@ -491,6 +542,8 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
   const hotelOrDestination = sanitizeHotelOrDestination(
     arrivalService?.hotel_structure ?? arrivalService?.destination ?? inboundParsed.hotel ?? inboundParsed.dropoff ?? null
   );
+  const holidayPreviewDates =
+    selection.parserKey === "agency_holiday_sud_italia" ? deriveHolidayPreviewDates(input.extractedText, input.headerText) : null;
   const notes = clean(
     [
       transferParsed.practice_number ? `Pratica ${transferParsed.practice_number}` : null,
@@ -551,9 +604,9 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
     customer_full_name: clean(resolvedCustomerFullName ?? customer.fullName),
     customer_email: null,
     customer_phone: normalizeCustomerPhone(selection, transferParsed, inboundParsed),
-    arrival_date: clean(arrivalService?.service_date ?? transferParsed.date_from ?? inboundParsed.date ?? null),
+    arrival_date: clean(arrivalService?.service_date ?? transferParsed.date_from ?? holidayPreviewDates?.arrivalDate ?? inboundParsed.date ?? null),
     outbound_time: operationalOutwardTime,
-    departure_date: clean(departureService?.service_date ?? transferParsed.date_to ?? inboundParsed.departure_date ?? null),
+    departure_date: clean(departureService?.service_date ?? transferParsed.date_to ?? holidayPreviewDates?.departureDate ?? inboundParsed.departure_date ?? null),
     return_time: operationalReturnTime,
     transport_mode: transportMode,
     transport_reference_outward: transportReferenceOutward,

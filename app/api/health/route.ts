@@ -20,6 +20,11 @@ export async function GET() {
   const imapPass = process.env.IMAP_PASS;
   const imapTls = process.env.IMAP_TLS;
   const ocrSpaceApiKey = process.env.OCR_SPACE_API_KEY;
+  const googleCloudProjectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
+  const googleVisionClientEmail = process.env.GOOGLE_CLOUD_VISION_CLIENT_EMAIL;
+  const googleVisionPrivateKey = process.env.GOOGLE_CLOUD_VISION_PRIVATE_KEY;
+  const googleVisionInputBucket = process.env.GOOGLE_CLOUD_VISION_INPUT_BUCKET;
+  const googleVisionOutputBucket = process.env.GOOGLE_CLOUD_VISION_OUTPUT_BUCKET;
   const cronSecret = process.env.CRON_SECRET;
   const whatsappToken = process.env.WHATSAPP_TOKEN;
   const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -45,6 +50,11 @@ export async function GET() {
     IMAP_PASS: Boolean(imapPass),
     IMAP_TLS: Boolean(imapTls),
     OCR_SPACE_API_KEY: Boolean(ocrSpaceApiKey),
+    GOOGLE_CLOUD_PROJECT_ID: Boolean(googleCloudProjectId),
+    GOOGLE_CLOUD_VISION_CLIENT_EMAIL: Boolean(googleVisionClientEmail),
+    GOOGLE_CLOUD_VISION_PRIVATE_KEY: Boolean(googleVisionPrivateKey),
+    GOOGLE_CLOUD_VISION_INPUT_BUCKET: Boolean(googleVisionInputBucket),
+    GOOGLE_CLOUD_VISION_OUTPUT_BUCKET: Boolean(googleVisionOutputBucket),
     CRON_SECRET: Boolean(cronSecret),
     WHATSAPP_TOKEN: Boolean(whatsappToken),
     WHATSAPP_PHONE_NUMBER_ID: Boolean(whatsappPhoneNumberId),

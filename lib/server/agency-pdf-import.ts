@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { buildAgencyPdfPreview } from "@/lib/server/agency-pdf-preview";
+import { canonicalizeKnownHotelName } from "@/lib/server/hotel-aliases";
 import { auditLog } from "@/lib/server/ops-audit";
 import { extractPdfHeaderTextFromBase64, extractPdfTextFromBase64 } from "@/lib/server/pdf-text";
 import { tryMatchAndApplyPricing } from "@/lib/server/pricing-matching";
@@ -482,7 +483,8 @@ async function resolveHotelId(admin: any, tenantId: string, hotelName: string | 
     throw new Error(`Hotel lookup failed: ${hotelsError.message}`);
   }
   let hotels = (hotelsData ?? []) as Array<{ id: string; name: string }>;
-  const normalizedHotel = clean(hotelName)?.toLowerCase() ?? null;
+  const canonicalHotelName = canonicalizeKnownHotelName(hotelName);
+  const normalizedHotel = clean(canonicalHotelName)?.toLowerCase() ?? null;
 
   const matched =
     hotels.find((hotel) => normalizedHotel && hotel.name.toLowerCase() === normalizedHotel) ??
@@ -495,8 +497,8 @@ async function resolveHotelId(admin: any, tenantId: string, hotelName: string | 
     .from("hotels")
     .insert({
       tenant_id: tenantId,
-      name: hotelName ?? "Hotel da verificare",
-      normalized_name: slug(hotelName ?? "hotel da verificare"),
+      name: canonicalHotelName ?? "Hotel da verificare",
+      normalized_name: slug(canonicalHotelName ?? "hotel da verificare"),
       address: "Ischia",
       city: "Ischia",
       zone: "Ischia Porto",
