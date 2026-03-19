@@ -86,11 +86,11 @@ function parseChosenVoucherTimes(sourceText: string) {
   const returnBlock = normalized.match(/Scegli l['’]?orario di partenza da Casamicciola a Napoli Beverello:\s*(.+)$/i)?.[1];
 
   const pickMarkedTime = (value?: string | null) => {
-    const marked = Array.from(String(value ?? "").matchAll(/\b([a-z0-9])\s*([0-2]?\d[:.,][0-5]\d)\b/gi)).map((match) => ({
+    const marked = Array.from(String(value ?? "").matchAll(/(?:^|[\s([{])([^0-9\s])\s*([0-2]?\d[:.,][0-5]\d)\b/gi)).map((match) => ({
       marker: match[1].toLowerCase(),
       time: normalizeTime(match[2])
     }));
-    const preferred = marked.find((item) => item.time && !["c", "o", "0"].includes(item.marker));
+    const preferred = marked.find((item) => item.time && !["c", "o", "0", "(", "[", "{", "-", "•"].includes(item.marker));
     if (preferred?.time) return preferred.time;
 
     const plain = Array.from(String(value ?? "").matchAll(/([0-2]?\d[:.,][0-5]\d)/g)).map((match) => normalizeTime(match[1]));
@@ -105,6 +105,19 @@ function parseChosenVoucherTimes(sourceText: string) {
 
 function parseCustomerName(lines: string[]) {
   const compact = lines.join(" ");
+  const compactNormalized = compact.replace(/\s+/g, " ");
+  const looseCombinedLabelMatch =
+    compactNormalized.match(/\b(?:it\s+)?([A-Za-zÀ-ÿ' ]{1,40})\s+Nome:\s*([A-Za-zÀ-ÿ' ]{1,40})(?=\s+(?:Cognome:|Data|Numero|Cellulare|Hotel|Scegli)\b|$)/i) ??
+    compactNormalized.match(/\bNome:\s*([A-Za-zÀ-ÿ' ]{1,40})\s+Cognome:\s*([A-Za-zÀ-ÿ' ]{1,40})/i);
+  if (looseCombinedLabelMatch) {
+    const firstName = cleanCustomerChunk(looseCombinedLabelMatch[1]);
+    const lastName = cleanCustomerChunk(looseCombinedLabelMatch[2]);
+    return {
+      firstName,
+      lastName,
+      fullName: clean([firstName, lastName].filter(Boolean).join(" "))
+    };
+  }
   const combinedLabelMatch =
     compact.match(/\b(?:it\s+)?([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÖØ-öø-ÿ' ]{1,40})\s+Nome:\s*([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÖØ-öø-ÿ' ]{1,40})\s+Cognome:/i) ??
     compact.match(/\bNome:\s*([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÖØ-öø-ÿ' ]{1,40})\s+Cognome:\s*([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÖØ-öø-ÿ' ]{1,40})/i);
@@ -145,11 +158,13 @@ function parseCustomerName(lines: string[]) {
       ? [cleanCustomerChunk(lines[surnameIndex + 1] ?? null), cleanCustomerChunk(lines[surnameIndex + 2] ?? null), cleanCustomerChunk(lines[surnameIndex + 3] ?? null)].filter(Boolean)
       : [];
   const lastName = lastNameParts.length > 0 ? lastNameParts.join(" ") : null;
+  const fallbackNameBeforeLabel = cleanCustomerChunk(compactNormalized.match(/\b(?:it\s+)?([A-Za-zÀ-ÿ' ]{2,40})\s+Nome:/i)?.[1] ?? null);
+  const fallbackSurnameBeforeLabel = cleanCustomerChunk(compactNormalized.match(/Nome:\s*([A-Za-zÀ-ÿ' ]{2,40})\s+Cognome:/i)?.[1] ?? null);
 
   return {
-    firstName,
-    lastName,
-    fullName: clean([firstName, lastName].filter(Boolean).join(" "))
+    firstName: firstName ?? fallbackNameBeforeLabel,
+    lastName: lastName ?? fallbackSurnameBeforeLabel,
+    fullName: clean([firstName ?? fallbackNameBeforeLabel, lastName ?? fallbackSurnameBeforeLabel].filter(Boolean).join(" "))
   };
 }
 
