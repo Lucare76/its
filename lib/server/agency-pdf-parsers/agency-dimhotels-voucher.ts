@@ -8,7 +8,12 @@ function clean(value?: string | null) {
 }
 
 function cleanCustomerChunk(value?: string | null) {
-  return clean(value)?.replace(/^it\s+/i, "") ?? null;
+  return (
+    clean(value)
+      ?.replace(/^it\s+/i, "")
+      .replace(/\s+(?:nome|cognome)\s*:?.*$/i, "")
+      .trim() ?? null
+  );
 }
 
 function cleanVoucherHotel(value?: string | null) {
@@ -100,6 +105,19 @@ function parseChosenVoucherTimes(sourceText: string) {
 
 function parseCustomerName(lines: string[]) {
   const compact = lines.join(" ");
+  const combinedLabelMatch =
+    compact.match(/\b(?:it\s+)?([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÖØ-öø-ÿ' ]{1,40})\s+Nome:\s*([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÖØ-öø-ÿ' ]{1,40})\s+Cognome:/i) ??
+    compact.match(/\bNome:\s*([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÖØ-öø-ÿ' ]{1,40})\s+Cognome:\s*([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÖØ-öø-ÿ' ]{1,40})/i);
+  if (combinedLabelMatch) {
+    const firstName = cleanCustomerChunk(combinedLabelMatch[1]);
+    const lastName = cleanCustomerChunk(combinedLabelMatch[2]);
+    return {
+      firstName,
+      lastName,
+      fullName: clean([firstName, lastName].filter(Boolean).join(" "))
+    };
+  }
+
   const firstNameInline = cleanCustomerChunk(lines.find((line) => /Nome:/i.test(line))?.match(/Nome:\s*(.+)$/i)?.[1] ?? null);
   const lastNameInline = cleanCustomerChunk(lines.find((line) => /Cognome:/i.test(line))?.match(/Cognome:\s*(.+)$/i)?.[1] ?? null);
   const firstNameBeforeLabel = cleanCustomerChunk(compact.match(/\b([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÖØ-öø-ÿ' ]{1,40})\s+Nome:/i)?.[1] ?? null);
