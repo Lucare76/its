@@ -146,7 +146,9 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     parseItalianDate(compact.match(/\bal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]) ??
     fromDate;
   const pax =
-    tsfBlocks.map((item) => item.pax).find((value): value is number => Boolean(value)) ??
+    (tsfBlocks.map((item) => item.pax).filter((value): value is number => Boolean(value)).length > 0
+      ? Math.max(...tsfBlocks.map((item) => item.pax).filter((value): value is number => Boolean(value)))
+      : null) ??
     (Number(compact.match(/\bpax\s*(\d{1,2})/i)?.[1] ?? compact.match(/(?:\s|^)(\d{1,2})\(\d+\)\s*\d+[.,]\d{2}/i)?.[1] ?? 0) || null);
   const totalAmountCandidates = [
     parseEuroAmount(compact.match(/\btotale\s*eur\s*(\d+[.,]\d{2})/i)?.[1]),
