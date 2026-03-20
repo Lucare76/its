@@ -37,6 +37,17 @@ type ExtractedBusJourney = {
   direction: "andata" | "ritorno";
 };
 
+type ExtractedMarineJourney = {
+  serviceDate: string | null;
+  serviceTime: string | null;
+  meetingPoint: string | null;
+  origin: string | null;
+  destination: string | null;
+  hotel: string | null;
+  rawDetailText: string;
+  direction: "andata" | "ritorno";
+};
+
 const CUSTOMER_STOPWORDS = ["PACCHETTO", "TRANSFER", "SERVIZIO", "PROGRAMMA", "STAFF", "CLIENTE", "ISCHIA"];
 
 function clean(value?: string | null) {
@@ -128,7 +139,7 @@ function extractHotel(sourceText: string) {
   if (fromProgramRow) return fromProgramRow;
 
   const fromDestination = clean(
-    sourceText.match(/dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Cliente:|\s+Cellulare|\s+Cell\.|\n|\r|$)/i)?.[1]
+    sourceText.match(/dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|\s+Cell\.|\n|\r|$)/i)?.[1]
   );
   if (fromDestination) return fromDestination;
 
@@ -267,6 +278,49 @@ function extractAlesteBusJourney(sourceText: string, direction: "andata" | "rito
   };
 }
 
+function extractAlesteMarineJourney(
+  sourceText: string,
+  direction: "andata" | "ritorno",
+  fallbackYear?: string | null
+): ExtractedMarineJourney | null {
+  const compact = sourceText.replace(/\s+/g, " ").trim();
+
+  if (direction === "andata") {
+    const outwardMatch = compact.match(
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRAGHETTO\s+POZZUOLI\s*\+\s*TRS\s+H\.\s*ISCHIA\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(PORTO DI POZZUOLI)\s+da:\s*(POZZUOLI CON MEDMAR)\s+a:\s*CELL\.?\s*\d*\s*dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|$)/i
+    );
+    if (!outwardMatch) return null;
+
+    const hotel = clean(outwardMatch[5]);
+    return {
+      serviceDate: parseItalianDate(outwardMatch[1]) ?? parseItalianShortDate(outwardMatch[1], fallbackYear),
+      serviceTime: normalizeTime(outwardMatch[2]),
+      meetingPoint: clean(outwardMatch[3]),
+      origin: "PORTO DI POZZUOLI",
+      destination: hotel,
+      hotel,
+      rawDetailText: clean(outwardMatch[0]) ?? "",
+      direction
+    };
+  }
+
+  const returnMatch = compact.match(
+    /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRS\s+H\.\s*ISCHIA\s*\+\s*TRAGHETTO\s+POZZUOLI\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(HOTEL ISCHIA)\s+da:\s*HOTEL\s+a:\s*(PORTO PER POZZUOLI CON MEDMAR)\s+dest:\s*(PORTO DI POZZUOLI)/i
+  );
+  if (!returnMatch) return null;
+
+  return {
+    serviceDate: parseItalianDate(returnMatch[1]) ?? parseItalianShortDate(returnMatch[1], fallbackYear),
+    serviceTime: normalizeTime(returnMatch[2]),
+    meetingPoint: clean(returnMatch[3]),
+    origin: "HOTEL ISCHIA",
+    destination: "PORTO DI POZZUOLI",
+    hotel: null,
+    rawDetailText: clean(returnMatch[0]) ?? "",
+    direction
+  };
+}
+
 function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload {
   const parsed = parseTransferBookingPdfText(sourceText);
   const compact = sourceText.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim();
@@ -293,6 +347,8 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
   const departureTrain = extractTrainJourney(sourceText, "2", fallbackYear);
   const outwardBus = extractAlesteBusJourney(sourceText, "andata", fallbackYear);
   const returnBus = extractAlesteBusJourney(sourceText, "ritorno", fallbackYear);
+  const outwardMarine = extractAlesteMarineJourney(sourceText, "andata", fallbackYear);
+  const returnMarine = extractAlesteMarineJourney(sourceText, "ritorno", fallbackYear);
   const hasBusLineService =
     /\b(?:linea\s+\d+|bus\s+line|bus da |pullman|servizio bus|corriera|autobus)\b/i.test(sourceText) ||
     /\bBUS\b/i.test(parsed.program ?? "") ||
@@ -411,6 +467,54 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     }
   }
 
+  if (hasMarineAutoTransfer) {
+    const marineHotel = outwardMarine?.hotel ?? hotel;
+
+    if (outwardMarine && marineHotel) {
+      parsedServices.push({
+        practice_number: parsed.practice_number,
+        beneficiary: exactBeneficiary ?? parsed.first_beneficiary,
+        pax: exactPax ?? parsed.pax,
+        service_type: "transfer",
+        direction: "andata",
+        service_date: outwardMarine.serviceDate,
+        service_time: outwardMarine.serviceTime,
+        pickup_meeting_point: outwardMarine.meetingPoint,
+        origin: outwardMarine.origin,
+        destination: marineHotel,
+        carrier_company: "MEDMAR",
+        hotel_structure: marineHotel,
+        original_row_description: "TRAGHETTO POZZUOLI + TRS H. ISCHIA",
+        raw_detail_text: outwardMarine.rawDetailText,
+        parsing_status: "parsed",
+        confidence_level: "high",
+        semantic_tag: "transfer_arrival"
+      });
+    }
+
+    if (returnMarine && marineHotel) {
+      parsedServices.push({
+        practice_number: parsed.practice_number,
+        beneficiary: exactBeneficiary ?? parsed.first_beneficiary,
+        pax: exactPax ?? parsed.pax,
+        service_type: "transfer",
+        direction: "ritorno",
+        service_date: returnMarine.serviceDate,
+        service_time: returnMarine.serviceTime,
+        pickup_meeting_point: marineHotel,
+        origin: marineHotel,
+        destination: returnMarine.destination,
+        carrier_company: "MEDMAR",
+        hotel_structure: marineHotel,
+        original_row_description: "TRS H. ISCHIA + TRAGHETTO POZZUOLI",
+        raw_detail_text: returnMarine.rawDetailText,
+        parsing_status: "parsed",
+        confidence_level: "high",
+        semantic_tag: "transfer_departure"
+      });
+    }
+  }
+
   return {
     ...parsed,
     first_beneficiary: exactBeneficiary ?? parsed.first_beneficiary,
@@ -422,8 +526,8 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     pax: exactPax ?? parsed.pax,
     booking_kind: hasBusLineService ? "bus_city_hotel" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_train_hotel",
     service_type_code: hasBusLineService ? "bus_line" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_station_hotel",
-    date_from: (outwardBus?.serviceDate ?? parsed.date_from) || null,
-    date_to: (returnBus?.serviceDate ?? parsed.date_to) || null,
+    date_from: (outwardBus?.serviceDate ?? outwardMarine?.serviceDate ?? parsed.date_from) || null,
+    date_to: (returnBus?.serviceDate ?? returnMarine?.serviceDate ?? parsed.date_to) || null,
     train_arrival_number: arrivalTrain?.trainNumber ? `${arrivalTrain.carrierCompany ?? "ITALO"} ${arrivalTrain.trainNumber}` : null,
     train_arrival_time: arrivalTrain?.originTime ?? null,
     train_departure_number: departureTrain?.trainNumber ? `${departureTrain.carrierCompany ?? "ITALO"} ${departureTrain.trainNumber}` : null,
