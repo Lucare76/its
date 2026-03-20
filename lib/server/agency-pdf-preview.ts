@@ -2,6 +2,7 @@ import { parseInboundEmail } from "@/lib/email-parser";
 import { resolveBillingPartyFromRegistry } from "@/lib/server/billing-party-registry";
 import { canonicalizeKnownHotelName } from "@/lib/server/hotel-aliases";
 import { selectAgencyPdfParser, type AgencyPdfParserSelectionResult } from "@/lib/server/agency-pdf-parser-registry";
+import { cleanExtractedPdfText } from "@/lib/server/pdf-text-cleaning";
 
 type BookingKind = "transfer_port_hotel" | "transfer_airport_hotel" | "transfer_train_hotel" | "bus_city_hotel" | "excursion";
 type ServiceTypeDeduced = "transfer" | "ferry" | "excursion" | "bus" | null;
@@ -505,12 +506,14 @@ function normalizeCustomerPhone(
 }
 
 export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPreviewResult {
-  const inboundParsed = parseInboundEmail([input.subject, input.bodyText ?? ""].filter(Boolean).join("\n"), "agency-default", input.extractedText);
+  const cleanedExtractedText = cleanExtractedPdfText(input.extractedText);
+  const cleanedHeaderText = input.headerText ? cleanExtractedPdfText(input.headerText) : null;
+  const inboundParsed = parseInboundEmail([input.subject, input.bodyText ?? ""].filter(Boolean).join("\n"), "agency-default", cleanedExtractedText);
   const selection = selectAgencyPdfParser({
     senderEmail: input.senderEmail,
     subject: input.subject,
     filename: input.filename,
-    extractedText: input.extractedText
+    extractedText: cleanedExtractedText
   });
 
   const transferParsed = selection.parsed;
@@ -536,8 +539,8 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
   const resolvedCustomerFullName = deriveCustomerFullName(
     selection,
     transferParsed,
-    input.extractedText,
-    input.headerText,
+    cleanedExtractedText,
+    cleanedHeaderText,
     inboundParsed.customer_name ?? null
   );
   const customer = splitCustomerName(resolvedCustomerFullName);
@@ -549,7 +552,7 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
     arrivalService?.hotel_structure ?? arrivalService?.destination ?? inboundParsed.hotel ?? inboundParsed.dropoff ?? null
   );
   const holidayPreviewDates =
-    selection.parserKey === "agency_holiday_sud_italia" ? deriveHolidayPreviewDates(input.extractedText, input.headerText) : null;
+    selection.parserKey === "agency_holiday_sud_italia" ? deriveHolidayPreviewDates(cleanedExtractedText, cleanedHeaderText) : null;
   const notes = clean(
     [
       transferParsed.practice_number ? `Pratica ${transferParsed.practice_number}` : null,
@@ -563,7 +566,7 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
 
   const sourceForDeduction = [
     input.subject,
-    input.extractedText,
+    cleanedExtractedText,
     arrivalService?.raw_detail_text,
     departureService?.raw_detail_text,
     inboundParsed.pickup,
@@ -600,10 +603,10 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
       ? Number((sourceTotalAmount / Number(transferParsed.pax)).toFixed(2))
       : null;
 
-  const agencyName = deriveAgencyName(input.senderEmail, input.subject, input.extractedText, input.headerText, selection);
+  const agencyName = deriveAgencyName(input.senderEmail, input.subject, cleanedExtractedText, cleanedHeaderText, selection);
   const extracted: AgencyPdfPreviewResult["extracted"] = {
     agency_name: agencyName,
-    billing_party_name: deriveBillingPartyName(selection, transferParsed, input.extractedText, input.headerText, agencyName),
+    billing_party_name: deriveBillingPartyName(selection, transferParsed, cleanedExtractedText, cleanedHeaderText, agencyName),
     booking_kind: deducedBookingKind,
     service_type: deducedServiceType,
     service_type_deduced: deduceServiceType(sourceForDeduction),
@@ -667,7 +670,7 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
       fallback_reason: selection.fallbackReason,
       candidates: selection.candidates
     },
-    extracted_text_preview: input.extractedText.slice(0, 3000),
+    extracted_text_preview: cleanedExtractedText.slice(0, 3000),
     extracted,
     fields_found: fieldsFound,
     missing_fields: missingFields,

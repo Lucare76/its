@@ -7,6 +7,7 @@ import { KpiCard } from "@/components/kpi-card";
 import { ServicesTable } from "@/components/services-table";
 import { EmptyState, PageHeader, SidePanel } from "@/components/ui";
 import { needsInboxReview } from "@/lib/inbox-review";
+import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { formatServiceSlot, getCustomerFullName, getOutboundTime } from "@/lib/service-display";
 import { getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
 import { supabase } from "@/lib/supabase/client";
@@ -70,7 +71,11 @@ export default function OperatorDashboardPage() {
   }
 
   const todayIso = new Date().toISOString().slice(0, 10);
-  const todayServices = data.services.filter((service) => service.date === todayIso);
+  const todayInstances = buildOperationalInstances(data.services).filter((instance) => instance.date === todayIso);
+  const todayServiceIds = new Set(todayInstances.map((instance) => instance.serviceId));
+  const todayServices = data.services.filter((service) => todayServiceIds.has(service.id));
+  const todayArrivals = todayInstances.filter((instance) => instance.direction === "arrival").length;
+  const todayDepartures = todayInstances.filter((instance) => instance.direction === "departure").length;
   const todayPdfServices = todayServices.filter((service) => getServicePdfOperationalMeta(service, data.inboundEmails).isPdf);
   const todayPdfNeedsAttention = todayServices.filter((service) => getServicePdfOperationalMeta(service, data.inboundEmails).reviewRecommended);
   const inboxToReview = data.inboundEmails.filter((email) => needsInboxReview(email.parsed_json));
@@ -227,7 +232,7 @@ export default function OperatorDashboardPage() {
           <>
             <ExportServicesButton defaultDateFrom={defaultDateFrom} defaultDateTo={defaultDateTo} />
             <button type="button" onClick={() => setIsSuggestionsOpen(true)} className="btn-secondary">
-              Suggerimenti Dispatch
+              Supporto assegnazioni
             </button>
             <Link href="/services/new" className="btn-primary">
               Nuova prenotazione
@@ -251,7 +256,7 @@ export default function OperatorDashboardPage() {
             2. Inbox / Upload PDF draft
           </Link>
           <Link href="/dispatch" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
-            3. Assegna driver e mezzo
+            3. Assegnazioni interne
           </Link>
           <Link href="/driver" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
             4. Verifica area autista
@@ -259,8 +264,10 @@ export default function OperatorDashboardPage() {
         </div>
       </article>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-        <KpiCard label="Servizi oggi" value={String(todayServices.length)} hint="Operativita giornaliera" />
-        <KpiCard label="Da assegnare" value={String(pending)} hint="Servizi stato new" />
+        <KpiCard label="Operativo oggi" value={String(todayInstances.length)} hint="Arrivi + partenze della giornata" />
+        <KpiCard label="Senza assegnazione" value={String(pending)} hint="Dato informativo, non blocca il flusso" />
+        <KpiCard label="Arrivi oggi" value={String(todayArrivals)} hint="Istanze operative arrivo" />
+        <KpiCard label="Partenze oggi" value={String(todayDepartures)} hint="Istanze operative partenza" />
         <KpiCard label="Driver attivi" value={String(activeDrivers)} hint="Con almeno un servizio" />
         <KpiCard label="Pax oggi" value={String(totalPax)} hint="Totale passeggeri" />
         <KpiCard label="Booking PDF oggi" value={String(todayPdfServices.length)} hint="Import confermati da PDF" />
@@ -277,6 +284,7 @@ export default function OperatorDashboardPage() {
         Non assegnati oggi: <span className="font-semibold">{unassignedServices.length}</span> | Coperti dai suggerimenti:{" "}
         <span className="font-semibold">{coveredBySuggestions}</span>
       </p>
+      <p className="text-sm text-muted">L&apos;operativo non dipende dall&apos;assegnazione: driver e mezzo sono una fase interna successiva.</p>
       {undeliveredReminderAlerts.length > 0 ? (
         <article className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           <p className="font-semibold">
@@ -304,7 +312,7 @@ export default function OperatorDashboardPage() {
         </article>
       ) : null}
       <ServicesTable services={todayServices} hotels={data.hotels} assignments={data.assignments} memberships={data.memberships} statusEvents={data.statusEvents} inboundEmails={data.inboundEmails} />
-      <SidePanel open={isSuggestionsOpen} onClose={() => setIsSuggestionsOpen(false)} title="Suggerimenti Dispatch" subtitle="Anteprima deterministica per i servizi di oggi non assegnati.">
+      <SidePanel open={isSuggestionsOpen} onClose={() => setIsSuggestionsOpen(false)} title="Supporto assegnazioni" subtitle="Suggerimenti interni opzionali: il servizio resta operativo anche senza assegnazione.">
         <div className="mt-4 space-y-3">
           {suggestedGroups.filter((group) => !appliedGroupIds.includes(group.id) && !skippedGroupIds.includes(group.id)).length === 0 ? (
             <EmptyState title="Nessun suggerimento disponibile." compact />

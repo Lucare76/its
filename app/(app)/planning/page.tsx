@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { DragEvent } from "react";
+import { buildOperationalInstances, type OperationalInstance } from "@/lib/operational-service-instances";
 import { supabase } from "@/lib/supabase/client";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import type { Service, ServiceType } from "@/lib/types";
@@ -68,6 +69,8 @@ export default function PlanningPage() {
     [data.memberships]
   );
 
+  const operationalInstances = useMemo(() => buildOperationalInstances(data.services), [data.services]);
+
   const filteredServices = useMemo(() => {
     return data.services
       .filter((service) => {
@@ -82,38 +85,58 @@ export default function PlanningPage() {
       });
   }, [assignmentsByServiceId, data.services, driverFilter, serviceTypeFilter]);
 
-  const availableDates = useMemo(() => [...new Set(data.services.map((service) => service.date))].sort(), [data.services]);
+  const filteredInstances = useMemo(() => {
+    const allowedIds = new Set(filteredServices.map((service) => service.id));
+    return operationalInstances.filter((instance) => allowedIds.has(instance.serviceId));
+  }, [filteredServices, operationalInstances]);
+
+  const availableDates = useMemo(() => [...new Set(filteredInstances.map((instance) => instance.date))].sort(), [filteredInstances]);
   const effectiveSelectedDate = availableDates.includes(selectedDate) ? selectedDate : availableDates[0] ?? selectedDate;
 
-  const dayServices = useMemo(() => filteredServices.filter((service) => service.date === effectiveSelectedDate), [effectiveSelectedDate, filteredServices]);
+  const dayInstances = useMemo(() => filteredInstances.filter((instance) => instance.date === effectiveSelectedDate), [effectiveSelectedDate, filteredInstances]);
 
   const weekStart = useMemo(() => startOfWeek(effectiveSelectedDate), [effectiveSelectedDate]);
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, index) => toIsoDate(addDays(weekStart, index))), [weekStart]);
 
   const servicesByDayAndSlot = useMemo(() => {
-    const map = new Map<string, Service[]>();
-    for (const service of filteredServices) {
-      const slot = floorToThirtyMinutes(service.time);
-      const key = `${service.date}|${slot}`;
+    const map = new Map<string, OperationalInstance[]>();
+    for (const instance of filteredInstances) {
+      const slot = floorToThirtyMinutes(instance.time);
+      const key = `${instance.date}|${slot}`;
       const existing = map.get(key) ?? [];
-      existing.push(service);
+      existing.push(instance);
       map.set(key, existing);
     }
     return map;
-  }, [filteredServices]);
+  }, [filteredInstances]);
 
-  const applyDrop = async (serviceId: string, nextDate: string, nextTime: string) => {
-    const service = data.services.find((item) => item.id === serviceId);
-    if (!service || !tenantId || !supabase) return;
-    const currentTime = floorToThirtyMinutes(service.time);
-    if (service.date === nextDate && currentTime === nextTime) return;
+  const applyDrop = async (instanceId: string, nextDate: string, nextTime: string) => {
+    const instance = operationalInstances.find((item) => item.instanceId === instanceId);
+    if (!instance || !tenantId || !supabase) return;
+    const service = instance.service;
+    const currentTime = floorToThirtyMinutes(instance.time);
+    if (instance.date === nextDate && currentTime === nextTime) return;
 
-    setMessage(`Spostato a ${nextDate} ${nextTime}`);
+    const nextTimestamp = `${nextTime}:00`;
+    const updates =
+      instance.direction === "departure"
+        ? {
+            departure_date: nextDate,
+            departure_time: nextTimestamp,
+            return_time: nextTimestamp
+          }
+        : {
+            date: nextDate,
+            time: nextTimestamp,
+            arrival_date: nextDate,
+            arrival_time: nextTimestamp,
+            outbound_time: nextTimestamp
+          };
 
     const { error } = await supabase
       .from("services")
-      .update({ date: nextDate, time: `${nextTime}:00` })
-      .eq("id", serviceId)
+      .update(updates)
+      .eq("id", service.id)
       .eq("tenant_id", tenantId);
 
     if (error) {
@@ -121,13 +144,14 @@ export default function PlanningPage() {
       return;
     }
 
+    setMessage(`${instance.direction === "arrival" ? "Arrivo" : "Partenza"} spostato a ${nextDate} ${nextTime}`);
     await refresh();
   };
 
-  const onDragStart = (serviceId: string, event: DragEvent<HTMLElement>) => {
-    setDraggingServiceId(serviceId);
+  const onDragStart = (instanceId: string, event: DragEvent<HTMLElement>) => {
+    setDraggingServiceId(instanceId);
     event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", serviceId);
+    event.dataTransfer.setData("text/plain", instanceId);
   };
 
   const onDropSlot = async (date: string, time: string, event: DragEvent<HTMLElement>) => {
@@ -198,14 +222,20 @@ export default function PlanningPage() {
                   <div className="border-t border-border px-2 py-3 text-xs text-muted">{slot}</div>
                   <div className="min-h-14 border-t border-border px-2 py-2 hover:bg-blue-50/50" onDragOver={(event) => event.preventDefault()} onDrop={(event) => void onDropSlot(effectiveSelectedDate, slot, event)}>
                     <div className="flex flex-wrap gap-2">
-                      {servicesAtSlot.map((service) => {
+                      {servicesAtSlot.map((instance) => {
+                        const service = instance.service;
                         const assignment = assignmentsByServiceId.get(service.id);
                         const driver = assignment?.driver_user_id ? driverNameById.get(assignment.driver_user_id) : "Non assegnato";
                         return (
-                          <article key={service.id} draggable onDragStart={(event) => onDragStart(service.id, event)} className="cursor-grab rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs shadow-sm">
+                          <article
+                            key={instance.instanceId}
+                            draggable
+                            onDragStart={(event) => onDragStart(instance.instanceId, event)}
+                            className="cursor-grab rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs shadow-sm"
+                          >
                             <p className="line-clamp-2 text-safe-wrap font-semibold">{service.customer_name}</p>
                             <p className="line-clamp-1 text-muted">
-                              {normalizeTime(service.time)} | {(service.service_type ?? "transfer").toUpperCase()}
+                              {normalizeTime(instance.time)} | {instance.direction === "arrival" ? "ARRIVO" : "PARTENZA"} | {(service.service_type ?? "transfer").toUpperCase()}
                             </p>
                             <p className="line-clamp-1 text-muted">{driver}</p>
                           </article>
@@ -217,7 +247,7 @@ export default function PlanningPage() {
               );
             })}
           </div>
-          {dayServices.length === 0 ? <p className="p-3 text-sm text-muted">Nessun servizio per il giorno e i filtri selezionati.</p> : null}
+          {dayInstances.length === 0 ? <p className="p-3 text-sm text-muted">Nessuna istanza operativa per il giorno e i filtri selezionati.</p> : null}
         </div>
       ) : (
         <div className="card overflow-x-auto p-2 md:p-3">
@@ -237,10 +267,17 @@ export default function PlanningPage() {
                   return (
                     <div key={key} className="min-h-14 border-t border-border px-1.5 py-2 hover:bg-blue-50/40" onDragOver={(event) => event.preventDefault()} onDrop={(event) => void onDropSlot(date, slot, event)}>
                       <div className="space-y-1">
-                        {servicesAtSlot.map((service) => (
-                          <article key={service.id} draggable onDragStart={(event) => onDragStart(service.id, event)} className="cursor-grab rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-[11px] shadow-sm">
-                            <p className="truncate font-semibold">{service.customer_name}</p>
-                            <p className="truncate text-muted">{(service.service_type ?? "transfer").toUpperCase()}</p>
+                        {servicesAtSlot.map((instance) => (
+                          <article
+                            key={instance.instanceId}
+                            draggable
+                            onDragStart={(event) => onDragStart(instance.instanceId, event)}
+                            className="cursor-grab rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-[11px] shadow-sm"
+                          >
+                            <p className="truncate font-semibold">{instance.service.customer_name}</p>
+                            <p className="truncate text-muted">
+                              {instance.direction === "arrival" ? "ARRIVO" : "PARTENZA"} | {(instance.service.service_type ?? "transfer").toUpperCase()}
+                            </p>
                           </article>
                         ))}
                       </div>

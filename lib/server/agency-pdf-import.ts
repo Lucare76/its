@@ -719,7 +719,7 @@ function buildParsedJson(
     from_email: source.fromEmail,
     subject: source.subject,
     received_at: new Date().toISOString(),
-    review_status: mode === "preview" ? "preview" : "needs_review",
+    review_status: mode === "preview" ? "preview" : outcome === "imported" ? "ready_operational" : "needs_review",
     attachments: [
       {
         filename: source.filename,
@@ -761,6 +761,86 @@ function buildParsedJson(
       reviewed_at: null,
       linked_service_id: linkedServiceId ?? null,
       possible_existing_matches: possibleExistingMatches ?? []
+    }
+  };
+}
+
+function requiresManualPdfReview(normalized: NormalizedPdfImport) {
+  const missingCriticalField =
+    !normalized.customer_full_name ||
+    normalized.customer_full_name === "Cliente da verificare" ||
+    !normalized.arrival_date ||
+    !normalized.passengers ||
+    (normalized.booking_kind !== "excursion" && !normalized.hotel_or_destination && !normalized.arrival_place);
+
+  return normalized.parsing_quality !== "high" || missingCriticalField;
+}
+
+function buildServicePayload(
+  normalized: NormalizedPdfImport,
+  params: {
+    tenantId: string;
+    userId: string | null;
+    inboundEmailId: string | null;
+    hotelId: string;
+    isDraft: boolean;
+    status: "needs_review" | "new";
+    importMode: "draft" | "final";
+    hasManualReview: boolean;
+  }
+) {
+  return {
+    tenant_id: params.tenantId,
+    inbound_email_id: params.inboundEmailId,
+    is_draft: params.isDraft,
+    date: normalized.arrival_date,
+    time: normalized.outbound_time ?? "00:00",
+    service_type: baseServiceType(normalized),
+    direction: "arrival" as const,
+    vessel: normalized.carrier_company ?? normalized.arrival_place ?? "Transfer da PDF",
+    pax: normalized.passengers,
+    hotel_id: params.hotelId,
+    customer_name: normalized.customer_full_name,
+    billing_party_name: normalized.billing_party_name,
+    outbound_time: normalized.outbound_time,
+    return_time: normalized.return_time,
+    source_total_amount_cents: normalized.source_total_amount_cents,
+    source_price_per_pax_cents: normalized.source_price_per_pax_cents,
+    source_amount_currency: normalized.source_amount_currency,
+    phone: normalized.customer_phone,
+    notes: buildServiceNotes(normalized, { mode: params.importMode, hasManualReview: params.hasManualReview }),
+    status: params.status,
+    created_by_user_id: params.userId,
+    booking_service_kind: normalized.booking_kind,
+    service_type_code: normalized.service_type,
+    customer_first_name: null,
+    customer_last_name: null,
+    customer_email: normalized.customer_email,
+    arrival_date: normalized.arrival_date,
+    arrival_time: normalized.outbound_time ?? "00:00",
+    departure_date: normalized.departure_date,
+    departure_time: normalized.return_time,
+    transport_code: normalized.transport_code,
+    train_arrival_number: normalized.train_arrival_number,
+    train_arrival_time: null,
+    train_departure_number: normalized.train_departure_number,
+    train_departure_time: null,
+    bus_city_origin: null,
+    include_ferry_tickets: normalized.include_ferry_tickets,
+    ferry_details: {
+      transport_mode: normalized.transport_mode,
+      arrival_place: normalized.arrival_place,
+      carrier_company: normalized.carrier_company,
+      transport_reference_outward: normalized.transport_reference_outward,
+      transport_reference_return: normalized.transport_reference_return,
+      arrival_transport_code: normalized.arrival_transport_code,
+      departure_transport_code: normalized.departure_transport_code
+    },
+    excursion_details: {
+      source: "pdf",
+      import_mode: params.importMode,
+      external_reference: normalized.external_reference,
+      reviewed: params.hasManualReview
     }
   };
 }
@@ -828,6 +908,7 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
     throw new Error("Nessun hotel disponibile per il tenant.");
   }
   const possibleExistingMatches = await findPotentialExistingMatches(auth.admin, tenantId, parsed.normalized);
+  const needsManualReview = requiresManualPdfReview(parsed.normalized);
 
   const parsedJson = buildParsedJson(
     {
@@ -838,8 +919,8 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
       sizeBytes: input.fileSize
     },
     parsed,
-    "draft",
-    "draft",
+    needsManualReview ? "draft" : "final",
+    needsManualReview ? "draft" : "imported",
     undefined,
     possibleExistingMatches
   );
@@ -878,62 +959,20 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
     // Attachment persistence is optional for the controlled import flow.
   }
 
-  const notes = buildServiceNotes(parsed.normalized, { mode: "draft", hasManualReview: false });
   const serviceInsert = await auth.admin
     .from("services")
-    .insert({
-      tenant_id: tenantId,
-      inbound_email_id: inboundInsert.data.id,
-      is_draft: true,
-      date: parsed.normalized.arrival_date,
-      time: parsed.normalized.outbound_time ?? "00:00",
-      service_type: baseServiceType(parsed.normalized),
-      direction: "arrival",
-      vessel: parsed.normalized.carrier_company ?? parsed.normalized.arrival_place ?? "Transfer da PDF",
-      pax: parsed.normalized.passengers,
-      hotel_id: hotelId,
-      customer_name: parsed.normalized.customer_full_name,
-      billing_party_name: parsed.normalized.billing_party_name,
-      outbound_time: parsed.normalized.outbound_time,
-      return_time: parsed.normalized.return_time,
-      source_total_amount_cents: parsed.normalized.source_total_amount_cents,
-      source_price_per_pax_cents: parsed.normalized.source_price_per_pax_cents,
-      source_amount_currency: parsed.normalized.source_amount_currency,
-      phone: parsed.normalized.customer_phone,
-      notes,
-      status: "needs_review",
-      created_by_user_id: auth.user.id ?? null,
-      booking_service_kind: parsed.normalized.booking_kind,
-      service_type_code: parsed.normalized.service_type,
-      customer_first_name: null,
-      customer_last_name: null,
-      customer_email: parsed.normalized.customer_email,
-      arrival_date: parsed.normalized.arrival_date,
-      arrival_time: parsed.normalized.outbound_time ?? "00:00",
-      departure_date: parsed.normalized.departure_date,
-      departure_time: parsed.normalized.return_time,
-      transport_code: parsed.normalized.transport_code,
-      train_arrival_number: parsed.normalized.train_arrival_number,
-      train_arrival_time: null,
-      train_departure_number: parsed.normalized.train_departure_number,
-      train_departure_time: null,
-      bus_city_origin: null,
-      include_ferry_tickets: parsed.normalized.include_ferry_tickets,
-      ferry_details: {
-        transport_mode: parsed.normalized.transport_mode,
-        arrival_place: parsed.normalized.arrival_place,
-        carrier_company: parsed.normalized.carrier_company,
-        transport_reference_outward: parsed.normalized.transport_reference_outward,
-        transport_reference_return: parsed.normalized.transport_reference_return,
-        arrival_transport_code: parsed.normalized.arrival_transport_code,
-        departure_transport_code: parsed.normalized.departure_transport_code
-      },
-      excursion_details: {
-        source: "pdf",
-        import_mode: "draft",
-        external_reference: parsed.normalized.external_reference
-      }
-    })
+    .insert(
+      buildServicePayload(parsed.normalized, {
+        tenantId,
+        userId: auth.user.id ?? null,
+        inboundEmailId: inboundInsert.data.id,
+        hotelId,
+        isDraft: needsManualReview,
+        status: needsManualReview ? "needs_review" : "new",
+        importMode: needsManualReview ? "draft" : "final",
+        hasManualReview: false
+      })
+    )
     .select("id")
     .single();
 
@@ -950,8 +989,8 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
       sizeBytes: input.fileSize
     },
     parsed,
-    "draft",
-    "draft",
+    needsManualReview ? "draft" : "final",
+    needsManualReview ? "draft" : "imported",
     serviceInsert.data.id,
     possibleExistingMatches
   );
@@ -963,6 +1002,55 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
     .eq("tenant_id", tenantId);
   if (inboundUpdate.error) {
     throw new Error(inboundUpdate.error.message);
+  }
+
+  if (!needsManualReview) {
+    const statusInsert = await auth.admin.from("status_events").insert({
+      tenant_id: tenantId,
+      service_id: serviceInsert.data.id,
+      status: "new",
+      by_user_id: auth.user.id
+    });
+    if (statusInsert.error) {
+      throw new Error(statusInsert.error.message);
+    }
+
+    await tryMatchAndApplyPricing(auth.admin, {
+      tenantId,
+      inboundEmailId: inboundInsert.data.id,
+      serviceId: serviceInsert.data.id,
+      senderEmail: input.senderEmail,
+      sourceText: buildPricingSourceText([input.subject, input.bodyText ?? "", parsed.extractedText], parsed.normalized),
+      serviceType: "transfer",
+      direction: "arrival",
+      date: parsed.normalized.arrival_date,
+      time: parsed.normalized.outbound_time ?? "00:00",
+      pax: parsed.normalized.passengers,
+      bookingKind: parsed.normalized.booking_kind,
+      serviceVariant: parsed.normalized.service_variant
+    });
+
+    auditLog({
+      event: "pdf_import_confirmed",
+      tenantId,
+      userId: auth.user.id ?? null,
+      role: auth.membership.role,
+      serviceId: serviceInsert.data.id,
+      inboundEmailId: inboundInsert.data.id,
+      outcome: "imported",
+      parserKey: parsed.normalized.parser_key,
+      parsingQuality: parsed.normalized.parsing_quality,
+      details: { filename: input.filename, auto_confirmed: true, parser_mode: parsed.preview.parser.mode }
+    });
+
+    return {
+      ok: true,
+      outcome: "imported",
+      inbound_email_id: inboundInsert.data.id,
+      final_service_id: serviceInsert.data.id,
+      preview: parsed.preview,
+      normalized: parsed.normalized
+    };
   }
 
   auditLog({

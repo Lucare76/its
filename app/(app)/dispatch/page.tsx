@@ -63,7 +63,7 @@ export default function DispatchPage() {
   const [vehicleLabel, setVehicleLabel] = useState("Mercedes Vito - AA123BB");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("Assegna driver e mezzo ai servizi.");
+  const [message, setMessage] = useState("Assegnazione interna opzionale: il servizio è già operativo anche senza driver.");
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [actorUserId, setActorUserId] = useState<string | null>(null);
   const [services, setServices] = useState<Service[]>([]);
@@ -349,11 +349,12 @@ export default function DispatchPage() {
     <section className="mx-auto max-w-3xl page-section">
       <PageHeader
         title="Dispatch e Assegnazione"
-        subtitle="Assegna driver e veicolo in modo rapido e chiaro."
+        subtitle="Supporto interno per driver e mezzo. Non blocca l'operativo."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Dispatch" }]}
       />
       <form action={submit} className="card grid gap-5 p-4 md:p-7">
         <h2 className="text-base">Dettagli assegnazione</h2>
+        <p className="text-sm text-muted">Questa schermata serve solo a Ischia Transfer per l&apos;organizzazione interna successiva.</p>
         <div className="grid gap-3 md:grid-cols-3">
           <select data-testid="dispatch-source-filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as "all" | "pdf" | "agency" | "manual")} className="input-saas">
             <option value="all">Origine: tutte</option>

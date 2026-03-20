@@ -3,6 +3,7 @@ import { createSign } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { cleanExtractedPdfText } from "@/lib/server/pdf-text-cleaning";
 
 export function isPdfAttachment(filename: string, mimeType?: string | null) {
   const normalizedMime = (mimeType ?? "").toLowerCase();
@@ -304,16 +305,17 @@ export async function extractPdfTextFromBase64(contentBase64: string) {
     const extracted = parsed.text?.trim() ?? "";
 
     if (!hasCorruptedPdfTextShape(extracted)) {
-      return extracted;
+      return cleanExtractedPdfText(extracted);
     }
 
     const ocrText = await runServerCompatiblePdfOcr(contentBase64);
-    return ocrText.trim() || extracted;
+    return cleanExtractedPdfText(ocrText.trim() || extracted);
   } catch {
-    return runServerCompatiblePdfOcr(contentBase64);
+    const fallback = await runServerCompatiblePdfOcr(contentBase64);
+    return cleanExtractedPdfText(fallback);
   }
 }
 
 export async function extractPdfHeaderTextFromBase64(contentBase64: string) {
-  return runServerCompatiblePdfOcr(contentBase64);
+  return cleanExtractedPdfText(await runServerCompatiblePdfOcr(contentBase64));
 }

@@ -195,8 +195,13 @@ export default function InboxPage() {
     await loadData(token);
     setSelectedId(inboundId);
     setPdfUploading(false);
-    setPdfUploadStatus(`PDF importato. Draft: ${String(body?.draft_service_id ?? "N/D")}.`);
-    setMessage(`PDF importato. Draft creato: ${String(body?.draft_service_id ?? "N/D")}.`);
+    if (String(body?.outcome ?? "") === "imported") {
+      setPdfUploadStatus(`PDF importato direttamente nell'operativo. Service: ${String(body?.final_service_id ?? "N/D")}.`);
+      setMessage(`PDF confermato automaticamente. Service operativo: ${String(body?.final_service_id ?? "N/D")}.`);
+    } else {
+      setPdfUploadStatus(`PDF importato. Draft: ${String(body?.draft_service_id ?? "N/D")}.`);
+      setMessage(`PDF importato. Draft creato: ${String(body?.draft_service_id ?? "N/D")}.`);
+    }
   };
 
   const confirmDraftQuick = async () => {

@@ -190,7 +190,14 @@ export async function POST(request: NextRequest) {
         }
       );
 
-      if ("draft_service_id" in autoImport && typeof autoImport.draft_service_id === "string") {
+      const autoImportServiceId =
+        ("draft_service_id" in autoImport && typeof autoImport.draft_service_id === "string"
+          ? autoImport.draft_service_id
+          : "final_service_id" in autoImport && typeof autoImport.final_service_id === "string"
+            ? autoImport.final_service_id
+            : null);
+
+      if (autoImportServiceId) {
         const pricingSourceText = [
           parsed.data.subject,
           parsed.data.body_text,
@@ -208,7 +215,7 @@ export async function POST(request: NextRequest) {
         await tryMatchAndApplyPricing(admin, {
           tenantId,
           inboundEmailId: "inbound_email_id" in autoImport ? autoImport.inbound_email_id : null,
-          serviceId: autoImport.draft_service_id,
+          serviceId: autoImportServiceId,
           senderEmail: parsed.data.from,
           sourceText: pricingSourceText,
           serviceType: "transfer",
