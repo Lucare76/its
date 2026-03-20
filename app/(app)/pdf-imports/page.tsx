@@ -693,17 +693,13 @@ export default function PdfImportsPage() {
       }
       if (body.duplicate) {
         setMessage("PDF gia presente: import fermato per duplicato.");
-      } else if (body.outcome === "imported") {
-        setMessage("PDF confermato automaticamente e inviato nell'operativo.");
       } else {
         setMessage("Draft PDF creato correttamente.");
       }
       setUploadStatus(
         body.duplicate
           ? `Duplicato rilevato. Service esistente: ${body.existing_service_id ?? "N/D"}.`
-          : body.outcome === "imported"
-            ? `Import operativo completato da ${uploadFile.name}.`
-            : `Draft creato da ${uploadFile.name}.`
+          : `Draft creato da ${uploadFile.name}.`
       );
     } catch (uploadError) {
       const nextError = uploadError instanceof Error ? uploadError.message : "Errore upload PDF.";

@@ -776,6 +776,10 @@ function requiresManualPdfReview(normalized: NormalizedPdfImport) {
   return normalized.parsing_quality !== "high" || missingCriticalField;
 }
 
+function shouldAlwaysCreatePdfDraft() {
+  return true;
+}
+
 function buildServicePayload(
   normalized: NormalizedPdfImport,
   params: {
@@ -908,7 +912,8 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
     throw new Error("Nessun hotel disponibile per il tenant.");
   }
   const possibleExistingMatches = await findPotentialExistingMatches(auth.admin, tenantId, parsed.normalized);
-  const needsManualReview = requiresManualPdfReview(parsed.normalized);
+  const reviewRecommended = requiresManualPdfReview(parsed.normalized);
+  const needsManualReview = shouldAlwaysCreatePdfDraft();
 
   const parsedJson = buildParsedJson(
     {
@@ -919,8 +924,8 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
       sizeBytes: input.fileSize
     },
     parsed,
-    needsManualReview ? "draft" : "final",
-    needsManualReview ? "draft" : "imported",
+    "draft",
+    "draft",
     undefined,
     possibleExistingMatches
   );
@@ -967,9 +972,9 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
         userId: auth.user.id ?? null,
         inboundEmailId: inboundInsert.data.id,
         hotelId,
-        isDraft: needsManualReview,
-        status: needsManualReview ? "needs_review" : "new",
-        importMode: needsManualReview ? "draft" : "final",
+        isDraft: true,
+        status: "needs_review",
+        importMode: "draft",
         hasManualReview: false
       })
     )
@@ -989,8 +994,8 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
       sizeBytes: input.fileSize
     },
     parsed,
-    needsManualReview ? "draft" : "final",
-    needsManualReview ? "draft" : "imported",
+    "draft",
+    "draft",
     serviceInsert.data.id,
     possibleExistingMatches
   );
@@ -1004,55 +1009,6 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
     throw new Error(inboundUpdate.error.message);
   }
 
-  if (!needsManualReview) {
-    const statusInsert = await auth.admin.from("status_events").insert({
-      tenant_id: tenantId,
-      service_id: serviceInsert.data.id,
-      status: "new",
-      by_user_id: auth.user.id
-    });
-    if (statusInsert.error) {
-      throw new Error(statusInsert.error.message);
-    }
-
-    await tryMatchAndApplyPricing(auth.admin, {
-      tenantId,
-      inboundEmailId: inboundInsert.data.id,
-      serviceId: serviceInsert.data.id,
-      senderEmail: input.senderEmail,
-      sourceText: buildPricingSourceText([input.subject, input.bodyText ?? "", parsed.extractedText], parsed.normalized),
-      serviceType: "transfer",
-      direction: "arrival",
-      date: parsed.normalized.arrival_date,
-      time: parsed.normalized.outbound_time ?? "00:00",
-      pax: parsed.normalized.passengers,
-      bookingKind: parsed.normalized.booking_kind,
-      serviceVariant: parsed.normalized.service_variant
-    });
-
-    auditLog({
-      event: "pdf_import_confirmed",
-      tenantId,
-      userId: auth.user.id ?? null,
-      role: auth.membership.role,
-      serviceId: serviceInsert.data.id,
-      inboundEmailId: inboundInsert.data.id,
-      outcome: "imported",
-      parserKey: parsed.normalized.parser_key,
-      parsingQuality: parsed.normalized.parsing_quality,
-      details: { filename: input.filename, auto_confirmed: true, parser_mode: parsed.preview.parser.mode }
-    });
-
-    return {
-      ok: true,
-      outcome: "imported",
-      inbound_email_id: inboundInsert.data.id,
-      final_service_id: serviceInsert.data.id,
-      preview: parsed.preview,
-      normalized: parsed.normalized
-    };
-  }
-
   auditLog({
     event: "pdf_import_draft_created",
     tenantId,
@@ -1063,9 +1019,14 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
     outcome: "draft",
     parserKey: parsed.normalized.parser_key,
     parsingQuality: parsed.normalized.parsing_quality,
-    details: { filename: input.filename, parser_mode: parsed.preview.parser.mode }
+    details: {
+      filename: input.filename,
+      parser_mode: parsed.preview.parser.mode,
+      review_recommended: reviewRecommended,
+      auto_confirm_disabled: true
+    }
   });
-  if (parsed.normalized.parsing_quality === "low") {
+  if (reviewRecommended) {
     auditLog({
       event: "pdf_import_low_quality_warning",
       level: "warn",
@@ -1076,7 +1037,7 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
       inboundEmailId: inboundInsert.data.id,
       parserKey: parsed.normalized.parser_key,
       parsingQuality: parsed.normalized.parsing_quality,
-      details: { filename: input.filename }
+      details: { filename: input.filename, review_recommended: true }
     });
   }
 
