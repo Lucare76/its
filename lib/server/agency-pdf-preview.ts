@@ -217,6 +217,19 @@ function deriveBillingPartyName(
   headerText: string | null | undefined,
   agencyName: string | null
 ) {
+  const explicitAgencyHints = [
+    extractedText.match(/\b(Aleste Viaggi)\b/i)?.[1],
+    headerText?.match(/\b(Aleste Viaggi)\b/i)?.[1],
+    extractedText.match(/\b(Sosandra Tour(?:\s+By)?\s+Rossella Viaggi(?:\s+S\.r\.l\.)?)\b/i)?.[1],
+    extractedText.match(/\b(Zigolo Viaggi|Zigoloviaggi)\b/i)?.[1],
+    extractedText.match(/\b(Angelino Tour Operator|Angelino Tour)\b/i)?.[1]
+  ];
+
+  for (const candidate of explicitAgencyHints) {
+    const canonical = canonicalAgencyNameFromText(candidate);
+    if (canonical) return canonical;
+  }
+
   if (selection.parserKey === "agency_rossella_sosandra") {
     return agencyName ?? "Sosandra Tour By Rossella Viaggi";
   }
