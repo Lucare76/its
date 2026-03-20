@@ -27,6 +27,16 @@ type ExtractedTrainJourney = {
   destinationTime: string | null;
 };
 
+type ExtractedBusJourney = {
+  serviceDate: string | null;
+  serviceTime: string | null;
+  meetingPoint: string | null;
+  origin: string | null;
+  destination: string | null;
+  rawDetailText: string;
+  direction: "andata" | "ritorno";
+};
+
 const CUSTOMER_STOPWORDS = ["PACCHETTO", "TRANSFER", "SERVIZIO", "PROGRAMMA", "STAFF", "CLIENTE", "ISCHIA"];
 
 function clean(value?: string | null) {
@@ -76,6 +86,16 @@ function parseItalianDate(raw?: string | null) {
   return month ? `${year}-${month}-${day}` : null;
 }
 
+function parseItalianShortDate(raw?: string | null, fallbackYear?: string | null) {
+  if (!raw || !fallbackYear) return null;
+  const match = raw.match(/([0-3]?\d)-(gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)\b/i);
+  if (!match) return null;
+  const day = match[1].padStart(2, "0");
+  const month = IT_MONTHS[match[2].toLowerCase()];
+  if (!month) return null;
+  return `${fallbackYear}-${month}-${day}`;
+}
+
 function normalizeTime(raw?: string | null) {
   const match = String(raw ?? "").match(/([01]?\d|2[0-3])[:.]([0-5]\d)/);
   if (!match) return null;
@@ -90,6 +110,23 @@ function normalizeStationName(value?: string | null) {
 }
 
 function extractHotel(sourceText: string) {
+  const fromDescription = clean(
+    sourceText.match(
+      /DESCRIZIONE\s*(?:AV\s+)?([A-Z][A-Z &'./-]+?(?:HOTEL(?:\s*&\s*THERMAL\s*SPA)?|THERMAL SPA|SPA))(?=\s*(?:ns\s*ri?\s*ferimento|IMPORTO|NS\s+REFERENTE|DAL\b|[0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)|$))/i
+    )?.[1]
+  );
+  if (fromDescription) return fromDescription;
+
+  const fromCompactDescription = clean(
+    sourceText.match(/\bAV\s+([A-Z][A-Z &'./-]+?(?:HOTEL(?:\s*&\s*THERMAL\s*SPA)?|THERMAL SPA|SPA))(?=\s*[0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)|$)/i)?.[1]
+  );
+  if (fromCompactDescription) return fromCompactDescription;
+
+  const fromProgramRow = clean(
+    sourceText.match(/PROGRAMMA(?:DESCRIZIONE)?(?:DALAL)?\s*[A-Z0-9/]+\s*(?:AV\s+)?([A-Z][A-Z &'./-]+?(?:HOTEL(?:\s*&\s*THERMAL\s*SPA)?|THERMAL SPA|SPA))(?=\s*[0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)|$)/i)?.[1]
+  );
+  if (fromProgramRow) return fromProgramRow;
+
   const fromDestination = clean(
     sourceText.match(/dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Cliente:|\s+Cellulare|\s+Cell\.|\n|\r|$)/i)?.[1]
   );
@@ -100,7 +137,7 @@ function extractHotel(sourceText: string) {
     clean(sourceText.match(/PROGRAMMA.*?([A-Z][A-Z &'./-]+SPA)/i)?.[1]);
 
   if (!fromProgram) return null;
-  return clean(fromProgram.replace(/\bHOTEL.*$/i, "").trim()) ?? fromProgram;
+  return fromProgram;
 }
 
 function extractCustomerPhone(sourceText: string) {
@@ -174,6 +211,42 @@ function extractTrainJourney(sourceText: string, rowNumber: "1" | "2") {
   return extractTrainJourneyFromOperationalBlock(sourceText, rowNumber) ?? extractTrainJourneyFromSchedule(sourceText, rowNumber);
 }
 
+function extractAlesteBusJourney(sourceText: string, direction: "andata" | "ritorno", fallbackYear?: string | null): ExtractedBusJourney | null {
+  const compact = sourceText.replace(/\s+/g, " ").trim();
+
+  if (direction === "andata") {
+    const outwardMatch = compact.match(
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+BUS\s+DA\s+BOLOGNA\s+PARTENZA\s+ORE\s*([0-2]?\d[:.]\d{2})[\s\S]{0,240}?Meeting point:\s*(.+?)\s+da:\s*BOLOGNA\s+a:\s*CELL\.?\s+dest:\s*HOTEL(?=\s+Cliente:|\s+Cellulare|\s+L['’]ORARIO|\s+Il\s*[0-3]?\d-|$)/i
+    );
+    if (!outwardMatch) return null;
+
+    return {
+      serviceDate: parseItalianDate(outwardMatch[1]) ?? parseItalianShortDate(outwardMatch[1], fallbackYear),
+      serviceTime: normalizeTime(outwardMatch[2]),
+      meetingPoint: clean(outwardMatch[3]),
+      origin: "BOLOGNA",
+      destination: "HOTEL ISCHIA",
+      rawDetailText: clean(outwardMatch[0]) ?? "",
+      direction
+    };
+  }
+
+  const returnMatch = compact.match(
+    /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+BUS\s+DA\s+HOTEL\s+ISCHIA\s+PICK-UP\s+ORE\s*([0-2]?\d[:.]\d{1,2})[\s\S]{0,240}?Meeting point:\s*DA HOTEL ISCHIA(?:\s+M\.p\.\s*:\s*TRAGHETTO\s*[0-2]?\d[:.]\d{2})?\s+da:\s*HOTEL\s+a:\s*PORTO\s+dest:\s*(.+?)(?=\s+L['’]ORARIO|\s+La caparra|\s+Cliente:|$)/i
+  );
+  if (!returnMatch) return null;
+
+  return {
+    serviceDate: parseItalianDate(returnMatch[1]) ?? parseItalianShortDate(returnMatch[1], fallbackYear),
+    serviceTime: normalizeTime(returnMatch[2]),
+    meetingPoint: "DA HOTEL ISCHIA",
+    origin: "HOTEL ISCHIA",
+    destination: clean(returnMatch[3]),
+    rawDetailText: clean(returnMatch[0]) ?? "",
+    direction
+  };
+}
+
 function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload {
   const parsed = parseTransferBookingPdfText(sourceText);
   const compact = sourceText.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim();
@@ -193,6 +266,13 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
   const customerPhone = extractCustomerPhone(sourceText);
   const arrivalTrain = extractTrainJourney(sourceText, "1");
   const departureTrain = extractTrainJourney(sourceText, "2");
+  const fallbackYear =
+    parsed.practice_date?.slice(0, 4) ??
+    parseItalianDate(practiceHead[2])?.slice(0, 4) ??
+    parseItalianDate(sourceText.match(/\bData\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})/i)?.[1] ?? null)?.slice(0, 4) ??
+    null;
+  const outwardBus = extractAlesteBusJourney(sourceText, "andata", fallbackYear);
+  const returnBus = extractAlesteBusJourney(sourceText, "ritorno", fallbackYear);
   const hasBusLineService =
     /\b(?:linea\s+\d+|bus\s+line|bus da |pullman|servizio bus|corriera|autobus)\b/i.test(sourceText) ||
     /\bBUS\b/i.test(parsed.program ?? "") ||
@@ -265,6 +345,52 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     }
   }
 
+  if (hasBusLineService && hotel) {
+    if (outwardBus) {
+      parsedServices.push({
+        practice_number: parsed.practice_number,
+        beneficiary: exactBeneficiary ?? parsed.first_beneficiary,
+        pax: exactPax ?? parsed.pax,
+        service_type: "transfer",
+        direction: "andata",
+        service_date: outwardBus.serviceDate,
+        service_time: outwardBus.serviceTime,
+        pickup_meeting_point: outwardBus.meetingPoint,
+        origin: outwardBus.origin,
+        destination: hotel,
+        carrier_company: "BUS",
+        hotel_structure: hotel,
+        original_row_description: "BUS DA CITTA / HOTEL",
+        raw_detail_text: outwardBus.rawDetailText,
+        parsing_status: "parsed",
+        confidence_level: "high",
+        semantic_tag: "transfer_arrival"
+      });
+    }
+
+    if (returnBus) {
+      parsedServices.push({
+        practice_number: parsed.practice_number,
+        beneficiary: exactBeneficiary ?? parsed.first_beneficiary,
+        pax: exactPax ?? parsed.pax,
+        service_type: "transfer",
+        direction: "ritorno",
+        service_date: returnBus.serviceDate,
+        service_time: returnBus.serviceTime,
+        pickup_meeting_point: hotel,
+        origin: hotel,
+        destination: returnBus.destination,
+        carrier_company: "BUS",
+        hotel_structure: hotel,
+        original_row_description: "BUS HOTEL / CITTA",
+        raw_detail_text: returnBus.rawDetailText,
+        parsing_status: "parsed",
+        confidence_level: "high",
+        semantic_tag: "transfer_departure"
+      });
+    }
+  }
+
   return {
     ...parsed,
     first_beneficiary: exactBeneficiary ?? parsed.first_beneficiary,
@@ -276,6 +402,8 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     pax: exactPax ?? parsed.pax,
     booking_kind: hasBusLineService ? "bus_city_hotel" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_train_hotel",
     service_type_code: hasBusLineService ? "bus_line" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_station_hotel",
+    date_from: (outwardBus?.serviceDate ?? parsed.date_from) || null,
+    date_to: (returnBus?.serviceDate ?? parsed.date_to) || null,
     train_arrival_number: arrivalTrain?.trainNumber ? `${arrivalTrain.carrierCompany ?? "ITALO"} ${arrivalTrain.trainNumber}` : null,
     train_arrival_time: arrivalTrain?.destinationTime ?? null,
     train_departure_number: departureTrain?.trainNumber ? `${departureTrain.carrierCompany ?? "ITALO"} ${departureTrain.trainNumber}` : null,
