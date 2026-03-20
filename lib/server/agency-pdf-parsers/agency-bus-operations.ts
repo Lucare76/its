@@ -239,17 +239,17 @@ export const agencyBusOperationsPdfParser: AgencyPdfParserImplementation = {
   mode: "dedicated",
   label: "Bus Operations List",
   senderDomains: [],
-  subjectHints: ["conferme annullamenti servizi", "bus"],
-  contentHints: ["elenco richieste conferme annullamenti servizi", "bus ischia", "foligno stazione fs"],
-  agencyNameHints: ["ischia transfer service"],
-  voucherHints: ["pratica", "ref.", "conf extra", "bus"],
+  subjectHints: ["conferme annullamenti servizi", "bus da", "bus ischia"],
+  contentHints: ["001bus da", "001bus ischia", "foligno stazione fs", "linea umbria"],
+  agencyNameHints: [],
+  voucherHints: ["001bus da", "001bus ischia", "foligno stazione fs"],
   parse: parseBusOperationsPdfText,
   match: (input) =>
     buildParserMatch(input, {
       senderDomains: [],
-      subjectHints: ["conferme annullamenti servizi", "bus"],
-      contentHints: ["elenco richieste conferme annullamenti servizi", "bus ischia", "foligno stazione fs"],
-      agencyNameHints: ["ischia transfer service"],
-      voucherHints: ["pratica", "ref.", "conf extra", "bus"]
+      subjectHints: ["conferme annullamenti servizi", "bus da", "bus ischia"],
+      contentHints: ["001bus da", "001bus ischia", "foligno stazione fs", "linea umbria"],
+      agencyNameHints: [],
+      voucherHints: ["001bus da", "001bus ischia", "foligno stazione fs"]
     })
 };

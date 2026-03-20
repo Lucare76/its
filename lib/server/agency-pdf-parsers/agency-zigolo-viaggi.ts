@@ -47,6 +47,8 @@ function normalizeZigoloText(sourceText: string) {
     .replace(/alal/gi, "al")
     .replace(/benefici ari/gi, "beneficiari")
     .replace(/trattamento e note/gi, "trattamento e note")
+    .replace(/numservizio/gi, "num servizio")
+    .replace(/datal/gi, "data ")
     .trim();
 }
 
@@ -59,14 +61,17 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
   const reference = clean(compact.match(/pratica\s*\d{2}\/\d{6}\s*ref\.\s*([^\n]+)/i)?.[1]);
   const bookingState = clean(compact.match(/stato prenotazione\s*([^\n]+)/i)?.[1]);
   const serviceDescription =
+    clean(compact.match(/\b\d{3}\s*(TOUR DELL'ISOLA IN BUS)\b/i)?.[1]) ??
     clean(compact.match(/\b\d{3}\s+([A-Z' ]+?)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\s+trattamento e note/i)?.[1]) ??
     clean(compact.match(/\bdescrizione\s+([A-Z' ]+?)\s+importo\b/i)?.[1]);
   const beneficiary =
+    clean(compact.match(/TOUR DELL'ISOLA IN BUS\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*(?:dal|datal|tasse|pax|totale)/i)?.[1]) ??
     clean(compact.match(/beneficiari\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s+trattamento e note/i)?.[1]) ??
     clean(compact.match(/\b\d{3}\s+[A-Z' ]+\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s+trattamento e note/i)?.[1]);
   const fromDate = parseItalianDate(compact.match(/\bdal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
   const toDate = parseItalianDate(compact.match(/\bal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
-  const pax = Number(compact.match(/\bpax\s+(\d{1,2})/i)?.[1] ?? 0) || null;
+  const pax =
+    Number(compact.match(/\bpax\s*(\d{1,2})/i)?.[1] ?? compact.match(/(\d{1,2})\(\d+\)\s*\d+[.,]\d{2}/i)?.[1] ?? 0) || null;
   const totalAmount =
     parseEuroAmount(compact.match(/\btotale\s+eur\s+(\d+[.,]\d{2})/i)?.[1]) ??
     parseEuroAmount(compact.match(/\btotale\s+(\d+[.,]\d{2})/i)?.[1]);
