@@ -29,6 +29,16 @@ function cleanBeneficiary(value?: string | null) {
   return clean(stopAt > 0 ? normalized.slice(0, stopAt) : normalized);
 }
 
+function normalizeCustomerName(value?: string | null) {
+  const normalized = cleanBeneficiary(value);
+  if (!normalized) return null;
+  return clean(
+    normalized
+      .replace(/\d{1,2}-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4}$/i, "")
+      .replace(/\d+$/g, "")
+  );
+}
+
 function parseItalianDate(raw?: string | null) {
   const match = String(raw ?? "").match(/([0-3]?\d)-\s*(gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*(\d{2,4})/i);
   if (!match) return null;
@@ -51,6 +61,48 @@ function parseAllEuroAmounts(raw?: string | null) {
     .filter((value) => Number.isFinite(value));
 }
 
+function parseTsfBlocks(compact: string, practiceNumber: string | null) {
+  const blocks = Array.from(
+    compact.matchAll(
+      /stato prenotazione\s*conf extra\s*data prenotazione:\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})\s*dal\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})\s*num servizio beneficiari trattamento e note\s*001\s*(TSF PER HOTEL (?:ANDATA|RITORNO))\s*([A-ZÀ-ÖØ-Ý' ]+?)\s*(?:\d{1,2}-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})?\s*dal al descrizione importo tasse(?:pax)? totale\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))\s*TSF PER HOTEL (ANDATA|RITORNO)\s*(\d+[.,]\d{2})(?:\s*(\d{1,2})\(\d+\)|\((\d+)\))?\s*(\d+[.,]\d{2})/gi
+    )
+  ).map((match) => {
+    const passengerCount = Number(match[8] ?? match[9] ?? 0) || null;
+    const direction: "andata" | "ritorno" = /RITORNO/i.test(match[6] ?? match[3]) ? "ritorno" : "andata";
+    return {
+      bookingDate: parseItalianDate(match[1]),
+      serviceDate: parseItalianDate(match[2]),
+      description: clean(match[3]),
+      beneficiary: normalizeCustomerName(match[4]),
+      direction,
+      lineAmount: parseEuroAmount(match[7]),
+      pax: passengerCount,
+      totalAmount: parseEuroAmount(match[10]),
+      service: {
+        practice_number: practiceNumber,
+        beneficiary: normalizeCustomerName(match[4]),
+        pax: passengerCount,
+        service_type: "transfer" as const,
+        direction,
+        service_date: parseItalianDate(match[2]),
+        service_time: null,
+        pickup_meeting_point: null,
+        origin: direction === "andata" ? "PORTO" : "HOTEL ISCHIA",
+        destination: direction === "andata" ? "HOTEL ISCHIA" : "PORTO",
+        carrier_company: null,
+        hotel_structure: null,
+        original_row_description: clean(match[3]),
+        raw_detail_text: [clean(match[3]), normalizeCustomerName(match[4]), parseItalianDate(match[2])].filter(Boolean).join(" | "),
+        parsing_status: "parsed" as const,
+        confidence_level: "medium" as const,
+        semantic_tag: direction === "andata" ? ("transfer_arrival" as const) : ("transfer_departure" as const)
+      }
+    };
+  });
+
+  return blocks;
+}
+
 function normalizeZigoloText(sourceText: string) {
   return sourceText
     .replace(/\r/g, "\n")
@@ -68,24 +120,34 @@ function normalizeZigoloText(sourceText: string) {
 
 function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload {
   const compact = normalizeZigoloText(sourceText);
+  const tsfBlocks = parseTsfBlocks(compact, null);
 
   const practiceNumber = clean(compact.match(/pratica\s*(\d{2}\/\d{6})/i)?.[1]);
-  const practiceDate = parseItalianDate(compact.match(/\bdata\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
-  const bookingDate = parseItalianDate(compact.match(/data prenotazione\s*:\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
+  const practiceDate =
+    parseItalianDate(compact.match(/\bdata\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]) ??
+    parseItalianDate(compact.match(/servizi\s*n\.\s*\d+\s*data\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
+  const bookingDate = tsfBlocks[0]?.bookingDate ?? parseItalianDate(compact.match(/data prenotazione\s*:\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
   const reference = clean(compact.match(/pratica\s*\d{2}\/\d{6}\s*ref\.\s*([^\n]+)/i)?.[1]);
   const bookingState = clean(compact.match(/stato prenotazione\s*([^\n]+)/i)?.[1]);
+  const hasTsfTransfer = /TSF PER HOTEL (?:ANDATA|RITORNO)/i.test(compact);
   const serviceDescription =
     clean(compact.match(/\b\d{3}\s*(TOUR DELL'ISOLA IN BUS)\b/i)?.[1]) ??
     clean(compact.match(/\b\d{3}\s+([A-Z' ]+?)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\s+trattamento e note/i)?.[1]) ??
     clean(compact.match(/\bdescrizione\s+([A-Z' ]+?)\s+importo\b/i)?.[1]);
   const beneficiary =
+    tsfBlocks[0]?.beneficiary ??
+    normalizeCustomerName(compact.match(/TSF PER HOTEL (?:ANDATA|RITORNO)\s*([A-ZÀ-ÖØ-Ý' ]+?)\s*\d{1,2}-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4}/i)?.[1]) ??
     cleanBeneficiary(compact.match(/TOUR DELL'ISOLA IN BUS\s*([^\n]+)/i)?.[1]) ??
     cleanBeneficiary(compact.match(/beneficiari\s+([^\n]+?)(?:trattamento e note|dal|descrizione|importo|tasse|pax|totale|$)/i)?.[1]) ??
     cleanBeneficiary(compact.match(/\b\d{3}\s+[A-Z' ]+\s+([^\n]+?)(?:trattamento e note|dal|descrizione|importo|tasse|pax|totale|$)/i)?.[1]);
-  const fromDate = parseItalianDate(compact.match(/\bdal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
-  const toDate = parseItalianDate(compact.match(/\bal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
+  const fromDate = tsfBlocks.find((item) => item.direction === "andata")?.serviceDate ?? parseItalianDate(compact.match(/\bdal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
+  const toDate =
+    tsfBlocks.find((item) => item.direction === "ritorno")?.serviceDate ??
+    parseItalianDate(compact.match(/\bal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]) ??
+    fromDate;
   const pax =
-    Number(compact.match(/\bpax\s*(\d{1,2})/i)?.[1] ?? compact.match(/(\d{1,2})\(\d+\)\s*\d+[.,]\d{2}/i)?.[1] ?? 0) || null;
+    tsfBlocks.map((item) => item.pax).find((value): value is number => Boolean(value)) ??
+    (Number(compact.match(/\bpax\s*(\d{1,2})/i)?.[1] ?? compact.match(/(?:\s|^)(\d{1,2})\(\d+\)\s*\d+[.,]\d{2}/i)?.[1] ?? 0) || null);
   const totalAmountCandidates = [
     parseEuroAmount(compact.match(/\btotale\s*eur\s*(\d+[.,]\d{2})/i)?.[1]),
     parseEuroAmount(compact.match(/\btotaleeur\s*(\d+[.,]\d{2})/i)?.[1]),
@@ -119,7 +181,9 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
         }
       : null;
 
-  const parsedServices = excursionService ? [excursionService] : [];
+  const parsedServices = hasTsfTransfer ? tsfBlocks.map((item) => item.service) : excursionService ? [excursionService] : [];
+  const bookingKind = hasTsfTransfer ? "transfer_port_hotel" : "excursion";
+  const serviceTypeCode = hasTsfTransfer ? "transfer_port_hotel" : "excursion";
 
   return {
     practice_number: practiceNumber,
@@ -132,14 +196,14 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     program: serviceDescription,
     package_description: "ELENCO RICHIESTE CONFERME ANNULLAMENTI SERVIZI",
     date_from: fromDate,
-    date_to: toDate ?? fromDate,
+    date_to: toDate,
     total_amount_practice: totalAmount,
-    booking_kind: "excursion",
-    service_type_code: "excursion",
+    booking_kind: bookingKind,
+    service_type_code: serviceTypeCode,
     service_rows: parsedServices.map((service) => ({
       row_text: service.original_row_description ?? service.raw_detail_text,
-      semantic_tag: "excursion",
-      direction: service.direction
+      semantic_tag: hasTsfTransfer ? service.semantic_tag : "excursion",
+      direction: service.direction as "andata" | "ritorno"
     })),
     operational_details: parsedServices.map((service) => ({
       service_date: service.service_date,
@@ -152,8 +216,8 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
       raw_detail_text: service.raw_detail_text
     })),
     parsed_services: parsedServices,
-    parsing_status: practiceNumber && beneficiary && serviceDescription && fromDate ? "parsed" : "needs_review",
-    confidence_level: practiceNumber && beneficiary && serviceDescription && totalAmount !== null ? "medium" : "low",
+    parsing_status: practiceNumber && beneficiary && fromDate ? "parsed" : "needs_review",
+    confidence_level: practiceNumber && beneficiary && totalAmount !== null ? "medium" : "low",
     anomaly_message:
       bookingState || bookingDate
         ? `Zigolo Viaggi: verifica stato/prenotazione prima della conferma. ${parserNotes}`.trim()
