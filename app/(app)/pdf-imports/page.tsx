@@ -271,6 +271,14 @@ function parserLabel(value?: string | null) {
   }
 }
 
+function displayConfirmedField(selected: PdfImportRow, normalizedKey: string, fallback: string | null | undefined) {
+  const normalizedValue = text(selected.effective_normalized[normalizedKey]) || null;
+  if (selected.status === "confirmed") {
+    return fallback ?? normalizedValue;
+  }
+  return normalizedValue ?? fallback ?? null;
+}
+
 function isOcrHeavyCase(row: PdfImportRow | null) {
   if (!row) return false;
   if (row.parser_key === "agency_dimhotels_voucher") return true;
@@ -931,11 +939,15 @@ export default function PdfImportsPage() {
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                     <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Data servizio</p>
-                    <p className="mt-1 font-medium text-slate-800">{formatIsoDateShort(text(selected.effective_normalized.arrival_date) || selected.arrival_date)}</p>
+                    <p className="mt-1 font-medium text-slate-800">
+                      {formatIsoDateShort(displayConfirmedField(selected, "arrival_date", selected.arrival_date))}
+                    </p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                     <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Destinazione</p>
-                    <p className="mt-1 font-medium text-slate-800">{text(selected.effective_normalized.hotel_or_destination) || selected.hotel_or_destination || "N/D"}</p>
+                    <p className="mt-1 font-medium text-slate-800">
+                      {displayConfirmedField(selected, "hotel_or_destination", selected.hotel_or_destination) || "N/D"}
+                    </p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                     <p className="text-xs uppercase tracking-[0.06em] text-slate-500">{getOutwardTimeLabel(reviewContext(reviewForm))}</p>

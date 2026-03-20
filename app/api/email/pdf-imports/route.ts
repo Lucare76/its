@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
     const pdfInboundRows = ((inboundRows ?? []) as Array<Record<string, any>>).filter((row) => Boolean(row.parsed_json?.pdf_import));
     const { data: serviceRows } = await auth.admin
       .from("services")
-      .select("id, inbound_email_id, is_draft, status, customer_name, date, time, notes, created_at")
+      .select("id, inbound_email_id, is_draft, status, customer_name, billing_party_name, phone, date, time, notes, created_at, hotels(name)")
       .eq("tenant_id", auth.membership.tenant_id)
       .order("created_at", { ascending: false })
       .limit(500);
