@@ -184,19 +184,25 @@ function deriveAgencyName(
   if (fromParser && selection.parserKey !== "agency_bus_operations") return fromParser;
 
   const explicitTextCandidates = [
-    headerText,
+    extractedText.match(/\b(Aleste Viaggi)\b/i)?.[1],
+    headerText?.match(/\b(Aleste Viaggi)\b/i)?.[1],
+    extractedText.match(/\b(Sosandra Tour(?:\s+By)?\s+Rossella Viaggi(?:\s+S\.r\.l\.)?)\b/i)?.[1],
+    extractedText.match(/\b(Rossella Viaggi(?:\s+S\.r\.l\.)?)\b/i)?.[1],
+    extractedText.match(/\b(Dimhotels)\b/i)?.[1],
+    extractedText.match(/\b(Holiday Sud Italia|Hollday Sud Italia)\b/i)?.[1],
+    extractedText.match(/\b(Zigolo Viaggi|Zigoloviaggi)\b/i)?.[1],
+    extractedText.match(/\b(Angelino Tour Operator|Angelino Tour)\b/i)?.[1],
     extractedText.match(/Ufficio Booking\s*-\s*([^\n\r]+)/i)?.[1],
     extractedText.match(/(?:Agenzia|Agency)\s*[:.-]?\s*([^\n\r]+)/i)?.[1],
     subject.match(/(?:Agenzia|Agency)\s*[:.-]?\s*([^\n\r]+)/i)?.[1],
-    extractedText.match(/\b(Sosandra Tour(?:\s+By)?\s+Rossella Viaggi(?:\s+S\.r\.l\.)?)\b/i)?.[1],
-    extractedText.match(/\b(Rossella Viaggi(?:\s+S\.r\.l\.)?)\b/i)?.[1],
-    extractedText.match(/\b(Aleste Viaggi)\b/i)?.[1],
-    extractedText.match(/\b(Dimhotels)\b/i)?.[1],
+    headerText,
     extractedText.match(/\b(ISCHIA TRANSFER SERVICE(?:\s+S\.r\.l\.)?)\b/i)?.[1]
   ];
 
   for (const candidate of explicitTextCandidates) {
     const canonical = canonicalAgencyNameFromText(candidate);
+    if (!canonical) continue;
+    if (canonical === "Ischia Transfer Service" && selection.parserKey !== "agency_bus_operations") continue;
     if (canonical) return canonical;
   }
 
