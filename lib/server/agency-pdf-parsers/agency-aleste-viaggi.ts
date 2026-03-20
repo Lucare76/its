@@ -193,6 +193,10 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
   const customerPhone = extractCustomerPhone(sourceText);
   const arrivalTrain = extractTrainJourney(sourceText, "1");
   const departureTrain = extractTrainJourney(sourceText, "2");
+  const hasBusLineService =
+    /\b(?:linea\s+\d+|bus\s+line|bus da |pullman|servizio bus|corriera|autobus)\b/i.test(sourceText) ||
+    /\bBUS\b/i.test(parsed.program ?? "") ||
+    /\bBUS\b/i.test(parsed.package_description ?? "");
   const hasMarineAutoTransfer =
     /AUTO\s*ISCHIA\s*\/\s*HOTEL|AUTO\s*HOTEL\s*\/\s*ISCHIA|ALISCAFO\s+DA\s+NAPOLI|ALISCAFO\s+PER\s+NAPOLI|CON\s+SNAV/i.test(sourceText);
 
@@ -270,7 +274,8 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     ns_reference: exactReference ?? parsed.ns_reference,
     ns_contact: customerPhone ?? parsed.ns_contact,
     pax: exactPax ?? parsed.pax,
-    service_type_code: hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_station_hotel",
+    booking_kind: hasBusLineService ? "bus_city_hotel" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_train_hotel",
+    service_type_code: hasBusLineService ? "bus_line" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_station_hotel",
     train_arrival_number: arrivalTrain?.trainNumber ? `${arrivalTrain.carrierCompany ?? "ITALO"} ${arrivalTrain.trainNumber}` : null,
     train_arrival_time: arrivalTrain?.destinationTime ?? null,
     train_departure_number: departureTrain?.trainNumber ? `${departureTrain.carrierCompany ?? "ITALO"} ${departureTrain.trainNumber}` : null,
