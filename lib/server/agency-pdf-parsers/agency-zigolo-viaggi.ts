@@ -45,6 +45,12 @@ function parseEuroAmount(raw?: string | null) {
   return Number.isFinite(value) ? value : null;
 }
 
+function parseAllEuroAmounts(raw?: string | null) {
+  return Array.from(String(raw ?? "").matchAll(/(\d+(?:[.,]\d{2}))/g))
+    .map((match) => Number(match[1].replace(/\./g, "").replace(",", ".")))
+    .filter((value) => Number.isFinite(value));
+}
+
 function normalizeZigoloText(sourceText: string) {
   return sourceText
     .replace(/\r/g, "\n")
@@ -52,6 +58,7 @@ function normalizeZigoloText(sourceText: string) {
     .replace(/\n{2,}/g, "\n")
     .replace(/daldal/gi, "dal")
     .replace(/alal/gi, "al")
+    .replace(/data(?=\d)/gi, "data ")
     .replace(/benefici ari/gi, "beneficiari")
     .replace(/trattamento e note/gi, "trattamento e note")
     .replace(/numservizio/gi, "num servizio")
@@ -79,9 +86,13 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
   const toDate = parseItalianDate(compact.match(/\bal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
   const pax =
     Number(compact.match(/\bpax\s*(\d{1,2})/i)?.[1] ?? compact.match(/(\d{1,2})\(\d+\)\s*\d+[.,]\d{2}/i)?.[1] ?? 0) || null;
-  const totalAmount =
-    parseEuroAmount(compact.match(/\btotale\s+eur\s+(\d+[.,]\d{2})/i)?.[1]) ??
-    parseEuroAmount(compact.match(/\btotale\s+(\d+[.,]\d{2})/i)?.[1]);
+  const totalAmountCandidates = [
+    parseEuroAmount(compact.match(/\btotale\s*eur\s*(\d+[.,]\d{2})/i)?.[1]),
+    parseEuroAmount(compact.match(/\btotaleeur\s*(\d+[.,]\d{2})/i)?.[1]),
+    parseEuroAmount(compact.match(/\btotale\s*(\d+[.,]\d{2})/i)?.[1]),
+    ...parseAllEuroAmounts(compact)
+  ].filter((value): value is number => value !== null);
+  const totalAmount = totalAmountCandidates.length > 0 ? Math.max(...totalAmountCandidates) : null;
 
   const parserNotes = [bookingState, bookingDate ? `Data prenotazione ${bookingDate}` : null].filter(Boolean).join(" | ");
 
