@@ -22,6 +22,13 @@ function clean(value?: string | null) {
   return normalized.length > 0 ? normalized : null;
 }
 
+function cleanBeneficiary(value?: string | null) {
+  const normalized = clean(value);
+  if (!normalized) return null;
+  const stopAt = normalized.search(/\b(dal|descrizione|importo|tasse|pax|totale|data prenotazione|stato prenotazione)\b/i);
+  return clean(stopAt > 0 ? normalized.slice(0, stopAt) : normalized);
+}
+
 function parseItalianDate(raw?: string | null) {
   const match = String(raw ?? "").match(/([0-3]?\d)-\s*(gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*(\d{2,4})/i);
   if (!match) return null;
@@ -65,9 +72,9 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     clean(compact.match(/\b\d{3}\s+([A-Z' ]+?)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\s+trattamento e note/i)?.[1]) ??
     clean(compact.match(/\bdescrizione\s+([A-Z' ]+?)\s+importo\b/i)?.[1]);
   const beneficiary =
-    clean(compact.match(/TOUR DELL'ISOLA IN BUS\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*(?:dal|datal|tasse|pax|totale)/i)?.[1]) ??
-    clean(compact.match(/beneficiari\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s+trattamento e note/i)?.[1]) ??
-    clean(compact.match(/\b\d{3}\s+[A-Z' ]+\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s+trattamento e note/i)?.[1]);
+    cleanBeneficiary(compact.match(/TOUR DELL'ISOLA IN BUS\s*([^\n]+)/i)?.[1]) ??
+    cleanBeneficiary(compact.match(/beneficiari\s+([^\n]+?)(?:trattamento e note|dal|descrizione|importo|tasse|pax|totale|$)/i)?.[1]) ??
+    cleanBeneficiary(compact.match(/\b\d{3}\s+[A-Z' ]+\s+([^\n]+?)(?:trattamento e note|dal|descrizione|importo|tasse|pax|totale|$)/i)?.[1]);
   const fromDate = parseItalianDate(compact.match(/\bdal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
   const toDate = parseItalianDate(compact.match(/\bal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
   const pax =
