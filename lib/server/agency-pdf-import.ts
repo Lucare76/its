@@ -159,6 +159,24 @@ function normalizeOptionalDate(value?: string | null) {
   return isIsoDate(value) ? String(value) : null;
 }
 
+function shouldRunHeaderOcr(extractedText: string) {
+  const normalized = clean(extractedText);
+  if (!normalized) return true;
+
+  const lower = normalized.toLowerCase();
+  const hasCoreBusinessSignals =
+    /pratica\s*\d{2}\/\d{6}/i.test(normalized) ||
+    /\b(?:totale|beneficiari|stato prenotazione|ref\.)\b/i.test(normalized) ||
+    /\b(?:transfer|tsf per hotel|tour dell'isola|snav|medmar|alilauro)\b/i.test(normalized);
+  const looksLikeImageOnlyForm =
+    /nome:\s*cognome:\s*data di arrivo ad ischia:/i.test(lower) ||
+    /hotel di destinazione:\s*scegli l['’]orario di partenza/i.test(lower);
+
+  if (looksLikeImageOnlyForm) return true;
+  if (hasCoreBusinessSignals && normalized.length >= 180) return false;
+  return normalized.length < 180;
+}
+
 function eurosToCents(value?: number | null) {
   if (value === null || value === undefined || !Number.isFinite(value)) return null;
   return Math.round(value * 100);
@@ -756,7 +774,7 @@ export async function parseAgencyPdfUpload(input: {
 }): Promise<ParsedUpload> {
   const base64 = input.fileBytes.toString("base64");
   const extractedText = await extractPdfTextFromBase64(base64);
-  const headerText = await extractPdfHeaderTextFromBase64(base64);
+  const headerText = shouldRunHeaderOcr(extractedText) ? await extractPdfHeaderTextFromBase64(base64) : null;
   const preview = buildAgencyPdfPreview({
     senderEmail: input.senderEmail,
     subject: input.subject,
