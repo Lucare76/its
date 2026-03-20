@@ -615,13 +615,13 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
     extractTransportReference(departureService?.raw_detail_text ?? departureService?.original_row_description ?? null);
   const operationalOutwardTime =
     (transportMode === "bus" ? clean(arrivalService?.service_time ?? null) : null) ??
+    (isTrainMode(transportMode) ? clean(transferParsed.train_arrival_time ?? null) : null) ??
     extractOperationalTime(arrivalService?.raw_detail_text, "outward") ??
-    clean(transferParsed.train_arrival_time ?? null) ??
     clean(arrivalService?.service_time ?? (transportMode === "bus" ? null : inboundParsed.time) ?? null);
   const operationalReturnTime =
     (transportMode === "bus" ? clean(departureService?.service_time ?? null) : null) ??
+    (isTrainMode(transportMode) ? clean(transferParsed.train_departure_time ?? null) : null) ??
     extractOperationalTime(departureService?.raw_detail_text, "return") ??
-    clean(transferParsed.train_departure_time ?? null) ??
     clean(departureService?.service_time ?? (transportMode === "bus" ? null : inboundParsed.departure_time) ?? null);
   const sourceTotalAmount = transferParsed.total_amount_practice ?? null;
   const sourcePricePerPax =

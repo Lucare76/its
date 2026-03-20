@@ -146,7 +146,27 @@ function extractCustomerPhone(sourceText: string) {
   );
 }
 
-function extractTrainJourneyFromSchedule(sourceText: string, rowNumber: "1" | "2"): ExtractedTrainJourney | null {
+function extractTrainJourneyFromSchedule(sourceText: string, rowNumber: "1" | "2", fallbackYear?: string | null): ExtractedTrainJourney | null {
+  const compactSource = sourceText.replace(/\s+/g, " ").trim();
+  const compactMatch = compactSource.match(
+    new RegExp(
+      `${rowNumber}\\s+([A-ZÀ-ÖØ-Ý0-9.' ]+?)\\s*([0-2]?\\d:\\d{2})\\s*([0-3]?\\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\\d{2,4})?)\\s*ITALO(?:ITA)?\\s*(\\d{4})\\s*([A-ZÀ-ÖØ-Ý0-9.' ]+?)\\s*([0-2]?\\d:\\d{2})\\s*([0-3]?\\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\\d{2,4})?)`,
+      "i"
+    )
+  );
+
+  if (compactMatch) {
+    return {
+      originStation: clean(compactMatch[1]),
+      originTime: normalizeTime(compactMatch[2]),
+      serviceDate: parseItalianDate(compactMatch[3]) ?? parseItalianShortDate(compactMatch[3], fallbackYear),
+      carrierCompany: "ITALO",
+      trainNumber: clean(compactMatch[4]),
+      destinationStation: clean(compactMatch[5]),
+      destinationTime: normalizeTime(compactMatch[6])
+    };
+  }
+
   const lines = sourceText
     .replace(/\r/g, "\n")
     .split("\n")
@@ -171,7 +191,7 @@ function extractTrainJourneyFromSchedule(sourceText: string, rowNumber: "1" | "2
     return {
       originStation: clean(firstMatch[1]),
       originTime: normalizeTime(firstMatch[2]),
-      serviceDate: parseItalianDate(firstMatch[3]),
+      serviceDate: parseItalianDate(firstMatch[3]) ?? parseItalianShortDate(firstMatch[3], fallbackYear),
       carrierCompany: "ITALO",
       trainNumber: clean(firstMatch[4]),
       destinationStation: clean(secondMatch[1]),
@@ -207,8 +227,8 @@ function extractTrainJourneyFromOperationalBlock(sourceText: string, rowNumber: 
   };
 }
 
-function extractTrainJourney(sourceText: string, rowNumber: "1" | "2") {
-  return extractTrainJourneyFromOperationalBlock(sourceText, rowNumber) ?? extractTrainJourneyFromSchedule(sourceText, rowNumber);
+function extractTrainJourney(sourceText: string, rowNumber: "1" | "2", fallbackYear?: string | null) {
+  return extractTrainJourneyFromSchedule(sourceText, rowNumber, fallbackYear) ?? extractTrainJourneyFromOperationalBlock(sourceText, rowNumber);
 }
 
 function extractAlesteBusJourney(sourceText: string, direction: "andata" | "ritorno", fallbackYear?: string | null): ExtractedBusJourney | null {
@@ -264,13 +284,13 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
   const exactPax = practiceHead[5] ? Number(practiceHead[5]) : null;
   const hotel = extractHotel(sourceText);
   const customerPhone = extractCustomerPhone(sourceText);
-  const arrivalTrain = extractTrainJourney(sourceText, "1");
-  const departureTrain = extractTrainJourney(sourceText, "2");
   const fallbackYear =
     parsed.practice_date?.slice(0, 4) ??
     parseItalianDate(practiceHead[2])?.slice(0, 4) ??
     parseItalianDate(sourceText.match(/\bData\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})/i)?.[1] ?? null)?.slice(0, 4) ??
     null;
+  const arrivalTrain = extractTrainJourney(sourceText, "1", fallbackYear);
+  const departureTrain = extractTrainJourney(sourceText, "2", fallbackYear);
   const outwardBus = extractAlesteBusJourney(sourceText, "andata", fallbackYear);
   const returnBus = extractAlesteBusJourney(sourceText, "ritorno", fallbackYear);
   const hasBusLineService =
@@ -405,7 +425,7 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     date_from: (outwardBus?.serviceDate ?? parsed.date_from) || null,
     date_to: (returnBus?.serviceDate ?? parsed.date_to) || null,
     train_arrival_number: arrivalTrain?.trainNumber ? `${arrivalTrain.carrierCompany ?? "ITALO"} ${arrivalTrain.trainNumber}` : null,
-    train_arrival_time: arrivalTrain?.destinationTime ?? null,
+    train_arrival_time: arrivalTrain?.originTime ?? null,
     train_departure_number: departureTrain?.trainNumber ? `${departureTrain.carrierCompany ?? "ITALO"} ${departureTrain.trainNumber}` : null,
     train_departure_time: departureTrain?.originTime ?? null,
     parsed_services: parsedServices,
