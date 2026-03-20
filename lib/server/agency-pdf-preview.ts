@@ -223,19 +223,6 @@ function deriveBillingPartyName(
   headerText: string | null | undefined,
   agencyName: string | null
 ) {
-  const explicitAgencyHints = [
-    extractedText.match(/\b(Aleste Viaggi)\b/i)?.[1],
-    headerText?.match(/\b(Aleste Viaggi)\b/i)?.[1],
-    extractedText.match(/\b(Sosandra Tour(?:\s+By)?\s+Rossella Viaggi(?:\s+S\.r\.l\.)?)\b/i)?.[1],
-    extractedText.match(/\b(Zigolo Viaggi|Zigoloviaggi)\b/i)?.[1],
-    extractedText.match(/\b(Angelino Tour Operator|Angelino Tour)\b/i)?.[1]
-  ];
-
-  for (const candidate of explicitAgencyHints) {
-    const canonical = canonicalAgencyNameFromText(candidate);
-    if (canonical) return canonical;
-  }
-
   if (selection.parserKey === "agency_rossella_sosandra") {
     return agencyName ?? "Sosandra Tour By Rossella Viaggi";
   }
@@ -260,6 +247,19 @@ function deriveBillingPartyName(
     return "Zigolo Viaggi";
   }
 
+  const explicitAgencyHints = [
+    extractedText.match(/\b(Aleste Viaggi)\b/i)?.[1],
+    headerText?.match(/\b(Aleste Viaggi)\b/i)?.[1],
+    extractedText.match(/\b(Sosandra Tour(?:\s+By)?\s+Rossella Viaggi(?:\s+S\.r\.l\.)?)\b/i)?.[1],
+    extractedText.match(/\b(Zigolo Viaggi|Zigoloviaggi)\b/i)?.[1],
+    extractedText.match(/\b(Angelino Tour Operator|Angelino Tour)\b/i)?.[1]
+  ];
+
+  for (const candidate of explicitAgencyHints) {
+    const canonical = canonicalAgencyNameFromText(candidate);
+    if (canonical) return canonical;
+  }
+
   const explicitCandidates = [
     headerText,
     extractedText.match(/(?:Intestatario|Contraente|Agenzia|Agency)\s*[:.-]?\s*([^\n\r]+)/i)?.[1]
@@ -267,7 +267,12 @@ function deriveBillingPartyName(
 
   for (const candidate of explicitCandidates) {
     const normalized = clean(candidate);
-    if (normalized && !/ischia transfer service/i.test(normalized)) return normalized;
+    if (!normalized) continue;
+    if (/ischia transfer service/i.test(normalized)) continue;
+    if (normalized.length > 80) continue;
+    if (/[.!?]/.test(normalized)) continue;
+    if (/\b(pratica|pagamenti|inviarci|contabile|whatsapp)\b/i.test(normalized)) continue;
+    return normalized;
   }
 
   if (selection.parserKey === "agency_bus_operations") {
