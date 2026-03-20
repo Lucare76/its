@@ -7,6 +7,7 @@ import { agencyDimhotelsVoucherPdfParser } from "@/lib/server/agency-pdf-parsers
 import { agencyDefaultPdfParser } from "@/lib/server/agency-pdf-parsers/agency-default";
 import { agencyHolidaySudItaliaPdfParser } from "@/lib/server/agency-pdf-parsers/agency-holiday-sud-italia";
 import { agencyRossellaSosandraPdfParser } from "@/lib/server/agency-pdf-parsers/agency-rossella-sosandra";
+import { agencyZigoloViaggiPdfParser } from "@/lib/server/agency-pdf-parsers/agency-zigolo-viaggi";
 import type { AgencyPdfParserImplementation, AgencyPdfParserMode, AgencyPdfParserSelectionContext } from "@/lib/server/agency-pdf-parsers/types";
 import { buildParserMatch } from "@/lib/server/agency-pdf-parsers/utils";
 
@@ -61,6 +62,7 @@ const parserDefinitions: AgencyPdfParserImplementation[] = [
   agencyBusOperationsPdfParser,
   agencyDimhotelsVoucherPdfParser,
   agencyHolidaySudItaliaPdfParser,
+  agencyZigoloViaggiPdfParser,
   buildStubParser("agency_gattinoni_stub", "Gattinoni Stub", ["gattinoni.it"], ["gattinoni"], ["gattinoni"]),
   buildStubParser("agency_welcome_stub", "Welcome Stub", ["welcometravel.it"], ["welcome travel"], ["welcome travel"]),
   buildStubParser("agency_made_stub", "Made Stub", ["made.it"], ["made"], ["made"]),
