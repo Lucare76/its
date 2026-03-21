@@ -384,7 +384,7 @@ function extractAlesteMarineJourney(
 
   const returnMatch =
     compact.match(
-      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRS\s+H\.?\s*ISCHIA\s*\+\s*TRAGHETTO\s+POZZUOLI\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(HOTEL ISCHIA)\s+da:\s*HOTEL\s+a:\s*(PORTO PER POZZUOLI CON MEDMAR)\s+dest:\s*(PORTO DI POZZUOLI)/i
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRS\s+H\.?\s*ISCHIA\s*\+\s*TRAGHETTO\s+POZZUOLI\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*([A-Z][A-Z &'./-]+?)\s+da:\s*HOTEL\s+a:\s*(PORTO PER POZZUOLI CON MEDMAR)\s+dest:\s*(PORTO DI POZZUOLI)/i
     ) ??
     compact.match(
       /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRS\s+H\.?\s*ISCHIA\s*\+\s*AL\s*ISCAFO\s+PER\s+NAPOLI\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*([A-Z][A-Z &'./-]+?)\s+da:\s*(ISCHIA)\s+a:\s*(SNAV)\s+dest:\s*(PORTO\s+NAPOLI)/i
