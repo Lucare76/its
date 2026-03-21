@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { DragEvent } from "react";
+import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { buildOperationalInstances, type OperationalInstance } from "@/lib/operational-service-instances";
+import { formatIsoDateShort } from "@/lib/service-display";
 import { supabase } from "@/lib/supabase/client";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import type { Service, ServiceType } from "@/lib/types";
@@ -44,6 +46,22 @@ function addDays(date: Date, days: number) {
 
 function toIsoDate(date: Date) {
   return date.toISOString().slice(0, 10);
+}
+
+function addDaysToIso(dateIso: string, days: number) {
+  const date = new Date(`${dateIso}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function instanceBadge(direction: OperationalInstance["direction"]) {
+  return direction === "arrival" ? "Arrivo" : "Partenza";
+}
+
+function lineLabel(instance: OperationalInstance) {
+  const service = instance.service;
+  const destination = service.meeting_point?.trim() || service.customer_name;
+  return `${instance.time} · ${instanceBadge(instance.direction)} · ${destination}`;
 }
 
 export default function PlanningPage() {
@@ -94,6 +112,16 @@ export default function PlanningPage() {
   const effectiveSelectedDate = availableDates.includes(selectedDate) ? selectedDate : availableDates[0] ?? selectedDate;
 
   const dayInstances = useMemo(() => filteredInstances.filter((instance) => instance.date === effectiveSelectedDate), [effectiveSelectedDate, filteredInstances]);
+  const dayArrivals = useMemo(() => dayInstances.filter((instance) => instance.direction === "arrival"), [dayInstances]);
+  const dayDepartures = useMemo(() => dayInstances.filter((instance) => instance.direction === "departure"), [dayInstances]);
+  const futureCutoffDate = useMemo(() => addDaysToIso(effectiveSelectedDate, 7), [effectiveSelectedDate]);
+  const nextInstances = useMemo(
+    () =>
+      filteredInstances
+        .filter((instance) => instance.date > effectiveSelectedDate && instance.date <= futureCutoffDate)
+        .slice(0, 10),
+    [effectiveSelectedDate, filteredInstances, futureCutoffDate]
+  );
 
   const weekStart = useMemo(() => startOfWeek(effectiveSelectedDate), [effectiveSelectedDate]);
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, index) => toIsoDate(addDays(weekStart, index))), [weekStart]);
@@ -169,20 +197,22 @@ export default function PlanningPage() {
 
   return (
     <section className="page-section">
-      <div className="section-head">
-        <div className="flex items-center gap-3">
-          <h1 className="section-title">Pianificazione</h1>
-          <span className={liveConnected ? "live-dot" : "status-badge status-badge-cancelled"}>{liveConnected ? "In tempo reale" : "Non in linea"}</span>
-        </div>
-        <div className="flex gap-2">
-          <button type="button" onClick={() => setViewMode("day")} className={viewMode === "day" ? "btn-primary" : "btn-secondary"}>
-            Vista giorno
-          </button>
-          <button type="button" onClick={() => setViewMode("week")} className={viewMode === "week" ? "btn-primary" : "btn-secondary"}>
-            Vista settimana
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Pianificazione"
+        subtitle="Vista operativa per arrivi, partenze e servizi futuri. L'assegnazione resta opzionale."
+        breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Pianificazione" }]}
+        badge={<span className={liveConnected ? "live-dot" : "status-badge status-badge-cancelled"}>{liveConnected ? "In tempo reale" : "Non in linea"}</span>}
+        actions={
+          <>
+            <button type="button" onClick={() => setViewMode("day")} className={viewMode === "day" ? "btn-primary" : "btn-secondary"}>
+              Vista giorno
+            </button>
+            <button type="button" onClick={() => setViewMode("week")} className={viewMode === "week" ? "btn-primary" : "btn-secondary"}>
+              Vista settimana
+            </button>
+          </>
+        }
+      />
 
       <div className="filters-grid md:grid-cols-4">
         <label className="text-sm">
@@ -209,6 +239,77 @@ export default function PlanningPage() {
           </select>
         </label>
         <div className="flex items-end text-xs text-muted">Trascina una card e rilasciala in un altro slot per cambiare l&apos;orario del servizio.</div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <SectionCard title="Arrivi del giorno" subtitle={formatIsoDateShort(effectiveSelectedDate)}>
+          <p className="text-3xl font-semibold text-text">{dayArrivals.length}</p>
+          <p className="mt-1 text-sm text-muted">{dayArrivals.reduce((sum, item) => sum + item.service.pax, 0)} pax in ingresso</p>
+        </SectionCard>
+        <SectionCard title="Partenze del giorno" subtitle={formatIsoDateShort(effectiveSelectedDate)}>
+          <p className="text-3xl font-semibold text-text">{dayDepartures.length}</p>
+          <p className="mt-1 text-sm text-muted">{dayDepartures.reduce((sum, item) => sum + item.service.pax, 0)} pax in uscita</p>
+        </SectionCard>
+        <SectionCard title="Futuri da gestire" subtitle={`Finestra fino al ${formatIsoDateShort(futureCutoffDate)}`}>
+          <p className="text-3xl font-semibold text-text">{nextInstances.length}</p>
+          <p className="mt-1 text-sm text-muted">Prime istanze operative dei prossimi 7 giorni</p>
+        </SectionCard>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <SectionCard title="Arrivi del giorno" subtitle="Controllo rapido prima della griglia oraria">
+          {dayArrivals.length === 0 ? (
+            <EmptyState title="Nessun arrivo" description="Con i filtri attuali non ci sono arrivi per questa giornata." compact />
+          ) : (
+            <div className="space-y-2">
+              {dayArrivals.slice(0, 8).map((instance) => (
+                <article key={instance.instanceId} className="rounded-xl border border-border bg-surface/80 px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-text">{instance.service.customer_name}</p>
+                    <span className="text-xs text-muted">{instance.time}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">{instance.service.meeting_point?.trim() || "Meeting point da verificare"}</p>
+                </article>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard title="Partenze del giorno" subtitle="Servizi in uscita dalla stessa giornata">
+          {dayDepartures.length === 0 ? (
+            <EmptyState title="Nessuna partenza" description="Con i filtri attuali non ci sono partenze per questa giornata." compact />
+          ) : (
+            <div className="space-y-2">
+              {dayDepartures.slice(0, 8).map((instance) => (
+                <article key={instance.instanceId} className="rounded-xl border border-border bg-surface/80 px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-text">{instance.service.customer_name}</p>
+                    <span className="text-xs text-muted">{instance.time}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">{instance.service.meeting_point?.trim() || "Meeting point da verificare"}</p>
+                </article>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard title="Servizi futuri da gestire" subtitle="Preview rapida dei prossimi 7 giorni">
+          {nextInstances.length === 0 ? (
+            <EmptyState title="Nessun servizio futuro" description="La finestra prossimi 7 giorni non ha istanze operative con i filtri attuali." compact />
+          ) : (
+            <div className="space-y-2">
+              {nextInstances.map((instance) => (
+                <article key={instance.instanceId} className="rounded-xl border border-border bg-surface/80 px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-text">{instance.service.customer_name}</p>
+                    <span className="text-xs text-muted">{formatIsoDateShort(instance.date)}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">{lineLabel(instance)}</p>
+                </article>
+              ))}
+            </div>
+          )}
+        </SectionCard>
       </div>
 
       {viewMode === "day" ? (
