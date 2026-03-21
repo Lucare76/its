@@ -170,9 +170,14 @@ function extractHotel(sourceText: string) {
   }
 
   const fromDestination = clean(
-    sourceText.match(/dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|\s+Cell\.|\n|\r|$)/i)?.[1]
+    sourceText.match(/dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s*Cliente:|\s+Cellulare|\s+Cell\.|\n|\r|$)/i)?.[1]
   );
   if (fromDestination) return fromDestination;
+
+  const fromAField = clean(
+    sourceText.match(/\ba:\s*([A-Z][A-Z &'./-]{2,}?)(?=\s*Cliente:|\s+Cellulare|\s+Cell\.|\n|\r|$)/i)?.[1]
+  );
+  if (fromAField && !/^CELL[.:]?/i.test(fromAField) && !/^\d/.test(fromAField)) return fromAField;
 
   const fromProgram =
     clean(sourceText.match(/PROGRAMMA.*?([A-Z][A-Z &'./-]+HOTEL[^0-9\n\r]*)/i)?.[1]) ??
