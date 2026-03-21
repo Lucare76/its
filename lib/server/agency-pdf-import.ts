@@ -82,6 +82,12 @@ type PossibleExistingMatch = {
   match_reason: "practice_number" | "phone" | "customer_name";
 };
 
+function normalizeReviewedServiceType(
+  value: Partial<z.infer<typeof pdfImportReviewSchema>>["service_type"]
+): NormalizedPdfImport["service_type"] {
+  return emptyToNull(value) as NormalizedPdfImport["service_type"];
+}
+
 export const pdfImportReviewSchema = z.object({
   customer_full_name: z.string().trim().max(240).optional().nullable(),
   customer_phone: z.string().trim().max(60).optional().nullable(),
@@ -412,7 +418,7 @@ function buildEffectiveNormalizedImport(
       ...base,
       external_reference: externalReference,
       booking_kind: reviewed.booking_kind ?? base.booking_kind,
-    service_type: reviewed.service_type !== undefined ? reviewed.service_type : base.service_type,
+    service_type: normalizeReviewedServiceType(reviewed.service_type) ?? base.service_type,
     transport_mode: reviewed.transport_mode !== undefined ? reviewed.transport_mode : base.transport_mode,
       customer_first_name: null,
       customer_last_name: null,
