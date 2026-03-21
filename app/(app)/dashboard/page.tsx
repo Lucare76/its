@@ -83,6 +83,18 @@ export default function OperatorDashboardPage() {
   const futureInstances = buildOperationalInstances(data.services).filter((instance) => instance.date > todayIso && instance.date <= next48hIso);
   const nextArrivals48h = futureInstances.filter((instance) => instance.direction === "arrival").slice(0, 6);
   const nextDepartures48h = futureInstances.filter((instance) => instance.direction === "departure").slice(0, 6);
+  const nextArrivalsBus48h = futureInstances.filter(
+    (instance) => instance.direction === "arrival" && (instance.service.service_type_code === "bus_line" || instance.service.booking_service_kind === "bus_city_hotel")
+  ).length;
+  const nextArrivalsOther48h = futureInstances.filter(
+    (instance) => instance.direction === "arrival" && !(instance.service.service_type_code === "bus_line" || instance.service.booking_service_kind === "bus_city_hotel")
+  ).length;
+  const nextDeparturesBus48h = futureInstances.filter(
+    (instance) => instance.direction === "departure" && (instance.service.service_type_code === "bus_line" || instance.service.booking_service_kind === "bus_city_hotel")
+  ).length;
+  const nextDeparturesOther48h = futureInstances.filter(
+    (instance) => instance.direction === "departure" && !(instance.service.service_type_code === "bus_line" || instance.service.booking_service_kind === "bus_city_hotel")
+  ).length;
   const hotelsById = new Map(data.hotels.map((hotel) => [hotel.id, hotel]));
   const assignmentsByServiceId = new Map(data.assignments.map((assignment) => [assignment.service_id, assignment]));
 
@@ -319,6 +331,30 @@ export default function OperatorDashboardPage() {
         </article>
       ) : null}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <article className="card p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-text">Lotti operativi 48h</h2>
+              <p className="text-sm text-muted">Suddivisione rapida tra linea bus e altri servizi per preparare gli export.</p>
+            </div>
+            <Link href="/ops-summary" className="btn-secondary px-3 py-1.5 text-xs">
+              Export operativi
+            </Link>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border border-border bg-surface/80 p-3">
+              <p className="text-xs uppercase tracking-[0.12em] text-muted">Arrivi</p>
+              <p className="mt-2 text-sm text-text">Linea bus: <span className="font-semibold">{nextArrivalsBus48h}</span></p>
+              <p className="mt-1 text-sm text-text">Altri servizi: <span className="font-semibold">{nextArrivalsOther48h}</span></p>
+            </div>
+            <div className="rounded-xl border border-border bg-surface/80 p-3">
+              <p className="text-xs uppercase tracking-[0.12em] text-muted">Partenze</p>
+              <p className="mt-2 text-sm text-text">Linea bus: <span className="font-semibold">{nextDeparturesBus48h}</span></p>
+              <p className="mt-1 text-sm text-text">Altri servizi: <span className="font-semibold">{nextDeparturesOther48h}</span></p>
+            </div>
+          </div>
+        </article>
+
         <article className="card p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>

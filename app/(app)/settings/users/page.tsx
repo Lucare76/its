@@ -10,6 +10,7 @@ type MembershipRow = {
   role: UserRole;
   full_name: string;
   created_at?: string | null;
+  suspended?: boolean;
 };
 
 type UserFormState = {
@@ -162,7 +163,7 @@ export default function SettingsUsersPage() {
     setMessage(`Utente creato: ${createdUser.full_name} (${createdUser.role}).`);
   };
 
-  const updateMembership = async (membership: MembershipRow, nextRole: UserRole, nextPassword?: string) => {
+  const updateMembership = async (membership: MembershipRow, nextRole: UserRole, nextPassword?: string, nextSuspended?: boolean) => {
     if (!hasSupabaseEnv || !supabase || updatingUserId) return;
     setUpdatingUserId(membership.user_id);
     setMessage(`Aggiornamento ruolo di ${membership.full_name}...`);
@@ -185,7 +186,8 @@ export default function SettingsUsersPage() {
         user_id: membership.user_id,
         full_name: membership.full_name,
         role: nextRole,
-        password: nextPassword?.trim() ? nextPassword.trim() : undefined
+        password: nextPassword?.trim() ? nextPassword.trim() : undefined,
+        suspended: nextSuspended ?? membership.suspended ?? false
       })
     });
 
@@ -198,13 +200,21 @@ export default function SettingsUsersPage() {
 
     const updatedUser = body.user;
 
-    setMemberships((prev) => prev.map((item) => (item.user_id === membership.user_id ? { ...item, role: updatedUser.role } : item)));
+    setMemberships((prev) =>
+      prev.map((item) =>
+        item.user_id === membership.user_id
+          ? { ...item, role: updatedUser.role, suspended: updatedUser.suspended ?? nextSuspended ?? item.suspended ?? false }
+          : item
+      )
+    );
     setPasswordDrafts((prev) => ({ ...prev, [membership.user_id]: "" }));
     setUpdatingUserId(null);
     setMessage(
       nextPassword?.trim()
         ? `Utente aggiornato: ${membership.full_name} (${updatedUser.role}) con nuova password.`
-        : `Ruolo aggiornato: ${membership.full_name} -> ${updatedUser.role}.`
+        : nextSuspended !== undefined && nextSuspended !== (membership.suspended ?? false)
+          ? `${membership.full_name} ${nextSuspended ? "sospeso" : "riattivato"}.`
+          : `Ruolo aggiornato: ${membership.full_name} -> ${updatedUser.role}.`
     );
   };
 
@@ -318,6 +328,7 @@ export default function SettingsUsersPage() {
                 <tr className="border-b border-border text-muted">
                   <th className="px-3 py-2 font-medium">Nome</th>
                   <th className="px-3 py-2 font-medium">Ruolo</th>
+                  <th className="px-3 py-2 font-medium">Stato</th>
                   <th className="px-3 py-2 font-medium">Nuova password</th>
                   <th className="px-3 py-2 font-medium">Azioni</th>
                   <th className="px-3 py-2 font-medium">Creato il</th>
@@ -343,6 +354,27 @@ export default function SettingsUsersPage() {
                       </select>
                     </td>
                     <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={
+                            membership.suspended
+                              ? "rounded-full bg-amber-100 px-2 py-1 text-[11px] font-medium text-amber-800"
+                              : "rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-800"
+                          }
+                        >
+                          {membership.suspended ? "Sospeso" : "Attivo"}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn-secondary px-3 py-2 text-xs"
+                          disabled={updatingUserId === membership.user_id}
+                          onClick={() => void updateMembership(membership, membership.role, undefined, !(membership.suspended ?? false))}
+                        >
+                          {membership.suspended ? "Riattiva" : "Sospendi"}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2">
                       <input
                         type="password"
                         value={passwordDrafts[membership.user_id] ?? ""}
@@ -357,7 +389,7 @@ export default function SettingsUsersPage() {
                         type="button"
                         className="btn-secondary px-3 py-2 text-xs"
                         disabled={updatingUserId === membership.user_id || !(passwordDrafts[membership.user_id] ?? "").trim()}
-                        onClick={() => void updateMembership(membership, membership.role, passwordDrafts[membership.user_id])}
+                        onClick={() => void updateMembership(membership, membership.role, passwordDrafts[membership.user_id], membership.suspended ?? false)}
                       >
                         {updatingUserId === membership.user_id ? "Salvataggio..." : "Salva password"}
                       </button>

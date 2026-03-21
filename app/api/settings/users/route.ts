@@ -10,6 +10,7 @@ type TenantMembershipRow = {
   role: "admin" | "operator" | "driver" | "agency";
   full_name: string;
   created_at?: string | null;
+  suspended?: boolean;
 };
 
 async function requireAdminMembership(request: NextRequest) {
@@ -65,12 +66,25 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Failed to load users" }, { status: 500 });
   }
 
+  const userIds = ((data ?? []) as TenantMembershipRow[]).map((item) => item.user_id);
+  const suspendedByUserId = new Map<string, boolean>();
+  if (userIds.length > 0) {
+    const listed = await auth.admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    if (!listed.error) {
+      for (const user of listed.data.users ?? []) {
+        if (!userIds.includes(user.id)) continue;
+        suspendedByUserId.set(user.id, Boolean(user.banned_until && user.banned_until !== "none"));
+      }
+    }
+  }
+
   const memberships = ((data ?? []) as TenantMembershipRow[]).map((item) => ({
     user_id: item.user_id,
     tenant_id: item.tenant_id,
     role: item.role,
     full_name: item.full_name,
-    created_at: item.created_at ?? null
+    created_at: item.created_at ?? null,
+    suspended: suspendedByUserId.get(item.user_id) ?? false
   }));
 
   return NextResponse.json({ ok: true, memberships });
@@ -173,12 +187,15 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: updateResult.error?.message ?? "Aggiornamento utente fallito." }, { status: 500 });
   }
 
+  const shouldSuspend = parsed.data.suspended === true;
+
   if (parsed.data.password) {
     const passwordUpdate = await auth.admin.auth.admin.updateUserById(parsed.data.user_id, {
       password: parsed.data.password,
       user_metadata: {
         full_name: parsed.data.full_name.trim()
-      }
+      },
+      ban_duration: shouldSuspend ? "876000h" : "none"
     });
     if (passwordUpdate.error) {
       return NextResponse.json({ error: passwordUpdate.error.message }, { status: 500 });
@@ -188,10 +205,11 @@ export async function PATCH(request: NextRequest) {
       .updateUserById(parsed.data.user_id, {
         user_metadata: {
           full_name: parsed.data.full_name.trim()
-        }
+        },
+        ban_duration: shouldSuspend ? "876000h" : "none"
       })
       .catch(() => undefined);
   }
 
-  return NextResponse.json({ ok: true, user: updateResult.data });
+  return NextResponse.json({ ok: true, user: { ...updateResult.data, suspended: shouldSuspend } });
 }

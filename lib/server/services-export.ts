@@ -14,7 +14,9 @@ const payloadSchema = z
     dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     status: z.array(statusEnum).default([]),
     serviceType: z.enum(["all", "transfer", "bus_tour"]).default("all"),
-    exportPreset: z.enum(["standard", "arrivals_bus_line", "arrivals_other_services"]).default("standard"),
+    exportPreset: z
+      .enum(["standard", "arrivals_bus_line", "arrivals_other_services", "departures_bus_line", "departures_other_services"])
+      .default("standard"),
     ship: z.string().max(80).optional().default(""),
     zone: z.string().max(80).optional().default(""),
     hotel_id: z.string().uuid().optional(),
@@ -287,6 +289,73 @@ function buildOperationalArrivalsSheet(
   return sheet;
 }
 
+function buildOperationalDeparturesSheet(
+  services: ServiceRow[],
+  hotelsById: Map<string, HotelRow>,
+  assignmentsByServiceId: Map<string, AssignmentRow>,
+  membershipsByUserId: Map<string, MembershipRow>
+) {
+  const header = [
+    "Categoria",
+    "Data partenza",
+    "Ora partenza",
+    "Cliente",
+    "Pax",
+    "Origine / hotel",
+    "Meeting point",
+    "Riferimento mezzo",
+    "Telefono",
+    "Agenzia fatturazione",
+    "Driver",
+    "Mezzo",
+    "Costo PDF",
+    "Valuta",
+    "Numero pratica",
+    "ID servizio",
+    "Note"
+  ];
+
+  const rows = services.map((service) => {
+    const hotel = hotelsById.get(service.hotel_id);
+    const assignment = assignmentsByServiceId.get(service.id);
+    const driverName = assignment?.driver_user_id
+      ? membershipsByUserId.get(assignment.driver_user_id)?.full_name ?? assignment.driver_user_id
+      : "";
+    const vehicleLabel = assignment?.vehicle_label ?? service.bus_plate ?? "";
+    const transportReference =
+      service.transport_code ??
+      service.train_departure_number ??
+      service.train_arrival_number ??
+      service.vessel ??
+      "";
+
+    return [
+      operationalCategory(service),
+      formatIsoDateShort(service.departure_date ?? ""),
+      normalizeTime(service.departure_time ?? service.return_time ?? ""),
+      service.customer_name,
+      service.pax,
+      hotel?.name ?? "",
+      service.meeting_point ?? "",
+      transportReference,
+      service.phone ?? "",
+      service.billing_party_name ?? "",
+      driverName,
+      vehicleLabel,
+      service.source_total_amount_cents === null ? "" : (service.source_total_amount_cents / 100).toFixed(2),
+      service.source_amount_currency ?? "",
+      service.notes.match(/\[practice:([^\]]+)\]/i)?.[1] ?? "",
+      service.id,
+      service.notes ?? ""
+    ];
+  });
+
+  const sheetRows = [header, ...rows];
+  const sheet = XLSX.utils.aoa_to_sheet(sheetRows);
+  applySheetFormatting(sheet, sheetRows);
+  return sheet;
+}
+
 export async function buildServicesExportXlsx(request: NextRequest) {
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -439,17 +508,38 @@ export async function buildServicesExportXlsx(request: NextRequest) {
       };
     };
 
-    if (filters.exportPreset === "arrivals_bus_line" || filters.exportPreset === "arrivals_other_services") {
+    if (
+      filters.exportPreset === "arrivals_bus_line" ||
+      filters.exportPreset === "arrivals_other_services" ||
+      filters.exportPreset === "departures_bus_line" ||
+      filters.exportPreset === "departures_other_services"
+    ) {
       const arrivalsForDate = filteredServices.filter((service) => (service.arrival_date ?? service.date) >= filters.dateFrom && (service.arrival_date ?? service.date) <= filters.dateTo);
+      const departuresForDate = filteredServices.filter(
+        (service) => Boolean(service.departure_date) && (service.departure_date ?? "") >= filters.dateFrom && (service.departure_date ?? "") <= filters.dateTo
+      );
       const presetRows =
         filters.exportPreset === "arrivals_bus_line"
           ? arrivalsForDate.filter((service) => isBusLineArrival(service))
-          : arrivalsForDate.filter((service) => !isBusLineArrival(service));
+          : filters.exportPreset === "arrivals_other_services"
+            ? arrivalsForDate.filter((service) => !isBusLineArrival(service))
+            : filters.exportPreset === "departures_bus_line"
+              ? departuresForDate.filter((service) => isBusLineArrival(service))
+              : departuresForDate.filter((service) => !isBusLineArrival(service));
 
+      const isDeparturePreset = filters.exportPreset.startsWith("departures_");
       XLSX.utils.book_append_sheet(
         workbook,
-        buildOperationalArrivalsSheet(presetRows, hotelsById, assignmentsByServiceId, membershipsByUserId),
-        filters.exportPreset === "arrivals_bus_line" ? "Arrivi Linea Bus" : "Arrivi Altri Servizi"
+        isDeparturePreset
+          ? buildOperationalDeparturesSheet(presetRows, hotelsById, assignmentsByServiceId, membershipsByUserId)
+          : buildOperationalArrivalsSheet(presetRows, hotelsById, assignmentsByServiceId, membershipsByUserId),
+        filters.exportPreset === "arrivals_bus_line"
+          ? "Arrivi Linea Bus"
+          : filters.exportPreset === "arrivals_other_services"
+            ? "Arrivi Altri Servizi"
+            : filters.exportPreset === "departures_bus_line"
+              ? "Partenze Linea Bus"
+              : "Partenze Altri Servizi"
       );
     } else {
       XLSX.utils.book_append_sheet(workbook, buildSheet(transferRows.map(normalizeServiceRow)), "Transfers");
@@ -517,6 +607,10 @@ export async function buildServicesExportXlsx(request: NextRequest) {
         ? `arrivi_linea_bus_${filters.dateFrom}_${filters.dateTo}.xlsx`
         : filters.exportPreset === "arrivals_other_services"
           ? `arrivi_altri_servizi_${filters.dateFrom}_${filters.dateTo}.xlsx`
+          : filters.exportPreset === "departures_bus_line"
+            ? `partenze_linea_bus_${filters.dateFrom}_${filters.dateTo}.xlsx`
+            : filters.exportPreset === "departures_other_services"
+              ? `partenze_altri_servizi_${filters.dateFrom}_${filters.dateTo}.xlsx`
           : `services_export_${filters.dateFrom}_${filters.dateTo}.xlsx`;
 
     return new NextResponse(buffer, {

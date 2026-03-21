@@ -7,7 +7,9 @@ interface OpsArrivalsExportButtonsProps {
   targetDate: string;
 }
 
-async function downloadOperationalExport(targetDate: string, exportPreset: "arrivals_bus_line" | "arrivals_other_services") {
+type ExportPreset = "arrivals_bus_line" | "arrivals_other_services" | "departures_bus_line" | "departures_other_services";
+
+async function downloadOperationalExport(targetDate: string, exportPreset: ExportPreset) {
   if (!hasSupabaseEnv || !supabase) {
     throw new Error("Esportazione disponibile solo con Supabase configurato.");
   }
@@ -38,7 +40,14 @@ async function downloadOperationalExport(targetDate: string, exportPreset: "arri
   const blob = await response.blob();
   const disposition = response.headers.get("content-disposition");
   const match = disposition?.match(/filename=\"?([^"]+)\"?/i);
-  const fallback = exportPreset === "arrivals_bus_line" ? `arrivi_linea_bus_${targetDate}.xlsx` : `arrivi_altri_servizi_${targetDate}.xlsx`;
+  const fallback =
+    exportPreset === "arrivals_bus_line"
+      ? `arrivi_linea_bus_${targetDate}.xlsx`
+      : exportPreset === "arrivals_other_services"
+        ? `arrivi_altri_servizi_${targetDate}.xlsx`
+        : exportPreset === "departures_bus_line"
+          ? `partenze_linea_bus_${targetDate}.xlsx`
+          : `partenze_altri_servizi_${targetDate}.xlsx`;
   const filename = match?.[1] ?? fallback;
 
   const url = URL.createObjectURL(blob);
@@ -52,15 +61,23 @@ async function downloadOperationalExport(targetDate: string, exportPreset: "arri
 }
 
 export function OpsArrivalsExportButtons({ targetDate }: OpsArrivalsExportButtonsProps) {
-  const [loadingKey, setLoadingKey] = useState<null | "arrivals_bus_line" | "arrivals_other_services">(null);
+  const [loadingKey, setLoadingKey] = useState<null | ExportPreset>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  const handleClick = async (exportPreset: "arrivals_bus_line" | "arrivals_other_services") => {
+  const handleClick = async (exportPreset: ExportPreset) => {
     setLoadingKey(exportPreset);
     setMessage(null);
     try {
       await downloadOperationalExport(targetDate, exportPreset);
-      setMessage(exportPreset === "arrivals_bus_line" ? "Excel arrivi linea bus scaricato." : "Excel arrivi altri servizi scaricato.");
+      setMessage(
+        exportPreset === "arrivals_bus_line"
+          ? "Excel arrivi linea bus scaricato."
+          : exportPreset === "arrivals_other_services"
+            ? "Excel arrivi altri servizi scaricato."
+            : exportPreset === "departures_bus_line"
+              ? "Excel partenze linea bus scaricato."
+              : "Excel partenze altri servizi scaricato."
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Errore export.");
     } finally {
@@ -71,8 +88,8 @@ export function OpsArrivalsExportButtons({ targetDate }: OpsArrivalsExportButton
   return (
     <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div>
-        <p className="text-sm font-semibold text-text">Export arrivi</p>
-        <p className="text-xs text-muted">Data target {targetDate}. Excel separati per linea bus e altri servizi.</p>
+        <p className="text-sm font-semibold text-text">Export operativi giornata</p>
+        <p className="text-xs text-muted">Data target {targetDate}. Excel separati per linea bus e altri servizi, su arrivi e partenze.</p>
       </div>
       <div className="flex flex-wrap gap-2">
         <button
@@ -90,6 +107,22 @@ export function OpsArrivalsExportButtons({ targetDate }: OpsArrivalsExportButton
           className="btn-primary disabled:opacity-50"
         >
           {loadingKey === "arrivals_other_services" ? "Esportazione..." : "Arrivi altri servizi"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleClick("departures_bus_line")}
+          disabled={loadingKey !== null}
+          className="btn-secondary disabled:opacity-50"
+        >
+          {loadingKey === "departures_bus_line" ? "Esportazione..." : "Partenze linea bus"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleClick("departures_other_services")}
+          disabled={loadingKey !== null}
+          className="btn-primary disabled:opacity-50"
+        >
+          {loadingKey === "departures_other_services" ? "Esportazione..." : "Partenze altri servizi"}
         </button>
       </div>
       {message ? <p className="text-xs text-muted">{message}</p> : null}
