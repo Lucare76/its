@@ -17,7 +17,7 @@ import { getClientSessionContext } from "@/lib/supabase/client-session";
 
 type PdfImportUiStatus = "preview" | "draft" | "confirmed" | "duplicate" | "ignored" | "failed";
 type BookingKind = "transfer_port_hotel" | "transfer_airport_hotel" | "transfer_train_hotel" | "bus_city_hotel" | "excursion";
-type OperationalServiceType = "transfer_station_hotel" | "transfer_port_hotel" | "transfer_hotel_port" | "excursion" | "ferry_transfer" | "bus_line" | "";
+type OperationalServiceType = "transfer_station_hotel" | "transfer_airport_hotel" | "transfer_port_hotel" | "transfer_hotel_port" | "excursion" | "ferry_transfer" | "bus_line" | "";
 
 type PdfImportRow = {
   inbound_email_id: string;
@@ -170,6 +170,7 @@ function normalizeOperationalServiceType(value: unknown): OperationalServiceType
   const normalized = text(value).trim();
   if (
     normalized === "transfer_station_hotel" ||
+    normalized === "transfer_airport_hotel" ||
     normalized === "transfer_port_hotel" ||
     normalized === "transfer_hotel_port" ||
     normalized === "excursion" ||
@@ -1115,6 +1116,7 @@ export default function PdfImportsPage() {
                       <select value={reviewForm.service_type} onChange={(event) => setReviewForm((current) => ({ ...current, service_type: event.target.value as OperationalServiceType }))} className="input-saas">
                         <option value="">non rilevato</option>
                         <option value="transfer_station_hotel">transfer_station_hotel</option>
+                        <option value="transfer_airport_hotel">transfer_airport_hotel</option>
                         <option value="transfer_port_hotel">transfer_port_hotel</option>
                         <option value="transfer_hotel_port">transfer_hotel_port</option>
                         <option value="excursion">excursion</option>

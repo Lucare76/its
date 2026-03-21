@@ -10,6 +10,7 @@ export type AgencyBookingServiceKind =
   | "excursion";
 export type OperationalServiceType =
   | "transfer_station_hotel"
+  | "transfer_airport_hotel"
   | "transfer_port_hotel"
   | "transfer_hotel_port"
   | "excursion"
