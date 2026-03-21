@@ -198,7 +198,7 @@ function extractAlesteTrainOperationalJourney(
 
   if (direction === "andata") {
     const match = compact.match(
-      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+STAZIONE\s*\/\s*HOTEL\s+Dalle\s*([0-2]?\d[:.]\d{2})(?:\s+Alle\s*([0-2]?\d[:.]\d{2}))?\s+M\.p\.\s*:\s*([A-Z][A-Z ]+?)\s+da:\s*([A-Z]+)\s*(\d{3,5})\s+a:\s*CELL[.:]?\s*\d+\s+dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Cliente:|\s+Cellulare|\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|$)/i
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+STAZIONE\s*\/\s*HOTEL\s+Dalle\s*([0-2]?\d[:.]\d{2})(?:\s+Alle\s*([0-2]?\d[:.]\d{2}))?\s+M\.p\.\s*:\s*([A-Z][A-Z ]+?)\s+da:\s*([A-Z]+)\s*(\d{3,5})\s+a:\s*CELL[.:]?\s*\d*\s+dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Cliente:|\s+Cellulare|\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|$)/i
     );
     if (!match) return null;
 
