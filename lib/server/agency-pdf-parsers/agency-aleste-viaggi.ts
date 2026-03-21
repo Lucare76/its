@@ -753,7 +753,7 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
       outwardAirport?.transportReference ??
       outwardFlixbus?.transportReference ??
       (arrivalTrain?.trainNumber ? `${arrivalTrain.carrierCompany ?? "ITALO"} ${arrivalTrain.trainNumber}` : null),
-    train_arrival_time: outwardAirport?.serviceTime ?? outwardFlixbus?.arrivalTime ?? outwardFlixbus?.serviceTime ?? arrivalTrain?.originTime ?? null,
+    train_arrival_time: outwardAirport?.serviceTime ?? outwardFlixbus?.arrivalTime ?? outwardFlixbus?.serviceTime ?? arrivalTrain?.destinationTime ?? arrivalTrain?.originTime ?? null,
     train_departure_number:
       returnAirport?.transportReference ??
       returnFlixbus?.transportReference ??
