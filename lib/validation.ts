@@ -117,7 +117,7 @@ export const agencyBookingCreateSchema = z
 
 export const assignmentSchema = z.object({
   service_id: z.string().uuid(),
-  driver_user_id: z.string().uuid(),
+  driver_user_id: z.string().uuid().nullable().optional(),
   vehicle_label: z.string().min(3).max(120)
 });
 

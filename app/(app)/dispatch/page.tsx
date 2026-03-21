@@ -227,13 +227,16 @@ export default function DispatchPage() {
   const resolvedDriverId = driverId || selectedAssignment?.driver_user_id || "";
   const resolvedVehicleLabel =
     vehicleLabel || selectedAssignment?.vehicle_label || (selectedService ? suggestedVehicleByPax(selectedService.pax) : "");
+  const assignedServicesCount = tenantAssignments.length;
+  const dispatchPendingCount = servicesToAssign.filter((service) => !assignmentByServiceId.has(service.id)).length;
+  const reviewedPdfCount = servicesToAssign.filter((service) => pdfMetaByServiceId.get(service.id)?.manualReview).length;
 
   const runAssign = async (nextServiceId: string, nextDriverId: string, nextVehicleLabel: string) => {
     setSaving(true);
 
     const payload = {
       service_id: nextServiceId,
-      driver_user_id: nextDriverId,
+      driver_user_id: nextDriverId || null,
       vehicle_label: nextVehicleLabel
     };
     const parsed = assignmentSchema.safeParse(payload);
@@ -253,7 +256,7 @@ export default function DispatchPage() {
     if (existing) {
       const { error: updateAssignmentError } = await supabase
         .from("assignments")
-        .update({ driver_user_id: parsed.data.driver_user_id, vehicle_label: parsed.data.vehicle_label })
+        .update({ driver_user_id: parsed.data.driver_user_id ?? null, vehicle_label: parsed.data.vehicle_label })
         .eq("id", existing.id)
         .eq("tenant_id", tenantId);
       if (updateAssignmentError) {
@@ -265,7 +268,7 @@ export default function DispatchPage() {
       const { error: insertAssignmentError } = await supabase.from("assignments").insert({
         tenant_id: tenantId,
         service_id: parsed.data.service_id,
-        driver_user_id: parsed.data.driver_user_id,
+        driver_user_id: parsed.data.driver_user_id ?? null,
         vehicle_label: parsed.data.vehicle_label
       });
       if (insertAssignmentError) {
@@ -324,7 +327,7 @@ export default function DispatchPage() {
           id: existing?.id ?? crypto.randomUUID(),
           tenant_id: tenantId,
           service_id: parsed.data.service_id,
-          driver_user_id: parsed.data.driver_user_id,
+          driver_user_id: parsed.data.driver_user_id ?? null,
           vehicle_label: parsed.data.vehicle_label
         }
       ];
@@ -352,6 +355,20 @@ export default function DispatchPage() {
         subtitle="Supporto interno per driver e mezzo. Non blocca l'operativo."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Dispatch" }]}
       />
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <SectionCard title="Da gestire internamente" subtitle="Servizi nuovi o gia assegnabili">
+          <p className="text-3xl font-semibold text-text">{servicesToAssign.length}</p>
+          <p className="mt-1 text-sm text-muted">{dispatchPendingCount} ancora senza scheda interna</p>
+        </SectionCard>
+        <SectionCard title="Schede dispatch create" subtitle="Servizi con mezzo e/o autista già salvati">
+          <p className="text-3xl font-semibold text-text">{assignedServicesCount}</p>
+          <p className="mt-1 text-sm text-muted">Dato interno, non blocca l&apos;operativo</p>
+        </SectionCard>
+        <SectionCard title="PDF gia revisionati" subtitle="Servizi PDF con review manuale eseguita">
+          <p className="text-3xl font-semibold text-text">{reviewedPdfCount}</p>
+          <p className="mt-1 text-sm text-muted">Utile per decidere cosa organizzare per primo</p>
+        </SectionCard>
+      </div>
       <form action={submit} className="card grid gap-5 p-4 md:p-7">
         <h2 className="text-base">Dettagli assegnazione</h2>
         <p className="text-sm text-muted">Questa schermata serve solo a Ischia Transfer per l&apos;organizzazione interna successiva.</p>
@@ -431,7 +448,7 @@ export default function DispatchPage() {
         <label className="text-sm">
           Autista
           <select name="driver_user_id" value={resolvedDriverId} onChange={(event) => setDriverId(event.target.value)} className="input-saas mt-1 w-full">
-            <option value="">Seleziona driver</option>
+            <option value="">Nessun autista assegnato per ora</option>
             {drivers.map((driver) => (
               <option key={driver.user_id} value={driver.user_id}>
                 {driver.full_name}
@@ -444,7 +461,7 @@ export default function DispatchPage() {
           <input name="vehicle_label" value={resolvedVehicleLabel} onChange={(event) => setVehicleLabel(event.target.value)} className="input-saas mt-1 w-full" />
         </label>
         <button type="submit" disabled={saving} className="btn-primary px-5 py-3 text-base disabled:opacity-50">
-          {saving ? "Salvataggio..." : "Conferma assegnazione"}
+          {saving ? "Salvataggio..." : resolvedDriverId ? "Conferma assegnazione" : "Salva scheda interna"}
         </button>
       </form>
       <SectionCard title="Autisti suggeriti (Primi 3)" className="space-y-0">
