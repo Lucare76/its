@@ -165,7 +165,7 @@ function extractHotel(sourceText: string) {
       /PROGRAMMA(?:DESCRIZIONE)?(?:DALAL)?\s*[A-Z0-9/]+\s*([A-Z][A-Z &'./-]+?)(?=\s*[0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4}\s*[0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})/i
     )?.[1]
   );
-  if (fromAlesteProgramRow && !/PACCHETTO\s+TRANSFER/i.test(fromAlesteProgramRow)) {
+  if (fromAlesteProgramRow && !/PACCHETTO\s+TRANSFER/i.test(fromAlesteProgramRow) && !/^TRANSFER\b/i.test(fromAlesteProgramRow)) {
     return clean(fromAlesteProgramRow.replace(/^AV\s+CLUB\s+/i, ""));
   }
 
@@ -558,8 +558,6 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
   }));
 
   const effectiveHotel = hotel ?? arrivalTrain?.hotel ?? departureTrain?.hotel ?? null;
-  // DEBUG TEMPORANEO - rimuovere dopo diagnosi
-  const debugInfo = `hotel=${hotel}|atHotel=${arrivalTrain?.hotel}|dtHotel=${departureTrain?.hotel}|eff=${effectiveHotel}|at=${arrivalTrain?.trainNumber}|dt=${departureTrain?.trainNumber}`;
   if (arrivalTrain && effectiveHotel) {
     const arrivalIndex = parsedServices.findIndex((service) => service.direction === "andata");
     const arrivalStation = normalizeStationName(arrivalTrain.destinationStation) ?? "STAZIONE DI NAPOLI";
@@ -839,8 +837,7 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
       (departureTrain?.trainNumber ? `${departureTrain.carrierCompany ?? "ITALO"} ${departureTrain.trainNumber}` : null),
     train_departure_time: returnAirport?.serviceTime ?? returnFlixbus?.serviceTime ?? departureTrain?.originTime ?? null,
     parsed_services: parsedServices,
-    confidence_level: "high",
-    anomaly_message: debugInfo
+    confidence_level: "high"
   };
 }
 
