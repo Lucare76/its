@@ -51,6 +51,7 @@ type ExtractedMarineJourney = {
 type ExtractedFlixbusJourney = {
   serviceDate: string | null;
   serviceTime: string | null;
+  arrivalTime: string | null;
   meetingPoint: string | null;
   transportReference: string | null;
   destination: string | null;
@@ -340,15 +341,16 @@ function extractAlesteFlixbusJourney(
 
   if (direction === "andata") {
     const outwardMatch = compact.match(
-      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+STAZIONE\s*\/\s*HOTEL\s+Dalle\s*([0-2]?\d[:.]\d{2})(?:\s+Alle\s*[0-2]?\d[:.]\d{2})?\s+M\.p\.\s*:\s*([A-Z][A-Z ]+?)\s+da:\s*(FLIXBUS\s+\d+)\s+a:\s*CELL:?\d+\s+dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Cliente:|\s+Cellulare|\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|$)/i
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+STAZIONE\s*\/\s*HOTEL\s+Dalle\s*([0-2]?\d[:.]\d{2})(?:\s+Alle\s*([0-2]?\d[:.]\d{2}))?\s+M\.p\.\s*:\s*([A-Z][A-Z ]+?)\s+da:\s*(FLIXBUS\s+\d+)\s+a:\s*CELL:?\d+\s+dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Cliente:|\s+Cellulare|\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|$)/i
     );
     if (!outwardMatch) return null;
     return {
       serviceDate: parseItalianDate(outwardMatch[1]) ?? parseItalianShortDate(outwardMatch[1], fallbackYear),
-      serviceTime: normalizeTime(outwardMatch[2]),
-      meetingPoint: clean(outwardMatch[3]),
-      transportReference: clean(outwardMatch[4]),
-      destination: clean(outwardMatch[5]),
+      serviceTime: normalizeTime(outwardMatch[3] ?? outwardMatch[2]),
+      arrivalTime: normalizeTime(outwardMatch[3]),
+      meetingPoint: clean(outwardMatch[4]),
+      transportReference: clean(outwardMatch[5]),
+      destination: clean(outwardMatch[6]),
       rawDetailText: clean(outwardMatch[0]) ?? "",
       direction
     };
@@ -361,6 +363,7 @@ function extractAlesteFlixbusJourney(
   return {
     serviceDate: parseItalianDate(returnMatch[1]) ?? parseItalianShortDate(returnMatch[1], fallbackYear),
     serviceTime: normalizeTime(returnMatch[2]),
+    arrivalTime: null,
     meetingPoint: clean(returnMatch[3]),
     transportReference: clean(returnMatch[4]),
     destination: clean(returnMatch[5]),
@@ -578,7 +581,7 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
         service_type: "transfer",
         direction: "andata",
         service_date: outwardFlixbus.serviceDate,
-        service_time: outwardFlixbus.serviceTime,
+        service_time: outwardFlixbus.arrivalTime ?? outwardFlixbus.serviceTime,
         pickup_meeting_point: outwardFlixbus.meetingPoint,
         origin: outwardFlixbus.meetingPoint,
         destination: hotel,
@@ -629,7 +632,7 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     date_from: (outwardFlixbus?.serviceDate ?? outwardBus?.serviceDate ?? outwardMarine?.serviceDate ?? parsed.date_from) || null,
     date_to: (returnFlixbus?.serviceDate ?? returnBus?.serviceDate ?? returnMarine?.serviceDate ?? parsed.date_to) || null,
     train_arrival_number: outwardFlixbus?.transportReference ?? (arrivalTrain?.trainNumber ? `${arrivalTrain.carrierCompany ?? "ITALO"} ${arrivalTrain.trainNumber}` : null),
-    train_arrival_time: outwardFlixbus?.serviceTime ?? arrivalTrain?.originTime ?? null,
+    train_arrival_time: outwardFlixbus?.arrivalTime ?? outwardFlixbus?.serviceTime ?? arrivalTrain?.originTime ?? null,
     train_departure_number: returnFlixbus?.transportReference ?? (departureTrain?.trainNumber ? `${departureTrain.carrierCompany ?? "ITALO"} ${departureTrain.trainNumber}` : null),
     train_departure_time: returnFlixbus?.serviceTime ?? departureTrain?.originTime ?? null,
     parsed_services: parsedServices,
