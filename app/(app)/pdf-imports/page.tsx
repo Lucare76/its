@@ -322,6 +322,8 @@ function serviceTypeLabel(value?: string | null, variant?: string | null) {
   switch (value) {
     case "transfer_station_hotel":
       return "Transfer stazione/hotel";
+    case "transfer_airport_hotel":
+      return "Transfer aeroporto/hotel";
     case "transfer_port_hotel":
       return "Transfer porto/hotel";
     case "transfer_hotel_port":
