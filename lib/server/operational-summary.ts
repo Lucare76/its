@@ -12,6 +12,8 @@ type SummaryLine = {
   service_type_code: string | null;
   billing_party_name: string | null;
   pax: number;
+  total_amount_cents: number | null;
+  currency: string | null;
 };
 
 export type SummaryPreviewPayload = {
@@ -21,6 +23,14 @@ export type SummaryPreviewPayload = {
   departures_48h: Record<string, SummaryLine[]>;
   bus_monday: Record<string, SummaryLine[]>;
   statement_candidates: Record<string, SummaryLine[]>;
+  export_history?: Array<{
+    id: string;
+    date_from: string;
+    date_to: string;
+    service_type: string;
+    exported_count: number;
+    created_at: string;
+  }>;
 };
 
 function addDays(dateIso: string, days: number) {
@@ -50,7 +60,9 @@ function lineFromInstance(instance: ReturnType<typeof buildOperationalInstances>
     booking_kind: instance.service.booking_service_kind ?? null,
     service_type_code: instance.service.service_type_code ?? null,
     billing_party_name: instance.service.billing_party_name ?? null,
-    pax: instance.service.pax
+    pax: instance.service.pax,
+    total_amount_cents: instance.service.source_total_amount_cents ?? null,
+    currency: instance.service.source_amount_currency ?? null
   };
 }
 
@@ -85,4 +97,3 @@ export function buildOperationalSummaryPreview(services: Service[], todayIso: st
     statement_candidates: groupByBookingOwner(statementCandidates.map(lineFromInstance))
   } satisfies SummaryPreviewPayload;
 }
-

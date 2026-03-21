@@ -29,14 +29,40 @@ function buildOwnerReport(owner: string, lines: SummaryLine[]) {
   return [header, ...rows].join("\n");
 }
 
+function buildStatementReport(owner: string, lines: SummaryLine[]) {
+  const totalCents = lines.reduce((sum, line) => sum + (line.total_amount_cents ?? 0), 0);
+  const currency = lines.find((line) => line.currency)?.currency ?? "EUR";
+  const header = `${owner} - ${lines.length} servizi - totale ${currency} ${(totalCents / 100).toFixed(2)}`;
+  const rows = sortLines(lines).map((line) => {
+    const destination = line.hotel_or_destination ?? "N/D";
+    const amount = line.total_amount_cents === null ? "N/D" : `${line.currency ?? "EUR"} ${(line.total_amount_cents / 100).toFixed(2)}`;
+    return `${line.date} ${line.time} | ${line.customer_name} | ${destination} | ${line.pax} pax | ${amount}`;
+  });
+  return [header, ...rows].join("\n");
+}
+
+function formatDateTime(dateTime: string) {
+  const parsed = new Date(dateTime);
+  if (Number.isNaN(parsed.getTime())) return dateTime;
+  return parsed.toLocaleString("it-IT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 function SummaryGroupList({
   groups,
   emptyLabel,
-  reportTitle
+  reportTitle,
+  reportBuilder = buildOwnerReport
 }: {
   groups: Record<string, SummaryLine[]>;
   emptyLabel: string;
   reportTitle: string;
+  reportBuilder?: (owner: string, lines: SummaryLine[]) => string;
 }) {
   const entries = Object.entries(groups);
   if (entries.length === 0) {
@@ -85,7 +111,7 @@ function SummaryGroupList({
             </div>
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted">{reportTitle}</p>
-              <textarea readOnly className="input-saas min-h-36 w-full font-mono text-xs" value={buildOwnerReport(owner, lines)} />
+              <textarea readOnly className="input-saas min-h-36 w-full font-mono text-xs" value={reportBuilder(owner, lines)} />
             </div>
           </div>
         ))}
@@ -200,9 +226,45 @@ export default function OpsSummaryPage() {
           <SummaryGroupList groups={payload?.bus_monday ?? {}} emptyLabel="Nessun servizio bus in invio settimanale per questa data base." reportTitle="Preview testo bus" />
         </SectionCard>
         <SectionCard title="Estratti conto agenzie" subtitle="Solo preview dati, nessun invio live" loading={loading} loadingLines={5}>
-          <SummaryGroupList groups={payload?.statement_candidates ?? {}} emptyLabel="Nessun estratto conto candidato per la data corrente." reportTitle="Preview testo estratto conto" />
+          <SummaryGroupList
+            groups={payload?.statement_candidates ?? {}}
+            emptyLabel="Nessun estratto conto candidato per la data corrente."
+            reportTitle="Preview testo estratto conto"
+            reportBuilder={buildStatementReport}
+          />
         </SectionCard>
       </div>
+
+      <SectionCard title="Storico export" subtitle="Ultimi export registrati nel tenant" loading={loading} loadingLines={4}>
+        {(payload?.export_history ?? []).length === 0 ? (
+          <p className="text-sm text-muted">Nessun export registrato finora.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-3 py-2">Creato il</th>
+                  <th className="px-3 py-2">Da</th>
+                  <th className="px-3 py-2">A</th>
+                  <th className="px-3 py-2">Tipo base</th>
+                  <th className="px-3 py-2">Servizi</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(payload?.export_history ?? []).map((item) => (
+                  <tr key={item.id} className="border-t border-slate-100">
+                    <td className="px-3 py-2">{formatDateTime(item.created_at)}</td>
+                    <td className="px-3 py-2">{formatIsoDate(item.date_from)}</td>
+                    <td className="px-3 py-2">{formatIsoDate(item.date_to)}</td>
+                    <td className="px-3 py-2">{item.service_type}</td>
+                    <td className="px-3 py-2">{item.exported_count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
     </section>
   );
 }
