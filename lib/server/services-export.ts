@@ -15,11 +15,12 @@ const payloadSchema = z
     status: z.array(statusEnum).default([]),
     serviceType: z.enum(["all", "transfer", "bus_tour"]).default("all"),
     exportPreset: z
-      .enum(["standard", "arrivals_bus_line", "arrivals_other_services", "departures_bus_line", "departures_other_services"])
+      .enum(["standard", "arrivals_bus_line", "arrivals_other_services", "departures_bus_line", "departures_other_services", "statement_agency"])
       .default("standard"),
     ship: z.string().max(80).optional().default(""),
     zone: z.string().max(80).optional().default(""),
     hotel_id: z.string().uuid().optional(),
+    billingParty: z.string().max(160).optional().default(""),
     search: z.string().max(200).optional().default("")
   })
   .refine((value) => value.dateFrom <= value.dateTo, {
@@ -120,6 +121,7 @@ async function parseExportPayload(request: NextRequest) {
       ship: params.get("ship") ?? "",
       zone: params.get("zone") ?? "",
       hotel_id: params.get("hotel_id") ?? undefined,
+      billingParty: params.get("billingParty") ?? "",
       search: params.get("search") ?? ""
     });
     if (!parsed.success) {
@@ -137,6 +139,7 @@ async function parseExportPayload(request: NextRequest) {
     ...body,
     ship: typeof body.ship === "string" ? body.ship : typeof body.vessel === "string" ? body.vessel : "",
     exportPreset: typeof body.exportPreset === "string" ? body.exportPreset : "standard",
+    billingParty: typeof body.billingParty === "string" ? body.billingParty : "",
     status: Array.isArray(body.status) ? body.status : []
   });
   if (!parsed.success) {
@@ -399,6 +402,27 @@ function buildOperationalSummarySheet(services: ServiceRow[]) {
   return sheet;
 }
 
+function buildStatementAgencySheet(services: ServiceRow[], hotelsById: Map<string, HotelRow>) {
+  const header = ["Data servizio", "Cliente", "Categoria", "Hotel / destinazione", "Pax", "Costo PDF", "Valuta", "ID servizio", "Note"];
+  const rows = services
+    .sort((a, b) => (a.arrival_date ?? a.date).localeCompare(b.arrival_date ?? b.date) || normalizeTime(a.arrival_time ?? a.outbound_time ?? a.time).localeCompare(normalizeTime(b.arrival_time ?? b.outbound_time ?? b.time)))
+    .map((service) => [
+      formatIsoDateShort(service.arrival_date ?? service.date),
+      service.customer_name,
+      operationalCategory(service),
+      hotelsById.get(service.hotel_id)?.name ?? "",
+      service.pax,
+      service.source_total_amount_cents === null ? "" : (service.source_total_amount_cents / 100).toFixed(2),
+      service.source_amount_currency ?? "",
+      service.id,
+      service.notes ?? ""
+    ]);
+  const sheetRows = [header, ...rows];
+  const sheet = XLSX.utils.aoa_to_sheet(sheetRows);
+  applySheetFormatting(sheet, sheetRows);
+  return sheet;
+}
+
 export async function buildServicesExportXlsx(request: NextRequest) {
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -513,6 +537,7 @@ export async function buildServicesExportXlsx(request: NextRequest) {
     );
 
     const filteredServices = services;
+    const billingPartyFilter = filters.billingParty.trim().toLowerCase();
 
     const workbook = XLSX.utils.book_new();
     const transferRows = filteredServices.filter((service) => (service.service_type ?? "transfer") === "transfer");
@@ -583,8 +608,14 @@ export async function buildServicesExportXlsx(request: NextRequest) {
             ? "Arrivi Altri Servizi"
             : filters.exportPreset === "departures_bus_line"
               ? "Partenze Linea Bus"
-              : "Partenze Altri Servizi"
+            : "Partenze Altri Servizi"
       );
+    } else if (filters.exportPreset === "statement_agency") {
+      const statementRows = filteredServices.filter((service) =>
+        billingPartyFilter ? (service.billing_party_name ?? "").trim().toLowerCase() === billingPartyFilter : true
+      );
+      XLSX.utils.book_append_sheet(workbook, buildOperationalSummarySheet(statementRows), "Riepilogo");
+      XLSX.utils.book_append_sheet(workbook, buildStatementAgencySheet(statementRows, hotelsById), "Estratto conto");
     } else {
       XLSX.utils.book_append_sheet(workbook, buildSheet(transferRows.map(normalizeServiceRow)), "Transfers");
       XLSX.utils.book_append_sheet(workbook, buildSheet(busTourRows.map(normalizeServiceRow)), "Bus Tours");
@@ -655,7 +686,9 @@ export async function buildServicesExportXlsx(request: NextRequest) {
             ? `partenze_linea_bus_${filters.dateFrom}_${filters.dateTo}.xlsx`
             : filters.exportPreset === "departures_other_services"
               ? `partenze_altri_servizi_${filters.dateFrom}_${filters.dateTo}.xlsx`
-          : `services_export_${filters.dateFrom}_${filters.dateTo}.xlsx`;
+              : filters.exportPreset === "statement_agency"
+                ? `estratto_conto_${(filters.billingParty || "agenzia").replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase()}_${filters.dateFrom}_${filters.dateTo}.xlsx`
+                : `services_export_${filters.dateFrom}_${filters.dateTo}.xlsx`;
 
     return new NextResponse(buffer, {
       status: 200,

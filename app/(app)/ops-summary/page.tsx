@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { OpsArrivalsExportButtons } from "@/components/ops-arrivals-export-buttons";
+import { OpsStatementExportButtons } from "@/components/ops-statement-export-buttons";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import type { SummaryPreviewPayload } from "@/lib/server/operational-summary";
 
@@ -211,6 +212,7 @@ export default function OpsSummaryPage() {
       </div>
 
       {payload ? <OpsArrivalsExportButtons targetDate={payload.target_date_48h} /> : null}
+      {payload ? <OpsStatementExportButtons agencies={Object.keys(payload.statement_candidates ?? {})} today={today} /> : null}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <SectionCard title="Arrivi 48 ore prima" subtitle={payload ? `Data target: ${formatIsoDate(payload.target_date_48h)}` : undefined} loading={loading} loadingLines={6}>
