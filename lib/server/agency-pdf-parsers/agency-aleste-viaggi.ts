@@ -25,6 +25,7 @@ type ExtractedTrainJourney = {
   trainNumber: string | null;
   destinationStation: string | null;
   destinationTime: string | null;
+  hotel: string | null;
 };
 
 type ExtractedBusJourney = {
@@ -209,7 +210,8 @@ function extractAlesteTrainOperationalJourney(
       carrierCompany: clean(match[5])?.toUpperCase() ?? null,
       trainNumber: clean(match[6]),
       destinationStation: "STAZIONE DI NAPOLI",
-      destinationTime: normalizeTime(match[3])
+      destinationTime: normalizeTime(match[3]),
+      hotel: clean(match[7])
     };
   }
 
@@ -225,7 +227,8 @@ function extractAlesteTrainOperationalJourney(
     carrierCompany: clean(match[4])?.toUpperCase() ?? null,
     trainNumber: clean(match[5]),
     destinationStation: normalizeStationName(match[6] ?? match[7]) ?? clean(match[6] ?? match[7]),
-    destinationTime: null
+    destinationTime: null,
+    hotel: null
   };
 }
 
@@ -246,7 +249,8 @@ function extractTrainJourneyFromSchedule(sourceText: string, rowNumber: "1" | "2
       carrierCompany: "ITALO",
       trainNumber: clean(compactMatch[4]),
       destinationStation: clean(compactMatch[5]),
-      destinationTime: normalizeTime(compactMatch[6])
+      destinationTime: normalizeTime(compactMatch[6]),
+      hotel: null
     };
   }
 
@@ -278,7 +282,8 @@ function extractTrainJourneyFromSchedule(sourceText: string, rowNumber: "1" | "2
       carrierCompany: "ITALO",
       trainNumber: clean(firstMatch[4]),
       destinationStation: clean(secondMatch[1]),
-      destinationTime: normalizeTime(secondMatch[2])
+      destinationTime: normalizeTime(secondMatch[2]),
+      hotel: null
     };
   }
 
@@ -306,7 +311,8 @@ function extractTrainJourneyFromOperationalBlock(sourceText: string, rowNumber: 
     carrierCompany,
     trainNumber: clean(blockMatch[6]),
     destinationStation: rowNumber === "1" ? arrivalStation : clean(blockMatch[8]),
-    destinationTime: normalizeTime(blockMatch[3])
+    destinationTime: normalizeTime(blockMatch[3]),
+    hotel: null
   };
 }
 
@@ -532,7 +538,8 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     confidence_level: "high" as const
   }));
 
-  if (arrivalTrain && hotel) {
+  const effectiveHotel = hotel ?? arrivalTrain?.hotel ?? null;
+  if (arrivalTrain && effectiveHotel) {
     const arrivalIndex = parsedServices.findIndex((service) => service.direction === "andata");
     const arrivalStation = normalizeStationName(arrivalTrain.destinationStation) ?? "STAZIONE DI NAPOLI";
     const arrivalService = {
@@ -545,11 +552,11 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
       service_time: arrivalTrain.destinationTime ?? parsedServices[arrivalIndex]?.service_time ?? null,
       pickup_meeting_point: arrivalStation,
       origin: arrivalStation,
-      destination: hotel,
+      destination: effectiveHotel,
       carrier_company: arrivalTrain.carrierCompany ?? "ITALO",
-      hotel_structure: hotel,
+      hotel_structure: effectiveHotel,
       original_row_description: "TRANSFER STAZIONE / HOTEL",
-      raw_detail_text: `Arrivo ${arrivalTrain.carrierCompany ?? "treno"} ${arrivalTrain.trainNumber ?? ""} a ${arrivalStation} alle ${arrivalTrain.destinationTime ?? "N/D"} - hotel ${hotel}`.trim(),
+      raw_detail_text: `Arrivo ${arrivalTrain.carrierCompany ?? "treno"} ${arrivalTrain.trainNumber ?? ""} a ${arrivalStation} alle ${arrivalTrain.destinationTime ?? "N/D"} - hotel ${effectiveHotel}`.trim(),
       parsing_status: "parsed" as const,
       confidence_level: "high" as const,
       semantic_tag: "transfer_arrival" as const
