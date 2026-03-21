@@ -18,12 +18,24 @@ function sortLines(lines: SummaryLine[]) {
   });
 }
 
+function buildOwnerReport(owner: string, lines: SummaryLine[]) {
+  const header = `${owner} - ${lines.length} servizi / ${lines.reduce((sum, line) => sum + line.pax, 0)} pax`;
+  const rows = sortLines(lines).map((line) => {
+    const direction = line.direction === "arrival" ? "Arrivo" : "Partenza";
+    const destination = line.hotel_or_destination ?? "N/D";
+    return `${line.date} ${line.time} | ${direction} | ${line.customer_name} | ${destination} | ${line.pax} pax`;
+  });
+  return [header, ...rows].join("\n");
+}
+
 function SummaryGroupList({
   groups,
-  emptyLabel
+  emptyLabel,
+  reportTitle
 }: {
   groups: Record<string, SummaryLine[]>;
   emptyLabel: string;
+  reportTitle: string;
 }) {
   const entries = Object.entries(groups);
   if (entries.length === 0) {
@@ -39,7 +51,7 @@ function SummaryGroupList({
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
               <p className="text-sm font-semibold text-text">{owner}</p>
               <span className="rounded-full bg-white px-2.5 py-1 text-xs text-muted">
-                {lines.length} servizi · {lines.reduce((sum, line) => sum + line.pax, 0)} pax
+                {lines.length} servizi - {lines.reduce((sum, line) => sum + line.pax, 0)} pax
               </span>
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -69,6 +81,10 @@ function SummaryGroupList({
                   ))}
                 </tbody>
               </table>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted">{reportTitle}</p>
+              <textarea readOnly className="input-saas min-h-36 w-full font-mono text-xs" value={buildOwnerReport(owner, lines)} />
             </div>
           </div>
         ))}
@@ -136,7 +152,7 @@ export default function OpsSummaryPage() {
     <section className="page-section">
       <PageHeader
         title="Riepiloghi Operativi"
-        subtitle="Preview dei riepiloghi automatici per arrivi, partenze, servizi bus del lunedì ed estratti conto."
+        subtitle="Preview dei riepiloghi automatici per arrivi, partenze, servizi bus del lunedi ed estratti conto."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Riepiloghi" }]}
         actions={
           <label className="text-sm">
@@ -157,7 +173,7 @@ export default function OpsSummaryPage() {
           <p className="text-3xl font-semibold text-text">{stats?.departures.length ?? 0}</p>
           <p className="mt-1 text-sm text-muted">{stats?.departures.reduce((sum, line) => sum + line.pax, 0) ?? 0} pax previsti</p>
         </SectionCard>
-        <SectionCard title="Bus del lunedì" subtitle="Solo se la data base cade di lunedì" loading={loading}>
+        <SectionCard title="Bus del lunedi" subtitle="Solo se la data base cade di lunedi" loading={loading}>
           <p className="text-3xl font-semibold text-text">{stats?.bus.length ?? 0}</p>
           <p className="mt-1 text-sm text-muted">{stats?.bus.reduce((sum, line) => sum + line.pax, 0) ?? 0} pax in elenco</p>
         </SectionCard>
@@ -169,19 +185,19 @@ export default function OpsSummaryPage() {
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <SectionCard title="Arrivi 48 ore prima" subtitle={payload ? `Data target: ${formatIsoDate(payload.target_date_48h)}` : undefined} loading={loading} loadingLines={6}>
-          <SummaryGroupList groups={payload?.arrivals_48h ?? {}} emptyLabel="Nessun arrivo aggregato per la finestra +48h." />
+          <SummaryGroupList groups={payload?.arrivals_48h ?? {}} emptyLabel="Nessun arrivo aggregato per la finestra +48h." reportTitle="Preview testo arrivi" />
         </SectionCard>
         <SectionCard title="Partenze 48 ore prima" subtitle={payload ? `Data target: ${formatIsoDate(payload.target_date_48h)}` : undefined} loading={loading} loadingLines={6}>
-          <SummaryGroupList groups={payload?.departures_48h ?? {}} emptyLabel="Nessuna partenza aggregata per la finestra +48h." />
+          <SummaryGroupList groups={payload?.departures_48h ?? {}} emptyLabel="Nessuna partenza aggregata per la finestra +48h." reportTitle="Preview testo partenze" />
         </SectionCard>
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <SectionCard title="Servizi bus del lunedì" subtitle="Preview del lotto settimanale bus" loading={loading} loadingLines={5}>
-          <SummaryGroupList groups={payload?.bus_monday ?? {}} emptyLabel="Nessun servizio bus in invio settimanale per questa data base." />
+        <SectionCard title="Servizi bus del lunedi" subtitle="Preview del lotto settimanale bus" loading={loading} loadingLines={5}>
+          <SummaryGroupList groups={payload?.bus_monday ?? {}} emptyLabel="Nessun servizio bus in invio settimanale per questa data base." reportTitle="Preview testo bus" />
         </SectionCard>
         <SectionCard title="Estratti conto agenzie" subtitle="Solo preview dati, nessun invio live" loading={loading} loadingLines={5}>
-          <SummaryGroupList groups={payload?.statement_candidates ?? {}} emptyLabel="Nessun estratto conto candidato per la data corrente." />
+          <SummaryGroupList groups={payload?.statement_candidates ?? {}} emptyLabel="Nessun estratto conto candidato per la data corrente." reportTitle="Preview testo estratto conto" />
         </SectionCard>
       </div>
     </section>

@@ -173,5 +173,25 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: updateResult.error?.message ?? "Aggiornamento utente fallito." }, { status: 500 });
   }
 
+  if (parsed.data.password) {
+    const passwordUpdate = await auth.admin.auth.admin.updateUserById(parsed.data.user_id, {
+      password: parsed.data.password,
+      user_metadata: {
+        full_name: parsed.data.full_name.trim()
+      }
+    });
+    if (passwordUpdate.error) {
+      return NextResponse.json({ error: passwordUpdate.error.message }, { status: 500 });
+    }
+  } else {
+    await auth.admin.auth.admin
+      .updateUserById(parsed.data.user_id, {
+        user_metadata: {
+          full_name: parsed.data.full_name.trim()
+        }
+      })
+      .catch(() => undefined);
+  }
+
   return NextResponse.json({ ok: true, user: updateResult.data });
 }

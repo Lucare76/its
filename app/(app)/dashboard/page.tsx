@@ -39,7 +39,7 @@ export default function OperatorDashboardPage() {
   const [skippedGroupIds, setSkippedGroupIds] = useState<string[]>([]);
   const [applyingGroupId, setApplyingGroupId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [alertNowMs, setAlertNowMs] = useState(0);
+  const [alertNowMs, setAlertNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -70,8 +70,9 @@ export default function OperatorDashboardPage() {
     );
   }
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = new Date(alertNowMs).toISOString().slice(0, 10);
   const todayInstances = buildOperationalInstances(data.services).filter((instance) => instance.date === todayIso);
+  const next48hIso = new Date(alertNowMs + 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const todayServiceIds = new Set(todayInstances.map((instance) => instance.serviceId));
   const todayServices = data.services.filter((service) => todayServiceIds.has(service.id));
   const todayArrivals = todayInstances.filter((instance) => instance.direction === "arrival").length;
@@ -79,6 +80,9 @@ export default function OperatorDashboardPage() {
   const todayPdfServices = todayServices.filter((service) => getServicePdfOperationalMeta(service, data.inboundEmails).isPdf);
   const todayPdfNeedsAttention = todayServices.filter((service) => getServicePdfOperationalMeta(service, data.inboundEmails).reviewRecommended);
   const inboxToReview = data.inboundEmails.filter((email) => needsInboxReview(email.parsed_json));
+  const futureInstances = buildOperationalInstances(data.services).filter((instance) => instance.date > todayIso && instance.date <= next48hIso);
+  const nextArrivals48h = futureInstances.filter((instance) => instance.direction === "arrival").slice(0, 6);
+  const nextDepartures48h = futureInstances.filter((instance) => instance.direction === "departure").slice(0, 6);
   const hotelsById = new Map(data.hotels.map((hotel) => [hotel.id, hotel]));
   const assignmentsByServiceId = new Map(data.assignments.map((assignment) => [assignment.service_id, assignment]));
 
@@ -314,6 +318,66 @@ export default function OperatorDashboardPage() {
           </p>
         </article>
       ) : null}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <article className="card p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-text">Prossimi arrivi 48h</h2>
+              <p className="text-sm text-muted">Servizi gia confermati che entreranno nell&apos;operativo a breve.</p>
+            </div>
+            <Link href="/ops-summary" className="btn-secondary px-3 py-1.5 text-xs">
+              Apri riepiloghi
+            </Link>
+          </div>
+          {nextArrivals48h.length === 0 ? (
+            <EmptyState title="Nessun arrivo imminente" description="Nelle prossime 48 ore non ci sono arrivi confermati." compact />
+          ) : (
+            <div className="space-y-2">
+              {nextArrivals48h.map((instance) => (
+                <article key={instance.instanceId} className="rounded-xl border border-border bg-surface/80 px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-text">{getCustomerFullName(instance.service)}</p>
+                    <span className="text-xs text-muted">
+                      {formatServiceSlot({
+                        arrival_date: instance.date,
+                        outbound_time: instance.time
+                      })}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">{instance.service.meeting_point?.trim() || "Meeting point da verificare"}</p>
+                </article>
+              ))}
+            </div>
+          )}
+        </article>
+
+        <article className="card p-4">
+          <div className="mb-3">
+            <h2 className="text-base font-semibold text-text">Prossime partenze 48h</h2>
+            <p className="text-sm text-muted">Controllo rapido dei rientri e delle uscite imminenti.</p>
+          </div>
+          {nextDepartures48h.length === 0 ? (
+            <EmptyState title="Nessuna partenza imminente" description="Nelle prossime 48 ore non ci sono partenze confermate." compact />
+          ) : (
+            <div className="space-y-2">
+              {nextDepartures48h.map((instance) => (
+                <article key={instance.instanceId} className="rounded-xl border border-border bg-surface/80 px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-text">{getCustomerFullName(instance.service)}</p>
+                    <span className="text-xs text-muted">
+                      {formatServiceSlot({
+                        arrival_date: instance.date,
+                        outbound_time: instance.time
+                      })}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">{instance.service.meeting_point?.trim() || "Meeting point da verificare"}</p>
+                </article>
+              ))}
+            </div>
+          )}
+        </article>
+      </div>
       <ServicesTable services={todayServices} hotels={data.hotels} assignments={data.assignments} memberships={data.memberships} statusEvents={data.statusEvents} inboundEmails={data.inboundEmails} />
       <SidePanel open={isSuggestionsOpen} onClose={() => setIsSuggestionsOpen(false)} title="Supporto assegnazioni" subtitle="Suggerimenti interni opzionali: il servizio resta operativo anche senza assegnazione.">
         <div className="mt-4 space-y-3">

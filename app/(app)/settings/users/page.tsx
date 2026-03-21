@@ -52,6 +52,7 @@ export default function SettingsUsersPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("Caricamento utenti tenant...");
 
   const sortedMemberships = useMemo(
@@ -161,7 +162,7 @@ export default function SettingsUsersPage() {
     setMessage(`Utente creato: ${createdUser.full_name} (${createdUser.role}).`);
   };
 
-  const updateMembership = async (membership: MembershipRow, nextRole: UserRole) => {
+  const updateMembership = async (membership: MembershipRow, nextRole: UserRole, nextPassword?: string) => {
     if (!hasSupabaseEnv || !supabase || updatingUserId) return;
     setUpdatingUserId(membership.user_id);
     setMessage(`Aggiornamento ruolo di ${membership.full_name}...`);
@@ -183,7 +184,8 @@ export default function SettingsUsersPage() {
       body: JSON.stringify({
         user_id: membership.user_id,
         full_name: membership.full_name,
-        role: nextRole
+        role: nextRole,
+        password: nextPassword?.trim() ? nextPassword.trim() : undefined
       })
     });
 
@@ -197,8 +199,13 @@ export default function SettingsUsersPage() {
     const updatedUser = body.user;
 
     setMemberships((prev) => prev.map((item) => (item.user_id === membership.user_id ? { ...item, role: updatedUser.role } : item)));
+    setPasswordDrafts((prev) => ({ ...prev, [membership.user_id]: "" }));
     setUpdatingUserId(null);
-    setMessage(`Ruolo aggiornato: ${membership.full_name} -> ${updatedUser.role}.`);
+    setMessage(
+      nextPassword?.trim()
+        ? `Utente aggiornato: ${membership.full_name} (${updatedUser.role}) con nuova password.`
+        : `Ruolo aggiornato: ${membership.full_name} -> ${updatedUser.role}.`
+    );
   };
 
   return (
@@ -311,6 +318,8 @@ export default function SettingsUsersPage() {
                 <tr className="border-b border-border text-muted">
                   <th className="px-3 py-2 font-medium">Nome</th>
                   <th className="px-3 py-2 font-medium">Ruolo</th>
+                  <th className="px-3 py-2 font-medium">Nuova password</th>
+                  <th className="px-3 py-2 font-medium">Azioni</th>
                   <th className="px-3 py-2 font-medium">Creato il</th>
                   <th className="px-3 py-2 font-medium">User ID</th>
                 </tr>
@@ -332,6 +341,26 @@ export default function SettingsUsersPage() {
                           </option>
                         ))}
                       </select>
+                    </td>
+                    <td className="px-3 py-2">
+                      <input
+                        type="password"
+                        value={passwordDrafts[membership.user_id] ?? ""}
+                        onChange={(event) => setPasswordDrafts((prev) => ({ ...prev, [membership.user_id]: event.target.value }))}
+                        className="input-saas min-w-44"
+                        placeholder="Reset password"
+                        disabled={updatingUserId === membership.user_id}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <button
+                        type="button"
+                        className="btn-secondary px-3 py-2 text-xs"
+                        disabled={updatingUserId === membership.user_id || !(passwordDrafts[membership.user_id] ?? "").trim()}
+                        onClick={() => void updateMembership(membership, membership.role, passwordDrafts[membership.user_id])}
+                      >
+                        {updatingUserId === membership.user_id ? "Salvataggio..." : "Salva password"}
+                      </button>
                     </td>
                     <td className="px-3 py-2 text-muted">{formatCreatedAt(membership.created_at)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-muted">{membership.user_id}</td>

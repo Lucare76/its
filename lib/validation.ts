@@ -178,7 +178,8 @@ export const adminUserCreateSchema = z.object({
 export const adminUserUpdateSchema = z.object({
   user_id: z.string().uuid(),
   full_name: z.string().min(2).max(120),
-  role: roleSchema
+  role: roleSchema,
+  password: z.string().min(8).max(120).optional()
 });
 
 export const vehicleCreateSchema = z.object({
