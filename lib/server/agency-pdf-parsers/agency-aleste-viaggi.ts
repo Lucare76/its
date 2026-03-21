@@ -159,6 +159,15 @@ function extractHotel(sourceText: string) {
   );
   if (fromProgramRow) return fromProgramRow;
 
+  const fromAlesteProgramRow = clean(
+    sourceText.match(
+      /PROGRAMMA(?:DESCRIZIONE)?(?:DALAL)?\s*[A-Z0-9/]+\s*([A-Z][A-Z &'./-]+?)(?=\s*[0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4}\s*[0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})/i
+    )?.[1]
+  );
+  if (fromAlesteProgramRow && !/PACCHETTO\s+TRANSFER/i.test(fromAlesteProgramRow)) {
+    return clean(fromAlesteProgramRow.replace(/^AV\s+CLUB\s+/i, ""));
+  }
+
   const fromDestination = clean(
     sourceText.match(/dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|\s+Cell\.|\n|\r|$)/i)?.[1]
   );
@@ -176,6 +185,46 @@ function extractCustomerPhone(sourceText: string) {
   return clean(
     sourceText.match(/(?:Cellulare\/Tel\.?|Cellulare:?|CELL:|Cell\.?|Tel\.?)\s*([+\d][\d\s./-]{7,})/i)?.[1]
   );
+}
+
+function extractAlesteTrainOperationalJourney(
+  sourceText: string,
+  direction: "andata" | "ritorno",
+  fallbackYear?: string | null
+): ExtractedTrainJourney | null {
+  const compact = sourceText.replace(/\s+/g, " ").trim();
+
+  if (direction === "andata") {
+    const match = compact.match(
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+STAZIONE\s*\/\s*HOTEL\s+Dalle\s*([0-2]?\d[:.]\d{2})\s+Alle\s*([0-2]?\d[:.]\d{2})\s+M\.p\.\s*:\s*([A-Z][A-Z ]+?)\s+da:\s*([A-Z]+)\s*(\d{3,5})\s+a:\s*CELL:?\d+\s+dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Cliente:|\s+Cellulare|\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|$)/i
+    );
+    if (!match) return null;
+
+    return {
+      originStation: clean(match[4]),
+      originTime: normalizeTime(match[2]),
+      serviceDate: parseItalianDate(match[1]) ?? parseItalianShortDate(match[1], fallbackYear),
+      carrierCompany: clean(match[5])?.toUpperCase() ?? null,
+      trainNumber: clean(match[6]),
+      destinationStation: "STAZIONE DI NAPOLI",
+      destinationTime: normalizeTime(match[3])
+    };
+  }
+
+  const match = compact.match(
+    /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+HOTEL\s*\/\s*STAZIONE\s+Dalle\s*([0-2]?\d[:.]\d{2})\s+M\.p\.\s*:\s*([A-Z][A-Z &'./-]+?)\s+da:\s*([A-Z]+)\s*(\d{3,5})\s+a:\s*(NAPOLI(?:\s+STAZIONE|\s+CENTRALE)?)/i
+  );
+  if (!match) return null;
+
+  return {
+    originStation: "STAZIONE DI NAPOLI",
+    originTime: normalizeTime(match[2]),
+    serviceDate: parseItalianDate(match[1]) ?? parseItalianShortDate(match[1], fallbackYear),
+    carrierCompany: clean(match[4])?.toUpperCase() ?? null,
+    trainNumber: clean(match[5]),
+    destinationStation: normalizeStationName(match[6]) ?? clean(match[6]),
+    destinationTime: null
+  };
 }
 
 function extractTrainJourneyFromSchedule(sourceText: string, rowNumber: "1" | "2", fallbackYear?: string | null): ExtractedTrainJourney | null {
@@ -457,8 +506,8 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     parseItalianDate(practiceHead[2])?.slice(0, 4) ??
     parseItalianDate(sourceText.match(/\bData\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})/i)?.[1] ?? null)?.slice(0, 4) ??
     null;
-  const arrivalTrain = extractTrainJourney(sourceText, "1", fallbackYear);
-  const departureTrain = extractTrainJourney(sourceText, "2", fallbackYear);
+  const arrivalTrain = extractAlesteTrainOperationalJourney(sourceText, "andata", fallbackYear) ?? extractTrainJourney(sourceText, "1", fallbackYear);
+  const departureTrain = extractAlesteTrainOperationalJourney(sourceText, "ritorno", fallbackYear) ?? extractTrainJourney(sourceText, "2", fallbackYear);
   const outwardBus = extractAlesteBusJourney(sourceText, "andata", fallbackYear);
   const returnBus = extractAlesteBusJourney(sourceText, "ritorno", fallbackYear);
   const outwardMarine = extractAlesteMarineJourney(sourceText, "andata", fallbackYear);
