@@ -25,6 +25,7 @@ const appNav = [
   { href: "/pdf-imports", label: "Import PDF", icon: "F" },
   { href: "/pricing", label: "Tariffe", icon: "T" },
   { href: "/pricing/margins", label: "Margini", icon: "$" },
+  { href: "/settings/users", label: "Utenti", icon: "U" },
   { href: "/settings/whatsapp", label: "Impostazioni WA", icon: "W" }
 ];
 

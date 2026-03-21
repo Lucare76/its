@@ -168,6 +168,13 @@ export const onboardingDriversBatchSchema = z.object({
   drivers: z.array(onboardingDriverSchema).max(20)
 });
 
+export const adminUserCreateSchema = z.object({
+  full_name: z.string().min(2).max(120),
+  email: z.string().email().max(160),
+  password: z.string().min(8).max(120),
+  role: roleSchema
+});
+
 export const vehicleCreateSchema = z.object({
   label: z.string().min(2).max(120),
   plate: z.string().max(32).optional().or(z.literal("")),

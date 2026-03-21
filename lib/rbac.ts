@@ -19,6 +19,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/inbox", roles: ["admin", "operator"] },
   { prefix: "/pdf-imports", roles: ["admin", "operator"] },
   { prefix: "/pricing", roles: ["admin", "operator"] },
+  { prefix: "/settings/users", roles: ["admin"] },
   { prefix: "/settings/whatsapp", roles: ["admin"] }
 ];
 
@@ -37,6 +38,7 @@ export type AppCapability =
   | "agency_bookings:self"
   | "agency_bookings:manage"
   | "driver:self"
+  | "users:manage"
   | "whatsapp:manage";
 
 export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
@@ -54,6 +56,7 @@ export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
   "agency_bookings:self": ["agency"],
   "agency_bookings:manage": ["admin"],
   "driver:self": ["driver", "admin"],
+  "users:manage": ["admin"],
   "whatsapp:manage": ["admin"]
 };
 
