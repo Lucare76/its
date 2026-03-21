@@ -889,6 +889,68 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
   const tenantId = auth.membership.tenant_id;
   const dedupeHit = await findExistingPdfImport(auth.admin, tenantId, parsed.normalized);
   if (dedupeHit.service?.id) {
+    if (dedupeHit.service.is_draft && dedupeHit.service.inbound_email_id) {
+      const possibleExistingMatches = await findPotentialExistingMatches(auth.admin, tenantId, parsed.normalized);
+      const refreshedParsedJson = buildParsedJson(
+        {
+          fromEmail: input.senderEmail,
+          subject: input.subject,
+          bodyText: input.bodyText ?? "",
+          filename: input.filename,
+          sizeBytes: input.fileSize
+        },
+        parsed,
+        "draft",
+        "draft",
+        dedupeHit.service.id,
+        possibleExistingMatches
+      );
+
+      const inboundRefresh = await auth.admin
+        .from("inbound_emails")
+        .update({
+          from_email: input.senderEmail,
+          subject: input.subject,
+          body_text: input.bodyText ?? "",
+          raw_text: input.bodyText ?? "",
+          raw_json: { source: "pdf-import-controlled", filename: input.filename, size_bytes: input.fileSize, refreshed: true },
+          extracted_text: parsed.extractedText || null,
+          parsed_json: refreshedParsedJson
+        })
+        .eq("tenant_id", tenantId)
+        .eq("id", dedupeHit.service.inbound_email_id);
+
+      if (inboundRefresh.error) {
+        throw new Error(inboundRefresh.error.message);
+      }
+
+      await syncDraftServiceFromNormalized(auth, dedupeHit.service.inbound_email_id, parsed.normalized, refreshedParsedJson);
+
+      auditLog({
+        event: "pdf_import_draft_refreshed",
+        tenantId,
+        userId: auth.user.id ?? null,
+        role: auth.membership.role,
+        serviceId: dedupeHit.service.id,
+        inboundEmailId: dedupeHit.service.inbound_email_id,
+        outcome: "draft_refreshed",
+        parserKey: parsed.normalized.parser_key,
+        parsingQuality: parsed.normalized.parsing_quality,
+        details: { dedupe_pattern: dedupeHit.pattern, filename: input.filename }
+      });
+
+      return {
+        ok: true,
+        outcome: "draft_refreshed",
+        duplicate: true,
+        inbound_email_id: dedupeHit.service.inbound_email_id,
+        draft_service_id: dedupeHit.service.id,
+        dedupe_pattern: dedupeHit.pattern,
+        preview: parsed.preview,
+        normalized: parsed.normalized
+      };
+    }
+
     auditLog({
       event: "pdf_import_duplicate_blocked",
       level: "warn",
