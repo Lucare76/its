@@ -48,6 +48,16 @@ type ExtractedMarineJourney = {
   direction: "andata" | "ritorno";
 };
 
+type ExtractedFlixbusJourney = {
+  serviceDate: string | null;
+  serviceTime: string | null;
+  meetingPoint: string | null;
+  transportReference: string | null;
+  destination: string | null;
+  rawDetailText: string;
+  direction: "andata" | "ritorno";
+};
+
 const CUSTOMER_STOPWORDS = ["PACCHETTO", "TRANSFER", "SERVIZIO", "PROGRAMMA", "STAFF", "CLIENTE", "ISCHIA"];
 
 function clean(value?: string | null) {
@@ -321,6 +331,44 @@ function extractAlesteMarineJourney(
   };
 }
 
+function extractAlesteFlixbusJourney(
+  sourceText: string,
+  direction: "andata" | "ritorno",
+  fallbackYear?: string | null
+): ExtractedFlixbusJourney | null {
+  const compact = sourceText.replace(/\s+/g, " ").trim();
+
+  if (direction === "andata") {
+    const outwardMatch = compact.match(
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+STAZIONE\s*\/\s*HOTEL\s+Dalle\s*([0-2]?\d[:.]\d{2})(?:\s+Alle\s*[0-2]?\d[:.]\d{2})?\s+M\.p\.\s*:\s*([A-Z][A-Z ]+?)\s+da:\s*(FLIXBUS\s+\d+)\s+a:\s*CELL:?\d+\s+dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Cliente:|\s+Cellulare|\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|$)/i
+    );
+    if (!outwardMatch) return null;
+    return {
+      serviceDate: parseItalianDate(outwardMatch[1]) ?? parseItalianShortDate(outwardMatch[1], fallbackYear),
+      serviceTime: normalizeTime(outwardMatch[2]),
+      meetingPoint: clean(outwardMatch[3]),
+      transportReference: clean(outwardMatch[4]),
+      destination: clean(outwardMatch[5]),
+      rawDetailText: clean(outwardMatch[0]) ?? "",
+      direction
+    };
+  }
+
+  const returnMatch = compact.match(
+    /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+HOTEL\s*\/\s*STAZIONE\s+Dalle\s*([0-2]?\d[:.]\d{2})\s+M\.p\.\s*:\s*([A-Z][A-Z &'./-]+?)\s+da:\s*(FLIXBUS\s+\d+)\s+a:\s*([A-Z][A-Z ]+?)(?=\s+La caparra|\s+Cliente:|\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|$)/i
+  );
+  if (!returnMatch) return null;
+  return {
+    serviceDate: parseItalianDate(returnMatch[1]) ?? parseItalianShortDate(returnMatch[1], fallbackYear),
+    serviceTime: normalizeTime(returnMatch[2]),
+    meetingPoint: clean(returnMatch[3]),
+    transportReference: clean(returnMatch[4]),
+    destination: clean(returnMatch[5]),
+    rawDetailText: clean(returnMatch[0]) ?? "",
+    direction
+  };
+}
+
 function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload {
   const parsed = parseTransferBookingPdfText(sourceText);
   const compact = sourceText.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim();
@@ -349,6 +397,8 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
   const returnBus = extractAlesteBusJourney(sourceText, "ritorno", fallbackYear);
   const outwardMarine = extractAlesteMarineJourney(sourceText, "andata", fallbackYear);
   const returnMarine = extractAlesteMarineJourney(sourceText, "ritorno", fallbackYear);
+  const outwardFlixbus = extractAlesteFlixbusJourney(sourceText, "andata", fallbackYear);
+  const returnFlixbus = extractAlesteFlixbusJourney(sourceText, "ritorno", fallbackYear);
   const hasBusLineService =
     /\b(?:linea\s+\d+|bus\s+line|bus da |pullman|servizio bus|corriera|autobus)\b/i.test(sourceText) ||
     /\bBUS\b/i.test(parsed.program ?? "") ||
@@ -515,6 +565,56 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     }
   }
 
+  const hasFlixbusTransfer =
+    /\bFLIXBUS\b/i.test(sourceText) &&
+    /TRANSFER\s+STAZIONE\s*\/\s*HOTEL|TRANSFER\s+HOTEL\s*\/\s*STAZIONE/i.test(sourceText);
+
+  if (hasFlixbusTransfer && hotel) {
+    if (outwardFlixbus) {
+      parsedServices.push({
+        practice_number: parsed.practice_number,
+        beneficiary: exactBeneficiary ?? parsed.first_beneficiary,
+        pax: exactPax ?? parsed.pax,
+        service_type: "transfer",
+        direction: "andata",
+        service_date: outwardFlixbus.serviceDate,
+        service_time: outwardFlixbus.serviceTime,
+        pickup_meeting_point: outwardFlixbus.meetingPoint,
+        origin: outwardFlixbus.meetingPoint,
+        destination: hotel,
+        carrier_company: "FLIXBUS",
+        hotel_structure: hotel,
+        original_row_description: "TRANSFER STAZIONE / HOTEL",
+        raw_detail_text: outwardFlixbus.rawDetailText,
+        parsing_status: "parsed",
+        confidence_level: "high",
+        semantic_tag: "transfer_arrival"
+      });
+    }
+
+    if (returnFlixbus) {
+      parsedServices.push({
+        practice_number: parsed.practice_number,
+        beneficiary: exactBeneficiary ?? parsed.first_beneficiary,
+        pax: exactPax ?? parsed.pax,
+        service_type: "transfer",
+        direction: "ritorno",
+        service_date: returnFlixbus.serviceDate,
+        service_time: returnFlixbus.serviceTime,
+        pickup_meeting_point: hotel,
+        origin: hotel,
+        destination: returnFlixbus.destination,
+        carrier_company: "FLIXBUS",
+        hotel_structure: hotel,
+        original_row_description: "TRANSFER HOTEL/STAZIONE",
+        raw_detail_text: returnFlixbus.rawDetailText,
+        parsing_status: "parsed",
+        confidence_level: "high",
+        semantic_tag: "transfer_departure"
+      });
+    }
+  }
+
   return {
     ...parsed,
     first_beneficiary: exactBeneficiary ?? parsed.first_beneficiary,
@@ -526,12 +626,12 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     pax: exactPax ?? parsed.pax,
     booking_kind: hasBusLineService ? "bus_city_hotel" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_train_hotel",
     service_type_code: hasBusLineService ? "bus_line" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_station_hotel",
-    date_from: (outwardBus?.serviceDate ?? outwardMarine?.serviceDate ?? parsed.date_from) || null,
-    date_to: (returnBus?.serviceDate ?? returnMarine?.serviceDate ?? parsed.date_to) || null,
-    train_arrival_number: arrivalTrain?.trainNumber ? `${arrivalTrain.carrierCompany ?? "ITALO"} ${arrivalTrain.trainNumber}` : null,
-    train_arrival_time: arrivalTrain?.originTime ?? null,
-    train_departure_number: departureTrain?.trainNumber ? `${departureTrain.carrierCompany ?? "ITALO"} ${departureTrain.trainNumber}` : null,
-    train_departure_time: departureTrain?.originTime ?? null,
+    date_from: (outwardFlixbus?.serviceDate ?? outwardBus?.serviceDate ?? outwardMarine?.serviceDate ?? parsed.date_from) || null,
+    date_to: (returnFlixbus?.serviceDate ?? returnBus?.serviceDate ?? returnMarine?.serviceDate ?? parsed.date_to) || null,
+    train_arrival_number: outwardFlixbus?.transportReference ?? (arrivalTrain?.trainNumber ? `${arrivalTrain.carrierCompany ?? "ITALO"} ${arrivalTrain.trainNumber}` : null),
+    train_arrival_time: outwardFlixbus?.serviceTime ?? arrivalTrain?.originTime ?? null,
+    train_departure_number: returnFlixbus?.transportReference ?? (departureTrain?.trainNumber ? `${departureTrain.carrierCompany ?? "ITALO"} ${departureTrain.trainNumber}` : null),
+    train_departure_time: returnFlixbus?.serviceTime ?? departureTrain?.originTime ?? null,
     parsed_services: parsedServices,
     confidence_level: "high"
   };
