@@ -356,6 +356,49 @@ function buildOperationalDeparturesSheet(
   return sheet;
 }
 
+function buildOperationalSummarySheet(services: ServiceRow[]) {
+  const totalServices = services.length;
+  const totalPax = services.reduce((sum, service) => sum + service.pax, 0);
+  const totalAmountCents = services.reduce((sum, service) => sum + (service.source_total_amount_cents ?? 0), 0);
+  const categoryCounts = new Map<string, { services: number; pax: number }>();
+  const agencyCounts = new Map<string, { services: number; pax: number }>();
+
+  for (const service of services) {
+    const category = operationalCategory(service);
+    const categoryCurrent = categoryCounts.get(category) ?? { services: 0, pax: 0 };
+    categoryCurrent.services += 1;
+    categoryCurrent.pax += service.pax;
+    categoryCounts.set(category, categoryCurrent);
+
+    const agency = service.billing_party_name?.trim() || "Privati / non classificati";
+    const agencyCurrent = agencyCounts.get(agency) ?? { services: 0, pax: 0 };
+    agencyCurrent.services += 1;
+    agencyCurrent.pax += service.pax;
+    agencyCounts.set(agency, agencyCurrent);
+  }
+
+  const rows: unknown[][] = [
+    ["Indicatore", "Valore"],
+    ["Servizi totali", totalServices],
+    ["Pax totali", totalPax],
+    ["Totale economico (EUR)", (totalAmountCents / 100).toFixed(2)],
+    [],
+    ["Categoria", "Servizi", "Pax"],
+    ...Array.from(categoryCounts.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([category, values]) => [category, values.services, values.pax]),
+    [],
+    ["Agenzia fatturazione", "Servizi", "Pax"],
+    ...Array.from(agencyCounts.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([agency, values]) => [agency, values.services, values.pax])
+  ];
+
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  applySheetFormatting(sheet, rows);
+  return sheet;
+}
+
 export async function buildServicesExportXlsx(request: NextRequest) {
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -528,6 +571,7 @@ export async function buildServicesExportXlsx(request: NextRequest) {
               : departuresForDate.filter((service) => !isBusLineArrival(service));
 
       const isDeparturePreset = filters.exportPreset.startsWith("departures_");
+      XLSX.utils.book_append_sheet(workbook, buildOperationalSummarySheet(presetRows), "Riepilogo");
       XLSX.utils.book_append_sheet(
         workbook,
         isDeparturePreset
