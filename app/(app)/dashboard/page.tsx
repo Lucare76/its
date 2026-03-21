@@ -255,11 +255,14 @@ export default function OperatorDashboardPage() {
           <Link href="/inbox" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
             2. Inbox / Upload PDF draft
           </Link>
+          <Link href="/ops-summary" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
+            3. Riepiloghi operativi
+          </Link>
           <Link href="/dispatch" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
-            3. Assegnazioni interne
+            4. Assegnazioni interne
           </Link>
           <Link href="/driver" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
-            4. Verifica area autista
+            5. Verifica area autista
           </Link>
         </div>
       </article>

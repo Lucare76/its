@@ -11,6 +11,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/dispatch", roles: ["admin", "operator"] },
   { prefix: "/bus-tours", roles: ["admin", "operator"] },
   { prefix: "/planning", roles: ["admin", "operator"] },
+  { prefix: "/ops-summary", roles: ["admin", "operator"] },
   { prefix: "/hotels", roles: ["admin", "operator"] },
   { prefix: "/driver", roles: ["admin", "driver"] },
   { prefix: "/map", roles: ["admin", "operator", "agency"] },
@@ -26,6 +27,7 @@ export type AppCapability =
   | "analytics:view"
   | "dispatch:manage"
   | "planning:manage"
+  | "ops_summary:view"
   | "inbox:manage"
   | "pdf_imports:manage"
   | "pdf_imports:debug"
@@ -42,6 +44,7 @@ export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
   "analytics:view": ["admin", "operator"],
   "dispatch:manage": ["admin", "operator"],
   "planning:manage": ["admin", "operator"],
+  "ops_summary:view": ["admin", "operator"],
   "inbox:manage": ["admin", "operator"],
   "pdf_imports:manage": ["admin", "operator"],
   "pdf_imports:debug": ["admin"],

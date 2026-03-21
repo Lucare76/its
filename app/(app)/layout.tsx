@@ -18,6 +18,7 @@ const appNav = [
   { href: "/dispatch", label: "Assegnazioni", icon: "P" },
   { href: "/bus-tours", label: "Tour in Bus", icon: "B" },
   { href: "/planning", label: "Pianificazione", icon: "L" },
+  { href: "/ops-summary", label: "Riepiloghi", icon: "S" },
   { href: "/driver", label: "Autista", icon: "R" },
   { href: "/map", label: "Mappa", icon: "M" },
   { href: "/inbox", label: "Posta in arrivo", icon: "I" },
