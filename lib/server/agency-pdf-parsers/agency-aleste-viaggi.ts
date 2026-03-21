@@ -558,6 +558,8 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
   }));
 
   const effectiveHotel = hotel ?? arrivalTrain?.hotel ?? departureTrain?.hotel ?? null;
+  // DEBUG TEMPORANEO - rimuovere dopo diagnosi
+  const debugInfo = `hotel=${hotel}|atHotel=${arrivalTrain?.hotel}|dtHotel=${departureTrain?.hotel}|eff=${effectiveHotel}|at=${arrivalTrain?.trainNumber}|dt=${departureTrain?.trainNumber}`;
   if (arrivalTrain && effectiveHotel) {
     const arrivalIndex = parsedServices.findIndex((service) => service.direction === "andata");
     const arrivalStation = normalizeStationName(arrivalTrain.destinationStation) ?? "STAZIONE DI NAPOLI";
@@ -837,7 +839,8 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
       (departureTrain?.trainNumber ? `${departureTrain.carrierCompany ?? "ITALO"} ${departureTrain.trainNumber}` : null),
     train_departure_time: returnAirport?.serviceTime ?? returnFlixbus?.serviceTime ?? departureTrain?.originTime ?? null,
     parsed_services: parsedServices,
-    confidence_level: "high"
+    confidence_level: "high",
+    anomaly_message: debugInfo
   };
 }
 
