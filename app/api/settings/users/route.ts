@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
-import { adminUserCreateSchema } from "@/lib/validation";
+import { adminUserCreateSchema, adminUserUpdateSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
 
@@ -143,4 +143,35 @@ export async function POST(request: NextRequest) {
     },
     { status: 201 }
   );
+}
+
+export async function PATCH(request: NextRequest) {
+  const auth = await requireAdminMembership(request);
+  if ("error" in auth) return auth.error;
+
+  const parsed = adminUserUpdateSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid payload" }, { status: 400 });
+  }
+
+  if (parsed.data.user_id === auth.actorUserId && parsed.data.role !== "admin") {
+    return NextResponse.json({ error: "Non puoi togliere a te stesso il ruolo admin da questa schermata." }, { status: 400 });
+  }
+
+  const updateResult = await auth.admin
+    .from("memberships")
+    .update({
+      full_name: parsed.data.full_name.trim(),
+      role: parsed.data.role
+    })
+    .eq("tenant_id", auth.membership.tenant_id)
+    .eq("user_id", parsed.data.user_id)
+    .select("user_id, tenant_id, role, full_name, created_at")
+    .maybeSingle();
+
+  if (updateResult.error || !updateResult.data) {
+    return NextResponse.json({ error: updateResult.error?.message ?? "Aggiornamento utente fallito." }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true, user: updateResult.data });
 }

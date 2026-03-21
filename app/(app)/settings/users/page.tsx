@@ -51,6 +51,7 @@ export default function SettingsUsersPage() {
   const [form, setForm] = useState<UserFormState>(defaultForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
   const [message, setMessage] = useState("Caricamento utenti tenant...");
 
   const sortedMemberships = useMemo(
@@ -158,6 +159,46 @@ export default function SettingsUsersPage() {
     setForm(defaultForm);
     setSaving(false);
     setMessage(`Utente creato: ${createdUser.full_name} (${createdUser.role}).`);
+  };
+
+  const updateMembership = async (membership: MembershipRow, nextRole: UserRole) => {
+    if (!hasSupabaseEnv || !supabase || updatingUserId) return;
+    setUpdatingUserId(membership.user_id);
+    setMessage(`Aggiornamento ruolo di ${membership.full_name}...`);
+
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      setUpdatingUserId(null);
+      setMessage("Sessione non valida.");
+      return;
+    }
+
+    const response = await fetch("/api/settings/users", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        user_id: membership.user_id,
+        full_name: membership.full_name,
+        role: nextRole
+      })
+    });
+
+    const body = (await response.json().catch(() => null)) as { error?: string; user?: MembershipRow } | null;
+    if (!response.ok || !body?.user) {
+      setUpdatingUserId(null);
+      setMessage(body?.error ?? "Aggiornamento ruolo fallito.");
+      return;
+    }
+
+    const updatedUser = body.user;
+
+    setMemberships((prev) => prev.map((item) => (item.user_id === membership.user_id ? { ...item, role: updatedUser.role } : item)));
+    setUpdatingUserId(null);
+    setMessage(`Ruolo aggiornato: ${membership.full_name} -> ${updatedUser.role}.`);
   };
 
   return (
@@ -279,9 +320,18 @@ export default function SettingsUsersPage() {
                   <tr key={membership.user_id} className="border-b border-border/70">
                     <td className="px-3 py-2 font-medium text-text">{membership.full_name}</td>
                     <td className="px-3 py-2">
-                      <span className="rounded-full bg-surface-2 px-2 py-1 text-[11px] uppercase tracking-[0.12em] text-muted">
-                        {membership.role}
-                      </span>
+                      <select
+                        value={membership.role}
+                        onChange={(event) => void updateMembership(membership, event.target.value as UserRole)}
+                        className="input-saas min-w-36"
+                        disabled={updatingUserId === membership.user_id}
+                      >
+                        {roleDescriptions.map((item) => (
+                          <option key={`${membership.user_id}-${item.role}`} value={item.role}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
                     </td>
                     <td className="px-3 py-2 text-muted">{formatCreatedAt(membership.created_at)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-muted">{membership.user_id}</td>
