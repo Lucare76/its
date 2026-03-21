@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { OpsArrivalsExportButtons } from "@/components/ops-arrivals-export-buttons";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import type { SummaryPreviewPayload } from "@/lib/server/operational-summary";
 
@@ -182,6 +183,8 @@ export default function OpsSummaryPage() {
           <p className="mt-1 text-sm text-muted">Servizi candidati al report</p>
         </SectionCard>
       </div>
+
+      {payload ? <OpsArrivalsExportButtons targetDate={payload.target_date_48h} /> : null}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <SectionCard title="Arrivi 48 ore prima" subtitle={payload ? `Data target: ${formatIsoDate(payload.target_date_48h)}` : undefined} loading={loading} loadingLines={6}>

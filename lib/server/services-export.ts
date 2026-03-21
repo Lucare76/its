@@ -14,6 +14,7 @@ const payloadSchema = z
     dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     status: z.array(statusEnum).default([]),
     serviceType: z.enum(["all", "transfer", "bus_tour"]).default("all"),
+    exportPreset: z.enum(["standard", "arrivals_bus_line", "arrivals_other_services"]).default("standard"),
     ship: z.string().max(80).optional().default(""),
     zone: z.string().max(80).optional().default(""),
     hotel_id: z.string().uuid().optional(),
@@ -40,7 +41,16 @@ type ServiceRow = {
   billing_party_name: string | null;
   outbound_time: string | null;
   return_time: string | null;
+  arrival_date: string | null;
+  arrival_time: string | null;
   departure_date: string | null;
+  departure_time: string | null;
+  booking_service_kind: string | null;
+  service_type_code: string | null;
+  transport_mode: string | null;
+  transport_code: string | null;
+  train_arrival_number: string | null;
+  train_departure_number: string | null;
   source_total_amount_cents: number | null;
   source_price_per_pax_cents: number | null;
   source_amount_currency: string | null;
@@ -104,6 +114,7 @@ async function parseExportPayload(request: NextRequest) {
       dateTo: params.get("dateTo") ?? "",
       status: parsedStatuses.value,
       serviceType: params.get("serviceType") ?? "all",
+      exportPreset: params.get("exportPreset") ?? "standard",
       ship: params.get("ship") ?? "",
       zone: params.get("zone") ?? "",
       hotel_id: params.get("hotel_id") ?? undefined,
@@ -123,6 +134,7 @@ async function parseExportPayload(request: NextRequest) {
   const parsed = payloadSchema.safeParse({
     ...body,
     ship: typeof body.ship === "string" ? body.ship : typeof body.vessel === "string" ? body.vessel : "",
+    exportPreset: typeof body.exportPreset === "string" ? body.exportPreset : "standard",
     status: Array.isArray(body.status) ? body.status : []
   });
   if (!parsed.success) {
@@ -177,6 +189,99 @@ function buildSheet(rows: Array<Record<string, string | number>>) {
   ];
   const dataRows = rows.map((row) => header.map((key) => row[key] ?? ""));
   const sheetRows = [header, ...dataRows];
+  const sheet = XLSX.utils.aoa_to_sheet(sheetRows);
+  applySheetFormatting(sheet, sheetRows);
+  return sheet;
+}
+
+function isBusLineArrival(service: ServiceRow) {
+  return service.service_type_code === "bus_line" || service.booking_service_kind === "bus_city_hotel";
+}
+
+function operationalCategory(service: ServiceRow) {
+  if (isBusLineArrival(service)) return "Linea bus";
+  if (service.service_type_code === "transfer_airport_hotel" || service.booking_service_kind === "transfer_airport_hotel") {
+    return "Transfer aeroporto";
+  }
+  if (service.service_type_code === "transfer_station_hotel" || service.booking_service_kind === "transfer_train_hotel") {
+    return "Transfer stazione";
+  }
+  if (
+    service.service_type_code === "transfer_port_hotel" ||
+    service.booking_service_kind === "transfer_port_hotel" ||
+    service.transport_mode === "hydrofoil" ||
+    service.transport_mode === "ferry"
+  ) {
+    const transportReference = `${service.transport_code ?? ""} ${service.vessel ?? ""}`.toLowerCase();
+    if (transportReference.includes("medmar")) return "Formula Medmar";
+    if (transportReference.includes("snav")) return "Formula SNAV";
+    return "Transfer porto";
+  }
+  return "Altri servizi";
+}
+
+function buildOperationalArrivalsSheet(
+  services: ServiceRow[],
+  hotelsById: Map<string, HotelRow>,
+  assignmentsByServiceId: Map<string, AssignmentRow>,
+  membershipsByUserId: Map<string, MembershipRow>
+) {
+  const header = [
+    "Categoria",
+    "Data arrivo",
+    "Ora arrivo",
+    "Cliente",
+    "Pax",
+    "Hotel / destinazione",
+    "Meeting point",
+    "Riferimento mezzo",
+    "Telefono",
+    "Agenzia fatturazione",
+    "Driver",
+    "Mezzo",
+    "Costo PDF",
+    "Valuta",
+    "Numero pratica",
+    "ID servizio",
+    "Note"
+  ];
+
+  const rows = services.map((service) => {
+    const hotel = hotelsById.get(service.hotel_id);
+    const assignment = assignmentsByServiceId.get(service.id);
+    const driverName = assignment?.driver_user_id
+      ? membershipsByUserId.get(assignment.driver_user_id)?.full_name ?? assignment.driver_user_id
+      : "";
+    const vehicleLabel = assignment?.vehicle_label ?? service.bus_plate ?? "";
+    const transportReference =
+      service.transport_code ??
+      service.train_arrival_number ??
+      service.train_departure_number ??
+      service.vessel ??
+      "";
+
+    return [
+      operationalCategory(service),
+      formatIsoDateShort(service.arrival_date ?? service.date),
+      normalizeTime(service.arrival_time ?? service.outbound_time ?? service.time),
+      service.customer_name,
+      service.pax,
+      hotel?.name ?? "",
+      service.meeting_point ?? "",
+      transportReference,
+      service.phone ?? "",
+      service.billing_party_name ?? "",
+      driverName,
+      vehicleLabel,
+      service.source_total_amount_cents === null ? "" : (service.source_total_amount_cents / 100).toFixed(2),
+      service.source_amount_currency ?? "",
+      service.notes.match(/\[practice:([^\]]+)\]/i)?.[1] ?? "",
+      service.id,
+      service.notes ?? ""
+    ];
+  });
+
+  const sheetRows = [header, ...rows];
   const sheet = XLSX.utils.aoa_to_sheet(sheetRows);
   applySheetFormatting(sheet, sheetRows);
   return sheet;
@@ -244,7 +349,8 @@ export async function buildServicesExportXlsx(request: NextRequest) {
         search: filters.search,
         agency_id: role === "agency" ? user.id : undefined
       },
-        select: "id, tenant_id, date, time, service_type, direction, vessel, pax, hotel_id, customer_name, billing_party_name, outbound_time, return_time, departure_date, source_total_amount_cents, source_price_per_pax_cents, source_amount_currency, phone, notes, meeting_point, bus_plate, status"
+      select:
+        "id, tenant_id, date, time, service_type, direction, vessel, pax, hotel_id, customer_name, billing_party_name, outbound_time, return_time, arrival_date, arrival_time, departure_date, departure_time, booking_service_kind, service_type_code, transport_mode, transport_code, train_arrival_number, train_departure_number, source_total_amount_cents, source_price_per_pax_cents, source_amount_currency, phone, notes, meeting_point, bus_plate, status"
     })) as any;
 
     let servicesQuery = builtBaseQuery.order("date", { ascending: true }).order("time", { ascending: true });
@@ -333,8 +439,22 @@ export async function buildServicesExportXlsx(request: NextRequest) {
       };
     };
 
-    XLSX.utils.book_append_sheet(workbook, buildSheet(transferRows.map(normalizeServiceRow)), "Transfers");
-    XLSX.utils.book_append_sheet(workbook, buildSheet(busTourRows.map(normalizeServiceRow)), "Bus Tours");
+    if (filters.exportPreset === "arrivals_bus_line" || filters.exportPreset === "arrivals_other_services") {
+      const arrivalsForDate = filteredServices.filter((service) => (service.arrival_date ?? service.date) >= filters.dateFrom && (service.arrival_date ?? service.date) <= filters.dateTo);
+      const presetRows =
+        filters.exportPreset === "arrivals_bus_line"
+          ? arrivalsForDate.filter((service) => isBusLineArrival(service))
+          : arrivalsForDate.filter((service) => !isBusLineArrival(service));
+
+      XLSX.utils.book_append_sheet(
+        workbook,
+        buildOperationalArrivalsSheet(presetRows, hotelsById, assignmentsByServiceId, membershipsByUserId),
+        filters.exportPreset === "arrivals_bus_line" ? "Arrivi Linea Bus" : "Arrivi Altri Servizi"
+      );
+    } else {
+      XLSX.utils.book_append_sheet(workbook, buildSheet(transferRows.map(normalizeServiceRow)), "Transfers");
+      XLSX.utils.book_append_sheet(workbook, buildSheet(busTourRows.map(normalizeServiceRow)), "Bus Tours");
+    }
 
     const timelineRows: Array<{
       service_id: string;
@@ -369,11 +489,13 @@ export async function buildServicesExportXlsx(request: NextRequest) {
       }
     }
 
-    const timelineHeader = ["service_id", "timestamp", "old_status", "new_status", "actor"];
-    const timelineAoA = [timelineHeader, ...timelineRows.map((row) => timelineHeader.map((key) => row[key as keyof typeof row] ?? ""))];
-    const timelineSheet = XLSX.utils.aoa_to_sheet(timelineAoA);
-    applySheetFormatting(timelineSheet, timelineAoA);
-    XLSX.utils.book_append_sheet(workbook, timelineSheet, "Status events");
+    if (filters.exportPreset === "standard") {
+      const timelineHeader = ["service_id", "timestamp", "old_status", "new_status", "actor"];
+      const timelineAoA = [timelineHeader, ...timelineRows.map((row) => timelineHeader.map((key) => row[key as keyof typeof row] ?? ""))];
+      const timelineSheet = XLSX.utils.aoa_to_sheet(timelineAoA);
+      applySheetFormatting(timelineSheet, timelineAoA);
+      XLSX.utils.book_append_sheet(workbook, timelineSheet, "Status events");
+    }
 
     if (filteredServices.length > 0) {
       const { error: auditError } = await admin.from("export_audits").insert({
@@ -390,7 +512,12 @@ export async function buildServicesExportXlsx(request: NextRequest) {
     }
 
     const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
-    const filename = `services_export_${filters.dateFrom}_${filters.dateTo}.xlsx`;
+    const filename =
+      filters.exportPreset === "arrivals_bus_line"
+        ? `arrivi_linea_bus_${filters.dateFrom}_${filters.dateTo}.xlsx`
+        : filters.exportPreset === "arrivals_other_services"
+          ? `arrivi_altri_servizi_${filters.dateFrom}_${filters.dateTo}.xlsx`
+          : `services_export_${filters.dateFrom}_${filters.dateTo}.xlsx`;
 
     return new NextResponse(buffer, {
       status: 200,
