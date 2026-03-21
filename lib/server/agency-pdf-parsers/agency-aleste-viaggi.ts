@@ -182,9 +182,11 @@ function extractHotel(sourceText: string) {
 }
 
 function extractCustomerPhone(sourceText: string) {
-  return clean(
+  const raw = clean(
     sourceText.match(/(?:Cellulare\/Tel\.?|Cellulare:?|CELL:|Cell\.?|Tel\.?)\s*([+\d][\d\s./-]{7,})/i)?.[1]
   );
+  if (!raw) return null;
+  return clean(raw.replace(/[-–—]{3,}.*$/u, ""));
 }
 
 function extractAlesteTrainOperationalJourney(
@@ -358,15 +360,14 @@ function extractAlesteMarineJourney(
   if (direction === "andata") {
     const outwardMatch =
       compact.match(
-      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRAGHETTO\s+POZZUOLI\s*\+\s*TRS\s+H\.?\s*ISCHIA\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(PORTO DI POZZUOLI)\s+da:\s*(POZZUOLI CON MEDMAR)\s+a:\s*CELL[:.]?\s*\d*\s*dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|$)/i
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRAGHETTO\s+POZZUOLI\s*\+\s*TRS\s+H\.?\s*ISCHIA\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(PORTO DI POZZUOLI)\s+da:\s*(POZZUOLI CON MEDMAR)\s+a:\s*(?:CELL[:.]?\s*\d*|HOTEL)\s*dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|$)/i
       ) ??
       compact.match(
         /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+AL\s*ISCAFO\s+DA\s+NAPOLI\s*\+\s*TRS\s+H\.?\s*ISCHIA\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(PORTO\s+NAPOLI)\s+da:\s*(NAPOLI\s+CON\s+SNAV)\s+a:\s*CELL[:.]?\s*\d*\s*dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|$)/i
       );
     if (!outwardMatch) return null;
 
-    const isSnavJourney = /SNAV/i.test(outwardMatch[4] ?? outwardMatch[5] ?? "");
-    const hotel = clean(isSnavJourney ? outwardMatch[5] : outwardMatch[4]);
+    const hotel = clean(outwardMatch[5] ?? outwardMatch[4]);
     const origin =
       /POZZUOLI/i.test(outwardMatch[3] ?? "") ? "PORTO DI POZZUOLI" : clean(outwardMatch[3]) ?? "PORTO NAPOLI";
     return {
@@ -819,16 +820,16 @@ export const agencyAlesteViaggiPdfParser: AgencyPdfParserImplementation = {
   label: "Aleste Viaggi",
   senderDomains: ["aleste-viaggi.it", "alesteviaggi.it"],
   subjectHints: ["aleste", "booking aleste"],
-  contentHints: ["staff aleste", "ufficio booking - aleste viaggi", "aleste viaggi"],
+  contentHints: ["staff aleste", "staff al este", "ufficio booking - aleste viaggi", "aleste viaggi"],
   agencyNameHints: ["aleste viaggi", "ufficio booking - aleste viaggi"],
-  voucherHints: ["staff aleste", "pacchetto transfer", "conferma d ordine"],
+  voucherHints: ["staff aleste", "staff al este", "pacchetto transfer", "conferma d ordine"],
   parse: parseAlesteViaggiPdfText,
   match: (input) =>
     buildParserMatch(input, {
       senderDomains: ["aleste-viaggi.it", "alesteviaggi.it"],
       subjectHints: ["aleste", "booking aleste"],
-      contentHints: ["staff aleste", "ufficio booking - aleste viaggi", "aleste viaggi"],
+      contentHints: ["staff aleste", "staff al este", "ufficio booking - aleste viaggi", "aleste viaggi"],
       agencyNameHints: ["aleste viaggi", "ufficio booking - aleste viaggi"],
-      voucherHints: ["staff aleste", "pacchetto transfer", "conferma d ordine"]
+      voucherHints: ["staff aleste", "staff al este", "pacchetto transfer", "conferma d ordine"]
     })
 };
