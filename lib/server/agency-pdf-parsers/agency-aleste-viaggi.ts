@@ -307,17 +307,24 @@ function extractAlesteMarineJourney(
   const compact = sourceText.replace(/\s+/g, " ").trim();
 
   if (direction === "andata") {
-    const outwardMatch = compact.match(
-      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRAGHETTO\s+POZZUOLI\s*\+\s*TRS\s+H\.\s*ISCHIA\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(PORTO DI POZZUOLI)\s+da:\s*(POZZUOLI CON MEDMAR)\s+a:\s*CELL\.?\s*\d*\s*dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|$)/i
-    );
+    const outwardMatch =
+      compact.match(
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRAGHETTO\s+POZZUOLI\s*\+\s*TRS\s+H\.?\s*ISCHIA\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(PORTO DI POZZUOLI)\s+da:\s*(POZZUOLI CON MEDMAR)\s+a:\s*CELL[:.]?\s*\d*\s*dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|$)/i
+      ) ??
+      compact.match(
+        /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+AL\s*ISCAFO\s+DA\s+NAPOLI\s*\+\s*TRS\s+H\.?\s*ISCHIA\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(PORTO\s+NAPOLI)\s+da:\s*(NAPOLI\s+CON\s+SNAV)\s+a:\s*CELL[:.]?\s*\d*\s*dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|$)/i
+      );
     if (!outwardMatch) return null;
 
-    const hotel = clean(outwardMatch[5]);
+    const isSnavJourney = /SNAV/i.test(outwardMatch[4] ?? outwardMatch[5] ?? "");
+    const hotel = clean(isSnavJourney ? outwardMatch[5] : outwardMatch[4]);
+    const origin =
+      /POZZUOLI/i.test(outwardMatch[3] ?? "") ? "PORTO DI POZZUOLI" : clean(outwardMatch[3]) ?? "PORTO NAPOLI";
     return {
       serviceDate: parseItalianDate(outwardMatch[1]) ?? parseItalianShortDate(outwardMatch[1], fallbackYear),
       serviceTime: normalizeTime(outwardMatch[2]),
       meetingPoint: clean(outwardMatch[3]),
-      origin: "PORTO DI POZZUOLI",
+      origin,
       destination: hotel,
       hotel,
       rawDetailText: clean(outwardMatch[0]) ?? "",
@@ -325,17 +332,25 @@ function extractAlesteMarineJourney(
     };
   }
 
-  const returnMatch = compact.match(
-    /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRS\s+H\.\s*ISCHIA\s*\+\s*TRAGHETTO\s+POZZUOLI\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(HOTEL ISCHIA)\s+da:\s*HOTEL\s+a:\s*(PORTO PER POZZUOLI CON MEDMAR)\s+dest:\s*(PORTO DI POZZUOLI)/i
-  );
+  const returnMatch =
+    compact.match(
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRS\s+H\.?\s*ISCHIA\s*\+\s*TRAGHETTO\s+POZZUOLI\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(HOTEL ISCHIA)\s+da:\s*HOTEL\s+a:\s*(PORTO PER POZZUOLI CON MEDMAR)\s+dest:\s*(PORTO DI POZZUOLI)/i
+    ) ??
+    compact.match(
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRS\s+H\.?\s*ISCHIA\s*\+\s*AL\s*ISCAFO\s+PER\s+NAPOLI\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*([A-Z][A-Z &'./-]+?)\s+da:\s*(ISCHIA)\s+a:\s*(SNAV)\s+dest:\s*(PORTO\s+NAPOLI)/i
+    );
   if (!returnMatch) return null;
 
+  const meetingPoint = clean(returnMatch[3]);
+  const isSnavJourney = /SNAV/i.test(returnMatch[5] ?? "");
+  const destination =
+    /POZZUOLI/i.test(returnMatch[5] ?? returnMatch[4] ?? "") ? "PORTO DI POZZUOLI" : clean(isSnavJourney ? returnMatch[6] : returnMatch[5]) ?? "PORTO NAPOLI";
   return {
     serviceDate: parseItalianDate(returnMatch[1]) ?? parseItalianShortDate(returnMatch[1], fallbackYear),
     serviceTime: normalizeTime(returnMatch[2]),
-    meetingPoint: clean(returnMatch[3]),
-    origin: "HOTEL ISCHIA",
-    destination: "PORTO DI POZZUOLI",
+    meetingPoint,
+    origin: meetingPoint ?? "HOTEL ISCHIA",
+    destination,
     hotel: null,
     rawDetailText: clean(returnMatch[0]) ?? "",
     direction
@@ -572,6 +587,9 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
 
   if (hasMarineAutoTransfer) {
     const marineHotel = outwardMarine?.hotel ?? hotel;
+    const marineCarrier = /SNAV/i.test(outwardMarine?.rawDetailText ?? returnMarine?.rawDetailText ?? "") ? "SNAV" : "MEDMAR";
+    const outwardMarineLabel = marineCarrier === "SNAV" ? "ALISCAFO DA NAPOLI + TRS H. ISCHIA" : "TRAGHETTO POZZUOLI + TRS H. ISCHIA";
+    const returnMarineLabel = marineCarrier === "SNAV" ? "TRS H. ISCHIA + ALISCAFO PER NAPOLI" : "TRS H. ISCHIA + TRAGHETTO POZZUOLI";
 
     if (outwardMarine && marineHotel) {
       parsedServices.push({
@@ -585,9 +603,9 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
         pickup_meeting_point: outwardMarine.meetingPoint,
         origin: outwardMarine.origin,
         destination: marineHotel,
-        carrier_company: "MEDMAR",
+        carrier_company: marineCarrier,
         hotel_structure: marineHotel,
-        original_row_description: "TRAGHETTO POZZUOLI + TRS H. ISCHIA",
+        original_row_description: outwardMarineLabel,
         raw_detail_text: outwardMarine.rawDetailText,
         parsing_status: "parsed",
         confidence_level: "high",
@@ -607,9 +625,9 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
         pickup_meeting_point: marineHotel,
         origin: marineHotel,
         destination: returnMarine.destination,
-        carrier_company: "MEDMAR",
+        carrier_company: marineCarrier,
         hotel_structure: marineHotel,
-        original_row_description: "TRS H. ISCHIA + TRAGHETTO POZZUOLI",
+        original_row_description: returnMarineLabel,
         raw_detail_text: returnMarine.rawDetailText,
         parsing_status: "parsed",
         confidence_level: "high",
