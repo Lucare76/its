@@ -36,7 +36,7 @@ export type ParsedTransferPdfPayload = {
   date_to: string | null;
   total_amount_practice: number | null;
   booking_kind?: "transfer_port_hotel" | "transfer_airport_hotel" | "transfer_train_hotel" | "bus_city_hotel" | "excursion" | null;
-  service_type_code?: "transfer_station_hotel" | "transfer_port_hotel" | "transfer_hotel_port" | "excursion" | "ferry_transfer" | "bus_line" | null;
+  service_type_code?: "transfer_station_hotel" | "transfer_airport_hotel" | "transfer_port_hotel" | "transfer_hotel_port" | "excursion" | "ferry_transfer" | "bus_line" | null;
   train_arrival_number?: string | null;
   train_arrival_time?: string | null;
   train_departure_number?: string | null;

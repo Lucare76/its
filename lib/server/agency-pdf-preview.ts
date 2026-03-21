@@ -6,7 +6,7 @@ import { cleanExtractedPdfText } from "@/lib/server/pdf-text-cleaning";
 
 type BookingKind = "transfer_port_hotel" | "transfer_airport_hotel" | "transfer_train_hotel" | "bus_city_hotel" | "excursion";
 type ServiceTypeDeduced = "transfer" | "ferry" | "excursion" | "bus" | null;
-type ServiceTypeCode = "transfer_station_hotel" | "transfer_port_hotel" | "transfer_hotel_port" | "excursion" | "ferry_transfer" | "bus_line" | null;
+type ServiceTypeCode = "transfer_station_hotel" | "transfer_airport_hotel" | "transfer_port_hotel" | "transfer_hotel_port" | "excursion" | "ferry_transfer" | "bus_line" | null;
 type TransportMode = "train" | "hydrofoil" | "ferry" | "road_transfer" | "bus" | "unknown" | null;
 
 const INTERNAL_ITS_PHONE = "0813331053";

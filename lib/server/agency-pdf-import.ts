@@ -22,7 +22,7 @@ export type NormalizedPdfImport = {
   agency_name: string | null;
   billing_party_name: string | null;
   external_reference: string | null;
-  service_type: "transfer_station_hotel" | "transfer_port_hotel" | "transfer_hotel_port" | "excursion" | "ferry_transfer" | "bus_line" | null;
+  service_type: "transfer_station_hotel" | "transfer_airport_hotel" | "transfer_port_hotel" | "transfer_hotel_port" | "excursion" | "ferry_transfer" | "bus_line" | null;
   service_variant: "train_station_hotel" | "ferry_naples_transfer" | "auto_ischia_hotel" | null;
   transport_mode: "train" | "hydrofoil" | "ferry" | "road_transfer" | "bus" | "unknown" | null;
   transport_code: string | null;
@@ -98,7 +98,7 @@ export const pdfImportReviewSchema = z.object({
   source_price_per_pax_cents: z.coerce.number().int().min(0).optional().nullable(),
   source_amount_currency: z.string().trim().length(3).optional().nullable().or(z.literal("")),
   booking_kind: z.enum(["transfer_port_hotel", "transfer_airport_hotel", "transfer_train_hotel", "bus_city_hotel", "excursion"]),
-  service_type: z.enum(["transfer_station_hotel", "transfer_port_hotel", "transfer_hotel_port", "excursion", "ferry_transfer", "bus_line"]).nullable(),
+  service_type: z.enum(["transfer_station_hotel", "transfer_airport_hotel", "transfer_port_hotel", "transfer_hotel_port", "excursion", "ferry_transfer", "bus_line"]).nullable(),
   transport_mode: z.enum(["train", "hydrofoil", "ferry", "road_transfer", "bus", "unknown"]).nullable().optional(),
   train_arrival_number: z.string().trim().max(80).optional().nullable(),
   train_departure_number: z.string().trim().max(80).optional().nullable(),
