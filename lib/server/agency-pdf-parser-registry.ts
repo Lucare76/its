@@ -83,9 +83,17 @@ export function selectAgencyPdfParser(input: AgencyPdfParserSelectionInput): Age
   scored.sort((a, b) => b.match.score - a.match.score);
 
   const topCandidate = scored[0];
+  const topDedicatedCandidate = scored.find((candidate) => candidate.definition.mode === "dedicated" && candidate.match.score > 0);
+  const fallbackBeatsDedicatedByTooLittle =
+    topCandidate?.definition.mode === "fallback" &&
+    topDedicatedCandidate &&
+    topDedicatedCandidate.match.matchedAgencyNames.length > 0 &&
+    topCandidate.match.score - topDedicatedCandidate.match.score <= 10;
   const winnerBundle =
-    topCandidate && topCandidate.match.score > 0
-      ? topCandidate
+    fallbackBeatsDedicatedByTooLittle
+      ? topDedicatedCandidate
+      : topCandidate && topCandidate.match.score > 0
+        ? topCandidate
       : { definition: agencyDefaultPdfParser, match: agencyDefaultPdfParser.match(input) };
   const winner = winnerBundle.definition;
   const winnerMatch = winnerBundle.match;
