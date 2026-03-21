@@ -225,6 +225,8 @@ function extractAlesteTrainOperationalJourney(
   );
   if (!match) return null;
 
+  const ritornoMp = clean(match[3]);
+  const ritornoHotel = ritornoMp && !/^(?:NAPOLI|STAZIONE|PORTO|AEROPORTO)/i.test(ritornoMp) ? ritornoMp : null;
   return {
     originStation: "STAZIONE DI NAPOLI",
     originTime: normalizeTime(match[2]),
@@ -233,7 +235,7 @@ function extractAlesteTrainOperationalJourney(
     trainNumber: clean(match[5]),
     destinationStation: normalizeStationName(match[6] ?? match[7]) ?? clean(match[6] ?? match[7]),
     destinationTime: null,
-    hotel: null
+    hotel: ritornoHotel
   };
 }
 
@@ -555,7 +557,7 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     confidence_level: "high" as const
   }));
 
-  const effectiveHotel = hotel ?? arrivalTrain?.hotel ?? null;
+  const effectiveHotel = hotel ?? arrivalTrain?.hotel ?? departureTrain?.hotel ?? null;
   if (arrivalTrain && effectiveHotel) {
     const arrivalIndex = parsedServices.findIndex((service) => service.direction === "andata");
     const arrivalStation = normalizeStationName(arrivalTrain.destinationStation) ?? "STAZIONE DI NAPOLI";
