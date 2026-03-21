@@ -204,7 +204,7 @@ function extractAlesteTrainOperationalJourney(
 
   if (direction === "andata") {
     const match = compact.match(
-      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+STAZIONE\s*\/\s*HOTEL\s+Dalle\s*([0-2]?\d[:.]\d{2})(?:\s+Alle\s*([0-2]?\d[:.]\d{2}))?\s+M\.p\.\s*:\s*([A-Z][A-Z ]+?)\s+da:\s*([A-Z]+)\s*(\d{3,5})(?:\s+a:\s*CELL[.:]?\s*\d*\s+dest:\s*([A-Z][A-Z &'./-]+?)|\s+a:\s*([A-Z][A-Z &'./-]+?))(?=\s+Cliente:|\s+Cellulare|\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|$)/i
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+STAZIONE\s*\/\s*HOTEL\s+Dalle\s*([0-2]?\d[:.]\d{2})(?:\s+Alle\s*([0-2]?\d[:.]\d{2}))?\s+M\.p\.\s*:\s*([A-Z][A-Z ]+?)\s+da:\s*([A-Z]+)\s*(\d{3,5})\s[^a]*?(?:\s*a:\s*CELL[.:]?\s*\d*\s+dest:\s*([A-Z][A-Z &'./-]+?)|a:\s*([A-Z][A-Z &'./-]+?))(?=\s+Cliente:|\s+Cellulare|\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|$)/i
     );
     if (!match) return null;
 
@@ -307,7 +307,19 @@ function extractTrainJourneyFromOperationalBlock(sourceText: string, rowNumber: 
 
   const meetingPoint = normalizeStationName(blockMatch[4]) ?? clean(blockMatch[4]);
   const carrierCompany = clean(blockMatch[5])?.toUpperCase() ?? null;
-  const arrivalStation = normalizeStationName(blockMatch[7]) ?? clean(blockMatch[7]);
+  const aFieldRaw = normalizeStationName(blockMatch[7]) ?? clean(blockMatch[7]);
+  const destFieldRaw = blockMatch[8] ? (normalizeStationName(blockMatch[8]) ?? clean(blockMatch[8])) : null;
+  const aFieldIsStation = /NAPOLI|STAZIONE|CENTRALE|ROMA|MILANO|FIRENZE|BOLOGNA|TORINO|VENEZIA|PADOVA|SALERNO/i.test(aFieldRaw ?? "");
+
+  let arrivalStation: string | null;
+  let hotelFromBlock: string | null;
+  if (rowNumber === "1" && !aFieldIsStation) {
+    hotelFromBlock = destFieldRaw ?? aFieldRaw;
+    arrivalStation = "STAZIONE DI NAPOLI";
+  } else {
+    hotelFromBlock = destFieldRaw;
+    arrivalStation = aFieldRaw;
+  }
 
   return {
     originStation: rowNumber === "2" ? arrivalStation : meetingPoint,
@@ -315,9 +327,9 @@ function extractTrainJourneyFromOperationalBlock(sourceText: string, rowNumber: 
     serviceDate: parseItalianDate(blockMatch[1]),
     carrierCompany,
     trainNumber: clean(blockMatch[6]),
-    destinationStation: rowNumber === "1" ? arrivalStation : clean(blockMatch[8]),
+    destinationStation: rowNumber === "1" ? arrivalStation : (destFieldRaw ?? arrivalStation),
     destinationTime: normalizeTime(blockMatch[3]),
-    hotel: null
+    hotel: hotelFromBlock
   };
 }
 
