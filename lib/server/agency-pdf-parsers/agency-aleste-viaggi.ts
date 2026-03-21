@@ -198,7 +198,7 @@ function extractAlesteTrainOperationalJourney(
 
   if (direction === "andata") {
     const match = compact.match(
-      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+STAZIONE\s*\/\s*HOTEL\s+Dalle\s*([0-2]?\d[:.]\d{2})\s+Alle\s*([0-2]?\d[:.]\d{2})\s+M\.p\.\s*:\s*([A-Z][A-Z ]+?)\s+da:\s*([A-Z]+)\s*(\d{3,5})\s+a:\s*CELL:?\d+\s+dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Cliente:|\s+Cellulare|\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|$)/i
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+STAZIONE\s*\/\s*HOTEL\s+Dalle\s*([0-2]?\d[:.]\d{2})(?:\s+Alle\s*([0-2]?\d[:.]\d{2}))?\s+M\.p\.\s*:\s*([A-Z][A-Z ]+?)\s+da:\s*([A-Z]+)\s*(\d{3,5})\s+a:\s*CELL[.:]?\s*\d+\s+dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Cliente:|\s+Cellulare|\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|$)/i
     );
     if (!match) return null;
 
@@ -214,7 +214,7 @@ function extractAlesteTrainOperationalJourney(
   }
 
   const match = compact.match(
-    /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+HOTEL\s*\/\s*STAZIONE\s+Dalle\s*([0-2]?\d[:.]\d{2})\s+M\.p\.\s*:\s*([A-Z][A-Z &'./-]+?)\s+da:\s*([A-Z]+)\s*(\d{3,5})\s+a:\s*(NAPOLI(?:\s+STAZIONE|\s+CENTRALE)?)/i
+    /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRANSFER\s+HOTEL(?:\s+ISCHIA)?\s*\/\s*STAZIONE\s+Dalle\s*([0-2]?\d[:.]\d{2})\s+M\.p\.\s*:\s*([A-Z][A-Z &'./-]+?)\s+da:\s*([A-Z]+)\s*(\d{3,5})(?:\s+a:\s*(NAPOLI(?:\s+STAZIONE|\s+CENTRALE)?)|\s+dest:\s*(STAZIONE\s+DI\s+NAPOLI|NAPOLI(?:\s+STAZIONE|\s+CENTRALE)?))/i
   );
   if (!match) return null;
 
@@ -224,7 +224,7 @@ function extractAlesteTrainOperationalJourney(
     serviceDate: parseItalianDate(match[1]) ?? parseItalianShortDate(match[1], fallbackYear),
     carrierCompany: clean(match[4])?.toUpperCase() ?? null,
     trainNumber: clean(match[5]),
-    destinationStation: normalizeStationName(match[6]) ?? clean(match[6]),
+    destinationStation: normalizeStationName(match[6] ?? match[7]) ?? clean(match[6] ?? match[7]),
     destinationTime: null
   };
 }
@@ -523,6 +523,7 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     /\bBUS\b/i.test(parsed.package_description ?? "");
   const hasMarineAutoTransfer =
     /AUTO\s*ISCHIA\s*\/\s*HOTEL|AUTO\s*HOTEL\s*\/\s*ISCHIA|ALISCAFO\s+DA\s+NAPOLI|ALISCAFO\s+PER\s+NAPOLI|CON\s+SNAV/i.test(sourceText);
+  const hasTrainTransfer = arrivalTrain !== null || departureTrain !== null;
 
   const parsedServices = parsed.parsed_services.map((service) => ({
     ...service,
@@ -795,8 +796,8 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     ns_reference: exactReference ?? parsed.ns_reference,
     ns_contact: customerPhone ?? parsed.ns_contact,
     pax: exactPax ?? parsed.pax,
-    booking_kind: hasAirportTransfer ? "transfer_airport_hotel" : hasBusLineService ? "bus_city_hotel" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_train_hotel",
-    service_type_code: hasAirportTransfer ? "transfer_airport_hotel" : hasBusLineService ? "bus_line" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_station_hotel",
+    booking_kind: hasAirportTransfer ? "transfer_airport_hotel" : hasBusLineService ? "bus_city_hotel" : hasTrainTransfer ? "transfer_train_hotel" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_train_hotel",
+    service_type_code: hasAirportTransfer ? "transfer_airport_hotel" : hasBusLineService ? "bus_line" : hasTrainTransfer ? "transfer_station_hotel" : hasMarineAutoTransfer ? "transfer_port_hotel" : "transfer_station_hotel",
     date_from: (outwardAirport?.serviceDate ?? outwardFlixbus?.serviceDate ?? outwardBus?.serviceDate ?? outwardMarine?.serviceDate ?? parsed.date_from) || null,
     date_to: (returnAirport?.serviceDate ?? returnFlixbus?.serviceDate ?? returnBus?.serviceDate ?? returnMarine?.serviceDate ?? parsed.date_to) || null,
     train_arrival_number:
