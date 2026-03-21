@@ -160,6 +160,25 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
   }, [agencyFilter, assignedMap, baseServices, driverFilter, pdfMetaByServiceId, qualityFilter, reviewedFilter, serviceTypeFilter, sourceByServiceId, sourceFilter]);
 
   const selectedService = selectedServiceId ? services.find((item) => item.id === selectedServiceId) : null;
+  const filteredOperationalStats = useMemo(() => {
+    const needsAttention = filtered.filter((service) => {
+      const pdfMeta = pdfMetaByServiceId.get(service.id);
+      return Boolean(pdfMeta?.reviewRecommended);
+    }).length;
+    const lineaBus = filtered.filter(
+      (service) => service.service_type_code === "bus_line" || service.booking_service_kind === "bus_city_hotel"
+    ).length;
+    const daAssegnareInternamente = filtered.filter((service) => !assignedMap.get(service.id)?.driver_user_id).length;
+    const promemoriaDaVerificare = filtered.filter((service) => isUndeliveredReminder(service)).length;
+    return {
+      totale: filtered.length,
+      needsAttention,
+      lineeBus: lineaBus,
+      altriServizi: filtered.length - lineaBus,
+      daAssegnareInternamente,
+      promemoriaDaVerificare
+    };
+  }, [assignedMap, filtered, pdfMetaByServiceId]);
   const selectedShareUrl = useMemo(() => {
     if (!selectedService) return "";
     const fromAction = shareUrlByServiceId[selectedService.id];
@@ -313,10 +332,23 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
     const hotel = hotels.find((item) => item.id === service.hotel_id);
     const assignment = assignedMap.get(service.id);
     const driverName = memberships.find((member) => member.user_id === assignment?.driver_user_id)?.full_name ?? "Non assegnato";
-      const pdfMeta = pdfMetaByServiceId.get(service.id);
-      const source = sourceByServiceId.get(service.id) ?? "manual";
-      return { hotel, driverName, pdfMeta, source };
-    };
+    const pdfMeta = pdfMetaByServiceId.get(service.id);
+    const source = sourceByServiceId.get(service.id) ?? "manual";
+    return { hotel, driverName, pdfMeta, source };
+  };
+
+  const resetOperationalFilters = () => {
+    setStatusFilter("all");
+    setVesselFilter("all");
+    setServiceTypeFilter("all");
+    setZoneFilter("all");
+    setDriverFilter("all");
+    setSourceFilter("all");
+    setReviewedFilter("all");
+    setAgencyFilter("all");
+    setQualityFilter("all");
+    setSearch("");
+  };
 
   if (services.length === 0) {
     return <EmptyState title="Nessun servizio oggi." compact />;
@@ -327,6 +359,50 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
       <div className="section-head">
         <h2 className="section-title text-base">Lista servizi</h2>
         <ExportServicesButton defaultDateFrom={defaultDateFrom} defaultDateTo={defaultDateTo} />
+      </div>
+      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <button type="button" onClick={resetOperationalFilters} className="card p-3 text-left transition hover:border-primary/40 hover:shadow-sm">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Totale visibili</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-900">{filteredOperationalStats.totale}</p>
+          <p className="mt-1 text-xs text-muted">Reset filtri e torna alla vista completa.</p>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setSourceFilter("pdf");
+            setQualityFilter("low");
+            setReviewedFilter("no");
+          }}
+          className="card p-3 text-left transition hover:border-amber-300 hover:shadow-sm"
+        >
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Da verificare</p>
+          <p className="mt-2 text-2xl font-semibold text-amber-700">{filteredOperationalStats.needsAttention}</p>
+          <p className="mt-1 text-xs text-muted">PDF con review consigliata o qualita bassa.</p>
+        </button>
+        <div className="card p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Linea bus</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-900">{filteredOperationalStats.lineeBus}</p>
+          <p className="mt-1 text-xs text-muted">Servizi classificati `bus_line` o `bus_city_hotel`.</p>
+        </div>
+        <div className="card p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Altri servizi</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-900">{filteredOperationalStats.altriServizi}</p>
+          <p className="mt-1 text-xs text-muted">Formula nave, aeroporto, stazione e transfer diretti.</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setDriverFilter("all")}
+          className="card p-3 text-left transition hover:border-primary/40 hover:shadow-sm"
+        >
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Da gestire internamente</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-900">{filteredOperationalStats.daAssegnareInternamente}</p>
+          <p className="mt-1 text-xs text-muted">Servizi senza autista assegnato nel pannello interno.</p>
+        </button>
+        <div className="card p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Promemoria da verificare</p>
+          <p className="mt-2 text-2xl font-semibold text-amber-700">{filteredOperationalStats.promemoriaDaVerificare}</p>
+          <p className="mt-1 text-xs text-muted">Promemoria inviati ma ancora non consegnati.</p>
+        </div>
       </div>
       <FilterBar colsClassName="md:grid-cols-9">
         <select
@@ -440,6 +516,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                   <p className="text-xs text-muted">
                     Hotel: {hotel?.name ?? "N/D"} ({hotel?.zone ?? "N/D"}) | Driver: {driverName}
                   </p>
+                  <p className="text-xs text-muted">Operativo: {service.date} | Pax {service.pax}</p>
                   {source === "pdf" && pdfMeta ? (
                     <div className="flex flex-wrap gap-1">
                       <span className="rounded-full bg-blue-100 px-2 py-1 text-[10px] font-semibold uppercase text-blue-700">PDF</span>
@@ -483,7 +560,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                   <th className="px-4 py-3">Cliente</th>
                   <th className="px-4 py-3">Tipo</th>
                   <th className="px-4 py-3">Nave</th>
-                  <th className="px-4 py-3">Zona</th>
+                  <th className="px-4 py-3">Hotel / Zona</th>
                   <th className="px-4 py-3">Origine</th>
                   <th className="px-4 py-3">Riferimento</th>
                   <th className="px-4 py-3">Driver</th>
@@ -513,9 +590,14 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                         </p>
                       </td>
                       <td className="px-4 py-3">
-                        <p className="line-clamp-2 max-w-[180px] text-safe-wrap" title={hotel?.zone ?? "N/D"}>
-                          {hotel?.zone ?? "N/D"}
-                        </p>
+                        <div className="max-w-[220px] text-xs text-slate-700">
+                          <p className="truncate font-medium text-slate-900" title={hotel?.name ?? "N/D"}>
+                            {hotel?.name ?? "N/D"}
+                          </p>
+                          <p className="truncate text-slate-500" title={hotel?.zone ?? "N/D"}>
+                            {hotel?.zone ?? "N/D"}
+                          </p>
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         {source === "pdf" && pdfMeta ? (
@@ -558,6 +640,11 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                         {isUndeliveredReminder(service) ? (
                           <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700">
                             Non consegnato
+                          </span>
+                        ) : null}
+                        {pdfMeta?.reviewRecommended ? (
+                          <span className="ml-2 inline-flex rounded-full bg-orange-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-orange-700">
+                            Review
                           </span>
                         ) : null}
                       </td>
