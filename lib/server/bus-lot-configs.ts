@@ -1,3 +1,5 @@
+import { deriveBusLotTitle } from "@/lib/bus-lot-utils";
+
 type AdminClient = {
   from: (table: string) => {
     upsert: (payload: unknown, options?: { onConflict?: string }) => Promise<{ error: { message: string } | null }>;
@@ -31,6 +33,12 @@ export function buildBusLotKeyFromSeed(seed: BusLotSeed) {
 
 export async function ensureDefaultBusLotConfig(admin: AdminClient, seed: BusLotSeed) {
   const lot_key = buildBusLotKeyFromSeed(seed);
+  const title = deriveBusLotTitle({
+    title: seed.title,
+    transportCode: seed.transportCode,
+    busCityOrigin: seed.busCityOrigin,
+    meetingPoint: seed.meetingPoint
+  });
   const { error } = await admin.from("bus_lot_configs").upsert(
     {
       tenant_id: seed.tenantId,
@@ -40,7 +48,7 @@ export async function ensureDefaultBusLotConfig(admin: AdminClient, seed: BusLot
       billing_party_name: seed.billingPartyName ?? null,
       bus_city_origin: seed.busCityOrigin ?? null,
       transport_code: seed.transportCode ?? null,
-      title: seed.title ?? null,
+      title,
       meeting_point: seed.meetingPoint ?? null,
       capacity: 54,
       low_seat_threshold: 5,

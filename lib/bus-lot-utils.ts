@@ -18,6 +18,31 @@ export function buildBusLotKey(service: Service) {
   ].join("|");
 }
 
+function cleanBusLotLabelPart(value?: string | null) {
+  const normalized = value?.replace(/\s+/g, " ").trim();
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
+export function deriveBusLotTitle(input: {
+  title?: string | null;
+  transportCode?: string | null;
+  busCityOrigin?: string | null;
+  meetingPoint?: string | null;
+}) {
+  const explicitTitle = cleanBusLotLabelPart(input.title);
+  if (explicitTitle) return explicitTitle;
+
+  const transportCode = cleanBusLotLabelPart(input.transportCode);
+  const busCityOrigin = cleanBusLotLabelPart(input.busCityOrigin);
+  const meetingPoint = cleanBusLotLabelPart(input.meetingPoint);
+
+  if (transportCode && busCityOrigin) return `${transportCode} - ${busCityOrigin}`;
+  if (transportCode) return `Linea bus ${transportCode}`;
+  if (busCityOrigin) return `Linea bus ${busCityOrigin}`;
+  if (meetingPoint) return `Linea bus ${meetingPoint}`;
+  return "Linea bus";
+}
+
 export type BusLotAggregate = {
   key: string;
   date: string;
@@ -77,7 +102,12 @@ export function buildBusLotAggregates(services: Service[], configs: BusLotConfig
         bus_city_origin: first.bus_city_origin ?? null,
         transport_code: first.transport_code ?? null,
         meeting_point: first.meeting_point ?? null,
-        title: config?.title ?? first.tour_name ?? `${first.billing_party_name ?? "Bus"} ${first.bus_city_origin ?? ""}`.trim(),
+        title: deriveBusLotTitle({
+          title: config?.title ?? first.tour_name,
+          transportCode: first.transport_code,
+          busCityOrigin: first.bus_city_origin,
+          meetingPoint: first.meeting_point
+        }),
         services: lotServices,
         service_count: lotServices.length,
         pax_total: paxTotal,
