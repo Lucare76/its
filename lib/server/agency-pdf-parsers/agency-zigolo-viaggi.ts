@@ -64,20 +64,23 @@ function parseAllEuroAmounts(raw?: string | null) {
 function parseTsfBlocks(compact: string, practiceNumber: string | null) {
   const blocks = Array.from(
     compact.matchAll(
-      /stato prenotazione\s*conf extra\s*data prenotazione:\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})\s*dal\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})\s*num servizio beneficiari trattamento e note\s*001\s*(TSF PER HOTEL (?:ANDATA|RITORNO))\s*([A-ZÀ-ÖØ-Ý' ]+?)\s*(?:\d{1,2}-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})?\s*dal al descrizione importo tasse(?:pax)? totale\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))\s*TSF PER HOTEL (ANDATA|RITORNO)\s*(\d+[.,]\d{2})(?:\s*(\d{1,2})\(\d+\)|\((\d+)\))?\s*(\d+[.,]\d{2})/gi
+      /stato prenotazione\s*conf extra\s*data prenotazione:\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})\s*dal\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})\s*num servizio beneficiari trattamento e note\s*001\s*(TSF PER HOTEL (?:ANDATA|RITORNO))\s*([A-ZÀ-ÖØ-Ý' ]+?)\s*(?:\d{1,2}-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})?\s*dal al descrizione importo tasse\s*(?:pax\s*)?totale\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))\s*TSF PER HOTEL (ANDATA|RITORNO)\s*(\d+[.,]\d{2})(?:\s*(\d{1,2})\s*\(\d+\)|\s*\((\d+)\))?\s*(\d+[.,]\d{2})/gi
     )
   ).map((match) => {
-    const passengerCount = Number(match[8] ?? match[9] ?? 0) || null;
-    const direction: "andata" | "ritorno" = /RITORNO/i.test(match[6] ?? match[3]) ? "ritorno" : "andata";
+    // groups: 1=bookingDate 2=serviceDate 3=description 4=beneficiary
+    //         5=dalTable 6=alTable 7=directionRow 8=lineAmount
+    //         9=paxOptionA (N\(n\)) 10=paxOptionB (\(N\)) 11=totalAmount
+    const passengerCount = Number(match[9] ?? match[10] ?? 0) || null;
+    const direction: "andata" | "ritorno" = /RITORNO/i.test(match[7] ?? match[3]) ? "ritorno" : "andata";
     return {
       bookingDate: parseItalianDate(match[1]),
       serviceDate: parseItalianDate(match[2]),
       description: clean(match[3]),
       beneficiary: normalizeCustomerName(match[4]),
       direction,
-      lineAmount: parseEuroAmount(match[7]),
+      lineAmount: parseEuroAmount(match[8]),
       pax: passengerCount,
-      totalAmount: parseEuroAmount(match[10]),
+      totalAmount: parseEuroAmount(match[11]),
       service: {
         practice_number: practiceNumber,
         beneficiary: normalizeCustomerName(match[4]),
