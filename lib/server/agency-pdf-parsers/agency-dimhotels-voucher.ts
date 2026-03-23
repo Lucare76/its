@@ -305,7 +305,11 @@ function parseDimhotelsVoucherPdfText(sourceText: string): ParsedTransferPdfPayl
     package_description: "Voucher Dimhotels/Snav",
     date_from: arrivalDate,
     date_to: departureDate,
-    total_amount_practice: /€\s*55/i.test(compact) || /55[,.\s]?00/i.test(compact) ? 55 : null,
+    total_amount_practice: (() => {
+      const m = compact.match(/€\s*(\d+(?:[.,]\d{2})?)\s*A\/R\s*a\s*persona/i);
+      if (m) return Number(m[1].replace(",", ".")) * (passengerCount ?? 1);
+      return /€\s*55/i.test(compact) || /55[,.\s]?00/i.test(compact) ? 55 : null;
+    })(),
     booking_kind: "transfer_port_hotel",
     service_type_code: "transfer_port_hotel",
     service_rows: [
