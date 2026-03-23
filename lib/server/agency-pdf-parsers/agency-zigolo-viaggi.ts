@@ -296,10 +296,7 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     parsed_services: parsedServices,
     parsing_status: practiceNumber && beneficiary && fromDate ? "parsed" : "needs_review",
     confidence_level: practiceNumber && beneficiary && totalAmount !== null ? "medium" : "low",
-    anomaly_message:
-      bookingState || bookingDate
-        ? `Zigolo Viaggi: verifica stato/prenotazione prima della conferma. ${parserNotes}`.trim()
-        : "Zigolo Viaggi: verifica dettagli escursione prima della conferma."
+    anomaly_message: `DEBUG bus=${busBlocks.length} tsf=${tsfBlocks.length} | compact[0..300]=${compact.slice(0, 300).replace(/\n/g, "↵")}`
   };
 }
 
