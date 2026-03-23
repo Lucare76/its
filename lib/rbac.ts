@@ -2,10 +2,14 @@ import type { UserRole } from "@/lib/types";
 
 export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/dashboard", roles: ["admin", "operator"] },
+  { prefix: "/arrivals", roles: ["admin", "operator"] },
+  { prefix: "/departures", roles: ["admin", "operator"] },
+  { prefix: "/notifications", roles: ["admin", "operator"] },
   { prefix: "/analytics", roles: ["admin", "operator"] },
   { prefix: "/onboarding", roles: ["admin", "operator"] },
   { prefix: "/servizi", roles: ["admin", "operator"] },
   { prefix: "/services/new", roles: ["admin", "operator"] },
+  { prefix: "/crm-agencies", roles: ["admin", "operator"] },
   { prefix: "/agency/new-booking", roles: ["admin", "agency"] },
   { prefix: "/agency", roles: ["admin", "agency"] },
   { prefix: "/agency/bookings", roles: ["admin", "agency"] },
@@ -13,6 +17,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/bus-tours", roles: ["admin", "operator"] },
   { prefix: "/planning", roles: ["admin", "operator"] },
   { prefix: "/ops-summary", roles: ["admin", "operator"] },
+  { prefix: "/audit", roles: ["admin", "operator"] },
   { prefix: "/hotels", roles: ["admin", "operator"] },
   { prefix: "/driver", roles: ["admin", "driver"] },
   { prefix: "/map", roles: ["admin", "operator", "agency"] },
@@ -26,13 +31,18 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
 
 export type AppCapability =
   | "dashboard:view"
+  | "arrivals:view"
+  | "departures:view"
+  | "notifications:view"
   | "analytics:view"
   | "services:view"
   | "services:create"
+  | "crm_agencies:view"
   | "dispatch:manage"
   | "planning:manage"
   | "ops_summary:view"
   | "statements:view"
+  | "audit:view"
   | "inbox:manage"
   | "pdf_imports:manage"
   | "pdf_imports:debug"
@@ -47,13 +57,18 @@ export type AppCapability =
 
 export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
   "dashboard:view": ["admin", "operator"],
+  "arrivals:view": ["admin", "operator"],
+  "departures:view": ["admin", "operator"],
+  "notifications:view": ["admin", "operator"],
   "analytics:view": ["admin", "operator"],
   "services:view": ["admin", "operator"],
   "services:create": ["admin", "operator"],
+  "crm_agencies:view": ["admin", "operator"],
   "dispatch:manage": ["admin", "operator"],
   "planning:manage": ["admin", "operator"],
   "ops_summary:view": ["admin", "operator"],
   "statements:view": ["admin", "operator"],
+  "audit:view": ["admin", "operator"],
   "inbox:manage": ["admin", "operator"],
   "pdf_imports:manage": ["admin", "operator"],
   "pdf_imports:debug": ["admin"],

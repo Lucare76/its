@@ -37,12 +37,17 @@ const roleDescriptions: Array<{ role: UserRole; label: string; description: stri
 
 const capabilityLabels: Array<{ capability: AppCapability; label: string }> = [
   { capability: "dashboard:view", label: "Cruscotto" },
+  { capability: "arrivals:view", label: "Arrivi" },
+  { capability: "departures:view", label: "Partenze" },
+  { capability: "notifications:view", label: "Notifiche" },
   { capability: "services:view", label: "Vista servizi" },
   { capability: "services:create", label: "Nuovo servizio" },
   { capability: "planning:manage", label: "Pianificazione" },
+  { capability: "crm_agencies:view", label: "CRM agenzie" },
   { capability: "dispatch:manage", label: "Dispatch interno" },
   { capability: "ops_summary:view", label: "Riepiloghi operativi" },
   { capability: "statements:view", label: "Estratti conto" },
+  { capability: "audit:view", label: "Audit" },
   { capability: "pricing:view", label: "Tariffe e margini" },
   { capability: "pricing:manage", label: "Gestione listini" },
   { capability: "users:manage", label: "Utenti" },
