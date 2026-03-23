@@ -32,6 +32,15 @@ export type SummaryPreviewPayload = {
     exported_count: number;
     created_at: string;
   }>;
+  report_jobs?: Array<{
+    id: string;
+    job_type: string;
+    target_date: string;
+    owner_name: string | null;
+    status: string;
+    created_at: string;
+    payload?: Record<string, unknown> | null;
+  }>;
 };
 
 function addDays(dateIso: string, days: number) {

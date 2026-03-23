@@ -22,6 +22,8 @@ export default function ReportCenterPage() {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [payload, setPayload] = useState<SummaryPreviewPayload | null>(null);
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -60,14 +62,23 @@ export default function ReportCenterPage() {
     };
   }, [today]);
 
-  const grouped = useMemo(() => {
+  const filteredRows = useMemo(() => {
     const rows = payload?.export_history ?? [];
+    return rows.filter((row) => {
+      const typeOk = typeFilter === "all" || row.service_type === typeFilter;
+      const searchOk = !search.trim() || `${row.service_type} ${row.date_from} ${row.date_to}`.toLowerCase().includes(search.toLowerCase());
+      return typeOk && searchOk;
+    });
+  }, [payload, search, typeFilter]);
+
+  const grouped = useMemo(() => {
+    const rows = filteredRows;
     return rows.reduce<Record<string, typeof rows>>((acc, row) => {
       const key = row.created_at.slice(0, 10);
       acc[key] = [...(acc[key] ?? []), row];
       return acc;
     }, {});
-  }, [payload]);
+  }, [filteredRows]);
 
   return (
     <section className="page-section">
@@ -104,6 +115,26 @@ export default function ReportCenterPage() {
         </SectionCard>
       </div>
 
+      <SectionCard title="Filtri report" subtitle="Riduci lo storico per tipo e testo">
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="text-sm">
+            Tipo export
+            <select className="input-saas mt-1" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+              <option value="all">Tutti</option>
+              {Array.from(new Set((payload?.export_history ?? []).map((row) => row.service_type))).map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            Cerca
+            <input className="input-saas mt-1" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tipo o periodo" />
+          </label>
+        </div>
+      </SectionCard>
+
       <SectionCard title="Timeline export" subtitle="Lettura per giorno e tipo file" loading={loading} loadingLines={6}>
         {Object.keys(grouped).length === 0 ? (
           <p className="text-sm text-muted">Nessun report registrato finora.</p>
@@ -116,7 +147,7 @@ export default function ReportCenterPage() {
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm font-semibold text-text">{day}</p>
                     <span className="rounded-full bg-white px-2.5 py-1 text-xs text-muted shadow-sm">
-                      {rows.length} export · {rows.reduce((sum, row) => sum + row.exported_count, 0)} servizi
+                      {rows.length} export - {rows.reduce((sum, row) => sum + row.exported_count, 0)} servizi
                     </span>
                   </div>
                   <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
@@ -133,7 +164,7 @@ export default function ReportCenterPage() {
                         {rows.map((row) => (
                           <tr key={row.id} className="border-t border-slate-100">
                             <td className="px-3 py-2">{formatDateTime(row.created_at)}</td>
-                            <td className="px-3 py-2">{row.date_from} → {row.date_to}</td>
+                            <td className="px-3 py-2">{row.date_from} -&gt; {row.date_to}</td>
                             <td className="px-3 py-2">{row.service_type}</td>
                             <td className="px-3 py-2">{row.exported_count}</td>
                           </tr>
@@ -143,6 +174,37 @@ export default function ReportCenterPage() {
                   </div>
                 </article>
               ))}
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Job report pianificati" subtitle="Storico coda scheduler" loading={loading} loadingLines={4}>
+        {(payload?.report_jobs ?? []).length === 0 ? (
+          <p className="text-sm text-muted">Nessun job report registrato.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-3 py-2">Creato il</th>
+                  <th className="px-3 py-2">Job</th>
+                  <th className="px-3 py-2">Target</th>
+                  <th className="px-3 py-2">Owner</th>
+                  <th className="px-3 py-2">Stato</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(payload?.report_jobs ?? []).map((job) => (
+                  <tr key={job.id} className="border-t border-slate-100">
+                    <td className="px-3 py-2">{formatDateTime(job.created_at)}</td>
+                    <td className="px-3 py-2">{job.job_type}</td>
+                    <td className="px-3 py-2">{job.target_date}</td>
+                    <td className="px-3 py-2">{job.owner_name ?? "N/D"}</td>
+                    <td className="px-3 py-2">{job.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </SectionCard>

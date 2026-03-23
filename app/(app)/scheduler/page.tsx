@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { SummaryPreviewPayload } from "@/lib/server/operational-summary";
 import { STATEMENT_AGENCY_NAMES } from "@/lib/server/statement-agencies";
 
@@ -29,12 +30,30 @@ export default function SchedulerPage() {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [payload, setPayload] = useState<SummaryPreviewPayload | null>(null);
+  const [jobMessage, setJobMessage] = useState<string | null>(null);
+  const [creatingJobs, setCreatingJobs] = useState(false);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
       setLoading(true);
-      const response = await fetch(`/api/ops/summary-preview?today=${today}`, { cache: "no-store" });
+      if (!hasSupabaseEnv || !supabase) {
+        if (!active) return;
+        setPayload(null);
+        setErrorMessage("Supabase non configurato.");
+        setLoading(false);
+        return;
+      }
+      const { data, error } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!active) return;
+      if (error || !token) {
+        setPayload(null);
+        setErrorMessage("Sessione non valida.");
+        setLoading(false);
+        return;
+      }
+      const response = await fetch(`/api/ops/summary-preview?today=${today}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
       const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; payload?: SummaryPreviewPayload } | null;
       if (!active) return;
       if (!response.ok || !body?.ok || !body.payload) {
@@ -77,6 +96,7 @@ export default function SchedulerPage() {
       />
 
       {errorMessage ? <EmptyState title="Scheduler non disponibile" description={errorMessage} compact /> : null}
+      {jobMessage ? <p className="text-sm text-muted">{jobMessage}</p> : null}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <SectionCard title="Job arrivi +48h" subtitle="Scheduler operativo" loading={loading}>
@@ -96,6 +116,65 @@ export default function SchedulerPage() {
           <p className="mt-1 text-sm text-muted">Agenzie abilitate al report economico</p>
         </SectionCard>
       </div>
+
+      <SectionCard title="Coda job report" subtitle="Generazione e lettura della coda operativa report" loading={loading} loadingLines={4}>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={creatingJobs}
+            onClick={async () => {
+              if (!hasSupabaseEnv || !supabase) return;
+              setCreatingJobs(true);
+              setJobMessage("Generazione coda report...");
+              const { data, error } = await supabase.auth.getSession();
+              const token = data.session?.access_token;
+              if (error || !token) {
+                setCreatingJobs(false);
+                setJobMessage("Sessione non valida.");
+                return;
+              }
+              const response = await fetch("/api/ops/report-jobs", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`
+                },
+                body: JSON.stringify({ today })
+              });
+              const body = (await response.json().catch(() => null)) as { inserted?: number; error?: string } | null;
+              setCreatingJobs(false);
+              setJobMessage(response.ok ? `Coda generata: ${body?.inserted ?? 0} job.` : body?.error ?? "Generazione coda fallita.");
+            }}
+          >
+            {creatingJobs ? "Generazione..." : "Genera coda report"}
+          </button>
+        </div>
+        <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-3 py-2">Creato il</th>
+                <th className="px-3 py-2">Job</th>
+                <th className="px-3 py-2">Target</th>
+                <th className="px-3 py-2">Owner</th>
+                <th className="px-3 py-2">Stato</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(payload?.report_jobs ?? []).map((job) => (
+                <tr key={job.id} className="border-t border-slate-100">
+                  <td className="px-3 py-2">{job.created_at.slice(0, 16).replace("T", " ")}</td>
+                  <td className="px-3 py-2">{job.job_type}</td>
+                  <td className="px-3 py-2">{job.target_date}</td>
+                  <td className="px-3 py-2">{job.owner_name ?? "N/D"}</td>
+                  <td className="px-3 py-2">{job.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.05fr_0.95fr]">
         <SectionCard title="Piano job automatici" subtitle="Sequenza di esecuzione suggerita" loading={loading} loadingLines={5}>
@@ -128,7 +207,7 @@ export default function SchedulerPage() {
                 <article key={agency} className="rounded-2xl border border-border bg-surface/80 p-3">
                   <p className="text-sm font-semibold text-text">{agency}</p>
                   <p className="mt-1 text-xs text-muted">
-                    {lines.length} servizi · EUR {(totalCents / 100).toFixed(2)}
+                    {lines.length} servizi - EUR {(totalCents / 100).toFixed(2)}
                   </p>
                 </article>
               );

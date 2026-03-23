@@ -2,9 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { SummaryPreviewPayload } from "@/lib/server/operational-summary";
-
-const LOCAL_RULES_KEY = "it-ops-rules-v1";
 
 const rules = [
   { id: "arrivals_48h", label: "Arrivi +48h", detail: "Prepara il riepilogo arrivi 48 ore prima, separato per prenotante." },
@@ -19,38 +18,69 @@ export default function OpsRulesPage() {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [payload, setPayload] = useState<SummaryPreviewPayload | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
   const [rulesDraft, setRulesDraft] = useState(() => {
-    const fallback = {
+    return {
       arrivalsHours: "48",
       departuresHours: "48",
       mondayBusEnabled: true,
-      mondayBusScope: "domenica successiva per agenzia",
+      mondayBusScope: "next_sunday_by_agency",
       statementAgencies: "Aleste Viaggi\nSosandra Tour By Rossella Viaggi\nZigolo Viaggi"
     };
-    if (typeof window === "undefined") return fallback;
-    const saved = window.localStorage.getItem(LOCAL_RULES_KEY);
-    if (!saved) return fallback;
-    try {
-      return JSON.parse(saved) as typeof fallback;
-    } catch {
-      return fallback;
-    }
   });
 
   useEffect(() => {
     let active = true;
     const load = async () => {
       setLoading(true);
-      const response = await fetch(`/api/ops/summary-preview?today=${today}`, { cache: "no-store" });
-      const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; payload?: SummaryPreviewPayload } | null;
+      if (!hasSupabaseEnv || !supabase) {
+        if (!active) return;
+        setPayload(null);
+        setErrorMessage("Supabase non configurato.");
+        setLoading(false);
+        return;
+      }
+      const { data, error } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
       if (!active) return;
-      if (!response.ok || !body?.ok || !body.payload) {
+      if (error || !token) {
+        setPayload(null);
+        setErrorMessage("Sessione non valida.");
+        setLoading(false);
+        return;
+      }
+      const [summaryResponse, settingsResponse] = await Promise.all([
+        fetch(`/api/ops/summary-preview?today=${today}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }),
+        fetch("/api/settings/operations", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" })
+      ]);
+      const body = (await summaryResponse.json().catch(() => null)) as { ok?: boolean; error?: string; payload?: SummaryPreviewPayload } | null;
+      const settingsBody = (await settingsResponse.json().catch(() => null)) as {
+        settings?: {
+          arrival_summary_hours: number;
+          departure_summary_hours: number;
+          monday_bus_enabled: boolean;
+          monday_bus_scope: string;
+          statement_agencies: string[];
+        };
+      } | null;
+      if (!active) return;
+      if (!summaryResponse.ok || !body?.ok || !body.payload) {
         setPayload(null);
         setErrorMessage(body?.error ?? "Impossibile caricare le regole operative.");
         setLoading(false);
         return;
       }
       setPayload(body.payload);
+      if (settingsBody?.settings) {
+        setRulesDraft({
+          arrivalsHours: String(settingsBody.settings.arrival_summary_hours),
+          departuresHours: String(settingsBody.settings.departure_summary_hours),
+          mondayBusEnabled: settingsBody.settings.monday_bus_enabled,
+          mondayBusScope: settingsBody.settings.monday_bus_scope,
+          statementAgencies: settingsBody.settings.statement_agencies.join("\n")
+        });
+      }
       setErrorMessage(null);
       setLoading(false);
     };
@@ -75,6 +105,7 @@ export default function OpsRulesPage() {
       />
 
       {errorMessage ? <EmptyState title="Regole operative non disponibili" description={errorMessage} compact /> : null}
+      {message ? <p className="text-sm text-muted">{message}</p> : null}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {rules.map((rule) => (
@@ -84,7 +115,7 @@ export default function OpsRulesPage() {
         ))}
       </div>
 
-      <SectionCard title="Configurazione workspace" subtitle="Regole operative modificabili lato admin, pronte per futura persistenza server" loading={loading} loadingLines={4}>
+      <SectionCard title="Configurazione workspace" subtitle="Regole operative persistenti lato admin, salvate per tenant" loading={loading} loadingLines={4}>
         <div className="grid gap-3 md:grid-cols-2">
           <label className="text-sm">
             Ore prima arrivi
@@ -118,12 +149,38 @@ export default function OpsRulesPage() {
             <button
               type="button"
               className="btn-primary"
-              onClick={() => {
-                if (typeof window === "undefined") return;
-                window.localStorage.setItem(LOCAL_RULES_KEY, JSON.stringify(rulesDraft));
+              disabled={saving}
+              onClick={async () => {
+                if (!hasSupabaseEnv || !supabase) return;
+                setSaving(true);
+                setMessage("Salvataggio impostazioni operative...");
+                const { data, error } = await supabase.auth.getSession();
+                const token = data.session?.access_token;
+                if (error || !token) {
+                  setSaving(false);
+                  setMessage("Sessione non valida.");
+                  return;
+                }
+                const response = await fetch("/api/settings/operations", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`
+                  },
+                  body: JSON.stringify({
+                    arrival_summary_hours: Number(rulesDraft.arrivalsHours),
+                    departure_summary_hours: Number(rulesDraft.departuresHours),
+                    monday_bus_enabled: rulesDraft.mondayBusEnabled,
+                    monday_bus_scope: rulesDraft.mondayBusScope,
+                    statement_agencies: rulesDraft.statementAgencies.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+                  })
+                });
+                const body = (await response.json().catch(() => null)) as { error?: string } | null;
+                setSaving(false);
+                setMessage(response.ok ? "Impostazioni operative salvate." : body?.error ?? "Salvataggio fallito.");
               }}
             >
-              Salva configurazione locale
+              {saving ? "Salvataggio..." : "Salva configurazione"}
             </button>
           </div>
         </div>
