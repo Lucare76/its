@@ -103,6 +103,63 @@ function parseTsfBlocks(compact: string, practiceNumber: string | null) {
   return blocks;
 }
 
+function normalizeTime(raw?: string | null) {
+  const match = String(raw ?? "").match(/([01]?\d|2[0-3])[.:]([0-5]\d)/);
+  if (!match) return null;
+  return `${match[1].padStart(2, "0")}:${match[2]}`;
+}
+
+function parseBusTransferBlocks(compact: string, practiceNumber: string | null) {
+  return Array.from(
+    compact.matchAll(
+      /stato prenotazione\s*conf extra\s*data prenotazione:\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})\s*dal\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})\s*num servizio beneficiari trattamento e note\s*001\s+(BUS\s+DA\s+[A-Z ]+?\s+\d{1,2}[.:]\d{2}|BUS\s+[-A-Z /]+?RITORNO)\s+([^\n]+)[\s\S]*?(\d+[.,]\d{2})\s+(\d+)\s*\(\d+\)\s+(\d+[.,]\d{2})\s*totale eur\s*(\d+[.,]\d{2})/gi
+    )
+  ).map((match) => {
+    const description = clean(match[3]);
+    const timeMatch = description?.match(/(\d{1,2}[.:]\d{2})\s*$/);
+    const serviceTime = timeMatch ? normalizeTime(timeMatch[1]) : null;
+    const isReturn = /RITORNO/i.test(description ?? "");
+    const direction: "andata" | "ritorno" = isReturn ? "ritorno" : "andata";
+    const pax = Number(match[6]) || null;
+    const firstBeneficiary = normalizeCustomerName(match[4]);
+    const cityName = isReturn
+      ? clean(description?.match(/BUS\s+ISCHIA\s*-\s*([-A-Z ]+?)\s+RITORNO/i)?.[1])
+      : clean(description?.replace(/^BUS\s+DA\s+/i, "").replace(/\s+\d{1,2}[.:]\d{2}$/, ""));
+    const origin = isReturn ? "HOTEL ISCHIA" : cityName;
+    const destination = isReturn ? cityName : "HOTEL ISCHIA";
+    return {
+      bookingDate: parseItalianDate(match[1]),
+      serviceDate: parseItalianDate(match[2]),
+      description,
+      serviceTime,
+      beneficiary: firstBeneficiary,
+      direction,
+      lineAmount: parseEuroAmount(match[5]),
+      pax,
+      totalAmount: parseEuroAmount(match[8]),
+      service: {
+        practice_number: practiceNumber,
+        beneficiary: firstBeneficiary,
+        pax,
+        service_type: "transfer" as const,
+        direction,
+        service_date: parseItalianDate(match[2]),
+        service_time: serviceTime,
+        pickup_meeting_point: isReturn ? "HOTEL ISCHIA" : cityName,
+        origin,
+        destination,
+        carrier_company: "BUS",
+        hotel_structure: null,
+        original_row_description: description,
+        raw_detail_text: [description, firstBeneficiary, parseItalianDate(match[2])].filter(Boolean).join(" | "),
+        parsing_status: "parsed" as const,
+        confidence_level: "medium" as const,
+        semantic_tag: direction === "andata" ? ("transfer_arrival" as const) : ("transfer_departure" as const)
+      }
+    };
+  });
+}
+
 function normalizeZigoloText(sourceText: string) {
   return sourceText
     .replace(/\r/g, "\n")
@@ -121,6 +178,7 @@ function normalizeZigoloText(sourceText: string) {
 function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload {
   const compact = normalizeZigoloText(sourceText);
   const tsfBlocks = parseTsfBlocks(compact, null);
+  const busBlocks = parseBusTransferBlocks(compact, null);
 
   const practiceNumber = clean(compact.match(/pratica\s*(\d{2}\/\d{6})/i)?.[1]);
   const practiceDate =
@@ -130,22 +188,31 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
   const reference = clean(compact.match(/pratica\s*\d{2}\/\d{6}\s*ref\.\s*([^\n]+)/i)?.[1]);
   const bookingState = clean(compact.match(/stato prenotazione\s*([^\n]+)/i)?.[1]);
   const hasTsfTransfer = /TSF PER HOTEL (?:ANDATA|RITORNO)/i.test(compact);
+  const hasBusTransfer = busBlocks.length > 0;
   const serviceDescription =
     clean(compact.match(/\b\d{3}\s*(TOUR DELL'ISOLA IN BUS)\b/i)?.[1]) ??
     clean(compact.match(/\b\d{3}\s+([A-Z' ]+?)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\s+trattamento e note/i)?.[1]) ??
     clean(compact.match(/\bdescrizione\s+([A-Z' ]+?)\s+importo\b/i)?.[1]);
   const beneficiary =
+    busBlocks[0]?.beneficiary ??
     tsfBlocks[0]?.beneficiary ??
     normalizeCustomerName(compact.match(/TSF PER HOTEL (?:ANDATA|RITORNO)\s*([A-ZÀ-ÖØ-Ý' ]+?)\s*\d{1,2}-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4}/i)?.[1]) ??
     cleanBeneficiary(compact.match(/TOUR DELL'ISOLA IN BUS\s*([^\n]+)/i)?.[1]) ??
     cleanBeneficiary(compact.match(/beneficiari\s+([^\n]+?)(?:trattamento e note|dal|descrizione|importo|tasse|pax|totale|$)/i)?.[1]) ??
     cleanBeneficiary(compact.match(/\b\d{3}\s+[A-Z' ]+\s+([^\n]+?)(?:trattamento e note|dal|descrizione|importo|tasse|pax|totale|$)/i)?.[1]);
-  const fromDate = tsfBlocks.find((item) => item.direction === "andata")?.serviceDate ?? parseItalianDate(compact.match(/\bdal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
+  const fromDate =
+    busBlocks.find((item) => item.direction === "andata")?.serviceDate ??
+    tsfBlocks.find((item) => item.direction === "andata")?.serviceDate ??
+    parseItalianDate(compact.match(/\bdal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]);
   const toDate =
+    busBlocks.find((item) => item.direction === "ritorno")?.serviceDate ??
     tsfBlocks.find((item) => item.direction === "ritorno")?.serviceDate ??
     parseItalianDate(compact.match(/\bal\s+([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})/i)?.[1]) ??
     fromDate;
   const pax =
+    (busBlocks.map((item) => item.pax).filter((value): value is number => Boolean(value)).length > 0
+      ? Math.max(...busBlocks.map((item) => item.pax).filter((value): value is number => Boolean(value)))
+      : null) ??
     (tsfBlocks.map((item) => item.pax).filter((value): value is number => Boolean(value)).length > 0
       ? Math.max(...tsfBlocks.map((item) => item.pax).filter((value): value is number => Boolean(value)))
       : null) ??
@@ -156,7 +223,10 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     parseEuroAmount(compact.match(/\btotale\s*(\d+[.,]\d{2})/i)?.[1]),
     ...parseAllEuroAmounts(compact)
   ].filter((value): value is number => value !== null);
-  const totalAmount = totalAmountCandidates.length > 0 ? Math.max(...totalAmountCandidates) : null;
+  const busTotalAmount = hasBusTransfer
+    ? busBlocks.reduce((sum, b) => sum + (b.totalAmount ?? 0), 0) || null
+    : null;
+  const totalAmount = busTotalAmount ?? (totalAmountCandidates.length > 0 ? Math.max(...totalAmountCandidates) : null);
 
   const parserNotes = [bookingState, bookingDate ? `Data prenotazione ${bookingDate}` : null].filter(Boolean).join(" | ");
 
@@ -183,9 +253,15 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
         }
       : null;
 
-  const parsedServices = hasTsfTransfer ? tsfBlocks.map((item) => item.service) : excursionService ? [excursionService] : [];
-  const bookingKind = hasTsfTransfer ? "transfer_port_hotel" : "excursion";
-  const serviceTypeCode = hasTsfTransfer ? "transfer_port_hotel" : "excursion";
+  const parsedServices = hasBusTransfer
+    ? busBlocks.map((item) => item.service)
+    : hasTsfTransfer
+      ? tsfBlocks.map((item) => item.service)
+      : excursionService
+        ? [excursionService]
+        : [];
+  const bookingKind = hasBusTransfer ? "bus_city_hotel" : hasTsfTransfer ? "transfer_port_hotel" : "excursion";
+  const serviceTypeCode = hasBusTransfer ? "bus_line" : hasTsfTransfer ? "transfer_port_hotel" : "excursion";
 
   return {
     practice_number: practiceNumber,
