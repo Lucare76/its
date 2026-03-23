@@ -67,6 +67,18 @@ export async function GET(request: NextRequest) {
       created_at: string;
     }>;
 
+    const { data: servicesData, error: servicesError } = await admin
+      .from("services")
+      .select("id, customer_name, billing_party_name, service_type_code, booking_service_kind, applied_pricing_rule_id, final_price_cents, margin_cents, pricing_manual_override, date, time")
+      .eq("tenant_id", membership.tenant_id)
+      .gte("date", fromIso.slice(0, 10))
+      .order("date", { ascending: false })
+      .limit(2000);
+
+    if (servicesError) {
+      return NextResponse.json({ error: servicesError.message }, { status: 500 });
+    }
+
     const agencyIds = Array.from(new Set(rows.map((item) => item.agency_id).filter(Boolean))) as string[];
     const routeIds = Array.from(new Set(rows.map((item) => item.route_id).filter(Boolean))) as string[];
 
@@ -117,16 +129,53 @@ export async function GET(request: NextRequest) {
     const byAgency = Array.from(byAgencyMap.values()).sort((a, b) => b.marginCents - a.marginCents).slice(0, 20);
     const byRoute = Array.from(byRouteMap.values()).sort((a, b) => b.marginCents - a.marginCents).slice(0, 20);
 
+    const services = (servicesData ?? []) as Array<{
+      id: string;
+      customer_name: string;
+      billing_party_name: string | null;
+      service_type_code: string | null;
+      booking_service_kind: string | null;
+      applied_pricing_rule_id: string | null;
+      final_price_cents: number | null;
+      margin_cents: number | null;
+      pricing_manual_override: boolean | null;
+      date: string;
+      time: string;
+    }>;
+
+    const alerts = {
+      withoutPricing: services.filter((item) => !item.applied_pricing_rule_id && (item.final_price_cents ?? 0) === 0).length,
+      lowMargin: services.filter((item) => typeof item.margin_cents === "number" && item.margin_cents > 0 && item.margin_cents <= 1000).length,
+      negativeMargin: services.filter((item) => typeof item.margin_cents === "number" && item.margin_cents < 0).length,
+      manualOverrides: services.filter((item) => item.pricing_manual_override === true).length
+    };
+
+    const attentionRows = services
+      .filter((item) => !item.applied_pricing_rule_id || (item.margin_cents ?? 0) <= 1000)
+      .slice(0, 30)
+      .map((item) => ({
+        id: item.id,
+        customer_name: item.customer_name,
+        billing_party_name: item.billing_party_name,
+        service_label: item.service_type_code ?? item.booking_service_kind ?? "N/D",
+        date: item.date,
+        time: item.time,
+        margin_cents: item.margin_cents ?? 0,
+        has_pricing_rule: Boolean(item.applied_pricing_rule_id),
+        manual_override: item.pricing_manual_override === true
+      }));
+
     return NextResponse.json({
       periodDays: days,
       fromIso,
       summary,
       byAgency,
-      byRoute
+      byRoute,
+      alerts,
+      attentionRows
     });
   } catch (error) {
     console.error("Pricing margins endpoint error", error);
     return NextResponse.json({ error: "Errore interno server." }, { status: 500 });
   }
 }
-
