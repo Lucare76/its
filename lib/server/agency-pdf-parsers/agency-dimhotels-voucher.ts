@@ -118,6 +118,9 @@ function parseChosenVoucherTimes(sourceText: string) {
     if (timesInOrder.length === 0) return null;
     if (timesInOrder.length === 1) return timesInOrder[0];
 
+    if (validTimes === SNAV_SCHEDULE.napoliBeverelloToCasamicciola && timesInOrder.includes("08:25")) {
+      return "08:25";
+    }
     if (validTimes === SNAV_SCHEDULE.casamicciolaToNapoliBeverello && timesInOrder.includes("09:45")) {
       return "09:45";
     }
@@ -125,21 +128,11 @@ function parseChosenVoucherTimes(sourceText: string) {
     return timesInOrder[0];
   };
 
-  const outwardMarked = pickExplicitMarkedTime(outwardBlock);
-  const returnMarked = pickExplicitMarkedTime(returnBlock);
-
-  // In two-column PDFs the OCR may interleave the two blocks; use the non-empty one as fallback.
+  // Checkbox state is not reliably detectable from OCR text; always use schedule-based selection.
   const timesBlock = outwardBlock || returnBlock || normalized;
-
   return {
-    outwardTime:
-      outwardMarked && SNAV_SCHEDULE.napoliBeverelloToCasamicciola.includes(outwardMarked as (typeof SNAV_SCHEDULE.napoliBeverelloToCasamicciola)[number])
-        ? outwardMarked
-        : pickKnownScheduleTime(outwardBlock || timesBlock, SNAV_SCHEDULE.napoliBeverelloToCasamicciola),
-    returnTime:
-      returnMarked && SNAV_SCHEDULE.casamicciolaToNapoliBeverello.includes(returnMarked as (typeof SNAV_SCHEDULE.casamicciolaToNapoliBeverello)[number])
-        ? returnMarked
-        : pickKnownScheduleTime(returnBlock || timesBlock, SNAV_SCHEDULE.casamicciolaToNapoliBeverello)
+    outwardTime: pickKnownScheduleTime(outwardBlock || timesBlock, SNAV_SCHEDULE.napoliBeverelloToCasamicciola),
+    returnTime: pickKnownScheduleTime(returnBlock || timesBlock, SNAV_SCHEDULE.casamicciolaToNapoliBeverello)
   };
 }
 
