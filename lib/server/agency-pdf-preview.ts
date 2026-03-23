@@ -57,6 +57,7 @@ export interface AgencyPdfPreviewResult {
     train_arrival_time: string | null;
     train_departure_number: string | null;
     train_departure_time: string | null;
+    bus_city_origin: string | null;
     notes: string | null;
   };
   fields_found: string[];
@@ -607,6 +608,10 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
       : deducedBookingKind === "transfer_airport_hotel"
         ? clean(rawArrivalPlace ?? arrivalService?.pickup_meeting_point ?? "AEROPORTO")
         : rawArrivalPlace;
+  const busCityOrigin =
+    deducedBookingKind === "bus_city_hotel" || deducedServiceType === "bus_line"
+      ? clean(arrivalService?.origin ?? null)
+      : null;
   const transportReferenceOutward =
     clean(transferParsed.train_arrival_number ?? null) ??
     extractTransportReference(arrivalService?.raw_detail_text ?? arrivalService?.original_row_description ?? null);
@@ -656,6 +661,7 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
     train_arrival_time: isTrainMode(transportMode) ? operationalOutwardTime : clean(transferParsed.train_arrival_time ?? null),
     train_departure_number: transportReferenceReturn,
     train_departure_time: isTrainMode(transportMode) ? operationalReturnTime : clean(transferParsed.train_departure_time ?? null),
+    bus_city_origin: busCityOrigin,
     notes
   };
 

@@ -35,6 +35,7 @@ export type NormalizedPdfImport = {
   train_arrival_time: string | null;
   train_departure_number: string | null;
   train_departure_time: string | null;
+  bus_city_origin: string | null;
   booking_kind: "transfer_port_hotel" | "transfer_airport_hotel" | "transfer_train_hotel" | "bus_city_hotel" | "excursion";
   service_type_deduced: "transfer" | "ferry" | "excursion" | "bus" | null;
   customer_first_name: string | null;
@@ -109,6 +110,7 @@ export const pdfImportReviewSchema = z.object({
   transport_mode: z.enum(["train", "hydrofoil", "ferry", "road_transfer", "bus", "unknown"]).nullable().optional(),
   train_arrival_number: z.string().trim().max(80).optional().nullable(),
   train_departure_number: z.string().trim().max(80).optional().nullable(),
+  bus_city_origin: z.string().trim().max(120).optional().nullable(),
   practice_number: z.string().trim().max(120).optional().nullable(),
   ns_reference: z.string().trim().max(160).optional().nullable(),
   notes: z.string().trim().max(2000).optional().nullable()
@@ -356,6 +358,7 @@ function buildNormalizedImport(preview: ReturnType<typeof buildAgencyPdfPreview>
     train_arrival_time: extractOperationalTime(arrivalService?.raw_detail_text, "outward") ?? clean(preview.extracted.train_arrival_time),
     train_departure_number: clean(preview.extracted.train_departure_number) ?? transportCodes.departureTransportCode,
     train_departure_time: extractOperationalTime(departureService?.raw_detail_text, "return") ?? clean(preview.extracted.train_departure_time),
+    bus_city_origin: clean(preview.extracted.bus_city_origin),
     booking_kind: bookingKind,
     service_type_deduced: serviceTypeDeduced,
     customer_first_name: null,
@@ -439,6 +442,7 @@ function buildEffectiveNormalizedImport(
         : base.return_time,
     train_arrival_number: emptyToNull(reviewed.train_arrival_number) ?? base.train_arrival_number,
     train_departure_number: emptyToNull(reviewed.train_departure_number) ?? base.train_departure_number,
+    bus_city_origin: emptyToNull(reviewed.bus_city_origin) ?? base.bus_city_origin,
     transport_reference_outward: emptyToNull(reviewed.train_arrival_number) ?? base.transport_reference_outward,
     transport_reference_return: emptyToNull(reviewed.train_departure_number) ?? base.transport_reference_return,
     arrival_place: emptyToNull(reviewed.arrival_place) ?? base.arrival_place,
@@ -485,6 +489,7 @@ function buildEffectiveNormalizedImport(
     ["source_price_per_pax_cents", effective.source_price_per_pax_cents],
     ["train_arrival_number", effective.train_arrival_number],
     ["train_departure_number", effective.train_departure_number],
+    ["bus_city_origin", effective.bus_city_origin],
     ["notes", effective.notes]
   ];
   for (const [key, value] of resolvedMap) {
@@ -835,7 +840,7 @@ function buildServicePayload(
     train_arrival_time: null,
     train_departure_number: normalized.train_departure_number,
     train_departure_time: null,
-    bus_city_origin: null,
+    bus_city_origin: normalized.bus_city_origin,
     include_ferry_tickets: normalized.include_ferry_tickets,
     ferry_details: {
       transport_mode: normalized.transport_mode,
@@ -1177,6 +1182,7 @@ async function syncDraftServiceFromNormalized(
       train_arrival_time: null,
       train_departure_number: normalized.train_departure_number,
       train_departure_time: null,
+      bus_city_origin: normalized.bus_city_origin,
       include_ferry_tickets: normalized.include_ferry_tickets,
       ferry_details: {
         transport_mode: normalized.transport_mode,
@@ -1468,6 +1474,7 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
         train_arrival_time: null,
         train_departure_number: normalized.train_departure_number,
         train_departure_time: null,
+        bus_city_origin: normalized.bus_city_origin,
         include_ferry_tickets: normalized.include_ferry_tickets,
         ferry_details: {
           transport_mode: normalized.transport_mode,
@@ -1581,9 +1588,9 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
       date: normalized.arrival_date,
       direction: "arrival",
       billingPartyName: normalized.billing_party_name,
-      busCityOrigin: null,
+      busCityOrigin: normalized.bus_city_origin,
       transportCode: normalized.transport_code,
-      title: normalized.billing_party_name ?? normalized.customer_full_name,
+      title: normalized.bus_city_origin,
       meetingPoint: normalized.arrival_place
     });
   }
