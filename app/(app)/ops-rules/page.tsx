@@ -7,7 +7,7 @@ import type { SummaryPreviewPayload } from "@/lib/server/operational-summary";
 const rules = [
   { id: "arrivals_48h", label: "Arrivi +48h", detail: "Prepara il riepilogo arrivi 48 ore prima, separato per prenotante." },
   { id: "departures_48h", label: "Partenze +48h", detail: "Prepara il riepilogo partenze 48 ore prima, separato per prenotante." },
-  { id: "bus_monday", label: "Bus del lunedi", detail: "I servizi bus non seguono il +48h e vengono aggregati nel lotto del lunedi." },
+  { id: "bus_monday", label: "Bus del lunedi", detail: "Ogni lunedi il sistema raggruppa per agenzia le linee bus di arrivo e partenza della domenica successiva." },
   { id: "statement_agency", label: "Estratti conto", detail: "Le agenzie abilitate vanno in report economico per periodo, con preview prima dell'invio." },
   { id: "exports_split", label: "Split export cliente", detail: "Gli Excel vengono separati in `linea bus` e `altri servizi`, sia per arrivi sia per partenze." }
 ];
@@ -79,6 +79,7 @@ export default function OpsRulesPage() {
             <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Bus lunedi</p>
               <p className="mt-2 text-2xl font-semibold text-slate-900">{Object.values(payload.bus_monday).flat().length}</p>
+              <p className="mt-1 text-xs text-slate-500">Target domenica {payload.target_bus_monday_date}</p>
             </article>
             <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Estratti conto</p>

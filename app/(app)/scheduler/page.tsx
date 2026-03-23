@@ -88,8 +88,8 @@ export default function SchedulerPage() {
           <p className="mt-1 text-sm text-muted">{Object.values(payload?.departures_48h ?? {}).flat().length} servizi nel lotto</p>
         </SectionCard>
         <SectionCard title="Job bus lunedi" subtitle="Eccezione settimanale" loading={loading}>
-          <p className="text-2xl font-semibold text-text">{formatDateLabel(schedule.mondayBus)}</p>
-          <p className="mt-1 text-sm text-muted">{Object.values(payload?.bus_monday ?? {}).flat().length} servizi bus in preparazione</p>
+          <p className="text-2xl font-semibold text-text">{payload ? formatDateLabel(payload.target_bus_monday_date) : formatDateLabel(schedule.mondayBus)}</p>
+          <p className="mt-1 text-sm text-muted">{Object.values(payload?.bus_monday ?? {}).flat().length} servizi bus in preparazione per agenzia</p>
         </SectionCard>
         <SectionCard title="Job estratti conto" subtitle="Per agenzie abilitate" loading={loading}>
           <p className="text-2xl font-semibold text-text">{schedule.statementAgencies.length}</p>
@@ -103,7 +103,7 @@ export default function SchedulerPage() {
             {[
               { label: "Arrivi 48h", when: formatDateLabel(schedule.target48h), detail: "Prepara il lotto arrivi separato per prenotante." },
               { label: "Partenze 48h", when: formatDateLabel(schedule.target48h), detail: "Prepara il lotto partenze separato per prenotante." },
-              { label: "Bus del lunedi", when: formatDateLabel(schedule.mondayBus), detail: "Raggruppa i servizi linea bus fuori dal flusso +48h." },
+              { label: "Bus del lunedi", when: payload ? formatDateLabel(payload.target_bus_monday_date) : formatDateLabel(schedule.mondayBus), detail: "Raggruppa per agenzia i bus di arrivo e partenza della domenica successiva." },
               { label: "Estratti conto", when: `Dal ${formatDateLabel(schedule.statementStart)}`, detail: "Genera preview economica per le agenzie abilitate." }
             ].map((item) => (
               <article key={item.label} className="rounded-2xl border border-border bg-surface/80 p-3">

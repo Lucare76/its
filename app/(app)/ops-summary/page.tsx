@@ -203,7 +203,10 @@ export default function OpsSummaryPage() {
         </SectionCard>
         <SectionCard title="Bus del lunedi" subtitle="Solo se la data base cade di lunedi" loading={loading}>
           <p className="text-3xl font-semibold text-text">{stats?.bus.length ?? 0}</p>
-          <p className="mt-1 text-sm text-muted">{stats?.bus.reduce((sum, line) => sum + line.pax, 0) ?? 0} pax in elenco</p>
+          <p className="mt-1 text-sm text-muted">
+            {payload ? `Domenica target ${formatIsoDate(payload.target_bus_monday_date)} · ` : ""}
+            {stats?.bus.reduce((sum, line) => sum + line.pax, 0) ?? 0} pax in elenco
+          </p>
         </SectionCard>
         <SectionCard title="Estratti conto" subtitle="Agenzie abilitate a report economico" loading={loading}>
           <p className="text-3xl font-semibold text-text">{stats?.statements.length ?? 0}</p>
@@ -220,7 +223,10 @@ export default function OpsSummaryPage() {
             <p className="text-sm text-text">Il sistema sta preparando i riepiloghi sul giorno target <span className="font-semibold">{formatIsoDate(payload.target_date_48h)}</span>.</p>
           </SectionCard>
           <SectionCard title="Finestra bus" subtitle="Eccezione settimanale">
-            <p className="text-sm text-text">I servizi linea bus seguono il lotto del lunedi e restano separati dagli altri servizi.</p>
+            <p className="text-sm text-text">
+              Il lunedi il sistema prepara, per singola agenzia, i bus di arrivo e partenza della domenica successiva
+              <span className="font-semibold"> {payload ? formatIsoDate(payload.target_bus_monday_date) : ""}</span>.
+            </p>
           </SectionCard>
           <SectionCard title="Finestra economica" subtitle="Estratti conto">
             <p className="text-sm text-text">Gli estratti conto lavorano per periodo e agenzia, con preview prima di qualsiasi invio.</p>
@@ -238,8 +244,17 @@ export default function OpsSummaryPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <SectionCard title="Servizi bus del lunedi" subtitle="Preview del lotto settimanale bus" loading={loading} loadingLines={5}>
-          <SummaryGroupList groups={payload?.bus_monday ?? {}} emptyLabel="Nessun servizio bus in invio settimanale per questa data base." reportTitle="Preview testo bus" />
+        <SectionCard
+          title="Servizi bus del lunedi"
+          subtitle={payload ? `Preview per domenica ${formatIsoDate(payload.target_bus_monday_date)}` : "Preview del lotto settimanale bus"}
+          loading={loading}
+          loadingLines={5}
+        >
+          <SummaryGroupList
+            groups={payload?.bus_monday ?? {}}
+            emptyLabel="Nessun servizio bus da riepilogare per la domenica successiva."
+            reportTitle="Preview testo bus per agenzia"
+          />
         </SectionCard>
         <SectionCard title="Estratti conto agenzie" subtitle="Solo preview dati, nessun invio live" loading={loading} loadingLines={5}>
           <SummaryGroupList

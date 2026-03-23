@@ -19,6 +19,7 @@ type SummaryLine = {
 export type SummaryPreviewPayload = {
   generated_at: string;
   target_date_48h: string;
+  target_bus_monday_date: string;
   arrivals_48h: Record<string, SummaryLine[]>;
   departures_48h: Record<string, SummaryLine[]>;
   bus_monday: Record<string, SummaryLine[]>;
@@ -42,6 +43,14 @@ function addDays(dateIso: string, days: number) {
 function isMonday(dateIso: string) {
   const date = new Date(`${dateIso}T12:00:00`);
   return date.getDay() === 1;
+}
+
+function nextSunday(dateIso: string) {
+  const date = new Date(`${dateIso}T12:00:00`);
+  const day = date.getDay();
+  const delta = day === 0 ? 7 : 7 - day;
+  date.setDate(date.getDate() + delta);
+  return date.toISOString().slice(0, 10);
 }
 
 function hotelNameFromService(service: Service) {
@@ -77,11 +86,17 @@ function groupByBookingOwner(lines: SummaryLine[]) {
 export function buildOperationalSummaryPreview(services: Service[], todayIso: string, statementAgencyNames: string[] = []) {
   const instances = buildOperationalInstances(services);
   const targetDate48h = addDays(todayIso, 2);
+  const targetBusMondayDate = nextSunday(todayIso);
   const arrivals48h = instances.filter((item) => item.direction === "arrival" && item.date === targetDate48h && item.service.booking_service_kind !== "bus_city_hotel");
   const departures48h = instances.filter((item) => item.direction === "departure" && item.date === targetDate48h && item.service.booking_service_kind !== "bus_city_hotel");
 
   const busWeekly = isMonday(todayIso)
-    ? instances.filter((item) => item.service.booking_service_kind === "bus_city_hotel" && item.date >= todayIso)
+    ? instances.filter(
+        (item) =>
+          item.service.booking_service_kind === "bus_city_hotel" &&
+          item.date === targetBusMondayDate &&
+          Boolean(item.service.billing_party_name?.trim())
+      )
     : [];
 
   const statementCandidates = instances.filter((item) =>
@@ -91,6 +106,7 @@ export function buildOperationalSummaryPreview(services: Service[], todayIso: st
   return {
     generated_at: new Date().toISOString(),
     target_date_48h: targetDate48h,
+    target_bus_monday_date: targetBusMondayDate,
     arrivals_48h: groupByBookingOwner(arrivals48h.map(lineFromInstance)),
     departures_48h: groupByBookingOwner(departures48h.map(lineFromInstance)),
     bus_monday: groupByBookingOwner(busWeekly.map(lineFromInstance)),
