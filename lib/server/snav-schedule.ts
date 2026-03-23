@@ -1,5 +1,5 @@
 export const SNAV_SCHEDULE = {
-  napoliBeverelloToCasamicciola: ["08:30", "12:30", "16:20", "19:00"],
+  napoliBeverelloToCasamicciola: ["08:25", "12:30", "16:20", "19:00"],
   casamicciolaToNapoliBeverello: ["07:10", "09:45", "14:00", "17:40"]
 } as const;
 

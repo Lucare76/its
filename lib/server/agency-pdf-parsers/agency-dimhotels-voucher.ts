@@ -126,9 +126,18 @@ function parseChosenVoucherTimes(sourceText: string) {
   const outwardMarked = pickExplicitMarkedTime(outwardBlock);
   const returnMarked = pickExplicitMarkedTime(returnBlock);
 
+  // In two-column PDFs the OCR may interleave the two blocks; use the non-empty one as fallback.
+  const timesBlock = outwardBlock || returnBlock || normalized;
+
   return {
-    outwardTime: outwardMarked ?? pickKnownScheduleTime(outwardBlock, SNAV_SCHEDULE.napoliBeverelloToCasamicciola),
-    returnTime: returnMarked ?? pickKnownScheduleTime(returnBlock, SNAV_SCHEDULE.casamicciolaToNapoliBeverello)
+    outwardTime:
+      outwardMarked && SNAV_SCHEDULE.napoliBeverelloToCasamicciola.includes(outwardMarked as (typeof SNAV_SCHEDULE.napoliBeverelloToCasamicciola)[number])
+        ? outwardMarked
+        : pickKnownScheduleTime(outwardBlock || timesBlock, SNAV_SCHEDULE.napoliBeverelloToCasamicciola),
+    returnTime:
+      returnMarked && SNAV_SCHEDULE.casamicciolaToNapoliBeverello.includes(returnMarked as (typeof SNAV_SCHEDULE.casamicciolaToNapoliBeverello)[number])
+        ? returnMarked
+        : pickKnownScheduleTime(returnBlock || timesBlock, SNAV_SCHEDULE.casamicciolaToNapoliBeverello)
   };
 }
 
