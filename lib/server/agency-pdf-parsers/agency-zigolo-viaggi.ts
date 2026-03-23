@@ -64,7 +64,7 @@ function parseAllEuroAmounts(raw?: string | null) {
 function parseTsfBlocks(compact: string, practiceNumber: string | null) {
   const blocks = Array.from(
     compact.matchAll(
-      /stato prenotazione\s*conf extra\s*data prenotazione:\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})\s*dal\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})\s*num servizio beneficiari trattamento e note\s*001\s*(TSF PER HOTEL (?:ANDATA|RITORNO))\s*([A-ZÀ-ÖØ-Ý' ]+?)\s*(?:\d{1,2}-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})?\s*dal al descrizione importo tasse\s*(?:pax\s*)?totale\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))\s*TSF PER HOTEL (ANDATA|RITORNO)\s*(\d+[.,]\d{2})(?:\s*\d{1,2}\s*\((\d+)\)|\s*\((\d+)\))?\s*(\d+[.,]\d{2})/gi
+      /stato prenotazione\s*conf extra\s*data prenotazione:\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})\s*dal\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\s*\d{2,4})\s*num servizio beneficiari trattamento e note\s*001\s*(TSF PER HOTEL (?:ANDATA|RITORNO))\s*([A-ZÀ-ÖØ-Ý' ]+?)\s*(?:\d{1,2}-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})?\s*dal al descrizione importo tasse\s*(?:pax\s*)?totale\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))\s*([0-3]?\d-\s*(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic))\s*TSF PER HOTEL (ANDATA|RITORNO)\s*(\d+[.,]\d{2})(?:\s*\d{1,2}\s*\((\d+)\)|\s*\((\d+)\))?(?:\s+\d{1,2}(?=\s))?\s*(\d+[.,]\d{2})/gi
     )
   ).map((match) => {
     // groups: 1=bookingDate 2=serviceDate 3=description 4=beneficiary
@@ -239,6 +239,7 @@ function normalizeZigoloText(sourceText: string) {
     .replace(/trattamento e note/gi, "trattamento e note")
     .replace(/numservizio/gi, "num servizio")
     .replace(/datal/gi, "data ")
+    .replace(/\bdal(?=\d)/gi, "dal ")
     .replace(/descrizioneimportotassepaxtotale/gi, "descrizione importo tasse pax totale")
     .replace(/daldescrizioneimportotassepaxtotale/gi, "dal al descrizione importo tasse pax totale")
     .trim();
@@ -286,16 +287,23 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
       ? Math.max(...tsfBlocks.map((item) => item.pax).filter((value): value is number => Boolean(value)))
       : null) ??
     (Number(compact.match(/\bpax\s*(\d{1,2})/i)?.[1] ?? compact.match(/(?:\s|^)(\d{1,2})\(\d+\)\s*\d+[.,]\d{2}/i)?.[1] ?? 0) || null);
+  const busTotalAmount = hasBusTransfer
+    ? busBlocks.reduce((sum, b) => sum + (b.totalAmount ?? 0), 0) || null
+    : null;
+  // Per TSF usa il max dei "TOTALE EUR" espliciti (evita artefatti OCR come 16,60 da "1 6,60")
+  const tsfTotalEurValues = Array.from(compact.matchAll(/\btotale\s*eur\s*(\d+[.,]\d{2})/gi))
+    .map((m) => parseEuroAmount(m[1]))
+    .filter((v): v is number => v !== null);
+  const tsfTotalAmount = hasTsfTransfer && tsfTotalEurValues.length > 0
+    ? Math.max(...tsfTotalEurValues)
+    : null;
   const totalAmountCandidates = [
     parseEuroAmount(compact.match(/\btotale\s*eur\s*(\d+[.,]\d{2})/i)?.[1]),
     parseEuroAmount(compact.match(/\btotaleeur\s*(\d+[.,]\d{2})/i)?.[1]),
     parseEuroAmount(compact.match(/\btotale\s*(\d+[.,]\d{2})/i)?.[1]),
     ...parseAllEuroAmounts(compact)
   ].filter((value): value is number => value !== null);
-  const busTotalAmount = hasBusTransfer
-    ? busBlocks.reduce((sum, b) => sum + (b.totalAmount ?? 0), 0) || null
-    : null;
-  const totalAmount = busTotalAmount ?? (totalAmountCandidates.length > 0 ? Math.max(...totalAmountCandidates) : null);
+  const totalAmount = busTotalAmount ?? tsfTotalAmount ?? (totalAmountCandidates.length > 0 ? Math.max(...totalAmountCandidates) : null);
 
   const parserNotes = [bookingState, bookingDate ? `Data prenotazione ${bookingDate}` : null].filter(Boolean).join(" | ");
 
