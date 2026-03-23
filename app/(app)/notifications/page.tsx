@@ -13,7 +13,7 @@ export default function NotificationsPage() {
     const items: Array<{ id: string; title: string; detail: string; severity: "high" | "medium" | "low" }> = [];
 
     for (const service of data.services) {
-      if ((service.service_type ?? "transfer") === "bus_tour") {
+      if ((service.service_type ?? "transfer") === "bus_tour" || service.service_type_code === "bus_line" || service.booking_service_kind === "bus_city_hotel") {
         const remainingSeats = service.capacity ? service.capacity - service.pax : null;
         const lowSeatThreshold = service.low_seat_threshold ?? 4;
         const minimumPassengers = service.minimum_passengers ?? null;

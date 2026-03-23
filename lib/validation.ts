@@ -46,39 +46,39 @@ export const serviceCreateSchema = z.object({
   bus_city_origin: z.string().max(120).optional().or(z.literal("")),
   status: serviceStatusSchema
 }).superRefine((value, ctx) => {
-  if (value.service_type === "bus_tour") {
+  if (value.service_type === "bus_tour" || value.booking_service_kind === "bus_city_hotel" || value.service_type_code === "bus_line") {
     if (!value.tour_name || value.tour_name.trim().length < 2) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "tour_name richiesto per service_type bus_tour",
+        message: "tour_name richiesto per servizi bus",
         path: ["tour_name"]
       });
     }
     if (!value.meeting_point || value.meeting_point.trim().length < 2) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "meeting_point richiesto per service_type bus_tour",
+        message: "meeting_point richiesto per servizi bus",
         path: ["meeting_point"]
       });
     }
     if (!value.capacity || value.capacity < value.pax) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "capacity deve essere >= pax per bus_tour",
+        message: "capacity deve essere >= pax per servizi bus",
         path: ["capacity"]
       });
     }
     if (value.minimum_passengers && value.capacity && value.minimum_passengers > value.capacity) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "minimum_passengers non puo superare la capacity del bus_tour",
+        message: "minimum_passengers non puo superare la capacity del bus",
         path: ["minimum_passengers"]
       });
     }
     if (value.low_seat_threshold !== null && value.low_seat_threshold !== undefined && value.capacity && value.low_seat_threshold > value.capacity) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "low_seat_threshold non puo superare la capacity del bus_tour",
+        message: "low_seat_threshold non puo superare la capacity del bus",
         path: ["low_seat_threshold"]
       });
     }

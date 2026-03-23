@@ -20,7 +20,7 @@ const appNav = [
   { href: "/crm-agencies", label: "CRM Agenzie", icon: "C" },
   { href: "/agency", label: "Agenzia", icon: "A" },
   { href: "/dispatch", label: "Assegnazioni", icon: "P" },
-  { href: "/bus-tours", label: "Tour in Bus", icon: "B" },
+  { href: "/bus-tours", label: "Servizi Bus", icon: "B" },
   { href: "/planning", label: "Pianificazione", icon: "L" },
   { href: "/ops-summary", label: "Riepiloghi", icon: "S" },
   { href: "/report-center", label: "Centro Report", icon: "H" },

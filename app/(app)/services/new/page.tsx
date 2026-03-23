@@ -402,10 +402,10 @@ export default function NewServicePage() {
             <input name="bus_plate" className="input-saas mt-1" />
           </label>
         )}
-        {serviceType === "bus_tour" ? (
+        {serviceType === "bus_tour" || selectedPreset.key === "linea_bus" ? (
           <>
             <label className="text-sm md:col-span-2">
-              Nome tour
+              {selectedPreset.key === "linea_bus" ? "Nome linea / lotto bus" : "Nome tour"}
               <input name="tour_name" className="input-saas mt-1" required />
             </label>
             <label className="text-sm">

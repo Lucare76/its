@@ -66,7 +66,12 @@ export default function BusToursPage() {
     return () => window.clearTimeout(timeout);
   }, [message]);
 
-  const busTours = data.services.filter((service) => (service.service_type ?? "transfer") === "bus_tour");
+  const busTours = data.services.filter(
+    (service) =>
+      (service.service_type ?? "transfer") === "bus_tour" ||
+      service.service_type_code === "bus_line" ||
+      service.booking_service_kind === "bus_city_hotel"
+  );
   const assignmentsByServiceId = new Map(data.assignments.map((assignment) => [assignment.service_id, assignment]));
   const hotelsById = new Map(data.hotels.map((hotel) => [hotel.id, hotel]));
   const drivers = data.memberships.filter((member) => member.role === "driver");
@@ -255,7 +260,7 @@ export default function BusToursPage() {
 
   return (
     <section className="page-section">
-      <PageHeader title="Escursioni Bus" subtitle={`Totale: ${filteredTours.length}`} breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Escursioni bus" }]} />
+      <PageHeader title="Servizi Bus" subtitle={`Totale: ${filteredTours.length}`} breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Servizi bus" }]} />
 
       <div className="grid gap-3 md:grid-cols-4">
         <div className="card p-4"><p className="text-xs uppercase tracking-[0.14em] text-muted">Pax filtrati</p><p className="mt-2 text-2xl font-semibold text-text">{busTourSummary.totalPax}</p></div>
@@ -323,7 +328,7 @@ export default function BusToursPage() {
                     {service.date} {service.time}
                   </td>
                   <td className="px-4 py-3">
-                    <p className="line-clamp-2 text-safe-wrap font-medium">{service.tour_name ?? "Tour N/D"}</p>
+                    <p className="line-clamp-2 text-safe-wrap font-medium">{service.tour_name ?? service.customer_name ?? "Servizio bus N/D"}</p>
                     <p className="line-clamp-1 text-xs text-muted">{hotelsById.get(service.hotel_id)?.zone ?? "Zona N/D"}</p>
                   </td>
                   <td className="px-4 py-3">{service.pax}</td>
@@ -395,12 +400,12 @@ export default function BusToursPage() {
       {selectedService ? (
         <aside className="card space-y-2 p-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold">Dettaglio escursione</h2>
+            <h2 className="font-semibold">Dettaglio servizio bus</h2>
             <button type="button" className="text-sm text-muted" onClick={() => setSelectedServiceId(null)}>
               Chiudi
             </button>
           </div>
-          <p className="text-sm">Tour: {selectedService.tour_name ?? "N/D"}</p>
+          <p className="text-sm">Bus / lotto: {selectedService.tour_name ?? "N/D"}</p>
           <p className="text-sm">
             Data/Ora: {selectedService.date} {selectedService.time}
           </p>
