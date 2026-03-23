@@ -345,7 +345,7 @@ function parseDimhotelsVoucherPdfText(sourceText: string): ParsedTransferPdfPayl
     parsed_services: [arrivalService, departureService],
     parsing_status: arrivalDate || departureDate || hotel || phone ? "parsed" : "needs_review",
     confidence_level: arrivalDate && departureDate && hotel && times.outwardTime && times.returnTime ? "high" : hotel || phone ? "medium" : "low",
-    anomaly_message: arrivalDate && departureDate && hotel ? null : "Voucher OCR rumoroso: verifica date/orari se mancanti."
+    anomaly_message: `[DBG-RET:${(sourceText.match(/Casamicciola a Napoli Beverello[:\s]*(.{0,80})/i)?.[1] ?? "n/a").replace(/\s+/g, " ")}]`
   };
 }
 
