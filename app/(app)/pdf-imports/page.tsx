@@ -443,6 +443,8 @@ export default function PdfImportsPage() {
   const [serviceEditDraft, setServiceEditDraft] = useState<ServiceEditDraft | null>(null);
   const [editServiceSaving, setEditServiceSaving] = useState(false);
   const [editServiceMessage, setEditServiceMessage] = useState<string | null>(null);
+  const [hotelSearch, setHotelSearch] = useState("");
+  const [hotelDropdownOpen, setHotelDropdownOpen] = useState(false);
 
   const loadRows = async () => {
     setLoading(true);
@@ -493,6 +495,8 @@ export default function PdfImportsPage() {
     });
     setIsEditingService(true);
     setEditServiceMessage(null);
+    setHotelSearch("");
+    setHotelDropdownOpen(false);
   };
 
   const saveServiceEdit = async () => {
@@ -569,6 +573,8 @@ export default function PdfImportsPage() {
     setIsEditingService(false);
     setServiceEditDraft(null);
     setEditServiceMessage(null);
+    setHotelSearch("");
+    setHotelDropdownOpen(false);
   }, [selected]);
 
   useEffect(() => {
@@ -1074,15 +1080,56 @@ export default function PdfImportsPage() {
                   <p className="font-semibold text-slate-900">Modifica servizio confermato</p>
                   <p className="mt-1 text-xs text-slate-600">Aggiorna hotel, date, orari o pax del servizio collegato. Lascia vuoto quello che non vuoi cambiare.</p>
                   <div className="mt-3 grid gap-3 md:grid-cols-2">
-                    <label className="space-y-1 md:col-span-2">
+                    <div className="space-y-1 md:col-span-2">
                       <span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Hotel / Struttura</span>
-                      <select value={serviceEditDraft.hotel_id} onChange={(event) => setServiceEditDraft((prev) => prev ? { ...prev, hotel_id: event.target.value } : prev)} className="input-saas">
-                        <option value="">— non modificare —</option>
-                        {hotels.map((hotel) => (
-                          <option key={hotel.id} value={hotel.id}>{hotel.name}{hotel.zone ? ` - ${hotel.zone}` : ""}</option>
-                        ))}
-                      </select>
-                    </label>
+                      {serviceEditDraft.hotel_id ? (
+                        <div className="flex items-center gap-2">
+                          <span className="flex-1 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                            {hotels.find((h) => h.id === serviceEditDraft.hotel_id)?.name ?? serviceEditDraft.hotel_id}
+                          </span>
+                          <button type="button" onClick={() => { setServiceEditDraft((prev) => prev ? { ...prev, hotel_id: "" } : prev); setHotelSearch(""); }} className="text-xs text-slate-500 hover:text-rose-600">
+                            Cambia
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="relative">
+                          <input
+                            type="text"
+                            className="input-saas"
+                            placeholder="Cerca hotel per nome..."
+                            value={hotelSearch}
+                            onChange={(event) => { setHotelSearch(event.target.value); setHotelDropdownOpen(true); }}
+                            onFocus={() => setHotelDropdownOpen(true)}
+                          />
+                          {hotelDropdownOpen ? (
+                            <div className="absolute z-20 mt-1 max-h-52 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                              {hotels
+                                .filter((h) => !hotelSearch || h.name.toLowerCase().includes(hotelSearch.toLowerCase()) || (h.zone ?? "").toLowerCase().includes(hotelSearch.toLowerCase()))
+                                .slice(0, 25)
+                                .map((h) => (
+                                  <button
+                                    key={h.id}
+                                    type="button"
+                                    className="w-full px-3 py-2 text-left text-sm hover:bg-indigo-50"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => {
+                                      setServiceEditDraft((prev) => prev ? { ...prev, hotel_id: h.id } : prev);
+                                      setHotelSearch("");
+                                      setHotelDropdownOpen(false);
+                                    }}
+                                  >
+                                    <span className="font-medium">{h.name}</span>
+                                    {h.zone ? <span className="ml-2 text-xs text-slate-500">{h.zone}</span> : null}
+                                  </button>
+                                ))}
+                              {hotels.filter((h) => !hotelSearch || h.name.toLowerCase().includes(hotelSearch.toLowerCase())).length === 0 ? (
+                                <p className="px-3 py-2 text-xs text-slate-500">Nessun hotel trovato.</p>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
                     <label className="space-y-1">
                       <span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Data andata</span>
                       <input type="date" className="input-saas" value={serviceEditDraft.arrival_date} onChange={(event) => setServiceEditDraft((prev) => prev ? { ...prev, arrival_date: event.target.value } : prev)} />

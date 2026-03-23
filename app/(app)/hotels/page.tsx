@@ -445,6 +445,21 @@ export default function HotelsPage() {
     await loadAliases(tenantId);
   };
 
+  const deleteHotel = async (hotelId: string, hotelName: string) => {
+    if (!tenantId || !supabase) return;
+    if (!window.confirm(`Eliminare "${hotelName}"? L'operazione non può essere annullata.`)) return;
+    setSaving(true);
+    setError("");
+    const { error: deleteError } = await supabase.from("hotels").delete().eq("id", hotelId).eq("tenant_id", tenantId);
+    setSaving(false);
+    if (deleteError) {
+      setError(deleteError.message);
+      return;
+    }
+    setMessage(`Hotel "${hotelName}" eliminato.`);
+    await loadHotels(tenantId, search, 0, false);
+  };
+
   const startEdit = (hotel: HotelListItem) => {
     setEditingId(hotel.id);
     setEditDraft(toEditDraft(hotel));
@@ -744,13 +759,23 @@ export default function HotelsPage() {
                                 </button>
                               </div>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => startEdit(hotel)}
-                                className="rounded-md border border-slate-300 px-2 py-1 text-xs"
-                              >
-                                Modifica
-                              </button>
+                              <div className="flex flex-wrap gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => startEdit(hotel)}
+                                  className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                                >
+                                  Modifica
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void deleteHotel(hotel.id, hotel.name)}
+                                  disabled={saving}
+                                  className="rounded-md border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                                >
+                                  Elimina
+                                </button>
+                              </div>
                             )
                           ) : (
                             <span className="text-xs text-slate-400">Solo admin/operator</span>
