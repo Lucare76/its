@@ -26,7 +26,12 @@ export default function OpsRulesPage() {
       departuresHours: "48",
       mondayBusEnabled: true,
       mondayBusScope: "next_sunday_by_agency",
-      statementAgencies: "Aleste Viaggi\nSosandra Tour By Rossella Viaggi\nZigolo Viaggi"
+      statementAgencies: "Aleste Viaggi\nSosandra Tour By Rossella Viaggi\nZigolo Viaggi",
+      splitArrivalsExports: true,
+      splitDeparturesExports: true,
+      mondayBusSendWeekday: "1",
+      reportProcessingLimit: "25",
+      internalNotes: ""
     };
   });
 
@@ -62,6 +67,11 @@ export default function OpsRulesPage() {
           monday_bus_enabled: boolean;
           monday_bus_scope: string;
           statement_agencies: string[];
+          split_arrivals_exports: boolean;
+          split_departures_exports: boolean;
+          monday_bus_send_weekday: number;
+          report_processing_limit: number;
+          internal_notes: string | null;
         };
       } | null;
       if (!active) return;
@@ -78,7 +88,12 @@ export default function OpsRulesPage() {
           departuresHours: String(settingsBody.settings.departure_summary_hours),
           mondayBusEnabled: settingsBody.settings.monday_bus_enabled,
           mondayBusScope: settingsBody.settings.monday_bus_scope,
-          statementAgencies: settingsBody.settings.statement_agencies.join("\n")
+          statementAgencies: settingsBody.settings.statement_agencies.join("\n"),
+          splitArrivalsExports: settingsBody.settings.split_arrivals_exports,
+          splitDeparturesExports: settingsBody.settings.split_departures_exports,
+          mondayBusSendWeekday: String(settingsBody.settings.monday_bus_send_weekday),
+          reportProcessingLimit: String(settingsBody.settings.report_processing_limit),
+          internalNotes: settingsBody.settings.internal_notes ?? ""
         });
       }
       setErrorMessage(null);
@@ -129,6 +144,14 @@ export default function OpsRulesPage() {
             Scope bus del lunedi
             <input className="input-saas mt-1" value={rulesDraft.mondayBusScope} onChange={(event) => setRulesDraft((prev) => ({ ...prev, mondayBusScope: event.target.value }))} />
           </label>
+          <label className="text-sm">
+            Giorno invio bus
+            <input className="input-saas mt-1" value={rulesDraft.mondayBusSendWeekday} onChange={(event) => setRulesDraft((prev) => ({ ...prev, mondayBusSendWeekday: event.target.value }))} />
+          </label>
+          <label className="text-sm">
+            Limite processazione coda
+            <input className="input-saas mt-1" value={rulesDraft.reportProcessingLimit} onChange={(event) => setRulesDraft((prev) => ({ ...prev, reportProcessingLimit: event.target.value }))} />
+          </label>
           <label className="text-sm md:col-span-2">
             Agenzie estratto conto
             <textarea
@@ -144,6 +167,31 @@ export default function OpsRulesPage() {
               onChange={(event) => setRulesDraft((prev) => ({ ...prev, mondayBusEnabled: event.target.checked }))}
             />
             Abilita job bus del lunedi
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={rulesDraft.splitArrivalsExports}
+              onChange={(event) => setRulesDraft((prev) => ({ ...prev, splitArrivalsExports: event.target.checked }))}
+            />
+            Split export arrivi
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={rulesDraft.splitDeparturesExports}
+              onChange={(event) => setRulesDraft((prev) => ({ ...prev, splitDeparturesExports: event.target.checked }))}
+            />
+            Split export partenze
+          </label>
+          <label className="text-sm md:col-span-2">
+            Note interne regole
+            <textarea
+              className="input-saas mt-1 min-h-[96px]"
+              value={rulesDraft.internalNotes}
+              onChange={(event) => setRulesDraft((prev) => ({ ...prev, internalNotes: event.target.value }))}
+              placeholder="Appunti interni su eccezioni operative, invii e regole commerciali"
+            />
           </label>
           <div className="md:col-span-2">
             <button
@@ -172,7 +220,12 @@ export default function OpsRulesPage() {
                     departure_summary_hours: Number(rulesDraft.departuresHours),
                     monday_bus_enabled: rulesDraft.mondayBusEnabled,
                     monday_bus_scope: rulesDraft.mondayBusScope,
-                    statement_agencies: rulesDraft.statementAgencies.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+                    statement_agencies: rulesDraft.statementAgencies.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+                    split_arrivals_exports: rulesDraft.splitArrivalsExports,
+                    split_departures_exports: rulesDraft.splitDeparturesExports,
+                    monday_bus_send_weekday: Number(rulesDraft.mondayBusSendWeekday),
+                    report_processing_limit: Number(rulesDraft.reportProcessingLimit),
+                    internal_notes: rulesDraft.internalNotes.trim() || null
                   })
                 });
                 const body = (await response.json().catch(() => null)) as { error?: string } | null;

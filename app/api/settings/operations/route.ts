@@ -10,7 +10,12 @@ const payloadSchema = z.object({
   departure_summary_hours: z.number().int().min(1).max(168),
   monday_bus_enabled: z.boolean(),
   monday_bus_scope: z.string().min(3).max(120),
-  statement_agencies: z.array(z.string().min(1).max(160)).max(50)
+  statement_agencies: z.array(z.string().min(1).max(160)).max(50),
+  split_arrivals_exports: z.boolean(),
+  split_departures_exports: z.boolean(),
+  monday_bus_send_weekday: z.number().int().min(0).max(6),
+  report_processing_limit: z.number().int().min(1).max(100),
+  internal_notes: z.string().max(4000).nullable()
 });
 
 const fallbackSettings = {
@@ -18,7 +23,12 @@ const fallbackSettings = {
   departure_summary_hours: 48,
   monday_bus_enabled: true,
   monday_bus_scope: "next_sunday_by_agency",
-  statement_agencies: STATEMENT_AGENCY_NAMES
+  statement_agencies: STATEMENT_AGENCY_NAMES,
+  split_arrivals_exports: true,
+  split_departures_exports: true,
+  monday_bus_send_weekday: 1,
+  report_processing_limit: 25,
+  internal_notes: null
 };
 
 export async function GET(request: NextRequest) {
@@ -27,7 +37,7 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await auth.admin
     .from("tenant_operational_settings")
-    .select("arrival_summary_hours, departure_summary_hours, monday_bus_enabled, monday_bus_scope, statement_agencies")
+    .select("arrival_summary_hours, departure_summary_hours, monday_bus_enabled, monday_bus_scope, statement_agencies, split_arrivals_exports, split_departures_exports, monday_bus_send_weekday, report_processing_limit, internal_notes")
     .eq("tenant_id", auth.membership.tenant_id)
     .maybeSingle();
 

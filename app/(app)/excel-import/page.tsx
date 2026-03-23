@@ -17,6 +17,12 @@ type MappingSuggestion = {
   confidence: "high" | "medium" | "low";
 };
 
+type RowAssessment = {
+  importable: number;
+  partial: number;
+  empty: number;
+};
+
 function normalize(value: string) {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -65,6 +71,20 @@ function suggestMappings(sheet: SheetPreview): MappingSuggestion[] {
   });
 }
 
+function assessRows(sheet: SheetPreview): RowAssessment {
+  const dataRows = sheet.sample.slice(1);
+  return dataRows.reduce<RowAssessment>(
+    (acc, row) => {
+      const filled = row.filter((cell) => cell.trim().length > 0).length;
+      if (filled === 0) acc.empty += 1;
+      else if (filled >= 4) acc.importable += 1;
+      else acc.partial += 1;
+      return acc;
+    },
+    { importable: 0, partial: 0, empty: 0 }
+  );
+}
+
 export default function ExcelImportPage() {
   const [message, setMessage] = useState("Carica un Excel cliente o operativo per leggerne subito struttura e fogli.");
   const [sheets, setSheets] = useState<SheetPreview[]>([]);
@@ -77,14 +97,17 @@ export default function ExcelImportPage() {
     }),
     [sheets]
   );
+
   const primarySheet = sheets[0] ?? null;
   const templateType = primarySheet ? detectTemplate(primarySheet) : null;
   const mappingSuggestions = primarySheet ? suggestMappings(primarySheet) : [];
+  const rowAssessment = primarySheet ? assessRows(primarySheet) : null;
 
   const handleFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     setFileName(file.name);
+
     try {
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: "array" });
@@ -96,9 +119,10 @@ export default function ExcelImportPage() {
           name: sheetName,
           rows: Math.max(0, rows.length - 1),
           cols: maxCols,
-          sample: rows.slice(0, 6).map((row) => row.map((item) => String(item ?? "")))
+          sample: rows.slice(0, 8).map((row) => row.map((item) => String(item ?? "")))
         } satisfies SheetPreview;
       });
+
       setSheets(nextSheets);
       setMessage(`File letto correttamente: ${file.name}`);
     } catch (error) {
@@ -111,7 +135,7 @@ export default function ExcelImportPage() {
     <section className="page-section">
       <PageHeader
         title="Import Excel Guidato"
-        subtitle="Workspace per leggere file Excel del cliente, verificare struttura fogli e preparare un eventuale import controllato."
+        subtitle="Workspace per leggere file Excel del cliente, verificare struttura fogli e stimare quanto sono gia pronti per un import guidato."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Import Excel" }]}
       />
 
@@ -128,7 +152,7 @@ export default function ExcelImportPage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="Upload file Excel" subtitle="Solo analisi struttura in questa fase">
+      <SectionCard title="Upload file Excel" subtitle="Analisi guidata del file, senza importare dati in produzione">
         <input type="file" accept=".xlsx,.xls,.csv" className="input-saas" onChange={(event) => void handleFile(event)} />
       </SectionCard>
 
@@ -195,6 +219,27 @@ export default function ExcelImportPage() {
         </SectionCard>
       </div>
 
+      <SectionCard title="Valutazione importabilita" subtitle="Stima rapida di quante righe sembrano gia pronte per un import guidato">
+        {rowAssessment ? (
+          <div className="grid gap-3 md:grid-cols-3">
+            <article className="rounded-2xl border border-border bg-surface/80 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-muted">Righe importabili</p>
+              <p className="mt-2 text-2xl font-semibold text-text">{rowAssessment.importable}</p>
+            </article>
+            <article className="rounded-2xl border border-border bg-surface/80 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-muted">Righe parziali</p>
+              <p className="mt-2 text-2xl font-semibold text-text">{rowAssessment.partial}</p>
+            </article>
+            <article className="rounded-2xl border border-border bg-surface/80 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-muted">Righe vuote</p>
+              <p className="mt-2 text-2xl font-semibold text-text">{rowAssessment.empty}</p>
+            </article>
+          </div>
+        ) : (
+          <EmptyState title="Nessuna valutazione disponibile" description="Carica un file per stimare la qualita del foglio principale." compact />
+        )}
+      </SectionCard>
+
       <SectionCard title="Anteprima fogli" subtitle="Prime righe per capire struttura colonne">
         {sheets.length === 0 ? (
           <EmptyState title="Nessun foglio disponibile" description="Carica un file Excel per vedere anteprima e struttura." compact />
@@ -205,7 +250,7 @@ export default function ExcelImportPage() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="text-sm font-semibold text-text">{sheet.name}</p>
-                    <p className="text-xs text-muted">{sheet.rows} righe · {sheet.cols} colonne</p>
+                    <p className="text-xs text-muted">{sheet.rows} righe - {sheet.cols} colonne</p>
                   </div>
                 </div>
                 <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
