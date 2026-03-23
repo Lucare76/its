@@ -7,6 +7,7 @@ import { auditLog } from "@/lib/server/ops-audit";
 export const runtime = "nodejs";
 
 const bookingPatchSchema = z.object({
+  hotel_id: z.string().uuid().optional(),
   customer_first_name: z.string().min(2).max(80).optional(),
   customer_last_name: z.string().min(2).max(80).optional(),
   customer_phone: z.string().min(6).max(30).optional(),
@@ -73,6 +74,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const patch = parsed.data;
     const update: Record<string, unknown> = {};
 
+    if (patch.hotel_id !== undefined) update.hotel_id = patch.hotel_id;
     if (patch.arrival_date !== undefined) { update.arrival_date = patch.arrival_date; update.date = patch.arrival_date; }
     if (patch.arrival_time !== undefined) { update.arrival_time = patch.arrival_time; update.time = patch.arrival_time; }
     if (patch.departure_date !== undefined) update.departure_date = patch.departure_date;

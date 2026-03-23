@@ -116,6 +116,22 @@ type UploadPreview = {
   missing_fields: string[];
 };
 
+type HotelOption = {
+  id: string;
+  name: string;
+  zone: string | null;
+};
+
+type ServiceEditDraft = {
+  hotel_id: string;
+  arrival_date: string;
+  arrival_time: string;
+  departure_date: string;
+  departure_time: string;
+  pax: string;
+  notes: string;
+};
+
 type BusSuggestion = {
   lineCode: string;
   lineName: string;
@@ -374,6 +390,10 @@ function canEdit(row: PdfImportRow) {
   return row.status === "draft" && row.linked_service_is_draft;
 }
 
+function canEditService(row: PdfImportRow) {
+  return row.status === "confirmed" && !!row.linked_service_id;
+}
+
 function isBusLikeForm(form: Pick<ReviewForm, "transport_mode" | "service_type" | "booking_kind">) {
   return (
     form.transport_mode === "bus" ||
@@ -417,6 +437,12 @@ export default function PdfImportsPage() {
   const [uploadPreview, setUploadPreview] = useState<UploadPreview | null>(null);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(true);
   const [busSuggestionStatus, setBusSuggestionStatus] = useState<string | null>(null);
+  const [hotels, setHotels] = useState<HotelOption[]>([]);
+  const [hotelsLoaded, setHotelsLoaded] = useState(false);
+  const [isEditingService, setIsEditingService] = useState(false);
+  const [serviceEditDraft, setServiceEditDraft] = useState<ServiceEditDraft | null>(null);
+  const [editServiceSaving, setEditServiceSaving] = useState(false);
+  const [editServiceMessage, setEditServiceMessage] = useState<string | null>(null);
 
   const loadRows = async () => {
     setLoading(true);
@@ -444,6 +470,68 @@ export default function PdfImportsPage() {
       setError(loadError instanceof Error ? loadError.message : "Errore caricamento.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadHotels = async () => {
+    if (hotelsLoaded || !hasSupabaseEnv || !supabase) return;
+    const { data } = await supabase.from("hotels").select("id, name, zone").order("name", { ascending: true }).limit(2000);
+    setHotels((data ?? []) as HotelOption[]);
+    setHotelsLoaded(true);
+  };
+
+  const openServiceEdit = async (row: PdfImportRow) => {
+    await loadHotels();
+    setServiceEditDraft({
+      hotel_id: "",
+      arrival_date: text(row.effective_normalized.arrival_date),
+      arrival_time: text(row.effective_normalized.outbound_time),
+      departure_date: text(row.effective_normalized.departure_date),
+      departure_time: text(row.effective_normalized.return_time),
+      pax: text(row.effective_normalized.passengers || "1"),
+      notes: text(row.effective_normalized.notes)
+    });
+    setIsEditingService(true);
+    setEditServiceMessage(null);
+  };
+
+  const saveServiceEdit = async () => {
+    if (!selected?.linked_service_id || !serviceEditDraft) return;
+    setEditServiceSaving(true);
+    setEditServiceMessage(null);
+    try {
+      if (!hasSupabaseEnv || !supabase) throw new Error("Supabase non configurato.");
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Sessione non valida.");
+      const body: Record<string, unknown> = {};
+      if (serviceEditDraft.hotel_id) body.hotel_id = serviceEditDraft.hotel_id;
+      if (serviceEditDraft.arrival_date) body.arrival_date = toIsoDateFromDisplay(serviceEditDraft.arrival_date) || serviceEditDraft.arrival_date;
+      if (serviceEditDraft.arrival_time) body.arrival_time = serviceEditDraft.arrival_time;
+      if (serviceEditDraft.departure_date) body.departure_date = toIsoDateFromDisplay(serviceEditDraft.departure_date) || serviceEditDraft.departure_date;
+      if (serviceEditDraft.departure_time) body.departure_time = serviceEditDraft.departure_time;
+      if (serviceEditDraft.pax) body.pax = Number(serviceEditDraft.pax);
+      if (serviceEditDraft.notes !== undefined) body.notes = serviceEditDraft.notes;
+      if (Object.keys(body).length === 0) {
+        setEditServiceMessage("Nessun campo da aggiornare.");
+        setEditServiceSaving(false);
+        return;
+      }
+      const response = await fetch(`/api/agency/bookings/${selected.linked_service_id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body)
+      });
+      const result = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!response.ok || !result?.ok) throw new Error(result?.error ?? "Salvataggio fallito.");
+      setEditServiceMessage("Servizio aggiornato.");
+      setIsEditingService(false);
+      await loadRows();
+      setSelectedId(selected.inbound_email_id);
+    } catch (err) {
+      setEditServiceMessage(err instanceof Error ? err.message : "Errore salvataggio.");
+    } finally {
+      setEditServiceSaving(false);
     }
   };
 
@@ -478,6 +566,9 @@ export default function PdfImportsPage() {
   useEffect(() => {
     setReviewForm(formFromRow(selected));
     setBusSuggestionStatus(null);
+    setIsEditingService(false);
+    setServiceEditDraft(null);
+    setEditServiceMessage(null);
   }, [selected]);
 
   useEffect(() => {
@@ -898,6 +989,11 @@ export default function PdfImportsPage() {
                 <div className="flex flex-wrap gap-2">
                   {canEdit(selected) ? <button data-testid="pdf-review-save" type="button" onClick={() => void saveReview()} disabled={busyId === selected.inbound_email_id} className="btn-secondary px-3 py-2 text-xs disabled:opacity-50">{busyId === selected.inbound_email_id ? "Salvo..." : "Salva modifiche"}</button> : null}
                   {canEdit(selected) ? <button type="button" onClick={() => setReviewForm(formFromRow(selected))} disabled={busyId === selected.inbound_email_id} className="btn-secondary px-3 py-2 text-xs disabled:opacity-50">Annulla</button> : null}
+                  {canEditService(selected) ? (
+                    <button type="button" onClick={() => isEditingService ? setIsEditingService(false) : void openServiceEdit(selected)} className="btn-secondary px-3 py-2 text-xs">
+                      {isEditingService ? "Chiudi modifica" : "Modifica servizio"}
+                    </button>
+                  ) : null}
                   <button data-testid="pdf-confirm-import" type="button" onClick={() => void runAction("confirm", selected.inbound_email_id)} disabled={!canConfirm(selected) || busyId === selected.inbound_email_id} className="btn-primary px-3 py-2 text-xs disabled:opacity-50">{busyId === selected.inbound_email_id ? "Operazione..." : "Conferma import"}</button>
                   <button data-testid="pdf-ignore-import" type="button" onClick={() => void runAction("ignore", selected.inbound_email_id)} disabled={!canIgnore(selected) || busyId === selected.inbound_email_id} className="btn-secondary px-3 py-2 text-xs disabled:opacity-50">Scarta</button>
                   <button
@@ -972,6 +1068,57 @@ export default function PdfImportsPage() {
                   </div>
                 </div>
               </div>
+
+              {isEditingService && serviceEditDraft ? (
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
+                  <p className="font-semibold text-slate-900">Modifica servizio confermato</p>
+                  <p className="mt-1 text-xs text-slate-600">Aggiorna hotel, date, orari o pax del servizio collegato. Lascia vuoto quello che non vuoi cambiare.</p>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <label className="space-y-1 md:col-span-2">
+                      <span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Hotel / Struttura</span>
+                      <select value={serviceEditDraft.hotel_id} onChange={(event) => setServiceEditDraft((prev) => prev ? { ...prev, hotel_id: event.target.value } : prev)} className="input-saas">
+                        <option value="">— non modificare —</option>
+                        {hotels.map((hotel) => (
+                          <option key={hotel.id} value={hotel.id}>{hotel.name}{hotel.zone ? ` - ${hotel.zone}` : ""}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Data andata</span>
+                      <input type="date" className="input-saas" value={serviceEditDraft.arrival_date} onChange={(event) => setServiceEditDraft((prev) => prev ? { ...prev, arrival_date: event.target.value } : prev)} />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Ora andata</span>
+                      <input type="time" className="input-saas" value={serviceEditDraft.arrival_time} onChange={(event) => setServiceEditDraft((prev) => prev ? { ...prev, arrival_time: event.target.value } : prev)} />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Data ritorno</span>
+                      <input type="date" className="input-saas" value={serviceEditDraft.departure_date} onChange={(event) => setServiceEditDraft((prev) => prev ? { ...prev, departure_date: event.target.value } : prev)} />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Ora ritorno</span>
+                      <input type="time" className="input-saas" value={serviceEditDraft.departure_time} onChange={(event) => setServiceEditDraft((prev) => prev ? { ...prev, departure_time: event.target.value } : prev)} />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Pax</span>
+                      <input type="number" min={1} max={16} className="input-saas" value={serviceEditDraft.pax} onChange={(event) => setServiceEditDraft((prev) => prev ? { ...prev, pax: event.target.value } : prev)} />
+                    </label>
+                    <label className="space-y-1 md:col-span-2">
+                      <span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Note</span>
+                      <textarea rows={2} className="input-saas" value={serviceEditDraft.notes} onChange={(event) => setServiceEditDraft((prev) => prev ? { ...prev, notes: event.target.value } : prev)} />
+                    </label>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => void saveServiceEdit()} disabled={editServiceSaving} className="btn-primary px-3 py-2 text-xs disabled:opacity-50">
+                      {editServiceSaving ? "Salvo..." : "Salva modifiche"}
+                    </button>
+                    <button type="button" onClick={() => setIsEditingService(false)} disabled={editServiceSaving} className="btn-secondary px-3 py-2 text-xs">
+                      Annulla
+                    </button>
+                  </div>
+                  {editServiceMessage ? <p className="mt-2 text-xs font-medium text-indigo-700">{editServiceMessage}</p> : null}
+                </div>
+              ) : null}
 
               {showTechnicalDetails ? (
                 <>
