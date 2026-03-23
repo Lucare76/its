@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
+import { STATEMENT_AGENCY_NAMES } from "@/lib/server/statement-agencies";
 
 type AgencyRow = {
   id: string;
@@ -22,6 +24,7 @@ type PriceListRow = { id: string; agency_id: string | null; active: boolean };
 type PricingRuleRow = { id: string; agency_id: string | null; active: boolean };
 
 export default function CrmAgenciesPage() {
+  const { data: tenantData } = useTenantOperationalData();
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [agencies, setAgencies] = useState<AgencyRow[]>([]);
@@ -70,9 +73,17 @@ export default function CrmAgenciesPage() {
       activeAgencies.map((agency) => ({
         agency,
         lists: priceLists.filter((item) => item.agency_id === agency.id && item.active).length,
-        rules: rules.filter((item) => item.agency_id === agency.id && item.active).length
+        rules: rules.filter((item) => item.agency_id === agency.id && item.active).length,
+        services: tenantData.services.filter((service) => (service.billing_party_name ?? "").trim() === agency.name).length,
+        pax: tenantData.services
+          .filter((service) => (service.billing_party_name ?? "").trim() === agency.name)
+          .reduce((sum, service) => sum + service.pax, 0),
+        latestServiceDate:
+          [...tenantData.services]
+            .filter((service) => (service.billing_party_name ?? "").trim() === agency.name)
+            .sort((a, b) => `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`))[0]?.date ?? null
       })),
-    [activeAgencies, priceLists, rules]
+    [activeAgencies, priceLists, rules, tenantData.services]
   );
 
   return (
@@ -102,7 +113,7 @@ export default function CrmAgenciesPage() {
           <p className="text-sm text-muted">Nessuna agenzia disponibile.</p>
         ) : (
           <div className="grid gap-3 xl:grid-cols-2">
-            {agencyStats.map(({ agency, lists, rules: agencyRules }) => (
+            {agencyStats.map(({ agency, lists, rules: agencyRules, services, pax, latestServiceDate }) => (
               <article key={agency.id} className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-start justify-between gap-2">
                   <div>
@@ -121,6 +132,10 @@ export default function CrmAgenciesPage() {
                   <p>Booking kind: {(agency.default_enabled_booking_kinds ?? []).join(", ") || "N/D"}</p>
                   <p>Listini attivi: {lists}</p>
                   <p>Regole attive: {agencyRules}</p>
+                  <p>Servizi storici: {services}</p>
+                  <p>Pax gestiti: {pax}</p>
+                  <p>Ultimo servizio: {latestServiceDate ?? "N/D"}</p>
+                  <p>Estratto conto: {STATEMENT_AGENCY_NAMES.includes(agency.name) ? "abilitato" : "non abilitato"}</p>
                   <p>Note pricing: {agency.default_pricing_notes || "N/D"}</p>
                   <p>Note CRM: {agency.notes || "N/D"}</p>
                 </div>

@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import type { ServiceStatus } from "@/lib/types";
 
@@ -22,7 +23,10 @@ function formatDateLabel(dateIso: string) {
 }
 
 export default function ServiceWorkflowPage() {
-  const { data, loading, errorMessage, liveConnected } = useTenantOperationalData();
+  const { data, loading, errorMessage, liveConnected, tenantId, userId, refresh } = useTenantOperationalData();
+  const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
+  const [savingStatus, setSavingStatus] = useState<ServiceStatus | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   const workflow = useMemo(() => {
     const counts = new Map<ServiceStatus, number>();
@@ -59,6 +63,37 @@ export default function ServiceWorkflowPage() {
     };
   }, [data.services]);
 
+  const selectedService = data.services.find((item) => item.id === selectedServiceId) ?? workflow.latest[0] ?? null;
+
+  const updateStatus = async (status: ServiceStatus) => {
+    if (!selectedService || !tenantId || !userId || !hasSupabaseEnv || !supabase) return;
+    setSavingStatus(status);
+    setMessage(`Aggiornamento stato ${status} in corso...`);
+
+    const { error: serviceError } = await supabase.from("services").update({ status }).eq("id", selectedService.id).eq("tenant_id", tenantId);
+    if (serviceError) {
+      setSavingStatus(null);
+      setMessage(serviceError.message);
+      return;
+    }
+
+    const { error: eventError } = await supabase.from("status_events").insert({
+      tenant_id: tenantId,
+      service_id: selectedService.id,
+      status,
+      by_user_id: userId
+    });
+    if (eventError) {
+      setSavingStatus(null);
+      setMessage(eventError.message);
+      return;
+    }
+
+    await refresh();
+    setSavingStatus(null);
+    setMessage(`Servizio aggiornato a ${status}.`);
+  };
+
   return (
     <section className="page-section">
       <PageHeader
@@ -68,6 +103,7 @@ export default function ServiceWorkflowPage() {
       />
 
       {errorMessage ? <EmptyState title="Workflow non disponibile" description={errorMessage} compact /> : null}
+      {message ? <p className="text-sm text-muted">{message}</p> : null}
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <SectionCard title="Servizi totali" subtitle={liveConnected ? "Realtime attivo" : "Realtime non connesso"} loading={loading}>
@@ -107,31 +143,62 @@ export default function ServiceWorkflowPage() {
           </div>
         </SectionCard>
 
-        <SectionCard title="Ultimi servizi nel workflow" subtitle="Controllo veloce su servizi recenti" loading={loading} loadingLines={6}>
+        <SectionCard title="Azioni rapide workflow" subtitle="Seleziona un servizio e muovilo nello stato corretto" loading={loading} loadingLines={6}>
           {workflow.latest.length === 0 ? (
             <p className="text-sm text-muted">Nessun servizio da mostrare.</p>
           ) : (
-            <div className="space-y-3">
-              {workflow.latest.map((service) => (
-                <article key={service.id} className="rounded-2xl border border-border bg-surface/80 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="space-y-4">
+              <div className="grid gap-2">
+                {workflow.latest.map((service) => (
+                  <button
+                    key={service.id}
+                    type="button"
+                    onClick={() => setSelectedServiceId(service.id)}
+                    className={`rounded-2xl border p-3 text-left ${selectedService?.id === service.id ? "border-primary bg-blue-50/50" : "border-border bg-surface/80"}`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-text">{service.customer_name}</p>
+                        <p className="text-xs text-muted">
+                          {formatDateLabel(service.date)} {service.time} - {service.billing_party_name ?? "Privato"}
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-slate-700">
+                        {service.status}
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {selectedService ? (
+                <article className="rounded-2xl border border-border bg-surface/80 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <p className="text-sm font-semibold text-text">{service.customer_name}</p>
+                      <p className="text-sm font-semibold text-text">{selectedService.customer_name}</p>
                       <p className="text-xs text-muted">
-                        {formatDateLabel(service.date)} {service.time} · {service.billing_party_name ?? "Privato"}
+                        {selectedService.service_type_code ?? selectedService.booking_service_kind ?? "N/D"} - {selectedService.pax} pax
                       </p>
                     </div>
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-slate-700">
-                      {service.status}
+                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-slate-700 shadow-sm">
+                      {selectedService.status}
                     </span>
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
-                    <span>{service.service_type_code ?? service.booking_service_kind ?? "N/D"}</span>
-                    <span>{service.pax} pax</span>
-                    <span>{service.customer_email ?? "senza email"}</span>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {(["new", "assigned", "partito", "arrivato", "completato", "problema"] as ServiceStatus[]).map((status) => (
+                      <button
+                        key={status}
+                        type="button"
+                        className="btn-secondary px-3 py-2 text-xs disabled:opacity-50"
+                        onClick={() => void updateStatus(status)}
+                        disabled={savingStatus !== null}
+                      >
+                        {savingStatus === status ? "..." : status}
+                      </button>
+                    ))}
                   </div>
                 </article>
-              ))}
+              ) : null}
             </div>
           )}
         </SectionCard>

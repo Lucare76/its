@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import type { SummaryPreviewPayload } from "@/lib/server/operational-summary";
 
+const LOCAL_RULES_KEY = "it-ops-rules-v1";
+
 const rules = [
   { id: "arrivals_48h", label: "Arrivi +48h", detail: "Prepara il riepilogo arrivi 48 ore prima, separato per prenotante." },
   { id: "departures_48h", label: "Partenze +48h", detail: "Prepara il riepilogo partenze 48 ore prima, separato per prenotante." },
@@ -17,6 +19,23 @@ export default function OpsRulesPage() {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [payload, setPayload] = useState<SummaryPreviewPayload | null>(null);
+  const [rulesDraft, setRulesDraft] = useState(() => {
+    const fallback = {
+      arrivalsHours: "48",
+      departuresHours: "48",
+      mondayBusEnabled: true,
+      mondayBusScope: "domenica successiva per agenzia",
+      statementAgencies: "Aleste Viaggi\nSosandra Tour By Rossella Viaggi\nZigolo Viaggi"
+    };
+    if (typeof window === "undefined") return fallback;
+    const saved = window.localStorage.getItem(LOCAL_RULES_KEY);
+    if (!saved) return fallback;
+    try {
+      return JSON.parse(saved) as typeof fallback;
+    } catch {
+      return fallback;
+    }
+  });
 
   useEffect(() => {
     let active = true;
@@ -64,6 +83,51 @@ export default function OpsRulesPage() {
           </SectionCard>
         ))}
       </div>
+
+      <SectionCard title="Configurazione workspace" subtitle="Regole operative modificabili lato admin, pronte per futura persistenza server" loading={loading} loadingLines={4}>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="text-sm">
+            Ore prima arrivi
+            <input className="input-saas mt-1" value={rulesDraft.arrivalsHours} onChange={(event) => setRulesDraft((prev) => ({ ...prev, arrivalsHours: event.target.value }))} />
+          </label>
+          <label className="text-sm">
+            Ore prima partenze
+            <input className="input-saas mt-1" value={rulesDraft.departuresHours} onChange={(event) => setRulesDraft((prev) => ({ ...prev, departuresHours: event.target.value }))} />
+          </label>
+          <label className="text-sm md:col-span-2">
+            Scope bus del lunedi
+            <input className="input-saas mt-1" value={rulesDraft.mondayBusScope} onChange={(event) => setRulesDraft((prev) => ({ ...prev, mondayBusScope: event.target.value }))} />
+          </label>
+          <label className="text-sm md:col-span-2">
+            Agenzie estratto conto
+            <textarea
+              className="input-saas mt-1 min-h-[110px]"
+              value={rulesDraft.statementAgencies}
+              onChange={(event) => setRulesDraft((prev) => ({ ...prev, statementAgencies: event.target.value }))}
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm md:col-span-2">
+            <input
+              type="checkbox"
+              checked={rulesDraft.mondayBusEnabled}
+              onChange={(event) => setRulesDraft((prev) => ({ ...prev, mondayBusEnabled: event.target.checked }))}
+            />
+            Abilita job bus del lunedi
+          </label>
+          <div className="md:col-span-2">
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => {
+                if (typeof window === "undefined") return;
+                window.localStorage.setItem(LOCAL_RULES_KEY, JSON.stringify(rulesDraft));
+              }}
+            >
+              Salva configurazione locale
+            </button>
+          </div>
+        </div>
+      </SectionCard>
 
       <SectionCard title="Preview live delle regole" subtitle="Conferma che il motore sta producendo dati reali" loading={loading} loadingLines={4}>
         {payload ? (
