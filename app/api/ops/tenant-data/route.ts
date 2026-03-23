@@ -10,10 +10,14 @@ export async function GET(request: NextRequest) {
 
     const includeInboundEmails = request.nextUrl.searchParams.get("include_inbound_emails") === "true";
 
-    const [servicesResult, assignmentsResult, statusEventsResult, hotelsResult, membershipsResult, inboundResult] =
+    const [servicesResult, assignmentsResult, busLotConfigsResult, statusEventsResult, hotelsResult, membershipsResult, inboundResult] =
       await Promise.all([
         auth.admin.from("services").select("*").eq("tenant_id", auth.membership.tenant_id),
         auth.admin.from("assignments").select("*").eq("tenant_id", auth.membership.tenant_id),
+        (async () => {
+          const result = await auth.admin.from("bus_lot_configs").select("*").eq("tenant_id", auth.membership.tenant_id);
+          return result.error ? { data: [], error: null } : result;
+        })(),
         auth.admin.from("status_events").select("*").eq("tenant_id", auth.membership.tenant_id),
         auth.admin.from("hotels").select("*").eq("tenant_id", auth.membership.tenant_id),
         auth.admin
@@ -44,6 +48,7 @@ export async function GET(request: NextRequest) {
       role: auth.membership.role,
       services: servicesResult.data ?? [],
       assignments: assignmentsResult.data ?? [],
+      bus_lot_configs: busLotConfigsResult.data ?? [],
       status_events: statusEventsResult.data ?? [],
       hotels: hotelsResult.data ?? [],
       memberships: membershipsResult.data ?? [],

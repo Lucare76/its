@@ -144,6 +144,27 @@ export interface StatusEvent {
   tenant_id: string;
 }
 
+export interface BusLotConfig {
+  id: string;
+  tenant_id: string;
+  lot_key: string;
+  service_date: string;
+  direction: ServiceDirection;
+  billing_party_name?: string | null;
+  bus_city_origin?: string | null;
+  transport_code?: string | null;
+  title?: string | null;
+  meeting_point?: string | null;
+  capacity: number;
+  low_seat_threshold: number;
+  minimum_passengers?: number | null;
+  waitlist_enabled: boolean;
+  waitlist_count: number;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface InboundEmail {
   id: string;
   tenant_id: string;
@@ -186,6 +207,7 @@ export interface DemoState {
   services: Service[];
   assignments: Assignment[];
   statusEvents: StatusEvent[];
+  busLotConfigs: BusLotConfig[];
   inboundEmails: InboundEmail[];
   memberships: Membership[];
 }

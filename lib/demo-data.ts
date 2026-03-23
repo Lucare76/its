@@ -179,6 +179,7 @@ export const initialDemoState: DemoState = {
   services: demoServicesToday,
   assignments: demoAssignments,
   statusEvents: demoStatusEvents,
+  busLotConfigs: [],
   inboundEmails: demoInboundEmails,
   memberships: demoMemberships
 };

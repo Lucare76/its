@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { buildBusLotAggregates, isBusLineService } from "@/lib/bus-lot-utils";
 import { getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 
@@ -9,11 +10,23 @@ export default function NotificationsPage() {
   const { loading, errorMessage, data } = useTenantOperationalData({ includeInboundEmails: true });
 
   const assignmentsByServiceId = useMemo(() => new Map(data.assignments.map((item) => [item.service_id, item])), [data.assignments]);
+  const busLots = useMemo(() => buildBusLotAggregates(data.services.filter((service) => isBusLineService(service)), data.busLotConfigs), [data.services, data.busLotConfigs]);
   const alerts = useMemo(() => {
     const items: Array<{ id: string; title: string; detail: string; severity: "high" | "medium" | "low" }> = [];
 
+    for (const lot of busLots) {
+      for (const alert of lot.alerts) {
+        items.push({
+          id: `${lot.key}-${alert.label}`,
+          title: alert.label === "Completo" ? "Lotto linea bus completo" : `Lotto linea bus: ${alert.label}`,
+          detail: `${lot.billing_party_name ?? "N/D"} | ${lot.bus_city_origin ?? "Origine N/D"} | ${lot.pax_total} pax`,
+          severity: alert.severity
+        });
+      }
+    }
+
     for (const service of data.services) {
-      if ((service.service_type ?? "transfer") === "bus_tour" || service.service_type_code === "bus_line" || service.booking_service_kind === "bus_city_hotel") {
+      if ((service.service_type ?? "transfer") === "bus_tour" && !isBusLineService(service)) {
         const remainingSeats = service.capacity ? service.capacity - service.pax : null;
         const lowSeatThreshold = service.low_seat_threshold ?? 4;
         const minimumPassengers = service.minimum_passengers ?? null;
@@ -81,7 +94,7 @@ export default function NotificationsPage() {
     }
 
     return items;
-  }, [assignmentsByServiceId, data.inboundEmails, data.services]);
+  }, [assignmentsByServiceId, busLots, data.inboundEmails, data.services]);
 
   const groups = {
     high: alerts.filter((item) => item.severity === "high"),

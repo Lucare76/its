@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { supabase } from "@/lib/supabase/client";
-import type { Assignment, Hotel, InboundEmail, Membership, Service, StatusEvent, UserRole } from "@/lib/types";
+import type { Assignment, BusLotConfig, Hotel, InboundEmail, Membership, Service, StatusEvent, UserRole } from "@/lib/types";
 
 type Options = {
   includeInboundEmails?: boolean;
@@ -12,6 +12,7 @@ type Options = {
 export type TenantOperationalData = {
   services: Service[];
   assignments: Assignment[];
+  busLotConfigs: BusLotConfig[];
   statusEvents: StatusEvent[];
   hotels: Hotel[];
   memberships: Membership[];
@@ -27,9 +28,10 @@ export function useTenantOperationalData(options?: Options) {
   const [role, setRole] = useState<UserRole | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [data, setData] = useState<TenantOperationalData>({
-    services: [],
-    assignments: [],
-    statusEvents: [],
+      services: [],
+      assignments: [],
+      busLotConfigs: [],
+      statusEvents: [],
     hotels: [],
     memberships: [],
     inboundEmails: []
@@ -46,6 +48,7 @@ export function useTenantOperationalData(options?: Options) {
       setData({
         services: [],
         assignments: [],
+        busLotConfigs: [],
         statusEvents: [],
         hotels: [],
         memberships: [],
@@ -62,6 +65,7 @@ export function useTenantOperationalData(options?: Options) {
       setData({
         services: [],
         assignments: [],
+        busLotConfigs: [],
         statusEvents: [],
         hotels: [],
         memberships: [],
@@ -78,6 +82,7 @@ export function useTenantOperationalData(options?: Options) {
       setData({
         services: [],
         assignments: [],
+        busLotConfigs: [],
         statusEvents: [],
         hotels: [],
         memberships: [],
@@ -94,6 +99,7 @@ export function useTenantOperationalData(options?: Options) {
       setData({
         services: [],
         assignments: [],
+        busLotConfigs: [],
         statusEvents: [],
         hotels: [],
         memberships: [],
@@ -117,6 +123,7 @@ export function useTenantOperationalData(options?: Options) {
           error?: string;
           services?: Service[];
           assignments?: Assignment[];
+          bus_lot_configs?: BusLotConfig[];
           status_events?: StatusEvent[];
           hotels?: Hotel[];
           memberships?: Membership[];
@@ -133,6 +140,7 @@ export function useTenantOperationalData(options?: Options) {
     setData({
       services: payload.services ?? [],
       assignments: payload.assignments ?? [],
+      busLotConfigs: payload.bus_lot_configs ?? [],
       statusEvents: payload.status_events ?? [],
       hotels: payload.hotels ?? [],
       memberships: payload.memberships ?? [],
