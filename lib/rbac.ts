@@ -17,6 +17,10 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/bus-tours", roles: ["admin", "operator"] },
   { prefix: "/planning", roles: ["admin", "operator"] },
   { prefix: "/ops-summary", roles: ["admin", "operator"] },
+  { prefix: "/scheduler", roles: ["admin", "operator"] },
+  { prefix: "/service-workflow", roles: ["admin", "operator"] },
+  { prefix: "/excel-workspace", roles: ["admin", "operator"] },
+  { prefix: "/ops-rules", roles: ["admin", "operator"] },
   { prefix: "/audit", roles: ["admin", "operator"] },
   { prefix: "/hotels", roles: ["admin", "operator"] },
   { prefix: "/driver", roles: ["admin", "driver"] },
@@ -41,6 +45,10 @@ export type AppCapability =
   | "dispatch:manage"
   | "planning:manage"
   | "ops_summary:view"
+  | "scheduler:view"
+  | "service_workflow:view"
+  | "excel_workspace:view"
+  | "ops_rules:view"
   | "statements:view"
   | "audit:view"
   | "inbox:manage"
@@ -67,6 +75,10 @@ export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
   "dispatch:manage": ["admin", "operator"],
   "planning:manage": ["admin", "operator"],
   "ops_summary:view": ["admin", "operator"],
+  "scheduler:view": ["admin", "operator"],
+  "service_workflow:view": ["admin", "operator"],
+  "excel_workspace:view": ["admin", "operator"],
+  "ops_rules:view": ["admin", "operator"],
   "statements:view": ["admin", "operator"],
   "audit:view": ["admin", "operator"],
   "inbox:manage": ["admin", "operator"],
