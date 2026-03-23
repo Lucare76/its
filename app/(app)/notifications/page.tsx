@@ -13,6 +13,38 @@ export default function NotificationsPage() {
     const items: Array<{ id: string; title: string; detail: string; severity: "high" | "medium" | "low" }> = [];
 
     for (const service of data.services) {
+      if ((service.service_type ?? "transfer") === "bus_tour") {
+        const remainingSeats = service.capacity ? service.capacity - service.pax : null;
+        const lowSeatThreshold = service.low_seat_threshold ?? 4;
+        const minimumPassengers = service.minimum_passengers ?? null;
+        const waitlistCount = service.waitlist_count ?? 0;
+
+        if (remainingSeats !== null && remainingSeats <= lowSeatThreshold) {
+          items.push({
+            id: `${service.id}-bus-low-seats`,
+            title: remainingSeats <= 0 ? "Bus tour completo" : "Bus tour con pochi posti",
+            detail: `${service.tour_name ?? service.customer_name} | restano ${Math.max(0, remainingSeats)} posti disponibili`,
+            severity: remainingSeats <= 0 ? "high" : "medium"
+          });
+        }
+        if (minimumPassengers && service.pax < minimumPassengers) {
+          items.push({
+            id: `${service.id}-bus-minimum`,
+            title: "Bus tour sotto minimo passeggeri",
+            detail: `${service.tour_name ?? service.customer_name} | ${service.pax}/${minimumPassengers} pax`,
+            severity: "medium"
+          });
+        }
+        if (service.waitlist_enabled && waitlistCount > 0) {
+          items.push({
+            id: `${service.id}-bus-waitlist`,
+            title: "Waiting list aperta",
+            detail: `${service.tour_name ?? service.customer_name} | ${waitlistCount} pax in attesa`,
+            severity: "high"
+          });
+        }
+      }
+
       const pdfMeta = getServicePdfOperationalMeta(service, data.inboundEmails);
       if (pdfMeta.reviewRecommended) {
         items.push({

@@ -89,6 +89,10 @@ export interface Service {
   notes: string;
   tour_name?: string | null;
   capacity?: number | null;
+  low_seat_threshold?: number | null;
+  minimum_passengers?: number | null;
+  waitlist_enabled?: boolean | null;
+  waitlist_count?: number | null;
   meeting_point?: string | null;
   stops?: string[] | null;
   bus_plate?: string | null;

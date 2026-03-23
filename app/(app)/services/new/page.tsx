@@ -157,6 +157,10 @@ export default function NewServicePage() {
       notes: String(formData.get("notes") ?? ""),
       tour_name: String(formData.get("tour_name") ?? ""),
       capacity: formData.get("capacity") ? Number(formData.get("capacity")) : null,
+      low_seat_threshold: formData.get("low_seat_threshold") ? Number(formData.get("low_seat_threshold")) : null,
+      minimum_passengers: formData.get("minimum_passengers") ? Number(formData.get("minimum_passengers")) : null,
+      waitlist_enabled: formData.get("waitlist_enabled") === "on",
+      waitlist_count: formData.get("waitlist_count") ? Number(formData.get("waitlist_count")) : 0,
       meeting_point: String(formData.get("meeting_point") ?? ""),
       stops: parsedStops.length > 0 ? parsedStops : [],
       bus_plate: String(formData.get("bus_plate") ?? ""),
@@ -407,6 +411,22 @@ export default function NewServicePage() {
             <label className="text-sm">
               Capacita
               <input name="capacity" type="number" min={1} max={120} defaultValue={18} className="input-saas mt-1" required />
+            </label>
+            <label className="text-sm">
+              Soglia pochi posti
+              <input name="low_seat_threshold" type="number" min={0} max={120} defaultValue={4} className="input-saas mt-1" />
+            </label>
+            <label className="text-sm">
+              Minimo passeggeri
+              <input name="minimum_passengers" type="number" min={1} max={120} defaultValue={10} className="input-saas mt-1" />
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input name="waitlist_enabled" type="checkbox" defaultChecked />
+              Abilita waiting list
+            </label>
+            <label className="text-sm">
+              Pax in waiting list
+              <input name="waitlist_count" type="number" min={0} max={500} defaultValue={0} className="input-saas mt-1" />
             </label>
             <label className="text-sm md:col-span-2">
               Stops (una riga per fermata, o separate da virgola)

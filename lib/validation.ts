@@ -25,6 +25,10 @@ export const serviceCreateSchema = z.object({
   notes: z.string().max(500),
   tour_name: z.string().max(120).optional().or(z.literal("")),
   capacity: z.number().int().min(1).max(120).optional().nullable(),
+  low_seat_threshold: z.number().int().min(0).max(120).optional().nullable(),
+  minimum_passengers: z.number().int().min(1).max(120).optional().nullable(),
+  waitlist_enabled: z.boolean().optional(),
+  waitlist_count: z.number().int().min(0).max(500).optional().nullable(),
   meeting_point: z.string().max(160).optional().or(z.literal("")),
   stops: z.array(z.string().min(1).max(120)).max(20).optional().nullable(),
   bus_plate: z.string().max(32).optional().or(z.literal("")),
@@ -62,6 +66,20 @@ export const serviceCreateSchema = z.object({
         code: z.ZodIssueCode.custom,
         message: "capacity deve essere >= pax per bus_tour",
         path: ["capacity"]
+      });
+    }
+    if (value.minimum_passengers && value.capacity && value.minimum_passengers > value.capacity) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "minimum_passengers non puo superare la capacity del bus_tour",
+        path: ["minimum_passengers"]
+      });
+    }
+    if (value.low_seat_threshold !== null && value.low_seat_threshold !== undefined && value.capacity && value.low_seat_threshold > value.capacity) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "low_seat_threshold non puo superare la capacity del bus_tour",
+        path: ["low_seat_threshold"]
       });
     }
   }
