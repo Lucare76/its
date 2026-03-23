@@ -1591,6 +1591,7 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
       busCityOrigin: normalized.bus_city_origin,
       transportCode: normalized.transport_code,
       title: normalized.bus_city_origin,
+      time: normalized.outbound_time,
       meetingPoint: normalized.arrival_place
     });
   }

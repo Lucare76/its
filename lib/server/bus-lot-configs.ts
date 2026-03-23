@@ -1,4 +1,4 @@
-import { deriveBusLotTitle } from "@/lib/bus-lot-utils";
+import { deriveBusLineIdentity, deriveBusLotTitle } from "@/lib/bus-lot-utils";
 
 type AdminClient = {
   from: (table: string) => {
@@ -14,6 +14,7 @@ type BusLotSeed = {
   busCityOrigin?: string | null;
   transportCode?: string | null;
   title?: string | null;
+  time?: string | null;
   meetingPoint?: string | null;
 };
 
@@ -22,21 +23,34 @@ function normalizeLotPart(value?: string | null) {
 }
 
 export function buildBusLotKeyFromSeed(seed: BusLotSeed) {
+  const lineIdentity = deriveBusLineIdentity({
+    title: seed.title,
+    transportCode: seed.transportCode,
+    busCityOrigin: seed.busCityOrigin,
+    time: seed.time,
+    meetingPoint: seed.meetingPoint
+  });
   return [
     seed.date,
     seed.direction,
-    normalizeLotPart(seed.billingPartyName),
-    normalizeLotPart(seed.busCityOrigin),
-    normalizeLotPart(seed.transportCode)
+    normalizeLotPart(lineIdentity.lineCode ?? seed.busCityOrigin)
   ].join("|");
 }
 
 export async function ensureDefaultBusLotConfig(admin: AdminClient, seed: BusLotSeed) {
   const lot_key = buildBusLotKeyFromSeed(seed);
-  const title = deriveBusLotTitle({
+  const lineIdentity = deriveBusLineIdentity({
     title: seed.title,
     transportCode: seed.transportCode,
     busCityOrigin: seed.busCityOrigin,
+    time: seed.time,
+    meetingPoint: seed.meetingPoint
+  });
+  const title = deriveBusLotTitle({
+    title: seed.title,
+    transportCode: lineIdentity.lineCode ?? seed.transportCode,
+    busCityOrigin: seed.busCityOrigin,
+    time: seed.time,
     meetingPoint: seed.meetingPoint
   });
   const { error } = await admin.from("bus_lot_configs").upsert(
@@ -47,7 +61,7 @@ export async function ensureDefaultBusLotConfig(admin: AdminClient, seed: BusLot
       direction: seed.direction,
       billing_party_name: seed.billingPartyName ?? null,
       bus_city_origin: seed.busCityOrigin ?? null,
-      transport_code: seed.transportCode ?? null,
+      transport_code: lineIdentity.lineCode ?? seed.transportCode ?? null,
       title,
       meeting_point: seed.meetingPoint ?? null,
       capacity: 54,

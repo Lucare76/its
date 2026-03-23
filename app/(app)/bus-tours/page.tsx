@@ -323,7 +323,7 @@ export default function BusToursPage() {
                 <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                   <tr>
                     <th className="px-3 py-2">Data / dir</th>
-                    <th className="px-3 py-2">Agenzia / origine</th>
+                    <th className="px-3 py-2">Linea / origine</th>
                     <th className="px-3 py-2">Codice</th>
                     <th className="px-3 py-2">Servizi</th>
                     <th className="px-3 py-2">Pax</th>
@@ -336,7 +336,7 @@ export default function BusToursPage() {
                   {busLots.map((lot) => (
                     <tr key={lot.key} className="border-t border-slate-100">
                       <td className="px-3 py-2">{lot.date}<br />{lot.direction === "arrival" ? "Arrivo" : "Partenza"}</td>
-                      <td className="px-3 py-2">{lot.billing_party_name ?? "N/D"}<br /><span className="text-xs text-muted">{lot.bus_city_origin ?? "Origine N/D"}</span></td>
+                      <td className="px-3 py-2">{lot.title ?? "Linea bus"}<br /><span className="text-xs text-muted">{lot.bus_city_origin ?? "Origine N/D"}</span></td>
                       <td className="px-3 py-2">{lot.transport_code ?? "N/D"}</td>
                       <td className="px-3 py-2">{lot.service_count}</td>
                       <td className="px-3 py-2">{lot.pax_total}</td>
@@ -368,7 +368,7 @@ export default function BusToursPage() {
           ) : (
             <>
               <p className="text-sm"><span className="font-medium">Titolo:</span> {selectedLot.title ?? "N/D"}</p>
-              <p className="text-sm"><span className="font-medium">Agenzia:</span> {selectedLot.billing_party_name ?? "N/D"}</p>
+              <p className="text-sm"><span className="font-medium">Agenzie:</span> {selectedLot.billing_party_name ?? "N/D"}</p>
               <p className="text-sm"><span className="font-medium">Origine:</span> {selectedLot.bus_city_origin ?? "N/D"}</p>
               <p className="text-sm"><span className="font-medium">Codice bus:</span> {selectedLot.transport_code ?? "N/D"}</p>
               <p className="text-sm"><span className="font-medium">Meeting point:</span> {selectedLot.meeting_point ?? "N/D"}</p>
@@ -387,6 +387,9 @@ export default function BusToursPage() {
                 </label>
                 <label className="text-sm">Pax waiting list
                   <input className="input-saas mt-1" type="number" min={0} value={getLotDraft(selectedLot).waitlistCount} onChange={(event) => setLotDrafts((prev) => ({ ...prev, [selectedLot.key]: { ...getLotDraft(selectedLot), waitlistCount: event.target.value } }))} />
+                </label>
+                <label className="text-sm">Disponibilita residua
+                  <input className="input-saas mt-1 bg-slate-100" value={selectedLot.remaining_seats ?? "N/D"} readOnly disabled />
                 </label>
                 <label className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={getLotDraft(selectedLot).waitlistEnabled} onChange={(event) => setLotDrafts((prev) => ({ ...prev, [selectedLot.key]: { ...getLotDraft(selectedLot), waitlistEnabled: event.target.checked } }))} />

@@ -1,3 +1,4 @@
+import { findNearestBusStop } from "@/lib/bus-lines-catalog";
 import type { BusLotConfig, Service } from "@/lib/types";
 
 export function isBusLineService(service: Service) {
@@ -9,12 +10,18 @@ export function isTrueBusTour(service: Service) {
 }
 
 export function buildBusLotKey(service: Service) {
+  const busLineIdentity = deriveBusLineIdentity({
+    busCityOrigin: service.bus_city_origin,
+    time: service.outbound_time ?? service.time,
+    transportCode: service.transport_code,
+    title: service.tour_name,
+    meetingPoint: service.meeting_point
+  });
+
   return [
     service.date,
     service.direction,
-    service.billing_party_name?.trim().toLowerCase() || "n-d",
-    service.bus_city_origin?.trim().toLowerCase() || "n-d",
-    service.transport_code?.trim().toLowerCase() || "n-d"
+    busLineIdentity.lineCode?.trim().toLowerCase() || service.bus_city_origin?.trim().toLowerCase() || "n-d"
   ].join("|");
 }
 
@@ -27,8 +34,18 @@ export function deriveBusLotTitle(input: {
   title?: string | null;
   transportCode?: string | null;
   busCityOrigin?: string | null;
+  time?: string | null;
   meetingPoint?: string | null;
 }) {
+  const busLineIdentity = deriveBusLineIdentity({
+    title: input.title,
+    transportCode: input.transportCode,
+    busCityOrigin: input.busCityOrigin,
+    time: input.time,
+    meetingPoint: input.meetingPoint
+  });
+  if (busLineIdentity.lineName) return busLineIdentity.lineName;
+
   const explicitTitle = cleanBusLotLabelPart(input.title);
   if (explicitTitle) return explicitTitle;
 
@@ -41,6 +58,31 @@ export function deriveBusLotTitle(input: {
   if (busCityOrigin) return `Linea bus ${busCityOrigin}`;
   if (meetingPoint) return `Linea bus ${meetingPoint}`;
   return "Linea bus";
+}
+
+export function deriveBusLineIdentity(input: {
+  title?: string | null;
+  transportCode?: string | null;
+  busCityOrigin?: string | null;
+  time?: string | null;
+  meetingPoint?: string | null;
+}) {
+  const directCode = cleanBusLotLabelPart(input.transportCode);
+  if (directCode?.toUpperCase().startsWith("LINEA_")) {
+    const readableName = directCode
+      .toLowerCase()
+      .replace(/^linea_/, "Linea ")
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+    return { lineCode: directCode, lineName: readableName };
+  }
+
+  const nearest = findNearestBusStop(input.busCityOrigin, input.time);
+  if (nearest) {
+    return { lineCode: nearest.lineCode, lineName: nearest.lineName };
+  }
+
+  return { lineCode: null, lineName: null };
 }
 
 export type BusLotAggregate = {
@@ -72,8 +114,16 @@ export function buildBusLotAggregates(services: Service[], configs: BusLotConfig
   return Array.from(groups.entries())
     .map(([key, lotServices]) => {
       const first = lotServices[0];
+      const lineIdentity = deriveBusLineIdentity({
+        title: first.tour_name,
+        transportCode: first.transport_code,
+        busCityOrigin: first.bus_city_origin,
+        time: first.outbound_time ?? first.time,
+        meetingPoint: first.meeting_point
+      });
       const config = configByKey.get(key) ?? null;
       const paxTotal = lotServices.reduce((sum, item) => sum + item.pax, 0);
+      const billingParties = [...new Set(lotServices.map((service) => cleanBusLotLabelPart(service.billing_party_name)).filter(Boolean))];
       const capacity = config?.capacity ?? null;
       const remainingSeats = capacity !== null ? capacity - paxTotal : null;
       const lowSeatThreshold = config?.low_seat_threshold ?? 4;
@@ -98,14 +148,15 @@ export function buildBusLotAggregates(services: Service[], configs: BusLotConfig
         key,
         date: first.date,
         direction: first.direction,
-        billing_party_name: first.billing_party_name ?? null,
+        billing_party_name: billingParties.length === 1 ? billingParties[0] ?? null : billingParties.length > 1 ? `${billingParties.length} agenzie` : null,
         bus_city_origin: first.bus_city_origin ?? null,
-        transport_code: first.transport_code ?? null,
+        transport_code: lineIdentity.lineCode ?? first.transport_code ?? null,
         meeting_point: first.meeting_point ?? null,
         title: deriveBusLotTitle({
           title: config?.title ?? first.tour_name,
-          transportCode: first.transport_code,
+          transportCode: lineIdentity.lineCode ?? first.transport_code,
           busCityOrigin: first.bus_city_origin,
+          time: first.outbound_time ?? first.time,
           meetingPoint: first.meeting_point
         }),
         services: lotServices,
