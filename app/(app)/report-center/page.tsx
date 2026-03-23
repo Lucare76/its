@@ -23,6 +23,7 @@ export default function ReportCenterPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [payload, setPayload] = useState<SummaryPreviewPayload | null>(null);
   const [typeFilter, setTypeFilter] = useState("all");
+  const [jobFilter, setJobFilter] = useState("all");
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -80,6 +81,26 @@ export default function ReportCenterPage() {
     }, {});
   }, [filteredRows]);
 
+  const filteredJobs = useMemo(() => {
+    return (payload?.report_jobs ?? []).filter((job) => {
+      const typeOk = jobFilter === "all" || job.job_type === jobFilter || job.status === jobFilter;
+      const searchOk =
+        !search.trim() ||
+        `${job.job_type} ${job.owner_name ?? ""} ${job.target_date} ${job.status}`.toLowerCase().includes(search.toLowerCase());
+      return typeOk && searchOk;
+    });
+  }, [jobFilter, payload, search]);
+
+  const reportTotals = useMemo(() => {
+    const rows = payload?.export_history ?? [];
+    const jobs = payload?.report_jobs ?? [];
+    return {
+      exportServices: rows.reduce((sum, row) => sum + row.exported_count, 0),
+      plannedJobs: jobs.filter((job) => job.status === "planned").length,
+      distinctTargets: new Set(rows.map((row) => `${row.date_from}:${row.date_to}`)).size
+    };
+  }, [payload]);
+
   return (
     <section className="page-section">
       <PageHeader
@@ -108,15 +129,28 @@ export default function ReportCenterPage() {
           <p className="mt-1 text-sm text-muted">Export che hanno prodotto un file non vuoto</p>
         </SectionCard>
         <SectionCard title="Volume servizi" loading={loading}>
-          <p className="text-3xl font-semibold text-text">
-            {(payload?.export_history ?? []).reduce((sum, row) => sum + row.exported_count, 0)}
-          </p>
+          <p className="text-3xl font-semibold text-text">{reportTotals.exportServices}</p>
           <p className="mt-1 text-sm text-muted">Servizi passati dai report storici</p>
         </SectionCard>
       </div>
 
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <SectionCard title="Job pianificati" loading={loading}>
+          <p className="text-3xl font-semibold text-text">{reportTotals.plannedJobs}</p>
+          <p className="mt-1 text-sm text-muted">Job scheduler attualmente in stato planned</p>
+        </SectionCard>
+        <SectionCard title="Finestre distinte" loading={loading}>
+          <p className="text-3xl font-semibold text-text">{reportTotals.distinctTargets}</p>
+          <p className="mt-1 text-sm text-muted">Periodi diversi gia passati dal centro report</p>
+        </SectionCard>
+        <SectionCard title="Agenzie in coda" loading={loading}>
+          <p className="text-3xl font-semibold text-text">{new Set((payload?.report_jobs ?? []).map((job) => job.owner_name ?? "N/D")).size}</p>
+          <p className="mt-1 text-sm text-muted">Owner o agenzie presenti nella coda report</p>
+        </SectionCard>
+      </div>
+
       <SectionCard title="Filtri report" subtitle="Riduci lo storico per tipo e testo">
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-3">
           <label className="text-sm">
             Tipo export
             <select className="input-saas mt-1" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
@@ -129,7 +163,18 @@ export default function ReportCenterPage() {
             </select>
           </label>
           <label className="text-sm">
-            Cerca
+            Filtro job
+            <select className="input-saas mt-1" value={jobFilter} onChange={(event) => setJobFilter(event.target.value)}>
+              <option value="all">Tutti</option>
+              {Array.from(new Set((payload?.report_jobs ?? []).flatMap((job) => [job.job_type, job.status]))).map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            Cerca report o owner
             <input className="input-saas mt-1" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tipo o periodo" />
           </label>
         </div>
@@ -179,7 +224,7 @@ export default function ReportCenterPage() {
       </SectionCard>
 
       <SectionCard title="Job report pianificati" subtitle="Storico coda scheduler" loading={loading} loadingLines={4}>
-        {(payload?.report_jobs ?? []).length === 0 ? (
+        {filteredJobs.length === 0 ? (
           <p className="text-sm text-muted">Nessun job report registrato.</p>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -194,7 +239,7 @@ export default function ReportCenterPage() {
                 </tr>
               </thead>
               <tbody>
-                {(payload?.report_jobs ?? []).map((job) => (
+                {filteredJobs.map((job) => (
                   <tr key={job.id} className="border-t border-slate-100">
                     <td className="px-3 py-2">{formatDateTime(job.created_at)}</td>
                     <td className="px-3 py-2">{job.job_type}</td>

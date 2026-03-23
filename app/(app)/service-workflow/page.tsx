@@ -27,6 +27,8 @@ export default function ServiceWorkflowPage() {
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const [savingStatus, setSavingStatus] = useState<ServiceStatus | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [internalNote, setInternalNote] = useState("");
+  const [savingInternalAction, setSavingInternalAction] = useState(false);
 
   const workflow = useMemo(() => {
     const counts = new Map<ServiceStatus, number>();
@@ -65,6 +67,14 @@ export default function ServiceWorkflowPage() {
 
   const selectedService = data.services.find((item) => item.id === selectedServiceId) ?? workflow.latest[0] ?? null;
 
+  const recentEvents = useMemo(() => {
+    if (!selectedService) return [];
+    return [...data.statusEvents]
+      .filter((item) => item.service_id === selectedService.id)
+      .sort((left, right) => right.at.localeCompare(left.at))
+      .slice(0, 6);
+  }, [data.statusEvents, selectedService]);
+
   const updateStatus = async (status: ServiceStatus) => {
     if (!selectedService || !tenantId || !userId || !hasSupabaseEnv || !supabase) return;
     setSavingStatus(status);
@@ -92,6 +102,51 @@ export default function ServiceWorkflowPage() {
     await refresh();
     setSavingStatus(null);
     setMessage(`Servizio aggiornato a ${status}.`);
+  };
+
+  const saveInternalAction = async () => {
+    if (!selectedService || !tenantId || !userId || !hasSupabaseEnv || !supabase) return;
+    setSavingInternalAction(true);
+    setMessage("Salvataggio nota interna e presa in carico...");
+
+    const noteParts = [selectedService.notes ?? ""];
+    if (!selectedService.notes.includes("[dispatch:handled-internally]")) {
+      noteParts.push("[dispatch:handled-internally]");
+    }
+    if (internalNote.trim()) {
+      noteParts.push(`[internal_note:${internalNote.trim()}]`);
+    }
+    const nextNotes = noteParts.filter(Boolean).join(" ");
+
+    const { error: serviceError } = await supabase
+      .from("services")
+      .update({ notes: nextNotes, status: selectedService.status === "new" ? "assigned" : selectedService.status })
+      .eq("id", selectedService.id)
+      .eq("tenant_id", tenantId);
+
+    if (serviceError) {
+      setSavingInternalAction(false);
+      setMessage(serviceError.message);
+      return;
+    }
+
+    const { error: eventError } = await supabase.from("status_events").insert({
+      tenant_id: tenantId,
+      service_id: selectedService.id,
+      status: selectedService.status === "new" ? "assigned" : selectedService.status,
+      by_user_id: userId
+    });
+
+    if (eventError) {
+      setSavingInternalAction(false);
+      setMessage(eventError.message);
+      return;
+    }
+
+    setInternalNote("");
+    await refresh();
+    setSavingInternalAction(false);
+    setMessage("Scheda interna aggiornata.");
   };
 
   return (
@@ -143,7 +198,7 @@ export default function ServiceWorkflowPage() {
           </div>
         </SectionCard>
 
-        <SectionCard title="Azioni rapide workflow" subtitle="Seleziona un servizio e muovilo nello stato corretto" loading={loading} loadingLines={6}>
+        <SectionCard title="Azioni rapide workflow" subtitle="Seleziona un servizio, aggiorna stato e registra presa in carico interna" loading={loading} loadingLines={6}>
           {workflow.latest.length === 0 ? (
             <p className="text-sm text-muted">Nessun servizio da mostrare.</p>
           ) : (
@@ -196,6 +251,40 @@ export default function ServiceWorkflowPage() {
                         {savingStatus === status ? "..." : status}
                       </button>
                     ))}
+                  </div>
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3">
+                    <label className="text-sm">
+                      Nota interna operativa
+                      <textarea
+                        className="input-saas mt-1 min-h-[92px]"
+                        value={internalNote}
+                        onChange={(event) => setInternalNote(event.target.value)}
+                        placeholder="Appunti interni, passaggi di presa in carico, promemoria operatore"
+                      />
+                    </label>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <button type="button" className="btn-primary" disabled={savingInternalAction} onClick={() => void saveInternalAction()}>
+                        {savingInternalAction ? "Salvataggio..." : "Segna preso in carico"}
+                      </button>
+                      <span className="text-xs text-muted">
+                        Stato attuale: {selectedService.status} {selectedService.notes.includes("[dispatch:handled-internally]") ? "- gestione interna gia marcata" : ""}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-semibold text-text">Ultimi eventi stato</p>
+                    <div className="mt-2 space-y-2">
+                      {recentEvents.length === 0 ? (
+                        <p className="text-xs text-muted">Nessun evento registrato.</p>
+                      ) : (
+                        recentEvents.map((event) => (
+                          <div key={event.id} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                            <p className="font-medium uppercase tracking-[0.08em]">{event.status}</p>
+                            <p>{new Date(event.at).toLocaleString("it-IT")}</p>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
                 </article>
               ) : null}
