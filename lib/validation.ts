@@ -4,6 +4,13 @@ export const roleSchema = z.enum(["admin", "operator", "driver", "agency"]);
 
 export const serviceStatusSchema = z.enum(["needs_review", "new", "assigned", "partito", "arrivato", "completato", "problema", "cancelled"]);
 export const serviceTypeSchema = z.enum(["transfer", "bus_tour"]);
+export const agencyBookingServiceKindSchema = z.enum([
+  "transfer_port_hotel",
+  "transfer_airport_hotel",
+  "transfer_train_hotel",
+  "bus_city_hotel",
+  "excursion"
+]);
 
 export const serviceCreateSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -21,6 +28,18 @@ export const serviceCreateSchema = z.object({
   meeting_point: z.string().max(160).optional().or(z.literal("")),
   stops: z.array(z.string().min(1).max(120)).max(20).optional().nullable(),
   bus_plate: z.string().max(32).optional().or(z.literal("")),
+  billing_party_name: z.string().max(160).optional().or(z.literal("")),
+  customer_email: z.string().email().max(160).optional().or(z.literal("")),
+  booking_service_kind: agencyBookingServiceKindSchema.optional(),
+  service_type_code: z
+    .enum(["transfer_station_hotel", "transfer_airport_hotel", "transfer_port_hotel", "transfer_hotel_port", "excursion", "ferry_transfer", "bus_line"])
+    .optional(),
+  arrival_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().or(z.literal("")),
+  arrival_time: z.string().regex(/^\d{2}:\d{2}$/).optional().or(z.literal("")),
+  departure_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().or(z.literal("")),
+  departure_time: z.string().regex(/^\d{2}:\d{2}$/).optional().or(z.literal("")),
+  transport_code: z.string().max(80).optional().or(z.literal("")),
+  bus_city_origin: z.string().max(120).optional().or(z.literal("")),
   status: serviceStatusSchema
 }).superRefine((value, ctx) => {
   if (value.service_type === "bus_tour") {
@@ -46,15 +65,42 @@ export const serviceCreateSchema = z.object({
       });
     }
   }
-});
 
-export const agencyBookingServiceKindSchema = z.enum([
-  "transfer_port_hotel",
-  "transfer_airport_hotel",
-  "transfer_train_hotel",
-  "bus_city_hotel",
-  "excursion"
-]);
+  const arrivalDate = value.arrival_date || value.date;
+  const arrivalTime = value.arrival_time || value.time;
+  const departureDate = value.departure_date || "";
+  const departureTime = value.departure_time || "";
+  if (departureDate && departureTime) {
+    const start = new Date(`${arrivalDate}T${arrivalTime}:00`);
+    const end = new Date(`${departureDate}T${departureTime}:00`);
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end < start) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "La data/ora di ritorno non puo essere precedente all'andata.",
+        path: ["departure_date"]
+      });
+    }
+  }
+
+  if (value.booking_service_kind === "bus_city_hotel" && (!value.bus_city_origin || value.bus_city_origin.trim().length < 2)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Origine linea bus obbligatoria per bus city/hotel.",
+      path: ["bus_city_origin"]
+    });
+  }
+
+  if (
+    (value.booking_service_kind === "transfer_airport_hotel" || value.booking_service_kind === "transfer_train_hotel") &&
+    (!value.transport_code || value.transport_code.trim().length < 2)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Riferimento volo/treno obbligatorio per aeroporto o stazione.",
+      path: ["transport_code"]
+    });
+  }
+});
 
 export const agencyBookingCreateSchema = z
   .object({

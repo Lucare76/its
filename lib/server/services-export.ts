@@ -359,6 +359,55 @@ function buildOperationalDeparturesSheet(
   return sheet;
 }
 
+function buildOperationalClientSheet(
+  services: ServiceRow[],
+  hotelsById: Map<string, HotelRow>,
+  isDeparture: boolean
+) {
+  const header = [
+    "Categoria",
+    isDeparture ? "Data partenza" : "Data arrivo",
+    isDeparture ? "Ora partenza" : "Ora arrivo",
+    "Cliente",
+    "Pax",
+    isDeparture ? "Origine / hotel" : "Hotel / destinazione",
+    "Meeting point",
+    "Riferimento mezzo",
+    "Agenzia",
+    "Telefono",
+    "Note operative"
+  ];
+
+  const rows = services.map((service) => {
+    const hotel = hotelsById.get(service.hotel_id);
+    const transportReference =
+      service.transport_code ??
+      service.train_arrival_number ??
+      service.train_departure_number ??
+      service.vessel ??
+      "";
+
+    return [
+      operationalCategory(service),
+      formatIsoDateShort(isDeparture ? service.departure_date ?? "" : service.arrival_date ?? service.date),
+      normalizeTime(isDeparture ? service.departure_time ?? service.return_time ?? "" : service.arrival_time ?? service.outbound_time ?? service.time),
+      service.customer_name,
+      service.pax,
+      hotel?.name ?? "",
+      service.meeting_point ?? "",
+      transportReference,
+      service.billing_party_name ?? "",
+      service.phone ?? "",
+      service.notes ?? ""
+    ];
+  });
+
+  const sheetRows = [header, ...rows];
+  const sheet = XLSX.utils.aoa_to_sheet(sheetRows);
+  applySheetFormatting(sheet, sheetRows);
+  return sheet;
+}
+
 function buildOperationalSummarySheet(services: ServiceRow[]) {
   const totalServices = services.length;
   const totalPax = services.reduce((sum, service) => sum + service.pax, 0);
@@ -610,12 +659,18 @@ export async function buildServicesExportXlsx(request: NextRequest) {
               ? "Partenze Linea Bus"
             : "Partenze Altri Servizi"
       );
+      XLSX.utils.book_append_sheet(
+        workbook,
+        buildOperationalClientSheet(presetRows, hotelsById, isDeparturePreset),
+        "Operativo cliente"
+      );
     } else if (filters.exportPreset === "statement_agency") {
       const statementRows = filteredServices.filter((service) =>
         billingPartyFilter ? (service.billing_party_name ?? "").trim().toLowerCase() === billingPartyFilter : true
       );
       XLSX.utils.book_append_sheet(workbook, buildOperationalSummarySheet(statementRows), "Riepilogo");
       XLSX.utils.book_append_sheet(workbook, buildStatementAgencySheet(statementRows, hotelsById), "Estratto conto");
+      XLSX.utils.book_append_sheet(workbook, buildOperationalClientSheet(statementRows, hotelsById, false), "Servizi cliente");
     } else {
       XLSX.utils.book_append_sheet(workbook, buildSheet(transferRows.map(normalizeServiceRow)), "Transfers");
       XLSX.utils.book_append_sheet(workbook, buildSheet(busTourRows.map(normalizeServiceRow)), "Bus Tours");

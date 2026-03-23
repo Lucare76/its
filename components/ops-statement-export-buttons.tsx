@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 interface OpsStatementExportButtonsProps {
@@ -59,13 +59,20 @@ async function downloadStatementExport(dateFrom: string, dateTo: string, billing
 export function OpsStatementExportButtons({ agencies, today }: OpsStatementExportButtonsProps) {
   const [loadingAgency, setLoadingAgency] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const dateFrom = useMemo(() => firstDayOfMonth(today), [today]);
+  const defaultDateFrom = useMemo(() => firstDayOfMonth(today), [today]);
+  const [dateFrom, setDateFrom] = useState(defaultDateFrom);
+  const [dateTo, setDateTo] = useState(today);
+
+  useEffect(() => {
+    setDateFrom(defaultDateFrom);
+    setDateTo(today);
+  }, [defaultDateFrom, today]);
 
   const handleExport = async (agency: string) => {
     setLoadingAgency(agency);
     setMessage(null);
     try {
-      await downloadStatementExport(dateFrom, today, agency);
+      await downloadStatementExport(dateFrom, dateTo, agency);
       setMessage(`Estratto conto scaricato: ${agency}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Errore export estratto conto.");
@@ -80,7 +87,17 @@ export function OpsStatementExportButtons({ agencies, today }: OpsStatementExpor
     <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div>
         <p className="text-sm font-semibold text-text">Export estratti conto</p>
-        <p className="text-xs text-muted">Periodo {dateFrom} {"->"} {today}. Excel separato per ogni agenzia abilitata.</p>
+        <p className="text-xs text-muted">Periodo configurabile. Excel separato per ogni agenzia abilitata, con foglio riepilogo e foglio servizi cliente.</p>
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        <label className="text-xs text-muted">
+          Dal
+          <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="input-saas mt-1" />
+        </label>
+        <label className="text-xs text-muted">
+          Al
+          <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="input-saas mt-1" />
+        </label>
       </div>
       <div className="flex flex-wrap gap-2">
         {agencies.map((agency) => (

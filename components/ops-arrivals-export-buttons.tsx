@@ -89,7 +89,7 @@ export function OpsArrivalsExportButtons({ targetDate }: OpsArrivalsExportButton
     <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div>
         <p className="text-sm font-semibold text-text">Export operativi giornata</p>
-        <p className="text-xs text-muted">Data target {targetDate}. Excel separati per linea bus e altri servizi, su arrivi e partenze.</p>
+        <p className="text-xs text-muted">Data target {targetDate}. Excel separati per linea bus e altri servizi, su arrivi e partenze, con foglio extra `Operativo cliente`.</p>
       </div>
       <div className="flex flex-wrap gap-2">
         <button

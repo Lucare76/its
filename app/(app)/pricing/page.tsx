@@ -1390,6 +1390,12 @@ export default function PricingAdminPage() {
       !standardRuleIds.has(rule.id) &&
       !busLineRuleIds.has(rule.id)
   );
+  const pricingOverview = {
+    activeAgencies: agencies.filter((agency) => agency.active).length,
+    activeLists: priceLists.filter((item) => item.active).length,
+    activeRules: rules.filter((rule) => rule.active).length,
+    reviewMatches: matches.filter((item) => item.review_required).length
+  };
   if (loading) return <div className="card p-4 text-sm text-slate-500">Caricamento tariffe...</div>;
 
   return (
@@ -1398,6 +1404,24 @@ export default function PricingAdminPage() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-2xl font-semibold">Tariffe e Margini</h1>
           <p className="text-xs text-slate-500">Modulo premium per listini, matching inbound e marginalita</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Agenzie attive</p>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">{pricingOverview.activeAgencies}</p>
+          </article>
+          <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Listini attivi</p>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">{pricingOverview.activeLists}</p>
+          </article>
+          <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Regole attive</p>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">{pricingOverview.activeRules}</p>
+          </article>
+          <article className="rounded-xl border border-slate-200 bg-amber-50 p-3">
+            <p className="text-xs uppercase tracking-[0.16em] text-amber-700">Match da review</p>
+            <p className="mt-2 text-2xl font-semibold text-amber-800">{pricingOverview.reviewMatches}</p>
+          </article>
         </div>
         <div className="flex flex-wrap gap-2">
           {([{ key: "listini", label: "Listini" }, { key: "regole", label: "Regole prezzo" }, { key: "agenzie", label: "Agenzie" }, { key: "match", label: "Match prenotazioni" }, { key: "storico", label: "Storico margini" }] as Array<{ key: SectionKey; label: string }>).map((i) => (
