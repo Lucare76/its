@@ -9,6 +9,7 @@ import type { SummaryPreviewPayload } from "@/lib/server/operational-summary";
 export default function AuditPage() {
   const { loading, errorMessage, data } = useTenantOperationalData();
   const [summaryPayload, setSummaryPayload] = useState<SummaryPreviewPayload | null>(null);
+  const [activityFilter, setActivityFilter] = useState("all");
 
   useEffect(() => {
     let active = true;
@@ -32,6 +33,36 @@ export default function AuditPage() {
     () => [...data.statusEvents].sort((left, right) => right.at.localeCompare(left.at)).slice(0, 20),
     [data.statusEvents]
   );
+  const timelineRows = useMemo(() => {
+    const exportRows = (summaryPayload?.export_history ?? []).map((item) => ({
+      id: `export-${item.id}`,
+      at: item.created_at,
+      kind: "export",
+      title: item.service_type,
+      detail: `${item.date_from} -> ${item.date_to}`,
+      meta: `${item.exported_count} servizi`
+    }));
+    const reportJobRows = (summaryPayload?.report_jobs ?? []).map((item) => ({
+      id: `job-${item.id}`,
+      at: item.created_at,
+      kind: "job",
+      title: item.job_type,
+      detail: item.owner_name ?? "N/D",
+      meta: item.status
+    }));
+    const statusRows = recentStatusEvents.map((item) => ({
+      id: `status-${item.id}`,
+      at: item.at,
+      kind: "status",
+      title: item.status,
+      detail: item.service_id.slice(0, 8),
+      meta: item.by_user_id ?? "system"
+    }));
+    return [...exportRows, ...reportJobRows, ...statusRows]
+      .filter((item) => activityFilter === "all" || item.kind === activityFilter)
+      .sort((left, right) => right.at.localeCompare(left.at))
+      .slice(0, 30);
+  }, [activityFilter, recentStatusEvents, summaryPayload]);
 
   return (
     <section className="page-section">
@@ -54,6 +85,18 @@ export default function AuditPage() {
           <p className="text-3xl font-semibold text-text">{data.services.length}</p>
         </SectionCard>
       </div>
+
+      <SectionCard title="Filtro audit" subtitle="Leggi la timeline per categoria">
+        <label className="text-sm">
+          Tipo attivita
+          <select className="input-saas mt-1" value={activityFilter} onChange={(event) => setActivityFilter(event.target.value)}>
+            <option value="all">Tutte</option>
+            <option value="status">Cambi stato</option>
+            <option value="export">Export</option>
+            <option value="job">Job report</option>
+          </select>
+        </label>
+      </SectionCard>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <SectionCard title="Ultimi export" loading={loading} loadingLines={4}>
@@ -114,6 +157,32 @@ export default function AuditPage() {
           )}
         </SectionCard>
       </div>
+
+      <SectionCard title="Timeline audit" subtitle="Unica vista di export, job scheduler e cambi stato" loading={loading} loadingLines={6}>
+        {timelineRows.length === 0 ? (
+          <p className="text-sm text-muted">Nessuna attivita disponibile.</p>
+        ) : (
+          <div className="space-y-2">
+            {timelineRows.map((item) => (
+              <article key={item.id} className="rounded-2xl border border-border bg-surface/80 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-text">{item.title}</p>
+                    <p className="text-xs text-muted">{item.detail}</p>
+                  </div>
+                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-slate-700 shadow-sm">
+                    {item.kind}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+                  <span>{item.meta}</span>
+                  <span>{new Date(item.at).toLocaleString("it-IT")}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </SectionCard>
     </section>
   );
 }

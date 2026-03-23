@@ -41,6 +41,8 @@ export default function DriverPage() {
   const [pendingQueueCount, setPendingQueueCount] = useState(() => readQueue().length);
   const [savingStatus, setSavingStatus] = useState<ServiceStatus | null>(null);
   const [message, setMessage] = useState("");
+  const [driverNote, setDriverNote] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
   const [isOnline, setIsOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
 
   const driverUserId = role === "driver" ? userId : null;
@@ -160,6 +162,26 @@ export default function DriverPage() {
     setSavingStatus(null);
   };
 
+  const handleDriverNote = async () => {
+    if (!focused || !supabase || !tenantId || !driverNote.trim()) return;
+    setSavingNote(true);
+    const nextNotes = `${focused.service.notes ?? ""} [driver_note:${driverNote.trim()}]`.trim();
+    const { error } = await supabase
+      .from("services")
+      .update({ notes: nextNotes })
+      .eq("id", focused.service.id)
+      .eq("tenant_id", tenantId);
+    if (error) {
+      setSavingNote(false);
+      setMessage(error.message);
+      return;
+    }
+    setDriverNote("");
+    await refresh();
+    setSavingNote(false);
+    setMessage("Nota autista salvata.");
+  };
+
   if (loading) return <div className="card p-4 text-sm text-muted">Caricamento servizi driver...</div>;
   if (errorMessage) return <div className="card p-4 text-sm text-muted">{errorMessage}</div>;
   if (!driverUserId) return <div className="card p-4 text-sm text-muted">Utente driver non disponibile.</div>;
@@ -193,6 +215,10 @@ export default function DriverPage() {
             <p className="text-muted">{focusedHotel?.zone ?? "Zona N/D"}</p>
             <p className="text-muted">{focused.assignment.vehicle_label}</p>
           </div>
+          <div className="rounded-xl border border-border bg-surface-2 p-3 text-sm">
+            <p className="font-medium">Note operative</p>
+            <p className="mt-1 text-muted whitespace-pre-wrap">{focused.service.notes || "Nessuna nota"}</p>
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <button type="button" onClick={() => void handleStatusAction("partito")} disabled={savingStatus !== null} className="btn-primary py-3 text-xs font-semibold disabled:opacity-50">
               {savingStatus === "partito" ? "..." : "Partito"}
@@ -219,6 +245,25 @@ export default function DriverPage() {
             <Link href={`/driver/${focused.service.id}`} className="btn-secondary">
               Dettagli
             </Link>
+          </div>
+          <div className="rounded-xl border border-border bg-surface-2 p-3">
+            <label className="text-sm font-medium">
+              Nota autista
+              <textarea
+                className="input-saas mt-2 min-h-[90px]"
+                value={driverNote}
+                onChange={(event) => setDriverNote(event.target.value)}
+                placeholder="Appunti rapidi su cliente, ritardo, bagagli, variazioni"
+              />
+            </label>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="btn-secondary" disabled={savingNote || !driverNote.trim()} onClick={() => void handleDriverNote()}>
+                {savingNote ? "Salvataggio..." : "Salva nota"}
+              </button>
+              <button type="button" className="btn-secondary" disabled={savingStatus !== null} onClick={() => void handleStatusAction("problema")}>
+                Segnala problema
+              </button>
+            </div>
           </div>
         </article>
       )}

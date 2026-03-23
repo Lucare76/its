@@ -11,6 +11,60 @@ type SheetPreview = {
   sample: string[][];
 };
 
+type MappingSuggestion = {
+  target: string;
+  source: string | null;
+  confidence: "high" | "medium" | "low";
+};
+
+function normalize(value: string) {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function detectTemplate(sheet: SheetPreview) {
+  const header = sheet.sample[0]?.map(normalize) ?? [];
+  const headerText = header.join(" | ");
+  if (headerText.includes("autista") && headerText.includes("cliente") && headerText.includes("mezzo")) {
+    return "lista_operativa";
+  }
+  if (headerText.includes("cliente") && headerText.includes("da") && headerText.includes("a")) {
+    return "dispatch_cliente";
+  }
+  if (headerText.includes("beneficiario") || headerText.includes("pax")) {
+    return "prenotazioni";
+  }
+  return "non_riconosciuto";
+}
+
+function suggestMappings(sheet: SheetPreview): MappingSuggestion[] {
+  const header = sheet.sample[0]?.map((item) => item.trim()) ?? [];
+  const findHeader = (patterns: string[]) => {
+    const found = header.find((item) => patterns.some((pattern) => normalize(item).includes(pattern)));
+    return found ?? null;
+  };
+
+  const mappingTargets: Array<{ target: string; patterns: string[] }> = [
+    { target: "customer_name", patterns: ["cliente", "beneficiario", "nominativo"] },
+    { target: "date", patterns: ["data", "dal"] },
+    { target: "time", patterns: ["ora", "hh:mm", "inizio"] },
+    { target: "pickup", patterns: ["da", "meeting", "imbarco"] },
+    { target: "destination", patterns: ["a", "hotel", "destinazione"] },
+    { target: "pax", patterns: ["pax", "posti"] },
+    { target: "transport_code", patterns: ["flight", "treno", "compagnia", "num."] },
+    { target: "driver", patterns: ["autista"] },
+    { target: "vehicle", patterns: ["mezzo", "bus"] }
+  ];
+
+  return mappingTargets.map((item) => {
+    const source = findHeader(item.patterns);
+    return {
+      target: item.target,
+      source,
+      confidence: source ? (normalize(source) === item.patterns[0] ? "high" : "medium") : "low"
+    };
+  });
+}
+
 export default function ExcelImportPage() {
   const [message, setMessage] = useState("Carica un Excel cliente o operativo per leggerne subito struttura e fogli.");
   const [sheets, setSheets] = useState<SheetPreview[]>([]);
@@ -23,6 +77,9 @@ export default function ExcelImportPage() {
     }),
     [sheets]
   );
+  const primarySheet = sheets[0] ?? null;
+  const templateType = primarySheet ? detectTemplate(primarySheet) : null;
+  const mappingSuggestions = primarySheet ? suggestMappings(primarySheet) : [];
 
   const handleFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -89,6 +146,54 @@ export default function ExcelImportPage() {
           ))}
         </div>
       </SectionCard>
+
+      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+        <SectionCard title="Riconoscimento template" subtitle="Lettura veloce del tipo file caricato">
+          {primarySheet ? (
+            <div className="space-y-3">
+              <article className="rounded-2xl border border-border bg-surface/80 p-4">
+                <p className="text-xs uppercase tracking-[0.14em] text-muted">Foglio principale</p>
+                <p className="mt-2 text-lg font-semibold text-text">{primarySheet.name}</p>
+                <p className="mt-1 text-sm text-muted">Template rilevato: {templateType}</p>
+              </article>
+              <div className="grid gap-2 md:grid-cols-2">
+                <article className="rounded-2xl border border-border bg-surface/80 p-3">
+                  <p className="text-xs uppercase tracking-[0.14em] text-muted">Righe</p>
+                  <p className="mt-2 text-2xl font-semibold text-text">{primarySheet.rows}</p>
+                </article>
+                <article className="rounded-2xl border border-border bg-surface/80 p-3">
+                  <p className="text-xs uppercase tracking-[0.14em] text-muted">Colonne</p>
+                  <p className="mt-2 text-2xl font-semibold text-text">{primarySheet.cols}</p>
+                </article>
+              </div>
+            </div>
+          ) : (
+            <EmptyState title="Nessun template rilevato" description="Carica un file per classificare il foglio principale." compact />
+          )}
+        </SectionCard>
+
+        <SectionCard title="Mapping suggerito" subtitle="Prime corrispondenze utili per un import guidato">
+          {mappingSuggestions.length === 0 ? (
+            <EmptyState title="Nessun mapping disponibile" description="Serve un file caricato per suggerire le colonne." compact />
+          ) : (
+            <div className="space-y-2">
+              {mappingSuggestions.map((item) => (
+                <article key={item.target} className="rounded-2xl border border-border bg-surface/80 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-text">{item.target}</p>
+                      <p className="text-xs text-muted">{item.source ?? "non trovato"}</p>
+                    </div>
+                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-slate-700 shadow-sm">
+                      {item.confidence}
+                    </span>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+      </div>
 
       <SectionCard title="Anteprima fogli" subtitle="Prime righe per capire struttura colonne">
         {sheets.length === 0 ? (
