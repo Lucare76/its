@@ -97,6 +97,8 @@ export default function ReportCenterPage() {
     return {
       exportServices: rows.reduce((sum, row) => sum + row.exported_count, 0),
       plannedJobs: jobs.filter((job) => job.status === "planned").length,
+      sentJobs: jobs.filter((job) => job.status === "sent").length,
+      failedJobs: jobs.filter((job) => job.status === "failed").length,
       distinctTargets: new Set(rows.map((row) => `${row.date_from}:${row.date_to}`)).size
     };
   }, [payload]);
@@ -146,6 +148,17 @@ export default function ReportCenterPage() {
         <SectionCard title="Agenzie in coda" loading={loading}>
           <p className="text-3xl font-semibold text-text">{new Set((payload?.report_jobs ?? []).map((job) => job.owner_name ?? "N/D")).size}</p>
           <p className="mt-1 text-sm text-muted">Owner o agenzie presenti nella coda report</p>
+        </SectionCard>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <SectionCard title="Job inviati" loading={loading}>
+          <p className="text-3xl font-semibold text-text">{reportTotals.sentJobs}</p>
+          <p className="mt-1 text-sm text-muted">Report consegnati via email dalla coda operativa</p>
+        </SectionCard>
+        <SectionCard title="Job falliti" loading={loading}>
+          <p className="text-3xl font-semibold text-text">{reportTotals.failedJobs}</p>
+          <p className="mt-1 text-sm text-muted">Job con errore destinatario o provider email</p>
         </SectionCard>
       </div>
 
@@ -233,19 +246,21 @@ export default function ReportCenterPage() {
                 <tr>
                   <th className="px-3 py-2">Creato il</th>
                   <th className="px-3 py-2">Job</th>
-                  <th className="px-3 py-2">Target</th>
-                  <th className="px-3 py-2">Owner</th>
-                  <th className="px-3 py-2">Stato</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredJobs.map((job) => (
-                  <tr key={job.id} className="border-t border-slate-100">
+                <th className="px-3 py-2">Target</th>
+                <th className="px-3 py-2">Owner</th>
+                <th className="px-3 py-2">Stato</th>
+                <th className="px-3 py-2">Destinatario</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredJobs.map((job) => (
+                <tr key={job.id} className="border-t border-slate-100">
                     <td className="px-3 py-2">{formatDateTime(job.created_at)}</td>
                     <td className="px-3 py-2">{job.job_type}</td>
                     <td className="px-3 py-2">{job.target_date}</td>
                     <td className="px-3 py-2">{job.owner_name ?? "N/D"}</td>
                     <td className="px-3 py-2">{job.status}</td>
+                    <td className="px-3 py-2">{typeof job.payload?.sent_to === "string" ? job.payload.sent_to : "-"}</td>
                   </tr>
                 ))}
               </tbody>

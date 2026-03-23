@@ -40,8 +40,7 @@ type ReportJobRow = {
   owner_name: string | null;
   status: string;
   target_date: string;
-  generated_at: string | null;
-  processed_by: string | null;
+  payload: Record<string, unknown> | null;
   created_at: string;
 };
 type StatusEventRow = {
@@ -81,7 +80,7 @@ export async function GET(request: NextRequest) {
         .limit(limit),
       auth.admin
         .from("ops_report_jobs")
-        .select("id, job_type, owner_name, status, target_date, generated_at, processed_by, created_at")
+        .select("id, job_type, owner_name, status, target_date, payload, created_at")
         .eq("tenant_id", auth.membership.tenant_id)
         .order("created_at", { ascending: false })
         .limit(limit),
@@ -141,8 +140,17 @@ export async function GET(request: NextRequest) {
         category: "report_job",
         title: item.job_type,
         detail: item.target_date,
-        actor: item.processed_by ? namesByUserId.get(item.processed_by) ?? item.processed_by : item.owner_name ?? "system",
-        meta: { status: item.status, generated_at: item.generated_at }
+        actor:
+          typeof item.payload?.processed_by === "string"
+            ? namesByUserId.get(item.payload.processed_by) ?? item.payload.processed_by
+            : item.owner_name ?? "system",
+        meta: {
+          status: item.status,
+          generated_at: typeof item.payload?.generated_at === "string" ? item.payload.generated_at : null,
+          sent_at: typeof item.payload?.sent_at === "string" ? item.payload.sent_at : null,
+          sent_to: typeof item.payload?.sent_to === "string" ? item.payload.sent_to : null,
+          send_error: typeof item.payload?.send_error === "string" ? item.payload.send_error : null
+        }
       })),
       ...((statusEventsResult.data ?? []) as StatusEventRow[]).map((item: StatusEventRow) => ({
         id: `status-${item.id}`,

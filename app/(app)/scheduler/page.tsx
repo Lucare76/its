@@ -175,13 +175,17 @@ export default function SchedulerPage() {
                 },
                 body: JSON.stringify({ today, limit: 25 })
               });
-              const body = (await response.json().catch(() => null)) as { processed?: number; error?: string } | null;
+              const body = (await response.json().catch(() => null)) as { processed?: number; sent?: number; failed?: number; error?: string } | null;
               setProcessingJobs(false);
-              setJobMessage(response.ok ? `Job processati: ${body?.processed ?? 0}.` : body?.error ?? "Processamento coda fallito.");
+              setJobMessage(
+                response.ok
+                  ? `Job processati: ${body?.processed ?? 0}. Inviati: ${body?.sent ?? 0}. Falliti: ${body?.failed ?? 0}.`
+                  : body?.error ?? "Processamento coda fallito."
+              );
               if (response.ok) setRefreshTick((current) => current + 1);
             }}
           >
-            {processingJobs ? "Processo..." : "Processa coda"}
+            {processingJobs ? "Invio..." : "Processa e invia coda"}
           </button>
         </div>
         <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
@@ -193,6 +197,7 @@ export default function SchedulerPage() {
                 <th className="px-3 py-2">Target</th>
                 <th className="px-3 py-2">Owner</th>
                 <th className="px-3 py-2">Stato</th>
+                <th className="px-3 py-2">Destinatario</th>
               </tr>
             </thead>
             <tbody>
@@ -202,8 +207,9 @@ export default function SchedulerPage() {
                   <td className="px-3 py-2">{job.job_type}</td>
                   <td className="px-3 py-2">{job.target_date}</td>
                   <td className="px-3 py-2">{job.owner_name ?? "N/D"}</td>
-                    <td className="px-3 py-2">{job.status}</td>
-                  </tr>
+                  <td className="px-3 py-2">{job.status}</td>
+                  <td className="px-3 py-2">{typeof job.payload?.sent_to === "string" ? job.payload.sent_to : "-"}</td>
+                </tr>
               ))}
             </tbody>
           </table>
@@ -250,7 +256,7 @@ export default function SchedulerPage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="Esito coda report" subtitle="Lettura rapida tra job pianificati e job gia generati" loading={loading} loadingLines={4}>
+      <SectionCard title="Esito coda report" subtitle="Lettura rapida tra job pianificati, inviati e falliti" loading={loading} loadingLines={4}>
         <div className="grid gap-3 md:grid-cols-3">
           <article className="rounded-2xl border border-border bg-surface/80 p-3">
             <p className="text-xs uppercase tracking-[0.14em] text-muted">Planned</p>
@@ -259,14 +265,16 @@ export default function SchedulerPage() {
             </p>
           </article>
           <article className="rounded-2xl border border-border bg-surface/80 p-3">
-            <p className="text-xs uppercase tracking-[0.14em] text-muted">Generated</p>
+            <p className="text-xs uppercase tracking-[0.14em] text-muted">Sent</p>
             <p className="mt-2 text-2xl font-semibold text-text">
-              {(payload?.report_jobs ?? []).filter((job) => job.status === "generated").length}
+              {(payload?.report_jobs ?? []).filter((job) => job.status === "sent").length}
             </p>
           </article>
           <article className="rounded-2xl border border-border bg-surface/80 p-3">
-            <p className="text-xs uppercase tracking-[0.14em] text-muted">Totale job</p>
-            <p className="mt-2 text-2xl font-semibold text-text">{payload?.report_jobs?.length ?? 0}</p>
+            <p className="text-xs uppercase tracking-[0.14em] text-muted">Failed</p>
+            <p className="mt-2 text-2xl font-semibold text-text">
+              {(payload?.report_jobs ?? []).filter((job) => job.status === "failed").length}
+            </p>
           </article>
         </div>
       </SectionCard>

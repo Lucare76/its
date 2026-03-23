@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { buildOperationalSummaryPreview } from "@/lib/server/operational-summary";
 import { STATEMENT_AGENCY_NAMES } from "@/lib/server/statement-agencies";
+import { sendOperationalReportEmail, type ReportJobType } from "@/lib/server/report-job-email";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -26,11 +28,12 @@ function buildPreviewText(jobType: string, ownerName: string | null, lines: Arra
 async function readOperationalSettings(admin: any, tenantId: string) {
   const { data } = await admin
     .from("tenant_operational_settings")
-    .select("statement_agencies")
+    .select("statement_agencies, report_processing_limit")
     .eq("tenant_id", tenantId)
     .maybeSingle();
   return {
-    statement_agencies: (data?.statement_agencies as string[] | null) ?? STATEMENT_AGENCY_NAMES
+    statement_agencies: (data?.statement_agencies as string[] | null) ?? STATEMENT_AGENCY_NAMES,
+    report_processing_limit: typeof data?.report_processing_limit === "number" ? data.report_processing_limit : 25
   };
 }
 
@@ -110,7 +113,7 @@ export async function PATCH(request: NextRequest) {
 
   const body = (await request.json().catch(() => null)) as { today?: string; limit?: number } | null;
   const today = body?.today ?? new Date().toISOString().slice(0, 10);
-  const limit = Math.min(50, Math.max(1, body?.limit ?? 20));
+  const requestedLimit = Math.min(50, Math.max(1, body?.limit ?? 50));
 
   const [{ data: jobs, error: jobsError }, { data: services, error: servicesError }, settings] = await Promise.all([
     auth.admin
@@ -119,7 +122,7 @@ export async function PATCH(request: NextRequest) {
       .eq("tenant_id", auth.membership.tenant_id)
       .eq("status", "planned")
       .order("created_at", { ascending: true })
-      .limit(limit),
+      .limit(requestedLimit),
     auth.admin.from("services").select("*").eq("tenant_id", auth.membership.tenant_id).limit(2000),
     readOperationalSettings(auth.admin, auth.membership.tenant_id)
   ]);
@@ -131,8 +134,9 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: servicesError.message }, { status: 500 });
   }
 
+  const limit = Math.min(requestedLimit, settings.report_processing_limit);
   const preview = buildOperationalSummaryPreview((services ?? []) as any[], today, settings.statement_agencies);
-  const updates = ((jobs ?? []) as ReportJobRow[]).map((job) => {
+  const updates = await Promise.all((((jobs ?? []) as ReportJobRow[]).slice(0, limit)).map(async (job) => {
     const lines =
       job.job_type === "arrivals_48h"
         ? preview.arrivals_48h[job.owner_name ?? ""]
@@ -142,20 +146,111 @@ export async function PATCH(request: NextRequest) {
             ? preview.bus_monday[job.owner_name ?? ""]
             : preview.statement_candidates[job.owner_name ?? ""];
 
-    const nextPayload = {
+    const previewText = buildPreviewText(job.job_type, job.owner_name, lines ?? []);
+    const generatedAt = new Date().toISOString();
+    const basePayload = {
       ...(typeof job.payload === "object" && job.payload ? job.payload : {}),
-      generated_at: new Date().toISOString(),
+      generated_at: generatedAt,
       processed_by: auth.user.id,
-      preview_text: buildPreviewText(job.job_type, job.owner_name, lines ?? []),
-      line_count: lines?.length ?? 0
+      preview_text: previewText,
+      line_count: lines?.length ?? 0,
+      delivery_mode: "email"
+    };
+
+    if (!lines || lines.length === 0) {
+      auditLog({
+        event: "ops_report_job_failed",
+        level: "warn",
+        tenantId: auth.membership.tenant_id,
+        userId: auth.user.id,
+        role: auth.membership.role,
+        outcome: "empty_batch",
+        details: {
+          job_id: job.id,
+          job_type: job.job_type,
+          owner_name: job.owner_name,
+          target_date: job.target_date
+        }
+      });
+      return {
+        id: job.id,
+        status: "failed",
+        payload: {
+          ...basePayload,
+          send_error: "Nessuna riga operativa disponibile al momento del processamento."
+        }
+      };
+    }
+
+    const delivery = await sendOperationalReportEmail({
+      admin: auth.admin,
+      tenantId: auth.membership.tenant_id,
+      jobType: job.job_type as ReportJobType,
+      targetDate: job.target_date,
+      ownerName: job.owner_name,
+      lines
+    });
+
+    if (delivery.status === "sent") {
+      auditLog({
+        event: "ops_report_job_sent",
+        tenantId: auth.membership.tenant_id,
+        userId: auth.user.id,
+        role: auth.membership.role,
+        outcome: "sent",
+        details: {
+          job_id: job.id,
+          job_type: job.job_type,
+          owner_name: job.owner_name,
+          target_date: job.target_date,
+          recipient: delivery.recipient,
+          provider_message_id: delivery.providerMessageId,
+          line_count: lines.length
+        }
+      });
+      return {
+        id: job.id,
+        status: "sent",
+        payload: {
+          ...basePayload,
+          sent_at: generatedAt,
+          sent_to: delivery.recipient,
+          provider_message_id: delivery.providerMessageId,
+          send_error: null
+        }
+      };
+    }
+
+    auditLog({
+      event: "ops_report_job_failed",
+      level: "error",
+      tenantId: auth.membership.tenant_id,
+      userId: auth.user.id,
+      role: auth.membership.role,
+      outcome: "failed",
+      details: {
+        job_id: job.id,
+        job_type: job.job_type,
+        owner_name: job.owner_name,
+        target_date: job.target_date,
+        recipient: delivery.recipient,
+        error: delivery.error
+      }
+    });
+
+    const nextPayload = {
+      ...basePayload,
+      sent_to: delivery.recipient,
+      provider_message_id: null,
+      send_error: delivery.error
     };
 
     return {
       id: job.id,
-      status: "generated",
+      status: "failed",
       payload: nextPayload
     };
-  });
+  }));
 
   if (updates.length === 0) {
     return NextResponse.json({ ok: true, processed: 0 });
@@ -172,5 +267,10 @@ export async function PATCH(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, processed: updates.length });
+  return NextResponse.json({
+    ok: true,
+    processed: updates.length,
+    sent: updates.filter((item) => item.status === "sent").length,
+    failed: updates.filter((item) => item.status === "failed").length
+  });
 }
