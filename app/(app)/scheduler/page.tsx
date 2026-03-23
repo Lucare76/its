@@ -32,6 +32,8 @@ export default function SchedulerPage() {
   const [payload, setPayload] = useState<SummaryPreviewPayload | null>(null);
   const [jobMessage, setJobMessage] = useState<string | null>(null);
   const [creatingJobs, setCreatingJobs] = useState(false);
+  const [processingJobs, setProcessingJobs] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -70,7 +72,7 @@ export default function SchedulerPage() {
     return () => {
       active = false;
     };
-  }, [today]);
+  }, [today, refreshTick]);
 
   const schedule = useMemo(() => {
     return {
@@ -145,9 +147,41 @@ export default function SchedulerPage() {
               const body = (await response.json().catch(() => null)) as { inserted?: number; error?: string } | null;
               setCreatingJobs(false);
               setJobMessage(response.ok ? `Coda generata: ${body?.inserted ?? 0} job.` : body?.error ?? "Generazione coda fallita.");
+              if (response.ok) setRefreshTick((current) => current + 1);
             }}
           >
             {creatingJobs ? "Generazione..." : "Genera coda report"}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={processingJobs}
+            onClick={async () => {
+              if (!hasSupabaseEnv || !supabase) return;
+              setProcessingJobs(true);
+              setJobMessage("Processo i job pianificati...");
+              const { data, error } = await supabase.auth.getSession();
+              const token = data.session?.access_token;
+              if (error || !token) {
+                setProcessingJobs(false);
+                setJobMessage("Sessione non valida.");
+                return;
+              }
+              const response = await fetch("/api/ops/report-jobs", {
+                method: "PATCH",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`
+                },
+                body: JSON.stringify({ today, limit: 25 })
+              });
+              const body = (await response.json().catch(() => null)) as { processed?: number; error?: string } | null;
+              setProcessingJobs(false);
+              setJobMessage(response.ok ? `Job processati: ${body?.processed ?? 0}.` : body?.error ?? "Processamento coda fallito.");
+              if (response.ok) setRefreshTick((current) => current + 1);
+            }}
+          >
+            {processingJobs ? "Processo..." : "Processa coda"}
           </button>
         </div>
         <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
@@ -168,8 +202,8 @@ export default function SchedulerPage() {
                   <td className="px-3 py-2">{job.job_type}</td>
                   <td className="px-3 py-2">{job.target_date}</td>
                   <td className="px-3 py-2">{job.owner_name ?? "N/D"}</td>
-                  <td className="px-3 py-2">{job.status}</td>
-                </tr>
+                    <td className="px-3 py-2">{job.status}</td>
+                  </tr>
               ))}
             </tbody>
           </table>
@@ -215,6 +249,27 @@ export default function SchedulerPage() {
           </div>
         </SectionCard>
       </div>
+
+      <SectionCard title="Esito coda report" subtitle="Lettura rapida tra job pianificati e job gia generati" loading={loading} loadingLines={4}>
+        <div className="grid gap-3 md:grid-cols-3">
+          <article className="rounded-2xl border border-border bg-surface/80 p-3">
+            <p className="text-xs uppercase tracking-[0.14em] text-muted">Planned</p>
+            <p className="mt-2 text-2xl font-semibold text-text">
+              {(payload?.report_jobs ?? []).filter((job) => job.status === "planned").length}
+            </p>
+          </article>
+          <article className="rounded-2xl border border-border bg-surface/80 p-3">
+            <p className="text-xs uppercase tracking-[0.14em] text-muted">Generated</p>
+            <p className="mt-2 text-2xl font-semibold text-text">
+              {(payload?.report_jobs ?? []).filter((job) => job.status === "generated").length}
+            </p>
+          </article>
+          <article className="rounded-2xl border border-border bg-surface/80 p-3">
+            <p className="text-xs uppercase tracking-[0.14em] text-muted">Totale job</p>
+            <p className="mt-2 text-2xl font-semibold text-text">{payload?.report_jobs?.length ?? 0}</p>
+          </article>
+        </div>
+      </SectionCard>
     </section>
   );
 }

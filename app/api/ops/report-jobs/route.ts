@@ -5,6 +5,24 @@ import { STATEMENT_AGENCY_NAMES } from "@/lib/server/statement-agencies";
 
 export const runtime = "nodejs";
 
+type ReportJobRow = {
+  id: string;
+  job_type: string;
+  target_date: string;
+  owner_name: string | null;
+  status: string;
+  payload: Record<string, unknown> | null;
+};
+
+function buildPreviewText(jobType: string, ownerName: string | null, lines: Array<{ date: string; time: string; customer_name: string; pax: number; hotel_or_destination: string | null; direction: "arrival" | "departure" }>) {
+  const owner = ownerName ?? "Owner non definito";
+  const header = `${jobType} | ${owner} | ${lines.length} servizi | ${lines.reduce((sum, line) => sum + line.pax, 0)} pax`;
+  const body = lines
+    .sort((left, right) => `${left.date}T${left.time}`.localeCompare(`${right.date}T${right.time}`))
+    .map((line) => `${line.date} ${line.time} | ${line.direction === "arrival" ? "Arrivo" : "Partenza"} | ${line.customer_name} | ${line.hotel_or_destination ?? "N/D"} | ${line.pax} pax`);
+  return [header, ...body].join("\n");
+}
+
 async function readOperationalSettings(admin: any, tenantId: string) {
   const { data } = await admin
     .from("tenant_operational_settings")
@@ -84,4 +102,75 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ ok: true, inserted: rows.length });
+}
+
+export async function PATCH(request: NextRequest) {
+  const auth = await authorizePricingRequest(request, ["admin", "operator"]);
+  if (auth instanceof NextResponse) return auth;
+
+  const body = (await request.json().catch(() => null)) as { today?: string; limit?: number } | null;
+  const today = body?.today ?? new Date().toISOString().slice(0, 10);
+  const limit = Math.min(50, Math.max(1, body?.limit ?? 20));
+
+  const [{ data: jobs, error: jobsError }, { data: services, error: servicesError }, settings] = await Promise.all([
+    auth.admin
+      .from("ops_report_jobs")
+      .select("id, job_type, target_date, owner_name, status, payload")
+      .eq("tenant_id", auth.membership.tenant_id)
+      .eq("status", "planned")
+      .order("created_at", { ascending: true })
+      .limit(limit),
+    auth.admin.from("services").select("*").eq("tenant_id", auth.membership.tenant_id).limit(2000),
+    readOperationalSettings(auth.admin, auth.membership.tenant_id)
+  ]);
+
+  if (jobsError) {
+    return NextResponse.json({ error: jobsError.message }, { status: 500 });
+  }
+  if (servicesError) {
+    return NextResponse.json({ error: servicesError.message }, { status: 500 });
+  }
+
+  const preview = buildOperationalSummaryPreview((services ?? []) as any[], today, settings.statement_agencies);
+  const updates = ((jobs ?? []) as ReportJobRow[]).map((job) => {
+    const lines =
+      job.job_type === "arrivals_48h"
+        ? preview.arrivals_48h[job.owner_name ?? ""]
+        : job.job_type === "departures_48h"
+          ? preview.departures_48h[job.owner_name ?? ""]
+          : job.job_type === "bus_monday"
+            ? preview.bus_monday[job.owner_name ?? ""]
+            : preview.statement_candidates[job.owner_name ?? ""];
+
+    const nextPayload = {
+      ...(typeof job.payload === "object" && job.payload ? job.payload : {}),
+      generated_at: new Date().toISOString(),
+      processed_by: auth.user.id,
+      preview_text: buildPreviewText(job.job_type, job.owner_name, lines ?? []),
+      line_count: lines?.length ?? 0
+    };
+
+    return {
+      id: job.id,
+      status: "generated",
+      payload: nextPayload
+    };
+  });
+
+  if (updates.length === 0) {
+    return NextResponse.json({ ok: true, processed: 0 });
+  }
+
+  for (const update of updates) {
+    const { error } = await auth.admin
+      .from("ops_report_jobs")
+      .update({ status: update.status, payload: update.payload })
+      .eq("id", update.id)
+      .eq("tenant_id", auth.membership.tenant_id);
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+  }
+
+  return NextResponse.json({ ok: true, processed: updates.length });
 }
