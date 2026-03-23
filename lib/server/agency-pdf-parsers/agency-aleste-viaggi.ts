@@ -170,7 +170,7 @@ function extractHotel(sourceText: string) {
   }
 
   const fromDestination = clean(
-    sourceText.match(/dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s*Cliente:|\s+Cellulare|\s+Cell\.|\n|\r|$)/i)?.[1]
+    sourceText.match(/dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|\s*Cliente:|\s+Cellulare|\s+Cell\.|\n|\r|$)/i)?.[1]
   );
   if (fromDestination) return fromDestination;
 
@@ -389,6 +389,9 @@ function extractAlesteMarineJourney(
       ) ??
       compact.match(
         /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+AL\s*ISCAFO\s+DA\s+NAPOLI\s*\+\s*TRS\s+H\.?\s*ISCHIA\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*(PORTO\s+NAPOLI)\s+da:\s*(NAPOLI\s+CON\s+SNAV)\s+a:\s*CELL[:.]?\s*\d*\s*dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|$)/i
+      ) ??
+      compact.match(
+        /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRAGHETTO\s+NAPOLI\s*\+\s*TRS\s+H\.?\s*ISCHIA\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*([A-Z][A-Z ']+?)\s+da:\s*(NAPOLI\s+CON\s+MEDMAR)\s+a:\s*CELL[:.]?\s*\d*\s+dest:\s*([A-Z][A-Z &'./-]+?)(?=\s+Il\s*[0-3]?\d-\w{3}-\d{2,4}|\s+Il[0-3]?\d-\w{3}-\d{2,4}|\s+Cliente:|\s+Cellulare|$)/i
       );
     if (!outwardMatch) return null;
 
@@ -413,6 +416,9 @@ function extractAlesteMarineJourney(
     ) ??
     compact.match(
       /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRS\s+H\.?\s*ISCHIA\s*\+\s*AL\s*ISCAFO\s+PER\s+NAPOLI\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*([A-Z][A-Z &'./-]+?)\s+da:\s*(ISCHIA)\s+a:\s*(SNAV)\s+dest:\s*(PORTO\s+NAPOLI)/i
+    ) ??
+    compact.match(
+      /Il\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)(?:-\d{2,4})?)\s+\d+\s+TRS\s+H\.?\s*ISCHIA\s*\+\s*TRAGHETTO\s+NAPOLI\s*([0-2]?\d[:.]\d{2})[\s\S]{0,220}?M\.p\.\s*:\s*([A-Z][A-Z &'./-]+?)\s+da:\s*HOTEL\s+a:\s*(PORTO\s+PER\s+NAPOLI\s+CON\s+MEDMAR)\s+dest:\s*(PORTO\s+DI\s+NAPOLI)/i
     );
   if (!returnMatch) return null;
 
@@ -665,8 +671,9 @@ function parseAlesteViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
   if (hasMarineAutoTransfer) {
     const marineHotel = outwardMarine?.hotel ?? hotel;
     const marineCarrier = /SNAV/i.test(outwardMarine?.rawDetailText ?? returnMarine?.rawDetailText ?? "") ? "SNAV" : "MEDMAR";
-    const outwardMarineLabel = marineCarrier === "SNAV" ? "ALISCAFO DA NAPOLI + TRS H. ISCHIA" : "TRAGHETTO POZZUOLI + TRS H. ISCHIA";
-    const returnMarineLabel = marineCarrier === "SNAV" ? "TRS H. ISCHIA + ALISCAFO PER NAPOLI" : "TRS H. ISCHIA + TRAGHETTO POZZUOLI";
+    const isNapoliMedmar = /NAPOLI\s+CON\s+MEDMAR/i.test(outwardMarine?.rawDetailText ?? returnMarine?.rawDetailText ?? "");
+    const outwardMarineLabel = marineCarrier === "SNAV" ? "ALISCAFO DA NAPOLI + TRS H. ISCHIA" : isNapoliMedmar ? "TRAGHETTO NAPOLI + TRS H. ISCHIA" : "TRAGHETTO POZZUOLI + TRS H. ISCHIA";
+    const returnMarineLabel = marineCarrier === "SNAV" ? "TRS H. ISCHIA + ALISCAFO PER NAPOLI" : isNapoliMedmar ? "TRS H. ISCHIA + TRAGHETTO NAPOLI" : "TRS H. ISCHIA + TRAGHETTO POZZUOLI";
 
     if (outwardMarine && marineHotel) {
       parsedServices.push({
