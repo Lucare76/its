@@ -3,10 +3,41 @@
 import { useEffect, useMemo, useState } from "react";
 import { DataTable, EmptyState, FilterBar, PageHeader } from "@/components/ui";
 import { buildBusLotAggregates, isBusLineService, isTrueBusTour } from "@/lib/bus-lot-utils";
+import type { BusLotAggregate } from "@/lib/bus-lot-utils";
+import { BUS_LINES_2026 } from "@/lib/bus-lines-catalog";
 import { supabase } from "@/lib/supabase/client";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
-import type { BusLotConfig, ServiceStatus } from "@/lib/types";
+import type { BusLotConfig, ServiceDirection, ServiceStatus } from "@/lib/types";
 import { SERVICE_STATUS_LABELS } from "@/lib/ui-labels";
+
+function isBusLineActiveOnDate(line: (typeof BUS_LINES_2026)[number], date: string) {
+  if (line.validFrom && date < line.validFrom) return false;
+  if (line.validTo && date > line.validTo) return false;
+  return true;
+}
+
+function buildLotAlerts(input: {
+  remainingSeats: number | null;
+  lowSeatThreshold: number;
+  minimumPassengers: number | null;
+  paxTotal: number;
+  waitlistEnabled: boolean;
+  waitlistCount: number;
+}) {
+  const alerts: Array<{ label: string; severity: "high" | "medium" | "low" }> = [];
+  if (input.remainingSeats !== null && input.remainingSeats <= 0) {
+    alerts.push({ label: "Completo", severity: "high" });
+  } else if (input.remainingSeats !== null && input.remainingSeats <= input.lowSeatThreshold) {
+    alerts.push({ label: `Pochi posti (${input.remainingSeats})`, severity: "medium" });
+  }
+  if (input.minimumPassengers && input.paxTotal < input.minimumPassengers) {
+    alerts.push({ label: `Sotto minimo (${input.paxTotal}/${input.minimumPassengers})`, severity: "low" });
+  }
+  if (input.waitlistEnabled && input.waitlistCount > 0) {
+    alerts.push({ label: `Waiting list ${input.waitlistCount} pax`, severity: "high" });
+  }
+  return alerts;
+}
 
 export default function BusToursPage() {
   const { loading, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData();
@@ -36,8 +67,8 @@ export default function BusToursPage() {
   const driverNameById = useMemo(() => new Map(drivers.map((driver) => [driver.user_id, driver.full_name])), [drivers]);
 
   const availableDates = useMemo(
-    () => [...new Set([...busLineServices, ...busTours].map((service) => service.date))].sort(),
-    [busLineServices, busTours]
+    () => [...new Set([...busLineServices, ...busTours].map((service) => service.date).concat(data.busLotConfigs.map((lot) => lot.service_date)))].sort(),
+    [busLineServices, busTours, data.busLotConfigs]
   );
 
   const filteredBusLineServices = useMemo(() => {
@@ -59,7 +90,91 @@ export default function BusToursPage() {
     });
   }, [busTours, dateFilter, tourNameFilter, statusFilter]);
 
-  const busLots = useMemo(() => buildBusLotAggregates(filteredBusLineServices, data.busLotConfigs), [filteredBusLineServices, data.busLotConfigs]);
+  const selectedReferenceDate = useMemo(() => {
+    if (dateFilter !== "all") return dateFilter;
+    return availableDates[0] ?? new Date().toISOString().slice(0, 10);
+  }, [availableDates, dateFilter]);
+
+  const actualBusLots = useMemo(() => buildBusLotAggregates(filteredBusLineServices, data.busLotConfigs), [filteredBusLineServices, data.busLotConfigs]);
+  const busLots = useMemo(() => {
+    const directionsForDate: ServiceDirection[] = [
+      ...new Set(
+        [
+          ...filteredBusLineServices.filter((service) => service.date === selectedReferenceDate).map((service) => service.direction),
+          ...data.busLotConfigs.filter((lot) => lot.service_date === selectedReferenceDate).map((lot) => lot.direction)
+        ].filter(Boolean)
+      )
+    ] as ServiceDirection[];
+    const activeDirections: ServiceDirection[] = directionsForDate.length > 0 ? directionsForDate : ["arrival"];
+    const configByKey = new Map(data.busLotConfigs.map((config) => [config.lot_key, config]));
+
+    if (statusFilter !== "all") {
+      return actualBusLots.filter((lot) => {
+        const searchText = `${lot.title ?? ""} ${lot.transport_code ?? ""} ${lot.bus_city_origin ?? ""} ${lot.billing_party_name ?? ""}`.toLowerCase();
+        return !tourNameFilter.trim() || searchText.includes(tourNameFilter.trim().toLowerCase());
+      });
+    }
+
+    const catalogLots: BusLotAggregate[] = BUS_LINES_2026.filter((line) => isBusLineActiveOnDate(line, selectedReferenceDate)).flatMap((line) =>
+      activeDirections.map((direction) => {
+        const key = [selectedReferenceDate, direction, line.code.trim().toLowerCase()].join("|");
+        const config = configByKey.get(key) ?? null;
+        const capacity = config?.capacity ?? 54;
+        const remainingSeats = capacity;
+        const lowSeatThreshold = config?.low_seat_threshold ?? 5;
+        const minimumPassengers = config?.minimum_passengers ?? null;
+        const waitlistEnabled = config?.waitlist_enabled ?? false;
+        const waitlistCount = config?.waitlist_count ?? 0;
+        return {
+          key,
+          date: selectedReferenceDate,
+          direction,
+          billing_party_name: config?.billing_party_name ?? null,
+          bus_city_origin: config?.bus_city_origin ?? line.stops[0]?.city ?? null,
+          transport_code: config?.transport_code ?? line.code,
+          meeting_point: config?.meeting_point ?? line.stops[0]?.pickupNote ?? null,
+          title: config?.title ?? line.name,
+          services: [],
+          service_count: 0,
+          pax_total: 0,
+          config,
+          capacity,
+          remaining_seats: remainingSeats,
+          alerts: buildLotAlerts({
+            remainingSeats,
+            lowSeatThreshold,
+            minimumPassengers,
+            paxTotal: 0,
+            waitlistEnabled,
+            waitlistCount
+          })
+        };
+      })
+    );
+
+    const lotsByKey = new Map<string, BusLotAggregate>(catalogLots.map((lot) => [lot.key, lot]));
+    for (const actualLot of actualBusLots) {
+      const seededLot = lotsByKey.get(actualLot.key);
+      lotsByKey.set(actualLot.key, {
+        ...(seededLot ?? {}),
+        ...actualLot,
+        title: actualLot.title && actualLot.title !== "Linea bus" ? actualLot.title : seededLot?.title ?? actualLot.title,
+        transport_code: actualLot.transport_code ?? seededLot?.transport_code ?? null,
+        bus_city_origin: actualLot.bus_city_origin ?? seededLot?.bus_city_origin ?? null,
+        meeting_point: actualLot.meeting_point ?? seededLot?.meeting_point ?? null,
+        capacity: actualLot.capacity ?? seededLot?.capacity ?? null,
+        remaining_seats: actualLot.remaining_seats ?? seededLot?.remaining_seats ?? null,
+        billing_party_name: actualLot.billing_party_name ?? seededLot?.billing_party_name ?? null
+      });
+    }
+
+    return Array.from(lotsByKey.values())
+      .filter((lot) => {
+        const searchText = `${lot.title ?? ""} ${lot.transport_code ?? ""} ${lot.bus_city_origin ?? ""} ${lot.billing_party_name ?? ""}`.toLowerCase();
+        return !tourNameFilter.trim() || searchText.includes(tourNameFilter.trim().toLowerCase());
+      })
+      .sort((left, right) => `${left.date}|${left.direction}|${left.title ?? ""}`.localeCompare(`${right.date}|${right.direction}|${right.title ?? ""}`));
+  }, [actualBusLots, data.busLotConfigs, filteredBusLineServices, selectedReferenceDate, statusFilter, tourNameFilter]);
   const selectedLot = busLots.find((item) => item.key === selectedLotKey) ?? busLots[0] ?? null;
   const selectedTour = filteredBusTours.find((service) => service.id === selectedTourServiceId) ?? filteredBusTours[0] ?? null;
   const selectedTourHotel = selectedTour ? hotelsById.get(selectedTour.hotel_id) : null;
