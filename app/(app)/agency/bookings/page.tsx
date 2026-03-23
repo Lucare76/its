@@ -67,6 +67,37 @@ function serviceOperationalDetail(row: BookingRow) {
   return row.vessel;
 }
 
+type EditDraft = {
+  customer_first_name: string;
+  customer_last_name: string;
+  customer_phone: string;
+  pax: string;
+  arrival_date: string;
+  arrival_time: string;
+  departure_date: string;
+  departure_time: string;
+  transport_code: string;
+  bus_city_origin: string;
+  notes: string;
+};
+
+function toEditDraft(row: BookingRow): EditDraft {
+  const nameParts = row.customer_name.split(" ");
+  return {
+    customer_first_name: nameParts[0] ?? "",
+    customer_last_name: nameParts.slice(1).join(" "),
+    customer_phone: "",
+    pax: String(row.pax),
+    arrival_date: row.arrival_date ?? row.date,
+    arrival_time: (row.arrival_time ?? row.time ?? "").slice(0, 5),
+    departure_date: row.departure_date ?? row.date,
+    departure_time: (row.departure_time ?? "").slice(0, 5),
+    transport_code: row.transport_code ?? "",
+    bus_city_origin: row.bus_city_origin ?? "",
+    notes: row.notes ?? ""
+  };
+}
+
 export default function AgencyBookingsPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -77,6 +108,11 @@ export default function AgencyBookingsPage() {
   const [windowFilter, setWindowFilter] = useState<"all" | "future" | "past">("future");
   const [bookings, setBookings] = useState<BookingRow[]>([]);
   const [selectedBookingId, setSelectedBookingId] = useState<string | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [editMessage, setEditMessage] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -106,6 +142,7 @@ export default function AgencyBookingsPage() {
         setLoading(false);
         return;
       }
+      setAccessToken(token);
 
       const response = await fetch("/api/agency/bookings?limit=1000", {
         headers: { Authorization: `Bearer ${token}` }
@@ -157,6 +194,56 @@ export default function AgencyBookingsPage() {
   );
 
   const selectedBooking = filtered.find((row) => row.id === selectedBookingId) ?? filtered[0] ?? null;
+
+  const saveEdit = async () => {
+    if (!editDraft || !selectedBooking || !accessToken) return;
+    setSaving(true);
+    setEditMessage("");
+    const body: Record<string, unknown> = {
+      customer_first_name: editDraft.customer_first_name.trim(),
+      customer_last_name: editDraft.customer_last_name.trim(),
+      pax: Number(editDraft.pax),
+      arrival_date: editDraft.arrival_date,
+      arrival_time: editDraft.arrival_time,
+      departure_date: editDraft.departure_date,
+      departure_time: editDraft.departure_time,
+      notes: editDraft.notes,
+      transport_code: editDraft.transport_code.trim() || null,
+      bus_city_origin: editDraft.bus_city_origin.trim() || null
+    };
+    if (editDraft.customer_phone.trim()) body.customer_phone = editDraft.customer_phone.trim();
+    const res = await fetch(`/api/agency/bookings/${selectedBooking.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(body)
+    });
+    const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    setSaving(false);
+    if (!res.ok) {
+      setEditMessage(data?.error ?? "Salvataggio fallito.");
+      return;
+    }
+    setBookings((prev) =>
+      prev.map((row) =>
+        row.id === selectedBooking.id
+          ? {
+              ...row,
+              customer_name: `${editDraft.customer_first_name.trim()} ${editDraft.customer_last_name.trim()}`.trim(),
+              pax: Number(editDraft.pax),
+              arrival_date: editDraft.arrival_date,
+              arrival_time: editDraft.arrival_time,
+              departure_date: editDraft.departure_date,
+              departure_time: editDraft.departure_time,
+              transport_code: editDraft.transport_code.trim() || null,
+              bus_city_origin: editDraft.bus_city_origin.trim() || null,
+              notes: editDraft.notes
+            }
+          : row
+      )
+    );
+    setIsEditing(false);
+    setEditMessage("Salvato.");
+  };
 
   if (loading) {
     return <div className="card p-4 text-sm text-slate-500">Caricamento prenotazioni...</div>;
@@ -235,7 +322,7 @@ export default function AgencyBookingsPage() {
                 <button
                   key={row.id}
                   type="button"
-                  onClick={() => setSelectedBookingId(row.id)}
+                  onClick={() => { setSelectedBookingId(row.id); setIsEditing(false); setEditMessage(""); }}
                   className={`w-full rounded-2xl border p-4 text-left ${selectedBooking?.id === row.id ? "border-primary bg-blue-50/40" : "border-border bg-surface/80"}`}
                 >
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -261,6 +348,71 @@ export default function AgencyBookingsPage() {
           <SectionCard title="Dettaglio prenotazione" subtitle="Vista completa lato agenzia del servizio selezionato.">
             {!selectedBooking ? (
               <EmptyState title="Nessuna prenotazione selezionata" description="Scegli una prenotazione dalla lista per vederne il dettaglio." compact />
+            ) : isEditing && editDraft ? (
+              <div className="space-y-4">
+                <article className="rounded-2xl border border-primary/30 bg-blue-50/30 p-4">
+                  <p className="text-sm font-semibold text-text mb-3">Modifica prenotazione</p>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="text-xs text-muted">Nome</label>
+                      <input className="input-saas mt-1" value={editDraft.customer_first_name} onChange={(e) => setEditDraft((d) => d && ({ ...d, customer_first_name: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted">Cognome</label>
+                      <input className="input-saas mt-1" value={editDraft.customer_last_name} onChange={(e) => setEditDraft((d) => d && ({ ...d, customer_last_name: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted">Telefono (lascia vuoto per non modificare)</label>
+                      <input className="input-saas mt-1" value={editDraft.customer_phone} onChange={(e) => setEditDraft((d) => d && ({ ...d, customer_phone: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted">Passeggeri</label>
+                      <input className="input-saas mt-1" type="number" min="1" max="16" value={editDraft.pax} onChange={(e) => setEditDraft((d) => d && ({ ...d, pax: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted">Data andata</label>
+                      <input className="input-saas mt-1" type="date" value={editDraft.arrival_date} onChange={(e) => setEditDraft((d) => d && ({ ...d, arrival_date: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted">Ora andata</label>
+                      <input className="input-saas mt-1" type="time" value={editDraft.arrival_time} onChange={(e) => setEditDraft((d) => d && ({ ...d, arrival_time: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted">Data ritorno</label>
+                      <input className="input-saas mt-1" type="date" value={editDraft.departure_date} onChange={(e) => setEditDraft((d) => d && ({ ...d, departure_date: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted">Ora ritorno</label>
+                      <input className="input-saas mt-1" type="time" value={editDraft.departure_time} onChange={(e) => setEditDraft((d) => d && ({ ...d, departure_time: e.target.value }))} />
+                    </div>
+                    {(selectedBooking.booking_service_kind === "transfer_airport_hotel" || selectedBooking.booking_service_kind === "transfer_train_hotel") && (
+                      <div className="md:col-span-2">
+                        <label className="text-xs text-muted">Codice volo / treno</label>
+                        <input className="input-saas mt-1" value={editDraft.transport_code} onChange={(e) => setEditDraft((d) => d && ({ ...d, transport_code: e.target.value }))} />
+                      </div>
+                    )}
+                    {selectedBooking.booking_service_kind === "bus_city_hotel" && (
+                      <div className="md:col-span-2">
+                        <label className="text-xs text-muted">Citta origine bus</label>
+                        <input className="input-saas mt-1" value={editDraft.bus_city_origin} onChange={(e) => setEditDraft((d) => d && ({ ...d, bus_city_origin: e.target.value }))} />
+                      </div>
+                    )}
+                    <div className="md:col-span-2">
+                      <label className="text-xs text-muted">Note</label>
+                      <textarea className="input-saas mt-1 min-h-[80px]" value={editDraft.notes} onChange={(e) => setEditDraft((d) => d && ({ ...d, notes: e.target.value }))} />
+                    </div>
+                  </div>
+                  {editMessage && <p className="mt-2 text-xs text-red-600">{editMessage}</p>}
+                </article>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => void saveEdit()} disabled={saving} className="btn-primary">
+                    {saving ? "Salvataggio..." : "Salva modifiche"}
+                  </button>
+                  <button type="button" onClick={() => { setIsEditing(false); setEditMessage(""); }} className="btn-secondary">
+                    Annulla
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="space-y-4">
                 <article className="rounded-2xl border border-border bg-surface/80 p-4">
@@ -299,8 +451,17 @@ export default function AgencyBookingsPage() {
                   <p className="mt-2 text-sm text-muted whitespace-pre-wrap">{selectedBooking.notes?.trim() || "Nessuna nota disponibile."}</p>
                 </article>
 
+                {editMessage === "Salvato." && <p className="text-xs text-green-600">Modifiche salvate.</p>}
+
                 <div className="flex flex-wrap gap-2">
-                  <Link href="/agency/new-booking" className="btn-primary">
+                  <button
+                    type="button"
+                    onClick={() => { setEditDraft(toEditDraft(selectedBooking)); setIsEditing(true); setEditMessage(""); }}
+                    className="btn-primary"
+                  >
+                    Modifica
+                  </button>
+                  <Link href="/agency/new-booking" className="btn-secondary">
                     Nuova prenotazione
                   </Link>
                   <Link href={`/dispatch?serviceId=${selectedBooking.id}`} className="btn-secondary">
