@@ -78,6 +78,7 @@ export default function BusToursPage() {
       { lots: 0, totalPax: 0, lowSeats: 0, waitlists: 0, belowMinimum: 0 }
     );
   }, [busLots]);
+  const missingLotConfigs = useMemo(() => busLots.filter((lot) => !lot.config), [busLots]);
 
   const getLotDraft = (lot: typeof selectedLot extends null ? never : NonNullable<typeof selectedLot>) => {
     const config = lot.config;
@@ -142,6 +143,41 @@ export default function BusToursPage() {
     }
     await refresh();
     setMessage("Lotto bus aggiornato.");
+  };
+
+  const createMissingLotConfigs = async () => {
+    if (!supabase || !tenantId || missingLotConfigs.length === 0) return;
+
+    setBusyId("create-missing-lots");
+    const payload: Array<Omit<BusLotConfig, "id">> = missingLotConfigs.map((lot) => ({
+      tenant_id: tenantId,
+      lot_key: lot.key,
+      service_date: lot.date,
+      direction: lot.direction,
+      billing_party_name: lot.billing_party_name,
+      bus_city_origin: lot.bus_city_origin,
+      transport_code: lot.transport_code,
+      title: lot.title || null,
+      meeting_point: lot.meeting_point,
+      capacity: 54,
+      low_seat_threshold: 5,
+      minimum_passengers: null,
+      waitlist_enabled: false,
+      waitlist_count: 0,
+      notes: null
+    }));
+
+    const { error } = await supabase.from("bus_lot_configs").upsert(payload, { onConflict: "tenant_id,lot_key" });
+    setBusyId(null);
+    if (error) {
+      setMessage("Errore creazione lotti bus.");
+      return;
+    }
+    await refresh();
+    if (!selectedLotKey && missingLotConfigs[0]) {
+      setSelectedLotKey(missingLotConfigs[0].key);
+    }
+    setMessage(`${missingLotConfigs.length} lotti bus creati con 54 posti.`);
   };
 
   const handleAssignTour = async (serviceId: string) => {
@@ -267,6 +303,17 @@ export default function BusToursPage() {
               <h2 className="font-semibold">Lotti linea bus</h2>
               <p className="text-sm text-muted">Capacita e waiting list si gestiscono qui, a livello lotto e non sul singolo passeggero.</p>
             </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted">Da configurare: {missingLotConfigs.length}</span>
+              <button
+                type="button"
+                className="btn-secondary px-3 py-2 text-xs"
+                disabled={missingLotConfigs.length === 0 || busyId === "create-missing-lots"}
+                onClick={() => void createMissingLotConfigs()}
+              >
+                {busyId === "create-missing-lots" ? "Creazione..." : "Crea lotti mancanti (54 posti)"}
+              </button>
+            </div>
           </div>
           {busLots.length === 0 ? (
             <EmptyState title="Nessun lotto linea bus trovato." compact />
@@ -303,7 +350,7 @@ export default function BusToursPage() {
                       </td>
                       <td className="px-3 py-2">
                         <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={() => setSelectedLotKey(lot.key)}>
-                          Apri
+                          Modifica
                         </button>
                       </td>
                     </tr>
