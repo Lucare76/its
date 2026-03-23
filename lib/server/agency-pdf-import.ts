@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { buildAgencyPdfPreview } from "@/lib/server/agency-pdf-preview";
+import { ensureDefaultBusLotConfig } from "@/lib/server/bus-lot-configs";
 import { canonicalizeKnownHotelName } from "@/lib/server/hotel-aliases";
 import { auditLog } from "@/lib/server/ops-audit";
 import { extractPdfHeaderTextFromBase64, extractPdfTextFromBase64 } from "@/lib/server/pdf-text";
@@ -515,7 +516,6 @@ async function resolveHotelId(admin: any, tenantId: string, hotelName: string | 
     hotels.find((hotel) => normalizedHotel && hotel.name.toLowerCase().includes(normalizedHotel)) ??
     hotels.find((hotel) => normalizedHotel && normalizedHotel.includes(hotel.name.toLowerCase()));
   if (matched?.id) return matched.id;
-  if (hotels[0]?.id) return hotels[0].id;
 
   let createHotelAttempt = await admin
     .from("hotels")
@@ -1573,6 +1573,19 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
     if (statusInsert.error) {
       throw new Error(statusInsert.error.message);
     }
+  }
+
+  if (normalized.service_type === "bus_line" || normalized.booking_kind === "bus_city_hotel") {
+    await ensureDefaultBusLotConfig(auth.admin, {
+      tenantId,
+      date: normalized.arrival_date,
+      direction: "arrival",
+      billingPartyName: normalized.billing_party_name,
+      busCityOrigin: null,
+      transportCode: normalized.transport_code,
+      title: normalized.billing_party_name ?? normalized.customer_full_name,
+      meetingPoint: normalized.arrival_place
+    });
   }
 
   const inboundUpdate = await auth.admin
