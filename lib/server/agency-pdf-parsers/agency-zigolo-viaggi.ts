@@ -110,54 +110,118 @@ function normalizeTime(raw?: string | null) {
 }
 
 function parseBusTransferBlocks(compact: string, practiceNumber: string | null) {
-  return Array.from(
-    compact.matchAll(
-      /stato prenotazione\s*conf extra\s*data prenotazione:\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})\s*dal\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})\s*num servizio beneficiari trattamento e note\s*001\s+(BUS\s+DA\s+[A-Z ]+?\s+\d{1,2}[.:]\d{2}|BUS\s+[-A-Z /]+?RITORNO)\s+([^\n]+)[\s\S]*?(\d+[.,]\d{2})\s+(\d+)\s*\(\d+\)\s+(\d+[.,]\d{2})\s*totale eur\s*(\d+[.,]\d{2})/gi
-    )
-  ).map((match) => {
-    const description = clean(match[3]);
-    const timeMatch = description?.match(/(\d{1,2}[.:]\d{2})\s*$/);
-    const serviceTime = timeMatch ? normalizeTime(timeMatch[1]) : null;
-    const isReturn = /RITORNO/i.test(description ?? "");
+  const results: Array<{
+    bookingDate: string | null;
+    serviceDate: string | null;
+    description: string | null;
+    serviceTime: string | null;
+    beneficiary: string | null;
+    direction: "andata" | "ritorno";
+    lineAmount: number | null;
+    pax: number | null;
+    totalAmount: number | null;
+    service: ParsedTransferService;
+  }> = [];
+
+  // Split compact into booking blocks: each block runs from "stato prenotazione" to "totale eur [amount]"
+  for (const blockMatch of compact.matchAll(/stato prenotazione\b[\s\S]*?totale eur\s*\d+[.,]\d{2}/gi)) {
+    const block = blockMatch[0];
+    if (!/\b001\s+BUS\b/i.test(block)) continue;
+
+    const bookingDate = parseItalianDate(
+      block.match(/data prenotazione:\s*([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})/i)?.[1]
+    );
+    // Header "dal" line has year: "Dal 10-mag-26"
+    const serviceDate = parseItalianDate(
+      block.match(/\bdal\s+([0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)-\d{2,4})/i)?.[1]
+    );
+
+    // Service header line: "001 BUS DA CITY STAZIONE FS HH:MM FIRSTNAME LASTNAME"
+    // or "001 BUS ISCHIA - CITY RITORNO FIRSTNAME LASTNAME"
+    // City/description contains only letters/spaces (digits mark the time boundary for andata)
+    const andataHeaderMatch = block.match(/\b001\s+(BUS\s+DA\s+[A-Z '+.-]+?)(\d{1,2}[.:]\d{2})\s+([A-Z][A-Z ']+?)(?:\n|$)/i);
+    const ritornoHeaderMatch = block.match(/\b001\s+(BUS\s+[-A-Z/ ']+?RITORNO)\s+([A-Z][A-Z ']+?)(?:\n|$)/i);
+
+    const isReturn = !!ritornoHeaderMatch && !andataHeaderMatch;
     const direction: "andata" | "ritorno" = isReturn ? "ritorno" : "andata";
-    const pax = Number(match[6]) || null;
-    const firstBeneficiary = normalizeCustomerName(match[4]);
+
+    // Build description: for andata include time suffix so it matches original row text
+    const rawDescWithTime = isReturn
+      ? clean(ritornoHeaderMatch?.[1])
+      : clean(andataHeaderMatch ? `${andataHeaderMatch[1]}${andataHeaderMatch[2]}` : null);
+    const rawDescNoTime = isReturn
+      ? clean(ritornoHeaderMatch?.[1])
+      : clean(andataHeaderMatch?.[1]);
+    const serviceTime = !isReturn && andataHeaderMatch ? normalizeTime(andataHeaderMatch[2]) : null;
+
+    const firstBeneficiary = normalizeCustomerName(
+      isReturn ? ritornoHeaderMatch?.[2] : andataHeaderMatch?.[3]
+    );
+
+    // Table row values are concatenated without spaces in the PDF:
+    //   "10-mag10-mag BUS DA FOLIGNO STAZIONE FS 5:4542,503(1)127,50"
+    //   → time=5:45, lineAmount=42,50, pax=3, (1), rowTotal=127,50
+    const tableRowAndata = !isReturn
+      ? block.match(
+          /(?:[0-3]?\d-(?:gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)){2}\s+BUS\s+[\s\S]*?(\d{1,2}[.:]\d{2})(\d+[.,]\d{2})(\d+)\s*\(\d+\)\s*(\d+[.,]\d{2})/i
+        )
+      : null;
+    // Ritorno table row: "... RITORNO [amount][pax]([n])[rowTotal]"
+    const tableRowRitorno = isReturn
+      ? block.match(/RITORNO\s*(\d+[.,]\d{2})(\d+)\s*\(\d+\)\s*(\d+[.,]\d{2})/i)
+      : null;
+
+    const lineAmount = tableRowAndata
+      ? parseEuroAmount(tableRowAndata[2])
+      : tableRowRitorno
+        ? parseEuroAmount(tableRowRitorno[1])
+        : null;
+    const pax = tableRowAndata
+      ? (Number(tableRowAndata[3]) || null)
+      : tableRowRitorno
+        ? (Number(tableRowRitorno[2]) || null)
+        : null;
+    const totalAmount = parseEuroAmount(block.match(/totale eur\s*(\d+[.,]\d{2})/i)?.[1]);
+
     const cityName = isReturn
-      ? clean(description?.match(/BUS\s+ISCHIA\s*-\s*([-A-Z ]+?)\s+RITORNO/i)?.[1])
-      : clean(description?.replace(/^BUS\s+DA\s+/i, "").replace(/\s+\d{1,2}[.:]\d{2}$/, ""));
+      ? clean(rawDescNoTime?.match(/BUS\s+ISCHIA\s*[-–]\s*([-A-Z ]+?)\s*RITORNO/i)?.[1])
+      : clean(rawDescNoTime?.replace(/^BUS\s+DA\s+/i, "").replace(/\s+STAZIONE\s+FS\s*$/i, "").trim());
     const origin = isReturn ? "HOTEL ISCHIA" : cityName;
     const destination = isReturn ? cityName : "HOTEL ISCHIA";
-    return {
-      bookingDate: parseItalianDate(match[1]),
-      serviceDate: parseItalianDate(match[2]),
-      description,
+
+    results.push({
+      bookingDate,
+      serviceDate,
+      description: rawDescWithTime,
       serviceTime,
       beneficiary: firstBeneficiary,
       direction,
-      lineAmount: parseEuroAmount(match[5]),
+      lineAmount,
       pax,
-      totalAmount: parseEuroAmount(match[8]),
+      totalAmount,
       service: {
         practice_number: practiceNumber,
         beneficiary: firstBeneficiary,
         pax,
         service_type: "transfer" as const,
         direction,
-        service_date: parseItalianDate(match[2]),
+        service_date: serviceDate,
         service_time: serviceTime,
         pickup_meeting_point: isReturn ? "HOTEL ISCHIA" : cityName,
         origin,
         destination,
         carrier_company: "BUS",
         hotel_structure: null,
-        original_row_description: description,
-        raw_detail_text: [description, firstBeneficiary, parseItalianDate(match[2])].filter(Boolean).join(" | "),
+        original_row_description: rawDescWithTime,
+        raw_detail_text: [rawDescWithTime, firstBeneficiary, serviceDate].filter(Boolean).join(" | "),
         parsing_status: "parsed" as const,
         confidence_level: "medium" as const,
         semantic_tag: direction === "andata" ? ("transfer_arrival" as const) : ("transfer_departure" as const)
       }
-    };
-  });
+    });
+  }
+
+  return results;
 }
 
 function normalizeZigoloText(sourceText: string) {
@@ -172,6 +236,8 @@ function normalizeZigoloText(sourceText: string) {
     .replace(/trattamento e note/gi, "trattamento e note")
     .replace(/numservizio/gi, "num servizio")
     .replace(/datal/gi, "data ")
+    .replace(/descrizioneimportotassepaxtotale/gi, "descrizione importo tasse pax totale")
+    .replace(/daldescrizioneimportotassepaxtotale/gi, "dal al descrizione importo tasse pax totale")
     .trim();
 }
 
@@ -268,7 +334,7 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     practice_date: practiceDate,
     first_beneficiary: beneficiary,
     customer_full_name: beneficiary,
-    ns_reference: `${reference ?? ""} [DBG:bus=${busBlocks.length}|${compact.slice(compact.toLowerCase().indexOf("stato prenotazione") >= 0 ? compact.toLowerCase().indexOf("stato prenotazione") : 0, compact.toLowerCase().indexOf("stato prenotazione") >= 0 ? compact.toLowerCase().indexOf("stato prenotazione") + 300 : 300).replace(/\n/g, "↵")}]`,
+    ns_reference: reference ?? null,
     ns_contact: null,
     pax,
     program: serviceDescription,
@@ -280,7 +346,7 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     service_type_code: serviceTypeCode,
     service_rows: parsedServices.map((service) => ({
       row_text: service.original_row_description ?? service.raw_detail_text,
-      semantic_tag: hasTsfTransfer ? service.semantic_tag : "excursion",
+      semantic_tag: hasBusTransfer || hasTsfTransfer ? service.semantic_tag : "excursion",
       direction: service.direction as "andata" | "ritorno"
     })),
     operational_details: parsedServices.map((service) => ({
@@ -296,7 +362,7 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     parsed_services: parsedServices,
     parsing_status: practiceNumber && beneficiary && fromDate ? "parsed" : "needs_review",
     confidence_level: practiceNumber && beneficiary && totalAmount !== null ? "medium" : "low",
-    anomaly_message: `DEBUG bus=${busBlocks.length} tsf=${tsfBlocks.length} | compact[0..300]=${compact.slice(0, 300).replace(/\n/g, "↵")}`
+    anomaly_message: null
   };
 }
 
