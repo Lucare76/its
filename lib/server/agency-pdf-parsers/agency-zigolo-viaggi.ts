@@ -345,7 +345,7 @@ function parseZigoloViaggiPdfText(sourceText: string): ParsedTransferPdfPayload 
     practice_date: practiceDate,
     first_beneficiary: beneficiary,
     customer_full_name: beneficiary,
-    ns_reference: reference ?? null,
+    ns_reference: `${reference ?? ""} [DBG:tsf=${tsfBlocks.length}|from=${fromDate}|${compact.slice(0, 400).replace(/\n/g, "↵")}]`,
     ns_contact: null,
     pax,
     program: serviceDescription,
