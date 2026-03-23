@@ -214,6 +214,20 @@ export default function OpsSummaryPage() {
       {payload ? <OpsArrivalsExportButtons targetDate={payload.target_date_48h} /> : null}
       {payload ? <OpsStatementExportButtons agencies={Object.keys(payload.statement_candidates ?? {})} today={today} /> : null}
 
+      {payload ? (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <SectionCard title="Finestra arrivi/partenze" subtitle="Lotto principale operativo">
+            <p className="text-sm text-text">Il sistema sta preparando i riepiloghi sul giorno target <span className="font-semibold">{formatIsoDate(payload.target_date_48h)}</span>.</p>
+          </SectionCard>
+          <SectionCard title="Finestra bus" subtitle="Eccezione settimanale">
+            <p className="text-sm text-text">I servizi linea bus seguono il lotto del lunedi e restano separati dagli altri servizi.</p>
+          </SectionCard>
+          <SectionCard title="Finestra economica" subtitle="Estratti conto">
+            <p className="text-sm text-text">Gli estratti conto lavorano per periodo e agenzia, con preview prima di qualsiasi invio.</p>
+          </SectionCard>
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <SectionCard title="Arrivi 48 ore prima" subtitle={payload ? `Data target: ${formatIsoDate(payload.target_date_48h)}` : undefined} loading={loading} loadingLines={6}>
           <SummaryGroupList groups={payload?.arrivals_48h ?? {}} emptyLabel="Nessun arrivo aggregato per la finestra +48h." reportTitle="Preview testo arrivi" />

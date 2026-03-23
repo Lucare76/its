@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { capabilityRoleMap, type AppCapability } from "@/lib/rbac";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { UserRole } from "@/lib/types";
 
@@ -32,6 +33,21 @@ const roleDescriptions: Array<{ role: UserRole; label: string; description: stri
   { role: "operator", label: "Operatore", description: "Gestisce servizi, review PDF, inbox, pianificazione e riepiloghi." },
   { role: "driver", label: "Autista", description: "Vede solo i servizi assegnati e la parte mobile operativa." },
   { role: "agency", label: "Agenzia", description: "Inserisce prenotazioni e consulta solo la propria area dedicata." }
+];
+
+const capabilityLabels: Array<{ capability: AppCapability; label: string }> = [
+  { capability: "dashboard:view", label: "Cruscotto" },
+  { capability: "services:view", label: "Vista servizi" },
+  { capability: "services:create", label: "Nuovo servizio" },
+  { capability: "planning:manage", label: "Pianificazione" },
+  { capability: "dispatch:manage", label: "Dispatch interno" },
+  { capability: "ops_summary:view", label: "Riepiloghi operativi" },
+  { capability: "statements:view", label: "Estratti conto" },
+  { capability: "pricing:view", label: "Tariffe e margini" },
+  { capability: "pricing:manage", label: "Gestione listini" },
+  { capability: "users:manage", label: "Utenti" },
+  { capability: "agency_bookings:self", label: "Prenotazioni agenzia" },
+  { capability: "driver:self", label: "Area autista" }
 ];
 
 function formatCreatedAt(value?: string | null) {
@@ -307,6 +323,37 @@ export default function SettingsUsersPage() {
                 <p className="mt-2 text-sm text-muted">{item.description}</p>
               </article>
             ))}
+          </div>
+          <div className="mt-4 overflow-x-auto rounded-2xl border border-border">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-3 py-2">Modulo</th>
+                  {roleDescriptions.map((item) => (
+                    <th key={item.role} className="px-3 py-2">
+                      {item.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {capabilityLabels.map((row) => (
+                  <tr key={row.capability} className="border-t border-slate-100">
+                    <td className="px-3 py-2 font-medium text-text">{row.label}</td>
+                    {roleDescriptions.map((item) => {
+                      const enabled = capabilityRoleMap[row.capability].includes(item.role);
+                      return (
+                        <td key={`${row.capability}-${item.role}`} className="px-3 py-2">
+                          <span className={enabled ? "inline-flex rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-semibold uppercase text-emerald-700" : "inline-flex rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase text-slate-500"}>
+                            {enabled ? "si" : "no"}
+                          </span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </article>
       </div>
