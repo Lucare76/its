@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { DataTable, EmptyState, FilterBar, PageHeader } from "@/components/ui";
+import { EmptyState, FilterBar, PageHeader, SectionCard } from "@/components/ui";
 import { formatIsoDateShort, formatIsoDateTimeShort } from "@/lib/service-display";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
@@ -26,8 +26,11 @@ type BookingRow = {
   include_ferry_tickets: boolean | null;
   email_confirmation_status: string | null;
   email_confirmation_sent_at: string | null;
+  email_confirmation_to: string | null;
   hotel_name: string;
   hotel_zone: string | null;
+  notes: string | null;
+  created_at: string | null;
 };
 
 const serviceKindLabels: Record<string, string> = {
@@ -69,7 +72,11 @@ export default function AgencyBookingsPage() {
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [confirmationFilter, setConfirmationFilter] = useState("all");
+  const [windowFilter, setWindowFilter] = useState<"all" | "future" | "past">("future");
   const [bookings, setBookings] = useState<BookingRow[]>([]);
+  const [selectedBookingId, setSelectedBookingId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -124,15 +131,32 @@ export default function AgencyBookingsPage() {
   }, []);
 
   const filtered = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
     return bookings.filter((row) => {
       const bySearch =
         row.customer_name.toLowerCase().includes(search.toLowerCase()) ||
         row.hotel_name.toLowerCase().includes(search.toLowerCase()) ||
         row.vessel.toLowerCase().includes(search.toLowerCase());
       const byKind = kindFilter === "all" || row.booking_service_kind === kindFilter;
-      return bySearch && byKind;
+      const byStatus = statusFilter === "all" || row.status === statusFilter;
+      const byConfirmation = confirmationFilter === "all" || row.email_confirmation_status === confirmationFilter;
+      const pivotDate = row.arrival_date ?? row.departure_date ?? row.date;
+      const byWindow = windowFilter === "all" ? true : windowFilter === "future" ? pivotDate >= today : pivotDate < today;
+      return bySearch && byKind && byStatus && byConfirmation && byWindow;
     });
-  }, [bookings, search, kindFilter]);
+  }, [bookings, confirmationFilter, kindFilter, search, statusFilter, windowFilter]);
+
+  const summary = useMemo(
+    () => ({
+      total: bookings.length,
+      future: bookings.filter((row) => (row.arrival_date ?? row.departure_date ?? row.date) >= new Date().toISOString().slice(0, 10)).length,
+      needsReview: bookings.filter((row) => row.status === "needs_review").length,
+      sentConfirmations: bookings.filter((row) => row.email_confirmation_status === "sent").length
+    }),
+    [bookings]
+  );
+
+  const selectedBooking = filtered.find((row) => row.id === selectedBookingId) ?? filtered[0] ?? null;
 
   if (loading) {
     return <div className="card p-4 text-sm text-slate-500">Caricamento prenotazioni...</div>;
@@ -143,9 +167,25 @@ export default function AgencyBookingsPage() {
       <PageHeader
         title="Le mie prenotazioni"
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Agenzia", href: "/agency" }, { label: "Prenotazioni" }]}
-        subtitle="Elenco prenotazioni agenzia su Supabase reale."
+        subtitle="Storico richieste agenzia con filtri, KPI e dettaglio operativo del singolo servizio."
       />
-      <FilterBar colsClassName="md:grid-cols-2">
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SectionCard title="Prenotazioni totali" subtitle="Storico disponibile" loading={loading}>
+          <p className="text-3xl font-semibold text-text">{summary.total}</p>
+        </SectionCard>
+        <SectionCard title="Servizi futuri" subtitle="Arrivi o partenze in programma" loading={loading}>
+          <p className="text-3xl font-semibold text-text">{summary.future}</p>
+        </SectionCard>
+        <SectionCard title="Da verificare" subtitle="Servizi in review" loading={loading}>
+          <p className="text-3xl font-semibold text-text">{summary.needsReview}</p>
+        </SectionCard>
+        <SectionCard title="Conferme inviate" subtitle="Email conferma spedite" loading={loading}>
+          <p className="text-3xl font-semibold text-text">{summary.sentConfirmations}</p>
+        </SectionCard>
+      </div>
+
+      <FilterBar colsClassName="md:grid-cols-2 xl:grid-cols-5">
         <input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -160,58 +200,117 @@ export default function AgencyBookingsPage() {
           <option value="bus_city_hotel">Bus citta - Hotel</option>
           <option value="excursion">Escursione</option>
         </select>
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="input-saas">
+          <option value="all">Stato: tutti</option>
+          <option value="needs_review">Da verificare</option>
+          <option value="new">Pronti operativi</option>
+          <option value="assigned">Presi in carico</option>
+          <option value="partito">Partiti</option>
+          <option value="arrivato">Arrivati</option>
+          <option value="completato">Chiusi</option>
+          <option value="problema">Problema</option>
+          <option value="cancelled">Annullati</option>
+        </select>
+        <select value={confirmationFilter} onChange={(event) => setConfirmationFilter(event.target.value)} className="input-saas">
+          <option value="all">Conferma email: tutte</option>
+          <option value="sent">Inviata</option>
+          <option value="pending">In attesa</option>
+          <option value="failed">Fallita</option>
+          <option value="skipped">Saltata</option>
+        </select>
+        <select value={windowFilter} onChange={(event) => setWindowFilter(event.target.value as "all" | "future" | "past")} className="input-saas">
+          <option value="future">Finestra: future</option>
+          <option value="past">Storico passato</option>
+          <option value="all">Tutte</option>
+        </select>
       </FilterBar>
 
       {filtered.length === 0 ? (
         <EmptyState title={message || "Nessuna prenotazione trovata."} compact />
       ) : (
-        <DataTable toolbar={<p className="text-xs text-muted">Prenotazioni trovate: {filtered.length}</p>}>
-          <thead>
-            <tr>
-              <th className="px-4 py-3">Cliente</th>
-              <th className="px-4 py-3">Servizio</th>
-              <th className="px-4 py-3">Arrivo</th>
-              <th className="px-4 py-3">Partenza</th>
-              <th className="px-4 py-3">Hotel</th>
-              <th className="px-4 py-3">Pax</th>
-              <th className="px-4 py-3">Stato</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((row) => (
-              <tr key={row.id}>
-                <td className="px-4 py-3">
-                  <p className="line-clamp-2 text-safe-wrap">{row.customer_name}</p>
-                  <p className="text-xs text-slate-500">ID: {row.id.slice(0, 8)}</p>
-                </td>
-                <td className="px-4 py-3">
-                  <p>{serviceKindLabels[row.booking_service_kind ?? ""] ?? "Transfer"}</p>
-                  <p className="text-xs text-slate-500">{serviceOperationalDetail(row)}</p>
-                  <p className="text-xs text-slate-500">
-                    {row.include_ferry_tickets ? "Con biglietti nave" : "Senza biglietti nave"}
-                  </p>
-                </td>
-                <td className="px-4 py-3">{formatDateTime(row.arrival_date ?? row.date, row.arrival_time ?? row.time)}</td>
-                <td className="px-4 py-3">{formatDateTime(row.departure_date, row.departure_time)}</td>
-                <td className="px-4 py-3">
-                  <p>{row.hotel_name}</p>
-                  <p className="text-xs text-slate-500">{row.hotel_zone ?? "-"}</p>
-                </td>
-                <td className="px-4 py-3">{row.pax}</td>
-                <td className="px-4 py-3">
-                  <p className="uppercase">{row.status}</p>
-                  <p className="text-xs text-slate-500">{formatEmailConfirmationStatus(row.email_confirmation_status)}</p>
-                  {row.email_confirmation_sent_at ? (
-                    <p className="text-xs text-slate-500">{formatIsoDateTimeShort(row.email_confirmation_sent_at)}</p>
-                  ) : null}
-                  <Link href={`/dispatch?serviceId=${row.id}`} className="mt-2 inline-flex text-xs font-medium text-blue-700 underline underline-offset-2">
+        <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+          <SectionCard title="Lista prenotazioni" subtitle={`Prenotazioni trovate: ${filtered.length}`}>
+            <div className="space-y-3">
+              {filtered.map((row) => (
+                <button
+                  key={row.id}
+                  type="button"
+                  onClick={() => setSelectedBookingId(row.id)}
+                  className={`w-full rounded-2xl border p-4 text-left ${selectedBooking?.id === row.id ? "border-primary bg-blue-50/40" : "border-border bg-surface/80"}`}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-text">{row.customer_name}</p>
+                      <p className="text-xs text-muted">{serviceKindLabels[row.booking_service_kind ?? ""] ?? "Transfer"}</p>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-slate-700">
+                      {row.status}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-1 text-xs text-muted md:grid-cols-2">
+                    <p>Arrivo: {formatDateTime(row.arrival_date ?? row.date, row.arrival_time ?? row.time)}</p>
+                    <p>Partenza: {formatDateTime(row.departure_date, row.departure_time)}</p>
+                    <p>Hotel: {row.hotel_name}</p>
+                    <p>Conferma: {formatEmailConfirmationStatus(row.email_confirmation_status)}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Dettaglio prenotazione" subtitle="Vista completa lato agenzia del servizio selezionato.">
+            {!selectedBooking ? (
+              <EmptyState title="Nessuna prenotazione selezionata" description="Scegli una prenotazione dalla lista per vederne il dettaglio." compact />
+            ) : (
+              <div className="space-y-4">
+                <article className="rounded-2xl border border-border bg-surface/80 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-lg font-semibold text-text">{selectedBooking.customer_name}</p>
+                      <p className="text-sm text-muted">{serviceKindLabels[selectedBooking.booking_service_kind ?? ""] ?? "Transfer"}</p>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-slate-700">
+                      {selectedBooking.status}
+                    </span>
+                  </div>
+                  <div className="mt-4 grid gap-2 text-sm text-text md:grid-cols-2">
+                    <p><span className="text-muted">Arrivo:</span> {formatDateTime(selectedBooking.arrival_date ?? selectedBooking.date, selectedBooking.arrival_time ?? selectedBooking.time)}</p>
+                    <p><span className="text-muted">Partenza:</span> {formatDateTime(selectedBooking.departure_date, selectedBooking.departure_time)}</p>
+                    <p><span className="text-muted">Hotel:</span> {selectedBooking.hotel_name}</p>
+                    <p><span className="text-muted">Zona:</span> {selectedBooking.hotel_zone ?? "-"}</p>
+                    <p><span className="text-muted">Pax:</span> {selectedBooking.pax}</p>
+                    <p><span className="text-muted">Operativo:</span> {serviceOperationalDetail(selectedBooking)}</p>
+                    <p><span className="text-muted">Biglietti nave:</span> {selectedBooking.include_ferry_tickets ? "Si" : "No"}</p>
+                    <p><span className="text-muted">Creata il:</span> {selectedBooking.created_at ? formatIsoDateTimeShort(selectedBooking.created_at) : "-"}</p>
+                  </div>
+                </article>
+
+                <article className="rounded-2xl border border-border bg-surface/80 p-4">
+                  <p className="text-sm font-semibold text-text">Conferma email</p>
+                  <div className="mt-3 grid gap-2 text-sm text-text">
+                    <p><span className="text-muted">Stato:</span> {formatEmailConfirmationStatus(selectedBooking.email_confirmation_status)}</p>
+                    <p><span className="text-muted">Destinatario:</span> {selectedBooking.email_confirmation_to ?? "-"}</p>
+                    <p><span className="text-muted">Ultimo invio:</span> {selectedBooking.email_confirmation_sent_at ? formatIsoDateTimeShort(selectedBooking.email_confirmation_sent_at) : "-"}</p>
+                  </div>
+                </article>
+
+                <article className="rounded-2xl border border-border bg-surface/80 p-4">
+                  <p className="text-sm font-semibold text-text">Note prenotazione</p>
+                  <p className="mt-2 text-sm text-muted whitespace-pre-wrap">{selectedBooking.notes?.trim() || "Nessuna nota disponibile."}</p>
+                </article>
+
+                <div className="flex flex-wrap gap-2">
+                  <Link href="/agency/new-booking" className="btn-primary">
+                    Nuova prenotazione
+                  </Link>
+                  <Link href={`/dispatch?serviceId=${selectedBooking.id}`} className="btn-secondary">
                     Apri in dispatch
                   </Link>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </DataTable>
+                </div>
+              </div>
+            )}
+          </SectionCard>
+        </div>
       )}
     </section>
   );
