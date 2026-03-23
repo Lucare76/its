@@ -22,6 +22,16 @@ export default function DriverDetailPage() {
   const hotel = useMemo(() => (service ? data.hotels.find((item) => item.id === service.hotel_id) : null), [data.hotels, service]);
   const assignment = useMemo(() => (service ? data.assignments.find((item) => item.service_id === service.id) : null), [data.assignments, service]);
   const isMine = role === "driver" ? assignment?.driver_user_id === userId : true;
+  const recentEvents = useMemo(
+    () =>
+      service
+        ? [...data.statusEvents]
+            .filter((item) => item.service_id === service.id)
+            .sort((left, right) => right.at.localeCompare(left.at))
+            .slice(0, 5)
+        : [],
+    [data.statusEvents, service]
+  );
 
   useEffect(() => {
     if (!message) return;
@@ -80,9 +90,30 @@ export default function DriverDetailPage() {
         </p>
         <p className="text-sm text-muted">Nave: {service.vessel}</p>
         <p className="text-sm text-muted">Hotel: {hotel?.name ?? "N/D"}</p>
+        <p className="text-sm text-muted">Passeggeri: {service.pax}</p>
+        <p className="text-sm text-muted">Telefono: {service.phone || "N/D"}</p>
         <p className="text-sm">
           Stato attuale: <strong className={statusBadgeClass(service.status)}>{service.status}</strong>
         </p>
+        <div className="rounded-xl border border-border bg-surface-2 p-3 text-sm">
+          <p className="font-medium">Note operative</p>
+          <p className="mt-1 whitespace-pre-wrap text-muted">{service.notes || "Nessuna nota"}</p>
+        </div>
+        <div className="rounded-xl border border-border bg-surface-2 p-3 text-sm">
+          <p className="font-medium">Storico rapido</p>
+          {recentEvents.length === 0 ? (
+            <p className="mt-1 text-muted">Nessun evento stato registrato.</p>
+          ) : (
+            <div className="mt-2 space-y-2">
+              {recentEvents.map((event) => (
+                <div key={event.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">{event.status}</p>
+                  <p className="text-xs text-muted">{new Date(event.at).toLocaleString("it-IT")}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="flex flex-wrap gap-2">
           {callHref ? (
             <a href={callHref} className="btn-secondary inline-flex w-fit">
