@@ -105,7 +105,8 @@ function parseChosenVoucherTimes(sourceText: string) {
       marker: match[1].toLowerCase(),
       time: normalizeTime(match[2])
     }));
-    return marked.find((item) => item.time && !["c", "o", "0", "(", "[", "{", "-", "â€¢"].includes(item.marker))?.time ?? null;
+    // Exclude empty-box characters (□ ☐ ▢) so only filled/checked box chars identify the selected time
+    return marked.find((item) => item.time && !["c", "o", "0", "(", "[", "{", "-", "â€¢", "□", "☐", "▢", "◻", "◽"].includes(item.marker))?.time ?? null;
   };
 
   const pickKnownScheduleTime = (value: string | null | undefined, validTimes: readonly string[]) => {
