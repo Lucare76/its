@@ -1,34 +1,137 @@
 "use client";
 
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import type { Hotel } from "@/lib/types";
 
 type SheetPreview = {
   name: string;
   rows: number;
   cols: number;
+  header: string[];
   sample: string[][];
+  allRows: string[][];
 };
 
+type MappingTarget =
+  | "customer_name"
+  | "date"
+  | "time"
+  | "pickup"
+  | "destination"
+  | "pax"
+  | "transport_code"
+  | "phone"
+  | "notes"
+  | "departure_date"
+  | "departure_time"
+  | "direction"
+  | "billing_party_name"
+  | "bus_city_origin";
+
 type MappingSuggestion = {
-  target: string;
+  target: MappingTarget;
   source: string | null;
   confidence: "high" | "medium" | "low";
 };
 
-type RowAssessment = {
-  importable: number;
-  partial: number;
-  empty: number;
+type CandidateRow = {
+  row_index: number;
+  customer_name: string;
+  date: string;
+  time: string;
+  pickup: string;
+  destination: string;
+  pax: number;
+  transport_code: string;
+  phone: string;
+  notes: string;
+  departure_date: string;
+  departure_time: string;
+  direction: "arrival" | "departure" | null;
+  billing_party_name: string;
+  bus_city_origin: string;
+  localIssues: string[];
+};
+
+type ImportResponse = {
+  ok: boolean;
+  dry_run: boolean;
+  summary: {
+    total_rows: number;
+    valid_rows: number;
+    invalid_rows: number;
+    imported_rows?: number;
+  };
+  errors: Array<{ row_index: number; message: string }>;
+};
+
+type PresetKey = "generic_transfer" | "formula_snav" | "formula_medmar" | "transfer_airport" | "transfer_station" | "linea_bus";
+
+const mappingTargetMeta: Array<{ target: MappingTarget; label: string; patterns: string[] }> = [
+  { target: "customer_name", label: "Cliente", patterns: ["cliente", "beneficiario", "nominativo"] },
+  { target: "date", label: "Data andata", patterns: ["data", "dal", "arrivo"] },
+  { target: "time", label: "Ora andata", patterns: ["ora", "hh:mm", "inizio", "alle"] },
+  { target: "pickup", label: "Meeting point", patterns: ["da", "pickup", "meeting", "imbarco"] },
+  { target: "destination", label: "Hotel / destinazione", patterns: ["a", "hotel", "destinazione"] },
+  { target: "pax", label: "Passeggeri", patterns: ["pax", "posti"] },
+  { target: "transport_code", label: "Riferimento mezzo", patterns: ["flight", "treno", "compagnia", "num", "mezzo"] },
+  { target: "phone", label: "Telefono", patterns: ["telefono", "cell", "tel"] },
+  { target: "notes", label: "Note", patterns: ["note", "osservazioni"] },
+  { target: "departure_date", label: "Data ritorno", patterns: ["al", "ritorno"] },
+  { target: "departure_time", label: "Ora ritorno", patterns: ["ora ritorno", "alle ritorno"] },
+  { target: "direction", label: "Direzione", patterns: ["direzione", "tipo servizio"] },
+  { target: "billing_party_name", label: "Agenzia fatturazione", patterns: ["agenzia", "to", "fatturazione"] },
+  { target: "bus_city_origin", label: "Origine linea bus", patterns: ["origine", "citta", "partenza bus"] }
+];
+
+const presets: Array<{
+  key: PresetKey;
+  label: string;
+  description: string;
+}> = [
+  { key: "generic_transfer", label: "Transfer generico", description: "Import base senza formula dedicata." },
+  { key: "formula_snav", label: "Formula SNAV", description: "Pacchetti porto/hotel associati a SNAV." },
+  { key: "formula_medmar", label: "Formula MEDMAR", description: "Pacchetti porto/hotel associati a Medmar." },
+  { key: "transfer_airport", label: "Transfer aeroporto", description: "Airport/hotel o hotel/airport." },
+  { key: "transfer_station", label: "Transfer stazione", description: "Stazione/hotel o hotel/stazione." },
+  { key: "linea_bus", label: "Linea bus", description: "Servizi linea bus / citta-hotel." }
+];
+
+const monthMap: Record<string, string> = {
+  gen: "01",
+  feb: "02",
+  mar: "03",
+  apr: "04",
+  mag: "05",
+  giu: "06",
+  lug: "07",
+  ago: "08",
+  set: "09",
+  ott: "10",
+  nov: "11",
+  dic: "12",
+  jan: "01",
+  apri: "04"
 };
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function normalizeText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function detectTemplate(sheet: SheetPreview) {
-  const header = sheet.sample[0]?.map(normalize) ?? [];
+  const header = sheet.header.map(normalize);
   const headerText = header.join(" | ");
   if (headerText.includes("autista") && headerText.includes("cliente") && headerText.includes("mezzo")) {
     return "lista_operativa";
@@ -42,53 +145,128 @@ function detectTemplate(sheet: SheetPreview) {
   return "non_riconosciuto";
 }
 
-function suggestMappings(sheet: SheetPreview): MappingSuggestion[] {
-  const header = sheet.sample[0]?.map((item) => item.trim()) ?? [];
-  const findHeader = (patterns: string[]) => {
-    const found = header.find((item) => patterns.some((pattern) => normalize(item).includes(pattern)));
-    return found ?? null;
-  };
-
-  const mappingTargets: Array<{ target: string; patterns: string[] }> = [
-    { target: "customer_name", patterns: ["cliente", "beneficiario", "nominativo"] },
-    { target: "date", patterns: ["data", "dal"] },
-    { target: "time", patterns: ["ora", "hh:mm", "inizio"] },
-    { target: "pickup", patterns: ["da", "meeting", "imbarco"] },
-    { target: "destination", patterns: ["a", "hotel", "destinazione"] },
-    { target: "pax", patterns: ["pax", "posti"] },
-    { target: "transport_code", patterns: ["flight", "treno", "compagnia", "num."] },
-    { target: "driver", patterns: ["autista"] },
-    { target: "vehicle", patterns: ["mezzo", "bus"] }
-  ];
-
-  return mappingTargets.map((item) => {
-    const source = findHeader(item.patterns);
-    return {
-      target: item.target,
-      source,
-      confidence: source ? (normalize(source) === item.patterns[0] ? "high" : "medium") : "low"
-    };
-  });
-}
-
-function assessRows(sheet: SheetPreview): RowAssessment {
-  const dataRows = sheet.sample.slice(1);
-  return dataRows.reduce<RowAssessment>(
-    (acc, row) => {
-      const filled = row.filter((cell) => cell.trim().length > 0).length;
-      if (filled === 0) acc.empty += 1;
-      else if (filled >= 4) acc.importable += 1;
-      else acc.partial += 1;
+function suggestMappings(sheet: SheetPreview): Record<MappingTarget, string> {
+  const header = sheet.header;
+  const findHeader = (patterns: string[]) => header.find((item) => patterns.some((pattern) => normalize(item).includes(pattern))) ?? "";
+  return mappingTargetMeta.reduce(
+    (acc, item) => {
+      acc[item.target] = findHeader(item.patterns);
       return acc;
     },
-    { importable: 0, partial: 0, empty: 0 }
+    {} as Record<MappingTarget, string>
   );
 }
 
+function buildMappingSuggestions(sheet: SheetPreview): MappingSuggestion[] {
+  const mappings = suggestMappings(sheet);
+  return mappingTargetMeta.map((item) => ({
+    target: item.target,
+    source: mappings[item.target] || null,
+    confidence: mappings[item.target] ? (normalize(mappings[item.target]) === item.patterns[0] ? "high" : "medium") : "low"
+  }));
+}
+
+function parseDateCell(value: string) {
+  const raw = value.trim();
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  const slash = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (slash) {
+    const day = slash[1].padStart(2, "0");
+    const month = slash[2].padStart(2, "0");
+    const year = slash[3].length === 2 ? `20${slash[3]}` : slash[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  const monthMatch = normalizeText(raw).match(/^(\d{1,2}) ([a-z]{3,4}) (\d{2,4})$/);
+  if (monthMatch) {
+    const day = monthMatch[1].padStart(2, "0");
+    const month = monthMap[monthMatch[2]] ?? "";
+    const year = monthMatch[3].length === 2 ? `20${monthMatch[3]}` : monthMatch[3];
+    if (month) return `${year}-${month}-${day}`;
+  }
+
+  return "";
+}
+
+function parseTimeCell(value: string) {
+  const raw = value.trim();
+  if (!raw) return "";
+  const compact = raw.replace(".", ":");
+  const hhmmss = compact.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (hhmmss) {
+    return `${hhmmss[1].padStart(2, "0")}:${hhmmss[2]}`;
+  }
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 4) return `${digits.slice(0, 2)}:${digits.slice(2, 4)}`;
+  if (digits.length === 3) return `0${digits[0]}:${digits.slice(1, 3)}`;
+  return "";
+}
+
+function parsePaxCell(value: string) {
+  const digits = value.replace(/[^\d]/g, "");
+  return digits ? Number(digits) : 0;
+}
+
+function parseDirectionCell(value: string): "arrival" | "departure" | null {
+  const normalized = normalizeText(value);
+  if (!normalized) return null;
+  if (normalized.includes("arrivo") || normalized.includes("andata")) return "arrival";
+  if (normalized.includes("partenza") || normalized.includes("ritorno")) return "departure";
+  return null;
+}
+
+function localRowIssues(row: Omit<CandidateRow, "localIssues">, defaultHotelId: string) {
+  const issues: string[] = [];
+  if (!row.customer_name) issues.push("cliente mancante");
+  if (!row.date) issues.push("data andata mancante");
+  if (!row.time) issues.push("ora andata mancante");
+  if (!row.phone) issues.push("telefono mancante");
+  if (!row.pax || row.pax < 1) issues.push("pax non valido");
+  if (!row.destination && !defaultHotelId) issues.push("hotel/destinazione mancante");
+  return issues;
+}
+
 export default function ExcelImportPage() {
-  const [message, setMessage] = useState("Carica un Excel cliente o operativo per leggerne subito struttura e fogli.");
+  const [message, setMessage] = useState("Carica un Excel cliente o operativo per leggerlo e importare solo le righe valide.");
   const [sheets, setSheets] = useState<SheetPreview[]>([]);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [selectedSheetName, setSelectedSheetName] = useState("");
+  const [mappings, setMappings] = useState<Record<MappingTarget, string>>({} as Record<MappingTarget, string>);
+  const [presetKey, setPresetKey] = useState<PresetKey>("generic_transfer");
+  const [defaultDirection, setDefaultDirection] = useState<"arrival" | "departure">("arrival");
+  const [defaultBillingPartyName, setDefaultBillingPartyName] = useState("");
+  const [defaultHotelId, setDefaultHotelId] = useState("");
+  const [hotels, setHotels] = useState<Hotel[]>([]);
+  const [result, setResult] = useState<ImportResponse | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const loadHotels = async () => {
+      if (!hasSupabaseEnv || !supabase) return;
+      const session = await supabase.auth.getSession();
+      if (!active || session.error || !session.data.session?.user?.id) return;
+      const { data, error } = await supabase.from("hotels").select("*").order("name", { ascending: true });
+      if (!active || error) return;
+      setHotels((data ?? []) as Hotel[]);
+    };
+    void loadHotels();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const selectedSheet = useMemo(
+    () => sheets.find((sheet) => sheet.name === selectedSheetName) ?? sheets[0] ?? null,
+    [selectedSheetName, sheets]
+  );
+
+  useEffect(() => {
+    if (!selectedSheet) return;
+    setMappings(suggestMappings(selectedSheet));
+  }, [selectedSheet]);
 
   const totals = useMemo(
     () => ({
@@ -98,15 +276,75 @@ export default function ExcelImportPage() {
     [sheets]
   );
 
-  const primarySheet = sheets[0] ?? null;
-  const templateType = primarySheet ? detectTemplate(primarySheet) : null;
-  const mappingSuggestions = primarySheet ? suggestMappings(primarySheet) : [];
-  const rowAssessment = primarySheet ? assessRows(primarySheet) : null;
+  const templateType = selectedSheet ? detectTemplate(selectedSheet) : null;
+  const mappingSuggestions = selectedSheet ? buildMappingSuggestions(selectedSheet) : [];
+
+  const candidateRows = useMemo<CandidateRow[]>(() => {
+    if (!selectedSheet) return [];
+    const headerIndexes = new Map(selectedSheet.header.map((item, index) => [item, index]));
+    const pick = (row: string[], target: MappingTarget) => {
+      const source = mappings[target];
+      const index = source ? headerIndexes.get(source) : undefined;
+      return index === undefined ? "" : String(row[index] ?? "").trim();
+    };
+
+    return selectedSheet.allRows
+      .slice(1)
+      .map((row, index) => {
+        const base = {
+          row_index: index + 2,
+          customer_name: pick(row, "customer_name"),
+          date: parseDateCell(pick(row, "date")),
+          time: parseTimeCell(pick(row, "time")),
+          pickup: pick(row, "pickup"),
+          destination: pick(row, "destination"),
+          pax: parsePaxCell(pick(row, "pax")),
+          transport_code: pick(row, "transport_code"),
+          phone: pick(row, "phone"),
+          notes: pick(row, "notes"),
+          departure_date: parseDateCell(pick(row, "departure_date")),
+          departure_time: parseTimeCell(pick(row, "departure_time")),
+          direction: parseDirectionCell(pick(row, "direction")),
+          billing_party_name: pick(row, "billing_party_name"),
+          bus_city_origin: pick(row, "bus_city_origin")
+        };
+
+        return {
+          ...base,
+          localIssues: localRowIssues(base, defaultHotelId)
+        };
+      })
+      .filter((row) =>
+        [
+          row.customer_name,
+          row.date,
+          row.time,
+          row.pickup,
+          row.destination,
+          row.transport_code,
+          row.phone,
+          row.notes,
+          row.departure_date,
+          row.departure_time,
+          row.billing_party_name,
+          row.bus_city_origin
+        ].some((value) => value.trim().length > 0) || row.pax > 0
+      );
+  }, [defaultHotelId, mappings, selectedSheet]);
+
+  const candidateStats = useMemo(
+    () => ({
+      valid: candidateRows.filter((row) => row.localIssues.length === 0).length,
+      invalid: candidateRows.filter((row) => row.localIssues.length > 0).length
+    }),
+    [candidateRows]
+  );
 
   const handleFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     setFileName(file.name);
+    setResult(null);
 
     try {
       const buffer = await file.arrayBuffer();
@@ -119,11 +357,14 @@ export default function ExcelImportPage() {
           name: sheetName,
           rows: Math.max(0, rows.length - 1),
           cols: maxCols,
-          sample: rows.slice(0, 8).map((row) => row.map((item) => String(item ?? "")))
+          header: rows[0]?.map((item) => String(item ?? "").trim()) ?? [],
+          sample: rows.slice(0, 8).map((row) => row.map((item) => String(item ?? ""))),
+          allRows: rows.map((row) => row.map((item) => String(item ?? "")))
         } satisfies SheetPreview;
       });
 
       setSheets(nextSheets);
+      setSelectedSheetName(nextSheets[0]?.name ?? "");
       setMessage(`File letto correttamente: ${file.name}`);
     } catch (error) {
       setSheets([]);
@@ -131,15 +372,67 @@ export default function ExcelImportPage() {
     }
   };
 
+  const runImport = async (dryRun: boolean) => {
+    if (!hasSupabaseEnv || !supabase) {
+      setMessage("Supabase non configurato.");
+      return;
+    }
+    if (candidateRows.length === 0) {
+      setMessage("Nessuna riga disponibile da importare.");
+      return;
+    }
+
+    setSubmitting(true);
+    setResult(null);
+    try {
+      const session = await supabase.auth.getSession();
+      if (session.error || !session.data.session?.access_token) {
+        setMessage("Sessione non valida. Rifai login.");
+        setSubmitting(false);
+        return;
+      }
+
+      const response = await fetch("/api/excel/import", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.data.session.access_token}`
+        },
+        body: JSON.stringify({
+          dry_run: dryRun,
+          preset_key: presetKey,
+          default_direction: defaultDirection,
+          default_billing_party_name: defaultBillingPartyName,
+          default_hotel_id: defaultHotelId || null,
+          rows: candidateRows.map(({ localIssues, ...row }) => row)
+        })
+      });
+
+      const body = (await response.json().catch(() => null)) as ImportResponse | { error?: string } | null;
+      if (!response.ok) {
+        setMessage((body as { error?: string } | null)?.error ?? "Import Excel non riuscito.");
+        setSubmitting(false);
+        return;
+      }
+
+      setResult(body as ImportResponse);
+      setMessage(dryRun ? "Dry run completato." : "Import servizi completato.");
+    } catch {
+      setMessage("Errore rete durante import Excel.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <section className="page-section">
       <PageHeader
         title="Import Excel Guidato"
-        subtitle="Workspace per leggere file Excel del cliente, verificare struttura fogli e stimare quanto sono gia pronti per un import guidato."
+        subtitle="Parsing locale del file, mapping controllato, dry run server e import dei servizi validi."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Import Excel" }]}
       />
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
         <SectionCard title="File caricato">
           <p className="text-sm font-semibold text-text">{fileName ?? "Nessun file"}</p>
           <p className="mt-1 text-xs text-muted">{message}</p>
@@ -150,99 +443,210 @@ export default function ExcelImportPage() {
         <SectionCard title="Righe lette">
           <p className="text-3xl font-semibold text-text">{totals.rows}</p>
         </SectionCard>
+        <SectionCard title="Righe candidate">
+          <p className="text-3xl font-semibold text-text">{candidateRows.length}</p>
+          <p className="mt-1 text-xs text-muted">
+            {candidateStats.valid} valide / {candidateStats.invalid} con warning
+          </p>
+        </SectionCard>
       </div>
 
-      <SectionCard title="Upload file Excel" subtitle="Analisi guidata del file, senza importare dati in produzione">
+      <SectionCard title="Upload file Excel" subtitle="Il file viene letto nel browser. L'import server parte solo dopo il dry run.">
         <input type="file" accept=".xlsx,.xls,.csv" className="input-saas" onChange={(event) => void handleFile(event)} />
       </SectionCard>
 
-      <SectionCard title="Checklist import" subtitle="Controlli prima di costruire un import reale">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {[
-            "Verifica se il file ha fogli vuoti o di servizio.",
-            "Controlla se le intestazioni sono stabili e ripetibili.",
-            "Distingui file cliente da foglio operativo interno.",
-            "Decidi se serve import completo o solo export compatibile."
-          ].map((item) => (
-            <article key={item} className="rounded-2xl border border-border bg-surface/80 p-3 text-sm text-text">
-              {item}
+      <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+        <SectionCard title="Configurazione import" subtitle="Scegli preset operativo, foglio e fallback da usare sulle righe.">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="text-sm">
+              Foglio
+              <select className="input-saas mt-1" value={selectedSheetName} onChange={(event) => setSelectedSheetName(event.target.value)}>
+                {sheets.map((sheet) => (
+                  <option key={sheet.name} value={sheet.name}>
+                    {sheet.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              Preset operativo
+              <select className="input-saas mt-1" value={presetKey} onChange={(event) => setPresetKey(event.target.value as PresetKey)}>
+                {presets.map((preset) => (
+                  <option key={preset.key} value={preset.key}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              Direzione di default
+              <select className="input-saas mt-1" value={defaultDirection} onChange={(event) => setDefaultDirection(event.target.value as "arrival" | "departure")}>
+                <option value="arrival">arrival</option>
+                <option value="departure">departure</option>
+              </select>
+            </label>
+            <label className="text-sm">
+              Hotel di fallback
+              <select className="input-saas mt-1" value={defaultHotelId} onChange={(event) => setDefaultHotelId(event.target.value)}>
+                <option value="">nessuno</option>
+                {hotels.map((hotel) => (
+                  <option key={hotel.id} value={hotel.id}>
+                    {hotel.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm md:col-span-2">
+              Agenzia di fatturazione di default
+              <input className="input-saas mt-1" value={defaultBillingPartyName} onChange={(event) => setDefaultBillingPartyName(event.target.value)} />
+            </label>
+          </div>
+          {selectedSheet ? (
+            <article className="mt-3 rounded-2xl border border-border bg-surface/80 p-3 text-sm text-muted">
+              Template rilevato: <span className="font-semibold text-text">{templateType}</span>. Il preset scelto ha priorita sul template.
             </article>
-          ))}
-        </div>
-      </SectionCard>
-
-      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-        <SectionCard title="Riconoscimento template" subtitle="Lettura veloce del tipo file caricato">
-          {primarySheet ? (
-            <div className="space-y-3">
-              <article className="rounded-2xl border border-border bg-surface/80 p-4">
-                <p className="text-xs uppercase tracking-[0.14em] text-muted">Foglio principale</p>
-                <p className="mt-2 text-lg font-semibold text-text">{primarySheet.name}</p>
-                <p className="mt-1 text-sm text-muted">Template rilevato: {templateType}</p>
-              </article>
-              <div className="grid gap-2 md:grid-cols-2">
-                <article className="rounded-2xl border border-border bg-surface/80 p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-muted">Righe</p>
-                  <p className="mt-2 text-2xl font-semibold text-text">{primarySheet.rows}</p>
-                </article>
-                <article className="rounded-2xl border border-border bg-surface/80 p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-muted">Colonne</p>
-                  <p className="mt-2 text-2xl font-semibold text-text">{primarySheet.cols}</p>
-                </article>
-              </div>
-            </div>
-          ) : (
-            <EmptyState title="Nessun template rilevato" description="Carica un file per classificare il foglio principale." compact />
-          )}
+          ) : null}
         </SectionCard>
 
-        <SectionCard title="Mapping suggerito" subtitle="Prime corrispondenze utili per un import guidato">
-          {mappingSuggestions.length === 0 ? (
-            <EmptyState title="Nessun mapping disponibile" description="Serve un file caricato per suggerire le colonne." compact />
-          ) : (
-            <div className="space-y-2">
-              {mappingSuggestions.map((item) => (
-                <article key={item.target} className="rounded-2xl border border-border bg-surface/80 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold text-text">{item.target}</p>
-                      <p className="text-xs text-muted">{item.source ?? "non trovato"}</p>
-                    </div>
-                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-slate-700 shadow-sm">
-                      {item.confidence}
-                    </span>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
+        <SectionCard title="Checklist import reale" subtitle="Il sistema non importa alla cieca: prima validazione, poi inserimento.">
+          <div className="grid gap-2">
+            {[
+              "Mappa le colonne una sola volta e controlla le prime 10 righe.",
+              "Usa hotel di fallback solo se il file non porta una destinazione pulita.",
+              "Fai sempre dry run prima del click finale di import.",
+              "Importa solo quando errori e righe deboli sono sotto controllo."
+            ].map((item) => (
+              <article key={item} className="rounded-2xl border border-border bg-surface/80 p-3 text-sm text-text">
+                {item}
+              </article>
+            ))}
+          </div>
         </SectionCard>
       </div>
 
-      <SectionCard title="Valutazione importabilita" subtitle="Stima rapida di quante righe sembrano gia pronte per un import guidato">
-        {rowAssessment ? (
-          <div className="grid gap-3 md:grid-cols-3">
-            <article className="rounded-2xl border border-border bg-surface/80 p-3">
-              <p className="text-xs uppercase tracking-[0.14em] text-muted">Righe importabili</p>
-              <p className="mt-2 text-2xl font-semibold text-text">{rowAssessment.importable}</p>
-            </article>
-            <article className="rounded-2xl border border-border bg-surface/80 p-3">
-              <p className="text-xs uppercase tracking-[0.14em] text-muted">Righe parziali</p>
-              <p className="mt-2 text-2xl font-semibold text-text">{rowAssessment.partial}</p>
-            </article>
-            <article className="rounded-2xl border border-border bg-surface/80 p-3">
-              <p className="text-xs uppercase tracking-[0.14em] text-muted">Righe vuote</p>
-              <p className="mt-2 text-2xl font-semibold text-text">{rowAssessment.empty}</p>
-            </article>
-          </div>
+      <SectionCard title="Mapping colonne" subtitle="Puoi correggere il mapping suggerito prima di generare le righe candidate.">
+        {!selectedSheet ? (
+          <EmptyState title="Nessun foglio selezionato" description="Carica un file Excel per vedere le colonne." compact />
         ) : (
-          <EmptyState title="Nessuna valutazione disponibile" description="Carica un file per stimare la qualita del foglio principale." compact />
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {mappingTargetMeta.map((item) => (
+              <label key={item.target} className="text-sm">
+                {item.label}
+                <select
+                  className="input-saas mt-1"
+                  value={mappings[item.target] ?? ""}
+                  onChange={(event) => setMappings((current) => ({ ...current, [item.target]: event.target.value }))}
+                >
+                  <option value="">non mappato</option>
+                  {selectedSheet.header.map((header) => (
+                    <option key={`${item.target}-${header}`} value={header}>
+                      {header}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
+          </div>
         )}
       </SectionCard>
 
-      <SectionCard title="Anteprima fogli" subtitle="Prime righe per capire struttura colonne">
+      <SectionCard title="Suggerimenti parser Excel" subtitle="Prime corrispondenze individuate sulle intestazioni del foglio principale.">
+        {mappingSuggestions.length === 0 ? (
+          <EmptyState title="Nessun suggerimento disponibile" description="Carica un file per attivare il riconoscimento colonne." compact />
+        ) : (
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {mappingSuggestions.map((item) => (
+              <article key={item.target} className="rounded-2xl border border-border bg-surface/80 p-3">
+                <p className="text-sm font-semibold text-text">{item.target}</p>
+                <p className="mt-1 text-xs text-muted">{item.source ?? "non trovato"}</p>
+                <p className="mt-2 text-[11px] uppercase tracking-[0.14em] text-slate-600">{item.confidence}</p>
+              </article>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Azioni import" subtitle="Prima dry run server, poi import delle sole righe valide.">
+        <div className="flex flex-wrap gap-3">
+          <button type="button" className="btn-secondary" disabled={submitting || candidateRows.length === 0} onClick={() => void runImport(true)}>
+            {submitting ? "Elaborazione..." : "Dry run server"}
+          </button>
+          <button type="button" className="btn-primary" disabled={submitting || candidateRows.length === 0} onClick={() => void runImport(false)}>
+            {submitting ? "Import in corso..." : "Importa righe valide"}
+          </button>
+        </div>
+        {result ? (
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <article className="rounded-2xl border border-border bg-surface/80 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-muted">Righe totali</p>
+              <p className="mt-2 text-2xl font-semibold text-text">{result.summary.total_rows}</p>
+            </article>
+            <article className="rounded-2xl border border-border bg-surface/80 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-muted">Righe valide</p>
+              <p className="mt-2 text-2xl font-semibold text-text">{result.summary.valid_rows}</p>
+            </article>
+            <article className="rounded-2xl border border-border bg-surface/80 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-muted">Importate / errate</p>
+              <p className="mt-2 text-2xl font-semibold text-text">
+                {result.summary.imported_rows ?? 0} / {result.summary.invalid_rows}
+              </p>
+            </article>
+          </div>
+        ) : null}
+      </SectionCard>
+
+      <SectionCard title="Righe candidate" subtitle="Anteprima normalizzata delle prime righe che il sistema prova a trasformare in servizi.">
+        {candidateRows.length === 0 ? (
+          <EmptyState title="Nessuna riga candidata" description="Carica un file e completa il mapping per generare una preview importabile." compact />
+        ) : (
+          <div className="space-y-3">
+            {candidateRows.slice(0, 12).map((row) => (
+              <article key={row.row_index} className="rounded-2xl border border-border bg-surface/80 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-text">
+                      Riga {row.row_index} - {row.customer_name || "cliente non letto"}
+                    </p>
+                    <p className="text-xs text-muted">
+                      {row.date || "data?"} {row.time || "ora?"} - {row.destination || "hotel?"}
+                    </p>
+                  </div>
+                  <span className={row.localIssues.length === 0 ? "rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-emerald-700" : "rounded-full bg-amber-50 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-amber-700"}>
+                    {row.localIssues.length === 0 ? "pronta" : "da verificare"}
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-2 text-sm text-text md:grid-cols-2 xl:grid-cols-4">
+                  <p><span className="text-muted">Pickup:</span> {row.pickup || "vuoto"}</p>
+                  <p><span className="text-muted">Pax:</span> {row.pax || 0}</p>
+                  <p><span className="text-muted">Rif. mezzo:</span> {row.transport_code || "vuoto"}</p>
+                  <p><span className="text-muted">Telefono:</span> {row.phone || "vuoto"}</p>
+                </div>
+                {row.localIssues.length > 0 ? (
+                  <p className="mt-3 text-xs text-amber-700">Warning: {row.localIssues.join(", ")}</p>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Errori server" subtitle="Il dry run o l'import reale restituiscono qui le righe che non passano la validazione finale.">
+        {!result || result.errors.length === 0 ? (
+          <EmptyState title="Nessun errore server" description="Esegui un dry run per vedere la validazione finale lato server." compact />
+        ) : (
+          <div className="space-y-2">
+            {result.errors.map((item) => (
+              <article key={`${item.row_index}-${item.message}`} className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                Riga {item.row_index}: {item.message}
+              </article>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Anteprima fogli" subtitle="Prime righe originali del file per controllare intestazioni e struttura.">
         {sheets.length === 0 ? (
-          <EmptyState title="Nessun foglio disponibile" description="Carica un file Excel per vedere anteprima e struttura." compact />
+          <EmptyState title="Nessun foglio disponibile" description="Carica un file Excel per vedere l'anteprima completa." compact />
         ) : (
           <div className="space-y-4">
             {sheets.map((sheet) => (
@@ -250,7 +654,9 @@ export default function ExcelImportPage() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="text-sm font-semibold text-text">{sheet.name}</p>
-                    <p className="text-xs text-muted">{sheet.rows} righe - {sheet.cols} colonne</p>
+                    <p className="text-xs text-muted">
+                      {sheet.rows} righe - {sheet.cols} colonne
+                    </p>
                   </div>
                 </div>
                 <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
