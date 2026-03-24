@@ -76,8 +76,8 @@ export default function ArrivalsPage() {
                     <td className="px-3 py-2 font-medium">{item.time}</td>
                     <td className="px-3 py-2">{getCustomerFullName(item.service)}</td>
                     <td className="px-3 py-2">{item.service.pax}</td>
-                    <td className="px-3 py-2">{hotelsById.get(item.service.hotel_id)?.name ?? "N/D"}</td>
-                    <td className="px-3 py-2">{item.service.meeting_point ?? item.service.vessel ?? "N/D"}</td>
+                    <td className="px-3 py-2 uppercase">{hotelsById.get(item.service.hotel_id)?.name ?? "N/D"}</td>
+                    <td className="px-3 py-2 uppercase">{item.service.meeting_point ?? item.service.vessel ?? "N/D"}</td>
                     <td className="px-3 py-2">{getTransportReferenceOutward(item.service) ?? item.service.transport_code ?? item.service.vessel}</td>
                     <td className="px-3 py-2">{item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D"}</td>
                   </tr>
