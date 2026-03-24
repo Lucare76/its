@@ -948,7 +948,7 @@ export default function PdfImportsPage() {
                       <td className="px-3 py-3 align-top"><span className={`inline-flex rounded-full border px-2 py-1 text-xs font-semibold ${statusMeta(row.status).className}`}>{statusMeta(row.status).label}</span></td>
                       <td className="px-3 py-3 align-top"><p className="font-medium text-slate-800">{row.customer ?? "Cliente da verificare"}</p><p className="text-xs text-slate-500">{row.agency ?? "Agenzia non rilevata"}</p><p className="mt-1 text-[11px] text-slate-500">{row.external_reference ?? "Rif. non disponibile"}</p></td>
                       <td className="px-3 py-3 align-top text-slate-700">{formatIsoDateShort(row.arrival_date)}</td>
-                      <td className="px-3 py-3 align-top text-slate-700">{row.hotel_or_destination ?? "N/D"}</td>
+                      <td className="px-3 py-3 align-top uppercase text-slate-700">{row.hotel_or_destination ?? "N/D"}</td>
                       <td className="px-3 py-3 align-top"><p className="text-slate-700">{parserLabel(row.parser_key)}</p><div className="mt-1 flex flex-wrap gap-1"><span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${qualityMeta(row.parsing_quality)}`}>{row.parsing_quality ?? "low"}</span><span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{parserModeLabel(row.parser_mode)}</span>{isOcrHeavyCase(row) ? <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">OCR rumoroso</span> : null}</div></td>
                     </tr>
                   );
@@ -1053,7 +1053,7 @@ export default function PdfImportsPage() {
                   <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                     <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Destinazione</p>
                     <p className="mt-1 font-medium text-slate-800">
-                      {displayConfirmedField(selected, "hotel_or_destination", selected.hotel_or_destination) || "N/D"}
+                      <span className="uppercase">{displayConfirmedField(selected, "hotel_or_destination", selected.hotel_or_destination) || "N/D"}</span>
                     </p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
