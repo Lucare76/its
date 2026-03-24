@@ -725,7 +725,7 @@ export default function HotelsPage() {
                               className="w-56 rounded-md border border-slate-300 px-2 py-1"
                             />
                           ) : (
-                            <span className="line-clamp-2 break-words">{hotel.name}</span>
+                            <span className="line-clamp-2 break-words uppercase">{hotel.name}</span>
                           )}
                         </td>
                         <td className="max-w-80 px-3 py-2">
