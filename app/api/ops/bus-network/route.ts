@@ -13,6 +13,9 @@ import {
   getDefaultStopsForLine,
   suggestBusRedistribution
 } from "@/lib/server/bus-network";
+import { getCustomerFullName } from "@/lib/service-display";
+import type { AgencyBookingServiceKind, OperationalServiceType } from "@/lib/types";
+import { validateBusAllocationRequest, validateBusMoveRequest } from "@/lib/server/bus-network-validation";
 
 export const runtime = "nodejs";
 
@@ -96,6 +99,40 @@ async function loadBusNetwork(auth: PricingAuthContext) {
   const allocations = allocationsResult.data ?? [];
   const services = servicesResult.data ?? [];
   const hotels = hotelsResult.data ?? [];
+  const hotelsById = new Map<string, { id: string; name: string }>(hotels.map((hotel: { id: string; name: string }) => [hotel.id, hotel]));
+
+  const enrichedServices = services.map((service: {
+    id: string;
+    customer_name: string;
+    customer_first_name?: string | null;
+    customer_last_name?: string | null;
+    date: string;
+    time: string;
+    pax: number;
+    direction: "arrival" | "departure";
+    bus_city_origin?: string | null;
+    transport_code?: string | null;
+    phone?: string | undefined;
+    phone_e164?: string | null | undefined;
+    hotel_id: string;
+    booking_service_kind?: AgencyBookingServiceKind | null | undefined;
+    service_type_code?: OperationalServiceType | null | undefined;
+    outbound_time?: string | null;
+  }) => {
+    const identity = deriveServiceBusIdentity(service);
+    const hotel = hotelsById.get(service.hotel_id);
+    return {
+      ...service,
+      customer_display_name: getCustomerFullName(service),
+      phone_display: service.phone_e164 ?? service.phone ?? "N/D",
+      hotel_name: hotel?.name ?? "Hotel N/D",
+      derived_family_code: identity.family_code,
+      derived_family_name: identity.family_name,
+      derived_line_code: identity.lineCode,
+      derived_line_name: identity.lineName,
+      suggested_stop_name: identity.stop_name
+    };
+  });
 
   const unitLoads = buildBusUnitLoadSummary(units, allocations);
   const stopLoads = buildStopLoadSummary(stops, allocations);
@@ -116,7 +153,7 @@ async function loadBusNetwork(auth: PricingAuthContext) {
     units,
     allocations,
     moves: movesResult.data ?? [],
-    services,
+    services: enrichedServices,
     unit_loads: unitLoads,
     stop_loads: stopLoads,
     geographic_suggestions: suggestions,
@@ -236,19 +273,38 @@ export async function POST(request: NextRequest) {
 
     if (action === "add_stop") {
       const parsed = addStopSchema.parse(body);
-      const { error } = await auth.admin.from("tenant_bus_line_stops").insert({
-        tenant_id: tenantId,
-        bus_line_id: parsed.bus_line_id,
-        direction: parsed.direction,
-        stop_name: parsed.stop_name,
-        city: parsed.city,
-        pickup_note: parsed.pickup_note ?? null,
-        stop_order: parsed.stop_order,
-        lat: parsed.lat ?? null,
-        lng: parsed.lng ?? null,
-        is_manual: true,
-        active: true
-      });
+      const departureOrder = Number(body?.departure_stop_order ?? parsed.stop_order);
+      if (!Number.isInteger(departureOrder) || departureOrder < 1) {
+        return NextResponse.json({ ok: false, error: "Ordine ritorno non valido." }, { status: 400 });
+      }
+      const { error } = await auth.admin.from("tenant_bus_line_stops").insert([
+        {
+          tenant_id: tenantId,
+          bus_line_id: parsed.bus_line_id,
+          direction: "arrival",
+          stop_name: parsed.stop_name,
+          city: parsed.city,
+          pickup_note: parsed.pickup_note ?? null,
+          stop_order: parsed.stop_order,
+          lat: parsed.lat ?? null,
+          lng: parsed.lng ?? null,
+          is_manual: true,
+          active: true
+        },
+        {
+          tenant_id: tenantId,
+          bus_line_id: parsed.bus_line_id,
+          direction: "departure",
+          stop_name: parsed.stop_name,
+          city: parsed.city,
+          pickup_note: parsed.pickup_note ?? null,
+          stop_order: departureOrder,
+          lat: parsed.lat ?? null,
+          lng: parsed.lng ?? null,
+          is_manual: true,
+          active: true
+        }
+      ]);
       if (error) throw new Error(error.message);
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
@@ -274,83 +330,58 @@ export async function POST(request: NextRequest) {
 
     if (action === "allocate_service") {
       const parsed = allocateSchema.parse(body);
-      const units = await auth.admin.from("tenant_bus_units").select("*").eq("tenant_id", tenantId).eq("id", parsed.bus_unit_id).maybeSingle();
-      if (units.error || !units.data) throw new Error(units.error?.message ?? "Bus non trovato.");
-      if (units.data.status === "closed" || units.data.status === "completed") {
-        return NextResponse.json({ ok: false, error: "Bus chiuso o completato: nessuna nuova prenotazione consentita." }, { status: 400 });
+      if (!parsed.stop_id) {
+        return NextResponse.json({ ok: false, error: "Fermata obbligatoria per allocare il servizio." }, { status: 400 });
       }
-      const existingAllocations = await auth.admin.from("tenant_bus_allocations").select("*").eq("tenant_id", tenantId).eq("bus_unit_id", parsed.bus_unit_id);
-      if (existingAllocations.error) throw new Error(existingAllocations.error.message);
-      const assignedPax = (existingAllocations.data ?? []).reduce((sum: number, item: { pax_assigned: number }) => sum + item.pax_assigned, 0);
-      if (assignedPax + parsed.pax_assigned > units.data.capacity) {
-        return NextResponse.json({ ok: false, error: "Capienza bus superata." }, { status: 400 });
-      }
-      const { error } = await auth.admin.from("tenant_bus_allocations").insert({
-        tenant_id: tenantId,
-        service_id: parsed.service_id,
-        bus_line_id: parsed.bus_line_id,
-        bus_unit_id: parsed.bus_unit_id,
-        stop_id: parsed.stop_id ?? null,
-        stop_name: parsed.stop_name,
-        direction: parsed.direction,
-        pax_assigned: parsed.pax_assigned,
-        notes: parsed.notes ?? null,
-        created_by_user_id: auth.user.id
+
+      await validateBusAllocationRequest(auth, {
+        tenantId,
+        serviceId: parsed.service_id,
+        busLineId: parsed.bus_line_id,
+        busUnitId: parsed.bus_unit_id,
+        stopId: parsed.stop_id,
+        stopName: parsed.stop_name,
+        direction: parsed.direction
       });
-      if (error) throw new Error(error.message);
+
+      const { error } = await auth.admin.rpc("allocate_bus_service", {
+        p_tenant_id: tenantId,
+        p_service_id: parsed.service_id,
+        p_bus_line_id: parsed.bus_line_id,
+        p_bus_unit_id: parsed.bus_unit_id,
+        p_stop_id: parsed.stop_id,
+        p_stop_name: parsed.stop_name,
+        p_direction: parsed.direction,
+        p_pax_assigned: parsed.pax_assigned,
+        p_notes: parsed.notes ?? null,
+        p_created_by_user_id: auth.user.id
+      });
+      if (error) {
+        return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+      }
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
     if (action === "move_allocation") {
       const parsed = moveSchema.parse(body);
-      const allocationResult = await auth.admin.from("tenant_bus_allocations").select("*").eq("tenant_id", tenantId).eq("id", parsed.allocation_id).maybeSingle();
-      if (allocationResult.error || !allocationResult.data) throw new Error(allocationResult.error?.message ?? "Allocazione non trovata.");
-      const targetResult = await auth.admin.from("tenant_bus_units").select("*").eq("tenant_id", tenantId).eq("id", parsed.to_bus_unit_id).maybeSingle();
-      if (targetResult.error || !targetResult.data) throw new Error(targetResult.error?.message ?? "Bus destinazione non trovato.");
-      if (targetResult.data.status === "closed" || targetResult.data.status === "completed") {
-        return NextResponse.json({ ok: false, error: "Bus destinazione chiuso o completato." }, { status: 400 });
-      }
-      const targetAllocations = await auth.admin.from("tenant_bus_allocations").select("pax_assigned").eq("tenant_id", tenantId).eq("bus_unit_id", parsed.to_bus_unit_id);
-      if (targetAllocations.error) throw new Error(targetAllocations.error.message);
-      const targetPax = (targetAllocations.data ?? []).reduce((sum: number, item: { pax_assigned: number }) => sum + item.pax_assigned, 0);
-      if (targetPax + parsed.pax_moved > targetResult.data.capacity) {
-        return NextResponse.json({ ok: false, error: "Capienza bus destinazione superata." }, { status: 400 });
-      }
-      if (parsed.pax_moved >= allocationResult.data.pax_assigned) {
-        const { error: updateError } = await auth.admin.from("tenant_bus_allocations").update({ bus_unit_id: parsed.to_bus_unit_id }).eq("tenant_id", tenantId).eq("id", parsed.allocation_id);
-        if (updateError) throw new Error(updateError.message);
-      } else {
-        const { error: reduceError } = await auth.admin
-          .from("tenant_bus_allocations")
-          .update({ pax_assigned: allocationResult.data.pax_assigned - parsed.pax_moved })
-          .eq("tenant_id", tenantId)
-          .eq("id", parsed.allocation_id);
-        if (reduceError) throw new Error(reduceError.message);
-        const { error: insertError } = await auth.admin.from("tenant_bus_allocations").insert({
-          tenant_id: tenantId,
-          service_id: allocationResult.data.service_id,
-          bus_line_id: allocationResult.data.bus_line_id,
-          bus_unit_id: parsed.to_bus_unit_id,
-          stop_id: allocationResult.data.stop_id,
-          stop_name: allocationResult.data.stop_name,
-          direction: allocationResult.data.direction,
-          pax_assigned: parsed.pax_moved,
-          notes: allocationResult.data.notes,
-          created_by_user_id: auth.user.id
-        });
-        if (insertError) throw new Error(insertError.message);
-      }
-      const { error: moveError } = await auth.admin.from("tenant_bus_allocation_moves").insert({
-        tenant_id: tenantId,
-        service_id: allocationResult.data.service_id,
-        from_bus_unit_id: allocationResult.data.bus_unit_id,
-        to_bus_unit_id: parsed.to_bus_unit_id,
-        stop_name: allocationResult.data.stop_name,
-        pax_moved: parsed.pax_moved,
-        reason: parsed.reason ?? null,
-        created_by_user_id: auth.user.id
+      await validateBusMoveRequest(auth, {
+        tenantId,
+        allocationId: parsed.allocation_id,
+        toBusUnitId: parsed.to_bus_unit_id,
+        paxMoved: parsed.pax_moved
       });
-      if (moveError) throw new Error(moveError.message);
+
+      const { error } = await auth.admin.rpc("move_bus_allocation", {
+        p_tenant_id: tenantId,
+        p_allocation_id: parsed.allocation_id,
+        p_to_bus_unit_id: parsed.to_bus_unit_id,
+        p_pax_moved: parsed.pax_moved,
+        p_reason: parsed.reason ?? null,
+        p_created_by_user_id: auth.user.id
+      });
+      if (error) {
+        return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+      }
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 

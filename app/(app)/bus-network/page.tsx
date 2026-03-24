@@ -49,12 +49,20 @@ type BusAllocation = {
 type BusService = {
   id: string;
   customer_name: string;
+  customer_display_name: string;
   date: string;
   time: string;
   pax: number;
   direction: "arrival" | "departure";
   bus_city_origin?: string | null;
   transport_code?: string | null;
+  phone_display: string;
+  hotel_name: string;
+  derived_family_code: string;
+  derived_family_name: string;
+  derived_line_code?: string | null;
+  derived_line_name?: string | null;
+  suggested_stop_name?: string | null;
 };
 
 type UnitLoad = BusUnit & { pax_assigned: number; remaining_seats: number; suggested_status: string };
@@ -95,13 +103,21 @@ async function getAccessToken() {
 export default function BusNetworkPage() {
   const [payload, setPayload] = useState<ApiPayload>(emptyPayload);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("Rete bus nazionale: linee, fermate, capienza e ridistribuzione pax.");
-  const [selectedLineId, setSelectedLineId] = useState<string>("");
-  const [selectedAllocationId, setSelectedAllocationId] = useState<string>("");
+  const [message, setMessage] = useState("Rete bus nazionale: linee, fermate, capienza e ridistribuzione prenotazioni.");
+  const [selectedLineId, setSelectedLineId] = useState("");
+  const [selectedServiceId, setSelectedServiceId] = useState("");
+  const [selectedUnitId, setSelectedUnitId] = useState("");
+  const [selectedStopId, setSelectedStopId] = useState("");
+  const [selectedAllocationId, setSelectedAllocationId] = useState("");
+  const [moveTargetUnitId, setMoveTargetUnitId] = useState("");
+  const [movePax, setMovePax] = useState("");
+  const [moveReason, setMoveReason] = useState("");
   const [saving, setSaving] = useState(false);
   const [newUnitLabel, setNewUnitLabel] = useState("");
   const [newStopName, setNewStopName] = useState("");
   const [newStopCity, setNewStopCity] = useState("");
+  const [newArrivalStopOrder, setNewArrivalStopOrder] = useState("1");
+  const [newDepartureStopOrder, setNewDepartureStopOrder] = useState("1");
 
   const load = useEffectEvent(async () => {
     const token = await getAccessToken();
@@ -119,6 +135,7 @@ export default function BusNetworkPage() {
       setMessage(body?.error ?? "Errore caricamento rete bus.");
       return;
     }
+
     const nextPayload = {
       lines: body.lines ?? [],
       stops: body.stops ?? [],
@@ -131,12 +148,12 @@ export default function BusNetworkPage() {
       geographic_suggestions: body.geographic_suggestions ?? [],
       arrival_windows: body.arrival_windows ?? []
     };
+
     setPayload(nextPayload);
     setSelectedLineId((current) => {
       if (current && nextPayload.lines.some((line) => line.id === current)) return current;
       return nextPayload.lines[0]?.id || "";
     });
-    setSelectedAllocationId((current) => current || nextPayload.allocations[0]?.id || "");
     setLoading(false);
   });
 
@@ -148,6 +165,70 @@ export default function BusNetworkPage() {
   const selectedUnits = payload.unit_loads.filter((unit) => unit.bus_line_id === selectedLine?.id);
   const selectedStops = payload.stop_loads.filter((stop) => stop.bus_line_id === selectedLine?.id);
   const selectedAllocations = payload.allocations.filter((allocation) => allocation.bus_line_id === selectedLine?.id);
+  const selectedServices = payload.services.filter((service) => {
+    if (!selectedLine) return false;
+    if (payload.allocations.some((allocation) => allocation.service_id === service.id)) return false;
+    return service.derived_family_code === selectedLine.family_code;
+  });
+
+  const selectedService = selectedServices.find((service) => service.id === selectedServiceId) ?? selectedServices[0] ?? null;
+  const compatibleStops = selectedStops.filter((stop) => stop.direction === (selectedService?.direction ?? "arrival"));
+  const selectedStop = compatibleStops.find((stop) => stop.id === selectedStopId) ?? null;
+  const selectedUnit = selectedUnits.find((unit) => unit.id === selectedUnitId) ?? selectedUnits[0] ?? null;
+  const selectedAllocation = selectedAllocations.find((allocation) => allocation.id === selectedAllocationId) ?? selectedAllocations[0] ?? null;
+  const allocationService = payload.services.find((service) => service.id === selectedAllocation?.service_id) ?? null;
+  const sourceUnit = selectedUnits.find((unit) => unit.id === selectedAllocation?.bus_unit_id) ?? null;
+  const targetUnits = selectedUnits.filter((unit) => unit.id !== selectedAllocation?.bus_unit_id);
+  const moveTargetUnit = targetUnits.find((unit) => unit.id === moveTargetUnitId) ?? targetUnits[0] ?? null;
+
+  useEffect(() => {
+    setSelectedServiceId((current) => {
+      if (current && selectedServices.some((service) => service.id === current)) return current;
+      return selectedServices[0]?.id ?? "";
+    });
+  }, [selectedLineId, selectedServices]);
+
+  useEffect(() => {
+    setSelectedUnitId((current) => {
+      if (current && selectedUnits.some((unit) => unit.id === current)) return current;
+      return selectedUnits[0]?.id ?? "";
+    });
+  }, [selectedLineId, selectedUnits]);
+
+  useEffect(() => {
+    setSelectedAllocationId((current) => {
+      if (current && selectedAllocations.some((allocation) => allocation.id === current)) return current;
+      return selectedAllocations[0]?.id ?? "";
+    });
+  }, [selectedLineId, selectedAllocations]);
+
+  useEffect(() => {
+    const suggestedStop =
+      compatibleStops.find((stop) => stop.stop_name === selectedService?.suggested_stop_name) ??
+      compatibleStops[0] ??
+      null;
+    setSelectedStopId((current) => {
+      if (current && compatibleStops.some((stop) => stop.id === current)) return current;
+      return suggestedStop?.id ?? "";
+    });
+  }, [selectedServiceId, selectedService, compatibleStops]);
+
+  useEffect(() => {
+    setMoveTargetUnitId((current) => {
+      if (current && targetUnits.some((unit) => unit.id === current)) return current;
+      return targetUnits[0]?.id ?? "";
+    });
+    setMovePax(selectedAllocation ? String(selectedAllocation.pax_assigned) : "");
+    setMoveReason("");
+  }, [selectedAllocationId, selectedAllocation, targetUnits]);
+
+  useEffect(() => {
+    const arrivalCount = selectedStops.filter((stop) => stop.direction === "arrival").length;
+    const departureCount = selectedStops.filter((stop) => stop.direction === "departure").length;
+    setNewArrivalStopOrder(String(arrivalCount + 1));
+    setNewDepartureStopOrder(String(departureCount + 1));
+  }, [selectedLineId, selectedStops]);
+
   const familySummary = useMemo(() => {
     const families = new Map<string, { lines: number; buses: number; pax: number }>();
     for (const line of payload.lines) {
@@ -162,11 +243,24 @@ export default function BusNetworkPage() {
     return Array.from(families.entries()).map(([family, info]) => ({ family, ...info }));
   }, [payload.lines, payload.unit_loads]);
 
+  const movePreview = useMemo(() => {
+    if (!selectedAllocation || !sourceUnit || !moveTargetUnit) return null;
+    const requested = Number(movePax || "0");
+    const effective = Number.isFinite(requested) && requested > 0 ? Math.min(requested, selectedAllocation.pax_assigned) : 0;
+    return {
+      available: selectedAllocation.pax_assigned,
+      destinationResidual: moveTargetUnit.remaining_seats,
+      sourceAfter: Math.max(0, selectedAllocation.pax_assigned - effective),
+      destinationAfter: moveTargetUnit.remaining_seats - effective,
+      effective
+    };
+  }, [selectedAllocation, sourceUnit, moveTargetUnit, movePax]);
+
   const postAction = async (body: Record<string, unknown>) => {
     const token = await getAccessToken();
     if (!token) {
       setMessage("Sessione non valida.");
-      return;
+      return false;
     }
     setSaving(true);
     const response = await fetch("/api/ops/bus-network", {
@@ -178,7 +272,7 @@ export default function BusNetworkPage() {
     if (!response.ok || !json?.ok) {
       setSaving(false);
       setMessage(json?.error ?? "Operazione non riuscita.");
-      return;
+      return false;
     }
     setPayload({
       lines: json.lines ?? [],
@@ -199,13 +293,18 @@ export default function BusNetworkPage() {
     });
     setSaving(false);
     setMessage("Operazione completata.");
+    return true;
   };
+
+  if (loading) {
+    return <section className="page-section"><p className="text-sm text-muted">Caricamento rete bus...</p></section>;
+  }
 
   return (
     <section className="page-section">
       <PageHeader
         title="Rete Bus Nazionale"
-        subtitle="Linee, bus, fermate, capienza, ridistribuzione pax e suggerimenti geografici."
+        subtitle="Linee, bus, fermate, capienza e spostamenti prenotazioni con controllo operativo."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Rete Bus" }]}
         actions={
           <button type="button" className="btn-primary px-4 py-2 text-sm" disabled={saving} onClick={() => void postAction({ action: "bootstrap_defaults" })}>
@@ -284,7 +383,7 @@ export default function BusNetworkPage() {
           </div>
         </SectionCard>
 
-        <SectionCard title="Bus della linea" subtitle="Capienza, chiusura manuale e alert posti">
+        <SectionCard title="Bus della linea" subtitle="Capienza, ultimi 5 posti e chiusura manuale">
           {!selectedLine ? (
             <p className="text-sm text-muted">Seleziona una linea.</p>
           ) : (
@@ -295,7 +394,11 @@ export default function BusNetworkPage() {
                   type="button"
                   className="btn-secondary px-3 py-2 text-sm"
                   disabled={saving || !newUnitLabel.trim()}
-                  onClick={() => void postAction({ action: "add_unit", bus_line_id: selectedLine.id, label: newUnitLabel.trim(), capacity: 54 }).then(() => setNewUnitLabel(""))}
+                  onClick={() =>
+                    void postAction({ action: "add_unit", bus_line_id: selectedLine.id, label: newUnitLabel.trim(), capacity: 54 }).then((ok) => {
+                      if (ok) setNewUnitLabel("");
+                    })
+                  }
                 >
                   Aggiungi bus
                 </button>
@@ -344,31 +447,33 @@ export default function BusNetworkPage() {
             <p className="text-sm text-muted">Seleziona una linea per vedere le fermate.</p>
           ) : (
             <div className="space-y-3">
-              <div className="grid gap-2 md:grid-cols-[1fr_1fr_120px_auto]">
+              <div className="grid gap-2 md:grid-cols-2">
                 <input className="input-saas" placeholder="Nuova fermata" value={newStopName} onChange={(event) => setNewStopName(event.target.value)} />
                 <input className="input-saas" placeholder="Citta" value={newStopCity} onChange={(event) => setNewStopCity(event.target.value)} />
-                <input className="input-saas" type="number" defaultValue={selectedStops.filter((stop) => stop.direction === "arrival").length + 1} id="bus-stop-order" />
+                <input className="input-saas" type="number" value={newArrivalStopOrder} onChange={(event) => setNewArrivalStopOrder(event.target.value)} placeholder="Ordine andata" />
+                <input className="input-saas" type="number" value={newDepartureStopOrder} onChange={(event) => setNewDepartureStopOrder(event.target.value)} placeholder="Ordine ritorno" />
                 <button
                   type="button"
-                  className="btn-secondary px-3 py-2 text-sm"
+                  className="btn-secondary px-3 py-2 text-sm md:col-span-2"
                   disabled={saving || !newStopName.trim() || !newStopCity.trim()}
-                  onClick={() => {
-                    const orderInput = document.getElementById("bus-stop-order") as HTMLInputElement | null;
+                  onClick={() =>
                     void postAction({
                       action: "add_stop",
                       bus_line_id: selectedLine.id,
                       direction: "arrival",
                       stop_name: newStopName.trim(),
                       city: newStopCity.trim(),
-                      stop_order: Number(orderInput?.value || selectedStops.length + 1),
+                      stop_order: Number(newArrivalStopOrder || "0"),
+                      departure_stop_order: Number(newDepartureStopOrder || "0"),
                       pickup_note: null
-                    }).then(() => {
+                    }).then((ok) => {
+                      if (!ok) return;
                       setNewStopName("");
                       setNewStopCity("");
-                    });
-                  }}
+                    })
+                  }
                 >
-                  Aggiungi fermata
+                  Aggiungi fermata bidirezionale
                 </button>
               </div>
               <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -389,7 +494,7 @@ export default function BusNetworkPage() {
                         <td className="px-3 py-2">{stop.stop_order}</td>
                         <td className="px-3 py-2">{stop.stop_name}</td>
                         <td className="px-3 py-2">{stop.pax_assigned}</td>
-                        <td className="px-3 py-2">{stop.is_manual ? "Manuale" : "PDF/catalogo"}</td>
+                        <td className="px-3 py-2">{stop.is_manual ? "Manuale A/R" : "PDF/catalogo"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -399,54 +504,59 @@ export default function BusNetworkPage() {
           )}
         </SectionCard>
 
-        <SectionCard title="Allocazioni e spostamenti pax" subtitle="Redistribuzione fra bus con controllo capienza">
+        <SectionCard title="Allocazioni e spostamenti prenotazioni" subtitle="Movimenti controllati tra bus con capienza e dati servizio">
           {!selectedLine ? (
-            <p className="text-sm text-muted">Seleziona una linea per allocare o spostare pax.</p>
+            <p className="text-sm text-muted">Seleziona una linea per allocare o spostare prenotazioni.</p>
           ) : (
             <div className="space-y-3">
               <div className="rounded-xl border border-border bg-surface-2 p-3">
                 <p className="mb-2 text-sm font-medium">Assegna prenotazione a un bus</p>
                 <div className="grid gap-2">
-                  <select className="input-saas" id="allocation-service">
-                    {payload.services
-                      .filter((service) => service.direction && !payload.allocations.some((allocation) => allocation.service_id === service.id))
-                      .map((service) => (
-                        <option key={service.id} value={service.id}>
-                          {service.date} {service.time} | {service.customer_name} | {service.pax} pax | {service.bus_city_origin ?? "N/D"}
-                        </option>
-                      ))}
+                  <select className="input-saas" value={selectedServiceId} onChange={(event) => setSelectedServiceId(event.target.value)}>
+                    {selectedServices.map((service) => (
+                      <option key={service.id} value={service.id}>
+                        {service.date} {service.time} | {service.customer_display_name} | {service.pax} pax | {service.hotel_name}
+                      </option>
+                    ))}
                   </select>
-                  <select className="input-saas" id="allocation-unit">
+                  {selectedService ? (
+                    <div className="rounded-xl border border-border bg-white px-3 py-3 text-sm">
+                      <p className="font-semibold">{selectedService.customer_display_name}</p>
+                      <p className="text-muted">{selectedService.phone_display} | {selectedService.hotel_name}</p>
+                      <p className="text-muted">
+                        {selectedService.direction === "arrival" ? "Andata" : "Ritorno"} | linea suggerita {selectedService.derived_family_name} | fermata suggerita {selectedService.suggested_stop_name ?? "N/D"}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted">Nessuna prenotazione disponibile su questa linea.</p>
+                  )}
+                  <select className="input-saas" value={selectedUnitId} onChange={(event) => setSelectedUnitId(event.target.value)}>
                     {selectedUnits.map((unit) => (
                       <option key={unit.id} value={unit.id}>
                         {unit.label} | residui {unit.remaining_seats}
                       </option>
                     ))}
                   </select>
-                  <select className="input-saas" id="allocation-stop">
-                    {selectedStops.filter((stop) => stop.direction === "arrival").map((stop) => (
+                  <select className="input-saas" value={selectedStopId} onChange={(event) => setSelectedStopId(event.target.value)}>
+                    {compatibleStops.map((stop) => (
                       <option key={stop.id} value={stop.id}>{stop.stop_name}</option>
                     ))}
                   </select>
                   <button
                     type="button"
                     className="btn-secondary px-3 py-2 text-sm"
+                    disabled={!selectedService || !selectedUnit || !selectedStop}
                     onClick={() => {
-                      const serviceId = (document.getElementById("allocation-service") as HTMLSelectElement | null)?.value ?? "";
-                      const unitId = (document.getElementById("allocation-unit") as HTMLSelectElement | null)?.value ?? "";
-                      const stopId = (document.getElementById("allocation-stop") as HTMLSelectElement | null)?.value ?? "";
-                      const service = payload.services.find((item) => item.id === serviceId);
-                      const stop = selectedStops.find((item) => item.id === stopId);
-                      if (!service || !stop) return;
+                      if (!selectedService || !selectedUnit || !selectedStop || !selectedLine) return;
                       void postAction({
                         action: "allocate_service",
-                        service_id: service.id,
+                        service_id: selectedService.id,
                         bus_line_id: selectedLine.id,
-                        bus_unit_id: unitId,
-                        direction: service.direction,
-                        stop_id: stop.id,
-                        stop_name: stop.stop_name,
-                        pax_assigned: service.pax,
+                        bus_unit_id: selectedUnit.id,
+                        direction: selectedService.direction,
+                        stop_id: selectedStop.id,
+                        stop_name: selectedStop.stop_name,
+                        pax_assigned: selectedService.pax,
                         notes: null
                       });
                     }}
@@ -457,7 +567,7 @@ export default function BusNetworkPage() {
               </div>
 
               <div className="rounded-xl border border-border bg-surface-2 p-3">
-                <p className="mb-2 text-sm font-medium">Sposta pax tra bus</p>
+                <p className="mb-2 text-sm font-medium">Sposta prenotazione / allocazione tra bus</p>
                 <div className="grid gap-2">
                   <select className="input-saas" value={selectedAllocationId} onChange={(event) => setSelectedAllocationId(event.target.value)}>
                     {selectedAllocations.map((allocation) => {
@@ -465,71 +575,60 @@ export default function BusNetworkPage() {
                       const unit = selectedUnits.find((item) => item.id === allocation.bus_unit_id);
                       return (
                         <option key={allocation.id} value={allocation.id}>
-                          {service?.customer_name ?? allocation.service_id} | {allocation.stop_name} | {allocation.pax_assigned} pax | {unit?.label ?? "Bus"}
+                          {service?.customer_display_name ?? allocation.service_id} | {allocation.stop_name} | {allocation.pax_assigned} pax | {unit?.label ?? "Bus"}
                         </option>
                       );
                     })}
                   </select>
-                  <select className="input-saas" id="move-target-unit">
-                    {selectedUnits.map((unit) => (
+                  {selectedAllocation && allocationService ? (
+                    <div className="rounded-xl border border-border bg-white px-3 py-3 text-sm">
+                      <p className="font-semibold">{allocationService.customer_display_name}</p>
+                      <p className="text-muted">{allocationService.phone_display} | {allocationService.hotel_name}</p>
+                      <p className="text-muted">
+                        {selectedAllocation.stop_name} | {selectedAllocation.direction === "arrival" ? "Andata" : "Ritorno"} | bus attuale {sourceUnit?.label ?? "N/D"}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted">Nessuna allocazione presente su questa linea.</p>
+                  )}
+                  <select className="input-saas" value={moveTargetUnitId} onChange={(event) => setMoveTargetUnitId(event.target.value)}>
+                    {targetUnits.map((unit) => (
                       <option key={unit.id} value={unit.id}>
                         {unit.label} | residui {unit.remaining_seats}
                       </option>
                     ))}
                   </select>
-                  <input className="input-saas" id="move-pax" type="number" min={1} placeholder="Pax da spostare" />
-                  <input className="input-saas" id="move-reason" placeholder="Motivo spostamento" />
+                  <input className="input-saas" value={movePax} onChange={(event) => setMovePax(event.target.value)} type="number" min={1} placeholder="Pax da spostare" />
+                  <input className="input-saas" value={moveReason} onChange={(event) => setMoveReason(event.target.value)} placeholder="Motivo spostamento (opzionale)" />
+                  {selectedAllocation && movePreview ? (
+                    <div className="rounded-xl border border-border bg-white px-3 py-3 text-sm">
+                      <p className="font-medium">Controllo prima della conferma</p>
+                      <p className="text-muted">Disponibili da spostare: {movePreview.available}</p>
+                      <p className="text-muted">Residui bus destinazione: {movePreview.destinationResidual}</p>
+                      <p className="text-muted">Impatto dopo spostamento: origine {movePreview.sourceAfter}, destinazione residui {movePreview.destinationAfter}</p>
+                    </div>
+                  ) : null}
                   <button
                     type="button"
                     className="btn-secondary px-3 py-2 text-sm"
-                    disabled={!selectedAllocationId}
+                    disabled={!selectedAllocation || !moveTargetUnit || !movePreview?.effective}
                     onClick={() => {
-                      const targetUnitId = (document.getElementById("move-target-unit") as HTMLSelectElement | null)?.value ?? "";
-                      const paxMoved = Number((document.getElementById("move-pax") as HTMLInputElement | null)?.value ?? "0");
-                      const reason = (document.getElementById("move-reason") as HTMLInputElement | null)?.value ?? "";
-                      if (!targetUnitId || !paxMoved) return;
+                      if (!selectedAllocation || !moveTargetUnit || !movePreview?.effective) return;
                       void postAction({
                         action: "move_allocation",
-                        allocation_id: selectedAllocationId,
-                        to_bus_unit_id: targetUnitId,
-                        pax_moved: paxMoved,
-                        reason
+                        allocation_id: selectedAllocation.id,
+                        to_bus_unit_id: moveTargetUnit.id,
+                        pax_moved: movePreview.effective,
+                        reason: moveReason || null
                       });
                     }}
                   >
-                    Sposta passeggeri
+                    Sposta prenotazione
                   </button>
                 </div>
               </div>
             </div>
           )}
-        </SectionCard>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <SectionCard title="Suggerimenti geografici / AI" subtitle="Supporto decisionale con override sempre manuale">
-          <div className="space-y-2">
-            {payload.geographic_suggestions.slice(0, 12).map((item) => (
-              <article key={item.service_id} className="rounded-xl border border-border bg-surface-2 px-4 py-3 text-sm">
-                <p className="font-semibold">{item.customer_name}</p>
-                <p className="text-muted">Fermata {item.stop_name} | Zona {item.grouped_zone}</p>
-                <p className="text-muted">Mezzo suggerito {item.suggested_vehicle_type} | Ordine fermata {item.suggested_stop_order ?? "N/D"}</p>
-              </article>
-            ))}
-            {payload.geographic_suggestions.length === 0 ? <p className="text-sm text-muted">Nessun suggerimento disponibile.</p> : null}
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Ridistribuzione consigliata" subtitle="Bus quasi pieni o senza compatibilita">
-          <div className="space-y-2">
-            {payload.redistribution_suggestions.map((item, index) => (
-              <article key={`${item.source_label}-${index}`} className="rounded-xl border border-border bg-surface-2 px-4 py-3 text-sm">
-                <p className="font-semibold">{item.source_label} → {item.target_label ?? "nessun bus libero"}</p>
-                <p className="text-muted">{item.reason}</p>
-              </article>
-            ))}
-            {payload.redistribution_suggestions.length === 0 ? <p className="text-sm text-muted">Nessuna redistribuzione suggerita ora.</p> : null}
-          </div>
         </SectionCard>
       </div>
     </section>
