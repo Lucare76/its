@@ -75,6 +75,10 @@ export default function HotelsPage() {
   const [aliases, setAliases] = useState<HotelAlias[]>([]);
   const [aliasHotelId, setAliasHotelId] = useState("");
   const [aliasValue, setAliasValue] = useState("");
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [createDraft, setCreateDraft] = useState<HotelEditDraft>({
+    name: "", address: "", city: "Ischia", zone: "Ischia Porto", lat: "", lng: "", is_active: true
+  });
 
   const loadHotels = useCallback(
     async (currentTenantId: string, termInput: string, offset: number, append: boolean) => {
@@ -516,6 +520,35 @@ export default function HotelsPage() {
     await loadHotels(tenantId, search, 0, false);
   };
 
+  const createHotel = async () => {
+    if (!tenantId || !supabase) return;
+    if (!createDraft.name.trim()) { setError("Il nome è obbligatorio."); return; }
+    setSaving(true);
+    setError("");
+    const parsedLat = createDraft.lat ? Number(createDraft.lat) : null;
+    const parsedLng = createDraft.lng ? Number(createDraft.lng) : null;
+    const zone = createDraft.zone || "Ischia Porto";
+    const centroid = zoneCentroids[(zone as keyof typeof zoneCentroids)] ?? zoneCentroids["Ischia Porto"];
+    const { error: insertError } = await supabase.from("hotels").insert({
+      tenant_id: tenantId,
+      name: createDraft.name.trim(),
+      normalized_name: createDraft.name.trim().toLowerCase().replace(/\s+/g, " "),
+      address: createDraft.address.trim() || "Ischia",
+      city: createDraft.city.trim() || "Ischia",
+      zone,
+      lat: parsedLat && Number.isFinite(parsedLat) ? parsedLat : centroid.lat,
+      lng: parsedLng && Number.isFinite(parsedLng) ? parsedLng : centroid.lng,
+      is_active: createDraft.is_active,
+      source: "manual"
+    });
+    setSaving(false);
+    if (insertError) { setError(insertError.message); return; }
+    setShowCreateForm(false);
+    setCreateDraft({ name: "", address: "", city: "Ischia", zone: "Ischia Porto", lat: "", lng: "", is_active: true });
+    setMessage(`Hotel "${createDraft.name.trim()}" creato.`);
+    await loadHotels(tenantId, search, 0, false);
+  };
+
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -579,7 +612,50 @@ export default function HotelsPage() {
                     }}
                   />
                 </label>
+                <button
+                  type="button"
+                  onClick={() => { setShowCreateForm((v) => !v); setError(""); setMessage(""); }}
+                  className="input-saas font-medium"
+                >
+                  {showCreateForm ? "Annulla nuovo hotel" : "+ Nuovo hotel"}
+                </button>
               </div>
+              {showCreateForm ? (
+                <div className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-4">
+                  <p className="mb-3 text-sm font-semibold text-slate-800">Crea nuovo hotel</p>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="space-y-1 md:col-span-2">
+                      <span className="text-xs font-medium text-slate-600">Nome *</span>
+                      <input value={createDraft.name} onChange={(e) => setCreateDraft({ ...createDraft, name: e.target.value })} placeholder="Es. Hotel Terme President" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="space-y-1 md:col-span-2">
+                      <span className="text-xs font-medium text-slate-600">Indirizzo</span>
+                      <input value={createDraft.address} onChange={(e) => setCreateDraft({ ...createDraft, address: e.target.value })} placeholder="Es. Via Roma 1, Ischia Porto" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-medium text-slate-600">Città</span>
+                      <input value={createDraft.city} onChange={(e) => setCreateDraft({ ...createDraft, city: e.target.value })} placeholder="Ischia" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-medium text-slate-600">Zona</span>
+                      <select value={createDraft.zone} onChange={(e) => setCreateDraft({ ...createDraft, zone: e.target.value })} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                        {HOTEL_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-medium text-slate-600">Lat (opzionale)</span>
+                      <input value={createDraft.lat} onChange={(e) => setCreateDraft({ ...createDraft, lat: e.target.value })} placeholder="Auto dalla zona" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-medium text-slate-600">Lng (opzionale)</span>
+                      <input value={createDraft.lng} onChange={(e) => setCreateDraft({ ...createDraft, lng: e.target.value })} placeholder="Auto dalla zona" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </label>
+                  </div>
+                  <button type="button" onClick={() => void createHotel()} disabled={saving} className="mt-3 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
+                    {saving ? "Creazione..." : "Crea hotel"}
+                  </button>
+                </div>
+              ) : null}
               <p className="text-xs text-slate-500">
                 Zone supportate: {HOTEL_ZONES.join(", ")}. Se lat/lng mancano, viene usato il centroide zona.
               </p>
