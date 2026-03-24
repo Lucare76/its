@@ -73,6 +73,14 @@ export function deriveBusFamily(code?: string | null, name?: string | null): { f
   const lineNumber = extractLineNumber(source);
   const normalized = source.toLowerCase();
 
+  if (normalized.includes("linea centro") || normalized.trim() === "centro" || normalized.includes(" family centro")) {
+    return { family_code: "CENTRO", family_name: "Linea Centro" };
+  }
+
+  if (normalized.includes("linea italia") || normalized.trim() === "italia" || normalized.includes(" family italia")) {
+    return { family_code: "ITALIA", family_name: "Linea Italia" };
+  }
+
   if (lineNumber === 11 || normalized.includes("adriatica")) {
     return { family_code: "ADRIATICA", family_name: "Linea Adriatica" };
   }
