@@ -132,7 +132,10 @@ export default function BusNetworkPage() {
       arrival_windows: body.arrival_windows ?? []
     };
     setPayload(nextPayload);
-    setSelectedLineId((current) => current || nextPayload.lines[0]?.id || "");
+    setSelectedLineId((current) => {
+      if (current && nextPayload.lines.some((line) => line.id === current)) return current;
+      return nextPayload.lines[0]?.id || "";
+    });
     setSelectedAllocationId((current) => current || nextPayload.allocations[0]?.id || "");
     setLoading(false);
   });
@@ -188,6 +191,11 @@ export default function BusNetworkPage() {
       redistribution_suggestions: json.redistribution_suggestions ?? [],
       geographic_suggestions: json.geographic_suggestions ?? [],
       arrival_windows: json.arrival_windows ?? []
+    });
+    setSelectedLineId((current) => {
+      const nextLines = json.lines ?? [];
+      if (current && nextLines.some((line) => line.id === current)) return current;
+      return nextLines[0]?.id ?? "";
     });
     setSaving(false);
     setMessage("Operazione completata.");
@@ -328,7 +336,10 @@ export default function BusNetworkPage() {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-        <SectionCard title="Fermate e ordine operativo" subtitle="Nord-sud per andata, inverso per ritorno, con override manuale">
+        <SectionCard
+          title="Fermate e ordine operativo"
+          subtitle={selectedLine ? `Linea selezionata: ${selectedLine.name}. Nord-sud per andata, inverso per ritorno, con override manuale.` : "Nord-sud per andata, inverso per ritorno, con override manuale."}
+        >
           {!selectedLine ? (
             <p className="text-sm text-muted">Seleziona una linea per vedere le fermate.</p>
           ) : (
