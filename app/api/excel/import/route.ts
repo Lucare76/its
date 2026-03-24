@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import {
+  appendSplitImportNote,
+  formatImportValidationMessage,
+  isPlaceholderHotelValue,
+  sanitizeImportCustomerName,
+  sanitizeImportPhone,
+  splitPassengerChunks
+} from "@/lib/server/bus-excel-import";
+import { resolveHotelMatch } from "@/lib/server/hotel-matching";
 import { serviceCreateSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -79,33 +88,6 @@ const presetConfig = {
   }
 } as const;
 
-function normalizeText(value: string | null | undefined) {
-  return String(value ?? "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function resolveHotelId(hotels: HotelRow[], rawHotelName: string, defaultHotelId: string | null | undefined) {
-  const wanted = normalizeText(rawHotelName);
-  if (!wanted) {
-    return defaultHotelId ?? null;
-  }
-
-  const exact = hotels.find((hotel) => normalizeText(hotel.normalized_name || hotel.name) === wanted);
-  if (exact) return exact.id;
-
-  const include = hotels.find((hotel) => {
-    const candidate = normalizeText(hotel.normalized_name || hotel.name);
-    return candidate.includes(wanted) || wanted.includes(candidate);
-  });
-  if (include) return include.id;
-
-  return defaultHotelId ?? null;
-}
-
 export async function POST(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator"]);
   if (auth instanceof NextResponse) return auth;
@@ -129,51 +111,67 @@ export async function POST(request: NextRequest) {
   const preset = presetConfig[parsed.data.preset_key];
   const validRows: Array<{ rowIndex: number; payload: z.infer<typeof serviceCreateSchema> }> = [];
   const errors: Array<{ row_index: number; message: string }> = [];
+  let skippedRows = 0;
 
   for (const row of parsed.data.rows) {
-    const resolvedHotelId = resolveHotelId(hotelRows, row.destination, parsed.data.default_hotel_id);
+    if (row.pax <= 0) {
+      skippedRows += 1;
+      continue;
+    }
+    if (parsed.data.preset_key === "linea_bus" && isPlaceholderHotelValue(row.destination)) {
+      skippedRows += 1;
+      continue;
+    }
+
+    const resolvedHotelId = resolveHotelMatch(hotelRows, row.destination, parsed.data.default_hotel_id);
     if (!resolvedHotelId) {
       errors.push({ row_index: row.row_index, message: `Hotel non riconosciuto: ${row.destination || "vuoto"}` });
       continue;
     }
 
-    const payload = {
-      date: row.date,
-      time: row.time,
-      service_type: "transfer" as const,
-      direction: row.direction ?? parsed.data.default_direction,
-      vessel: preset.vessel,
-      pax: row.pax,
-      hotel_id: resolvedHotelId,
-      customer_name: row.customer_name,
-      phone: row.phone,
-      notes: row.notes,
-      meeting_point: row.pickup || preset.meetingPoint,
-      stops: [],
-      bus_plate: "",
-      billing_party_name: row.billing_party_name || parsed.data.default_billing_party_name,
-      customer_email: "",
-      booking_service_kind: preset.bookingKind ?? undefined,
-      service_type_code: preset.serviceTypeCode ?? undefined,
-      arrival_date: row.date,
-      arrival_time: row.time,
-      departure_date: row.departure_date,
-      departure_time: row.departure_time,
-      transport_code: row.transport_code,
-      bus_city_origin: row.bus_city_origin || (parsed.data.preset_key === "linea_bus" ? row.pickup : ""),
-      status: "new" as const
-    };
+    const paxChunks = splitPassengerChunks(row.pax);
+    const customerName = sanitizeImportCustomerName(row.customer_name, row.row_index);
+    const phone = sanitizeImportPhone(row.phone);
 
-    const validated = serviceCreateSchema.safeParse(payload);
-    if (!validated.success) {
-      errors.push({
-        row_index: row.row_index,
-        message: validated.error.issues[0]?.message ?? "Riga non valida."
-      });
-      continue;
+    for (const [chunkIndex, paxChunk] of paxChunks.entries()) {
+      const payload = {
+        date: row.date,
+        time: row.time,
+        service_type: "transfer" as const,
+        direction: row.direction ?? parsed.data.default_direction,
+        vessel: preset.vessel,
+        pax: paxChunk,
+        hotel_id: resolvedHotelId,
+        customer_name: customerName,
+        phone,
+        notes: appendSplitImportNote(row.notes, row.pax, chunkIndex + 1, paxChunks.length),
+        meeting_point: row.pickup || preset.meetingPoint,
+        stops: [],
+        bus_plate: "",
+        billing_party_name: row.billing_party_name || parsed.data.default_billing_party_name,
+        customer_email: "",
+        booking_service_kind: preset.bookingKind ?? undefined,
+        service_type_code: preset.serviceTypeCode ?? undefined,
+        arrival_date: row.date,
+        arrival_time: row.time,
+        departure_date: row.departure_date,
+        departure_time: row.departure_time,
+        transport_code: row.transport_code,
+        bus_city_origin: row.bus_city_origin || (parsed.data.preset_key === "linea_bus" ? row.pickup : ""),
+        status: "new" as const
+      };
+
+      const validated = serviceCreateSchema.safeParse(payload);
+      if (!validated.success) {
+        errors.push({
+          row_index: row.row_index,
+          message: formatImportValidationMessage(validated.error.issues[0])
+        });
+        continue;
+      }
+
+      validRows.push({ rowIndex: row.row_index, payload: validated.data });
     }
-
-    validRows.push({ rowIndex: row.row_index, payload: validated.data });
   }
 
   if (parsed.data.dry_run) {
@@ -182,6 +180,7 @@ export async function POST(request: NextRequest) {
       dry_run: true,
       summary: {
         total_rows: parsed.data.rows.length,
+        skipped_rows: skippedRows,
         valid_rows: validRows.length,
         invalid_rows: errors.length
       },
@@ -196,6 +195,7 @@ export async function POST(request: NextRequest) {
         error: "Nessuna riga valida da importare.",
         summary: {
           total_rows: parsed.data.rows.length,
+          skipped_rows: skippedRows,
           valid_rows: 0,
           invalid_rows: errors.length
         },
@@ -243,6 +243,7 @@ export async function POST(request: NextRequest) {
     dry_run: false,
     summary: {
       total_rows: parsed.data.rows.length,
+      skipped_rows: skippedRows,
       valid_rows: validRows.length,
       invalid_rows: errors.length,
       imported_rows: insertedIds.length

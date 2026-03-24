@@ -13,6 +13,14 @@ export type BusLineCatalogEntry = {
   stops: BusLineStop[];
 };
 
+type ManualImportStopOverride = {
+  city: string;
+  time: string;
+  lineCode: string;
+  lineName: string;
+  pickupNote: string | null;
+};
+
 function note(value?: string) {
   const normalized = String(value ?? "").trim();
   return normalized.length > 0 ? normalized : null;
@@ -25,6 +33,92 @@ function normalizeBusText(value?: string | null) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+const BUS_CITY_ALIASES: Record<string, string[]> = {
+  "s maria degli angeli": ["santa maria degli angeli"],
+  "s benedetto del tronto": ["san benedetto del tronto"],
+  "citta di castello": ["citta di castello"],
+  "citta castello": ["citta di castello"],
+  iesi: ["jesi"],
+  "chiusi chiaciano": ["chiusi chianciano"],
+  schio: ["vicenza"],
+  bovezzo: ["brescia"],
+  nuvolento: ["brescia"],
+  "via carlo alberto della chiesa": ["brescia"],
+  "alba adriatica": ["san benedetto del tronto"]
+};
+
+const MANUAL_IMPORT_STOP_OVERRIDES: ManualImportStopOverride[] = [
+  {
+    city: "TERNI",
+    time: "05:55",
+    lineCode: "LINEA_7_CENTRO",
+    lineName: "Linea 7 Centro",
+    pickupNote: note("Import Excel cliente - fermata manuale da confermare")
+  },
+  {
+    city: "PONZANO",
+    time: "07:20",
+    lineCode: "LINEA_8_CENTRO_2",
+    lineName: "Linea 8 Centro 2",
+    pickupNote: note("Import Excel cliente - fermata manuale da confermare")
+  },
+  {
+    city: "GUIDONIA",
+    time: "08:00",
+    lineCode: "LINEA_8_CENTRO_2",
+    lineName: "Linea 8 Centro 2",
+    pickupNote: note("Import Excel cliente - fermata manuale da confermare")
+  },
+  {
+    city: "COLLEFERRO",
+    time: "09:15",
+    lineCode: "LINEA_8_CENTRO_2",
+    lineName: "Linea 8 Centro 2",
+    pickupNote: note("Import Excel cliente - fermata manuale da confermare")
+  },
+  {
+    city: "RAVENNA",
+    time: "04:20",
+    lineCode: "LINEA_11_ADRIATICA",
+    lineName: "Linea 11 Adriatica",
+    pickupNote: note("Import Excel cliente - fermata manuale da confermare")
+  },
+  {
+    city: "FORLI",
+    time: "04:30",
+    lineCode: "LINEA_11_ADRIATICA",
+    lineName: "Linea 11 Adriatica",
+    pickupNote: note("Import Excel cliente - fermata manuale prima di Cesena")
+  },
+  {
+    city: "SAN PAOLO CIVITATE",
+    time: "15:40",
+    lineCode: "LINEA_PUGLIA_ITALIA",
+    lineName: "Bus dedicato Puglia",
+    pickupNote: note("Import Excel cliente - gruppo Puglia dedicato")
+  },
+  {
+    city: "GIOVINAZZO",
+    time: "16:05",
+    lineCode: "LINEA_PUGLIA_ITALIA",
+    lineName: "Bus dedicato Puglia",
+    pickupNote: note("Import Excel cliente - gruppo Puglia dedicato")
+  },
+  {
+    city: "BARI",
+    time: "16:20",
+    lineCode: "LINEA_PUGLIA_ITALIA",
+    lineName: "Bus dedicato Puglia",
+    pickupNote: note("Import Excel cliente - gruppo Puglia dedicato")
+  }
+];
+
+function busSearchCandidates(city?: string | null) {
+  const normalized = normalizeBusText(city);
+  if (!normalized) return [];
+  return [normalized, ...(BUS_CITY_ALIASES[normalized] ?? [])];
 }
 
 export const BUS_LINES_2026: BusLineCatalogEntry[] = [
@@ -248,18 +342,38 @@ export function findBusLineByCode(code?: string | null) {
 }
 
 export function findBusStopsByCity(city?: string | null) {
-  const normalized = normalizeBusText(city);
-  if (!normalized) return [];
+  const candidates = busSearchCandidates(city);
+  if (candidates.length === 0) return [];
 
-  return BUS_LINES_2026.flatMap((line) =>
+  const catalogMatches = BUS_LINES_2026.flatMap((line) =>
     line.stops
-      .filter((stop) => normalizeBusText(stop.city).includes(normalized) || normalized.includes(normalizeBusText(stop.city)))
+      .filter((stop) => {
+        const normalizedStop = normalizeBusText(stop.city);
+        return candidates.some((candidate) => normalizedStop.includes(candidate) || candidate.includes(normalizedStop));
+      })
       .map((stop) => ({
         lineCode: line.code,
         lineName: line.name,
         stop
       }))
   );
+
+  const overrideMatches = MANUAL_IMPORT_STOP_OVERRIDES.filter((override) =>
+    candidates.some((candidate) => {
+      const normalizedStop = normalizeBusText(override.city);
+      return normalizedStop.includes(candidate) || candidate.includes(normalizedStop);
+    })
+  ).map((override) => ({
+    lineCode: override.lineCode,
+    lineName: override.lineName,
+    stop: {
+      city: override.city,
+      time: override.time,
+      pickupNote: override.pickupNote
+    }
+  }));
+
+  return [...catalogMatches, ...overrideMatches];
 }
 
 export function findNearestBusStop(city?: string | null, time?: string | null) {

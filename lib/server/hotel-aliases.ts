@@ -18,27 +18,59 @@ function simplifyHotelName(value?: string | null) {
 const SOSANDRA_HOTEL_ALIASES: Array<{ canonical: string; aliases: string[] }> = [
   {
     canonical: "Hotel Terme President",
-    aliases: ["Hotel Terme President", "Club Hotel President", "Hotel President", "President"]
+    aliases: ["Hotel Terme President", "Club Hotel President", "Hotel President", "President", "Presdient"]
   },
   {
     canonical: "Hotel Cristallo Palace",
     aliases: ["Hotel Cristallo Palace", "Cristallo Palace", "Hotel Cristallo"]
   },
   {
-    canonical: "Hotel Re Ferdinando",
-    aliases: ["Hotel Re Ferdinando", "Re Ferdinando"]
+    canonical: "Grand Hotel delle Terme Re Ferdinando",
+    aliases: ["Hotel Re Ferdinando", "Re Ferdinando", "Re Ferdinanod", "Grand Hotel delle Terme Re Ferdinando"]
   },
   {
-    canonical: "Hotel Felix",
-    aliases: ["Hotel Felix", "Felix"]
+    canonical: "Hotel Terme Felix",
+    aliases: ["Hotel Felix", "Felix", "Hotel Terme Felix"]
   },
   {
-    canonical: "Hotel Terme Augusto",
-    aliases: ["Hotel Terme Augusto", "Terme Augusto", "Augusto"]
+    canonical: "Grand Hotel Terme di Augusto",
+    aliases: ["Hotel Terme Augusto", "Terme Augusto", "Augusto", "Grand Hotel Terme di Augusto"]
   },
   {
     canonical: "Hotel Saint Raphael",
     aliases: ["Hotel Saint Raphael", "Saint Raphael", "St Raphael", "Saint-Raphael"]
+  },
+  {
+    canonical: "Hotel Terme Colella",
+    aliases: ["Hotel Terme Colella", "Colella"]
+  },
+  {
+    canonical: "San Valentino Terme",
+    aliases: ["San Valentino Terme", "San Valentino"]
+  },
+  {
+    canonical: "Parco Hotel Terme Villa Teresa",
+    aliases: ["Parco Hotel Terme Villa Teresa", "Villa Teresa"]
+  },
+  {
+    canonical: "Hotel Floridiana Terme",
+    aliases: ["Hotel Floridiana Terme", "Floridiana"]
+  },
+  {
+    canonical: "Hotel Terme Oriente",
+    aliases: ["Hotel Terme Oriente", "Oriente"]
+  },
+  {
+    canonical: "Hotel Aragonese",
+    aliases: ["Hotel Aragonese", "Aragonese", "Aregonese"]
+  },
+  {
+    canonical: "Royal Palm Hotel Terme",
+    aliases: ["Royal Palm Hotel Terme", "Royal Palm"]
+  },
+  {
+    canonical: "Hotel Eden Park",
+    aliases: ["Hotel Eden Park", "Eden Park"]
   }
 ];
 
@@ -56,4 +88,3 @@ export function canonicalizeKnownHotelName(value?: string | null) {
 
   return clean(value);
 }
-

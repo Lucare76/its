@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import type { PricingAuthContext } from "@/lib/server/pricing-auth";
+import { requireQuotesAccess } from "@/lib/server/quotes-access";
 
 export const runtime = "nodejs";
 
@@ -36,6 +37,8 @@ export async function GET(request: NextRequest) {
   try {
     const auth = await authorizePricingRequest(request, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
+    const denied = await requireQuotesAccess(auth);
+    if (denied) return denied;
     return NextResponse.json({ ok: true, ...(await loadQuotes(auth)) });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
@@ -46,6 +49,8 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await authorizePricingRequest(request, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
+    const denied = await requireQuotesAccess(auth);
+    if (denied) return denied;
     const tenantId = auth.membership.tenant_id;
     const body = await request.json().catch(() => null);
     const action = String(body?.action ?? "create_quote");

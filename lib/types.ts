@@ -253,6 +253,8 @@ export interface TenantBusAllocation {
   service_id: string;
   bus_line_id: string;
   bus_unit_id: string;
+  root_allocation_id?: string | null;
+  split_from_allocation_id?: string | null;
   stop_id?: string | null;
   stop_name: string;
   direction: ServiceDirection;
@@ -266,6 +268,9 @@ export interface TenantBusAllocationMove {
   id: string;
   tenant_id: string;
   service_id: string;
+  allocation_id?: string | null;
+  target_allocation_id?: string | null;
+  root_allocation_id?: string | null;
   from_bus_unit_id?: string | null;
   to_bus_unit_id?: string | null;
   stop_name?: string | null;

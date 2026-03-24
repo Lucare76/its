@@ -18,6 +18,10 @@
     "seed:demo": "node scripts/seed-demo.mjs",
     "seed:sample-pdf": "node scripts/process-sample-pdf.mjs",
     "inbound:test": "node scripts/test-inbound.mjs",
+    "bus:simulate-client-excel": "pnpm exec tsx scripts/simulate-client-bus-excel.ts",
+    "bus:simulate-ops": "pnpm exec tsx scripts/simulate-imported-bus-ops.ts",
+    "bus:allocate-imported": "pnpm exec tsx scripts/allocate-imported-bus-services.ts",
+    "bus:import-client-excel": "pnpm exec tsx scripts/import-client-bus-excel.ts",
     "db:bootstrap": "node scripts/db-sql-editor.mjs bootstrap",
     "db:seed": "node scripts/db-sql-editor.mjs seed"
   },

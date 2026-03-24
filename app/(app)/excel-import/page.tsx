@@ -3,6 +3,7 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { findBusStopsByCity, findNearestBusStop } from "@/lib/bus-lines-catalog";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { Hotel } from "@/lib/types";
 
@@ -69,6 +70,22 @@ type ImportResponse = {
 };
 
 type PresetKey = "generic_transfer" | "formula_snav" | "formula_medmar" | "transfer_airport" | "transfer_station" | "linea_bus";
+type SheetTemplate = "lista_operativa" | "dispatch_cliente" | "prenotazioni" | "linea_bus_arrivi_cliente" | "linea_bus_partenze_cliente" | "non_riconosciuto";
+type SimulatedBusLoad = {
+  label: string;
+  pax: number;
+  remaining: number;
+  rows: number;
+};
+type SimulatedFamilyLoad = {
+  key: string;
+  direction: "arrival" | "departure";
+  familyLabel: string;
+  totalPax: number;
+  totalRows: number;
+  buses: SimulatedBusLoad[];
+  unassignedPax: number;
+};
 
 const mappingTargetMeta: Array<{ target: MappingTarget; label: string; patterns: string[] }> = [
   { target: "customer_name", label: "Cliente", patterns: ["cliente", "beneficiario", "nominativo"] },
@@ -116,6 +133,11 @@ const monthMap: Record<string, string> = {
   jan: "01",
   apri: "04"
 };
+const clientBusFamilyConfig = {
+  ITALIA: { buses: 5, capacity: 54, label: "Linea Italia" },
+  CENTRO: { buses: 3, capacity: 54, label: "Linea Centro" },
+  ADRIATICA: { buses: 1, capacity: 54, label: "Linea Adriatica" }
+} as const;
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
@@ -130,9 +152,16 @@ function normalizeText(value: string) {
     .trim();
 }
 
-function detectTemplate(sheet: SheetPreview) {
+function detectTemplate(sheet: SheetPreview): SheetTemplate {
   const header = sheet.header.map(normalize);
   const headerText = header.join(" | ");
+  const firstRow = sheet.sample[0]?.map(normalize).join(" | ") ?? "";
+  if (firstRow.includes("arrivi") && headerText.includes("orario") && headerText.includes("punto di carico") && headerText.includes("hotel destinazione")) {
+    return "linea_bus_arrivi_cliente";
+  }
+  if (firstRow.includes("partenze") && headerText.includes("hotel partenza") && headerText.includes("destinazione")) {
+    return "linea_bus_partenze_cliente";
+  }
   if (headerText.includes("autista") && headerText.includes("cliente") && headerText.includes("mezzo")) {
     return "lista_operativa";
   }
@@ -217,6 +246,42 @@ function parseDirectionCell(value: string): "arrival" | "departure" | null {
   return null;
 }
 
+function inferDateFromFilename(fileName: string | null) {
+  const normalized = String(fileName ?? "")
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const match = normalizeText(normalized).match(/^(\d{1,2}) ([a-z]{3,9}) (\d{4})$/);
+  if (!match) return "";
+  const day = match[1].padStart(2, "0");
+  const monthKey = match[2].slice(0, 3);
+  const month = monthMap[monthKey] ?? "";
+  return month ? `${match[3]}-${month}-${day}` : "";
+}
+
+function parseTimeAndCity(raw: string) {
+  const compact = String(raw ?? "").replace(/\s+/g, " ").trim();
+  const match = compact.match(/^(\d{1,2}:\d{2})\s+(.+)$/);
+  return {
+    time: match ? parseTimeCell(match[1]) : "",
+    city: match ? match[2].trim() : compact
+  };
+}
+
+function extractDestinationCity(raw: string) {
+  const compact = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!compact) return "";
+  return compact.split(" - ")[0]?.split(",")[0]?.trim() ?? compact;
+}
+
+function deriveBusFamilyFromLineCode(lineCode?: string | null) {
+  const normalized = normalizeText(lineCode ?? "");
+  if (normalized.includes("11") || normalized.includes("adriatica")) return "ADRIATICA" as const;
+  if (normalized.includes("7") || normalized.includes("8") || normalized.includes("centro")) return "CENTRO" as const;
+  return "ITALIA" as const;
+}
+
 function localRowIssues(row: Omit<CandidateRow, "localIssues">, defaultHotelId: string) {
   const issues: string[] = [];
   if (!row.customer_name) issues.push("cliente mancante");
@@ -241,6 +306,7 @@ export default function ExcelImportPage() {
   const [hotels, setHotels] = useState<Hotel[]>([]);
   const [result, setResult] = useState<ImportResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [inferredFileDate, setInferredFileDate] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -265,6 +331,49 @@ export default function ExcelImportPage() {
 
   useEffect(() => {
     if (!selectedSheet) return;
+    const nextTemplate = detectTemplate(selectedSheet);
+    if (nextTemplate === "linea_bus_arrivi_cliente") {
+      setMappings({
+        customer_name: "nominativo ",
+        date: "",
+        time: "orario ",
+        pickup: "punto di carico ",
+        destination: "hotel destinazione ",
+        pax: "n° pax ",
+        transport_code: "",
+        phone: "cell ",
+        notes: "note ",
+        departure_date: "",
+        departure_time: "",
+        direction: "",
+        billing_party_name: "agenzia ",
+        bus_city_origin: ""
+      });
+      setPresetKey("linea_bus");
+      setDefaultDirection("arrival");
+      return;
+    }
+    if (nextTemplate === "linea_bus_partenze_cliente") {
+      setMappings({
+        customer_name: "nominativo ",
+        date: "",
+        time: "",
+        pickup: "hotel partenza ",
+        destination: "hotel partenza ",
+        pax: "n° pax ",
+        transport_code: "",
+        phone: "cell ",
+        notes: "note ",
+        departure_date: "",
+        departure_time: "",
+        direction: "",
+        billing_party_name: "agenzia ",
+        bus_city_origin: ""
+      });
+      setPresetKey("linea_bus");
+      setDefaultDirection("departure");
+      return;
+    }
     setMappings(suggestMappings(selectedSheet));
   }, [selectedSheet]);
 
@@ -287,6 +396,63 @@ export default function ExcelImportPage() {
       const index = source ? headerIndexes.get(source) : undefined;
       return index === undefined ? "" : String(row[index] ?? "").trim();
     };
+
+    if (templateType === "linea_bus_arrivi_cliente") {
+      return selectedSheet.allRows
+        .slice(2)
+        .map((row, index) => {
+          const { time, city } = parseTimeAndCity(String(row[0] ?? ""));
+          const matched = findNearestBusStop(city, time) ?? findBusStopsByCity(city)[0] ?? null;
+          const base = {
+            row_index: index + 3,
+            customer_name: String(row[3] ?? "").trim(),
+            date: inferredFileDate,
+            time: time || matched?.stop.time || "",
+            pickup: String(row[1] ?? "").trim(),
+            destination: String(row[5] ?? "").trim(),
+            pax: parsePaxCell(String(row[2] ?? "")),
+            transport_code: matched?.lineCode ?? "",
+            phone: String(row[4] ?? "").trim(),
+            notes: [String(row[7] ?? "").trim(), String(row[6] ?? "").trim()].filter(Boolean).join(" | "),
+            departure_date: "",
+            departure_time: "",
+            direction: "arrival" as const,
+            billing_party_name: String(row[9] ?? "").trim(),
+            bus_city_origin: matched?.stop.city ?? city
+          };
+          return { ...base, localIssues: localRowIssues(base, defaultHotelId) };
+        })
+        .filter((row) => row.customer_name || row.destination || row.bus_city_origin || row.pax > 0);
+    }
+
+    if (templateType === "linea_bus_partenze_cliente") {
+      return selectedSheet.allRows
+        .slice(2)
+        .map((row, index) => {
+          const mainlandDestination = String(row[4] ?? "").trim();
+          const mainlandCity = extractDestinationCity(mainlandDestination);
+          const matched = findNearestBusStop(mainlandCity) ?? findBusStopsByCity(mainlandCity)[0] ?? null;
+          const base = {
+            row_index: index + 3,
+            customer_name: String(row[2] ?? "").trim(),
+            date: inferredFileDate,
+            time: matched?.stop.time ?? "",
+            pickup: String(row[0] ?? "").trim(),
+            destination: String(row[0] ?? "").trim(),
+            pax: parsePaxCell(String(row[1] ?? "")),
+            transport_code: matched?.lineCode ?? "",
+            phone: String(row[3] ?? "").trim(),
+            notes: [String(row[7] ?? "").trim(), mainlandDestination].filter(Boolean).join(" | "),
+            departure_date: "",
+            departure_time: "",
+            direction: "departure" as const,
+            billing_party_name: String(row[6] ?? "").trim(),
+            bus_city_origin: matched?.stop.city ?? mainlandCity
+          };
+          return { ...base, localIssues: localRowIssues(base, defaultHotelId) };
+        })
+        .filter((row) => row.customer_name || row.destination || row.bus_city_origin || row.pax > 0);
+    }
 
     return selectedSheet.allRows
       .slice(1)
@@ -330,7 +496,52 @@ export default function ExcelImportPage() {
           row.bus_city_origin
         ].some((value) => value.trim().length > 0) || row.pax > 0
       );
-  }, [defaultHotelId, mappings, selectedSheet]);
+  }, [defaultHotelId, inferredFileDate, mappings, selectedSheet, templateType]);
+
+  const busSimulation = useMemo<SimulatedFamilyLoad[]>(() => {
+    const grouped = new Map<string, CandidateRow[]>();
+    for (const row of candidateRows) {
+      if (!row.direction || row.pax <= 0) continue;
+      const family = deriveBusFamilyFromLineCode(row.transport_code || row.bus_city_origin);
+      const key = `${row.direction}|${family}`;
+      const list = grouped.get(key) ?? [];
+      list.push(row);
+      grouped.set(key, list);
+    }
+
+    return Array.from(grouped.entries()).map(([key, rows]) => {
+      const [direction, familyCode] = key.split("|") as ["arrival" | "departure", keyof typeof clientBusFamilyConfig];
+      const config = clientBusFamilyConfig[familyCode];
+      const buses = Array.from({ length: config.buses }, (_, index) => ({
+        label: `${familyCode} ${index + 1}`,
+        pax: 0,
+        remaining: config.capacity,
+        rows: 0
+      }));
+      let unassignedPax = 0;
+
+      for (const row of [...rows].sort((left, right) => right.pax - left.pax)) {
+        const target = buses.find((bus) => bus.remaining >= row.pax);
+        if (!target) {
+          unassignedPax += row.pax;
+          continue;
+        }
+        target.pax += row.pax;
+        target.remaining -= row.pax;
+        target.rows += 1;
+      }
+
+      return {
+        key,
+        direction,
+        familyLabel: config.label,
+        totalPax: rows.reduce((sum, row) => sum + row.pax, 0),
+        totalRows: rows.length,
+        buses,
+        unassignedPax
+      };
+    });
+  }, [candidateRows]);
 
   const candidateStats = useMemo(
     () => ({
@@ -365,9 +576,11 @@ export default function ExcelImportPage() {
 
       setSheets(nextSheets);
       setSelectedSheetName(nextSheets[0]?.name ?? "");
+      setInferredFileDate(inferDateFromFilename(file.name));
       setMessage(`File letto correttamente: ${file.name}`);
     } catch (error) {
       setSheets([]);
+      setInferredFileDate("");
       setMessage(error instanceof Error ? error.message : "Impossibile leggere il file Excel.");
     }
   };
@@ -453,6 +666,9 @@ export default function ExcelImportPage() {
 
       <SectionCard title="Upload file Excel" subtitle="Il file viene letto nel browser. L'import server parte solo dopo il dry run.">
         <input type="file" accept=".xlsx,.xls,.csv" className="input-saas" onChange={(event) => void handleFile(event)} />
+        {inferredFileDate ? (
+          <p className="mt-3 text-xs text-muted">Data inferita dal nome file: <span className="font-semibold text-text">{inferredFileDate}</span></p>
+        ) : null}
       </SectionCard>
 
       <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
@@ -593,6 +809,38 @@ export default function ExcelImportPage() {
             </article>
           </div>
         ) : null}
+      </SectionCard>
+
+      <SectionCard title="Simulazione sistemazione bus" subtitle="Proposta locale di riempimento bus basata sulle linee del catalogo e sulle capienze operative del modulo.">
+        {busSimulation.length === 0 ? (
+          <EmptyState title="Nessuna simulazione disponibile" description="Carica un Excel linea bus o completa il mapping per ottenere una proposta di sistemazione." compact />
+        ) : (
+          <div className="space-y-3">
+            {busSimulation.map((group) => (
+              <article key={group.key} className="rounded-2xl border border-border bg-surface/80 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-text">{group.familyLabel} - {group.direction}</p>
+                    <p className="text-xs text-muted">{group.totalRows} prenotazioni - {group.totalPax} pax</p>
+                  </div>
+                  <span className={group.unassignedPax > 0 ? "rounded-full bg-amber-50 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-amber-700" : "rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-emerald-700"}>
+                    {group.unassignedPax > 0 ? `${group.unassignedPax} pax da gestire` : "capienza sufficiente"}
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {group.buses.map((bus) => (
+                    <article key={bus.label} className="rounded-2xl border border-slate-200 bg-white/80 p-3 text-sm">
+                      <p className="font-semibold text-text">{bus.label}</p>
+                      <p className="mt-1 text-muted">{bus.pax} pax assegnati</p>
+                      <p className="text-muted">{bus.remaining} posti residui</p>
+                      <p className="text-muted">{bus.rows} prenotazioni</p>
+                    </article>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </SectionCard>
 
       <SectionCard title="Righe candidate" subtitle="Anteprima normalizzata delle prime righe che il sistema prova a trasformare in servizi.">

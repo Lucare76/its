@@ -58,6 +58,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [authLoading, setAuthLoading] = useState(true);
   const [authRole, setAuthRole] = useState<UserRole | null>(null);
   const [authTenantId, setAuthTenantId] = useState<string | null>(null);
+  const [quotesAccess, setQuotesAccess] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [inboxSoundEnabled, setInboxSoundEnabled] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -68,7 +69,15 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     return localStorage.getItem("it-theme") === "dark";
   });
   const title = useMemo(() => pageTitle(pathname), [pathname]);
-  const allowedNav = useMemo(() => appNav.filter((item) => isAllowed(item.href, authRole)), [authRole]);
+  const allowedNav = useMemo(
+    () =>
+      appNav.filter((item) => {
+        if (!isAllowed(item.href, authRole)) return false;
+        if (item.href === "/preventivo-ops") return quotesAccess;
+        return true;
+      }),
+    [authRole, quotesAccess]
+  );
 
   const redirectByRole = (role: UserRole | null) => {
     if (!role) return "/login";
@@ -94,6 +103,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setNeedsOnboarding(false);
         setAuthRole(e2eOverride.role);
         setAuthTenantId(e2eOverride.tenantId);
+        setQuotesAccess(e2eOverride.role === "admin" || e2eOverride.role === "operator");
         setAuthLoading(false);
         if (!isAllowed(pathname, e2eOverride.role)) {
           hardRedirect(redirectByRole(e2eOverride.role));
@@ -106,6 +116,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setNeedsOnboarding(false);
         setAuthRole(null);
         setAuthTenantId(null);
+        setQuotesAccess(false);
         setAuthLoading(false);
         hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
         return;
@@ -117,6 +128,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setNeedsOnboarding(false);
         setAuthRole(null);
         setAuthTenantId(null);
+        setQuotesAccess(false);
         setAuthLoading(false);
         hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
         return;
@@ -129,6 +141,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setNeedsOnboarding(false);
         setAuthRole(null);
         setAuthTenantId(null);
+        setQuotesAccess(false);
         setAuthLoading(false);
         hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
         return;
@@ -152,6 +165,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setNeedsOnboarding(true);
         setAuthRole(null);
         setAuthTenantId(null);
+        setQuotesAccess(false);
         setAuthLoading(false);
         if (pathname !== "/onboarding") {
           hardRedirect("/onboarding");
@@ -162,7 +176,25 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       setNeedsOnboarding(false);
       setAuthRole(resolvedRole);
       setAuthTenantId(resolvedTenantId);
+      let resolvedQuotesAccess = false;
+      if (resolvedRole === "admin" || resolvedRole === "operator") {
+        const quotesAccessResponse = await fetch("/api/ops/quotes/access", {
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
+        });
+        const quotesAccessPayload = (await quotesAccessResponse.json().catch(() => null)) as
+          | { ok?: boolean; can_access?: boolean }
+          | null;
+        if (!active) return;
+        resolvedQuotesAccess = quotesAccessResponse.ok && quotesAccessPayload?.ok === true && quotesAccessPayload.can_access === true;
+      }
+      setQuotesAccess(resolvedQuotesAccess);
       setAuthLoading(false);
+      if (pathname.startsWith("/preventivo-ops") && !resolvedQuotesAccess) {
+        hardRedirect(redirectByRole(resolvedRole));
+        return;
+      }
       if (!isAllowed(pathname, resolvedRole)) {
         hardRedirect(redirectByRole(resolvedRole));
       }

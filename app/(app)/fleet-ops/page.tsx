@@ -20,6 +20,7 @@ type Vehicle = {
 };
 
 type Driver = { user_id: string; full_name: string };
+
 type Anomaly = {
   id: string;
   vehicle_id: string;
@@ -93,11 +94,19 @@ export default function FleetOpsPage() {
     setMessage("Flotta aggiornata.");
   };
 
+  if (loading) {
+    return (
+      <section className="page-section">
+        <p className="text-sm text-muted">Caricamento flotta...</p>
+      </section>
+    );
+  }
+
   return (
     <section className="page-section">
       <PageHeader
         title="Mezzi e Autisti Ischia"
-        subtitle="Associazione mezzo ↔ autista abituale, blocchi veicolo e anomalie."
+        subtitle="Associazione mezzo <-> autista abituale, blocchi veicolo e anomalie."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Flotta Ops" }]}
       />
 
@@ -166,7 +175,7 @@ export default function FleetOpsPage() {
                     vehicle_size: (document.getElementById("fleet-size") as HTMLSelectElement | null)?.value ?? "medium",
                     habitual_driver_user_id: (document.getElementById("fleet-driver") as HTMLSelectElement | null)?.value ?? null,
                     default_zone: (document.getElementById("fleet-zone") as HTMLInputElement | null)?.value ?? "",
-                    blocked_until: ((document.getElementById("fleet-blocked-until") as HTMLInputElement | null)?.value || null),
+                    blocked_until: (document.getElementById("fleet-blocked-until") as HTMLInputElement | null)?.value || null,
                     blocked_reason: (document.getElementById("fleet-blocked-reason") as HTMLInputElement | null)?.value ?? "",
                     notes: (document.getElementById("fleet-notes") as HTMLTextAreaElement | null)?.value ?? "",
                     capacity: selectedVehicle.capacity ?? null,
@@ -218,7 +227,11 @@ export default function FleetOpsPage() {
                     </div>
                     <p className="text-muted">{anomaly.description ?? "Nessuna descrizione"}</p>
                     <p className="text-xs text-muted">Segnalata il {new Date(anomaly.reported_at).toLocaleString("it-IT")}</p>
-                    <button type="button" className="btn-secondary mt-2 px-3 py-1.5 text-xs" onClick={() => void post({ action: "resolve_anomaly", anomaly_id: anomaly.id, vehicle_id: selectedVehicle.id })}>
+                    <button
+                      type="button"
+                      className="btn-secondary mt-2 px-3 py-1.5 text-xs"
+                      onClick={() => void post({ action: "resolve_anomaly", anomaly_id: anomaly.id, vehicle_id: selectedVehicle.id })}
+                    >
                       Risolvi anomalia
                     </button>
                   </article>
@@ -230,7 +243,7 @@ export default function FleetOpsPage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="Abbinamenti autista ↔ mezzo" subtitle="L'assegnazione resta manuale, ma qui consolidi i mezzi abituali">
+      <SectionCard title="Abbinamenti autista <-> mezzo" subtitle="L'assegnazione resta manuale, ma qui consolidi i mezzi abituali">
         <div className="overflow-x-auto rounded-xl border border-slate-200">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
@@ -245,7 +258,9 @@ export default function FleetOpsPage() {
               {vehicles.map((vehicle) => (
                 <tr key={vehicle.id} className="border-t border-slate-100">
                   <td className="px-3 py-2">{vehicle.label}</td>
-                  <td className="px-3 py-2">{vehicle.habitual_driver_user_id ? driverNameById.get(vehicle.habitual_driver_user_id) ?? vehicle.habitual_driver_user_id : "N/D"}</td>
+                  <td className="px-3 py-2">
+                    {vehicle.habitual_driver_user_id ? driverNameById.get(vehicle.habitual_driver_user_id) ?? vehicle.habitual_driver_user_id : "N/D"}
+                  </td>
                   <td className="px-3 py-2">{vehicle.default_zone ?? "N/D"}</td>
                   <td className="px-3 py-2">{vehicle.is_blocked_manual || vehicle.blocked_until ? "Non disponibile" : "Disponibile"}</td>
                 </tr>

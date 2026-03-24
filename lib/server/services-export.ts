@@ -408,6 +408,66 @@ function buildOperationalClientSheet(
   return sheet;
 }
 
+function buildBusOperationalSheet(
+  services: ServiceRow[],
+  allocationDetails: Array<Record<string, unknown>>,
+  assignmentsByServiceId: Map<string, AssignmentRow>,
+  membershipsByUserId: Map<string, MembershipRow>
+) {
+  const detailByServiceId = new Map(
+    allocationDetails.map((detail) => [String(detail.service_id), detail])
+  );
+
+  const header = [
+    "Linea",
+    "Bus",
+    "Fermata",
+    "Citta fermata",
+    "Data servizio",
+    "Ora servizio",
+    "Cliente",
+    "Telefono",
+    "Hotel",
+    "Pax allocati",
+    "Driver",
+    "Mezzo export",
+    "Tipo allocazione",
+    "ID servizio",
+    "ID allocazione"
+  ];
+
+  const rows = services.map((service) => {
+    const detail = detailByServiceId.get(service.id);
+    const assignment = assignmentsByServiceId.get(service.id);
+    const driverName = assignment?.driver_user_id
+      ? membershipsByUserId.get(assignment.driver_user_id)?.full_name ?? assignment.driver_user_id
+      : "";
+
+    return [
+      String(detail?.line_name ?? ""),
+      String(detail?.bus_label ?? ""),
+      String(detail?.stop_name ?? ""),
+      String(detail?.stop_city ?? ""),
+      String(detail?.service_date ?? service.date ?? ""),
+      String(detail?.service_time ?? service.time ?? ""),
+      String(detail?.customer_name ?? service.customer_name ?? ""),
+      String(detail?.customer_phone ?? service.phone ?? ""),
+      String(detail?.hotel_name ?? ""),
+      Number(detail?.pax_assigned ?? service.pax ?? 0),
+      driverName,
+      assignment?.vehicle_label ?? service.bus_plate ?? "",
+      detail?.split_from_allocation_id ? "split" : "booking-root",
+      service.id,
+      String(detail?.allocation_id ?? "")
+    ];
+  });
+
+  const sheetRows = [header, ...rows];
+  const sheet = XLSX.utils.aoa_to_sheet(sheetRows);
+  applySheetFormatting(sheet, sheetRows);
+  return sheet;
+}
+
 function buildOperationalSummarySheet(services: ServiceRow[]) {
   const totalServices = services.length;
   const totalPax = services.reduce((sum, service) => sum + service.pax, 0);
@@ -554,7 +614,7 @@ export async function buildServicesExportXlsx(request: NextRequest) {
     const serviceIds = services.map((service) => service.id);
     const hotelIds = Array.from(new Set(services.map((service) => service.hotel_id)));
 
-    const [{ data: hotelsData }, { data: assignmentsData }, { data: tenantMembershipsData }, { data: statusEventsData }] =
+    const [{ data: hotelsData }, { data: assignmentsData }, { data: tenantMembershipsData }, { data: statusEventsData }, { data: allocationDetailsData }] =
       await Promise.all([
         hotelIds.length > 0
           ? admin.from("hotels").select("id, name, address, zone").eq("tenant_id", tenantId).in("id", hotelIds)
@@ -574,6 +634,12 @@ export async function buildServicesExportXlsx(request: NextRequest) {
               .eq("tenant_id", tenantId)
               .in("service_id", serviceIds)
               .order("at", { ascending: true })
+          : Promise.resolve({ data: [] }),
+        serviceIds.length > 0
+          ? admin
+              .from("ops_bus_allocation_details")
+              .select("*")
+              .in("service_id", serviceIds)
           : Promise.resolve({ data: [] })
       ]);
 
@@ -584,6 +650,7 @@ export async function buildServicesExportXlsx(request: NextRequest) {
     const membershipsByUserId = new Map(
       (tenantMembershipsData as MembershipRow[] | null ?? []).map((member) => [member.user_id, member])
     );
+    const allocationDetails = (allocationDetailsData as Array<Record<string, unknown>> | null) ?? [];
 
     const filteredServices = services;
     const billingPartyFilter = filters.billingParty.trim().toLowerCase();
@@ -664,6 +731,13 @@ export async function buildServicesExportXlsx(request: NextRequest) {
         buildOperationalClientSheet(presetRows, hotelsById, isDeparturePreset),
         "Operativo cliente"
       );
+      if (filters.exportPreset === "arrivals_bus_line" || filters.exportPreset === "departures_bus_line") {
+        XLSX.utils.book_append_sheet(
+          workbook,
+          buildBusOperationalSheet(presetRows, allocationDetails, assignmentsByServiceId, membershipsByUserId),
+          "Bus Operativo"
+        );
+      }
     } else if (filters.exportPreset === "statement_agency") {
       const statementRows = filteredServices.filter((service) =>
         billingPartyFilter ? (service.billing_party_name ?? "").trim().toLowerCase() === billingPartyFilter : true

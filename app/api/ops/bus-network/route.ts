@@ -63,13 +63,20 @@ const moveSchema = z.object({
   reason: z.string().max(500).optional().nullable()
 });
 
+const reorderStopsSchema = z.object({
+  bus_line_id: z.string().uuid(),
+  direction: z.enum(["arrival", "departure"]),
+  stop_ids: z.array(z.string().uuid()).min(1)
+});
+
 async function loadBusNetwork(auth: PricingAuthContext) {
   const tenantId = auth.membership.tenant_id;
-  const [linesResult, stopsResult, unitsResult, allocationsResult, movesResult, servicesResult, hotelsResult] = await Promise.all([
+  const [linesResult, stopsResult, unitsResult, allocationsResult, allocationDetailsResult, movesResult, servicesResult, hotelsResult] = await Promise.all([
     auth.admin.from("tenant_bus_lines").select("*").eq("tenant_id", tenantId).order("family_code").order("name"),
-    auth.admin.from("tenant_bus_line_stops").select("*").eq("tenant_id", tenantId).order("direction").order("stop_order"),
+    auth.admin.from("tenant_bus_line_stops").select("*").eq("tenant_id", tenantId).order("direction").order("order_index").order("stop_order"),
     auth.admin.from("tenant_bus_units").select("*").eq("tenant_id", tenantId).order("bus_line_id").order("sort_order"),
     auth.admin.from("tenant_bus_allocations").select("*").eq("tenant_id", tenantId),
+    auth.admin.from("ops_bus_allocation_details").select("*"),
     auth.admin.from("tenant_bus_allocation_moves").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }).limit(80),
     auth.admin
       .from("services")
@@ -86,6 +93,7 @@ async function loadBusNetwork(auth: PricingAuthContext) {
     stopsResult.error ||
     unitsResult.error ||
     allocationsResult.error ||
+    allocationDetailsResult.error ||
     movesResult.error ||
     servicesResult.error ||
     hotelsResult.error;
@@ -152,6 +160,7 @@ async function loadBusNetwork(auth: PricingAuthContext) {
     stops,
     units,
     allocations,
+    allocation_details: allocationDetailsResult.data ?? [],
     moves: movesResult.data ?? [],
     services: enrichedServices,
     unit_loads: unitLoads,
@@ -232,6 +241,7 @@ export async function POST(request: NextRequest) {
               city: stop.city,
               pickup_note: stop.pickup_note,
               stop_order: stop.stop_order,
+              order_index: stop.stop_order,
               lat: stop.lat,
               lng: stop.lng,
               is_manual: stop.is_manual,
@@ -286,6 +296,7 @@ export async function POST(request: NextRequest) {
           city: parsed.city,
           pickup_note: parsed.pickup_note ?? null,
           stop_order: parsed.stop_order,
+          order_index: parsed.stop_order,
           lat: parsed.lat ?? null,
           lng: parsed.lng ?? null,
           is_manual: true,
@@ -299,6 +310,7 @@ export async function POST(request: NextRequest) {
           city: parsed.city,
           pickup_note: parsed.pickup_note ?? null,
           stop_order: departureOrder,
+          order_index: departureOrder,
           lat: parsed.lat ?? null,
           lng: parsed.lng ?? null,
           is_manual: true,
@@ -378,6 +390,20 @@ export async function POST(request: NextRequest) {
         p_pax_moved: parsed.pax_moved,
         p_reason: parsed.reason ?? null,
         p_created_by_user_id: auth.user.id
+      });
+      if (error) {
+        return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+      }
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
+    if (action === "reorder_stops") {
+      const parsed = reorderStopsSchema.parse(body);
+      const { error } = await auth.admin.rpc("reorder_bus_line_stops", {
+        p_tenant_id: tenantId,
+        p_bus_line_id: parsed.bus_line_id,
+        p_direction: parsed.direction,
+        p_stop_ids: parsed.stop_ids
       });
       if (error) {
         return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
