@@ -700,7 +700,8 @@ export default function HotelsPage() {
                   <tr>
                     <th className="px-3 py-2 font-medium">Nome</th>
                     <th className="px-3 py-2 font-medium">Indirizzo</th>
-                    <th className="px-3 py-2 font-medium">Citta</th>
+                    <th className="px-3 py-2 font-medium">Città</th>
+                    <th className="px-3 py-2 font-medium">Zona</th>
                     <th className="px-3 py-2 font-medium">Lat</th>
                     <th className="px-3 py-2 font-medium">Lng</th>
                     <th className="px-3 py-2 font-medium">Fonte</th>
@@ -747,6 +748,19 @@ export default function HotelsPage() {
                             />
                           ) : (
                             hotel.city ?? "Ischia"
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <select
+                              value={editDraft.zone}
+                              onChange={(event) => setEditDraft({ ...editDraft, zone: event.target.value })}
+                              className="w-40 rounded-md border border-slate-300 px-2 py-1 text-sm"
+                            >
+                              {HOTEL_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
+                            </select>
+                          ) : (
+                            <span className="text-sm text-slate-700">{hotel.zone || "N/D"}</span>
                           )}
                         </td>
                         <td className="px-3 py-2">
