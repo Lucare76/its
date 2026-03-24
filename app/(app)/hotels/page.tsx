@@ -97,7 +97,10 @@ export default function HotelsPage() {
         .range(offset, nextLimit);
 
       if (term) {
-        query = query.or(`name.ilike.%${term}%,zone.ilike.%${term}%,address.ilike.%${term}%,city.ilike.%${term}%`);
+        const words = term.split(/\s+/).filter(Boolean);
+        for (const word of words) {
+          query = query.or(`name.ilike.%${word}%,zone.ilike.%${word}%,address.ilike.%${word}%,city.ilike.%${word}%`);
+        }
       }
 
       const { data, count, error: queryError } = await query;
