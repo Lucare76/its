@@ -166,6 +166,26 @@ export async function POST(request: NextRequest) {
       for (const line of lineRows.data ?? []) {
         const defaultStops = getDefaultStopsForLine(line.code);
         if (defaultStops.length > 0) {
+          const existingStops = await auth.admin
+            .from("tenant_bus_line_stops")
+            .select("id,is_manual")
+            .eq("tenant_id", tenantId)
+            .eq("bus_line_id", line.id);
+          if (existingStops.error) throw new Error(existingStops.error.message);
+
+          const autoStopIds = (existingStops.data ?? [])
+            .filter((stop: { id: string; is_manual: boolean }) => !stop.is_manual)
+            .map((stop: { id: string }) => stop.id);
+
+          if (autoStopIds.length > 0) {
+            const { error: deleteStopsError } = await auth.admin
+              .from("tenant_bus_line_stops")
+              .delete()
+              .eq("tenant_id", tenantId)
+              .in("id", autoStopIds);
+            if (deleteStopsError) throw new Error(deleteStopsError.message);
+          }
+
           await auth.admin.from("tenant_bus_line_stops").upsert(
             defaultStops.map((stop) => ({
               tenant_id: tenantId,
