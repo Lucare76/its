@@ -1,4 +1,5 @@
 export type UserRole = "admin" | "operator" | "driver" | "agency";
+export type VehicleSize = "small" | "medium" | "large" | "bus";
 
 export type ServiceDirection = "arrival" | "departure";
 export type ServiceType = "transfer" | "bus_tour";
@@ -163,6 +164,140 @@ export interface BusLotConfig {
   notes?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface VehicleRecord {
+  id: string;
+  tenant_id: string;
+  label: string;
+  plate?: string | null;
+  capacity?: number | null;
+  active: boolean;
+  vehicle_size?: VehicleSize | null;
+  habitual_driver_user_id?: string | null;
+  default_zone?: string | null;
+  blocked_until?: string | null;
+  blocked_reason?: string | null;
+  notes?: string | null;
+  is_blocked_manual?: boolean | null;
+  created_at?: string;
+}
+
+export interface VehicleAnomaly {
+  id: string;
+  tenant_id: string;
+  vehicle_id: string;
+  driver_user_id?: string | null;
+  severity: "low" | "medium" | "high" | "blocking";
+  title: string;
+  description?: string | null;
+  blocked_until?: string | null;
+  active: boolean;
+  resolved_at?: string | null;
+  resolved_by_user_id?: string | null;
+  reported_at: string;
+}
+
+export interface TenantBusLine {
+  id: string;
+  tenant_id: string;
+  code: string;
+  name: string;
+  family_code: string;
+  family_name: string;
+  variant_label?: string | null;
+  default_capacity: number;
+  alert_threshold: number;
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TenantBusLineStop {
+  id: string;
+  tenant_id: string;
+  bus_line_id: string;
+  direction: ServiceDirection;
+  stop_name: string;
+  city: string;
+  pickup_note?: string | null;
+  stop_order: number;
+  lat?: number | null;
+  lng?: number | null;
+  is_manual: boolean;
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TenantBusUnit {
+  id: string;
+  tenant_id: string;
+  bus_line_id: string;
+  label: string;
+  capacity: number;
+  low_seat_threshold: number;
+  minimum_passengers?: number | null;
+  status: "open" | "low" | "closed" | "completed";
+  manual_close: boolean;
+  close_reason?: string | null;
+  sort_order: number;
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TenantBusAllocation {
+  id: string;
+  tenant_id: string;
+  service_id: string;
+  bus_line_id: string;
+  bus_unit_id: string;
+  stop_id?: string | null;
+  stop_name: string;
+  direction: ServiceDirection;
+  pax_assigned: number;
+  notes?: string | null;
+  created_by_user_id?: string | null;
+  created_at?: string;
+}
+
+export interface TenantBusAllocationMove {
+  id: string;
+  tenant_id: string;
+  service_id: string;
+  from_bus_unit_id?: string | null;
+  to_bus_unit_id?: string | null;
+  stop_name?: string | null;
+  pax_moved: number;
+  reason?: string | null;
+  created_by_user_id?: string | null;
+  created_at?: string;
+}
+
+export interface QuoteRecord {
+  id: string;
+  tenant_id: string;
+  created_by_user_id?: string | null;
+  owner_label: string;
+  status: "draft" | "sent" | "accepted" | "rejected" | "expired";
+  service_kind: string;
+  route_label: string;
+  price_cents: number;
+  currency: string;
+  passenger_count?: number | null;
+  valid_until?: string | null;
+  notes?: string | null;
+  created_at: string;
+}
+
+export interface QuoteWaypoint {
+  id: string;
+  tenant_id: string;
+  quote_id: string;
+  label: string;
+  sort_order: number;
+  created_at?: string;
 }
 
 export interface InboundEmail {

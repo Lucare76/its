@@ -33,6 +33,9 @@ export interface TenantWhatsAppSettings {
   template_language: string;
   enable_2h_reminder: boolean;
   allow_text_fallback: boolean;
+  enable_arrival_messages: boolean;
+  arrival_template: string;
+  arrival_notice_minutes: number;
 }
 
 export interface SendReminderOptions {
@@ -98,12 +101,15 @@ export async function getTenantWhatsAppSettings(admin: ReturnType<typeof createA
     default_template: process.env.WHATSAPP_TEMPLATE_NAME ?? "transfer_reminder",
     template_language: normalizeLanguageCode(process.env.WHATSAPP_TEMPLATE_LANGUAGE ?? "it"),
     enable_2h_reminder: (process.env.WHATSAPP_REMINDER_2H_ENABLED ?? "false").toLowerCase() === "true",
-    allow_text_fallback: (process.env.WHATSAPP_ALLOW_TEXT_FALLBACK ?? "false").toLowerCase() === "true"
+    allow_text_fallback: (process.env.WHATSAPP_ALLOW_TEXT_FALLBACK ?? "false").toLowerCase() === "true",
+    enable_arrival_messages: false,
+    arrival_template: "arrival_welcome",
+    arrival_notice_minutes: 90
   };
 
   const { data } = await admin
     .from("tenant_whatsapp_settings")
-    .select("default_template, template_language, enable_2h_reminder, allow_text_fallback")
+    .select("default_template, template_language, enable_2h_reminder, allow_text_fallback, enable_arrival_messages, arrival_template, arrival_notice_minutes")
     .eq("tenant_id", tenantId)
     .maybeSingle();
 
@@ -112,7 +118,13 @@ export async function getTenantWhatsAppSettings(admin: ReturnType<typeof createA
     default_template: data.default_template || fallback.default_template,
     template_language: normalizeLanguageCode(data.template_language || fallback.template_language),
     enable_2h_reminder: Boolean(data.enable_2h_reminder),
-    allow_text_fallback: Boolean(data.allow_text_fallback)
+    allow_text_fallback: Boolean(data.allow_text_fallback),
+    enable_arrival_messages: Boolean(data.enable_arrival_messages),
+    arrival_template: data.arrival_template || fallback.arrival_template,
+    arrival_notice_minutes:
+      typeof data.arrival_notice_minutes === "number" && Number.isFinite(data.arrival_notice_minutes)
+        ? data.arrival_notice_minutes
+        : fallback.arrival_notice_minutes
   };
 }
 

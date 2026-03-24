@@ -15,7 +15,9 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/agency/bookings", roles: ["admin", "agency"] },
   { prefix: "/dispatch", roles: ["admin", "operator"] },
   { prefix: "/bus-tours", roles: ["admin", "operator"] },
+  { prefix: "/bus-network", roles: ["admin", "operator"] },
   { prefix: "/planning", roles: ["admin", "operator"] },
+  { prefix: "/arrivals-clock", roles: ["admin", "operator"] },
   { prefix: "/ops-summary", roles: ["admin", "operator"] },
   { prefix: "/report-center", roles: ["admin", "operator"] },
   { prefix: "/scheduler", roles: ["admin", "operator"] },
@@ -26,6 +28,8 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/audit", roles: ["admin", "operator"] },
   { prefix: "/hotels", roles: ["admin", "operator"] },
   { prefix: "/driver", roles: ["admin", "driver"] },
+  { prefix: "/fleet-ops", roles: ["admin", "operator", "driver"] },
+  { prefix: "/preventivo-ops", roles: ["admin", "operator"] },
   { prefix: "/map", roles: ["admin", "operator", "agency"] },
   { prefix: "/ingestion", roles: ["admin", "operator"] },
   { prefix: "/inbox", roles: ["admin", "operator"] },
@@ -45,7 +49,9 @@ export type AppCapability =
   | "services:create"
   | "crm_agencies:view"
   | "dispatch:manage"
+  | "bus_network:view"
   | "planning:manage"
+  | "arrivals_clock:view"
   | "ops_summary:view"
   | "report_center:view"
   | "scheduler:view"
@@ -64,6 +70,8 @@ export type AppCapability =
   | "agency_bookings:self"
   | "agency_bookings:manage"
   | "driver:self"
+  | "fleet_ops:view"
+  | "quotes:view"
   | "users:manage"
   | "whatsapp:manage";
 
@@ -77,7 +85,9 @@ export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
   "services:create": ["admin", "operator"],
   "crm_agencies:view": ["admin", "operator"],
   "dispatch:manage": ["admin", "operator"],
+  "bus_network:view": ["admin", "operator"],
   "planning:manage": ["admin", "operator"],
+  "arrivals_clock:view": ["admin", "operator"],
   "ops_summary:view": ["admin", "operator"],
   "report_center:view": ["admin", "operator"],
   "scheduler:view": ["admin", "operator"],
@@ -96,6 +106,8 @@ export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
   "agency_bookings:self": ["agency"],
   "agency_bookings:manage": ["admin"],
   "driver:self": ["driver", "admin"],
+  "fleet_ops:view": ["admin", "operator", "driver"],
+  "quotes:view": ["admin", "operator"],
   "users:manage": ["admin"],
   "whatsapp:manage": ["admin"]
 };

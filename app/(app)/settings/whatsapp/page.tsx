@@ -8,13 +8,19 @@ type WhatsAppSettings = {
   template_language: string;
   enable_2h_reminder: boolean;
   allow_text_fallback: boolean;
+  enable_arrival_messages: boolean;
+  arrival_template: string;
+  arrival_notice_minutes: number;
 };
 
 const defaultSettings: WhatsAppSettings = {
   default_template: "transfer_reminder",
   template_language: "it",
   enable_2h_reminder: false,
-  allow_text_fallback: false
+  allow_text_fallback: false,
+  enable_arrival_messages: false,
+  arrival_template: "arrival_welcome",
+  arrival_notice_minutes: 90
 };
 
 export default function WhatsAppSettingsPage() {
@@ -62,7 +68,10 @@ export default function WhatsAppSettingsPage() {
         default_template: body?.settings?.default_template ?? defaultSettings.default_template,
         template_language: body?.settings?.template_language ?? defaultSettings.template_language,
         enable_2h_reminder: Boolean(body?.settings?.enable_2h_reminder),
-        allow_text_fallback: Boolean(body?.settings?.allow_text_fallback)
+        allow_text_fallback: Boolean(body?.settings?.allow_text_fallback),
+        enable_arrival_messages: Boolean(body?.settings?.enable_arrival_messages),
+        arrival_template: body?.settings?.arrival_template ?? defaultSettings.arrival_template,
+        arrival_notice_minutes: Number(body?.settings?.arrival_notice_minutes ?? defaultSettings.arrival_notice_minutes)
       });
       setLoading(false);
       setMessage("Configura template e reminder per tenant.");
@@ -157,6 +166,37 @@ export default function WhatsAppSettingsPage() {
               onChange={(event) => setSettings((prev) => ({ ...prev, allow_text_fallback: event.target.checked }))}
             />
             Consenti fallback a messaggio testo se template fallisce
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-text">
+            <input
+              type="checkbox"
+              checked={settings.enable_arrival_messages}
+              onChange={(event) => setSettings((prev) => ({ ...prev, enable_arrival_messages: event.target.checked }))}
+            />
+            Abilita messaggi automatici clienti in arrivo
+          </label>
+
+          <label className="grid gap-1">
+            <span className="text-sm font-medium text-text">Template arrivi</span>
+            <input
+              value={settings.arrival_template}
+              onChange={(event) => setSettings((prev) => ({ ...prev, arrival_template: event.target.value }))}
+              className="input-saas"
+              placeholder="arrival_welcome"
+            />
+          </label>
+
+          <label className="grid gap-1">
+            <span className="text-sm font-medium text-text">Minuti prima dell&apos;arrivo</span>
+            <input
+              type="number"
+              min={5}
+              max={1440}
+              value={settings.arrival_notice_minutes}
+              onChange={(event) => setSettings((prev) => ({ ...prev, arrival_notice_minutes: Number(event.target.value || 90) }))}
+              className="input-saas"
+            />
           </label>
 
           <div>
