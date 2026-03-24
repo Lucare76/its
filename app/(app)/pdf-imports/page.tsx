@@ -946,7 +946,7 @@ export default function PdfImportsPage() {
                       onClick={() => setSelectedId(row.inbound_email_id)}
                     >
                       <td className="px-3 py-3 align-top"><span className={`inline-flex rounded-full border px-2 py-1 text-xs font-semibold ${statusMeta(row.status).className}`}>{statusMeta(row.status).label}</span></td>
-                      <td className="px-3 py-3 align-top"><p className="font-medium text-slate-800">{row.customer ?? "Cliente da verificare"}</p><p className="text-xs text-slate-500">{row.agency ?? "Agenzia non rilevata"}</p><p className="mt-1 text-[11px] text-slate-500">{row.external_reference ?? "Rif. non disponibile"}</p></td>
+                      <td className="px-3 py-3 align-top"><p className="font-medium uppercase text-slate-800">{row.customer ?? "Cliente da verificare"}</p><p className="text-xs text-slate-500">{row.agency ?? "Agenzia non rilevata"}</p><p className="mt-1 text-[11px] text-slate-500">{row.external_reference ?? "Rif. non disponibile"}</p></td>
                       <td className="px-3 py-3 align-top text-slate-700">{formatIsoDateShort(row.arrival_date)}</td>
                       <td className="px-3 py-3 align-top uppercase text-slate-700">{row.hotel_or_destination ?? "N/D"}</td>
                       <td className="px-3 py-3 align-top"><p className="text-slate-700">{parserLabel(row.parser_key)}</p><div className="mt-1 flex flex-wrap gap-1"><span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${qualityMeta(row.parsing_quality)}`}>{row.parsing_quality ?? "low"}</span><span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{parserModeLabel(row.parser_mode)}</span>{isOcrHeavyCase(row) ? <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">OCR rumoroso</span> : null}</div></td>
@@ -986,7 +986,7 @@ export default function PdfImportsPage() {
                       </span>
                     ) : null}
                   </div>
-                  <h2 className="mt-2 text-xl">{selected.customer ?? "Cliente da verificare"}</h2>
+                  <h2 className="mt-2 text-xl uppercase">{selected.customer ?? "Cliente da verificare"}</h2>
                   <p className="text-sm text-slate-500">{selected.agency ?? "Agenzia non rilevata"} | creato {formatIsoDateTimeShort(selected.created_at)}</p>
                   {selected.reviewed_at ? <p className="text-xs text-slate-500">Review salvata: {formatIsoDateTimeShort(selected.reviewed_at)}</p> : null}
                   {selected.review_recommended ? <p className="text-xs text-amber-700">Review manuale consigliata: parser {parserModeLabel(selected.parser_mode)} o qualita non alta.</p> : null}
@@ -1038,7 +1038,7 @@ export default function PdfImportsPage() {
                 <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                     <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Cliente</p>
-                    <p className="mt-1 font-medium text-slate-800">{selected.customer ?? "Cliente da verificare"}</p>
+                    <p className="mt-1 font-medium uppercase text-slate-800">{selected.customer ?? "Cliente da verificare"}</p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                     <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Agenzia</p>
