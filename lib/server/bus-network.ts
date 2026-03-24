@@ -62,21 +62,32 @@ const DEFAULT_BUS_FAMILY_CAPACITY: Record<BusLineFamilyCode, { buses: number; ca
   ADRIATICA: { buses: 1, capacity: 54 }
 };
 
+function extractLineNumber(source: string) {
+  const normalized = source.toLowerCase();
+  const match = normalized.match(/linea[_\s-]*(\d{1,2})/);
+  return match ? Number(match[1]) : null;
+}
+
 export function deriveBusFamily(code?: string | null, name?: string | null): { family_code: BusLineFamilyCode; family_name: string } {
-  const source = `${code ?? ""} ${name ?? ""}`.toLowerCase();
-  if (source.includes("adriatica") || source.includes("linea_11")) {
+  const source = `${code ?? ""} ${name ?? ""}`;
+  const lineNumber = extractLineNumber(source);
+  const normalized = source.toLowerCase();
+
+  if (lineNumber === 11 || normalized.includes("adriatica")) {
     return { family_code: "ADRIATICA", family_name: "Linea Adriatica" };
   }
-  if (source.includes("centro") || source.includes("linea_7") || source.includes("linea_8")) {
+
+  if (lineNumber === 7) {
     return { family_code: "CENTRO", family_name: "Linea Centro" };
   }
+
   return { family_code: "ITALIA", family_name: "Linea Italia" };
 }
 
 export function getDefaultBusNetworkLines(): BusNetworkLine[] {
   return ([
-    { code: "ITALIA", name: "Linea Italia", family_code: "ITALIA", family_name: "Linea Italia", variant_label: "Linea 1/2/3/4/5/6/9/10", default_capacity: 54, alert_threshold: 5, active: true },
-    { code: "CENTRO", name: "Linea Centro", family_code: "CENTRO", family_name: "Linea Centro", variant_label: "Linea 7/8 Centro", default_capacity: 54, alert_threshold: 5, active: true },
+    { code: "ITALIA", name: "Linea Italia", family_code: "ITALIA", family_name: "Linea Italia", variant_label: "Linea 1/2/3/4/5/6/8/9/10", default_capacity: 54, alert_threshold: 5, active: true },
+    { code: "CENTRO", name: "Linea Centro", family_code: "CENTRO", family_name: "Linea Centro", variant_label: "Linea 7 Centro", default_capacity: 54, alert_threshold: 5, active: true },
     { code: "ADRIATICA", name: "Linea Adriatica", family_code: "ADRIATICA", family_name: "Linea Adriatica", variant_label: "Linea 11 Adriatica", default_capacity: 54, alert_threshold: 5, active: true }
   ] satisfies BusNetworkLine[]);
 }
