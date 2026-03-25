@@ -16,6 +16,49 @@ import {
 import { getCustomerFullName } from "@/lib/service-display";
 import type { AgencyBookingServiceKind, OperationalServiceType } from "@/lib/types";
 import { validateBusAllocationRequest, validateBusMoveRequest } from "@/lib/server/bus-network-validation";
+import { sendBusLowSeatAlertEmail } from "@/lib/server/bus-alert-email";
+
+async function checkAndAlertLowSeats(
+  auth: PricingAuthContext,
+  tenantId: string,
+  busUnitId: string
+): Promise<{ busLabel: string; lineName: string; remainingSeats: number; threshold: number } | null> {
+  const [unitResult, allocResult] = await Promise.all([
+    auth.admin
+      .from("tenant_bus_units")
+      .select("id,bus_line_id,label,capacity,low_seat_threshold")
+      .eq("tenant_id", tenantId)
+      .eq("id", busUnitId)
+      .maybeSingle(),
+    auth.admin
+      .from("tenant_bus_allocations")
+      .select("pax_assigned")
+      .eq("tenant_id", tenantId)
+      .eq("bus_unit_id", busUnitId)
+  ]);
+  if (unitResult.error || allocResult.error || !unitResult.data) return null;
+
+  const unit = unitResult.data as { id: string; bus_line_id: string; label: string; capacity: number; low_seat_threshold: number };
+  const totalPax = (allocResult.data ?? []).reduce(
+    (sum: number, row: { pax_assigned: number }) => sum + (row.pax_assigned ?? 0),
+    0
+  );
+  const remaining = Math.max(0, unit.capacity - totalPax);
+  const threshold = unit.low_seat_threshold ?? 5;
+
+  if (remaining <= threshold) {
+    const lineResult = await auth.admin
+      .from("tenant_bus_lines")
+      .select("name")
+      .eq("tenant_id", tenantId)
+      .eq("id", unit.bus_line_id)
+      .maybeSingle();
+    const lineName = (lineResult.data as { name?: string } | null)?.name ?? "Linea bus";
+    await sendBusLowSeatAlertEmail({ busLabel: unit.label, lineName, remainingSeats: remaining, threshold });
+    return { busLabel: unit.label, lineName, remainingSeats: remaining, threshold };
+  }
+  return null;
+}
 
 export const runtime = "nodejs";
 
@@ -371,7 +414,11 @@ export async function POST(request: NextRequest) {
       if (error) {
         return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
       }
-      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+      const [networkPayload, allocateAlert] = await Promise.all([
+        loadBusNetwork(auth),
+        checkAndAlertLowSeats(auth, tenantId, parsed.bus_unit_id)
+      ]);
+      return NextResponse.json({ ok: true, ...networkPayload, low_seat_alert: allocateAlert });
     }
 
     if (action === "move_allocation") {
@@ -394,7 +441,11 @@ export async function POST(request: NextRequest) {
       if (error) {
         return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
       }
-      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+      const [networkPayload, moveAlert] = await Promise.all([
+        loadBusNetwork(auth),
+        checkAndAlertLowSeats(auth, tenantId, parsed.to_bus_unit_id)
+      ]);
+      return NextResponse.json({ ok: true, ...networkPayload, low_seat_alert: moveAlert });
     }
 
     if (action === "reorder_stops") {

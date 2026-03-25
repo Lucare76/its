@@ -46,6 +46,7 @@ export default function BusNetworkPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [lowSeatAlert, setLowSeatAlert] = useState<{ busLabel: string; lineName: string; remainingSeats: number } | null>(null);
 
   // Navigation
   const [date, setDate] = useState(() => getNextSunday());
@@ -104,9 +105,10 @@ export default function BusNetworkPage() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ action, ...data })
     });
-    const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string; low_seat_alert?: { busLabel: string; lineName: string; remainingSeats: number } | null } | null;
     setSaving(false);
     if (!res.ok || !body?.ok) { setMessage(body?.error ?? "Errore operazione."); return null; }
+    if (body?.low_seat_alert) setLowSeatAlert(body.low_seat_alert);
     await load();
     return body;
   }, [load]);
@@ -295,6 +297,16 @@ export default function BusNetworkPage() {
 
       {message && (
         <div className="mx-6 mb-0 mt-2 rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-700">{message}</div>
+      )}
+
+      {lowSeatAlert && (
+        <div className="mx-6 mb-0 mt-2 flex items-start justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <span>
+            <strong>Attenzione:</strong> il bus <strong>{lowSeatAlert.busLabel}</strong> ({lowSeatAlert.lineName}) ha solo{" "}
+            <strong>{lowSeatAlert.remainingSeats} posti rimasti</strong>. È stata inviata una notifica via email.
+          </span>
+          <button onClick={() => setLowSeatAlert(null)} className="shrink-0 rounded p-0.5 text-amber-600 hover:bg-amber-100">✕</button>
+        </div>
       )}
 
       {/* Top bar */}
