@@ -577,7 +577,9 @@ export default function BusNetworkPage() {
                         .filter((s) => s.bus_line_id === selectedLine.id && s.direction === direction)
                         .sort((a, b) => a.stop_order - b.stop_order)
                         .map((stop, idx, arr) => {
-                          const load = payload.stop_loads.find((sl) => sl.id === stop.id);
+                          const stopPaxToday = dateAllocations
+                            .filter((a) => a.stop_name.toLowerCase() === stop.stop_name.toLowerCase())
+                            .reduce((sum, a) => sum + a.pax_assigned, 0);
                           return (
                             <div key={stop.id} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
                               <span className="w-5 text-center text-xs tabular-nums text-slate-300">{stop.stop_order}</span>
@@ -587,8 +589,8 @@ export default function BusNetworkPage() {
                                 {stop.pickup_note && <span className="ml-1 text-xs text-slate-300">· {stop.pickup_note}</span>}
                                 {stop.is_manual && <span className="ml-1 rounded bg-indigo-50 px-1 text-[10px] text-indigo-500">manuale</span>}
                               </div>
-                              {load && load.pax_assigned > 0 && (
-                                <span className="rounded bg-emerald-50 px-2 text-xs font-medium text-emerald-700">{load.pax_assigned} pax</span>
+                              {stopPaxToday > 0 && (
+                                <span className="rounded bg-emerald-50 px-2 text-xs font-medium text-emerald-700">{stopPaxToday} pax</span>
                               )}
                               <div className="flex gap-0.5">
                                 <button onClick={() => void moveStopOrder(stop.id, "up")} disabled={idx === 0 || saving}
