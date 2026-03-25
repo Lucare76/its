@@ -175,6 +175,8 @@ async function main() {
   const planned: PlannedAllocation[] = [];
   const skippedAlreadyAllocated: string[] = [];
   const errors: Array<{ service_id: string; customer_name: string; message: string }> = [];
+  // Fermate create al volo durante questa esecuzione (chiave: "lineId:direction:CITY")
+  const createdStops = new Map<string, Pick<TenantBusLineStop, "id" | "bus_line_id" | "direction" | "stop_name" | "city" | "stop_order">>();
 
   for (const service of services) {
     if (allocatedServiceIds.has(service.id)) {
@@ -194,7 +196,7 @@ async function main() {
     const identityCity = normalizeBusText(identity.city);
     const aliasCities = findBusStopsByCity(service.bus_city_origin)
       .map((entry) => normalizeBusText(entry.stop.city));
-    const stop = lineStops.find((item) => {
+    let stop = lineStops.find((item) => {
       const stopCity = normalizeBusText(item.city);
       const stopName = normalizeBusText(item.stop_name);
       return (
@@ -206,9 +208,50 @@ async function main() {
         aliasCities.includes(stopName)
       );
     });
+    // Se la fermata non si trova → creala come fermata manuale
     if (!stop) {
-      errors.push({ service_id: service.id, customer_name: service.customer_name, message: `Fermata non trovata per ${service.bus_city_origin ?? "N/D"}.` });
-      continue;
+      const rawCity = (service.bus_city_origin ?? "").trim();
+      const cityName = rawCity.toUpperCase() || "SCONOSCIUTA";
+      const stopKey = `${line.id}:${service.direction}:${cityName}`;
+
+      // Riusa la fermata se già creata in questo run
+      const alreadyCreated = createdStops.get(stopKey);
+      if (alreadyCreated) {
+        stop = alreadyCreated;
+      } else {
+        const maxOrder = lineStops.reduce((max, s) => Math.max(max, s.stop_order ?? 0), 0);
+        const newStopData = {
+          tenant_id: tenantId,
+          bus_line_id: line.id,
+          direction: service.direction as "arrival" | "departure",
+          stop_name: cityName,
+          city: rawCity || cityName,
+          stop_order: maxOrder + 1,
+          order_index: maxOrder + 1,
+          is_manual: true,
+          active: true
+        };
+
+        if (apply) {
+          const { data: inserted, error: insertErr } = await admin
+            .from("tenant_bus_line_stops")
+            .insert(newStopData)
+            .select("id,bus_line_id,direction,stop_name,city,stop_order")
+            .single();
+          if (insertErr || !inserted) {
+            errors.push({ service_id: service.id, customer_name: service.customer_name, message: `Impossibile creare fermata per ${cityName}: ${insertErr?.message ?? "errore"}` });
+            continue;
+          }
+          stop = inserted as Pick<TenantBusLineStop, "id" | "bus_line_id" | "direction" | "stop_name" | "city" | "stop_order">;
+        } else {
+          // Dry-run: fermata virtuale
+          stop = { id: `new-${stopKey}`, bus_line_id: line.id, direction: service.direction as "arrival" | "departure", stop_name: cityName, city: rawCity || cityName, stop_order: maxOrder + 1 };
+        }
+
+        createdStops.set(stopKey, stop);
+        lineStops.push(stop); // disponibile per i prossimi passeggeri della stessa città
+        console.log(`[INFO] Creata fermata manuale: ${cityName} (linea ${line.code}, ${service.direction})`);
+      }
     }
 
     const buses = busesByLineId.get(line.id) ?? [];

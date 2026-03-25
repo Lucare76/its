@@ -32,10 +32,10 @@ async function main() {
   assertIncludes(busRoute, 'rpc("move_bus_allocation"', "move RPC usage");
   assertIncludes(busRoute, 'direction: "departure"', "bidirectional manual stop insert");
 
-  assertIncludes(busPage, "Aggiungi fermata bidirezionale", "bidirectional stop UI");
-  assertIncludes(busPage, "Storico movimenti", "movement audit UI");
-  assertIncludes(busPage, "Assegna prenotazione", "allocation UI");
-  assertIncludes(busPage, "Sposta prenotazione", "move UI");
+  assertIncludes(busPage, "Gestisci fermate", "stop manager UI");
+  assertIncludes(busPage, "Assegna a bus", "allocation UI");
+  assertIncludes(busPage, "Sposta passeggero", "move UI");
+  assertIncludes(busPage, "moveResidual", "move capacity preview");
 
   assertIncludes(quotesRoute, "requireQuotesAccess", "quotes access enforcement import");
   assertIncludes(quotesRoute, "const denied = await requireQuotesAccess(auth);", "quotes access enforcement usage");
@@ -45,7 +45,7 @@ async function main() {
   console.log("Bus module smoke passed:");
   console.log("- transactional RPCs present");
   console.log("- server validation hooks wired");
-  console.log("- bidirectional stop flow wired");
+  console.log("- stop manager and move preview wired");
   console.log("- quote access enforcement wired");
   console.log("- bus UI exposes allocation and movement controls");
 }

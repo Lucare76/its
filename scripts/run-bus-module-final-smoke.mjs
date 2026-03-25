@@ -21,7 +21,7 @@ async function main() {
   const quotesRoute = await read("app/api/ops/quotes/route.ts");
 
   assertIncludes(migration37, "create or replace function public.move_bus_allocation(", "transactional move RPC");
-  assertIncludes(migration38, "create or replace view public.ops_bus_allocation_details", "booking-centric allocation view");
+  assertIncludes(migration38, "create view public.ops_bus_allocation_details", "booking-centric allocation view");
   assertIncludes(migration38, "create or replace function public.reorder_bus_line_stops(", "reorder RPC");
   assertIncludes(migration38, "root_allocation_id", "allocation split lineage");
 
@@ -29,10 +29,10 @@ async function main() {
   assertIncludes(busRoute, 'rpc("reorder_bus_line_stops"', "reorder RPC wiring");
   assertIncludes(busRoute, 'from("ops_bus_allocation_details")', "booking-centric allocation load");
 
-  assertIncludes(busPage, "Drag and drop operativo", "drag and drop UI");
-  assertIncludes(busPage, "Conferma spostamento prenotazione", "drag-drop confirmation modal");
-  assertIncludes(busPage, "Confronto venerdi / sabato", "friday-saturday comparison");
-  assertIncludes(busPage, "Aggiungi fermata bidirezionale", "bidirectional stop UI");
+  assertIncludes(busPage, "onDragStart", "drag and drop wiring");
+  assertIncludes(busPage, "Sposta passeggero", "move confirmation modal");
+  assertIncludes(busPage, "Gestisci fermate", "stop manager UI");
+  assertIncludes(busPage, "Assegna a bus", "allocation modal UI");
 
   assertIncludes(exportServer, "buildBusOperationalSheet(", "bus export sheet builder");
   assertIncludes(exportServer, '"Bus Operativo"', "bus export sheet append");
@@ -45,7 +45,7 @@ async function main() {
   console.log("- booking-centric allocation lineage present");
   console.log("- drag/drop routes through confirmed move flow");
   console.log("- stop reorder RPC wired");
-  console.log("- friday/saturday comparison present");
+  console.log("- allocation and stop manager UI present");
   console.log("- bus export sheet present");
   console.log("- whatsapp preview flows present");
 }

@@ -79,6 +79,16 @@ export default function BusNetworkPage() {
   const [editDriverName, setEditDriverName] = useState("");
   const [editDriverPhone, setEditDriverPhone] = useState("");
 
+  // Delete allocation confirm
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Reset line/date modal
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetResult, setResetResult] = useState<{ allocations: number; services: number } | null>(null);
+
+  // Auto-assign
+  const [autoAssignResult, setAutoAssignResult] = useState<{ assigned: number; skipped: number; skipped_detail: Array<{ customerName: string; reason: string }> } | null>(null);
+
   const load = useCallback(async () => {
     const token = await getToken();
     if (!token) { setLoading(false); setMessage("Sessione non valida."); return; }
@@ -269,6 +279,39 @@ export default function BusNetworkPage() {
     setAssignService(null);
   }, [assignService, assignUnitId, assignStopId, lineStops, selectedLine, post]);
 
+  const deleteAllocation = useCallback(async (allocationId: string) => {
+    setDeleteConfirmId(null);
+    await post("delete_allocation", { allocation_id: allocationId });
+  }, [post]);
+
+  const resetLineDate = useCallback(async () => {
+    if (!selectedLine) return;
+    setResetModalOpen(false);
+    const token = await getToken();
+    if (!token) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/ops/bus-network", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reset_line_date", bus_line_id: selectedLine.id, date, direction })
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.ok) { setMessage(body?.error ?? "Errore reset."); return; }
+      setResetResult({ allocations: body.deleted_allocations ?? 0, services: body.deleted_services ?? 0 });
+      applyPayload(body);
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedLine, date, direction, applyPayload]);
+
+  const autoAssign = useCallback(async () => {
+    const body = await post("auto_assign_date", { date, direction }) as ({ assigned?: number; skipped?: number; skipped_detail?: Array<{ customerName: string; reason: string }> } | null);
+    if (body) {
+      setAutoAssignResult({ assigned: body.assigned ?? 0, skipped: body.skipped ?? 0, skipped_detail: body.skipped_detail ?? [] });
+    }
+  }, [post, date, direction]);
+
   const addUnit = useCallback(async () => {
     if (!newUnitLabel.trim() || !selectedLine) return;
     await post("add_unit", { bus_line_id: selectedLine.id, label: newUnitLabel.trim().toUpperCase(), capacity: 54 });
@@ -435,10 +478,21 @@ export default function BusNetworkPage() {
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium text-slate-600">
                   {selectedLine.name} — {direction === "arrival" ? "Andata" : "Ritorno"} — {fmtDate(date)}
+                  {totalPaxToday > 0 && <span className="ml-2 text-slate-400">({totalPaxToday} pax allocati)</span>}
                 </p>
-                <button onClick={() => exportExcel()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
-                  📥 Esporta Excel
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => exportExcel()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                    📥 Esporta Excel
+                  </button>
+                  <button onClick={() => void autoAssign()} disabled={saving}
+                    className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-40">
+                    ⚡ Auto-assegna
+                  </button>
+                  <button onClick={() => setResetModalOpen(true)} disabled={saving}
+                    className="flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-40">
+                    🗑 Svuota data
+                  </button>
+                </div>
               </div>
 
               {/* Bus cards */}
@@ -543,10 +597,23 @@ export default function BusNetworkPage() {
                                   <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">
                                     {alloc.pax_assigned} pax
                                   </span>
-                                  <button onClick={() => openMoveModal(alloc)}
-                                    className="rounded border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-600 opacity-0 transition-opacity hover:bg-indigo-50 group-hover:opacity-100">
-                                    Sposta
-                                  </button>
+                                  <div className="flex gap-1">
+                                    <button onClick={() => openMoveModal(alloc)}
+                                      className="rounded border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-600 opacity-0 transition-opacity hover:bg-indigo-50 group-hover:opacity-100">
+                                      Sposta
+                                    </button>
+                                    {deleteConfirmId === alloc.allocation_id ? (
+                                      <button onClick={() => void deleteAllocation(alloc.allocation_id)} disabled={saving}
+                                        className="rounded border border-rose-400 bg-rose-50 px-1.5 py-0.5 text-xs text-rose-700 opacity-100">
+                                        Conferma ✕
+                                      </button>
+                                    ) : (
+                                      <button onClick={() => setDeleteConfirmId(alloc.allocation_id)}
+                                        className="rounded border border-slate-200 px-1.5 py-0.5 text-xs text-slate-400 opacity-0 transition-opacity hover:border-rose-300 hover:text-rose-500 group-hover:opacity-100">
+                                        ✕
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             ))}
@@ -565,10 +632,23 @@ export default function BusNetworkPage() {
                               </div>
                               <div className="flex flex-shrink-0 flex-col items-end gap-1">
                                 <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">{alloc.pax_assigned} pax</span>
-                                <button onClick={() => openMoveModal(alloc)}
-                                  className="rounded border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-600 opacity-0 transition-opacity hover:bg-indigo-50 group-hover:opacity-100">
-                                  Sposta
-                                </button>
+                                <div className="flex gap-1">
+                                  <button onClick={() => openMoveModal(alloc)}
+                                    className="rounded border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-600 opacity-0 transition-opacity hover:bg-indigo-50 group-hover:opacity-100">
+                                    Sposta
+                                  </button>
+                                  {deleteConfirmId === alloc.allocation_id ? (
+                                    <button onClick={() => void deleteAllocation(alloc.allocation_id)} disabled={saving}
+                                      className="rounded border border-rose-400 bg-rose-50 px-1.5 py-0.5 text-xs text-rose-700 opacity-100">
+                                      Conferma ✕
+                                    </button>
+                                  ) : (
+                                    <button onClick={() => setDeleteConfirmId(alloc.allocation_id)}
+                                      className="rounded border border-slate-200 px-1.5 py-0.5 text-xs text-slate-400 opacity-0 transition-opacity hover:border-rose-300 hover:text-rose-500 group-hover:opacity-100">
+                                      ✕
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -683,8 +763,12 @@ export default function BusNetworkPage() {
                                 {stop.pickup_note && <span className="ml-1 text-xs text-slate-300">· {stop.pickup_note}</span>}
                                 {stop.is_manual && <span className="ml-1 rounded bg-indigo-50 px-1 text-[10px] text-indigo-500">manuale</span>}
                                 {stopAllocs.length > 0 && (
-                                  <div className="mt-0.5 text-[10px] text-slate-400">
-                                    {stopAllocs.map((a) => `${a.customer_name} (${a.pax_assigned}pax · ${a.bus_label})`).join(" · ")}
+                                  <div className="mt-0.5 space-y-0.5 text-[10px] text-slate-400">
+                                    {stopAllocs.map((a) => (
+                                      <div key={a.allocation_id}>
+                                        {a.customer_name} — {a.pax_assigned} pax — {a.bus_label} — <span className="font-medium text-amber-600">{a.service_date}</span>
+                                      </div>
+                                    ))}
                                   </div>
                                 )}
                               </div>
@@ -834,6 +918,77 @@ export default function BusNetworkPage() {
                 {saving ? "Assegnazione..." : "Assegna"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reset modal ── */}
+      {resetModalOpen && selectedLine && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-slate-900">Svuota {direction === "arrival" ? "Andata" : "Ritorno"} — {fmtDate(date)}</h2>
+            <p className="text-sm text-slate-600">
+              Questa operazione elimina tutte le allocazioni e i servizi bus di{" "}
+              <span className="font-semibold">{selectedLine.name}</span> del{" "}
+              <span className="font-semibold">{fmtDate(date)}</span> ({direction === "arrival" ? "Andata" : "Ritorno"}).
+            </p>
+            <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+              ⚠ Tutte le allocazioni e i relativi servizi bus del {fmtDate(date)} verranno eliminati. Azione irreversibile.
+            </p>
+            <p className="text-xs text-slate-400">
+              Dopo il reset puoi reimportare il file Excel dalla pagina Importa e rilanciare l&apos;assegnazione automatica.
+            </p>
+            <div className="flex gap-3 pt-1">
+              <button onClick={() => setResetModalOpen(false)} className="btn-secondary flex-1 py-2.5">Annulla</button>
+              <button onClick={() => void resetLineDate()} disabled={saving}
+                className="flex-1 rounded-xl bg-rose-600 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-40">
+                {saving ? "Eliminazione..." : "Conferma svuota"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reset result banner ── */}
+      {resetResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-emerald-700">✓ Reset completato</h2>
+            <p className="text-sm text-slate-600">
+              Eliminati <span className="font-semibold">{resetResult.allocations}</span> allocazioni
+              e <span className="font-semibold">{resetResult.services}</span> servizi.
+            </p>
+            <p className="text-sm text-slate-600">
+              Ora puoi reimportare il file Excel dalla pagina <span className="font-semibold">Importa</span> e poi rieseguire l&apos;assegnazione automatica.
+            </p>
+            <div className="flex gap-3 pt-1">
+              <button onClick={() => setResetResult(null)} className="btn-secondary flex-1 py-2.5">Chiudi</button>
+              <a href="/excel-import" className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-center text-sm font-semibold text-white hover:bg-indigo-700">
+                Vai a Importa →
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ── Auto-assign result ── */}
+      {autoAssignResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-emerald-700">⚡ Auto-assegnazione completata</h2>
+            <p className="text-sm text-slate-600">
+              Assegnati: <span className="font-semibold">{autoAssignResult.assigned}</span> servizi
+              {autoAssignResult.skipped > 0 && (
+                <> — Saltati: <span className="font-semibold text-amber-600">{autoAssignResult.skipped}</span></>
+              )}
+            </p>
+            {autoAssignResult.skipped_detail.length > 0 && (
+              <div className="max-h-40 overflow-y-auto rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-1">
+                {autoAssignResult.skipped_detail.map((d, i) => (
+                  <div key={i}><span className="font-semibold">{d.customerName}</span>: {d.reason}</div>
+                ))}
+              </div>
+            )}
+            <button onClick={() => setAutoAssignResult(null)} className="btn-primary w-full py-2.5">Chiudi</button>
           </div>
         </div>
       )}

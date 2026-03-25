@@ -164,7 +164,10 @@ export async function validateBusMoveRequest(
     throw new Error(targetAllocationsError.message);
   }
 
-  const assignedToTarget = (targetAllocations ?? []).reduce((total, row) => total + Number(row.pax_assigned ?? 0), 0);
+  const assignedToTarget = (targetAllocations ?? []).reduce(
+    (total: number, row: { pax_assigned: number | null }) => total + Number(row.pax_assigned ?? 0),
+    0
+  );
   const remainingSeats = Math.max(0, Number(targetUnit.capacity ?? 0) - assignedToTarget);
 
   if (input.paxMoved > remainingSeats) {

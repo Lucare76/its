@@ -44,8 +44,9 @@ const BUS_CITY_ALIASES: Record<string, string[]> = {
   "chiusi chiaciano": ["chiusi chianciano"],
   schio: ["vicenza"],
   bovezzo: ["brescia"],
-  nuvolento: ["brescia"],
   "via carlo alberto della chiesa": ["brescia"],
+  // nuvolento: rimosso alias brescia — fermata da definire separatamente
+  // cologno monzese: da aggiungere quando confermata la fermata corretta
   "alba adriatica": ["san benedetto del tronto"]
 };
 
