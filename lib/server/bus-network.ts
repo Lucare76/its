@@ -73,32 +73,27 @@ export function deriveBusFamily(code?: string | null, name?: string | null): { f
   const lineNumber = extractLineNumber(source);
   const normalized = source.toLowerCase();
 
-  if (
-    normalized.includes("linea centro") ||
-    normalized.includes("centro") ||
-    normalized.trim() === "centro" ||
-    normalized.includes(" family centro")
-  ) {
+  // Exact family codes (used for the main family lines stored in DB)
+  if (normalized.trim() === "centro" || normalized.includes(" family centro")) {
     return { family_code: "CENTRO", family_name: "Linea Centro" };
   }
-
-  if (
-    normalized.includes("linea italia") ||
-    normalized.includes("italia") ||
-    normalized.trim() === "italia" ||
-    normalized.includes(" family italia")
-  ) {
+  if (normalized.trim() === "italia" || normalized.includes(" family italia")) {
     return { family_code: "ITALIA", family_name: "Linea Italia" };
   }
-
-  if (lineNumber === 11 || normalized.includes("adriatica")) {
+  if (normalized.trim() === "adriatica" || normalized.includes(" family adriatica")) {
     return { family_code: "ADRIATICA", family_name: "Linea Adriatica" };
   }
 
+  // Line number takes priority over name keywords
+  // CENTRO: only line 7
   if (lineNumber === 7) {
     return { family_code: "CENTRO", family_name: "Linea Centro" };
   }
-
+  // ADRIATICA: only line 11
+  if (lineNumber === 11 || normalized.includes("adriatica")) {
+    return { family_code: "ADRIATICA", family_name: "Linea Adriatica" };
+  }
+  // ITALIA: lines 1,2,3,4,5,6,8,9,10 (includes Linea 8 Centro which uses Italia buses)
   return { family_code: "ITALIA", family_name: "Linea Italia" };
 }
 
