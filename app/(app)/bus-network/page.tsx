@@ -6,7 +6,7 @@ import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 type BusLine = { id: string; code: string; name: string; family_code: string; family_name: string; variant_label?: string | null };
 type BusStop = { id: string; bus_line_id: string; direction: "arrival" | "departure"; stop_name: string; city: string; pickup_note?: string | null; stop_order: number; is_manual: boolean };
-type BusUnit = { id: string; bus_line_id: string; label: string; capacity: number; low_seat_threshold: number; minimum_passengers?: number | null; status: "open" | "low" | "closed" | "completed"; manual_close: boolean; close_reason?: string | null };
+type BusUnit = { id: string; bus_line_id: string; label: string; capacity: number; low_seat_threshold: number; minimum_passengers?: number | null; status: "open" | "low" | "closed" | "completed"; manual_close: boolean; close_reason?: string | null; driver_name?: string | null; driver_phone?: string | null };
 type BusAllocation = { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; stop_id?: string | null; stop_name: string; direction: "arrival" | "departure"; pax_assigned: number };
 type BusMove = { id: string; service_id: string; from_bus_unit_id?: string | null; to_bus_unit_id?: string | null; stop_name?: string | null; pax_moved: number; reason?: string | null; created_at: string; customer_name?: string | null; customer_phone?: string | null; hotel_name?: string | null; source_bus_label?: string | null; target_bus_label?: string | null; moved_full_allocation?: boolean };
 type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_name?: string | null; notes?: string | null; created_at?: string };
@@ -68,10 +68,16 @@ export default function BusNetworkPage() {
 
   // Stop manager
   const [showStopManager, setShowStopManager] = useState(false);
+  const [hideEmptyStops, setHideEmptyStops] = useState(false);
   const [newStopName, setNewStopName] = useState("");
   const [newStopCity, setNewStopCity] = useState("");
   const [newUnitLabel, setNewUnitLabel] = useState("");
   const [dragOverUnitId, setDragOverUnitId] = useState("");
+
+  // Driver editing
+  const [editDriverUnitId, setEditDriverUnitId] = useState("");
+  const [editDriverName, setEditDriverName] = useState("");
+  const [editDriverPhone, setEditDriverPhone] = useState("");
 
   const load = useCallback(async () => {
     const token = await getToken();
@@ -272,6 +278,36 @@ export default function BusNetworkPage() {
     await post("reorder_stops", { bus_line_id: selectedLine.id, direction, stop_ids: reordered });
   }, [selectedLine, payload.stops, direction, post]);
 
+  const exportExcel = useCallback(async () => {
+    const { utils, writeFile } = await import("xlsx");
+    const rows: Record<string, string | number>[] = [];
+    for (const { unit, allocations: cardAllocs } of busCards) {
+      for (const alloc of cardAllocs) {
+        rows.push({
+          Bus: unit.label,
+          Autista: unit.driver_name ?? "",
+          "Tel. Autista": unit.driver_phone ?? "",
+          Fermata: alloc.stop_name,
+          Cliente: alloc.customer_name,
+          Hotel: alloc.hotel_name ?? "",
+          Telefono: alloc.customer_phone ?? "",
+          Pax: alloc.pax_assigned,
+          Data: date,
+          Direzione: direction === "arrival" ? "Andata" : "Ritorno"
+        });
+      }
+    }
+    const ws = utils.json_to_sheet(rows);
+    const wb = utils.book_new();
+    utils.book_append_sheet(wb, ws, "Bus");
+    writeFile(wb, `bus_${selectedLine?.code ?? "export"}_${date}_${direction}.xlsx`);
+  }, [busCards, date, direction, selectedLine]);
+
+  const saveDriver = useCallback(async (unitId: string) => {
+    await post("update_driver", { unit_id: unitId, driver_name: editDriverName.trim() || null, driver_phone: editDriverPhone.trim() || null });
+    setEditDriverUnitId("");
+  }, [post, editDriverName, editDriverPhone]);
+
   const handleDragStart = useCallback((alloc: AllocationDetail) => { setMoveSource(alloc); }, []);
   const handleDrop = useCallback((targetUnitId: string) => {
     setDragOverUnitId("");
@@ -371,6 +407,16 @@ export default function BusNetworkPage() {
             <p className="text-slate-400 text-sm">Seleziona una linea.</p>
           ) : (
             <>
+              {/* Toolbar */}
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-slate-600">
+                  {selectedLine.name} — {direction === "arrival" ? "Andata" : "Ritorno"} — {fmtDate(date)}
+                </p>
+                <button onClick={() => exportExcel()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                  📥 Esporta Excel
+                </button>
+              </div>
+
               {/* Bus cards */}
               <div className="flex gap-4 overflow-x-auto pb-2">
                 {busCards.map(({ unit, allocations: cardAllocs }) => {
@@ -426,6 +472,23 @@ export default function BusNetworkPage() {
                           </div>
                           <span className="w-14 text-right text-xs tabular-nums text-slate-500">{paxTotal}/{unit.capacity}</span>
                         </div>
+                        {/* Driver info */}
+                        {editDriverUnitId === unit.id ? (
+                          <div className="mt-2 flex gap-1">
+                            <input value={editDriverName} onChange={(e) => setEditDriverName(e.target.value)}
+                              placeholder="Nome autista" className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1 text-xs" />
+                            <input value={editDriverPhone} onChange={(e) => setEditDriverPhone(e.target.value)}
+                              placeholder="Telefono" className="w-24 rounded border border-slate-200 px-2 py-1 text-xs" />
+                            <button onClick={() => void saveDriver(unit.id)} disabled={saving}
+                              className="rounded bg-indigo-600 px-2 py-1 text-xs text-white hover:bg-indigo-700 disabled:opacity-40">✓</button>
+                            <button onClick={() => setEditDriverUnitId("")} className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600 hover:bg-slate-200">✕</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => { setEditDriverUnitId(unit.id); setEditDriverName(unit.driver_name ?? ""); setEditDriverPhone(unit.driver_phone ?? ""); }}
+                            className="mt-1.5 flex w-full items-center gap-1 text-left text-xs text-slate-400 hover:text-slate-600">
+                            🚗 {unit.driver_name ? <span className="font-medium text-slate-600">{unit.driver_name}{unit.driver_phone ? ` · ${unit.driver_phone}` : ""}</span> : <span className="italic">Aggiungi autista</span>}
+                          </button>
+                        )}
                       </div>
 
                       {/* Passenger list grouped by stop */}
@@ -568,8 +631,14 @@ export default function BusNetworkPage() {
 
                 {showStopManager && (
                   <div className="space-y-4 border-t border-slate-100 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                      {direction === "arrival" ? "Fermate andata — dal nord verso il sud" : "Fermate ritorno — dal sud verso il nord"}
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        {direction === "arrival" ? "Fermate andata — dal nord verso il sud" : "Fermate ritorno — dal sud verso il nord"}
+                      </div>
+                      <button onClick={() => setHideEmptyStops((v) => !v)}
+                        className="flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">
+                        {hideEmptyStops ? "👁 Mostra tutte" : "👁 Nascondi vuote"}
+                      </button>
                     </div>
 
                     <div className="space-y-1">
@@ -580,6 +649,7 @@ export default function BusNetworkPage() {
                           const stopPaxToday = dateAllocations
                             .filter((a) => a.stop_name.toLowerCase() === stop.stop_name.toLowerCase())
                             .reduce((sum, a) => sum + a.pax_assigned, 0);
+                          if (hideEmptyStops && stopPaxToday === 0) return null;
                           return (
                             <div key={stop.id} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
                               <span className="w-5 text-center text-xs tabular-nums text-slate-300">{stop.stop_order}</span>

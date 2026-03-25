@@ -71,6 +71,12 @@ const unitUpdateSchema = z.object({
   close_reason: z.string().max(500).optional().nullable()
 });
 
+const updateDriverSchema = z.object({
+  unit_id: z.string().uuid(),
+  driver_name: z.string().max(120).optional().nullable(),
+  driver_phone: z.string().max(60).optional().nullable()
+});
+
 const addUnitSchema = z.object({
   bus_line_id: z.string().uuid(),
   label: z.string().min(2).max(120),
@@ -119,7 +125,7 @@ async function loadBusNetwork(auth: PricingAuthContext) {
     auth.admin.from("tenant_bus_line_stops").select("*").eq("tenant_id", tenantId).order("direction").order("order_index").order("stop_order"),
     auth.admin.from("tenant_bus_units").select("*").eq("tenant_id", tenantId).order("bus_line_id").order("sort_order"),
     auth.admin.from("tenant_bus_allocations").select("*").eq("tenant_id", tenantId),
-    auth.admin.from("ops_bus_allocation_details").select("*"),
+    auth.admin.from("ops_bus_allocation_details").select("*").eq("tenant_id", tenantId),
     auth.admin.from("tenant_bus_allocation_moves").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }).limit(80),
     auth.admin
       .from("services")
@@ -375,6 +381,21 @@ export async function POST(request: NextRequest) {
           status: parsed.status,
           manual_close: parsed.status === "closed",
           close_reason: parsed.close_reason ?? null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("tenant_id", tenantId)
+        .eq("id", parsed.unit_id);
+      if (error) throw new Error(error.message);
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
+    if (action === "update_driver") {
+      const parsed = updateDriverSchema.parse(body);
+      const { error } = await auth.admin
+        .from("tenant_bus_units")
+        .update({
+          driver_name: parsed.driver_name ?? null,
+          driver_phone: parsed.driver_phone ?? null,
           updated_at: new Date().toISOString()
         })
         .eq("tenant_id", tenantId)
