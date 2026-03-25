@@ -74,7 +74,7 @@ export default function DeparturesPage() {
                 {departures.map((item) => (
                   <tr key={item.instanceId} className="border-t border-slate-100">
                     <td className="px-3 py-2 font-medium">{item.time}</td>
-                    <td className="px-3 py-2">{getCustomerFullName(item.service)}</td>
+                    <td className="px-3 py-2 uppercase">{getCustomerFullName(item.service)}</td>
                     <td className="px-3 py-2">{item.service.pax}</td>
                     <td className="px-3 py-2 uppercase">{hotelsById.get(item.service.hotel_id)?.name ?? "N/D"}</td>
                     <td className="px-3 py-2 uppercase">{item.service.meeting_point ?? "N/D"}</td>
