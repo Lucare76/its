@@ -161,13 +161,24 @@ export default function BusNetworkPage() {
     [payload.services, date, direction, selectedLine, allocatedServiceIds]
   );
 
+  // Per-unit loads filtered by date (capacity must be evaluated per date, not across all dates)
+  const dateUnitLoads = useMemo(
+    () => lineUnits.map((unit) => {
+      const datePax = dateAllocations
+        .filter((a) => a.bus_unit_id === unit.id)
+        .reduce((sum, a) => sum + a.pax_assigned, 0);
+      return { ...unit, pax_assigned: datePax, remaining_seats: Math.max(0, unit.capacity - datePax) };
+    }),
+    [lineUnits, dateAllocations]
+  );
+
   // Bus cards
   const busCards = useMemo(
-    () => lineUnits.map((unit) => ({
+    () => dateUnitLoads.map((unit) => ({
       unit,
       allocations: dateAllocations.filter((a) => a.bus_unit_id === unit.id)
     })),
-    [lineUnits, dateAllocations]
+    [dateUnitLoads, dateAllocations]
   );
 
   // Line summary for sidebar
@@ -190,19 +201,19 @@ export default function BusNetworkPage() {
     setMoveSource(alloc);
     setMovePaxStr(String(alloc.pax_assigned));
     setMoveReason("");
-    const compatible = lineUnits.filter((u) => u.id !== alloc.bus_unit_id && u.status !== "closed" && u.status !== "completed");
+    const compatible = dateUnitLoads.filter((u) => u.id !== alloc.bus_unit_id && u.status !== "closed" && u.status !== "completed");
     setMoveTargetUnitId(compatible[0]?.id ?? "");
     setMoveModalOpen(true);
-  }, [lineUnits]);
+  }, [dateUnitLoads]);
 
   const openAssignModal = useCallback((svc: BusService) => {
     setAssignService(svc);
-    const available = lineUnits.filter((u) => u.status !== "closed" && u.status !== "completed");
+    const available = dateUnitLoads.filter((u) => u.status !== "closed" && u.status !== "completed");
     setAssignUnitId(available[0]?.id ?? "");
     const suggestedStop = lineStops.find((s) => s.stop_name === svc.suggested_stop_name) ?? lineStops[0] ?? null;
     setAssignStopId(suggestedStop?.id ?? "");
     setAssignModalOpen(true);
-  }, [lineUnits, lineStops]);
+  }, [dateUnitLoads, lineStops]);
 
   const confirmMove = useCallback(async () => {
     if (!moveSource || !moveTargetUnitId) return;
@@ -263,16 +274,16 @@ export default function BusNetworkPage() {
   const handleDrop = useCallback((targetUnitId: string) => {
     setDragOverUnitId("");
     if (!moveSource || moveSource.bus_unit_id === targetUnitId) return;
-    const target = lineUnits.find((u) => u.id === targetUnitId && u.status !== "closed" && u.status !== "completed");
+    const target = dateUnitLoads.find((u) => u.id === targetUnitId && u.status !== "closed" && u.status !== "completed");
     if (!target) return;
     setMoveTargetUnitId(targetUnitId);
     setMovePaxStr(String(moveSource.pax_assigned));
     setMoveReason("");
     setMoveModalOpen(true);
-  }, [moveSource, lineUnits]);
+  }, [moveSource, dateUnitLoads]);
 
   // Move modal preview
-  const moveTargetUnit = lineUnits.find((u) => u.id === moveTargetUnitId);
+  const moveTargetUnit = dateUnitLoads.find((u) => u.id === moveTargetUnitId);
   const movePax = Number(movePaxStr) || 0;
   const moveResidual = moveTargetUnit ? moveTargetUnit.remaining_seats - movePax : null;
 
@@ -622,7 +633,7 @@ export default function BusNetworkPage() {
               <label className="text-sm font-medium text-slate-700">Trasferisci a:</label>
               <select value={moveTargetUnitId} onChange={(e) => setMoveTargetUnitId(e.target.value)}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
-                {lineUnits
+                {dateUnitLoads
                   .filter((u) => u.id !== moveSource.bus_unit_id && u.status !== "closed" && u.status !== "completed")
                   .map((u) => (
                     <option key={u.id} value={u.id}>{u.label} — {u.remaining_seats} posti liberi</option>
@@ -685,7 +696,7 @@ export default function BusNetworkPage() {
               <label className="text-sm font-medium text-slate-700">Bus:</label>
               <select value={assignUnitId} onChange={(e) => setAssignUnitId(e.target.value)}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
-                {lineUnits.filter((u) => u.status !== "closed" && u.status !== "completed").map((u) => (
+                {dateUnitLoads.filter((u) => u.status !== "closed" && u.status !== "completed").map((u) => (
                   <option key={u.id} value={u.id}>{u.label} — {u.remaining_seats} posti liberi</option>
                 ))}
               </select>
