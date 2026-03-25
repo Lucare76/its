@@ -670,9 +670,9 @@ export default function BusNetworkPage() {
                         .filter((s) => s.bus_line_id === selectedLine.id && s.direction === direction)
                         .sort((a, b) => a.stop_order - b.stop_order)
                         .map((stop, idx, arr) => {
-                          const stopPaxToday = dateAllocations
-                            .filter((a) => a.stop_name.toLowerCase() === stop.stop_name.toLowerCase())
-                            .reduce((sum, a) => sum + a.pax_assigned, 0);
+                          const stopAllocs = dateAllocations
+                            .filter((a) => a.stop_name.toLowerCase() === stop.stop_name.toLowerCase());
+                          const stopPaxToday = stopAllocs.reduce((sum, a) => sum + a.pax_assigned, 0);
                           if (hideEmptyStops && stopPaxToday === 0) return null;
                           return (
                             <div key={stop.id} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
@@ -682,6 +682,11 @@ export default function BusNetworkPage() {
                                 {stop.city && <span className="ml-2 text-xs text-slate-400">{stop.city}</span>}
                                 {stop.pickup_note && <span className="ml-1 text-xs text-slate-300">· {stop.pickup_note}</span>}
                                 {stop.is_manual && <span className="ml-1 rounded bg-indigo-50 px-1 text-[10px] text-indigo-500">manuale</span>}
+                                {stopAllocs.length > 0 && (
+                                  <div className="mt-0.5 text-[10px] text-slate-400">
+                                    {stopAllocs.map((a) => `${a.customer_name} (${a.pax_assigned}pax · ${a.bus_label})`).join(" · ")}
+                                  </div>
+                                )}
                               </div>
                               {stopPaxToday > 0 && (
                                 <span className="rounded bg-emerald-50 px-2 text-xs font-medium text-emerald-700">{stopPaxToday} pax</span>
