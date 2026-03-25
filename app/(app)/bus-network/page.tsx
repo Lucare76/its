@@ -101,6 +101,25 @@ export default function BusNetworkPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const applyPayload = useCallback((body: Partial<ApiPayload>) => {
+    const next: ApiPayload = {
+      lines: body.lines ?? [],
+      stops: body.stops ?? [],
+      units: body.units ?? [],
+      allocations: body.allocations ?? [],
+      allocation_details: body.allocation_details ?? [],
+      moves: body.moves ?? [],
+      services: body.services ?? [],
+      unit_loads: body.unit_loads ?? [],
+      stop_loads: body.stop_loads ?? [],
+      redistribution_suggestions: body.redistribution_suggestions ?? [],
+      geographic_suggestions: body.geographic_suggestions ?? [],
+      arrival_windows: body.arrival_windows ?? []
+    };
+    setPayload(next);
+    setSelectedLineId((cur) => (cur && next.lines.some((l) => l.id === cur)) ? cur : (next.lines[0]?.id ?? ""));
+  }, []);
+
   const post = useCallback(async (action: string, data: Record<string, unknown>) => {
     const token = await getToken();
     if (!token) return null;
@@ -111,13 +130,18 @@ export default function BusNetworkPage() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ action, ...data })
     });
-    const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string; low_seat_alert?: { busLabel: string; lineName: string; remainingSeats: number } | null } | null;
+    const body = (await res.json().catch(() => null)) as ({ ok?: boolean; error?: string; low_seat_alert?: { busLabel: string; lineName: string; remainingSeats: number } | null } & Partial<ApiPayload>) | null;
     setSaving(false);
     if (!res.ok || !body?.ok) { setMessage(body?.error ?? "Errore operazione."); return null; }
     if (body?.low_seat_alert) setLowSeatAlert(body.low_seat_alert);
-    await load();
+    // Aggiorna lo stato direttamente dalla risposta POST (evita un secondo GET che può tornare con dati vecchi)
+    if (body?.lines !== undefined) {
+      applyPayload(body);
+    } else {
+      await load();
+    }
     return body;
-  }, [load]);
+  }, [load, applyPayload]);
 
   // --- Derived data ---
   const selectedLine = payload.lines.find((l) => l.id === selectedLineId) ?? null;
