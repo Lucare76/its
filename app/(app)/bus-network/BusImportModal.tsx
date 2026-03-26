@@ -94,12 +94,17 @@ const STOP_WORDS = new Set([
   "mercato", "centro", "commerciale", "servizio",
 ]);
 
-// Restituisce true se almeno una parola significativa (≥4 chars) è condivisa tra a e b
+// Restituisce true se almeno una parola significativa è condivisa tra a e b.
+// Il match substring richiede entrambe le parole ≥5 chars per evitare falsi positivi
+// (es. "arca" in "Hotel Arca" non deve matchare "Petrarca").
 function hasKeywordOverlap(a: string, b: string): boolean {
   const words = (s: string) => s.split(/\s+/).filter((w) => w.length >= 4 && !STOP_WORDS.has(w));
   const wa = words(a);
   const wb = words(b);
-  return wa.some((x) => wb.some((y) => x === y || x.includes(y) || y.includes(x)));
+  return wa.some((x) => wb.some((y) =>
+    x === y ||
+    (x.length >= 5 && y.length >= 5 && (x.includes(y) || y.includes(x)))
+  ));
 }
 
 function matchAcrossLines(
@@ -234,6 +239,8 @@ export default function BusImportModal({
   const fileRef = useRef<HTMLInputElement>(null);
   // Ricerca per il selettore fermata manuale: mappa idx riga → testo ricerca
   const [stopSearch, setStopSearch] = useState<Record<number, string>>({});
+  // Righe in modalità modifica manuale (anche se già abbinate)
+  const [editingRows, setEditingRows] = useState<Set<number>>(new Set());
 
   // Aggiornamento manuale stop per righe "da validare"
   const assignRowStop = useCallback((idx: number, stopId: string) => {
@@ -509,35 +516,29 @@ export default function BusImportModal({
                           <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">{row.pax}</span>
                         </td>
                         <td className="px-3 py-2">
-                          {row.status === "ok" && (
-                            <div>
-                              <div className="text-xs font-semibold text-indigo-600">{row.matchedLine?.name}</div>
-                              <div className="flex items-center gap-1 text-emerald-700">
-                                <span className="text-xs">✓</span>
-                                <span className="text-xs">{row.matchedStop?.stop_name}</span>
-                              </div>
-                              {(row.orario || row.matchedStop?.pickup_time) && (
-                                <div className="text-[10px] text-slate-400 mt-0.5">
-                                  🕐 {row.orario || row.matchedStop?.pickup_time}
+                          {(row.status === "ok" || row.status === "fuzzy") && !editingRows.has(i) && (
+                            <div className="flex items-start gap-1">
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-semibold text-indigo-600">{row.matchedLine?.name}</div>
+                                <div className={`flex items-center gap-1 ${row.status === "ok" ? "text-emerald-700" : "text-amber-700"}`}>
+                                  <span className="text-xs">{row.status === "ok" ? "✓" : "~"}</span>
+                                  <span className="text-xs">{row.matchedStop?.stop_name}</span>
                                 </div>
-                              )}
+                                {(row.orario || row.matchedStop?.pickup_time) && (
+                                  <div className="text-[10px] text-slate-400 mt-0.5">
+                                    🕐 {row.orario || row.matchedStop?.pickup_time}
+                                  </div>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                title="Modifica fermata"
+                                onClick={() => setEditingRows((prev) => { const s = new Set(prev); s.add(i); return s; })}
+                                className="shrink-0 rounded p-0.5 text-slate-300 hover:bg-indigo-50 hover:text-indigo-500"
+                              >✎</button>
                             </div>
                           )}
-                          {row.status === "fuzzy" && (
-                            <div>
-                              <div className="text-xs font-semibold text-indigo-600">{row.matchedLine?.name}</div>
-                              <div className="flex items-center gap-1 text-amber-700">
-                                <span className="text-xs">~</span>
-                                <span className="text-xs">{row.matchedStop?.stop_name}</span>
-                              </div>
-                              {(row.orario || row.matchedStop?.pickup_time) && (
-                                <div className="text-[10px] text-slate-400 mt-0.5">
-                                  🕐 {row.orario || row.matchedStop?.pickup_time}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                          {row.status === "pending" && (
+                          {(row.status === "pending" || editingRows.has(i)) && (
                             <StopSearchSelect
                               rowIdx={i}
                               search={stopSearch[i] ?? ""}
@@ -546,6 +547,7 @@ export default function BusImportModal({
                               onSelect={(stopId) => {
                                 assignRowStop(i, stopId);
                                 setStopSearch((prev) => ({ ...prev, [i]: "" }));
+                                setEditingRows((prev) => { const s = new Set(prev); s.delete(i); return s; });
                               }}
                             />
                           )}

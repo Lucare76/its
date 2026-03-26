@@ -907,7 +907,10 @@ export async function POST(request: NextRequest) {
       function hasKeywordOverlapAuto(a: string, b: string): boolean {
         const words = (s: string) => s.split(/\s+/).filter((w) => w.length >= 4 && !STOP_WORDS_AUTO.has(w));
         const wa = words(a); const wb = words(b);
-        return wa.some((x) => wb.some((y) => x === y || x.includes(y) || y.includes(x)));
+        return wa.some((x) => wb.some((y) =>
+          x === y ||
+          (x.length >= 5 && y.length >= 5 && (x.includes(y) || y.includes(x)))
+        ));
       }
 
       function findStopAuto(city: string): { stop: DBStop2 | null; fuzzy: boolean } {
