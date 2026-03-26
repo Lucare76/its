@@ -299,10 +299,16 @@ export default function BusImportModal({
 
         const str = (idx: number) => (idx >= 0 ? String(rowData[idx] ?? "").trim() : "");
         const hotel = str(hotelCol);
-        const name = str(nameCol) || hotel || str(0);
-        if (!name) continue;
-
         const cityRaw = str(cityCol);
+        const paxRaw = str(paxCol);
+        const pax = Math.max(1, parseInt(paxRaw || "1", 10) || 1);
+
+        // Accetta la riga se ha un nome OPPURE se ha fermata + pax validi (gruppi senza nominativo individuale)
+        const nameRaw = str(nameCol) || hotel || str(0);
+        const hasCity = cityRaw.trim().length > 0;
+        const hasPax = /^\d+$/.test(paxRaw) && parseInt(paxRaw, 10) > 0;
+        if (!nameRaw && !(hasCity && hasPax)) continue;
+        const name = nameRaw || `Gruppo ${pax} pax`;
         const cityNorm = extractCity(cityRaw);
         const pax = Math.max(1, parseInt(str(paxCol) || "1", 10) || 1);
         const phone = str(phoneCol);
