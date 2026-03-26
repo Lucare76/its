@@ -901,6 +901,7 @@ export async function POST(request: NextRequest) {
         "via", "zona", "area", "nord", "sud", "est", "ovest", "nuovo", "nuova", "san", "santa",
         "fermata", "piazzale", "parcheggio", "casello", "stazione", "terminal", "largo", "uscita",
         "distributore", "autostrada", "autostradale", "superstrada", "rotonda", "svincolo",
+        "mercato", "centro", "commerciale", "servizio",
       ]);
       function hasKeywordOverlapAuto(a: string, b: string): boolean {
         const words = (s: string) => s.split(/\s+/).filter((w) => w.length >= 4 && !STOP_WORDS_AUTO.has(w));

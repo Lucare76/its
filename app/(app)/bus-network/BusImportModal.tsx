@@ -91,6 +91,7 @@ const STOP_WORDS = new Set([
   "via", "zona", "area", "nord", "sud", "est", "ovest", "nuovo", "nuova", "san", "santa",
   "fermata", "piazzale", "parcheggio", "casello", "stazione", "terminal", "largo", "uscita",
   "distributore", "autostrada", "autostradale", "superstrada", "rotonda", "svincolo",
+  "mercato", "centro", "commerciale", "servizio",
 ]);
 
 // Restituisce true se almeno una parola significativa (≥4 chars) è condivisa tra a e b
