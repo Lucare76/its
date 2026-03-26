@@ -14,6 +14,7 @@ import {
   suggestBusRedistribution
 } from "@/lib/server/bus-network";
 import { findBusStopsByCity } from "@/lib/server/bus-lines-catalog";
+import { geocodeCityName } from "@/lib/server/geocoding";
 import { getCustomerFullName } from "@/lib/service-display";
 import type { AgencyBookingServiceKind, OperationalServiceType } from "@/lib/types";
 import { validateBusAllocationRequest, validateBusMoveRequest } from "@/lib/server/bus-network-validation";
@@ -931,6 +932,36 @@ export async function POST(request: NextRequest) {
         return { stop: fuzzy ?? null, fuzzy: !!fuzzy };
       }
 
+      // Cache geocoding per evitare chiamate duplicate sulla stessa città
+      const geocodingCache = new Map<string, DBStop2 | null>();
+
+      async function findStopAutoWithGeo(city: string): Promise<{ stop: DBStop2 | null; fuzzy: boolean }> {
+        const sync = findStopAuto(city);
+        if (sync.stop) return sync;
+
+        const cacheKey = normCityAuto(city);
+        if (geocodingCache.has(cacheKey)) {
+          const cached = geocodingCache.get(cacheKey) ?? null;
+          return { stop: cached, fuzzy: true };
+        }
+
+        // Chiama Nominatim per ottenere il nome della città/comune
+        const candidates = await geocodeCityName(city);
+        // Rispetta il rate limit di Nominatim (1 req/sec)
+        await new Promise((r) => setTimeout(r, 1100));
+
+        for (const candidate of candidates) {
+          const retry = findStopAuto(candidate);
+          if (retry.stop) {
+            geocodingCache.set(cacheKey, retry.stop);
+            return { stop: retry.stop, fuzzy: true };
+          }
+        }
+
+        geocodingCache.set(cacheKey, null);
+        return { stop: null, fuzzy: false };
+      }
+
       function pickBusForLine(lineId: string, pax: number): DBUnit2 | null {
         const lineUnits = allUnits.filter((u) => u.bus_line_id === lineId);
         const scored = lineUnits
@@ -952,7 +983,7 @@ export async function POST(request: NextRequest) {
           resolvedFuzzy = false;
         }
         if (!resolvedStop) {
-          const found = findStopAuto(row.city);
+          const found = await findStopAutoWithGeo(row.city);
           resolvedStop = found.stop;
           resolvedFuzzy = found.fuzzy;
         }

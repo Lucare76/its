@@ -310,7 +310,6 @@ export default function BusImportModal({
         if (!nameRaw && !(hasCity && hasPax)) continue;
         const name = nameRaw || `Gruppo ${pax} pax`;
         const cityNorm = extractCity(cityRaw);
-        const pax = Math.max(1, parseInt(str(paxCol) || "1", 10) || 1);
         const phone = str(phoneCol);
         const orario = str(orarioCol);
         const agency = str(notesCol);
