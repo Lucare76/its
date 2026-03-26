@@ -450,7 +450,7 @@ export default function BusNetworkPage() {
   const handleDrop = useCallback((targetUnitId: string) => {
     setDragOverUnitId("");
     if (!moveSource || moveSource.bus_unit_id === targetUnitId) return;
-    const target = dateUnitLoads.find((u) => u.id === targetUnitId && u.status !== "closed" && u.status !== "completed");
+    const target = dateUnitLoads.find((u) => u.id === targetUnitId && u.bus_line_id === moveSource.bus_line_id && u.status !== "closed" && u.status !== "completed");
     if (!target) return;
     setMoveTargetUnitId(targetUnitId);
     setMovePaxStr(String(moveSource.pax_assigned));
@@ -1004,7 +1004,7 @@ export default function BusNetworkPage() {
               <select value={moveTargetUnitId} onChange={(e) => setMoveTargetUnitId(e.target.value)}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
                 {dateUnitLoads
-                  .filter((u) => u.id !== moveSource.bus_unit_id && u.status !== "closed" && u.status !== "completed")
+                  .filter((u) => u.id !== moveSource.bus_unit_id && u.bus_line_id === moveSource.bus_line_id && u.status !== "closed" && u.status !== "completed")
                   .map((u) => (
                     <option key={u.id} value={u.id}>{u.label} — {u.remaining_seats} posti liberi</option>
                   ))}
