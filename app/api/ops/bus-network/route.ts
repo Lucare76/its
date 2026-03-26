@@ -535,6 +535,15 @@ export async function POST(request: NextRequest) {
         if (delSvcErr) throw new Error(delSvcErr.message);
       }
 
+      // 4. Delete pending passengers for this line/date/direction
+      await auth.admin
+        .from("bus_import_pending")
+        .delete()
+        .eq("tenant_id", tenantId)
+        .eq("bus_line_id", parsed.bus_line_id)
+        .eq("travel_date", parsed.date)
+        .eq("direction", parsed.direction);
+
       return NextResponse.json({
         ok: true,
         deleted_allocations: allocationIds.length,
