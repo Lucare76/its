@@ -861,23 +861,27 @@ export async function POST(request: NextRequest) {
 
       // Carica tutte le fermate attive del tenant per la direzione richiesta
       const [allStopsRes, allUnitsRes, allocRes] = await Promise.all([
-        auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,stop_name,city,stop_order")
+        auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,stop_name,city,stop_order,pickup_note")
           .eq("tenant_id", tenantId).eq("direction", parsed.direction).eq("active", true).order("stop_order"),
         auth.admin.from("tenant_bus_units").select("id,bus_line_id,label,capacity,status")
           .eq("tenant_id", tenantId).not("status", "in", '("closed","completed")').order("sort_order"),
-        auth.admin.from("tenant_bus_allocations").select("bus_unit_id,pax_assigned")
-          .eq("tenant_id", tenantId),
+        // Filtra per data di viaggio per calcolo capacità corretto
+        auth.admin.from("tenant_bus_allocations").select("bus_unit_id,pax_assigned,service_id")
+          .eq("tenant_id", tenantId)
+          .in("service_id",
+            (await auth.admin.from("services").select("id").eq("tenant_id", tenantId).eq("date", parsed.travel_date)).data?.map((s: { id: string }) => s.id) ?? []
+          ),
       ]);
       if (allStopsRes.error) throw new Error(allStopsRes.error.message);
       if (allUnitsRes.error) throw new Error(allUnitsRes.error.message);
       if (allocRes.error) throw new Error(allocRes.error.message);
 
-      type DBStop2 = { id: string; bus_line_id: string; stop_name: string; city: string; stop_order: number };
+      type DBStop2 = { id: string; bus_line_id: string; stop_name: string; city: string; stop_order: number; pickup_note?: string | null };
       type DBUnit2 = { id: string; bus_line_id: string; label: string; capacity: number; status: string };
       const allLineStops = (allStopsRes.data ?? []) as DBStop2[];
       const allUnits = (allUnitsRes.data ?? []) as DBUnit2[];
 
-      // Mappa pax correnti per bus unit
+      // Mappa pax correnti per bus unit (solo per la data di viaggio)
       const datePaxMap2 = new Map<string, number>();
       for (const a of (allocRes.data ?? []) as Array<{ bus_unit_id: string; pax_assigned: number }>) {
         datePaxMap2.set(a.bus_unit_id, (datePaxMap2.get(a.bus_unit_id) ?? 0) + a.pax_assigned);
@@ -885,12 +889,22 @@ export async function POST(request: NextRequest) {
 
       function findStopAuto(city: string): { stop: DBStop2 | null; fuzzy: boolean } {
         const nc = normCityAuto(city);
-        if (!nc) return { stop: null, fuzzy: false };
-        const exact = allLineStops.find((s) => normCityAuto(s.city) === nc || normCityAuto(s.stop_name) === nc);
+        if (!nc || nc.length < 3) return { stop: null, fuzzy: false };
+        // Exact: city/stop_name o pickup_note
+        const exact = allLineStops.find((s) =>
+          normCityAuto(s.city) === nc ||
+          normCityAuto(s.stop_name) === nc ||
+          (s.pickup_note && normCityAuto(s.pickup_note).includes(nc) && nc.length >= 4)
+        );
         if (exact) return { stop: exact, fuzzy: false };
+        // Fuzzy: include/contiene + pickup_note
         const fuzzy = allLineStops.find((s) => {
-          const sc = normCityAuto(s.city); const sn = normCityAuto(s.stop_name);
-          return sc.includes(nc) || nc.includes(sc) || sn.includes(nc) || nc.includes(sn);
+          const sc = normCityAuto(s.city);
+          const sn = normCityAuto(s.stop_name);
+          const sp = s.pickup_note ? normCityAuto(s.pickup_note) : "";
+          return sc.includes(nc) || nc.includes(sc) ||
+            sn.includes(nc) || nc.includes(sn) ||
+            (sp && nc.length >= 4 && (sp.includes(nc) || nc.includes(sp)));
         });
         return { stop: fuzzy ?? null, fuzzy: !!fuzzy };
       }
