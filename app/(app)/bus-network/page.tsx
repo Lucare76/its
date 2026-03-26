@@ -674,10 +674,17 @@ export default function BusNetworkPage() {
                       <div className="flex-1 divide-y divide-slate-50 overflow-y-auto">
                         {[...stopGroups.map(({ stop, allocs }) => (
                           <div key={stop.id} className="px-3 py-2">
-                            <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                              📍 {stop.stop_name}
-                              {stop.city && stop.city.toLowerCase() !== stop.stop_name.toLowerCase() && (
-                                <span className="ml-1 font-normal normal-case text-slate-300">({stop.city})</span>
+                            <div className="mb-1 flex items-center justify-between">
+                              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                                📍 {stop.stop_name}
+                                {stop.city && stop.city.toLowerCase() !== stop.stop_name.toLowerCase() && (
+                                  <span className="ml-1 font-normal normal-case text-slate-300">({stop.city})</span>
+                                )}
+                              </div>
+                              {stop.pickup_time && (
+                                <span className="ml-2 shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-500">
+                                  🕐 {stop.pickup_time}
+                                </span>
                               )}
                             </div>
                             {allocs.map((alloc) => (

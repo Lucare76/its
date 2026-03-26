@@ -460,6 +460,7 @@ export default function BusImportModal({
                       <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Destinazione</th>
                       <th className="px-3 py-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-400">Pax</th>
                       <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Linea → Fermata</th>
+                      <th className="w-6 px-1" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -525,6 +526,14 @@ export default function BusImportModal({
                               }}
                             />
                           )}
+                        </td>
+                        <td className="w-8 px-1 py-2 text-center">
+                          <button
+                            type="button"
+                            onClick={() => setRows((prev) => prev.filter((_, ri) => ri !== i))}
+                            className="rounded p-0.5 text-slate-300 hover:bg-rose-50 hover:text-rose-500"
+                            title="Rimuovi riga"
+                          >✕</button>
                         </td>
                       </tr>
                     ))}
