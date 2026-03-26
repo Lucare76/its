@@ -85,9 +85,12 @@ function extractCity(raw: string): string {
 }
 
 // Parole da ignorare nel matching per parola-chiave
+// Include parole di infrastruttura trasporti che non identificano univocamente una città
 const STOP_WORDS = new Set([
   "di", "del", "della", "delle", "dei", "da", "al", "no", "il", "la", "le", "lo", "e",
   "via", "zona", "area", "nord", "sud", "est", "ovest", "nuovo", "nuova", "san", "santa",
+  "fermata", "piazzale", "parcheggio", "casello", "stazione", "terminal", "largo", "uscita",
+  "distributore", "autostrada", "autostradale", "superstrada", "rotonda", "svincolo",
 ]);
 
 // Restituisce true se almeno una parola significativa (≥4 chars) è condivisa tra a e b
