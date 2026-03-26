@@ -3,19 +3,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import BusImportModal from "./BusImportModal";
 
 type BusLine = { id: string; code: string; name: string; family_code: string; family_name: string; variant_label?: string | null };
-type BusStop = { id: string; bus_line_id: string; direction: "arrival" | "departure"; stop_name: string; city: string; pickup_note?: string | null; stop_order: number; is_manual: boolean };
+type BusStop = { id: string; bus_line_id: string; direction: "arrival" | "departure"; stop_name: string; city: string; pickup_note?: string | null; pickup_time?: string | null; stop_order: number; is_manual: boolean };
 type BusUnit = { id: string; bus_line_id: string; label: string; capacity: number; low_seat_threshold: number; minimum_passengers?: number | null; status: "open" | "low" | "closed" | "completed"; manual_close: boolean; close_reason?: string | null; driver_name?: string | null; driver_phone?: string | null };
 type BusAllocation = { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; stop_id?: string | null; stop_name: string; direction: "arrival" | "departure"; pax_assigned: number };
 type BusMove = { id: string; service_id: string; from_bus_unit_id?: string | null; to_bus_unit_id?: string | null; stop_name?: string | null; pax_moved: number; reason?: string | null; created_at: string; customer_name?: string | null; customer_phone?: string | null; hotel_name?: string | null; source_bus_label?: string | null; target_bus_label?: string | null; moved_full_allocation?: boolean };
-type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_name?: string | null; notes?: string | null; created_at?: string };
+type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; stop_pickup_note?: string | null; stop_pickup_time?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_name?: string | null; notes?: string | null; created_at?: string };
 type BusService = { id: string; customer_name: string; customer_display_name: string; date: string; time: string; pax: number; direction: "arrival" | "departure"; bus_city_origin?: string | null; transport_code?: string | null; phone_display: string; hotel_name: string; derived_family_code: string; derived_family_name: string; derived_line_code?: string | null; derived_line_name?: string | null; suggested_stop_name?: string | null };
 type UnitLoad = BusUnit & { pax_assigned: number; remaining_seats: number; suggested_status: string };
 type StopLoad = BusStop & { pax_assigned: number };
-type ApiPayload = { lines: BusLine[]; stops: BusStop[]; units: BusUnit[]; allocations: BusAllocation[]; allocation_details: AllocationDetail[]; moves: BusMove[]; services: BusService[]; unit_loads: UnitLoad[]; stop_loads: StopLoad[]; redistribution_suggestions: Array<{ source_label: string; target_label: string | null; reason: string }>; geographic_suggestions: Array<{ service_id: string; customer_name: string; stop_name: string; grouped_zone: string; suggested_vehicle_type: string; suggested_stop_order: number | null }>; arrival_windows: Array<{ time: string; totalPax: number; snavPax: number; medmarPax: number; otherPax: number }> };
+type PendingPassenger = { id: string; bus_line_id: string; direction: "arrival" | "departure"; travel_date: string; passenger_name: string; passenger_phone: string | null; city_original: string; pax: number; notes: string | null; geo_suggested_stop: string | null; created_at: string };
+type ApiPayload = { lines: BusLine[]; stops: BusStop[]; units: BusUnit[]; allocations: BusAllocation[]; allocation_details: AllocationDetail[]; moves: BusMove[]; services: BusService[]; unit_loads: UnitLoad[]; stop_loads: StopLoad[]; redistribution_suggestions: Array<{ source_label: string; target_label: string | null; reason: string }>; geographic_suggestions: Array<{ service_id: string; customer_name: string; stop_name: string; grouped_zone: string; suggested_vehicle_type: string; suggested_stop_order: number | null }>; arrival_windows: Array<{ time: string; totalPax: number; snavPax: number; medmarPax: number; otherPax: number }>; pending_passengers: PendingPassenger[]; user_role?: string };
 
-const emptyPayload: ApiPayload = { lines: [], stops: [], units: [], allocations: [], allocation_details: [], moves: [], services: [], unit_loads: [], stop_loads: [], redistribution_suggestions: [], geographic_suggestions: [], arrival_windows: [] };
+const emptyPayload: ApiPayload = { lines: [], stops: [], units: [], allocations: [], allocation_details: [], moves: [], services: [], unit_loads: [], stop_loads: [], redistribution_suggestions: [], geographic_suggestions: [], arrival_windows: [], pending_passengers: [], user_role: undefined };
 
 async function getToken() {
   if (!hasSupabaseEnv || !supabase) return null;
@@ -89,6 +91,23 @@ export default function BusNetworkPage() {
   // Auto-assign
   const [autoAssignResult, setAutoAssignResult] = useState<{ assigned: number; skipped: number; skipped_detail: Array<{ customerName: string; reason: string }> } | null>(null);
 
+  // Import modal
+  const [importModalOpen, setImportModalOpen] = useState(false);
+
+  // Tab: "bus" | "da_validare"
+  const [activeTab, setActiveTab] = useState<"bus" | "da_validare">("bus");
+
+  // Approve pending modal
+  const [approvePending, setApprovePending] = useState<PendingPassenger | null>(null);
+  const [approveUnitId, setApproveUnitId] = useState("");
+  const [approveStopId, setApproveStopId] = useState("");
+
+  // Transfer to another line modal (admin only)
+  const [transferAlloc, setTransferAlloc] = useState<AllocationDetail | null>(null);
+  const [transferLineId, setTransferLineId] = useState("");
+  const [transferUnitId, setTransferUnitId] = useState("");
+  const [transferStopId, setTransferStopId] = useState("");
+
   const load = useCallback(async () => {
     const token = await getToken();
     if (!token) { setLoading(false); setMessage("Sessione non valida."); return; }
@@ -102,7 +121,9 @@ export default function BusNetworkPage() {
       unit_loads: body.unit_loads ?? [], stop_loads: body.stop_loads ?? [],
       redistribution_suggestions: body.redistribution_suggestions ?? [],
       geographic_suggestions: body.geographic_suggestions ?? [],
-      arrival_windows: body.arrival_windows ?? []
+      arrival_windows: body.arrival_windows ?? [],
+      pending_passengers: body.pending_passengers ?? [],
+      user_role: (body as { user_role?: string }).user_role ?? undefined,
     };
     setPayload(next);
     setSelectedLineId((cur) => (cur && next.lines.some((l) => l.id === cur)) ? cur : (next.lines[0]?.id ?? ""));
@@ -124,7 +145,9 @@ export default function BusNetworkPage() {
       stop_loads: body.stop_loads ?? [],
       redistribution_suggestions: body.redistribution_suggestions ?? [],
       geographic_suggestions: body.geographic_suggestions ?? [],
-      arrival_windows: body.arrival_windows ?? []
+      arrival_windows: body.arrival_windows ?? [],
+      pending_passengers: body.pending_passengers ?? [],
+      user_role: body.user_role,
     };
     setPayload(next);
     setSelectedLineId((cur) => (cur && next.lines.some((l) => l.id === cur)) ? cur : (next.lines[0]?.id ?? ""));
@@ -154,6 +177,7 @@ export default function BusNetworkPage() {
   }, [load, applyPayload]);
 
   // --- Derived data ---
+  const isAdmin = payload.user_role === "admin";
   const selectedLine = payload.lines.find((l) => l.id === selectedLineId) ?? null;
 
   const lineUnits = useMemo(
@@ -238,7 +262,40 @@ export default function BusNetworkPage() {
 
   const totalPaxToday = dateAllocations.reduce((sum, a) => sum + a.pax_assigned, 0);
 
+  // Derived data for transfer modal
+  const transferTargetStops = useMemo(
+    () => payload.stops.filter((s) => s.bus_line_id === transferLineId && s.direction === direction).sort((a, b) => a.stop_order - b.stop_order),
+    [payload.stops, transferLineId, direction]
+  );
+  const transferTargetUnits = useMemo(
+    () => payload.units.filter((u) => u.bus_line_id === transferLineId && u.status !== "closed" && u.status !== "completed"),
+    [payload.units, transferLineId]
+  );
+
   // --- Actions ---
+  const openTransferModal = useCallback((alloc: AllocationDetail) => {
+    setTransferAlloc(alloc);
+    const otherLines = payload.lines.filter((l) => l.id !== alloc.bus_line_id);
+    const firstLine = otherLines[0];
+    const firstLineId = firstLine?.id ?? "";
+    setTransferLineId(firstLineId);
+    const firstStop = payload.stops.find((s) => s.bus_line_id === firstLineId && s.direction === direction);
+    setTransferStopId(firstStop?.id ?? "");
+    const firstUnit = payload.units.find((u) => u.bus_line_id === firstLineId && u.status !== "closed" && u.status !== "completed");
+    setTransferUnitId(firstUnit?.id ?? "");
+  }, [payload.lines, payload.stops, payload.units, direction]);
+
+  const confirmTransfer = useCallback(async () => {
+    if (!transferAlloc || !transferLineId || !transferUnitId || !transferStopId) return;
+    await post("transfer_allocation_line", {
+      allocation_id: transferAlloc.allocation_id,
+      target_bus_line_id: transferLineId,
+      target_bus_unit_id: transferUnitId,
+      target_stop_id: transferStopId,
+    });
+    setTransferAlloc(null);
+  }, [transferAlloc, transferLineId, transferUnitId, transferStopId, post]);
+
   const openMoveModal = useCallback((alloc: AllocationDetail) => {
     setMoveSource(alloc);
     setMovePaxStr(String(alloc.pax_assigned));
@@ -349,12 +406,20 @@ export default function BusNetworkPage() {
     const { utils, writeFile } = await import("xlsx");
     const rows: Record<string, string | number>[] = [];
     for (const { unit, allocations: cardAllocs } of busCards) {
-      for (const alloc of cardAllocs) {
+      // Ordina per orario di raccolta
+      const sorted = [...cardAllocs].sort((a, b) => {
+        const ta = a.stop_pickup_time ?? "99:99";
+        const tb = b.stop_pickup_time ?? "99:99";
+        return ta.localeCompare(tb);
+      });
+      for (const alloc of sorted) {
         rows.push({
           Bus: unit.label,
           Autista: unit.driver_name ?? "",
           "Tel. Autista": unit.driver_phone ?? "",
+          "Orario raccolta": alloc.stop_pickup_time ?? "",
           Fermata: alloc.stop_name,
+          "Punto raccolta": alloc.stop_pickup_note ?? "",
           Cliente: alloc.customer_name,
           Hotel: alloc.hotel_name ?? "",
           Telefono: alloc.customer_phone ?? "",
@@ -365,6 +430,12 @@ export default function BusNetworkPage() {
       }
     }
     const ws = utils.json_to_sheet(rows);
+    // Larghezze colonne
+    ws["!cols"] = [
+      { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 10 },
+      { wch: 22 }, { wch: 32 }, { wch: 28 }, { wch: 22 },
+      { wch: 16 }, { wch: 6 }, { wch: 12 }, { wch: 10 }
+    ];
     const wb = utils.book_new();
     utils.book_append_sheet(wb, ws, "Bus");
     writeFile(wb, `bus_${selectedLine?.code ?? "export"}_${date}_${direction}.xlsx`);
@@ -492,11 +563,41 @@ export default function BusNetworkPage() {
                     className="flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-40">
                     🗑 Svuota data
                   </button>
+                  <button onClick={() => setImportModalOpen(true)}
+                    className="flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50">
+                    📥 Importa Excel
+                  </button>
                 </div>
               </div>
 
+              {/* Tab switcher */}
+              {(() => {
+                const linePending = payload.pending_passengers.filter(
+                  (p) => p.bus_line_id === selectedLine?.id && p.direction === direction
+                );
+                return (
+                  <div className="flex gap-0 overflow-hidden rounded-xl border border-slate-200 text-sm">
+                    <button
+                      onClick={() => setActiveTab("bus")}
+                      className={`px-4 py-2 font-medium transition-colors ${activeTab === "bus" ? "bg-indigo-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+                      🚌 Bus
+                    </button>
+                    <button
+                      onClick={() => setActiveTab("da_validare")}
+                      className={`flex items-center gap-2 px-4 py-2 font-medium transition-colors ${activeTab === "da_validare" ? "bg-amber-500 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+                      ⚠ Da validare
+                      {linePending.length > 0 && (
+                        <span className={`rounded-full px-1.5 py-0.5 text-xs font-bold ${activeTab === "da_validare" ? "bg-white/30 text-white" : "bg-amber-100 text-amber-700"}`}>
+                          {linePending.length}
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                );
+              })()}
+
               {/* Bus cards */}
-              <div className="flex gap-4 overflow-x-auto pb-2">
+              {activeTab === "bus" && <div className="flex gap-4 overflow-x-auto pb-2">
                 {busCards.map(({ unit, allocations: cardAllocs }) => {
                   const paxTotal = cardAllocs.reduce((sum, a) => sum + a.pax_assigned, 0);
                   const pct = unit.capacity > 0 ? Math.round((paxTotal / unit.capacity) * 100) : 0;
@@ -602,6 +703,12 @@ export default function BusNetworkPage() {
                                       className="rounded border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-600 opacity-0 transition-opacity hover:bg-indigo-50 group-hover:opacity-100">
                                       Sposta
                                     </button>
+                                    {isAdmin && (
+                                      <button onClick={() => openTransferModal(alloc)}
+                                        className="rounded border border-violet-200 px-1.5 py-0.5 text-xs text-violet-600 opacity-0 transition-opacity hover:bg-violet-50 group-hover:opacity-100">
+                                        ↔ Linea
+                                      </button>
+                                    )}
                                     {deleteConfirmId === alloc.allocation_id ? (
                                       <button onClick={() => void deleteAllocation(alloc.allocation_id)} disabled={saving}
                                         className="rounded border border-rose-400 bg-rose-50 px-1.5 py-0.5 text-xs text-rose-700 opacity-100">
@@ -637,6 +744,12 @@ export default function BusNetworkPage() {
                                     className="rounded border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-600 opacity-0 transition-opacity hover:bg-indigo-50 group-hover:opacity-100">
                                     Sposta
                                   </button>
+                                  {isAdmin && (
+                                    <button onClick={() => openTransferModal(alloc)}
+                                      className="rounded border border-violet-200 px-1.5 py-0.5 text-xs text-violet-600 opacity-0 transition-opacity hover:bg-violet-50 group-hover:opacity-100">
+                                      ↔ Linea
+                                    </button>
+                                  )}
                                   {deleteConfirmId === alloc.allocation_id ? (
                                     <button onClick={() => void deleteAllocation(alloc.allocation_id)} disabled={saving}
                                       className="rounded border border-rose-400 bg-rose-50 px-1.5 py-0.5 text-xs text-rose-700 opacity-100">
@@ -696,7 +809,60 @@ export default function BusNetworkPage() {
                     + Aggiungi bus
                   </button>
                 </div>
-              </div>
+              </div>}
+
+              {/* Da validare panel */}
+              {activeTab === "da_validare" && (() => {
+                const linePending = payload.pending_passengers.filter(
+                  (p) => p.bus_line_id === selectedLine?.id && p.direction === direction
+                );
+                return (
+                  <div className="space-y-3">
+                    {linePending.length === 0 ? (
+                      <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-slate-400">
+                        Nessun passeggero da validare per questa linea e direzione.
+                      </div>
+                    ) : (
+                      linePending.map((p) => (
+                        <div key={p.id} className="flex items-center gap-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold uppercase text-slate-900">{p.passenger_name}</div>
+                            <div className="text-sm text-slate-500">
+                              Città: <span className="font-medium text-rose-600">{p.city_original}</span>
+                              {p.geo_suggested_stop && (
+                                <span className="ml-2 text-amber-600">· Suggerita: {p.geo_suggested_stop}</span>
+                              )}
+                            </div>
+                            <div className="text-xs text-slate-400">
+                              {p.pax} pax · {p.travel_date}
+                              {p.passenger_phone && ` · ${p.passenger_phone}`}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                setApprovePending(p);
+                                const firstUnit = dateUnitLoads.filter((u) => u.status !== "closed").at(0);
+                                setApproveUnitId(firstUnit?.id ?? "");
+                                const firstStop = lineStops[0];
+                                setApproveStopId(firstStop?.id ?? "");
+                              }}
+                              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700">
+                              Assegna
+                            </button>
+                            <button
+                              onClick={() => void post("reject_pending", { pending_id: p.id })}
+                              disabled={saving}
+                              className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50">
+                              Rifiuta
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Unassigned passengers */}
               {unassigned.length > 0 && (
@@ -991,6 +1157,143 @@ export default function BusNetworkPage() {
             <button onClick={() => setAutoAssignResult(null)} className="btn-primary w-full py-2.5">Chiudi</button>
           </div>
         </div>
+      )}
+
+      {/* ── Approva pending modal ── */}
+      {approvePending && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-slate-900">Assegna passeggero</h2>
+            <div className="rounded-xl bg-slate-50 p-4 space-y-1">
+              <div className="font-bold uppercase text-slate-900">{approvePending.passenger_name}</div>
+              <div className="text-sm text-slate-600">Città: <span className="font-medium text-rose-600">{approvePending.city_original}</span></div>
+              <div className="text-sm text-slate-600">Pax: <span className="font-medium">{approvePending.pax}</span></div>
+              {approvePending.geo_suggested_stop && (
+                <div className="text-sm text-amber-600">Fermata suggerita: {approvePending.geo_suggested_stop}</div>
+              )}
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-700">Fermata:</label>
+              <select value={approveStopId} onChange={(e) => setApproveStopId(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                {lineStops.map((s) => (
+                  <option key={s.id} value={s.id}>{s.stop_name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-700">Bus:</label>
+              <select value={approveUnitId} onChange={(e) => setApproveUnitId(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                {dateUnitLoads.filter((u) => u.status !== "closed" && u.status !== "completed").map((u) => (
+                  <option key={u.id} value={u.id}>{u.label} — {u.remaining_seats} posti liberi</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex gap-3 pt-1">
+              <button onClick={() => setApprovePending(null)} className="btn-secondary flex-1 py-2.5">Annulla</button>
+              <button
+                onClick={async () => {
+                  if (!approveUnitId || !approveStopId || !approvePending) return;
+                  await post("approve_pending", {
+                    pending_id: approvePending.id,
+                    bus_unit_id: approveUnitId,
+                    stop_id: approveStopId,
+                    travel_date: approvePending.travel_date,
+                  });
+                  setApprovePending(null);
+                }}
+                disabled={saving || !approveUnitId || !approveStopId}
+                className="btn-primary flex-1 py-2.5 disabled:opacity-40">
+                {saving ? "Salvataggio..." : "Conferma assegnazione"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Transfer to another line modal (admin only) ── */}
+      {transferAlloc && isAdmin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Cambia linea</h2>
+              <p className="text-xs text-slate-400 mt-0.5">Solo admin — sposta la prenotazione su un&apos;altra linea bus</p>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 p-4 space-y-1">
+              <div className="text-base font-bold uppercase text-slate-900">{transferAlloc.customer_name}</div>
+              {transferAlloc.hotel_name && <div className="text-sm text-slate-600">Hotel: <span className="font-medium uppercase">{transferAlloc.hotel_name}</span></div>}
+              <div className="text-sm text-slate-600">Linea attuale: <span className="font-medium">{transferAlloc.line_name}</span></div>
+              <div className="text-sm text-slate-600">Bus attuale: <span className="font-medium">{transferAlloc.bus_label}</span></div>
+              <div className="text-sm text-slate-600">Fermata attuale: <span className="font-medium">{transferAlloc.stop_name}</span></div>
+              <div className="text-sm text-slate-600">Pax: <span className="font-medium">{transferAlloc.pax_assigned}</span></div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-700">Linea destinazione:</label>
+              <select value={transferLineId}
+                onChange={(e) => {
+                  const lid = e.target.value;
+                  setTransferLineId(lid);
+                  const firstStop = payload.stops.find((s) => s.bus_line_id === lid && s.direction === direction);
+                  setTransferStopId(firstStop?.id ?? "");
+                  const firstUnit = payload.units.find((u) => u.bus_line_id === lid && u.status !== "closed" && u.status !== "completed");
+                  setTransferUnitId(firstUnit?.id ?? "");
+                }}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">
+                {payload.lines.filter((l) => l.id !== transferAlloc.bus_line_id).map((l) => (
+                  <option key={l.id} value={l.id}>{l.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-700">Fermata:</label>
+              <select value={transferStopId} onChange={(e) => setTransferStopId(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">
+                {transferTargetStops.length === 0
+                  ? <option value="">— nessuna fermata —</option>
+                  : transferTargetStops.map((s) => <option key={s.id} value={s.id}>{s.stop_name}{s.city && s.city !== s.stop_name ? ` (${s.city})` : ""}</option>)
+                }
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-700">Bus:</label>
+              <select value={transferUnitId} onChange={(e) => setTransferUnitId(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">
+                {transferTargetUnits.length === 0
+                  ? <option value="">— nessun bus disponibile —</option>
+                  : transferTargetUnits.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)
+                }
+              </select>
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button onClick={() => setTransferAlloc(null)}
+                className="btn-secondary flex-1 py-2.5">Annulla</button>
+              <button
+                onClick={() => void confirmTransfer()}
+                disabled={saving || !transferLineId || !transferUnitId || !transferStopId}
+                className="flex-1 rounded-lg bg-violet-600 py-2.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-40">
+                {saving ? "Trasferimento..." : "Conferma trasferimento"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Import modal ── */}
+      {importModalOpen && (
+        <BusImportModal
+          allLines={payload.lines}
+          allStops={payload.stops}
+          direction={direction}
+          date={date}
+          onClose={() => setImportModalOpen(false)}
+          onImported={() => { setImportModalOpen(false); void load(); }}
+        />
       )}
     </div>
   );

@@ -121,7 +121,7 @@ const reorderStopsSchema = z.object({
 
 async function loadBusNetwork(auth: PricingAuthContext) {
   const tenantId = auth.membership.tenant_id;
-  const [linesResult, stopsResult, unitsResult, allocationsResult, allocationDetailsResult, movesResult, servicesResult, hotelsResult] = await Promise.all([
+  const [linesResult, stopsResult, unitsResult, allocationsResult, allocationDetailsResult, movesResult, servicesResult, hotelsResult, pendingResult] = await Promise.all([
     auth.admin.from("tenant_bus_lines").select("*").eq("tenant_id", tenantId).order("family_code").order("name"),
     auth.admin.from("tenant_bus_line_stops").select("*").eq("tenant_id", tenantId).order("direction").order("order_index").order("stop_order"),
     auth.admin.from("tenant_bus_units").select("*").eq("tenant_id", tenantId).order("bus_line_id").order("sort_order"),
@@ -135,7 +135,8 @@ async function loadBusNetwork(auth: PricingAuthContext) {
       .or("service_type_code.eq.bus_line,booking_service_kind.eq.bus_city_hotel")
       .order("date")
       .order("time"),
-    auth.admin.from("hotels").select("*").eq("tenant_id", tenantId)
+    auth.admin.from("hotels").select("*").eq("tenant_id", tenantId),
+    auth.admin.from("bus_import_pending").select("*").eq("tenant_id", tenantId).eq("status", "pending").order("created_at", { ascending: false })
   ]);
 
   const error =
@@ -146,7 +147,8 @@ async function loadBusNetwork(auth: PricingAuthContext) {
     allocationDetailsResult.error ||
     movesResult.error ||
     servicesResult.error ||
-    hotelsResult.error;
+    hotelsResult.error ||
+    pendingResult.error;
   if (error) {
     throw new Error(error.message);
   }
@@ -217,7 +219,8 @@ async function loadBusNetwork(auth: PricingAuthContext) {
     stop_loads: stopLoads,
     geographic_suggestions: suggestions,
     redistribution_suggestions: redistribution,
-    arrival_windows: arrivalWindows
+    arrival_windows: arrivalWindows,
+    pending_passengers: pendingResult.data ?? []
   };
 }
 
@@ -226,7 +229,7 @@ export async function GET(request: NextRequest) {
     const auth = await authorizePricingRequest(request, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
     const payload = await loadBusNetwork(auth);
-    return NextResponse.json({ ok: true, ...payload });
+    return NextResponse.json({ ok: true, user_role: auth.membership.role, ...payload });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
   }
@@ -690,6 +693,430 @@ export async function POST(request: NextRequest) {
         skipped_detail: skipped,
         ...(await loadBusNetwork(auth))
       });
+    }
+
+    if (action === "import_excel_line") {
+      const importSchema = z.object({
+        bus_line_id: z.string().uuid(),
+        direction: z.enum(["arrival", "departure"]),
+        travel_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        rows: z.array(z.object({
+          name: z.string().max(200),
+          phone: z.string().max(100).optional().nullable(),
+          email: z.string().max(200).optional().nullable(),
+          city: z.string().max(200),
+          pax: z.number().int().min(1).max(120),
+          notes: z.string().max(500).optional().nullable(),
+        })).min(1).max(500),
+      });
+      const parsed = importSchema.parse(body);
+
+      function normCity(v?: string | null) {
+        return String(v ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+      }
+
+      // Carica fermate e bus della linea
+      const [stopsRes, unitsRes, allocRes] = await Promise.all([
+        auth.admin.from("tenant_bus_line_stops").select("id,stop_name,city,stop_order")
+          .eq("tenant_id", tenantId).eq("bus_line_id", parsed.bus_line_id)
+          .eq("direction", parsed.direction).eq("active", true).order("stop_order"),
+        auth.admin.from("tenant_bus_units").select("id,label,capacity,status")
+          .eq("tenant_id", tenantId).eq("bus_line_id", parsed.bus_line_id)
+          .not("status", "in", '("closed","completed")').order("sort_order"),
+        auth.admin.from("tenant_bus_allocations").select("bus_unit_id,pax_assigned,service_id")
+          .eq("tenant_id", tenantId),
+      ]);
+      if (stopsRes.error) throw new Error(stopsRes.error.message);
+      if (unitsRes.error) throw new Error(unitsRes.error.message);
+      if (allocRes.error) throw new Error(allocRes.error.message);
+
+      type DBStop = { id: string; stop_name: string; city: string; stop_order: number };
+      type DBUnit = { id: string; label: string; capacity: number; status: string };
+      const lineStops = (stopsRes.data ?? []) as DBStop[];
+      const units = (unitsRes.data ?? []) as DBUnit[];
+
+      // Calcola pax per data per bus
+      const datePaxMap = new Map<string, number>();
+      for (const a of (allocRes.data ?? []) as Array<{ bus_unit_id: string; pax_assigned: number }>) {
+        datePaxMap.set(a.bus_unit_id, (datePaxMap.get(a.bus_unit_id) ?? 0) + a.pax_assigned);
+      }
+
+      function findStop(city: string): { stop: DBStop | null; fuzzy: boolean } {
+        const nc = normCity(city);
+        if (!nc) return { stop: null, fuzzy: false };
+        const exact = lineStops.find((s) => normCity(s.city) === nc || normCity(s.stop_name) === nc);
+        if (exact) return { stop: exact, fuzzy: false };
+        const fuzzy = lineStops.find((s) => {
+          const sc = normCity(s.city); const sn = normCity(s.stop_name);
+          return sc.includes(nc) || nc.includes(sc) || sn.includes(nc) || nc.includes(sn);
+        });
+        return { stop: fuzzy ?? null, fuzzy: !!fuzzy };
+      }
+
+      function pickBus(pax: number): DBUnit | null {
+        const scored = units
+          .map((u) => ({ u, remaining: u.capacity - (datePaxMap.get(u.id) ?? 0) }))
+          .filter((x) => x.remaining >= pax)
+          .sort((a, b) => a.remaining - b.remaining);
+        return scored[0]?.u ?? null;
+      }
+
+      let assigned = 0;
+      let pending = 0;
+
+      for (const row of parsed.rows) {
+        const { stop, fuzzy } = findStop(row.city);
+
+        if (stop && !fuzzy) {
+          // Fermata trovata: crea servizio + alloca
+          const bus = pickBus(row.pax);
+          if (bus) {
+            const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
+              tenant_id: tenantId,
+              customer_name: row.name,
+              customer_phone: row.phone ?? null,
+              direction: parsed.direction,
+              date: parsed.travel_date,
+              pax: row.pax,
+              bus_city_origin: row.city,
+              booking_service_kind: "bus_city_hotel",
+              status: "confirmed",
+            }).select("id").single();
+            if (svcErr || !svc) { pending++; continue; }
+
+            const { error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
+              p_tenant_id: tenantId,
+              p_service_id: svc.id,
+              p_bus_line_id: parsed.bus_line_id,
+              p_bus_unit_id: bus.id,
+              p_stop_id: stop.id,
+              p_stop_name: stop.stop_name,
+              p_direction: parsed.direction,
+              p_pax_assigned: row.pax,
+              p_notes: row.notes ?? null,
+              p_created_by_user_id: auth.user.id,
+            });
+            if (allocErr) { pending++; continue; }
+
+            datePaxMap.set(bus.id, (datePaxMap.get(bus.id) ?? 0) + row.pax);
+            assigned++;
+          } else {
+            // Nessun bus disponibile → da validare
+            await auth.admin.from("bus_import_pending").insert({
+              tenant_id: tenantId,
+              bus_line_id: parsed.bus_line_id,
+              direction: parsed.direction,
+              travel_date: parsed.travel_date,
+              passenger_name: row.name,
+              passenger_phone: row.phone ?? null,
+              passenger_email: row.email ?? null,
+              city_original: row.city,
+              pax: row.pax,
+              notes: row.notes ?? null,
+              geo_suggested_stop: stop.stop_name,
+            });
+            pending++;
+          }
+        } else {
+          // Fermata non trovata o parziale → da validare
+          await auth.admin.from("bus_import_pending").insert({
+            tenant_id: tenantId,
+            bus_line_id: parsed.bus_line_id,
+            direction: parsed.direction,
+            travel_date: parsed.travel_date,
+            passenger_name: row.name,
+            passenger_phone: row.phone ?? null,
+            passenger_email: row.email ?? null,
+            city_original: row.city,
+            pax: row.pax,
+            notes: row.notes ?? null,
+            geo_suggested_stop: stop?.stop_name ?? null,
+          });
+          pending++;
+        }
+      }
+
+      return NextResponse.json({ ok: true, assigned, pending, ...(await loadBusNetwork(auth)) });
+    }
+
+    if (action === "import_excel_auto") {
+      const importSchema = z.object({
+        direction: z.enum(["arrival", "departure"]),
+        travel_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        rows: z.array(z.object({
+          name: z.string().max(200),
+          phone: z.string().max(100).optional().nullable(),
+          city: z.string().max(200),
+          pax: z.number().int().min(1).max(120),
+          notes: z.string().max(500).optional().nullable(),
+          stop_id: z.string().uuid().optional().nullable(),       // assegnato manualmente nel preview
+          bus_line_id: z.string().uuid().optional().nullable(),   // assegnato manualmente nel preview
+        })).min(1).max(500),
+      });
+      const parsed = importSchema.parse(body);
+
+      function normCityAuto(v?: string | null) {
+        return String(v ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+      }
+
+      // Carica tutte le fermate attive del tenant per la direzione richiesta
+      const [allStopsRes, allUnitsRes, allocRes] = await Promise.all([
+        auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,stop_name,city,stop_order")
+          .eq("tenant_id", tenantId).eq("direction", parsed.direction).eq("active", true).order("stop_order"),
+        auth.admin.from("tenant_bus_units").select("id,bus_line_id,label,capacity,status")
+          .eq("tenant_id", tenantId).not("status", "in", '("closed","completed")').order("sort_order"),
+        auth.admin.from("tenant_bus_allocations").select("bus_unit_id,pax_assigned")
+          .eq("tenant_id", tenantId),
+      ]);
+      if (allStopsRes.error) throw new Error(allStopsRes.error.message);
+      if (allUnitsRes.error) throw new Error(allUnitsRes.error.message);
+      if (allocRes.error) throw new Error(allocRes.error.message);
+
+      type DBStop2 = { id: string; bus_line_id: string; stop_name: string; city: string; stop_order: number };
+      type DBUnit2 = { id: string; bus_line_id: string; label: string; capacity: number; status: string };
+      const allLineStops = (allStopsRes.data ?? []) as DBStop2[];
+      const allUnits = (allUnitsRes.data ?? []) as DBUnit2[];
+
+      // Mappa pax correnti per bus unit
+      const datePaxMap2 = new Map<string, number>();
+      for (const a of (allocRes.data ?? []) as Array<{ bus_unit_id: string; pax_assigned: number }>) {
+        datePaxMap2.set(a.bus_unit_id, (datePaxMap2.get(a.bus_unit_id) ?? 0) + a.pax_assigned);
+      }
+
+      function findStopAuto(city: string): { stop: DBStop2 | null; fuzzy: boolean } {
+        const nc = normCityAuto(city);
+        if (!nc) return { stop: null, fuzzy: false };
+        const exact = allLineStops.find((s) => normCityAuto(s.city) === nc || normCityAuto(s.stop_name) === nc);
+        if (exact) return { stop: exact, fuzzy: false };
+        const fuzzy = allLineStops.find((s) => {
+          const sc = normCityAuto(s.city); const sn = normCityAuto(s.stop_name);
+          return sc.includes(nc) || nc.includes(sc) || sn.includes(nc) || nc.includes(sn);
+        });
+        return { stop: fuzzy ?? null, fuzzy: !!fuzzy };
+      }
+
+      function pickBusForLine(lineId: string, pax: number): DBUnit2 | null {
+        const lineUnits = allUnits.filter((u) => u.bus_line_id === lineId);
+        const scored = lineUnits
+          .map((u) => ({ u, remaining: u.capacity - (datePaxMap2.get(u.id) ?? 0) }))
+          .filter((x) => x.remaining >= pax)
+          .sort((a, b) => a.remaining - b.remaining);
+        return scored[0]?.u ?? null;
+      }
+
+      let assigned2 = 0;
+      let pending2 = 0;
+
+      for (const row of parsed.rows) {
+        // Se il client ha già assegnato manualmente la fermata, usala direttamente
+        let resolvedStop: DBStop2 | null = null;
+        let resolvedFuzzy = false;
+        if (row.stop_id && row.bus_line_id) {
+          resolvedStop = allLineStops.find((s) => s.id === row.stop_id) ?? null;
+          resolvedFuzzy = false;
+        }
+        if (!resolvedStop) {
+          const found = findStopAuto(row.city);
+          resolvedStop = found.stop;
+          resolvedFuzzy = found.fuzzy;
+        }
+        const stop = resolvedStop;
+        const fuzzy = resolvedFuzzy;
+
+        if (stop && !fuzzy) {
+          const bus = pickBusForLine(stop.bus_line_id, row.pax);
+          if (bus) {
+            const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
+              tenant_id: tenantId,
+              customer_name: row.name,
+              customer_phone: row.phone ?? null,
+              direction: parsed.direction,
+              date: parsed.travel_date,
+              pax: row.pax,
+              bus_city_origin: row.city,
+              booking_service_kind: "bus_city_hotel",
+              status: "confirmed",
+            }).select("id").single();
+            if (svcErr || !svc) { pending2++; continue; }
+
+            const { error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
+              p_tenant_id: tenantId,
+              p_service_id: svc.id,
+              p_bus_line_id: stop.bus_line_id,
+              p_bus_unit_id: bus.id,
+              p_stop_id: stop.id,
+              p_stop_name: stop.stop_name,
+              p_direction: parsed.direction,
+              p_pax_assigned: row.pax,
+              p_notes: row.notes ?? null,
+              p_created_by_user_id: auth.user.id,
+            });
+            if (allocErr) { pending2++; continue; }
+
+            datePaxMap2.set(bus.id, (datePaxMap2.get(bus.id) ?? 0) + row.pax);
+            assigned2++;
+          } else {
+            // Nessun bus disponibile sulla linea → da validare
+            await auth.admin.from("bus_import_pending").insert({
+              tenant_id: tenantId,
+              bus_line_id: stop.bus_line_id,
+              direction: parsed.direction,
+              travel_date: parsed.travel_date,
+              passenger_name: row.name,
+              passenger_phone: row.phone ?? null,
+              city_original: row.city,
+              pax: row.pax,
+              notes: row.notes ?? null,
+              geo_suggested_stop: stop.stop_name,
+            });
+            pending2++;
+          }
+        } else {
+          // Fermata non trovata → da validare (bus_line_id = primo bus disponibile del tenant come fallback)
+          const firstLine = allUnits[0]?.bus_line_id ?? null;
+          if (firstLine) {
+            await auth.admin.from("bus_import_pending").insert({
+              tenant_id: tenantId,
+              bus_line_id: firstLine,
+              direction: parsed.direction,
+              travel_date: parsed.travel_date,
+              passenger_name: row.name,
+              passenger_phone: row.phone ?? null,
+              city_original: row.city,
+              pax: row.pax,
+              notes: row.notes ?? null,
+              geo_suggested_stop: stop?.stop_name ?? null,
+            });
+          }
+          pending2++;
+        }
+      }
+
+      return NextResponse.json({ ok: true, assigned: assigned2, pending: pending2, ...(await loadBusNetwork(auth)) });
+    }
+
+    if (action === "approve_pending") {
+      const approveSchema = z.object({
+        pending_id: z.string().uuid(),
+        bus_unit_id: z.string().uuid(),
+        stop_id: z.string().uuid(),
+        travel_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      });
+      const parsed = approveSchema.parse(body);
+
+      const { data: pend, error: pendErr } = await auth.admin
+        .from("bus_import_pending")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("id", parsed.pending_id)
+        .eq("status", "pending")
+        .single();
+      if (pendErr || !pend) return NextResponse.json({ ok: false, error: "Record non trovato." }, { status: 404 });
+
+      const pRow = pend as { bus_line_id: string; direction: string; passenger_name: string; passenger_phone: string | null; city_original: string; pax: number; notes: string | null };
+
+      const { data: stop } = await auth.admin.from("tenant_bus_line_stops").select("stop_name").eq("id", parsed.stop_id).single();
+
+      const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
+        tenant_id: tenantId,
+        customer_name: pRow.passenger_name,
+        customer_phone: pRow.passenger_phone,
+        direction: pRow.direction,
+        date: parsed.travel_date,
+        pax: pRow.pax,
+        bus_city_origin: pRow.city_original,
+        booking_service_kind: "bus_city_hotel",
+        status: "confirmed",
+      }).select("id").single();
+      if (svcErr || !svc) throw new Error(svcErr?.message ?? "Errore creazione servizio.");
+
+      const { error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
+        p_tenant_id: tenantId,
+        p_service_id: (svc as { id: string }).id,
+        p_bus_line_id: pRow.bus_line_id,
+        p_bus_unit_id: parsed.bus_unit_id,
+        p_stop_id: parsed.stop_id,
+        p_stop_name: (stop as { stop_name: string } | null)?.stop_name ?? pRow.city_original,
+        p_direction: pRow.direction as "arrival" | "departure",
+        p_pax_assigned: pRow.pax,
+        p_notes: pRow.notes,
+        p_created_by_user_id: auth.user.id,
+      });
+      if (allocErr) throw new Error(allocErr.message);
+
+      await auth.admin.from("bus_import_pending").update({ status: "approved" }).eq("id", parsed.pending_id);
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
+    if (action === "reject_pending") {
+      const pendingId = z.string().uuid().parse(body?.pending_id);
+      await auth.admin.from("bus_import_pending").update({ status: "rejected" }).eq("tenant_id", tenantId).eq("id", pendingId);
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
+    if (action === "transfer_allocation_line") {
+      // Solo admin
+      if (auth.membership.role !== "admin") {
+        return NextResponse.json({ ok: false, error: "Non autorizzato." }, { status: 403 });
+      }
+      const schema = z.object({
+        allocation_id: z.string().uuid(),
+        target_bus_line_id: z.string().uuid(),
+        target_bus_unit_id: z.string().uuid(),
+        target_stop_id: z.string().uuid(),
+      });
+      const parsed = schema.parse(body);
+
+      // Leggi allocazione corrente
+      const { data: alloc, error: allocReadErr } = await auth.admin
+        .from("tenant_bus_allocations")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("id", parsed.allocation_id)
+        .single();
+      if (allocReadErr || !alloc) return NextResponse.json({ ok: false, error: "Allocazione non trovata." }, { status: 404 });
+
+      const a = alloc as { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; direction: string; pax_assigned: number; notes?: string | null };
+
+      // Leggi fermata destinazione
+      const { data: targetStop } = await auth.admin
+        .from("tenant_bus_line_stops")
+        .select("stop_name")
+        .eq("id", parsed.target_stop_id)
+        .single();
+      const targetStopName = (targetStop as { stop_name: string } | null)?.stop_name ?? "";
+
+      // Elimina allocazione corrente
+      await auth.admin.from("tenant_bus_allocations").delete().eq("tenant_id", tenantId).eq("id", parsed.allocation_id);
+
+      // Crea nuova allocazione sulla linea/bus/fermata di destinazione
+      const { error: newAllocErr } = await auth.admin.rpc("allocate_bus_service", {
+        p_tenant_id: tenantId,
+        p_service_id: a.service_id,
+        p_bus_line_id: parsed.target_bus_line_id,
+        p_bus_unit_id: parsed.target_bus_unit_id,
+        p_stop_id: parsed.target_stop_id,
+        p_stop_name: targetStopName,
+        p_direction: a.direction as "arrival" | "departure",
+        p_pax_assigned: a.pax_assigned,
+        p_notes: a.notes ?? null,
+        p_created_by_user_id: auth.user.id,
+      });
+      if (newAllocErr) throw new Error(newAllocErr.message);
+
+      // Traccia nel log movimenti
+      await auth.admin.from("tenant_bus_allocation_moves").insert({
+        tenant_id: tenantId,
+        service_id: a.service_id,
+        from_bus_unit_id: a.bus_unit_id,
+        to_bus_unit_id: parsed.target_bus_unit_id,
+        stop_name: targetStopName,
+        pax_moved: a.pax_assigned,
+        reason: `Trasferito a linea diversa`,
+        created_by_user_id: auth.user.id,
+      });
+
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
     return NextResponse.json({ ok: false, error: "Azione non supportata." }, { status: 400 });
