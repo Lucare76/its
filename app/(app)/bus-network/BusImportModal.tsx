@@ -84,6 +84,20 @@ function extractCity(raw: string): string {
   return city;
 }
 
+// Parole da ignorare nel matching per parola-chiave
+const STOP_WORDS = new Set([
+  "di", "del", "della", "delle", "dei", "da", "al", "no", "il", "la", "le", "lo", "e",
+  "via", "zona", "area", "nord", "sud", "est", "ovest", "nuovo", "nuova", "san", "santa",
+]);
+
+// Restituisce true se almeno una parola significativa (≥4 chars) è condivisa tra a e b
+function hasKeywordOverlap(a: string, b: string): boolean {
+  const words = (s: string) => s.split(/\s+/).filter((w) => w.length >= 4 && !STOP_WORDS.has(w));
+  const wa = words(a);
+  const wb = words(b);
+  return wa.some((x) => wb.some((y) => x === y || x.includes(y) || y.includes(x)));
+}
+
 function matchAcrossLines(
   city: string,
   stops: BusStop[],
@@ -91,12 +105,12 @@ function matchAcrossLines(
   direction: "arrival" | "departure"
 ): { stop: BusStop | null; line: BusLine | null; status: "ok" | "fuzzy" | "pending" } {
   const nc = normCity(city);
-  if (!nc) return { stop: null, line: null, status: "pending" };
+  if (!nc || nc.length < 3) return { stop: null, line: null, status: "pending" };
 
   const dirStops = stops.filter((s) => s.direction === direction);
   const findLine = (s: BusStop) => lines.find((l) => l.id === s.bus_line_id) ?? null;
 
-  // Exact: città, stop_name, oppure pickup_note contiene la stringa cercata
+  // Exact: città o stop_name uguali, oppure pickup_note contiene la stringa cercata
   const exact = dirStops.find((s) =>
     normCity(s.city) === nc ||
     normCity(s.stop_name) === nc ||
@@ -104,14 +118,14 @@ function matchAcrossLines(
   );
   if (exact) return { stop: exact, line: findLine(exact), status: "ok" };
 
-  // Fuzzy: include/è contenuto in city o stop_name, oppure pickup_note
+  // Fuzzy: substring match su city/stop_name/pickup_note, oppure keyword overlap su pickup_note
   const fuzzy = dirStops.find((s) => {
     const sc = normCity(s.city);
     const sn = normCity(s.stop_name);
     const sp = s.pickup_note ? normCity(s.pickup_note) : "";
     return sc.includes(nc) || nc.includes(sc) ||
       sn.includes(nc) || nc.includes(sn) ||
-      (sp && nc.length >= 4 && (sp.includes(nc) || nc.includes(sp)));
+      (sp && nc.length >= 4 && (sp.includes(nc) || nc.includes(sp) || hasKeywordOverlap(nc, sp)));
   });
   if (fuzzy) return { stop: fuzzy, line: findLine(fuzzy), status: "fuzzy" };
 

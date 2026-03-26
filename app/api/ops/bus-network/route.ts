@@ -887,6 +887,16 @@ export async function POST(request: NextRequest) {
         datePaxMap2.set(a.bus_unit_id, (datePaxMap2.get(a.bus_unit_id) ?? 0) + a.pax_assigned);
       }
 
+      const STOP_WORDS_AUTO = new Set([
+        "di", "del", "della", "delle", "dei", "da", "al", "no", "il", "la", "le", "lo", "e",
+        "via", "zona", "area", "nord", "sud", "est", "ovest", "nuovo", "nuova", "san", "santa",
+      ]);
+      function hasKeywordOverlapAuto(a: string, b: string): boolean {
+        const words = (s: string) => s.split(/\s+/).filter((w) => w.length >= 4 && !STOP_WORDS_AUTO.has(w));
+        const wa = words(a); const wb = words(b);
+        return wa.some((x) => wb.some((y) => x === y || x.includes(y) || y.includes(x)));
+      }
+
       function findStopAuto(city: string): { stop: DBStop2 | null; fuzzy: boolean } {
         const nc = normCityAuto(city);
         if (!nc || nc.length < 3) return { stop: null, fuzzy: false };
@@ -897,14 +907,14 @@ export async function POST(request: NextRequest) {
           (s.pickup_note && normCityAuto(s.pickup_note).includes(nc) && nc.length >= 4)
         );
         if (exact) return { stop: exact, fuzzy: false };
-        // Fuzzy: include/contiene + pickup_note
+        // Fuzzy: substring + keyword overlap su pickup_note
         const fuzzy = allLineStops.find((s) => {
           const sc = normCityAuto(s.city);
           const sn = normCityAuto(s.stop_name);
           const sp = s.pickup_note ? normCityAuto(s.pickup_note) : "";
           return sc.includes(nc) || nc.includes(sc) ||
             sn.includes(nc) || nc.includes(sn) ||
-            (sp && nc.length >= 4 && (sp.includes(nc) || nc.includes(sp)));
+            (sp && nc.length >= 4 && (sp.includes(nc) || nc.includes(sp) || hasKeywordOverlapAuto(nc, sp)));
         });
         return { stop: fuzzy ?? null, fuzzy: !!fuzzy };
       }
