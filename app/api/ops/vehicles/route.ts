@@ -16,7 +16,8 @@ const vehicleSchema = z.object({
   blocked_reason: z.string().max(500).optional().nullable(),
   notes: z.string().max(2000).optional().nullable(),
   is_blocked_manual: z.boolean().optional().default(false),
-  active: z.boolean().optional().default(true)
+  active: z.boolean().optional().default(true),
+  radius_vehicle_id: z.string().max(120).optional().nullable()
 });
 
 const anomalySchema = z.object({
@@ -78,7 +79,8 @@ export async function POST(request: NextRequest) {
         blocked_reason: parsed.blocked_reason ?? null,
         notes: parsed.notes ?? null,
         is_blocked_manual: parsed.is_blocked_manual,
-        active: parsed.active
+        active: parsed.active,
+        radius_vehicle_id: parsed.radius_vehicle_id ?? null
       };
       const query = parsed.id
         ? auth.admin.from("vehicles").update(payload).eq("tenant_id", tenantId).eq("id", parsed.id)

@@ -195,6 +195,13 @@ function renderNavIcon(icon: string) {
           <path d="M8 2.5v1.5M8 12v1.5M2.5 8H4M12 8h1.5M4.2 4.2l1 1M10.8 10.8l1 1M11.8 4.2l-1 1M5.2 10.8l-1 1" />
         </svg>
       );
+    case "V":
+      return (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className={common} aria-hidden="true">
+          <circle cx="8" cy="8" r="2" />
+          <path d="M5 5a4.2 4.2 0 0 1 6 0M3.5 3.5a6.4 6.4 0 0 1 9 0M11 11a4.2 4.2 0 0 1-6 0M12.5 12.5a6.4 6.4 0 0 1-9 0" />
+        </svg>
+      );
     default:
       return <span className="text-[11px] font-semibold">{icon}</span>;
   }
@@ -217,7 +224,8 @@ const MAIN_NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/inbox", label: "Posta in arrivo", icon: "I" },
     { href: "/bus-network", label: "Rete Bus", icon: "B" },
     { href: "/rete-ischia", label: "Rete Ischia", icon: "O" },
-    { href: "/dispatch", label: "Assegnazioni", icon: "G" }
+    { href: "/dispatch", label: "Assegnazioni", icon: "G" },
+    { href: "/mappa-live", label: "Mappa Live GPS", icon: "V" }
   ],
   operator: [
     { href: "/dashboard", label: "Cruscotto", icon: "D" },
@@ -226,7 +234,8 @@ const MAIN_NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/inbox", label: "Posta in arrivo", icon: "I" },
     { href: "/bus-network", label: "Rete Bus", icon: "B" },
     { href: "/rete-ischia", label: "Rete Ischia", icon: "O" },
-    { href: "/dispatch", label: "Assegnazioni", icon: "G" }
+    { href: "/dispatch", label: "Assegnazioni", icon: "G" },
+    { href: "/mappa-live", label: "Mappa Live GPS", icon: "V" }
   ],
   agency: [
     { href: "/agency", label: "Area Agenzia", icon: "A" },

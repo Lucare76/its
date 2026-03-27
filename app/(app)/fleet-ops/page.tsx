@@ -17,6 +17,7 @@ type Vehicle = {
   blocked_reason?: string | null;
   notes?: string | null;
   is_blocked_manual?: boolean | null;
+  radius_vehicle_id?: string | null;
 };
 
 type Driver = { user_id: string; full_name: string };
@@ -162,7 +163,21 @@ export default function FleetOpsPage() {
                 <input id="fleet-blocked-until" className="input-saas" type="datetime-local" defaultValue={selectedVehicle.blocked_until ? selectedVehicle.blocked_until.slice(0, 16) : ""} />
                 <input id="fleet-blocked-reason" className="input-saas md:col-span-2" defaultValue={selectedVehicle.blocked_reason ?? ""} placeholder="Motivo blocco" />
                 <textarea id="fleet-notes" className="input-saas md:col-span-2 min-h-[90px]" defaultValue={selectedVehicle.notes ?? ""} placeholder="Note mezzo" />
+                <input
+                  id="fleet-radius-id"
+                  className="input-saas md:col-span-2"
+                  defaultValue={selectedVehicle.radius_vehicle_id ?? ""}
+                  placeholder="ID veicolo GPS Radius (es. VH-1234)"
+                />
               </div>
+              {selectedVehicle.radius_vehicle_id ? (
+                <a
+                  href="/mappa-live"
+                  className="inline-block rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700 hover:bg-teal-100"
+                >
+                  Apri su Mappa Live GPS
+                </a>
+              ) : null}
               <button
                 type="button"
                 className="btn-primary px-4 py-2 text-sm"
@@ -178,6 +193,7 @@ export default function FleetOpsPage() {
                     blocked_until: (document.getElementById("fleet-blocked-until") as HTMLInputElement | null)?.value || null,
                     blocked_reason: (document.getElementById("fleet-blocked-reason") as HTMLInputElement | null)?.value ?? "",
                     notes: (document.getElementById("fleet-notes") as HTMLTextAreaElement | null)?.value ?? "",
+                    radius_vehicle_id: (document.getElementById("fleet-radius-id") as HTMLInputElement | null)?.value || null,
                     capacity: selectedVehicle.capacity ?? null,
                     is_blocked_manual: Boolean((document.getElementById("fleet-blocked-reason") as HTMLInputElement | null)?.value)
                   })
@@ -251,6 +267,7 @@ export default function FleetOpsPage() {
                 <th className="px-3 py-2">Mezzo</th>
                 <th className="px-3 py-2">Autista abituale</th>
                 <th className="px-3 py-2">Zona</th>
+                <th className="px-3 py-2">GPS Radius</th>
                 <th className="px-3 py-2">Disponibilita</th>
               </tr>
             </thead>
@@ -262,6 +279,13 @@ export default function FleetOpsPage() {
                     {vehicle.habitual_driver_user_id ? driverNameById.get(vehicle.habitual_driver_user_id) ?? vehicle.habitual_driver_user_id : "N/D"}
                   </td>
                   <td className="px-3 py-2">{vehicle.default_zone ?? "N/D"}</td>
+                  <td className="px-3 py-2">
+                    {vehicle.radius_vehicle_id ? (
+                      <span className="text-teal-700 font-medium">{vehicle.radius_vehicle_id}</span>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2">{vehicle.is_blocked_manual || vehicle.blocked_until ? "Non disponibile" : "Disponibile"}</td>
                 </tr>
               ))}

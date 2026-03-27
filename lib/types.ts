@@ -207,6 +207,7 @@ export interface VehicleRecord {
   blocked_reason?: string | null;
   notes?: string | null;
   is_blocked_manual?: boolean | null;
+  radius_vehicle_id?: string | null;
   created_at?: string;
 }
 
@@ -377,4 +378,24 @@ export interface DemoState {
   busLotConfigs: BusLotConfig[];
   inboundEmails: InboundEmail[];
   memberships: Membership[];
+}
+
+// GPS live tracking (Radius/Kinesis)
+
+export interface GpsVehiclePosition {
+  radius_vehicle_id: string;
+  label: string;
+  lat: number;
+  lng: number;
+  speed_kmh: number | null;
+  heading: number | null;
+  timestamp: string;
+  driver_name: string | null;
+  line_name: string | null;
+  online: boolean;
+}
+
+export interface GpsLiveEntry extends GpsVehiclePosition {
+  pms_vehicle_id: string | null;
+  pms_label: string | null;
 }

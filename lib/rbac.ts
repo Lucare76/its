@@ -36,7 +36,8 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/pdf-imports", roles: ["admin", "operator"] },
   { prefix: "/pricing", roles: ["admin", "operator"] },
   { prefix: "/settings/users", roles: ["admin"] },
-  { prefix: "/settings/whatsapp", roles: ["admin"] }
+  { prefix: "/settings/whatsapp", roles: ["admin"] },
+  { prefix: "/mappa-live", roles: ["admin", "operator"] }
 ];
 
 export type AppCapability =
