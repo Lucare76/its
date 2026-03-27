@@ -1020,6 +1020,8 @@ export async function POST(request: NextRequest) {
           city: z.string().max(200),
           pax: z.number().int().min(1).max(120),
           notes: z.string().max(500).optional().nullable(),
+          hotel: z.string().max(200).optional().nullable(),
+          agency: z.string().max(200).optional().nullable(),
           stop_id: z.string().uuid().optional().nullable(),       // assegnato manualmente nel preview
           bus_line_id: z.string().uuid().optional().nullable(),   // assegnato manualmente nel preview
         })).min(1).max(500),
@@ -1177,6 +1179,8 @@ export async function POST(request: NextRequest) {
               bus_city_origin: row.city,
               booking_service_kind: "bus_city_hotel",
               status: "new",
+              meeting_point: row.hotel ?? null,
+              billing_party_name: row.agency ?? null,
             }).select("id").single();
             if (svcErr || !svc) {
               console.error(`[import_excel_auto] insert services fallita per "${row.name}" (${row.city}): ${svcErr?.message}`);

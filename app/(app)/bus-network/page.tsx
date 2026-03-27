@@ -466,27 +466,37 @@ export default function BusNetworkPage() {
       return ta !== tb ? ta.localeCompare(tb) : (a.service_time ?? "").localeCompare(b.service_time ?? "");
     });
     return sorted.map((alloc) => ({
+      Orario: alloc.stop_pickup_time ?? "",
+      "Punto di carico": alloc.stop_pickup_note ? `${alloc.stop_name} - ${alloc.stop_pickup_note}` : alloc.stop_name,
+      "N° pax": alloc.pax_assigned,
+      Nominativo: alloc.customer_name,
+      "Cell.": alloc.customer_phone ?? "",
+      "Hotel destinazione": alloc.hotel_name ?? "",
+      Incasso: "",
+      Note: alloc.notes ?? "",
+      Pranzo: "",
+      Agenzia: alloc.agency_name ?? "",
+      // Colonne di supporto (nascondere nel foglio finale se necessario)
       Linea: lineName,
       Bus: unit.label,
       Autista: unit.driver_name ?? "",
-      "Tel. Autista": unit.driver_phone ?? "",
-      "Orario raccolta": alloc.stop_pickup_time ?? "",
-      Fermata: alloc.stop_name,
-      "Punto raccolta": alloc.stop_pickup_note ?? "",
-      Cliente: alloc.customer_name,
-      Hotel: alloc.hotel_name ?? "",
-      Agenzia: alloc.agency_name ?? "",
-      Telefono: alloc.customer_phone ?? "",
-      Pax: alloc.pax_assigned,
-      Data: alloc.service_date,
-      Direzione: alloc.direction === "arrival" ? "Andata" : "Ritorno"
     }));
   }
 
   const colWidths = [
-    { wch: 16 }, { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 10 },
-    { wch: 22 }, { wch: 32 }, { wch: 28 }, { wch: 22 }, { wch: 20 },
-    { wch: 16 }, { wch: 6 }, { wch: 12 }, { wch: 10 }
+    { wch: 8 },  // Orario
+    { wch: 36 }, // Punto di carico
+    { wch: 7 },  // N° pax
+    { wch: 30 }, // Nominativo
+    { wch: 16 }, // Cell.
+    { wch: 28 }, // Hotel destinazione
+    { wch: 10 }, // Incasso
+    { wch: 22 }, // Note
+    { wch: 8 },  // Pranzo
+    { wch: 22 }, // Agenzia
+    { wch: 18 }, // Linea
+    { wch: 14 }, // Bus
+    { wch: 20 }, // Autista
   ];
 
   // Export linea corrente (tutti i bus della linea selezionata)
@@ -500,49 +510,62 @@ export default function BusNetworkPage() {
     ws["!cols"] = colWidths;
     const wb = utils.book_new();
     utils.book_append_sheet(wb, ws, (selectedLine?.name ?? "Bus").slice(0, 31));
-    writeFile(wb, `bus_${selectedLine?.code ?? "export"}_${date}_${direction}.xlsx`);
+    writeFile(wb, `bus_${selectedLine?.code ?? "export"}_${date}_${direction === "arrival" ? "Andata" : "Ritorno"}.xlsx`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busCards, date, direction, selectedLine]);
 
-  // Export singolo bus (usa il bus selezionato; se nessuno selezionato usa il primo)
+  // Export singolo bus: un foglio Andata + un foglio Ritorno
   const exportSingleBus = useCallback(async () => {
     const { utils, writeFile } = await import("xlsx");
     const targetCard = busCards.find((c) => c.unit.id === selectedBusUnitId) ?? busCards[0];
     if (!targetCard) return;
-    const rows = buildAllocRows(targetCard.unit, targetCard.allocations, selectedLine?.name ?? "");
-    const ws = utils.json_to_sheet(rows);
-    ws["!cols"] = colWidths;
+    const unitId = targetCard.unit.id;
+    const lineName = selectedLine?.name ?? "";
     const wb = utils.book_new();
-    utils.book_append_sheet(wb, ws, targetCard.unit.label.slice(0, 31));
+    for (const dir of ["arrival", "departure"] as const) {
+      const dirAllocs = payload.allocation_details.filter(
+        (a) => a.bus_unit_id === unitId && a.service_date === date && a.direction === dir
+      );
+      if (dirAllocs.length === 0) continue;
+      const rows = buildAllocRows(targetCard.unit, dirAllocs, lineName);
+      const ws = utils.json_to_sheet(rows);
+      ws["!cols"] = colWidths;
+      utils.book_append_sheet(wb, ws, dir === "arrival" ? "Andata" : "Ritorno");
+    }
+    if (wb.SheetNames.length === 0) return;
     const lineCode = selectedLine?.code ?? "bus";
     const busLabel = targetCard.unit.label.replace(/\s+/g, "_");
-    writeFile(wb, `${lineCode}_${busLabel}_${date}_${direction === "arrival" ? "Andata" : "Ritorno"}.xlsx`);
+    writeFile(wb, `${lineCode}_${busLabel}_${date}.xlsx`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busCards, selectedBusUnitId, date, direction, selectedLine]);
+  }, [busCards, selectedBusUnitId, date, direction, selectedLine, payload.allocation_details]);
 
-  // Export tutte le linee (un foglio per linea)
+  // Export tutte le linee: un foglio per linea×direzione (Andata + Ritorno)
   const exportAllLines = useCallback(async () => {
     const { utils, writeFile } = await import("xlsx");
     const wb = utils.book_new();
     for (const line of payload.lines) {
-      const lineAllocs = payload.allocation_details.filter(
-        (a) => a.bus_line_id === line.id && a.service_date === date && a.direction === direction
-      );
-      const lineUnitsAll = payload.unit_loads.filter((u) => u.bus_line_id === line.id);
-      const rows: Record<string, string | number>[] = [];
-      for (const unit of lineUnitsAll) {
-        const unitAllocs = lineAllocs.filter((a) => a.bus_unit_id === unit.id);
-        rows.push(...buildAllocRows(unit, unitAllocs, line.name));
-      }
-      if (rows.length > 0) {
-        const ws = utils.json_to_sheet(rows);
-        ws["!cols"] = colWidths;
-        utils.book_append_sheet(wb, ws, line.name.slice(0, 31));
+      for (const dir of ["arrival", "departure"] as const) {
+        const lineAllocs = payload.allocation_details.filter(
+          (a) => a.bus_line_id === line.id && a.service_date === date && a.direction === dir
+        );
+        const lineUnitsAll = payload.unit_loads.filter((u) => u.bus_line_id === line.id);
+        const rows: Record<string, string | number>[] = [];
+        for (const unit of lineUnitsAll) {
+          const unitAllocs = lineAllocs.filter((a) => a.bus_unit_id === unit.id);
+          rows.push(...buildAllocRows(unit, unitAllocs, line.name));
+        }
+        if (rows.length > 0) {
+          const ws = utils.json_to_sheet(rows);
+          ws["!cols"] = colWidths;
+          const sheetName = `${line.name.slice(0, 20)}_${dir === "arrival" ? "And" : "Rit"}`.slice(0, 31);
+          utils.book_append_sheet(wb, ws, sheetName);
+        }
       }
     }
-    writeFile(wb, `bus_tutte_linee_${date}_${direction === "arrival" ? "Andata" : "Ritorno"}.xlsx`);
+    if (wb.SheetNames.length === 0) return;
+    writeFile(wb, `bus_tutte_linee_${date}.xlsx`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [payload, date, direction]);
+  }, [payload, date]);
 
   const saveDriver = useCallback(async (unitId: string) => {
     await post("update_driver", { unit_id: unitId, driver_name: editDriverName.trim() || null, driver_phone: editDriverPhone.trim() || null });

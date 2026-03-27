@@ -9,6 +9,7 @@ type ImportRow = {
   name: string;
   phone: string;
   hotel: string;        // colonna A (hotel di partenza)
+  agency: string;       // agenzia (billing_party_name)
   cityRaw: string;      // valore originale dal file ("VIA BORGOSATOLLO")
   cityNorm: string;     // città estratta dopo pulizia ("BORGOSATOLLO")
   orario: string;       // orario di prelevamento dal file (se presente)
@@ -339,10 +340,10 @@ export default function BusImportModal({
         // Leggi agenzia da colonna notesCol e da colonna J (con alias mapping)
         const agencyRaw = str(notesCol) || str(agencyJCol);
         const agency = normalizeAgency(agencyRaw);
-        const notes = [hotel && `Hotel: ${hotel}`, agency && `Agenzia: ${agency}`].filter(Boolean).join(" · ");
+        const notes = "";
 
         const { stop, line, status } = matchAcrossLines(cityNorm, allStops, allLines, direction);
-        parsed.push({ name, phone, hotel, cityRaw, cityNorm, orario, pax, notes, status, matchedStop: stop, matchedLine: line });
+        parsed.push({ name, phone, hotel, agency, cityRaw, cityNorm, orario, pax, notes, status, matchedStop: stop, matchedLine: line });
       }
 
       if (parsed.length === 0) { setError("Nessuna riga valida trovata nel file."); return; }
@@ -371,6 +372,8 @@ export default function BusImportModal({
         city: r.cityNorm,
         pax: r.pax,
         notes: r.notes || null,
+        hotel: r.hotel || null,
+        agency: r.agency || null,
         // Se l'utente ha assegnato manualmente uno stop, lo passiamo esplicitamente
         stop_id: r.matchedStop?.id ?? null,
         bus_line_id: r.matchedLine?.id ?? null,
