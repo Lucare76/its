@@ -21,6 +21,13 @@ const bookingPatchSchema = z.object({
   notes: z.string().max(2000).optional()
 });
 
+async function hasColumn(admin: any, table: string, column: string) {
+  const { error } = await admin.from(table).select(column).limit(1);
+  if (!error) return true;
+  if ((error as { code?: string }).code === "42703") return false;
+  throw new Error(`Schema probe failed for ${table}.${column}: ${error.message}`);
+}
+
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -44,7 +51,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     const { data: membership } = await admin
       .from("memberships")
-      .select("tenant_id, role")
+      .select("tenant_id, agency_id, role")
       .eq("user_id", user.id)
       .maybeSingle();
 
@@ -52,14 +59,28 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (!membership?.tenant_id || !role || (role !== "agency" && role !== "admin")) {
       return NextResponse.json({ error: "Ruolo non autorizzato." }, { status: 403 });
     }
+    const supportsCreatedByUserId = await hasColumn(admin, "services", "created_by_user_id");
 
     const { id: serviceId } = await params;
-    const { data: existing } = await admin
+    let existingQuery = admin
       .from("services")
       .select("id, tenant_id, customer_first_name, customer_last_name, booking_service_kind")
       .eq("id", serviceId)
-      .eq("tenant_id", membership.tenant_id)
-      .maybeSingle();
+      .eq("tenant_id", membership.tenant_id);
+
+    if (role === "agency") {
+      if (membership.agency_id && supportsCreatedByUserId) {
+        existingQuery = existingQuery.or(`agency_id.eq.${membership.agency_id},created_by_user_id.eq.${user.id}`);
+      } else if (membership.agency_id) {
+        existingQuery = existingQuery.eq("agency_id", membership.agency_id);
+      } else if (supportsCreatedByUserId) {
+        existingQuery = existingQuery.eq("created_by_user_id", user.id);
+      } else {
+        return NextResponse.json({ error: "Schema incompleto: impossibile verificare l'agenzia proprietaria." }, { status: 503 });
+      }
+    }
+
+    const { data: existing } = await existingQuery.maybeSingle();
 
     if (!existing?.id) {
       return NextResponse.json({ error: "Prenotazione non trovata." }, { status: 404 });

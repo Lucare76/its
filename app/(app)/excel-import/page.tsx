@@ -139,12 +139,12 @@ const clientBusFamilyConfig = {
   ADRIATICA: { buses: 1, capacity: 54, label: "Linea Adriatica" }
 } as const;
 
-function normalize(value: string) {
-  return value.toLowerCase().replace(/\s+/g, " ").trim();
+function normalize(value: unknown) {
+  return String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function normalizeText(value: string) {
-  return value
+function normalizeText(value: unknown) {
+  return String(value ?? "")
     .toLowerCase()
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { isAllowed, parseRole } from "@/lib/rbac";
+import { isAllowed, isAllowedWithOverrides, type CapabilityOverrides, parseRole } from "@/lib/rbac";
 import { getE2ETestSessionOverride } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { needsInboxReview } from "@/lib/inbox-review";
@@ -200,6 +200,15 @@ function renderNavIcon(icon: string) {
   }
 }
 
+function HeaderBellIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4" aria-hidden="true">
+      <path d="M8 2.5a2.5 2.5 0 0 0-2.5 2.5v1.1c0 .7-.2 1.4-.5 2L4 10.5h8l-1-2.4c-.3-.6-.5-1.3-.5-2V5A2.5 2.5 0 0 0 8 2.5Z" />
+      <path d="M6.5 12a1.5 1.5 0 0 0 3 0" />
+    </svg>
+  );
+}
+
 const MAIN_NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
   admin: [
     { href: "/dashboard", label: "Cruscotto", icon: "D" },
@@ -207,6 +216,7 @@ const MAIN_NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/departures", label: "Partenze", icon: "P" },
     { href: "/inbox", label: "Posta in arrivo", icon: "I" },
     { href: "/bus-network", label: "Rete Bus", icon: "B" },
+    { href: "/rete-ischia", label: "Rete Ischia", icon: "O" },
     { href: "/dispatch", label: "Assegnazioni", icon: "G" }
   ],
   operator: [
@@ -215,6 +225,7 @@ const MAIN_NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/departures", label: "Partenze", icon: "P" },
     { href: "/inbox", label: "Posta in arrivo", icon: "I" },
     { href: "/bus-network", label: "Rete Bus", icon: "B" },
+    { href: "/rete-ischia", label: "Rete Ischia", icon: "O" },
     { href: "/dispatch", label: "Assegnazioni", icon: "G" }
   ],
   agency: [
@@ -286,9 +297,9 @@ function matchesPath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function canSeeNavItem(item: NavItem, role: UserRole | null, quotesAccess: boolean) {
+function canSeeNavItem(item: NavItem, role: UserRole | null, quotesAccess: boolean, overrides?: CapabilityOverrides) {
   if (!role) return false;
-  if (!isAllowed(item.href, role)) return false;
+  if (!isAllowedWithOverrides(item.href, role, overrides)) return false;
   if (item.requiresQuotesAccess && !quotesAccess) return false;
   return true;
 }
@@ -306,10 +317,13 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inboxPendingCount, setInboxPendingCount] = useState(0);
+  const [pendingAccessRequestCount, setPendingAccessRequestCount] = useState(0);
   const [liveToastMessage, setLiveToastMessage] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authRole, setAuthRole] = useState<UserRole | null>(null);
   const [authTenantId, setAuthTenantId] = useState<string | null>(null);
+  const [agencySetupRequired, setAgencySetupRequired] = useState(false);
+  const [capabilityOverrides, setCapabilityOverrides] = useState<CapabilityOverrides>({});
   const [quotesAccess, setQuotesAccess] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [inboxSoundEnabled, setInboxSoundEnabled] = useState(() => {
@@ -322,18 +336,18 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   });
   const title = useMemo(() => pageTitle(pathname), [pathname]);
   const mainNav = useMemo(
-    () => (authRole ? MAIN_NAV_BY_ROLE[authRole].filter((item) => canSeeNavItem(item, authRole, quotesAccess)) : []),
-    [authRole, quotesAccess]
+    () => (authRole ? MAIN_NAV_BY_ROLE[authRole].filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides)) : []),
+    [authRole, capabilityOverrides, quotesAccess]
   );
   const settingsGroups = useMemo(() => {
     if (authRole !== "admin") return [];
     return SETTINGS_GROUPS
       .map((group) => ({
         ...group,
-        items: group.items.filter((item) => canSeeNavItem(item, authRole, quotesAccess))
+        items: group.items.filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides))
       }))
       .filter((group) => group.items.length > 0);
-  }, [authRole, quotesAccess]);
+  }, [authRole, capabilityOverrides, quotesAccess]);
   const settingsPathActive = useMemo(
     () => settingsGroups.some((group) => group.items.some((item) => matchesPath(pathname, item.href))),
     [pathname, settingsGroups]
@@ -364,9 +378,11 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setNeedsOnboarding(false);
         setAuthRole(e2eOverride.role);
         setAuthTenantId(e2eOverride.tenantId);
+        setAgencySetupRequired(false);
+        setCapabilityOverrides({});
         setQuotesAccess(e2eOverride.role === "admin" || e2eOverride.role === "operator");
         setAuthLoading(false);
-        if (!isAllowed(pathname, e2eOverride.role)) {
+        if (!isAllowedWithOverrides(pathname, e2eOverride.role, {})) {
           hardRedirect(redirectByRole(e2eOverride.role));
         }
         return;
@@ -377,6 +393,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setNeedsOnboarding(false);
         setAuthRole(null);
         setAuthTenantId(null);
+        setAgencySetupRequired(false);
+        setCapabilityOverrides({});
         setQuotesAccess(false);
         setAuthLoading(false);
         hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
@@ -389,6 +407,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setNeedsOnboarding(false);
         setAuthRole(null);
         setAuthTenantId(null);
+        setAgencySetupRequired(false);
+        setCapabilityOverrides({});
         setQuotesAccess(false);
         setAuthLoading(false);
         hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
@@ -402,6 +422,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setNeedsOnboarding(false);
         setAuthRole(null);
         setAuthTenantId(null);
+        setAgencySetupRequired(false);
+        setCapabilityOverrides({});
         setQuotesAccess(false);
         setAuthLoading(false);
         hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
@@ -414,9 +436,22 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         }
       });
       const onboardingPayload = (await onboardingResponse.json().catch(() => null)) as
-        | { hasTenant?: boolean; tenant?: { id: string }; role?: string; error?: string }
+        | { hasTenant?: boolean; tenant?: { id: string }; role?: string; error?: string; capability_overrides?: CapabilityOverrides }
         | null;
       if (!active) return;
+
+      if (onboardingResponse.status === 403) {
+        await supabase.auth.signOut().catch(() => undefined);
+        setNeedsOnboarding(false);
+        setAuthRole(null);
+        setAuthTenantId(null);
+        setAgencySetupRequired(false);
+        setCapabilityOverrides({});
+        setQuotesAccess(false);
+        setAuthLoading(false);
+        hardRedirect("/login?suspended=1");
+        return;
+      }
 
       const resolvedRole = parseRole(onboardingPayload?.role);
       const resolvedTenantId = onboardingPayload?.tenant?.id ?? null;
@@ -426,6 +461,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setNeedsOnboarding(true);
         setAuthRole(null);
         setAuthTenantId(null);
+        setAgencySetupRequired(false);
+        setCapabilityOverrides({});
         setQuotesAccess(false);
         setAuthLoading(false);
         if (pathname !== "/onboarding") {
@@ -437,6 +474,35 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       setNeedsOnboarding(false);
       setAuthRole(resolvedRole);
       setAuthTenantId(resolvedTenantId);
+      setCapabilityOverrides(onboardingPayload?.capability_overrides ?? {});
+      let resolvedAgencySetupRequired = false;
+      if (resolvedRole === "agency") {
+        const agencyProfileResponse = await fetch("/api/agency/profile", {
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
+        });
+        const agencyProfilePayload = (await agencyProfileResponse.json().catch(() => null)) as
+          | { agency?: { setup_required?: boolean } }
+          | null;
+        if (!active) return;
+        resolvedAgencySetupRequired = agencyProfileResponse.ok && agencyProfilePayload?.agency?.setup_required === true;
+      }
+      setAgencySetupRequired(resolvedAgencySetupRequired);
+      if (resolvedRole === "admin") {
+        const pendingAccessResponse = await fetch("/api/settings/users", {
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
+        });
+        const pendingAccessPayload = (await pendingAccessResponse.json().catch(() => null)) as
+          | { pending_access_requests?: Array<unknown> }
+          | null;
+        if (!active) return;
+        setPendingAccessRequestCount(pendingAccessResponse.ok ? pendingAccessPayload?.pending_access_requests?.length ?? 0 : 0);
+      } else {
+        setPendingAccessRequestCount(0);
+      }
       let resolvedQuotesAccess = false;
       if (resolvedRole === "admin" || resolvedRole === "operator") {
         const quotesAccessResponse = await fetch("/api/ops/quotes/access", {
@@ -452,11 +518,19 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       }
       setQuotesAccess(resolvedQuotesAccess);
       setAuthLoading(false);
+      if (resolvedRole === "agency" && resolvedAgencySetupRequired && pathname !== "/agency/profile-setup") {
+        hardRedirect("/agency/profile-setup");
+        return;
+      }
+      if (resolvedRole === "agency" && !resolvedAgencySetupRequired && pathname === "/agency/profile-setup") {
+        hardRedirect("/agency");
+        return;
+      }
       if (pathname.startsWith("/preventivo-ops") && !resolvedQuotesAccess) {
         hardRedirect(redirectByRole(resolvedRole));
         return;
       }
-      if (!isAllowed(pathname, resolvedRole)) {
+      if (!isAllowedWithOverrides(pathname, resolvedRole, onboardingPayload?.capability_overrides ?? {})) {
         hardRedirect(redirectByRole(resolvedRole));
       }
     };
@@ -518,9 +592,24 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       setInboxPendingCount(rows.filter((row) => needsInboxReview(row.parsed_json)).length);
     };
 
+    const refreshPendingAccessRequests = async (tenantId: string) => {
+      if (authRole !== "admin") {
+        setPendingAccessRequestCount(0);
+        return;
+      }
+      const { count, error } = await client
+        .from("tenant_access_requests")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId)
+        .eq("status", "pending");
+      if (!isActive || error) return;
+      setPendingAccessRequestCount(count ?? 0);
+    };
+
     const initRealtime = async () => {
       const tenantId = authTenantId;
       await refreshPendingCount(tenantId);
+      await refreshPendingAccessRequests(tenantId);
 
       const channel = client
         .channel(`layout-inbox-${tenantId}`)
@@ -538,6 +627,24 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
           { event: "UPDATE", schema: "public", table: "inbound_emails", filter: `tenant_id=eq.${tenantId}` },
           () => {
             void refreshPendingCount(tenantId);
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "tenant_access_requests", filter: `tenant_id=eq.${tenantId}` },
+          (payload) => {
+            const nextStatus = typeof payload.new?.status === "string" ? payload.new.status : null;
+            if (nextStatus === "pending") {
+              setLiveToastMessage("Nuova richiesta accesso agenzia da approvare.");
+            }
+            void refreshPendingAccessRequests(tenantId);
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "tenant_access_requests", filter: `tenant_id=eq.${tenantId}` },
+          () => {
+            void refreshPendingAccessRequests(tenantId);
           }
         );
 
@@ -557,7 +664,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         void client.removeChannel(activeChannel);
       }
     };
-  }, [authTenantId, inboxSoundEnabled]);
+  }, [authRole, authTenantId, inboxSoundEnabled]);
 
   if (authLoading) {
     return <div className="card p-4 text-sm text-muted">Verifica sessione...</div>;
@@ -567,7 +674,11 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     return <div className="card p-4 text-sm text-muted">Reindirizzamento onboarding in corso...</div>;
   }
 
-  if (!needsOnboarding && !isAllowed(pathname, authRole)) {
+  if (authRole === "agency" && agencySetupRequired && pathname !== "/agency/profile-setup") {
+    return <div className="card p-4 text-sm text-muted">Reindirizzamento al completamento profilo agenzia...</div>;
+  }
+
+  if (!needsOnboarding && !isAllowedWithOverrides(pathname, authRole, capabilityOverrides)) {
     return <div className="card p-4 text-sm text-muted">Reindirizzamento in corso...</div>;
   }
 
@@ -645,6 +756,11 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                         {inboxPendingCount > 99 ? "99+" : inboxPendingCount}
                       </span>
                     ) : null}
+                    {item.href === "/settings/users" && pendingAccessRequestCount > 0 ? (
+                      <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                        {pendingAccessRequestCount > 99 ? "99+" : pendingAccessRequestCount}
+                      </span>
+                    ) : null}
                   </span>
                 ) : null}
               </Link>
@@ -691,7 +807,14 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                             <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg transition ${iconWrapClass(active)}`}>
                               {renderNavIcon(item.icon)}
                             </span>
-                            <span className="truncate">{item.label}</span>
+                            <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                              <span className="truncate">{item.label}</span>
+                              {item.href === "/settings/users" && pendingAccessRequestCount > 0 ? (
+                                <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                                  {pendingAccessRequestCount > 99 ? "99+" : pendingAccessRequestCount}
+                                </span>
+                              ) : null}
+                            </span>
                           </Link>
                         );
                       })}
@@ -713,6 +836,31 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             <h2 className="mt-1 line-clamp-2 text-2xl text-slate-950">{title}</h2>
           </div>
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end sm:gap-3">
+            {authRole === "admin" ? (
+              <Link
+                href="/settings/users"
+                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium shadow-sm transition ${
+                  pendingAccessRequestCount > 0
+                    ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+                title={
+                  pendingAccessRequestCount > 0
+                    ? `${pendingAccessRequestCount} richieste accesso da approvare`
+                    : "Nessuna nuova richiesta accesso"
+                }
+              >
+                <span className="relative inline-flex">
+                  <HeaderBellIcon />
+                  {pendingAccessRequestCount > 0 ? (
+                    <span className="absolute -right-2 -top-2 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-600 px-1 py-0.5 text-[10px] font-semibold text-white">
+                      {pendingAccessRequestCount > 99 ? "99+" : pendingAccessRequestCount}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="hidden sm:inline">Richieste agenzia</span>
+              </Link>
+            ) : null}
             <button type="button" onClick={toggleTheme} className="btn-secondary px-3 py-2 text-xs">
               {isDark ? "Modalita chiara" : "Modalita scura"}
             </button>
@@ -752,7 +900,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             ) : null}
           </div>
           {isSettingsExpanded && settingsGroups.length > 0 ? (
-            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 md:hidden">
               {settingsGroups.map((group) => (
                 <div key={`mobile-${group.title}`} className="space-y-2">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">{group.title}</p>
@@ -766,6 +914,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                           className={active ? "btn-primary px-3 py-1.5 text-xs" : "btn-secondary px-3 py-1.5 text-xs"}
                         >
                           {item.label}
+                          {item.href === "/settings/users" && pendingAccessRequestCount > 0 ? ` (${pendingAccessRequestCount > 99 ? "99+" : pendingAccessRequestCount})` : ""}
                         </Link>
                       );
                     })}

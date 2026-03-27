@@ -25,8 +25,35 @@ export type ReminderStatus = "pending" | "sent" | "delivered" | "read" | "failed
 export interface Membership {
   user_id: string;
   tenant_id: string;
+  agency_id?: string | null;
   role: UserRole;
   full_name: string;
+  suspended?: boolean;
+}
+
+export interface RoleCapabilityOverride {
+  id: string;
+  tenant_id: string;
+  role: UserRole;
+  capability: string;
+  enabled: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TenantAccessRequest {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  email: string;
+  full_name: string;
+  agency_name?: string | null;
+  requested_role?: UserRole | null;
+  status: "pending" | "approved" | "rejected";
+  review_notes?: string | null;
+  reviewed_by_user_id?: string | null;
+  reviewed_at?: string | null;
+  created_at?: string;
 }
 
 export interface Hotel {

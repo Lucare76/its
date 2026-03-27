@@ -32,6 +32,15 @@ function floorToThirtyMinutes(time: string) {
   return `${String(Number.isFinite(hour) ? hour : 0).padStart(2, "0")}:${String(flooredMinute).padStart(2, "0")}`;
 }
 
+function BellIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4" aria-hidden="true">
+      <path d="M8 2.5a2.5 2.5 0 0 0-2.5 2.5v1.1c0 .7-.2 1.4-.5 2L4 10.5h8l-1-2.4c-.3-.6-.5-1.3-.5-2V5A2.5 2.5 0 0 0 8 2.5Z" />
+      <path d="M6.5 12a1.5 1.5 0 0 0 3 0" />
+    </svg>
+  );
+}
+
 export default function OperatorDashboardPage() {
   const { loading, liveConnected, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData({ includeInboundEmails: true });
   const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
@@ -40,6 +49,7 @@ export default function OperatorDashboardPage() {
   const [applyingGroupId, setApplyingGroupId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [alertNowMs, setAlertNowMs] = useState(() => Date.now());
+  const [pendingAccessRequestCount, setPendingAccessRequestCount] = useState(0);
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -52,6 +62,51 @@ export default function OperatorDashboardPage() {
     refreshNow();
     const interval = window.setInterval(refreshNow, 60000);
     return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const client = supabase;
+
+    const loadPendingAccessRequests = async () => {
+      if (!client) return;
+      const { data: sessionData } = await client.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!active || !accessToken) return;
+
+      const response = await fetch("/api/settings/users", {
+        headers: {
+          Authorization: `Bearer ${accessToken}`
+        }
+      });
+      if (!active) return;
+      if (!response.ok) {
+        setPendingAccessRequestCount(0);
+        return;
+      }
+      const body = (await response.json().catch(() => null)) as { pending_access_requests?: Array<unknown> } | null;
+      if (!active) return;
+      setPendingAccessRequestCount(body?.pending_access_requests?.length ?? 0);
+    };
+
+    void loadPendingAccessRequests();
+    if (!client) {
+      return () => {
+        active = false;
+      };
+    }
+
+    const channel = client
+      .channel("dashboard-pending-access")
+      .on("postgres_changes", { event: "*", schema: "public", table: "tenant_access_requests" }, () => {
+        void loadPendingAccessRequests();
+      });
+    channel.subscribe();
+
+    return () => {
+      active = false;
+      void client.removeChannel(channel);
+    };
   }, []);
 
   if (loading) {
@@ -246,6 +301,17 @@ export default function OperatorDashboardPage() {
         badge={<span className={liveConnected ? "live-dot" : "inline-flex items-center gap-2 rounded-full bg-surface-2 px-2.5 py-1 text-xs text-muted"}>{liveConnected ? "In tempo reale" : "Non in linea"}</span>}
         actions={
           <>
+            {pendingAccessRequestCount > 0 ? (
+              <Link href="/settings/users" className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 shadow-sm hover:bg-amber-100">
+                <span className="relative inline-flex">
+                  <BellIcon />
+                  <span className="absolute -right-2 -top-2 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-600 px-1 py-0.5 text-[10px] font-semibold text-white">
+                    {pendingAccessRequestCount > 99 ? "99+" : pendingAccessRequestCount}
+                  </span>
+                </span>
+                <span>Richieste agenzia</span>
+              </Link>
+            ) : null}
             <ExportServicesButton defaultDateFrom={defaultDateFrom} defaultDateTo={defaultDateTo} />
             <button type="button" onClick={() => setIsSuggestionsOpen(true)} className="btn-secondary">
               Supporto assegnazioni
@@ -282,6 +348,24 @@ export default function OperatorDashboardPage() {
           </Link>
         </div>
       </article>
+      {pendingAccessRequestCount > 0 ? (
+        <article className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white text-amber-700 shadow-sm">
+                <BellIcon />
+              </span>
+              <div>
+                <p className="font-semibold">Richieste accesso agenzia da approvare: {pendingAccessRequestCount}</p>
+                <p className="mt-1 text-amber-800">Apri la gestione utenti per approvare le nuove agenzie registrate.</p>
+              </div>
+            </div>
+            <Link href="/settings/users" className="btn-secondary px-3 py-2 text-xs">
+              Vai a Utenti
+            </Link>
+          </div>
+        </article>
+      ) : null}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
         <KpiCard label="Operativo oggi" value={String(todayInstances.length)} hint="Arrivi + partenze della giornata" />
         <KpiCard label="Senza assegnazione" value={String(pending)} hint="Dato informativo, non blocca il flusso" />

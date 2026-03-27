@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
-import { parseRole } from "@/lib/rbac";
+import { parseRole, type AppCapability } from "@/lib/rbac";
 import { onboardingTenantSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
 
     const { data: memberships, error: membershipsError } = await admin!
       .from("memberships")
-      .select("tenant_id, role")
+      .select("tenant_id, role, suspended")
       .eq("user_id", user.id);
 
     if (membershipsError) {
@@ -48,22 +48,55 @@ export async function GET(request: NextRequest) {
     }
 
     if (!memberships || memberships.length === 0) {
-      return NextResponse.json({ hasTenant: false }, { status: 200 });
+      const { data: pendingRequest } = await admin!
+        .from("tenant_access_requests")
+        .select("id, tenant_id, status, created_at, tenants(name)")
+        .eq("user_id", user.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .maybeSingle();
+      return NextResponse.json({ hasTenant: false, pending_request: pendingRequest ?? null }, { status: 200 });
     }
 
-    const membershipRows = memberships as Array<{ tenant_id: string | null; role: string | null }>;
+    const membershipRows = memberships as Array<{ tenant_id: string | null; role: string | null; suspended?: boolean | null }>;
     const membership =
-      membershipRows.find((item) => Boolean(item.tenant_id) && parseRole(item.role ?? undefined) !== null) ?? null;
+      membershipRows.find(
+        (item) => Boolean(item.tenant_id) && parseRole(item.role ?? undefined) !== null && item.suspended !== true
+      ) ?? null;
     if (!membership?.tenant_id) {
-      return NextResponse.json({ hasTenant: false }, { status: 200 });
+      const hasSuspendedMembership = membershipRows.some(
+        (item) => Boolean(item.tenant_id) && parseRole(item.role ?? undefined) !== null && item.suspended === true
+      );
+      if (hasSuspendedMembership) {
+        return NextResponse.json({ error: "Accesso sospeso per questo tenant." }, { status: 403 });
+      }
+      const { data: pendingRequest } = await admin!
+        .from("tenant_access_requests")
+        .select("id, tenant_id, status, created_at, tenants(name)")
+        .eq("user_id", user.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .maybeSingle();
+      return NextResponse.json({ hasTenant: false, pending_request: pendingRequest ?? null }, { status: 200 });
     }
     const { data: tenant } = await admin!.from("tenants").select("id, name").eq("id", membership.tenant_id).maybeSingle();
+    const resolvedRole = parseRole(membership.role ?? undefined) ?? "admin";
+    const { data: capabilityOverrides } = await admin!
+      .from("role_capability_overrides")
+      .select("capability, enabled")
+      .eq("tenant_id", membership.tenant_id)
+      .eq("role", resolvedRole);
+
+    const capabilityOverrideMap = Object.fromEntries(
+      ((capabilityOverrides ?? []) as Array<{ capability: AppCapability; enabled: boolean }>).map((item) => [item.capability, item.enabled])
+    );
 
     return NextResponse.json(
       {
         hasTenant: true,
         tenant: tenant ?? { id: membership.tenant_id, name: "" },
-        role: parseRole(membership.role ?? undefined) ?? "admin"
+        role: resolvedRole,
+        capability_overrides: capabilityOverrideMap
       },
       { status: 200 }
     );
@@ -87,18 +120,21 @@ export async function POST(request: NextRequest) {
 
     const { data: existingMemberships, error: existingMembershipsError } = await admin!
       .from("memberships")
-      .select("tenant_id, role")
+      .select("tenant_id, role, suspended")
       .eq("user_id", user.id);
 
     if (existingMembershipsError) {
       return NextResponse.json({ error: existingMembershipsError.message }, { status: 500 });
     }
 
-    const membershipRows = (existingMemberships ?? []) as Array<{ tenant_id: string | null; role: string | null }>;
+    const membershipRows = (existingMemberships ?? []) as Array<{ tenant_id: string | null; role: string | null; suspended?: boolean | null }>;
     const existingValidMembership =
       membershipRows.find((item) => Boolean(item.tenant_id) && parseRole(item.role ?? undefined) !== null) ?? null;
 
     if (existingValidMembership?.tenant_id) {
+      if (existingValidMembership.suspended === true) {
+        return NextResponse.json({ error: "Accesso sospeso per questo tenant." }, { status: 403 });
+      }
       const { data: tenant } = await admin!.from("tenants").select("id, name").eq("id", existingValidMembership.tenant_id).maybeSingle();
       return NextResponse.json(
         {
@@ -108,6 +144,17 @@ export async function POST(request: NextRequest) {
         },
         { status: 200 }
       );
+    }
+
+    const { data: pendingRequest } = await admin!
+      .from("tenant_access_requests")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("status", "pending")
+      .maybeSingle();
+
+    if (pendingRequest?.id) {
+      return NextResponse.json({ error: "Hai gia una richiesta accesso in attesa. Attendi revisione admin." }, { status: 409 });
     }
 
     const { data: tenant, error: tenantError } = await admin!

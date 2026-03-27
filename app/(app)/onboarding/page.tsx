@@ -13,6 +13,7 @@ import {
 } from "@/lib/validation";
 
 type WizardStep = 1 | 2 | 3 | 4;
+type OnboardingMode = "create" | "request";
 
 type DriverInput = {
   full_name: string;
@@ -106,6 +107,11 @@ export default function OnboardingPage() {
   const [zonesText, setZonesText] = useState("");
   const [portsText, setPortsText] = useState("");
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
+  const [pendingRequest, setPendingRequest] = useState<{ id: string; tenant_id?: string; status?: string; tenants?: { name?: string } | null } | null>(null);
+  const [mode, setMode] = useState<OnboardingMode>("create");
+  const [requestFullName, setRequestFullName] = useState("");
+  const [requestRole, setRequestRole] = useState<"operator" | "driver" | "agency">("operator");
+  const [requestSubmitted, setRequestSubmitted] = useState(false);
 
   const loadContext = async () => {
     if (!hasSupabaseEnv || !supabase) {
@@ -124,12 +130,19 @@ export default function OnboardingPage() {
       }
     });
     const body = (await response.json().catch(() => null)) as
-      | { error?: string; hasTenant?: boolean; tenant?: { id: string; name: string } }
+      | {
+          error?: string;
+          hasTenant?: boolean;
+          tenant?: { id: string; name: string };
+          pending_request?: { id: string; tenant_id?: string; status?: string; tenants?: { name?: string } | null } | null;
+        }
       | null;
     if (!response.ok) {
       setMessage(body?.error ?? "Errore caricamento onboarding.");
       return;
     }
+
+    setPendingRequest(body?.pending_request ?? null);
 
     if (body?.hasTenant && body.tenant?.id) {
       setTenantId(body.tenant.id);
@@ -417,57 +430,167 @@ export default function OnboardingPage() {
     }
   };
 
+  const submitAccessRequest = async () => {
+    if (!hasSupabaseEnv || !supabase) {
+      setMessage("Supabase non configurato.");
+      return;
+    }
+    if (!requestFullName.trim()) {
+      setMessage("Inserisci il tuo nome completo.");
+      return;
+    }
+    setLoading(true);
+    setMessage("");
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) { setMessage("Sessione non valida."); return; }
+
+      const response = await fetch("/api/onboarding/access-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ full_name: requestFullName.trim(), requested_role: requestRole })
+      });
+      const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; request?: { id: string; tenant_id?: string; tenant_name?: string | null } } | null;
+      if (!response.ok || !body?.ok) {
+        setMessage(body?.error ?? "Errore invio richiesta.");
+        return;
+      }
+      setRequestSubmitted(true);
+      setPendingRequest({
+        id: body.request?.id ?? "",
+        tenant_id: body.request?.tenant_id,
+        status: "pending",
+        tenants: body.request?.tenant_name ? { name: body.request.tenant_name } : null
+      });
+      setMessage("Richiesta inviata! Un amministratore la revisionerà a breve.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <section className="mx-auto max-w-4xl space-y-4 pb-8">
       <header className="card space-y-3 p-4">
-        <h1 className="text-xl font-semibold">Onboarding Tenant</h1>
-        <p className="text-sm text-muted">Per iniziare la demo basta creare l&apos;azienda (Step 1).</p>
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-surface-2 p-3 text-xs">
-          <p className="text-muted">Setup avanzato (driver, mezzi, hotel CSV, zone) opzionale: puoi farlo anche dopo.</p>
-          <button type="button" onClick={() => setShowAdvancedSetup((prev) => !prev)} className="btn-secondary px-3 py-1.5 text-xs">
-            {showAdvancedSetup ? "Nascondi setup avanzato" : "Mostra setup avanzato"}
-          </button>
-        </div>
-        {showAdvancedSetup ? (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {stepBadges.map((item) => (
-              <div
-                key={item.id}
-                className={`rounded-xl border px-3 py-2 text-xs ${
-                  step >= (item.id as WizardStep) ? "border-blue-300 bg-blue-50 text-blue-900" : "border-border text-muted"
-                }`}
-              >
-                Step {item.id}: {item.label}
-              </div>
-            ))}
+        <h1 className="text-xl font-semibold">Accesso area operativa</h1>
+
+        {pendingRequest ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="font-semibold text-amber-800 mb-1">Richiesta in attesa di approvazione</div>
+            <p>
+              La tua richiesta per il tenant <strong>{pendingRequest.tenants?.name ?? "selezionato"}</strong> è stata inviata.
+              Un amministratore la revisionerà a breve. Non devi fare altro.
+            </p>
           </div>
-        ) : null}
+        ) : (
+          <>
+            <p className="text-sm text-muted">Scegli come procedere:</p>
+            <div className="flex overflow-hidden rounded-xl border border-border text-sm">
+              <button
+                type="button"
+                onClick={() => setMode("request")}
+                className={`flex-1 px-4 py-2.5 font-medium transition-colors ${mode === "request" ? "bg-indigo-600 text-white" : "bg-surface text-muted hover:bg-surface-2"}`}>
+                Unisciti a un team esistente
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("create")}
+                className={`flex-1 px-4 py-2.5 font-medium transition-colors ${mode === "create" ? "bg-indigo-600 text-white" : "bg-surface text-muted hover:bg-surface-2"}`}>
+                Crea nuova azienda
+              </button>
+            </div>
+          </>
+        )}
       </header>
 
-      <article className="card space-y-3 p-4">
-        <h2 className="text-base font-semibold">Step 1 - Crea azienda</h2>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <input
-            className="input-saas flex-1"
-            placeholder="Nome azienda"
-            value={companyName}
-            onChange={(event) => setCompanyName(event.target.value)}
-          />
-          <button type="button" onClick={() => void createTenant()} disabled={loading} className="btn-primary h-[42px] px-4 disabled:opacity-50">
-            {loading ? "Salvataggio..." : "Salva Step 1"}
-          </button>
-        </div>
-        {tenantId ? (
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs text-muted">Tenant attivo: {tenantId}</p>
-            <Link href="/dashboard" className="btn-secondary px-3 py-1.5 text-xs">
-              Vai alla dashboard
-            </Link>
+      {!pendingRequest && mode === "request" && (
+        <article className="card space-y-4 p-4">
+          <div>
+            <h2 className="text-base font-semibold">Richiedi accesso</h2>
+            <p className="text-sm text-muted">
+              Inserisci il tuo nome e il ruolo desiderato. Un amministratore riceverà la richiesta e potrà approvarla.
+            </p>
           </div>
-        ) : null}
-      </article>
+          {requestSubmitted ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+              Richiesta inviata con successo. Attendi l&apos;approvazione dell&apos;amministratore prima di accedere.
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+              <input
+                className="input-saas"
+                placeholder="Nome e cognome"
+                value={requestFullName}
+                onChange={(e) => setRequestFullName(e.target.value)}
+                disabled={loading}
+              />
+              <select
+                value={requestRole}
+                onChange={(e) => setRequestRole(e.target.value as "operator" | "driver" | "agency")}
+                className="input-saas min-w-36"
+                disabled={loading}>
+                <option value="operator">Operatore</option>
+                <option value="driver">Autista</option>
+                <option value="agency">Agenzia</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => void submitAccessRequest()}
+                disabled={loading || !requestFullName.trim()}
+                className="btn-primary h-[42px] px-5 disabled:opacity-50">
+                {loading ? "Invio..." : "Invia richiesta"}
+              </button>
+            </div>
+          )}
+        </article>
+      )}
 
-      {showAdvancedSetup && step >= 2 ? (
+      {!pendingRequest && mode === "create" && (
+        <article className="card space-y-3 p-4">
+          <h2 className="text-base font-semibold">Step 1 — Crea azienda</h2>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              className="input-saas flex-1"
+              placeholder="Nome azienda"
+              value={companyName}
+              onChange={(event) => setCompanyName(event.target.value)}
+            />
+            <button type="button" onClick={() => void createTenant()} disabled={loading} className="btn-primary h-[42px] px-4 disabled:opacity-50">
+              {loading ? "Salvataggio..." : "Salva Step 1"}
+            </button>
+          </div>
+          {tenantId ? (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted">Tenant attivo: {tenantId}</p>
+              <Link href="/dashboard" className="btn-secondary px-3 py-1.5 text-xs">
+                Vai alla dashboard →
+              </Link>
+            </div>
+          ) : null}
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-surface-2 p-3 text-xs">
+            <p className="text-muted">Setup avanzato (driver, mezzi, hotel CSV, zone) opzionale.</p>
+            <button type="button" onClick={() => setShowAdvancedSetup((prev) => !prev)} className="btn-secondary px-3 py-1.5 text-xs">
+              {showAdvancedSetup ? "Nascondi setup avanzato" : "Mostra setup avanzato"}
+            </button>
+          </div>
+          {showAdvancedSetup ? (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {stepBadges.map((item) => (
+                <div
+                  key={item.id}
+                  className={`rounded-xl border px-3 py-2 text-xs ${
+                    step >= (item.id as WizardStep) ? "border-blue-300 bg-blue-50 text-blue-900" : "border-border text-muted"
+                  }`}
+                >
+                  Step {item.id}: {item.label}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </article>
+      )}
+
+      {mode === "create" && showAdvancedSetup && step >= 2 ? (
         <article className="card space-y-4 p-4">
           <h2 className="text-base font-semibold">Passo 2 - Driver e mezzi</h2>
           <div className="grid gap-4 lg:grid-cols-2">
@@ -547,7 +670,7 @@ export default function OnboardingPage() {
         </article>
       ) : null}
 
-      {showAdvancedSetup && step >= 3 ? (
+      {mode === "create" && showAdvancedSetup && step >= 3 ? (
         <article className="card space-y-3 p-4">
           <h2 className="text-base font-semibold">Step 3 - Import hotel CSV</h2>
           <p className="text-xs text-muted">CSV semplice con header: `name,address,zone,lat,lng` (lat/lng opzionali).</p>
@@ -567,7 +690,7 @@ export default function OnboardingPage() {
         </article>
       ) : null}
 
-      {showAdvancedSetup && step >= 4 ? (
+      {mode === "create" && showAdvancedSetup && step >= 4 ? (
         <article className="card space-y-3 p-4">
           <h2 className="text-base font-semibold">Step 4 - Zone e porti</h2>
           <div className="grid gap-3 sm:grid-cols-2">

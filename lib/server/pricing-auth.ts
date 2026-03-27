@@ -5,7 +5,7 @@ import { auditLog } from "@/lib/server/ops-audit";
 export type PricingAuthContext = {
   admin: any;
   user: { id: string };
-  membership: { tenant_id: string; role: string };
+  membership: { tenant_id: string; role: string; suspended?: boolean };
 };
 
 export async function authorizePricingRequest(
@@ -38,7 +38,7 @@ export async function authorizePricingRequest(
 
   const { data: membership, error: membershipError } = await admin
     .from("memberships")
-    .select("tenant_id, role")
+    .select("tenant_id, role, suspended")
     .eq("user_id", user.id)
     .maybeSingle();
   if (membershipError || !membership?.tenant_id) {
@@ -57,9 +57,21 @@ export async function authorizePricingRequest(
     return NextResponse.json({ error: "Ruolo non autorizzato." }, { status: 403 });
   }
 
+  if (membership.suspended === true) {
+    auditLog({
+      event: "auth_membership_suspended",
+      level: "warn",
+      tenantId: membership.tenant_id,
+      userId: user.id,
+      role: membership.role,
+      details: { route: request.nextUrl.pathname }
+    });
+    return NextResponse.json({ error: "Accesso sospeso per questo tenant." }, { status: 403 });
+  }
+
   return {
     admin,
     user: { id: user.id },
-    membership: { tenant_id: membership.tenant_id, role: membership.role }
+    membership: { tenant_id: membership.tenant_id, role: membership.role, suspended: membership.suspended ?? false }
   };
 }

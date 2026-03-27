@@ -247,6 +247,49 @@ export const adminUserUpdateSchema = z.object({
   suspended: z.boolean().optional()
 });
 
+export const adminRoleCapabilityOverrideSchema = z.object({
+  role: roleSchema,
+  capability: z.string().min(2).max(120),
+  enabled: z.boolean()
+});
+
+export const tenantAccessRequestCreateSchema = z.object({
+  agency_name: z.string().min(2).max(160),
+  full_name: z.string().min(2).max(120),
+  email: z.string().email().max(160),
+  password: z.string().min(8).max(120),
+  requested_role: z.literal("agency").default("agency")
+});
+
+export const agencyProfileSetupSchema = z.object({
+  name: z.string().min(2).max(120),
+  legal_name: z.string().min(2).max(160),
+  billing_name: z.string().min(2).max(160),
+  contact_email: z.string().email().max(160),
+  booking_email: z.string().email().max(160),
+  phone: z.string().min(6).max(60),
+  vat_number: z.string().min(5).max(32),
+  pec_email: z.string().email().max(160).optional().or(z.literal("")),
+  sdi_code: z.string().max(16).optional().or(z.literal("")),
+  notes: z.string().max(2000).optional().or(z.literal(""))
+});
+
+export const tenantAccessRequestReviewSchema = z.object({
+  request_id: z.string().uuid(),
+  action: z.enum(["approve", "reject"]),
+  role: roleSchema.optional(),
+  review_notes: z.string().max(500).optional().or(z.literal("")),
+  capability_overrides: z
+    .array(
+      z.object({
+        capability: z.string().min(2).max(120),
+        enabled: z.boolean()
+      })
+    )
+    .max(100)
+    .optional()
+});
+
 export const vehicleCreateSchema = z.object({
   label: z.string().min(2).max(120),
   plate: z.string().max(32).optional().or(z.literal("")),

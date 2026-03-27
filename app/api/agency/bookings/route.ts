@@ -14,7 +14,7 @@ type BookingKind = z.infer<typeof agencyBookingCreateSchema>["booking_service_ki
 interface AuthContext {
   admin: SupabaseClient;
   user: { id: string; email: string | null };
-  membership: { tenant_id: string; role: AgencyRole; full_name: string };
+  membership: { tenant_id: string; agency_id: string | null; role: AgencyRole; full_name: string };
 }
 
 async function hasColumn(admin: SupabaseClient, table: string, column: string) {
@@ -67,7 +67,7 @@ async function authorizeAgencyRequest(request: NextRequest): Promise<AuthContext
 
   const { data: membership, error: membershipError } = await admin
     .from("memberships")
-    .select("tenant_id, role, full_name")
+    .select("tenant_id, agency_id, role, full_name")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -86,6 +86,7 @@ async function authorizeAgencyRequest(request: NextRequest): Promise<AuthContext
     user: { id: user.id, email: user.email ?? null },
     membership: {
       tenant_id: membership.tenant_id,
+      agency_id: membership.agency_id ?? null,
       role,
       full_name: membership.full_name ?? ""
     }
@@ -117,6 +118,21 @@ async function resolveAgencyId(
     return { agencyId: null };
   }
 
+  if (auth.membership.agency_id) {
+    const { data: agencyByMembership, error: agencyByMembershipError } = await auth.admin
+      .from("agencies")
+      .select("id")
+      .eq("tenant_id", auth.membership.tenant_id)
+      .eq("id", auth.membership.agency_id)
+      .maybeSingle();
+    if (agencyByMembershipError) {
+      return { agencyId: null, error: agencyByMembershipError.message };
+    }
+    if (agencyByMembership?.id) {
+      return { agencyId: agencyByMembership.id };
+    }
+  }
+
   const supportsExternalCode = await hasColumn(auth.admin, "agencies", "external_code");
   const externalCode = `auth_user:${auth.user.id}`;
   const baseNameRaw = auth.membership.full_name.trim() || auth.user.email?.split("@")[0] || "Agenzia";
@@ -131,6 +147,11 @@ async function resolveAgencyId(
       .eq("external_code", externalCode)
       .maybeSingle();
     if (existingAgency?.id) {
+      await auth.admin
+        .from("memberships")
+        .update({ agency_id: existingAgency.id })
+        .eq("tenant_id", auth.membership.tenant_id)
+        .eq("user_id", auth.user.id);
       return { agencyId: existingAgency.id };
     }
   } else {
@@ -141,6 +162,11 @@ async function resolveAgencyId(
       .eq("name", baseName)
       .maybeSingle();
     if (existingByName?.id) {
+      await auth.admin
+        .from("memberships")
+        .update({ agency_id: existingByName.id })
+        .eq("tenant_id", auth.membership.tenant_id)
+        .eq("user_id", auth.user.id);
       return { agencyId: existingByName.id };
     }
   }
@@ -192,6 +218,12 @@ async function resolveAgencyId(
   if (insertAttempt.error || !insertAttempt.data?.id) {
     return { agencyId: null, error: insertAttempt.error?.message ?? "Impossibile risolvere agenzia associata." };
   }
+
+  await auth.admin
+    .from("memberships")
+    .update({ agency_id: insertAttempt.data.id })
+    .eq("tenant_id", auth.membership.tenant_id)
+    .eq("user_id", auth.user.id);
 
   return { agencyId: insertAttempt.data.id };
 }

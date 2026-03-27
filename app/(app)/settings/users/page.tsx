@@ -14,11 +14,30 @@ type MembershipRow = {
   suspended?: boolean;
 };
 
+type RoleCapabilityOverrideRow = {
+  role: UserRole;
+  capability: AppCapability;
+  enabled: boolean;
+};
+
 type UserFormState = {
   full_name: string;
   email: string;
   password: string;
   role: UserRole;
+};
+
+type PendingAccessRequestRow = {
+  id: string;
+  tenant_id: string | null;
+  user_id: string;
+  email: string;
+  full_name: string;
+  agency_name?: string | null;
+  requested_role?: UserRole | null;
+  status: "pending" | "approved" | "rejected";
+  created_at?: string | null;
+  review_notes?: string | null;
 };
 
 const defaultForm: UserFormState = {
@@ -35,7 +54,7 @@ const roleDescriptions: Array<{ role: UserRole; label: string; description: stri
   { role: "agency", label: "Agenzia", description: "Inserisce prenotazioni e consulta solo la propria area dedicata." }
 ];
 
-const capabilityLabels: Array<{ capability: AppCapability; label: string }> = [
+const capabilityLabels = [
   { capability: "dashboard:view", label: "Cruscotto" },
   { capability: "arrivals:view", label: "Arrivi" },
   { capability: "departures:view", label: "Partenze" },
@@ -59,7 +78,7 @@ const capabilityLabels: Array<{ capability: AppCapability; label: string }> = [
   { capability: "users:manage", label: "Utenti" },
   { capability: "agency_bookings:self", label: "Prenotazioni agenzia" },
   { capability: "driver:self", label: "Area autista" }
-];
+] as const;
 
 function formatCreatedAt(value?: string | null) {
   if (!value) return "N/D";
@@ -74,13 +93,26 @@ function formatCreatedAt(value?: string | null) {
   });
 }
 
+function roleSwitchLabel(role: UserRole) {
+  if (role === "admin") return "Admin";
+  if (role === "operator") return "Operatore";
+  if (role === "driver") return "Autista";
+  return "Agenzia";
+}
+
 export default function SettingsUsersPage() {
   const [memberships, setMemberships] = useState<MembershipRow[]>([]);
+  const [roleCapabilityOverrides, setRoleCapabilityOverrides] = useState<RoleCapabilityOverrideRow[]>([]);
+  const [pendingAccessRequests, setPendingAccessRequests] = useState<PendingAccessRequestRow[]>([]);
   const [form, setForm] = useState<UserFormState>(defaultForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [updatingCapabilityKey, setUpdatingCapabilityKey] = useState<string | null>(null);
+  const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
   const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
+  const [requestRoleDrafts, setRequestRoleDrafts] = useState<Record<string, UserRole>>({});
   const [message, setMessage] = useState("Caricamento utenti tenant...");
 
   const sortedMemberships = useMemo(
@@ -127,8 +159,12 @@ export default function SettingsUsersPage() {
         return;
       }
 
-      const body = (await response.json().catch(() => null)) as { memberships?: MembershipRow[] } | null;
+      const body = (await response.json().catch(() => null)) as
+        | { memberships?: MembershipRow[]; role_capability_overrides?: RoleCapabilityOverrideRow[]; pending_access_requests?: PendingAccessRequestRow[] }
+        | null;
       setMemberships((body?.memberships ?? []) as MembershipRow[]);
+      setRoleCapabilityOverrides((body?.role_capability_overrides ?? []) as RoleCapabilityOverrideRow[]);
+      setPendingAccessRequests((body?.pending_access_requests ?? []) as PendingAccessRequestRow[]);
       setLoading(false);
       setMessage("Crea nuovi utenti del tenant e assegna il ruolo corretto.");
     };
@@ -245,6 +281,161 @@ export default function SettingsUsersPage() {
     );
   };
 
+  const getEffectiveCapability = (role: UserRole, capability: AppCapability) => {
+    const override = roleCapabilityOverrides.find((item) => item.role === role && item.capability === capability);
+    if (override) return override.enabled;
+    return capabilityRoleMap[capability].includes(role);
+  };
+
+  const updateRoleCapability = async (role: UserRole, capability: AppCapability, enabled: boolean) => {
+    if (!hasSupabaseEnv || !supabase || updatingCapabilityKey) return;
+
+    const requestKey = `${role}:${capability}`;
+    setUpdatingCapabilityKey(requestKey);
+    setMessage(`Aggiornamento permesso ${capability} per ${role}...`);
+
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      setUpdatingCapabilityKey(null);
+      setMessage("Sessione non valida.");
+      return;
+    }
+
+    const response = await fetch("/api/settings/users", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        role,
+        capability,
+        enabled
+      })
+    });
+
+    const body = (await response.json().catch(() => null)) as
+      | { error?: string; override?: RoleCapabilityOverrideRow }
+      | null;
+
+    if (!response.ok || !body?.override) {
+      setUpdatingCapabilityKey(null);
+      setMessage(body?.error ?? "Aggiornamento permesso fallito.");
+      return;
+    }
+
+    const override = body.override;
+    setRoleCapabilityOverrides((prev) => {
+      const next = prev.filter((item) => !(item.role === role && item.capability === capability));
+      next.push(override);
+      return next;
+    });
+    setUpdatingCapabilityKey(null);
+    setMessage(`Permesso aggiornato: ${roleDescriptions.find((item) => item.role === role)?.label ?? role} -> ${capabilityLabels.find((item) => item.capability === capability)?.label ?? capability}.`);
+  };
+
+  const deleteMembership = async (membership: MembershipRow) => {
+    if (!hasSupabaseEnv || !supabase || deletingUserId || updatingUserId) return;
+
+    const confirmed = window.confirm(`Vuoi eliminare definitivamente l'utente ${membership.full_name}?`);
+    if (!confirmed) return;
+
+    setDeletingUserId(membership.user_id);
+    setMessage(`Eliminazione di ${membership.full_name} in corso...`);
+
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      setDeletingUserId(null);
+      setMessage("Sessione non valida.");
+      return;
+    }
+
+    const response = await fetch(`/api/settings/users?user_id=${encodeURIComponent(membership.user_id)}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    const body = (await response.json().catch(() => null)) as { error?: string; deleted_user_id?: string } | null;
+    if (!response.ok || !body?.deleted_user_id) {
+      setDeletingUserId(null);
+      setMessage(body?.error ?? "Eliminazione utente fallita.");
+      return;
+    }
+
+    setMemberships((prev) => prev.filter((item) => item.user_id !== membership.user_id));
+    setPasswordDrafts((prev) => {
+      const next = { ...prev };
+      delete next[membership.user_id];
+      return next;
+    });
+    setDeletingUserId(null);
+    setMessage(`Utente eliminato: ${membership.full_name}.`);
+  };
+
+  const reviewAccessRequest = async (request: PendingAccessRequestRow, action: "approve" | "reject") => {
+    if (!hasSupabaseEnv || !supabase || reviewingRequestId) return;
+
+    setReviewingRequestId(request.id);
+    setMessage(`${action === "approve" ? "Approvazione" : "Rifiuto"} richiesta di ${request.full_name}...`);
+
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      setReviewingRequestId(null);
+      setMessage("Sessione non valida.");
+      return;
+    }
+
+    const response = await fetch("/api/settings/users", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        request_id: request.id,
+        action,
+        role: action === "approve" ? requestRoleDrafts[request.id] ?? request.requested_role ?? "operator" : undefined
+      })
+    });
+
+    const body = (await response.json().catch(() => null)) as
+      | { error?: string; approved_request?: { user_id: string; tenant_id: string; full_name: string; role: UserRole } }
+      | null;
+
+    if (!response.ok) {
+      setReviewingRequestId(null);
+      setMessage(body?.error ?? "Revisione richiesta fallita.");
+      return;
+    }
+
+    setPendingAccessRequests((prev) => prev.filter((item) => item.id !== request.id));
+
+    const approvedRequest = body?.approved_request;
+    if (approvedRequest) {
+      setMemberships((prev) => [
+        ...prev,
+        {
+          user_id: approvedRequest.user_id,
+          tenant_id: approvedRequest.tenant_id,
+          role: approvedRequest.role,
+          full_name: approvedRequest.full_name,
+          created_at: new Date().toISOString(),
+          suspended: false
+        }
+      ]);
+      setMessage(`Richiesta approvata: ${approvedRequest.full_name} ora entra come ${approvedRequest.role}.`);
+    } else {
+      setMessage(`Richiesta rifiutata: ${request.full_name}.`);
+    }
+
+    setReviewingRequestId(null);
+  };
+
   return (
     <section className="space-y-4">
       <div className="space-y-1">
@@ -352,12 +543,36 @@ export default function SettingsUsersPage() {
                   <tr key={row.capability} className="border-t border-slate-100">
                     <td className="px-3 py-2 font-medium text-text">{row.label}</td>
                     {roleDescriptions.map((item) => {
-                      const enabled = capabilityRoleMap[row.capability].includes(item.role);
                       return (
                         <td key={`${row.capability}-${item.role}`} className="px-3 py-2">
-                          <span className={enabled ? "inline-flex rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-semibold uppercase text-emerald-700" : "inline-flex rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase text-slate-500"}>
-                            {enabled ? "si" : "no"}
-                          </span>
+                          {(() => {
+                            const enabled = getEffectiveCapability(item.role, row.capability);
+                            const isUpdating = updatingCapabilityKey === `${item.role}:${row.capability}`;
+                            return (
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={enabled}
+                                aria-label={`${row.label} per ${roleSwitchLabel(item.role)}`}
+                                disabled={isUpdating}
+                                onClick={() => void updateRoleCapability(item.role, row.capability, !enabled)}
+                                className={`inline-flex w-[86px] items-center rounded-full p-1 transition ${
+                                  enabled ? "bg-emerald-100 hover:bg-emerald-200" : "bg-slate-200 hover:bg-slate-300"
+                                } ${isUpdating ? "cursor-not-allowed opacity-60" : ""}`}
+                                title={enabled ? "Click per impostare NO" : "Click per impostare SI"}
+                              >
+                                <span
+                                  className={`inline-flex h-7 min-w-[40px] items-center justify-center rounded-full text-[11px] font-semibold uppercase transition ${
+                                    enabled
+                                      ? "translate-x-[38px] bg-emerald-600 text-white shadow-sm"
+                                      : "translate-x-0 bg-white text-slate-500 shadow-sm"
+                                  }`}
+                                >
+                                  {isUpdating ? "..." : enabled ? "si" : "no"}
+                                </span>
+                              </button>
+                            );
+                          })()}
                         </td>
                       );
                     })}
@@ -368,6 +583,82 @@ export default function SettingsUsersPage() {
           </div>
         </article>
       </div>
+
+      <article className="card p-4">
+        <div className="mb-4">
+          <h2 className="text-lg font-semibold">Richieste accesso pending</h2>
+          <p className="text-sm text-muted">Chi si registra resta fuori dal tenant finche un admin non approva il ruolo.</p>
+        </div>
+
+        {loading ? (
+          <div className="text-sm text-muted">Caricamento richieste...</div>
+        ) : pendingAccessRequests.length === 0 ? (
+          <div className="text-sm text-muted">Nessuna richiesta pending.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-border text-muted">
+                  <th className="px-3 py-2 font-medium">Nome</th>
+                  <th className="px-3 py-2 font-medium">Agenzia</th>
+                  <th className="px-3 py-2 font-medium">Email</th>
+                  <th className="px-3 py-2 font-medium">Origine</th>
+                  <th className="px-3 py-2 font-medium">Ruolo richiesto</th>
+                  <th className="px-3 py-2 font-medium">Ruolo da assegnare</th>
+                  <th className="px-3 py-2 font-medium">Creata il</th>
+                  <th className="px-3 py-2 font-medium">Azioni</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingAccessRequests.map((request) => (
+                  <tr key={request.id} className="border-b border-border/70">
+                    <td className="px-3 py-2 font-medium text-text">{request.full_name}</td>
+                    <td className="px-3 py-2 text-muted">{request.agency_name?.trim() || "Da completare al primo accesso"}</td>
+                    <td className="px-3 py-2 text-muted">{request.email}</td>
+                    <td className="px-3 py-2 text-muted">{request.tenant_id ? "Tenant corrente" : "Area riservata sito"}</td>
+                    <td className="px-3 py-2 text-muted">{request.requested_role ?? "non indicato"}</td>
+                    <td className="px-3 py-2">
+                      <select
+                        value={requestRoleDrafts[request.id] ?? request.requested_role ?? "operator"}
+                        onChange={(event) => setRequestRoleDrafts((prev) => ({ ...prev, [request.id]: event.target.value as UserRole }))}
+                        className="input-saas min-w-36"
+                        disabled={reviewingRequestId === request.id}
+                      >
+                        {roleDescriptions.map((item) => (
+                          <option key={`${request.id}-${item.role}`} value={item.role}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-3 py-2 text-muted">{formatCreatedAt(request.created_at)}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="btn-primary px-3 py-2 text-xs"
+                          disabled={reviewingRequestId === request.id}
+                          onClick={() => void reviewAccessRequest(request, "approve")}
+                        >
+                          {reviewingRequestId === request.id ? "Elaborazione..." : "Approva"}
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={reviewingRequestId === request.id}
+                          onClick={() => void reviewAccessRequest(request, "reject")}
+                        >
+                          Rifiuta
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </article>
 
       <article className="card p-4">
         <div className="mb-4">
@@ -443,14 +734,24 @@ export default function SettingsUsersPage() {
                       />
                     </td>
                     <td className="px-3 py-2">
-                      <button
-                        type="button"
-                        className="btn-secondary px-3 py-2 text-xs"
-                        disabled={updatingUserId === membership.user_id || !(passwordDrafts[membership.user_id] ?? "").trim()}
-                        onClick={() => void updateMembership(membership, membership.role, passwordDrafts[membership.user_id], membership.suspended ?? false)}
-                      >
-                        {updatingUserId === membership.user_id ? "Salvataggio..." : "Salva password"}
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="btn-secondary px-3 py-2 text-xs"
+                          disabled={updatingUserId === membership.user_id || deletingUserId === membership.user_id || !(passwordDrafts[membership.user_id] ?? "").trim()}
+                          onClick={() => void updateMembership(membership, membership.role, passwordDrafts[membership.user_id], membership.suspended ?? false)}
+                        >
+                          {updatingUserId === membership.user_id ? "Salvataggio..." : "Salva password"}
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={updatingUserId === membership.user_id || deletingUserId === membership.user_id}
+                          onClick={() => void deleteMembership(membership)}
+                        >
+                          {deletingUserId === membership.user_id ? "Eliminazione..." : "Elimina"}
+                        </button>
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-muted">{formatCreatedAt(membership.created_at)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-muted">{membership.user_id}</td>

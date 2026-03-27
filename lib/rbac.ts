@@ -75,6 +75,8 @@ export type AppCapability =
   | "users:manage"
   | "whatsapp:manage";
 
+export type CapabilityOverrides = Partial<Record<AppCapability, boolean>>;
+
 export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
   "dashboard:view": ["admin", "operator"],
   "arrivals:view": ["admin", "operator"],
@@ -112,11 +114,55 @@ export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
   "whatsapp:manage": ["admin"]
 };
 
+export const routeCapabilityMap: Array<{ prefix: string; capability: AppCapability }> = [
+  { prefix: "/settings/users", capability: "users:manage" },
+  { prefix: "/settings/whatsapp", capability: "whatsapp:manage" },
+  { prefix: "/dashboard", capability: "dashboard:view" },
+  { prefix: "/arrivals", capability: "arrivals:view" },
+  { prefix: "/departures", capability: "departures:view" },
+  { prefix: "/notifications", capability: "notifications:view" },
+  { prefix: "/services/new", capability: "services:create" },
+  { prefix: "/crm-agencies", capability: "crm_agencies:view" },
+  { prefix: "/agency/bookings", capability: "agency_bookings:self" },
+  { prefix: "/agency/new-booking", capability: "agency_bookings:self" },
+  { prefix: "/agency", capability: "agency_bookings:self" },
+  { prefix: "/dispatch", capability: "dispatch:manage" },
+  { prefix: "/bus-network", capability: "bus_network:view" },
+  { prefix: "/planning", capability: "planning:manage" },
+  { prefix: "/arrivals-clock", capability: "arrivals_clock:view" },
+  { prefix: "/ops-summary", capability: "ops_summary:view" },
+  { prefix: "/report-center", capability: "report_center:view" },
+  { prefix: "/scheduler", capability: "scheduler:view" },
+  { prefix: "/service-workflow", capability: "service_workflow:view" },
+  { prefix: "/excel-workspace", capability: "excel_workspace:view" },
+  { prefix: "/excel-import", capability: "excel_import:view" },
+  { prefix: "/ops-rules", capability: "ops_rules:view" },
+  { prefix: "/audit", capability: "audit:view" },
+  { prefix: "/driver", capability: "driver:self" },
+  { prefix: "/fleet-ops", capability: "fleet_ops:view" },
+  { prefix: "/preventivo-ops", capability: "quotes:view" },
+  { prefix: "/inbox", capability: "inbox:manage" },
+  { prefix: "/pdf-imports", capability: "pdf_imports:manage" },
+  { prefix: "/pricing/margins", capability: "pricing:view" },
+  { prefix: "/pricing", capability: "pricing:view" }
+];
+
 export function isProtectedPath(pathname: string): boolean {
   return routeRoleMap.some((item) => pathname.startsWith(item.prefix));
 }
 
 export function isAllowed(pathname: string, role: UserRole | null): boolean {
+  return isAllowedWithOverrides(pathname, role);
+}
+
+export function isAllowedWithOverrides(pathname: string, role: UserRole | null, overrides?: CapabilityOverrides): boolean {
+  const capabilityMatch = [...routeCapabilityMap]
+    .sort((left, right) => right.prefix.length - left.prefix.length)
+    .find((item) => pathname.startsWith(item.prefix));
+  if (capabilityMatch) {
+    return hasCapability(role, capabilityMatch.capability, overrides);
+  }
+
   const match = routeRoleMap.find((item) => pathname.startsWith(item.prefix));
   if (!match) return true;
   if (!role) return false;
@@ -132,7 +178,10 @@ export function parseRole(raw: string | undefined): UserRole | null {
   return null;
 }
 
-export function hasCapability(role: UserRole | null, capability: AppCapability): boolean {
+export function hasCapability(role: UserRole | null, capability: AppCapability, overrides?: CapabilityOverrides): boolean {
   if (!role) return false;
+  if (overrides && capability in overrides) {
+    return overrides[capability] === true;
+  }
   return capabilityRoleMap[capability].includes(role);
 }

@@ -4,8 +4,11 @@ import { useEffect, useState } from "react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 export default function LoginPage() {
+  const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [agencyName, setAgencyName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string>("Accesso riservato. Se hai credenziali attive, puoi entrare subito.");
@@ -14,6 +17,10 @@ export default function LoginPage() {
     if (!hasSupabaseEnv || !supabase) {
       setMessage("Supabase non configurato: imposta le variabili ambiente prima del login.");
       return;
+    }
+    const suspended = new URLSearchParams(window.location.search).get("suspended");
+    if (suspended === "1") {
+      setMessage("Accesso sospeso per questo tenant. Contatta un admin del tenant per riattivarti.");
     }
   }, []);
 
@@ -87,6 +94,40 @@ export default function LoginPage() {
     }
   };
 
+  const handleRegister = async () => {
+    if (loading) return;
+    setLoading(true);
+    setMessage("Invio richiesta accesso...");
+    try {
+      const response = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agency_name: agencyName,
+          full_name: fullName,
+          email,
+          password,
+          requested_role: "agency"
+        })
+      });
+      const body = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+      if (!response.ok) {
+        setMessage(body?.error ?? "Richiesta accesso non inviata.");
+        return;
+      }
+      setMessage(body?.message ?? "Richiesta accesso inviata. Un admin la vedra nella coda di approvazione.");
+      setFullName("");
+      setAgencyName("");
+      setEmail("");
+      setPassword("");
+      setMode("login");
+    } catch (error) {
+      setMessage(error instanceof Error ? `Errore registrazione: ${error.message}` : "Errore registrazione inatteso.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <section className="mx-auto max-w-lg page-section">
       <h1 className="section-title">Login Supabase</h1>
@@ -95,6 +136,30 @@ export default function LoginPage() {
           Ischia Transfer Service e attivo dal 2006. L&apos;area riservata consente al team di coordinare con rapidita i
           transfer tra aeroporto, porto e hotel.
         </p>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setMode("login")} className={mode === "login" ? "btn-primary flex-1" : "btn-secondary flex-1"}>
+            Login
+          </button>
+          <button type="button" onClick={() => setMode("register")} className={mode === "register" ? "btn-primary flex-1" : "btn-secondary flex-1"}>
+            Richiedi accesso
+          </button>
+        </div>
+        {mode === "register" ? (
+          <>
+            <label className="block text-sm">
+              Nome completo
+              <input className="input-saas mt-1" value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Mario Rossi" />
+            </label>
+            <label className="block text-sm">
+              Nome agenzia
+              <input className="input-saas mt-1" value={agencyName} onChange={(event) => setAgencyName(event.target.value)} placeholder="Nome della tua agenzia" />
+            </label>
+            <label className="block text-sm">
+              Ruolo richiesto
+              <input className="input-saas mt-1" value="Agenzia" disabled />
+            </label>
+          </>
+        ) : null}
         <label className="block text-sm">
           Email
           <input
@@ -130,15 +195,17 @@ export default function LoginPage() {
         <button
           data-testid="login-submit"
           type="button"
-          onClick={handleSignIn}
+          onClick={mode === "login" ? handleSignIn : handleRegister}
           disabled={loading}
           className="btn-primary w-full disabled:opacity-60"
         >
-          {loading ? "Verifica accesso..." : "Accedi all'area riservata"}
+          {loading ? "Elaborazione..." : mode === "login" ? "Accedi all'area riservata" : "Invia richiesta accesso"}
         </button>
-        <button type="button" onClick={handleMagicLink} disabled={loading} className="btn-secondary w-full disabled:opacity-60">
-          Invia link magico via email
-        </button>
+        {mode === "login" ? (
+          <button type="button" onClick={handleMagicLink} disabled={loading} className="btn-secondary w-full disabled:opacity-60">
+            Invia link magico via email
+          </button>
+        ) : null}
         <p className="text-sm text-slate-600">{message}</p>
         <p className="text-xs text-slate-500">Riceverai una risposta o un link di accesso in breve tempo, quando previsto.</p>
       </div>
