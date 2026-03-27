@@ -416,6 +416,12 @@ export default function BusNetworkPage() {
     if (res) setMessage(`Ordinamento geografico completato: ${res.geocoded ?? 0} fermate geocodificate, ${res.skipped ?? 0} senza coordinate ignorate.`);
   }, [selectedLine, direction, post]);
 
+  const timeSortStops = useCallback(async () => {
+    if (!selectedLine) return;
+    const res = await post("sort_stops_by_time", { bus_line_id: selectedLine.id, direction }) as ({ sorted?: number } | null);
+    if (res) setMessage(`Fermate riallineate per orario: ${res.sorted ?? 0} fermate riordinate.`);
+  }, [selectedLine, direction, post]);
+
   const addUnit = useCallback(async () => {
     if (!newUnitLabel.trim() || !selectedLine) return;
     await post("add_unit", { bus_line_id: selectedLine.id, label: newUnitLabel.trim().toUpperCase(), capacity: 54 });
@@ -1193,6 +1199,11 @@ export default function BusNetworkPage() {
                         {direction === "arrival" ? "Fermate andata — dal nord verso il sud" : "Fermate ritorno — dal sud verso il nord"}
                       </div>
                       <div className="flex items-center gap-1.5">
+                        <button onClick={() => void timeSortStops()} disabled={saving}
+                          title="Riordina le fermate in base all'orario di partenza (crescente)"
+                          className="flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-40">
+                          🕐 Riallinea per orario
+                        </button>
                         <button onClick={() => void geoSortStops()} disabled={saving || geoSorting}
                           title="Geocodifica le fermate e le ordina automaticamente per latitudine (nord→sud)"
                           className="flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-100 disabled:opacity-40">

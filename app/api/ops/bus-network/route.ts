@@ -627,6 +627,39 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    // Riordina fermate in base al pickup_time (orario crescente)
+    if (action === "sort_stops_by_time") {
+      const parsed = z.object({
+        bus_line_id: z.string().uuid(),
+        direction: z.enum(["arrival", "departure"])
+      }).parse(body);
+
+      const { data: stops, error: stopsErr } = await auth.admin
+        .from("tenant_bus_line_stops")
+        .select("id,pickup_time")
+        .eq("tenant_id", tenantId)
+        .eq("bus_line_id", parsed.bus_line_id)
+        .eq("direction", parsed.direction)
+        .eq("active", true);
+      if (stopsErr) throw new Error(stopsErr.message);
+
+      type TimeStop = { id: string; pickup_time: string | null };
+      const withTime = ((stops ?? []) as TimeStop[]).filter((s) => s.pickup_time);
+      const withoutTime = ((stops ?? []) as TimeStop[]).filter((s) => !s.pickup_time);
+
+      // Ordina per orario crescente (le fermate senza orario vanno in fondo)
+      withTime.sort((a, b) => (a.pickup_time ?? "").localeCompare(b.pickup_time ?? ""));
+      const ordered = [...withTime, ...withoutTime];
+
+      for (let i = 0; i < ordered.length; i++) {
+        await auth.admin.from("tenant_bus_line_stops")
+          .update({ stop_order: i + 1, order_index: i + 1 })
+          .eq("tenant_id", tenantId).eq("id", ordered[i].id);
+      }
+
+      return NextResponse.json({ ok: true, sorted: ordered.length, ...(await loadBusNetwork(auth)) });
+    }
+
     // Geocodifica fermate senza coordinate e le riordina per latitudine (nord→sud andata, inverso ritorno)
     if (action === "geo_sort_stops") {
       const parsed = z.object({
