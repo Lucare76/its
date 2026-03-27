@@ -10,7 +10,7 @@ type BusStop = { id: string; bus_line_id: string; direction: "arrival" | "depart
 type BusUnit = { id: string; bus_line_id: string; label: string; capacity: number; low_seat_threshold: number; minimum_passengers?: number | null; status: "open" | "low" | "closed" | "completed"; manual_close: boolean; close_reason?: string | null; driver_name?: string | null; driver_phone?: string | null };
 type BusAllocation = { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; stop_id?: string | null; stop_name: string; direction: "arrival" | "departure"; pax_assigned: number };
 type BusMove = { id: string; service_id: string; from_bus_unit_id?: string | null; to_bus_unit_id?: string | null; stop_name?: string | null; pax_moved: number; reason?: string | null; created_at: string; customer_name?: string | null; customer_phone?: string | null; hotel_name?: string | null; source_bus_label?: string | null; target_bus_label?: string | null; moved_full_allocation?: boolean };
-type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; stop_pickup_note?: string | null; stop_pickup_time?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_name?: string | null; notes?: string | null; created_at?: string };
+type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; stop_pickup_note?: string | null; stop_pickup_time?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_name?: string | null; agency_name?: string | null; notes?: string | null; created_at?: string };
 type BusService = { id: string; customer_name: string; customer_display_name: string; date: string; time: string; pax: number; direction: "arrival" | "departure"; bus_city_origin?: string | null; transport_code?: string | null; phone_display: string; hotel_name: string; derived_family_code: string; derived_family_name: string; derived_line_code?: string | null; derived_line_name?: string | null; suggested_stop_name?: string | null };
 type UnitLoad = BusUnit & { pax_assigned: number; remaining_seats: number; suggested_status: string };
 type StopLoad = BusStop & { pax_assigned: number };
@@ -77,6 +77,7 @@ export default function BusNetworkPage() {
   const [hideEmptyStops, setHideEmptyStops] = useState(false);
   const [newStopName, setNewStopName] = useState("");
   const [newStopCity, setNewStopCity] = useState("");
+  const [newStopPickupTime, setNewStopPickupTime] = useState("");
   const [newUnitLabel, setNewUnitLabel] = useState("");
   const [dragOverUnitId, setDragOverUnitId] = useState("");
 
@@ -408,11 +409,13 @@ export default function BusNetworkPage() {
     await post("add_stop", {
       bus_line_id: selectedLine.id, direction,
       stop_name: newStopName.trim().toUpperCase(), city: newStopCity.trim(),
+      pickup_time: newStopPickupTime.trim() || null,
       stop_order: maxOrder + 1, pickup_note: null, lat: null, lng: null
     });
     setNewStopName("");
     setNewStopCity("");
-  }, [newStopName, newStopCity, selectedLine, direction, payload.stops, post]);
+    setNewStopPickupTime("");
+  }, [newStopName, newStopCity, newStopPickupTime, selectedLine, direction, payload.stops, post]);
 
   const moveStopOrder = useCallback(async (stopId: string, shift: "up" | "down") => {
     if (!selectedLine) return;
@@ -423,49 +426,97 @@ export default function BusNetworkPage() {
     if (idx < 0) return;
     const swapIdx = shift === "up" ? idx - 1 : idx + 1;
     if (swapIdx < 0 || swapIdx >= sorted.length) return;
-    const reordered = sorted.map((s) => s.id);
-    [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
-    await post("reorder_stops", { bus_line_id: selectedLine.id, direction, stop_ids: reordered });
+    await post("swap_stops", { stop_id_a: sorted[idx].id, stop_id_b: sorted[swapIdx].id });
   }, [selectedLine, payload.stops, direction, post]);
 
+  function buildAllocRows(
+    unit: { label: string; driver_name?: string | null; driver_phone?: string | null },
+    allocs: AllocationDetail[],
+    lineName: string
+  ): Record<string, string | number>[] {
+    const sorted = [...allocs].sort((a, b) => {
+      const ta = a.stop_pickup_time ?? "99:99";
+      const tb = b.stop_pickup_time ?? "99:99";
+      return ta !== tb ? ta.localeCompare(tb) : (a.service_time ?? "").localeCompare(b.service_time ?? "");
+    });
+    return sorted.map((alloc) => ({
+      Linea: lineName,
+      Bus: unit.label,
+      Autista: unit.driver_name ?? "",
+      "Tel. Autista": unit.driver_phone ?? "",
+      "Orario raccolta": alloc.stop_pickup_time ?? "",
+      Fermata: alloc.stop_name,
+      "Punto raccolta": alloc.stop_pickup_note ?? "",
+      Cliente: alloc.customer_name,
+      Hotel: alloc.hotel_name ?? "",
+      Agenzia: alloc.agency_name ?? "",
+      Telefono: alloc.customer_phone ?? "",
+      Pax: alloc.pax_assigned,
+      Data: alloc.service_date,
+      Direzione: alloc.direction === "arrival" ? "Andata" : "Ritorno"
+    }));
+  }
+
+  const colWidths = [
+    { wch: 16 }, { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 10 },
+    { wch: 22 }, { wch: 32 }, { wch: 28 }, { wch: 22 }, { wch: 20 },
+    { wch: 16 }, { wch: 6 }, { wch: 12 }, { wch: 10 }
+  ];
+
+  // Export linea corrente (tutti i bus della linea selezionata)
   const exportExcel = useCallback(async () => {
     const { utils, writeFile } = await import("xlsx");
     const rows: Record<string, string | number>[] = [];
     for (const { unit, allocations: cardAllocs } of busCards) {
-      // Ordina per orario di raccolta
-      const sorted = [...cardAllocs].sort((a, b) => {
-        const ta = a.stop_pickup_time ?? "99:99";
-        const tb = b.stop_pickup_time ?? "99:99";
-        return ta.localeCompare(tb);
-      });
-      for (const alloc of sorted) {
-        rows.push({
-          Bus: unit.label,
-          Autista: unit.driver_name ?? "",
-          "Tel. Autista": unit.driver_phone ?? "",
-          "Orario raccolta": alloc.stop_pickup_time ?? "",
-          Fermata: alloc.stop_name,
-          "Punto raccolta": alloc.stop_pickup_note ?? "",
-          Cliente: alloc.customer_name,
-          Hotel: alloc.hotel_name ?? "",
-          Telefono: alloc.customer_phone ?? "",
-          Pax: alloc.pax_assigned,
-          Data: date,
-          Direzione: direction === "arrival" ? "Andata" : "Ritorno"
-        });
-      }
+      rows.push(...buildAllocRows(unit, cardAllocs, selectedLine?.name ?? ""));
     }
     const ws = utils.json_to_sheet(rows);
-    // Larghezze colonne
-    ws["!cols"] = [
-      { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 10 },
-      { wch: 22 }, { wch: 32 }, { wch: 28 }, { wch: 22 },
-      { wch: 16 }, { wch: 6 }, { wch: 12 }, { wch: 10 }
-    ];
+    ws["!cols"] = colWidths;
     const wb = utils.book_new();
-    utils.book_append_sheet(wb, ws, "Bus");
+    utils.book_append_sheet(wb, ws, (selectedLine?.name ?? "Bus").slice(0, 31));
     writeFile(wb, `bus_${selectedLine?.code ?? "export"}_${date}_${direction}.xlsx`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busCards, date, direction, selectedLine]);
+
+  // Export singolo bus (usa il bus selezionato; se nessuno selezionato usa il primo)
+  const exportSingleBus = useCallback(async () => {
+    const { utils, writeFile } = await import("xlsx");
+    const targetCard = busCards.find((c) => c.unit.id === selectedBusUnitId) ?? busCards[0];
+    if (!targetCard) return;
+    const rows = buildAllocRows(targetCard.unit, targetCard.allocations, selectedLine?.name ?? "");
+    const ws = utils.json_to_sheet(rows);
+    ws["!cols"] = colWidths;
+    const wb = utils.book_new();
+    utils.book_append_sheet(wb, ws, targetCard.unit.label.slice(0, 31));
+    const lineCode = selectedLine?.code ?? "bus";
+    const busLabel = targetCard.unit.label.replace(/\s+/g, "_");
+    writeFile(wb, `${lineCode}_${busLabel}_${date}_${direction === "arrival" ? "Andata" : "Ritorno"}.xlsx`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busCards, selectedBusUnitId, date, direction, selectedLine]);
+
+  // Export tutte le linee (un foglio per linea)
+  const exportAllLines = useCallback(async () => {
+    const { utils, writeFile } = await import("xlsx");
+    const wb = utils.book_new();
+    for (const line of payload.lines) {
+      const lineAllocs = payload.allocation_details.filter(
+        (a) => a.bus_line_id === line.id && a.service_date === date && a.direction === direction
+      );
+      const lineUnitsAll = payload.unit_loads.filter((u) => u.bus_line_id === line.id);
+      const rows: Record<string, string | number>[] = [];
+      for (const unit of lineUnitsAll) {
+        const unitAllocs = lineAllocs.filter((a) => a.bus_unit_id === unit.id);
+        rows.push(...buildAllocRows(unit, unitAllocs, line.name));
+      }
+      if (rows.length > 0) {
+        const ws = utils.json_to_sheet(rows);
+        ws["!cols"] = colWidths;
+        utils.book_append_sheet(wb, ws, line.name.slice(0, 31));
+      }
+    }
+    writeFile(wb, `bus_tutte_linee_${date}_${direction === "arrival" ? "Andata" : "Ritorno"}.xlsx`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payload, date, direction]);
 
   const saveDriver = useCallback(async (unitId: string) => {
     await post("update_driver", { unit_id: unitId, driver_name: editDriverName.trim() || null, driver_phone: editDriverPhone.trim() || null });
@@ -666,8 +717,14 @@ export default function BusNetworkPage() {
                   {totalPaxToday > 0 && <span className="ml-2 text-slate-400">({totalPaxToday} pax allocati)</span>}
                 </p>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => exportExcel()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
-                    📥 Esporta Excel
+                  <button onClick={() => void exportAllLines()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50" title="Esporta tutte le linee in un unico file Excel">
+                    📥 Esporta tutte linee
+                  </button>
+                  <button onClick={() => void exportExcel()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50" title="Esporta tutti i bus della linea selezionata">
+                    📥 Esporta linea
+                  </button>
+                  <button onClick={() => void exportSingleBus()} disabled={busCards.length === 0} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40" title={selectedBusUnitId ? "Esporta bus selezionato" : "Esporta primo bus (seleziona un bus dalla lista per sceglierne uno specifico)"}>
+                    📥 Esporta bus{selectedBusUnitId ? " ✓" : ""}
                   </button>
                   <button onClick={() => void autoAssign()} disabled={saving}
                     className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-40">
@@ -776,10 +833,12 @@ export default function BusNetworkPage() {
                   const isFull = unit.remaining_seats <= 0;
                   const isClosed = unit.status === "closed" || unit.status === "completed";
 
-                  // Group by stop in correct order
+                  // Group by stop in correct order, within each stop ordina per orario di partenza
                   const stopGroups = activeStops.map((stop) => ({
                     stop,
-                    allocs: cardAllocs.filter((a) => a.stop_name === stop.stop_name)
+                    allocs: cardAllocs
+                      .filter((a) => a.stop_name === stop.stop_name)
+                      .sort((a, b) => (a.service_time ?? "99:99").localeCompare(b.service_time ?? "99:99"))
                   })).filter((g) => g.allocs.length > 0);
 
                   // Allocations at stops not in the active list
@@ -1168,6 +1227,9 @@ export default function BusNetworkPage() {
                       <input value={newStopCity} onChange={(e) => setNewStopCity(e.target.value)}
                         placeholder="Città" onKeyDown={(e) => { if (e.key === "Enter") void addStop(); }}
                         className="w-28 rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                      <input type="time" value={newStopPickupTime} onChange={(e) => setNewStopPickupTime(e.target.value)}
+                        title="Orario di partenza" onKeyDown={(e) => { if (e.key === "Enter") void addStop(); }}
+                        className="w-24 rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                       <button onClick={() => void addStop()} disabled={saving || !newStopName.trim() || !newStopCity.trim()}
                         className="btn-secondary px-4 py-2 text-sm disabled:opacity-40">
                         + Fermata

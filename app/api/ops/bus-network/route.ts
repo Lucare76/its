@@ -91,6 +91,7 @@ const addStopSchema = z.object({
   stop_name: z.string().min(2).max(120),
   city: z.string().min(2).max(120),
   pickup_note: z.string().max(500).optional().nullable(),
+  pickup_time: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
   stop_order: z.number().int().min(1),
   lat: z.number().optional().nullable(),
   lng: z.number().optional().nullable()
@@ -349,6 +350,7 @@ export async function POST(request: NextRequest) {
           stop_name: parsed.stop_name,
           city: parsed.city,
           pickup_note: parsed.pickup_note ?? null,
+          pickup_time: parsed.pickup_time ?? null,
           stop_order: parsed.stop_order,
           order_index: parsed.stop_order,
           lat: parsed.lat ?? null,
@@ -363,6 +365,7 @@ export async function POST(request: NextRequest) {
           stop_name: parsed.stop_name,
           city: parsed.city,
           pickup_note: parsed.pickup_note ?? null,
+          pickup_time: parsed.pickup_time ?? null,
           stop_order: departureOrder,
           order_index: departureOrder,
           lat: parsed.lat ?? null,
@@ -588,6 +591,26 @@ export async function POST(request: NextRequest) {
       if (error) {
         return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
       }
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
+    // Scambia l'ordine di due fermate (usato dalle frecce ↑↓ nel client)
+    if (action === "swap_stops") {
+      const parsed = z.object({
+        stop_id_a: z.string().uuid(),
+        stop_id_b: z.string().uuid()
+      }).parse(body);
+      const [resA, resB] = await Promise.all([
+        auth.admin.from("tenant_bus_line_stops").select("stop_order,order_index").eq("tenant_id", tenantId).eq("id", parsed.stop_id_a).single(),
+        auth.admin.from("tenant_bus_line_stops").select("stop_order,order_index").eq("tenant_id", tenantId).eq("id", parsed.stop_id_b).single()
+      ]);
+      if (resA.error || resB.error || !resA.data || !resB.data) throw new Error("Fermate non trovate");
+      const orderA = (resA.data as { stop_order: number }).stop_order;
+      const orderB = (resB.data as { stop_order: number }).stop_order;
+      // Swap via valore temporaneo (99999) per evitare conflitti su eventuali vincoli
+      await auth.admin.from("tenant_bus_line_stops").update({ stop_order: 99999, order_index: 99999 }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_a);
+      await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderA, order_index: orderA }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_b);
+      await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderB, order_index: orderB }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_a);
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 

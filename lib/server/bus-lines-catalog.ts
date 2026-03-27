@@ -255,6 +255,7 @@ export const BUS_LINES_2026: BusLineCatalogEntry[] = [
       { city: "SANTA MARIA DEGLI ANGELI", time: "04:50", pickupNote: note("Hotel Antonelli") },
       { city: "FOLIGNO", time: "05:15", pickupNote: note("City Hotel") },
       { city: "SPOLETO", time: "05:45", pickupNote: note("Hotel Arca") },
+      { city: "TERNI", time: "05:52", pickupNote: note("Terminal ATC") },
       { city: "VITERBO", time: "06:00", pickupNote: note("Piazzale Romiti") },
       { city: "AMELIA", time: "06:10", pickupNote: note("Agenzia Tiva Viaggi") },
       { city: "ORTE", time: "07:10", pickupNote: note("Hotel Tevere") }
