@@ -983,6 +983,9 @@ export async function POST(request: NextRequest) {
         let resolvedFuzzy = false;
         if (row.stop_id && row.bus_line_id) {
           resolvedStop = allLineStops.find((s) => s.id === row.stop_id) ?? null;
+          if (!resolvedStop) {
+            console.warn(`[import_excel_auto] stop_id ${row.stop_id} non trovato in allLineStops (inattivo?) per "${row.name}" (${row.city})`);
+          }
           resolvedFuzzy = false;
         }
         if (!resolvedStop) {
@@ -1007,7 +1010,10 @@ export async function POST(request: NextRequest) {
               booking_service_kind: "bus_city_hotel",
               status: "confirmed",
             }).select("id").single();
-            if (svcErr || !svc) { pending2++; continue; }
+            if (svcErr || !svc) {
+              console.error(`[import_excel_auto] insert services fallita per "${row.name}" (${row.city}): ${svcErr?.message}`);
+              pending2++; continue;
+            }
 
             const { error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
               p_tenant_id: tenantId,
@@ -1021,7 +1027,25 @@ export async function POST(request: NextRequest) {
               p_notes: row.notes ?? null,
               p_created_by_user_id: auth.user.id,
             });
-            if (allocErr) { pending2++; continue; }
+            if (allocErr) {
+              console.error(`[import_excel_auto] allocate_bus_service fallita per "${row.name}" (${row.city}): ${allocErr.message}`);
+              // Elimina il servizio orfano e metti il passeggero in pending
+              await auth.admin.from("services").delete().eq("id", svc.id);
+              await auth.admin.from("bus_import_pending").insert({
+                tenant_id: tenantId,
+                bus_line_id: stop.bus_line_id,
+                direction: parsed.direction,
+                travel_date: parsed.travel_date,
+                passenger_name: row.name,
+                passenger_phone: row.phone ?? null,
+                city_original: row.city,
+                pax: row.pax,
+                notes: (row.notes ? row.notes + " | " : "") + `Errore: ${allocErr.message}`,
+                geo_suggested_stop: stop.stop_name,
+              });
+              pending2++;
+              continue;
+            }
 
             datePaxMap2.set(bus.id, (datePaxMap2.get(bus.id) ?? 0) + row.pax);
             assigned2++;
