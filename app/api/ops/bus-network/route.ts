@@ -495,6 +495,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    if (action === "update_line_name") {
+      const schema = z.object({
+        line_id: z.string().uuid(),
+        name: z.string().min(1).max(200).trim(),
+      });
+      const parsed = schema.parse(body);
+      const { error } = await auth.admin
+        .from("tenant_bus_lines")
+        .update({ name: parsed.name })
+        .eq("id", parsed.line_id)
+        .eq("tenant_id", tenantId);
+      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
     if (action === "reset_line_date") {
       const resetSchema = z.object({
         bus_line_id: z.string().uuid(),

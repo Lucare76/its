@@ -68,6 +68,10 @@ export default function BusNetworkPage() {
   const [assignStopId, setAssignStopId] = useState("");
   const [assignModalOpen, setAssignModalOpen] = useState(false);
 
+  // Modifica nome linea
+  const [editingLineId, setEditingLineId] = useState<string | null>(null);
+  const [editingLineName, setEditingLineName] = useState("");
+
   // Stop manager
   const [showStopManager, setShowStopManager] = useState(false);
   const [hideEmptyStops, setHideEmptyStops] = useState(false);
@@ -175,6 +179,12 @@ export default function BusNetworkPage() {
     }
     return body;
   }, [load, applyPayload]);
+
+  const saveLineName = useCallback(async (lineId: string, name: string) => {
+    if (!name.trim()) return;
+    await post("update_line_name", { line_id: lineId, name: name.trim() });
+    setEditingLineId(null);
+  }, [post]);
 
   // --- Derived data ---
   const isAdmin = payload.user_role === "admin";
@@ -525,16 +535,46 @@ export default function BusNetworkPage() {
             <div className="p-4 text-xs text-slate-400">Nessuna linea. Vai su Impostazioni per caricare le linee base.</div>
           )}
           {lineSummary.map((line) => (
-            <button key={line.id} onClick={() => setSelectedLineId(line.id)}
-              className={`w-full border-b border-slate-100 px-3 py-3 text-left transition-colors hover:bg-white ${
-                selectedLineId === line.id ? "border-l-4 border-l-indigo-500 bg-white font-semibold text-indigo-700" : "text-slate-700"
+            <div key={line.id}
+              className={`border-b border-slate-100 transition-colors ${
+                selectedLineId === line.id ? "border-l-4 border-l-indigo-500 bg-white" : ""
               }`}>
-              <div className="text-sm font-medium leading-tight">{line.name}</div>
-              {line.paxToday > 0 && <div className="mt-0.5 text-xs text-slate-400">{line.paxToday} pax</div>}
-              {line.unassignedToday > 0 && (
-                <div className="mt-0.5 text-xs font-medium text-amber-600">{line.unassignedToday} da assegnare</div>
-              )}
-            </button>
+              <div className="flex items-center gap-1 px-3 pt-3">
+                {editingLineId === line.id ? (
+                  <form className="flex flex-1 items-center gap-1" onSubmit={(e) => { e.preventDefault(); void saveLineName(line.id, editingLineName); }}>
+                    <input
+                      autoFocus
+                      value={editingLineName}
+                      onChange={(e) => setEditingLineName(e.target.value)}
+                      onKeyDown={(e) => e.key === "Escape" && setEditingLineId(null)}
+                      className="flex-1 rounded border border-indigo-300 px-2 py-0.5 text-sm font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    />
+                    <button type="submit" className="rounded p-0.5 text-indigo-600 hover:bg-indigo-50 text-xs font-bold">✓</button>
+                    <button type="button" onClick={() => setEditingLineId(null)} className="rounded p-0.5 text-slate-400 hover:bg-slate-100 text-xs">✕</button>
+                  </form>
+                ) : (
+                  <>
+                    <button className="flex-1 text-left" onClick={() => setSelectedLineId(line.id)}>
+                      <div className={`text-sm font-medium leading-tight ${selectedLineId === line.id ? "text-indigo-700 font-semibold" : "text-slate-700"}`}>
+                        {line.name}
+                      </div>
+                    </button>
+                    <button
+                      title="Rinomina linea"
+                      onClick={() => { setEditingLineId(line.id); setEditingLineName(line.name); }}
+                      className="shrink-0 rounded p-0.5 text-slate-300 hover:text-indigo-500 hover:bg-indigo-50">
+                      ✎
+                    </button>
+                  </>
+                )}
+              </div>
+              <button className="w-full px-3 pb-3 text-left" onClick={() => setSelectedLineId(line.id)}>
+                {line.paxToday > 0 && <div className="mt-0.5 text-xs text-slate-400">{line.paxToday} pax</div>}
+                {line.unassignedToday > 0 && (
+                  <div className="mt-0.5 text-xs font-medium text-amber-600">{line.unassignedToday} da assegnare</div>
+                )}
+              </button>
+            </div>
           ))}
         </div>
 

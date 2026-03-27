@@ -19,6 +19,17 @@ type ImportRow = {
   matchedLine: BusLine | null;
 };
 
+// Mappa alias agenzie: il nome raw nel file viene normalizzato al nome ufficiale
+const AGENCY_ALIASES: Record<string, string> = {
+  "ischia enjoy": "ALESTE VIAGGI",
+};
+
+function normalizeAgency(raw: string): string {
+  if (!raw.trim()) return "";
+  const key = raw.trim().toLowerCase();
+  return AGENCY_ALIASES[key] ?? raw.trim();
+}
+
 // Prefissi indirizzo italiani da rimuovere per estrarre il nome del luogo
 // Ordinati dal più specifico al più generico
 const ADDR_PREFIXES = [
@@ -241,6 +252,8 @@ export default function BusImportModal({
   const [stopSearch, setStopSearch] = useState<Record<number, string>>({});
   // Righe in modalità modifica manuale (anche se già abbinate)
   const [editingRows, setEditingRows] = useState<Set<number>>(new Set());
+  // Conferma eliminazione import
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Aggiornamento manuale stop per righe "da validare"
   const assignRowStop = useCallback((idx: number, stopId: string) => {
@@ -290,6 +303,10 @@ export default function BusImportModal({
       const hotelCol  = col(["albergo", "hotel partenza", "hotel arrivo", "struttura", "hotel"]);
       const notesCol  = col(["agenzia", "agency", "note", "notes", "annotazioni"]);
       const orarioCol = col(["orario", "ora", "ora partenza", "ora ritiro", "time"]);
+      // Colonna J (indice 9) per agenzia speciale — letta sia per intestazione sia per posizione fissa
+      const agencyJCol = col(["touroperator", "operatore", "agenzia speciale", "t.o.", "to "]) >= 0
+        ? col(["touroperator", "operatore", "agenzia speciale", "t.o.", "to "])
+        : (headerRow.length > 9 ? 9 : -1);
 
       if (nameCol < 0 && cityCol < 0) {
         const found = headerRow.filter(Boolean).join(", ") || "(nessuna intestazione trovata)";
@@ -319,7 +336,9 @@ export default function BusImportModal({
         const cityNorm = extractCity(cityRaw);
         const phone = str(phoneCol);
         const orario = str(orarioCol);
-        const agency = str(notesCol);
+        // Leggi agenzia da colonna notesCol e da colonna J (con alias mapping)
+        const agencyRaw = str(notesCol) || str(agencyJCol);
+        const agency = normalizeAgency(agencyRaw);
         const notes = [hotel && `Hotel: ${hotel}`, agency && `Agenzia: ${agency}`].filter(Boolean).join(" · ");
 
         const { stop, line, status } = matchAcrossLines(cityNorm, allStops, allLines, direction);
@@ -607,10 +626,32 @@ export default function BusImportModal({
           )}
           {(step === "preview" || step === "importing") && (
             <>
-              <button onClick={() => { setStep("upload"); setRows([]); setError(""); }}
+              <button onClick={() => { setStep("upload"); setRows([]); setError(""); setConfirmDelete(false); }}
                 className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">
                 ← Indietro
               </button>
+              {confirmDelete ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-rose-700 font-medium">Eliminare questo import?</span>
+                  <button
+                    onClick={() => { setRows([]); setStep("upload"); setError(""); setConfirmDelete(false); }}
+                    className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700">
+                    Sì, elimina
+                  </button>
+                  <button
+                    onClick={() => setConfirmDelete(false)}
+                    className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">
+                    Annulla
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmDelete(true)}
+                  disabled={step === "importing"}
+                  className="rounded-lg border border-rose-200 px-4 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-40">
+                  🗑 Elimina import
+                </button>
+              )}
               <button onClick={() => void doImport()}
                 disabled={step === "importing" || rows.length === 0}
                 className="rounded-lg bg-indigo-600 px-6 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40">
