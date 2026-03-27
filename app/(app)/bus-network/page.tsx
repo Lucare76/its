@@ -101,10 +101,21 @@ export default function BusNetworkPage() {
   // Tab: "bus" | "da_validare"
   const [activeTab, setActiveTab] = useState<"bus" | "da_validare">("bus");
 
+  // Route strip
+  const [showRouteStrip, setShowRouteStrip] = useState(true);
+  const [selectedBusUnitId, setSelectedBusUnitId] = useState<string | null>(null);
+
+  // Editable bus label
+  const [editLabelUnitId, setEditLabelUnitId] = useState<string | null>(null);
+  const [editLabelValue, setEditLabelValue] = useState("");
+
   // Approve pending modal
   const [approvePending, setApprovePending] = useState<PendingPassenger | null>(null);
   const [approveUnitId, setApproveUnitId] = useState("");
   const [approveStopId, setApproveStopId] = useState("");
+
+  // Create new stop from pending approval
+  const [pendingNewStop, setPendingNewStop] = useState<{ name: string; city: string; note: string; afterStopId: string } | null>(null);
 
   // Transfer to another line modal (admin only)
   const [transferAlloc, setTransferAlloc] = useState<AllocationDetail | null>(null);
@@ -135,6 +146,7 @@ export default function BusNetworkPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setSelectedBusUnitId(null); }, [selectedLineId, date, direction]);
 
   const applyPayload = useCallback((body: Partial<ApiPayload>) => {
     const next: ApiPayload = {
@@ -202,12 +214,13 @@ export default function BusNetworkPage() {
     [payload.stops, selectedLine, direction]
   );
 
-  // Allocations for this date + direction + line
+  // Allocations for this date + direction + line (optionally filtered by selected bus)
   const dateAllocations = useMemo(
     () => payload.allocation_details.filter(
-      (a) => a.bus_line_id === selectedLine?.id && a.service_date === date && a.direction === direction
+      (a) => a.bus_line_id === selectedLine?.id && a.service_date === date && a.direction === direction &&
+        (!selectedBusUnitId || a.bus_unit_id === selectedBusUnitId)
     ),
-    [payload.allocation_details, selectedLine, date, direction]
+    [payload.allocation_details, selectedLine, date, direction, selectedBusUnitId]
   );
 
   // Stops WITH passengers today, ordered correctly
@@ -267,8 +280,11 @@ export default function BusNetworkPage() {
         s.derived_family_code === line.family_code &&
         !allocatedServiceIds.has(s.id)
     ).length;
-    return { ...line, paxToday, unassignedToday };
-  }), [payload.lines, payload.allocation_details, payload.services, date, direction, allocatedServiceIds]);
+    const totalCapacity = payload.units
+      .filter((u) => u.bus_line_id === line.id && u.status !== "closed" && u.status !== "completed")
+      .reduce((sum, u) => sum + u.capacity, 0);
+    return { ...line, paxToday, unassignedToday, totalCapacity };
+  }), [payload.lines, payload.allocation_details, payload.services, payload.units, date, direction, allocatedServiceIds]);
 
   const totalPaxToday = dateAllocations.reduce((sum, a) => sum + a.pax_assigned, 0);
 
@@ -456,6 +472,40 @@ export default function BusNetworkPage() {
     setEditDriverUnitId("");
   }, [post, editDriverName, editDriverPhone]);
 
+  const confirmApprovePendingWithNewStop = useCallback(async () => {
+    if (!approvePending || !pendingNewStop || !selectedLine) return;
+    const existing = payload.stops.filter((s) => s.bus_line_id === selectedLine.id && s.direction === direction);
+    const afterStop = existing.find((s) => s.id === pendingNewStop.afterStopId);
+    const insertOrder = afterStop
+      ? afterStop.stop_order + 1
+      : existing.reduce((max, s) => Math.max(max, s.stop_order), 0) + 1;
+    const addResult = await post("add_stop", {
+      bus_line_id: selectedLine.id,
+      direction,
+      stop_name: pendingNewStop.name.trim().toUpperCase(),
+      city: pendingNewStop.city.trim(),
+      pickup_note: pendingNewStop.note || null,
+      stop_order: insertOrder,
+      lat: null, lng: null
+    }) as (Partial<ApiPayload> & { ok?: boolean }) | null;
+    if (!addResult) return;
+    const updatedStops = addResult.stops ?? [];
+    const newStop = updatedStops.find(
+      (s) => s.bus_line_id === selectedLine.id &&
+        s.direction === direction &&
+        s.stop_name.toUpperCase() === pendingNewStop.name.trim().toUpperCase()
+    );
+    if (!newStop) { setMessage("Fermata creata ma non trovata — riprova."); return; }
+    await post("approve_pending", {
+      pending_id: approvePending.id,
+      bus_unit_id: approveUnitId,
+      stop_id: newStop.id,
+      travel_date: approvePending.travel_date,
+    });
+    setApprovePending(null);
+    setPendingNewStop(null);
+  }, [approvePending, pendingNewStop, selectedLine, direction, payload.stops, approveUnitId, post]);
+
   const handleDragStart = useCallback((alloc: AllocationDetail) => { setMoveSource(alloc); }, []);
   const handleDrop = useCallback((targetUnitId: string) => {
     setDragOverUnitId("");
@@ -498,7 +548,10 @@ export default function BusNetworkPage() {
         {/* Date nav */}
         <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1">
           <button onClick={() => setDate(shiftSunday(date, -1))} className="rounded p-1 text-slate-500 hover:bg-white hover:text-slate-800">←</button>
-          <input type="date" value={date} onChange={(e) => { if (e.target.value) setDate(e.target.value); }}
+          <input type="date" value={date}
+            min="2024-01-01"
+            max={`${new Date().getFullYear() + 1}-12-31`}
+            onChange={(e) => { if (e.target.value) setDate(e.target.value); }}
             className="w-36 rounded-md border-0 bg-transparent px-2 py-0.5 text-sm font-medium text-slate-700 focus:outline-none" />
           <button onClick={() => setDate(shiftSunday(date, 1))} className="rounded p-1 text-slate-500 hover:bg-white hover:text-slate-800">→</button>
         </div>
@@ -569,8 +622,29 @@ export default function BusNetworkPage() {
                 )}
               </div>
               <button className="w-full px-3 pb-3 text-left" onClick={() => setSelectedLineId(line.id)}>
-                {line.paxToday > 0 && <div className="mt-0.5 text-xs text-slate-400">{line.paxToday} pax</div>}
-                {line.unassignedToday > 0 && (
+                {line.totalCapacity > 0 && (
+                  <div className="mt-1.5">
+                    <div className="mb-0.5 flex items-center justify-between text-[10px] tabular-nums text-slate-400">
+                      <span>{line.paxToday}/{line.totalCapacity}</span>
+                      {line.unassignedToday > 0 && (
+                        <span className="font-medium text-amber-600">+{line.unassignedToday}</span>
+                      )}
+                    </div>
+                    <div className="h-1 w-full overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={`h-1 rounded-full transition-all ${
+                          line.totalCapacity > 0 && line.paxToday / line.totalCapacity >= 0.9
+                            ? "bg-rose-400"
+                            : line.totalCapacity > 0 && line.paxToday / line.totalCapacity >= 0.7
+                            ? "bg-amber-400"
+                            : "bg-emerald-400"
+                        }`}
+                        style={{ width: line.totalCapacity > 0 ? `${Math.min(100, Math.round((line.paxToday / line.totalCapacity) * 100))}%` : "0%" }}
+                      />
+                    </div>
+                  </div>
+                )}
+                {line.totalCapacity === 0 && line.unassignedToday > 0 && (
                   <div className="mt-0.5 text-xs font-medium text-amber-600">{line.unassignedToday} da assegnare</div>
                 )}
               </button>
@@ -636,6 +710,63 @@ export default function BusNetworkPage() {
                 );
               })()}
 
+              {/* Route strip */}
+              {activeTab === "bus" && (
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                  <button
+                    onClick={() => setShowRouteStrip((v) => !v)}
+                    className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-slate-500 hover:bg-slate-50">
+                    <span>🗺 Percorso — {lineStops.length} fermate</span>
+                    <span className="text-slate-300">{showRouteStrip ? "▲" : "▼"}</span>
+                  </button>
+                  {showRouteStrip && (
+                    <div className="overflow-x-auto border-t border-slate-100 px-3 py-3">
+                      <div className="flex min-w-max items-start gap-0">
+                        {lineStops.map((stop, idx) => {
+                          const stopPax = dateAllocations
+                            .filter((a) => a.stop_name.toLowerCase() === stop.stop_name.toLowerCase())
+                            .reduce((sum, a) => sum + a.pax_assigned, 0);
+                          const hasPax = stopPax > 0;
+                          return (
+                            <div key={stop.id} className="flex items-center">
+                              {idx > 0 && (
+                                <div className={`h-0.5 w-5 flex-shrink-0 ${hasPax ? "bg-emerald-300" : "bg-slate-200"}`} />
+                              )}
+                              <div className={`group flex w-[88px] flex-shrink-0 flex-col items-center rounded-xl border px-2 py-2 text-center transition-colors ${
+                                hasPax ? "border-emerald-200 bg-emerald-50" : "border-slate-100 bg-slate-50"
+                              }`}>
+                                <span className="mb-0.5 text-[9px] font-bold tabular-nums text-slate-300">{stop.stop_order}</span>
+                                <span className={`text-[10px] font-bold leading-tight ${hasPax ? "text-emerald-800" : "text-slate-500"}`} style={{ wordBreak: "break-word" }}>
+                                  {stop.stop_name}
+                                </span>
+                                {stop.pickup_note && (
+                                  <span className="mt-0.5 text-[9px] text-slate-300 leading-tight">{stop.pickup_note}</span>
+                                )}
+                                {stop.pickup_time && (
+                                  <span className="mt-0.5 rounded bg-indigo-50 px-1 text-[9px] font-semibold text-indigo-500">{stop.pickup_time}</span>
+                                )}
+                                {hasPax && (
+                                  <span className="mt-1 rounded-full bg-emerald-600 px-1.5 text-[10px] font-bold text-white">{stopPax} pax</span>
+                                )}
+                                <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                                  <button onClick={() => void moveStopOrder(stop.id, "up")} disabled={idx === 0 || saving}
+                                    className="rounded p-0.5 text-[10px] text-slate-300 hover:text-slate-700 disabled:opacity-20">↑</button>
+                                  <button onClick={() => void moveStopOrder(stop.id, "down")} disabled={idx === lineStops.length - 1 || saving}
+                                    className="rounded p-0.5 text-[10px] text-slate-300 hover:text-slate-700 disabled:opacity-20">↓</button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {lineStops.length === 0 && (
+                          <div className="py-2 text-xs italic text-slate-300">Nessuna fermata. Usa &quot;Gestisci fermate&quot; per aggiungerne.</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Bus cards */}
               {activeTab === "bus" && <div className="flex gap-4 overflow-x-auto pb-2">
                 {busCards.map(({ unit, allocations: cardAllocs }) => {
@@ -656,12 +787,15 @@ export default function BusNetworkPage() {
                     (a) => !activeStops.some((s) => s.stop_name === a.stop_name)
                   );
 
+                  const isSelected = selectedBusUnitId === unit.id;
                   return (
                     <div key={unit.id}
                       onDragOver={(e) => { e.preventDefault(); setDragOverUnitId(unit.id); }}
                       onDragLeave={() => setDragOverUnitId("")}
                       onDrop={() => handleDrop(unit.id)}
-                      className={`relative flex w-72 flex-shrink-0 flex-col rounded-2xl border-2 bg-white shadow-sm transition-all ${
+                      onClick={() => setSelectedBusUnitId(isSelected ? null : unit.id)}
+                      className={`relative flex w-72 flex-shrink-0 flex-col rounded-2xl border-2 bg-white shadow-sm transition-all cursor-pointer ${
+                        isSelected ? "border-indigo-500 ring-2 ring-indigo-200" :
                         dragOverUnitId === unit.id ? "border-indigo-400 bg-indigo-50 shadow-indigo-100" :
                         isClosed ? "border-slate-200 opacity-60" :
                         isFull ? "border-rose-300" :
@@ -671,7 +805,28 @@ export default function BusNetworkPage() {
                       {/* Header */}
                       <div className="rounded-t-2xl border-b border-slate-100 px-4 py-3">
                         <div className="flex items-center justify-between">
-                          <span className="text-base font-bold uppercase tracking-wide text-slate-900">{unit.label}</span>
+                          {editLabelUnitId === unit.id ? (
+                            <input
+                              autoFocus
+                              value={editLabelValue}
+                              onChange={(e) => setEditLabelValue(e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              onBlur={async () => {
+                                if (editLabelValue.trim() && editLabelValue.trim() !== unit.label) {
+                                  await post("update_label", { unit_id: unit.id, label: editLabelValue.trim() });
+                                }
+                                setEditLabelUnitId(null);
+                              }}
+                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditLabelUnitId(null); }}
+                              className="w-40 rounded border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-base font-bold uppercase tracking-wide text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                            />
+                          ) : (
+                            <span
+                              className="cursor-text text-base font-bold uppercase tracking-wide text-slate-900 hover:text-indigo-600"
+                              title="Clicca per rinominare"
+                              onClick={(e) => { e.stopPropagation(); setEditLabelUnitId(unit.id); setEditLabelValue(unit.label); }}
+                            >{unit.label}</span>
+                          )}
                           {isClosed ? (
                             <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-600">CHIUSO</span>
                           ) : isFull ? (
@@ -889,10 +1044,16 @@ export default function BusNetworkPage() {
                             <button
                               onClick={() => {
                                 setApprovePending(p);
+                                setPendingNewStop(null);
                                 const firstUnit = dateUnitLoads.filter((u) => u.status !== "closed").at(0);
                                 setApproveUnitId(firstUnit?.id ?? "");
-                                const firstStop = lineStops[0];
-                                setApproveStopId(firstStop?.id ?? "");
+                                // pre-select geo-suggested stop, fallback to first stop
+                                const suggestedStop = lineStops.find(
+                                  (s) => p.geo_suggested_stop && s.stop_name.toLowerCase() === p.geo_suggested_stop.toLowerCase().trim()
+                                ) ?? lineStops.find(
+                                  (s) => s.city.toLowerCase() === p.city_original.toLowerCase().trim()
+                                ) ?? lineStops[0];
+                                setApproveStopId(suggestedStop?.id ?? "");
                               }}
                               className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700">
                               Assegna
@@ -1043,11 +1204,18 @@ export default function BusNetworkPage() {
               <label className="text-sm font-medium text-slate-700">Trasferisci a:</label>
               <select value={moveTargetUnitId} onChange={(e) => setMoveTargetUnitId(e.target.value)}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
-                {dateUnitLoads
-                  .filter((u) => u.id !== moveSource.bus_unit_id && u.bus_line_id === moveSource.bus_line_id && u.status !== "closed" && u.status !== "completed")
-                  .map((u) => (
-                    <option key={u.id} value={u.id}>{u.label} — {u.remaining_seats} posti liberi</option>
-                  ))}
+                <option value="">— Scegli bus —</option>
+                {payload.lines.map((line) => {
+                  const lineUnits = dateUnitLoads.filter((u) => u.bus_line_id === line.id && u.id !== moveSource.bus_unit_id && u.status !== "closed" && u.status !== "completed");
+                  if (lineUnits.length === 0) return null;
+                  return (
+                    <optgroup key={line.id} label={line.name}>
+                      {lineUnits.map((u) => (
+                        <option key={u.id} value={u.id}>{u.label} — {u.remaining_seats} posti liberi</option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
               </select>
             </div>
 
@@ -1209,25 +1377,95 @@ export default function BusNetworkPage() {
       {/* ── Approva pending modal ── */}
       {approvePending && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+          <div className="w-full max-w-lg space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
             <h2 className="text-lg font-bold text-slate-900">Assegna passeggero</h2>
             <div className="rounded-xl bg-slate-50 p-4 space-y-1">
               <div className="font-bold uppercase text-slate-900">{approvePending.passenger_name}</div>
-              <div className="text-sm text-slate-600">Città: <span className="font-medium text-rose-600">{approvePending.city_original}</span></div>
-              <div className="text-sm text-slate-600">Pax: <span className="font-medium">{approvePending.pax}</span></div>
+              <div className="text-sm text-slate-600">Città dichiarata: <span className="font-medium text-rose-600">{approvePending.city_original}</span></div>
+              <div className="text-sm text-slate-600">Pax: <span className="font-medium">{approvePending.pax}</span> · Data: <span className="font-medium">{approvePending.travel_date}</span></div>
+              {approvePending.notes && (
+                <div className="text-xs text-slate-400">Note: {approvePending.notes}</div>
+              )}
               {approvePending.geo_suggested_stop && (
-                <div className="text-sm text-amber-600">Fermata suggerita: {approvePending.geo_suggested_stop}</div>
+                <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 mt-1">
+                  <span className="text-sm text-amber-700">🗺 Fermata suggerita da geocoding: <strong>{approvePending.geo_suggested_stop}</strong></span>
+                  <button
+                    onClick={() => {
+                      const s = lineStops.find((s) => s.stop_name.toLowerCase() === approvePending.geo_suggested_stop!.toLowerCase().trim());
+                      if (s) setApproveStopId(s.id);
+                    }}
+                    className="ml-auto shrink-0 rounded-lg border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50">
+                    Usa questa
+                  </button>
+                </div>
               )}
             </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium text-slate-700">Fermata:</label>
-              <select value={approveStopId} onChange={(e) => setApproveStopId(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
-                {lineStops.map((s) => (
-                  <option key={s.id} value={s.id}>{s.stop_name}</option>
-                ))}
-              </select>
-            </div>
+
+            {!pendingNewStop ? (
+              <>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-slate-700">Fermata:</label>
+                  <select value={approveStopId} onChange={(e) => setApproveStopId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                    {lineStops.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.stop_name}{s.city && s.city.toLowerCase() !== s.stop_name.toLowerCase() ? ` (${s.city})` : ""}{s.pickup_note ? ` — ${s.pickup_note}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  onClick={() => setPendingNewStop({
+                    name: approvePending.city_original,
+                    city: approvePending.city_original,
+                    note: "",
+                    afterStopId: lineStops.at(-1)?.id ?? ""
+                  })}
+                  className="w-full rounded-lg border border-dashed border-slate-300 py-2 text-xs font-medium text-slate-400 hover:border-indigo-300 hover:text-indigo-500">
+                  + Crea nuova fermata per questa città
+                </button>
+              </>
+            ) : (
+              <div className="space-y-3 rounded-xl border border-indigo-200 bg-indigo-50 p-4">
+                <div className="text-sm font-semibold text-indigo-800">Nuova fermata</div>
+                <div className="flex gap-2">
+                  <input
+                    value={pendingNewStop.name}
+                    onChange={(e) => setPendingNewStop((v) => v && { ...v, name: e.target.value })}
+                    placeholder="Nome fermata"
+                    className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm uppercase"
+                  />
+                  <input
+                    value={pendingNewStop.city}
+                    onChange={(e) => setPendingNewStop((v) => v && { ...v, city: e.target.value })}
+                    placeholder="Città"
+                    className="w-32 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                  />
+                </div>
+                <input
+                  value={pendingNewStop.note}
+                  onChange={(e) => setPendingNewStop((v) => v && { ...v, note: e.target.value })}
+                  placeholder="Punto raccolta (es: Stazione FS) — opzionale"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                />
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">Inserisci dopo:</label>
+                  <select
+                    value={pendingNewStop.afterStopId}
+                    onChange={(e) => setPendingNewStop((v) => v && { ...v, afterStopId: e.target.value })}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <option value="">— All&apos;inizio —</option>
+                    {lineStops.map((s) => (
+                      <option key={s.id} value={s.id}>{s.stop_order}. {s.stop_name}</option>
+                    ))}
+                  </select>
+                </div>
+                <button onClick={() => setPendingNewStop(null)} className="text-xs text-slate-400 hover:text-slate-600">
+                  ← Torna alla selezione fermata esistente
+                </button>
+              </div>
+            )}
+
             <div className="space-y-1">
               <label className="text-sm font-medium text-slate-700">Bus:</label>
               <select value={approveUnitId} onChange={(e) => setApproveUnitId(e.target.value)}
@@ -1238,22 +1476,31 @@ export default function BusNetworkPage() {
               </select>
             </div>
             <div className="flex gap-3 pt-1">
-              <button onClick={() => setApprovePending(null)} className="btn-secondary flex-1 py-2.5">Annulla</button>
-              <button
-                onClick={async () => {
-                  if (!approveUnitId || !approveStopId || !approvePending) return;
-                  await post("approve_pending", {
-                    pending_id: approvePending.id,
-                    bus_unit_id: approveUnitId,
-                    stop_id: approveStopId,
-                    travel_date: approvePending.travel_date,
-                  });
-                  setApprovePending(null);
-                }}
-                disabled={saving || !approveUnitId || !approveStopId}
-                className="btn-primary flex-1 py-2.5 disabled:opacity-40">
-                {saving ? "Salvataggio..." : "Conferma assegnazione"}
-              </button>
+              <button onClick={() => { setApprovePending(null); setPendingNewStop(null); }} className="btn-secondary flex-1 py-2.5">Annulla</button>
+              {pendingNewStop ? (
+                <button
+                  onClick={() => void confirmApprovePendingWithNewStop()}
+                  disabled={saving || !approveUnitId || !pendingNewStop.name.trim() || !pendingNewStop.city.trim()}
+                  className="btn-primary flex-1 py-2.5 disabled:opacity-40">
+                  {saving ? "Salvataggio..." : "Crea fermata e assegna"}
+                </button>
+              ) : (
+                <button
+                  onClick={async () => {
+                    if (!approveUnitId || !approveStopId || !approvePending) return;
+                    await post("approve_pending", {
+                      pending_id: approvePending.id,
+                      bus_unit_id: approveUnitId,
+                      stop_id: approveStopId,
+                      travel_date: approvePending.travel_date,
+                    });
+                    setApprovePending(null);
+                  }}
+                  disabled={saving || !approveUnitId || !approveStopId}
+                  className="btn-primary flex-1 py-2.5 disabled:opacity-40">
+                  {saving ? "Salvataggio..." : "Conferma assegnazione"}
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -150,10 +150,6 @@ export async function validateBusMoveRequest(
     throw new Error("Il bus destinazione deve essere diverso dal bus origine.");
   }
 
-  if (allocation.bus_line_id !== targetUnit.bus_line_id) {
-    throw new Error("Il bus destinazione deve appartenere alla stessa linea.");
-  }
-
   const { data: targetAllocations, error: targetAllocationsError } = await auth.admin
     .from("tenant_bus_allocations")
     .select("pax_assigned")

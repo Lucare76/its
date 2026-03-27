@@ -394,6 +394,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    if (action === "update_label") {
+      const parsed = z.object({ unit_id: z.string().uuid(), label: z.string().min(1).max(120).trim() }).parse(body);
+      const { error } = await auth.admin.from("tenant_bus_units")
+        .update({ label: parsed.label, updated_at: new Date().toISOString() })
+        .eq("tenant_id", tenantId).eq("id", parsed.unit_id);
+      if (error) throw new Error(error.message);
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
     if (action === "update_driver") {
       const parsed = updateDriverSchema.parse(body);
       const { error } = await auth.admin
@@ -640,6 +649,9 @@ export async function POST(request: NextRequest) {
       const assigned: Array<{ serviceId: string; customerName: string; busUnitId: string; busLabel: string; stopId: string | null; stopName: string; pax: number }> = [];
       const skipped: Array<{ serviceId: string; customerName: string; reason: string }> = [];
       const createdStopKeys = new Set<string>();
+      // Logica geografica: mappa busId → stopId primaria già assegnata al bus.
+      // Permette di raggruppare passeggeri della stessa fermata sullo stesso bus.
+      const busStopPrimary = new Map<string, string>(); // busId → stopId
 
       for (const svc of services as Array<{ id: string; customer_name: string; pax: number; direction: string; bus_city_origin?: string | null; transport_code?: string | null; time?: string | null; outbound_time?: string | null; service_type_code?: string | null; booking_service_kind?: string | null }>) {
         if (allocatedIds.has(svc.id)) continue;
@@ -679,7 +691,7 @@ export async function POST(request: NextRequest) {
 
         if (!stop) { skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: `Fermata non trovata per ${svc.bus_city_origin ?? "N/D"}` }); continue; }
 
-        // Scegli bus
+        // Scegli bus con logica geografica
         const buses = busesByLineId.get(line.id) ?? [];
         const reserved = new Set(["ITALIA PUGLIA", "ITALIA PUGLIA 2"]);
         const isPuglia = svc.transport_code === "LINEA_PUGLIA_ITALIA";
@@ -688,7 +700,14 @@ export async function POST(request: NextRequest) {
         if (preferred.length) {
           chosenBus = preferred.map((lbl) => buses.find((b) => b.label === lbl && b.remaining >= svc.pax) ?? null).find((b): b is SimUnit => b !== null) ?? null;
         } else {
-          chosenBus = buses.filter((b) => b.remaining >= svc.pax && !reserved.has(b.label)).sort((a, b) => a.remaining - b.remaining)[0] ?? null;
+          const eligible = buses.filter((b) => b.remaining >= svc.pax && !reserved.has(b.label));
+          // 1. Preferisci bus già assegnato alla stessa fermata (stessa città/area geografica)
+          const sameStop = eligible.filter((b) => busStopPrimary.get(b.id) === stop.id).sort((a, b) => a.remaining - b.remaining);
+          // 2. Bus ancora senza fermata primaria (inizia nuovo cluster geografico)
+          const fresh = eligible.filter((b) => !busStopPrimary.has(b.id)).sort((a, b) => a.remaining - b.remaining);
+          // 3. Fallback: qualunque bus con capienza, anche se già ha un'altra fermata primaria
+          const other = eligible.filter((b) => busStopPrimary.has(b.id) && busStopPrimary.get(b.id) !== stop.id).sort((a, b) => a.remaining - b.remaining);
+          chosenBus = sameStop[0] ?? fresh[0] ?? other[0] ?? null;
         }
         if (!chosenBus) { skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: "Nessun bus disponibile" }); continue; }
 
@@ -706,6 +725,8 @@ export async function POST(request: NextRequest) {
         });
         if (allocErr) { skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: allocErr.message }); continue; }
 
+        // Registra fermata primaria del bus se non ancora impostata
+        if (!busStopPrimary.has(chosenBus.id)) busStopPrimary.set(chosenBus.id, stop.id);
         chosenBus.remaining -= svc.pax;
         datePax.set(chosenBus.id, (datePax.get(chosenBus.id) ?? 0) + svc.pax);
         assigned.push({ serviceId: svc.id, customerName: svc.customer_name, busUnitId: chosenBus.id, busLabel: chosenBus.label, stopId: stop.id, stopName: stop.stop_name, pax: svc.pax });
@@ -799,13 +820,15 @@ export async function POST(request: NextRequest) {
             const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
               tenant_id: tenantId,
               customer_name: row.name,
-              customer_phone: row.phone ?? null,
+              phone: row.phone ?? "",
               direction: parsed.direction,
               date: parsed.travel_date,
+              time: "00:00",
+              vessel: "Linea bus",
               pax: row.pax,
               bus_city_origin: row.city,
               booking_service_kind: "bus_city_hotel",
-              status: "confirmed",
+              status: "new",
             }).select("id").single();
             if (svcErr || !svc) { pending++; continue; }
 
@@ -885,21 +908,26 @@ export async function POST(request: NextRequest) {
       }
 
       // Carica tutte le fermate attive del tenant per la direzione richiesta
-      const [allStopsRes, allUnitsRes, allocRes] = await Promise.all([
+      const [allStopsRes, allUnitsRes, existingSvcRes] = await Promise.all([
         auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,stop_name,city,stop_order,pickup_note")
           .eq("tenant_id", tenantId).eq("direction", parsed.direction).eq("active", true).order("stop_order"),
         auth.admin.from("tenant_bus_units").select("id,bus_line_id,label,capacity,status")
           .eq("tenant_id", tenantId).not("status", "in", '("closed","completed")').order("sort_order"),
-        // Filtra per data di viaggio per calcolo capacità corretto
-        auth.admin.from("tenant_bus_allocations").select("bus_unit_id,pax_assigned,service_id")
-          .eq("tenant_id", tenantId)
-          .in("service_id",
-            (await auth.admin.from("services").select("id").eq("tenant_id", tenantId).eq("date", parsed.travel_date)).data?.map((s: { id: string }) => s.id) ?? []
-          ),
+        auth.admin.from("services").select("id").eq("tenant_id", tenantId).eq("date", parsed.travel_date),
       ]);
       if (allStopsRes.error) throw new Error(allStopsRes.error.message);
       if (allUnitsRes.error) throw new Error(allUnitsRes.error.message);
-      if (allocRes.error) throw new Error(allocRes.error.message);
+      if (existingSvcRes.error) throw new Error(existingSvcRes.error.message);
+
+      const existingSvcIds = (existingSvcRes.data ?? []).map((s: { id: string }) => s.id);
+      // Se non ci sono servizi per questa data, non ci sono allocazioni → mappa vuota
+      let allocData: Array<{ bus_unit_id: string; pax_assigned: number }> = [];
+      if (existingSvcIds.length > 0) {
+        const allocRes = await auth.admin.from("tenant_bus_allocations").select("bus_unit_id,pax_assigned")
+          .eq("tenant_id", tenantId).in("service_id", existingSvcIds);
+        if (allocRes.error) throw new Error(allocRes.error.message);
+        allocData = (allocRes.data ?? []) as Array<{ bus_unit_id: string; pax_assigned: number }>;
+      }
 
       type DBStop2 = { id: string; bus_line_id: string; stop_name: string; city: string; stop_order: number; pickup_note?: string | null };
       type DBUnit2 = { id: string; bus_line_id: string; label: string; capacity: number; status: string };
@@ -908,7 +936,7 @@ export async function POST(request: NextRequest) {
 
       // Mappa pax correnti per bus unit (solo per la data di viaggio)
       const datePaxMap2 = new Map<string, number>();
-      for (const a of (allocRes.data ?? []) as Array<{ bus_unit_id: string; pax_assigned: number }>) {
+      for (const a of allocData) {
         datePaxMap2.set(a.bus_unit_id, (datePaxMap2.get(a.bus_unit_id) ?? 0) + a.pax_assigned);
       }
 
@@ -1017,13 +1045,15 @@ export async function POST(request: NextRequest) {
             const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
               tenant_id: tenantId,
               customer_name: row.name,
-              customer_phone: row.phone ?? null,
+              phone: row.phone ?? "",
               direction: parsed.direction,
               date: parsed.travel_date,
+              time: "00:00",
+              vessel: "Linea bus",
               pax: row.pax,
               bus_city_origin: row.city,
               booking_service_kind: "bus_city_hotel",
-              status: "confirmed",
+              status: "new",
             }).select("id").single();
             if (svcErr || !svc) {
               console.error(`[import_excel_auto] insert services fallita per "${row.name}" (${row.city}): ${svcErr?.message}`);
@@ -1129,9 +1159,11 @@ export async function POST(request: NextRequest) {
       const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
         tenant_id: tenantId,
         customer_name: pRow.passenger_name,
-        customer_phone: pRow.passenger_phone,
+        phone: pRow.passenger_phone ?? "",
         direction: pRow.direction,
         date: parsed.travel_date,
+        time: "00:00",
+        vessel: "Linea bus",
         pax: pRow.pax,
         bus_city_origin: pRow.city_original,
         booking_service_kind: "bus_city_hotel",
