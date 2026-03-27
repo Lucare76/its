@@ -110,6 +110,13 @@ export default function BusNetworkPage() {
   const [editLabelUnitId, setEditLabelUnitId] = useState<string | null>(null);
   const [editLabelValue, setEditLabelValue] = useState("");
 
+  // Edit stop pickup_time inline
+  const [editStopTimeId, setEditStopTimeId] = useState<string | null>(null);
+  const [editStopTimeValue, setEditStopTimeValue] = useState("");
+
+  // Geo sort progress
+  const [geoSorting, setGeoSorting] = useState(false);
+
   // Approve pending modal
   const [approvePending, setApprovePending] = useState<PendingPassenger | null>(null);
   const [approveUnitId, setApproveUnitId] = useState("");
@@ -395,6 +402,19 @@ export default function BusNetworkPage() {
       setAutoAssignResult({ assigned: body.assigned ?? 0, skipped: body.skipped ?? 0, skipped_detail: body.skipped_detail ?? [] });
     }
   }, [post, date, direction]);
+
+  const saveStopTime = useCallback(async (stopId: string, time: string) => {
+    await post("update_stop_time", { stop_id: stopId, pickup_time: time.trim() || null });
+    setEditStopTimeId(null);
+  }, [post]);
+
+  const geoSortStops = useCallback(async () => {
+    if (!selectedLine) return;
+    setGeoSorting(true);
+    const res = await post("geo_sort_stops", { bus_line_id: selectedLine.id, direction }) as ({ geocoded?: number; skipped?: number } | null);
+    setGeoSorting(false);
+    if (res) setMessage(`Ordinamento geografico completato: ${res.geocoded ?? 0} fermate geocodificate, ${res.skipped ?? 0} senza coordinate ignorate.`);
+  }, [selectedLine, direction, post]);
 
   const addUnit = useCallback(async () => {
     if (!newUnitLabel.trim() || !selectedLine) return;
@@ -1168,14 +1188,21 @@ export default function BusNetworkPage() {
 
                 {showStopManager && (
                   <div className="space-y-4 border-t border-slate-100 p-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2">
                       <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                         {direction === "arrival" ? "Fermate andata — dal nord verso il sud" : "Fermate ritorno — dal sud verso il nord"}
                       </div>
-                      <button onClick={() => setHideEmptyStops((v) => !v)}
-                        className="flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">
-                        {hideEmptyStops ? "👁 Mostra tutte" : "👁 Nascondi vuote"}
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => void geoSortStops()} disabled={saving || geoSorting}
+                          title="Geocodifica le fermate e le ordina automaticamente per latitudine (nord→sud)"
+                          className="flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-100 disabled:opacity-40">
+                          {geoSorting ? "⏳ Geocoding..." : "🌍 Ordina per geografia"}
+                        </button>
+                        <button onClick={() => setHideEmptyStops((v) => !v)}
+                          className="flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">
+                          {hideEmptyStops ? "👁 Mostra tutte" : "👁 Nascondi vuote"}
+                        </button>
+                      </div>
                     </div>
 
                     <div className="space-y-1">
@@ -1207,6 +1234,29 @@ export default function BusNetworkPage() {
                               </div>
                               {stopPaxToday > 0 && (
                                 <span className="rounded bg-emerald-50 px-2 text-xs font-medium text-emerald-700">{stopPaxToday} pax</span>
+                              )}
+                              {/* Orario editabile inline */}
+                              {editStopTimeId === stop.id ? (
+                                <div className="flex items-center gap-1">
+                                  <input type="time" value={editStopTimeValue}
+                                    onChange={(e) => setEditStopTimeValue(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") void saveStopTime(stop.id, editStopTimeValue);
+                                      if (e.key === "Escape") setEditStopTimeId(null);
+                                    }}
+                                    autoFocus
+                                    className="w-20 rounded border border-indigo-300 px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-400" />
+                                  <button onClick={() => void saveStopTime(stop.id, editStopTimeValue)} disabled={saving}
+                                    className="rounded bg-indigo-600 px-1.5 py-0.5 text-[10px] text-white hover:bg-indigo-700 disabled:opacity-40">✓</button>
+                                  <button onClick={() => setEditStopTimeId(null)}
+                                    className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-300">✕</button>
+                                </div>
+                              ) : (
+                                <button onClick={() => { setEditStopTimeId(stop.id); setEditStopTimeValue(stop.pickup_time ?? ""); }}
+                                  title="Modifica orario di partenza"
+                                  className="min-w-[52px] rounded border border-slate-200 bg-white px-1.5 py-0.5 text-center text-xs text-slate-500 hover:border-indigo-300 hover:text-indigo-600">
+                                  {stop.pickup_time ?? "⏱ orario"}
+                                </button>
                               )}
                               <div className="flex gap-0.5">
                                 <button onClick={() => void moveStopOrder(stop.id, "up")} disabled={idx === 0 || saving}

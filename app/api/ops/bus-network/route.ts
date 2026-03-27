@@ -14,7 +14,7 @@ import {
   suggestBusRedistribution
 } from "@/lib/server/bus-network";
 import { findBusStopsByCity } from "@/lib/server/bus-lines-catalog";
-import { geocodeCityName } from "@/lib/server/geocoding";
+import { geocodeCity, geocodeCityName } from "@/lib/server/geocoding";
 import { getCustomerFullName } from "@/lib/service-display";
 import type { AgencyBookingServiceKind, OperationalServiceType } from "@/lib/types";
 import { validateBusAllocationRequest, validateBusMoveRequest } from "@/lib/server/bus-network-validation";
@@ -612,6 +612,73 @@ export async function POST(request: NextRequest) {
       await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderA, order_index: orderA }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_b);
       await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderB, order_index: orderB }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_a);
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
+    // Aggiorna l'orario di partenza di una fermata esistente
+    if (action === "update_stop_time") {
+      const parsed = z.object({
+        stop_id: z.string().uuid(),
+        pickup_time: z.string().regex(/^\d{2}:\d{2}$/).nullable()
+      }).parse(body);
+      const { error } = await auth.admin.from("tenant_bus_line_stops")
+        .update({ pickup_time: parsed.pickup_time })
+        .eq("tenant_id", tenantId).eq("id", parsed.stop_id);
+      if (error) throw new Error(error.message);
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
+    // Geocodifica fermate senza coordinate e le riordina per latitudine (nord→sud andata, inverso ritorno)
+    if (action === "geo_sort_stops") {
+      const parsed = z.object({
+        bus_line_id: z.string().uuid(),
+        direction: z.enum(["arrival", "departure"])
+      }).parse(body);
+
+      const { data: stops, error: stopsErr } = await auth.admin
+        .from("tenant_bus_line_stops")
+        .select("id,stop_name,city,lat,lng")
+        .eq("tenant_id", tenantId)
+        .eq("bus_line_id", parsed.bus_line_id)
+        .eq("direction", parsed.direction)
+        .eq("active", true);
+      if (stopsErr) throw new Error(stopsErr.message);
+
+      type RawStop = { id: string; stop_name: string; city: string; lat: number | null; lng: number | null };
+      const allStops = (stops ?? []) as RawStop[];
+
+      // Geocodifica solo quelle senza coordinate (rispetta rate-limit Nominatim con pausa 1s)
+      for (const stop of allStops) {
+        if (stop.lat != null) continue;
+        const geo = await geocodeCity(stop.city || stop.stop_name);
+        if (!geo) continue;
+        await auth.admin.from("tenant_bus_line_stops")
+          .update({ lat: geo.lat, lng: geo.lng })
+          .eq("tenant_id", tenantId).eq("id", stop.id);
+        stop.lat = geo.lat;
+        stop.lng = geo.lng;
+        // Pausa 1 secondo per non superare il rate-limit Nominatim
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+
+      // Ordina per latitudine: andata = nord→sud (lat desc), ritorno = sud→nord (lat asc)
+      const withCoords = allStops.filter((s): s is RawStop & { lat: number } => s.lat != null);
+      const sorted = withCoords.sort((a, b) =>
+        parsed.direction === "arrival" ? b.lat - a.lat : a.lat - b.lat
+      );
+
+      // Aggiorna stop_order
+      for (let i = 0; i < sorted.length; i++) {
+        await auth.admin.from("tenant_bus_line_stops")
+          .update({ stop_order: i + 1, order_index: i + 1 })
+          .eq("tenant_id", tenantId).eq("id", sorted[i].id);
+      }
+
+      return NextResponse.json({
+        ok: true,
+        geocoded: withCoords.length,
+        skipped: allStops.length - withCoords.length,
+        ...(await loadBusNetwork(auth))
+      });
     }
 
     if (action === "auto_assign_date") {
