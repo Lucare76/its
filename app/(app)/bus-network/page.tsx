@@ -482,22 +482,32 @@ export default function BusNetworkPage() {
       const tb = b.stop_pickup_time ?? "99:99";
       return ta !== tb ? ta.localeCompare(tb) : (a.service_time ?? "").localeCompare(b.service_time ?? "");
     });
-    return sorted.map((alloc) => ({
-      Orario: alloc.stop_pickup_time ?? "",
-      "Punto di carico": alloc.stop_pickup_note ? `${alloc.stop_name} - ${alloc.stop_pickup_note}` : alloc.stop_name,
-      "N° pax": alloc.pax_assigned,
-      Nominativo: alloc.customer_name,
-      "Cell.": alloc.customer_phone ?? "",
-      "Hotel destinazione": alloc.hotel_name ?? "",
-      Incasso: "",
-      Note: alloc.notes ?? "",
-      Pranzo: "",
-      Agenzia: alloc.agency_name ?? "",
-      // Colonne di supporto (nascondere nel foglio finale se necessario)
-      Linea: lineName,
-      Bus: unit.label,
-      Autista: unit.driver_name ?? "",
-    }));
+    return sorted.map((alloc) => {
+      // Estrai hotel/agenzia dai notes se i campi dedicati sono vuoti (workaround PGRST204 o import vecchio)
+      const rawNotes = alloc.notes ?? "";
+      const hotelFromNotes = rawNotes.match(/Hotel:\s*([^·\n]+)/)?.[1]?.trim() ?? null;
+      const agencyFromNotes = rawNotes.match(/Agenzia:\s*([^·\n]+)/)?.[1]?.trim() ?? null;
+      const cleanNote = rawNotes
+        .replace(/Hotel:\s*[^·\n]+·?\s*/gi, "")
+        .replace(/Agenzia:\s*[^·\n]+·?\s*/gi, "")
+        .trim();
+
+      return {
+        Orario: alloc.stop_pickup_time ?? "",
+        "Punto di carico": alloc.stop_pickup_note ? `${alloc.stop_name} - ${alloc.stop_pickup_note}` : alloc.stop_name,
+        "N° pax": alloc.pax_assigned,
+        Nominativo: alloc.customer_name,
+        "Cell.": alloc.customer_phone ?? "",
+        "Hotel destinazione": alloc.hotel_name || hotelFromNotes || "",
+        Incasso: "",
+        Note: cleanNote,
+        Pranzo: "",
+        Agenzia: alloc.agency_name || agencyFromNotes || "",
+        Linea: lineName,
+        Bus: unit.label,
+        Autista: unit.driver_name ?? "",
+      };
+    });
   }
 
   const colWidths = [
