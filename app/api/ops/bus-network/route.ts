@@ -610,45 +610,27 @@ export async function POST(request: NextRequest) {
         stop_id_b: z.string().uuid()
       }).parse(body);
 
-      // Leggi la fermata A per ricavare bus_line_id e direction, poi carica tutti gli stop della stessa linea+direzione
-      const refRes = await auth.admin.from("tenant_bus_line_stops")
-        .select("id,bus_line_id,direction,stop_order")
-        .eq("tenant_id", tenantId)
-        .eq("id", parsed.stop_id_a)
-        .single();
-      if (refRes.error || !refRes.data) throw new Error("Fermata non trovata: " + (refRes.error?.message ?? ""));
+      // Leggi entrambe le fermate con stop_order correnti
+      const [resA, resB] = await Promise.all([
+        auth.admin.from("tenant_bus_line_stops").select("id,stop_order").eq("tenant_id", tenantId).eq("id", parsed.stop_id_a).single(),
+        auth.admin.from("tenant_bus_line_stops").select("id,stop_order").eq("tenant_id", tenantId).eq("id", parsed.stop_id_b).single()
+      ]);
+      if (resA.error || !resA.data) throw new Error("Fermata A non trovata: " + (resA.error?.message ?? "id non presente"));
+      if (resB.error || !resB.data) throw new Error("Fermata B non trovata: " + (resB.error?.message ?? "id non presente"));
 
-      const { bus_line_id, direction: stopDir } = refRes.data as { bus_line_id: string; direction: string; stop_order: number };
+      const orderA = (resA.data as { stop_order: number }).stop_order;
+      const orderB = (resB.data as { stop_order: number }).stop_order;
 
-      const allStopsRes = await auth.admin.from("tenant_bus_line_stops")
-        .select("id,stop_order")
-        .eq("tenant_id", tenantId)
-        .eq("bus_line_id", bus_line_id)
-        .eq("direction", stopDir)
-        .order("stop_order");
-      if (allStopsRes.error) throw new Error("Caricamento fermate: " + allStopsRes.error.message);
-
-      type StopRow = { id: string; stop_order: number };
-      const allStops = (allStopsRes.data ?? []) as StopRow[];
-
-      // Trova le posizioni di A e B nell'array ordinato
-      const idxA = allStops.findIndex((s) => s.id === parsed.stop_id_a);
-      const idxB = allStops.findIndex((s) => s.id === parsed.stop_id_b);
-      if (idxA < 0 || idxB < 0) throw new Error("Fermate non trovate nell'elenco");
-
-      // Scambia le posizioni nell'array
-      const reordered = [...allStops];
-      [reordered[idxA], reordered[idxB]] = [reordered[idxB], reordered[idxA]];
-
-      // Riscrivi stop_order sequenziale (1,2,3,...) eliminando eventuali gap
-      for (let i = 0; i < reordered.length; i++) {
-        const newOrder = i + 1;
-        const { error } = await auth.admin.from("tenant_bus_line_stops")
-          .update({ stop_order: newOrder, order_index: newOrder })
-          .eq("tenant_id", tenantId)
-          .eq("id", reordered[i].id);
-        if (error) throw new Error(`Aggiornamento fermata ${i + 1}: ${error.message}`);
-      }
+      // Aggiorna solo i 2 stop che cambiano — in parallelo (nessun unique constraint su stop_order)
+      // .select("id") forza RETURNING e garantisce che le righe siano state effettivamente aggiornate
+      const [sw1, sw2] = await Promise.all([
+        auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderB, order_index: orderB }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_a).select("id"),
+        auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderA, order_index: orderA }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_b).select("id")
+      ]);
+      if (sw1.error) throw new Error("Swap A: " + sw1.error.message);
+      if (sw2.error) throw new Error("Swap B: " + sw2.error.message);
+      if (!sw1.data?.length) throw new Error("Fermata A non aggiornata (0 righe) — tenant_id mismatch?");
+      if (!sw2.data?.length) throw new Error("Fermata B non aggiornata (0 righe) — tenant_id mismatch?");
 
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
