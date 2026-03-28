@@ -721,16 +721,44 @@ export async function POST(request: NextRequest) {
     if (action === "geo_sort_stops") {
       const parsed = z.object({
         bus_line_id: z.string().uuid(),
-        direction: z.enum(["arrival", "departure"])
+        direction: z.enum(["arrival", "departure"]),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       }).parse(body);
 
-      const { data: stops, error: stopsErr } = await auth.admin
+      // Se è passata una data, carica solo le fermate con allocazioni in quella data
+      let stopIds: string[] | null = null;
+      if (parsed.date) {
+        const { data: services } = await auth.admin
+          .from("services")
+          .select("id")
+          .eq("tenant_id", tenantId)
+          .eq("date", parsed.date)
+          .eq("direction", parsed.direction);
+        const serviceIds = (services ?? []).map((s: { id: string }) => s.id);
+        if (serviceIds.length > 0) {
+          const { data: allocs } = await auth.admin
+            .from("tenant_bus_allocations")
+            .select("stop_id")
+            .eq("tenant_id", tenantId)
+            .eq("bus_line_id", parsed.bus_line_id)
+            .in("service_id", serviceIds)
+            .not("stop_id", "is", null);
+          type AllocRow = { stop_id: string | null };
+          const ids: string[] = [...new Set((allocs as AllocRow[] ?? []).map((a) => a.stop_id).filter((x): x is string => !!x))];
+          if (ids.length > 0) stopIds = ids;
+        }
+      }
+
+      let stopsQuery = auth.admin
         .from("tenant_bus_line_stops")
         .select("id,stop_name,city,lat,lng")
         .eq("tenant_id", tenantId)
         .eq("bus_line_id", parsed.bus_line_id)
         .eq("direction", parsed.direction)
         .eq("active", true);
+      if (stopIds) stopsQuery = stopsQuery.in("id", stopIds);
+
+      const { data: stops, error: stopsErr } = await stopsQuery;
       if (stopsErr) throw new Error(stopsErr.message);
 
       type RawStop = { id: string; stop_name: string; city: string; lat: number | null; lng: number | null };

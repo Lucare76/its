@@ -428,7 +428,7 @@ export default function BusNetworkPage() {
   const geoSortStops = useCallback(async () => {
     if (!selectedLine) return;
     setGeoSorting(true);
-    const res = await post("geo_sort_stops", { bus_line_id: selectedLine.id, direction }) as ({ geocoded?: number; skipped?: number; skipped_names?: string } | null);
+    const res = await post("geo_sort_stops", { bus_line_id: selectedLine.id, direction, date }) as ({ geocoded?: number; skipped?: number; skipped_names?: string } | null);
     setGeoSorting(false);
     if (res) {
       const msg = `Ordinamento geografico: ${res.geocoded ?? 0} fermate ordinate per latitudine.`;
