@@ -153,11 +153,11 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 1. PLANNING BUS GENERALI — hotel Gantt style
+// 1. PLANNING BUS GENERALI — hotel Gantt style (click → modal Dal/Al)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-type NewBlock = { unitId: string; startDay: number; endDay: number };
-type EditBlock = { cell: PlanningCell };
+type NewBlock = { unitId: string; startDate: string; endDate: string };
+type EditBlock = { cell: PlanningCell; startDate: string; endDate: string };
 
 function BusGeneralPlanning({ token }: { token: string }) {
   const today = new Date();
@@ -167,14 +167,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
   const [busUnits, setBusUnits] = useState<BusUnit[]>([]);
   const [cells, setCells] = useState<PlanningCell[]>([]);
   const [error, setError] = useState<string | null>(null);
-
-  // drag state (refs to avoid stale closures in document event)
-  const dragStartRef = useRef<{ unitId: string; day: number } | null>(null);
-  const isDraggingRef = useRef(false);
-  const cellsRef = useRef<PlanningCell[]>([]);
-  useEffect(() => { cellsRef.current = cells; }, [cells]);
-
-  const [dragPreview, setDragPreview] = useState<{ unitId: string; d1: number; d2: number } | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // new block modal
   const [newBlock, setNewBlock] = useState<NewBlock | null>(null);
@@ -187,8 +180,6 @@ function BusGeneralPlanning({ token }: { token: string }) {
   const [editLabel, setEditLabel] = useState("");
   const [editColor, setEditColor] = useState("yellow");
   const editInputRef = useRef<HTMLInputElement>(null);
-
-  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -207,72 +198,43 @@ function BusGeneralPlanning({ token }: { token: string }) {
   useEffect(() => { if (newBlock) setTimeout(() => newInputRef.current?.focus(), 30); }, [newBlock]);
   useEffect(() => { if (editBlock) setTimeout(() => editInputRef.current?.focus(), 30); }, [editBlock]);
 
-  // document-level mouseup to finalize drag
-  useEffect(() => {
-    const onUp = () => {
-      if (!isDraggingRef.current || !dragStartRef.current) {
-        isDraggingRef.current = false;
-        setDragPreview(null);
-        return;
-      }
-      const { unitId } = dragStartRef.current;
-      const cur = dragStartRef.current;
-      const snap = dragPreviewRef.current;
-      const d1 = snap ? Math.min(cur.day, snap.d2) : cur.day;
-      const d2 = snap ? Math.max(cur.day, snap.d2) : cur.day;
-      isDraggingRef.current = false;
-      dragStartRef.current = null;
-      setDragPreview(null);
-      if (hasConflict(cellsRef.current, unitId, d1, d2)) {
-        setError("Intervallo sovrapposto a un blocco esistente.");
-        setTimeout(() => setError(null), 3000);
-        return;
-      }
-      setNewBlock({ unitId, startDay: d1, endDay: d2 });
-      setNewLabel("");
-      setNewColor("yellow");
-    };
-    document.addEventListener("mouseup", onUp);
-    document.addEventListener("touchend", onUp);
-    return () => {
-      document.removeEventListener("mouseup", onUp);
-      document.removeEventListener("touchend", onUp);
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ref mirror of dragPreview for use inside document mouseup
-  const dragPreviewRef = useRef<{ unitId: string; d1: number; d2: number } | null>(null);
-  useEffect(() => { dragPreviewRef.current = dragPreview; }, [dragPreview]);
-
-  // Escape to cancel
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { isDraggingRef.current = false; dragStartRef.current = null; setDragPreview(null); }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
   const numDays = daysInMonth(year, month);
   const days = Array.from({ length: numDays }, (_, i) => i + 1);
+  const monthStart = toDateStr(year, month, 1);
+  const monthEnd = toDateStr(year, month, numDays);
 
-  function onCellDown(unitId: string, day: number, e: React.MouseEvent | React.TouchEvent) {
-    if ("button" in e && e.button !== 0) return;
-    e.preventDefault();
-    dragStartRef.current = { unitId, day };
-    isDraggingRef.current = true;
-    setDragPreview({ unitId, d1: day, d2: day });
-  }
+  // Click empty cell → open new block modal pre-filled with that date
+  const onCellClick = (unitId: string, day: number) => {
+    const date = toDateStr(year, month, day);
+    setNewBlock({ unitId, startDate: date, endDate: date });
+    setNewLabel("");
+    setNewColor("yellow");
+  };
 
-  function onCellEnter(unitId: string, day: number) {
-    if (!isDraggingRef.current || !dragStartRef.current) return;
-    if (dragStartRef.current.unitId !== unitId) return;
-    const d1 = dragStartRef.current.day;
-    setDragPreview({ unitId, d1, d2: day });
-  }
+  // Click existing block → open edit modal
+  const openEdit = (cell: PlanningCell) => {
+    setEditBlock({
+      cell,
+      startDate: cell.cell_date,
+      endDate: cell.end_date ?? cell.cell_date,
+    });
+    setEditLabel(cell.content ?? "");
+    setEditColor(cell.bg_color ?? "yellow");
+  };
 
   const saveNew = async () => {
     if (!newBlock || !newLabel.trim() || saving) return;
+    if (newBlock.endDate < newBlock.startDate) {
+      setError("La data 'Al' deve essere uguale o successiva a 'Dal'.");
+      return;
+    }
+    const s = parseInt(newBlock.startDate.slice(8), 10);
+    const e = parseInt(newBlock.endDate.slice(8), 10);
+    if (hasConflict(cells, newBlock.unitId, s, e)) {
+      setError("Intervallo sovrapposto a un blocco esistente.");
+      setTimeout(() => setError(null), 3000);
+      return;
+    }
     setSaving(true);
     try {
       await fetch("/api/planning/cells", {
@@ -280,8 +242,8 @@ function BusGeneralPlanning({ token }: { token: string }) {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           type: "bus",
-          cell_date: toDateStr(year, month, newBlock.startDay),
-          end_date: toDateStr(year, month, newBlock.endDay),
+          cell_date: newBlock.startDate,
+          end_date: newBlock.endDate,
           row_key: newBlock.unitId,
           col_index: 0,
           content: newLabel.trim().toUpperCase(),
@@ -295,15 +257,26 @@ function BusGeneralPlanning({ token }: { token: string }) {
 
   const saveEdit = async () => {
     if (!editBlock || !editLabel.trim() || saving) return;
+    if (editBlock.endDate < editBlock.startDate) {
+      setError("La data 'Al' deve essere uguale o successiva a 'Dal'.");
+      return;
+    }
     setSaving(true);
     try {
+      // Delete old record first (key might change if dates changed)
+      await fetch("/api/planning/cells", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ id: editBlock.cell.id }),
+      });
+      // Re-insert with new data
       await fetch("/api/planning/cells", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           type: "bus",
-          cell_date: editBlock.cell.cell_date,
-          end_date: editBlock.cell.end_date,
+          cell_date: editBlock.startDate,
+          end_date: editBlock.endDate,
           row_key: editBlock.cell.row_key,
           col_index: 0,
           content: editLabel.trim().toUpperCase(),
@@ -329,23 +302,10 @@ function BusGeneralPlanning({ token }: { token: string }) {
     } finally { setSaving(false); }
   };
 
-  const openEdit = (cell: PlanningCell) => {
-    setEditBlock({ cell });
-    setEditLabel(cell.content ?? "");
-    setEditColor(cell.bg_color ?? "yellow");
-  };
-
   return (
     <div className="space-y-4">
       <MonthNav year={year} month={month} minYear={cy - 2} maxYear={cy + 2} setYear={setYear} setMonth={setMonth} />
       {error && <p className="text-sm text-red-500">{error}</p>}
-
-      {dragPreview && (
-        <p className="text-sm text-blue-600 font-medium">
-          Trascina per selezionare il periodo — rilascia per creare il blocco.{" "}
-          <button onClick={() => { isDraggingRef.current = false; dragStartRef.current = null; setDragPreview(null); }} className="underline">Annulla</button>
-        </p>
-      )}
 
       {busUnits.length === 0 ? (
         <div className="card p-8 text-center space-y-2">
@@ -354,10 +314,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
         </div>
       ) : (
         <>
-          <div
-            className="overflow-x-auto rounded-xl border border-border shadow-sm select-none"
-            style={{ cursor: isDraggingRef.current ? "col-resize" : "default" }}
-          >
+          <div className="overflow-x-auto rounded-xl border border-border shadow-sm select-none">
             <table className="border-collapse" style={{ minWidth: `${140 + numDays * 44}px` }}>
               <thead>
                 <tr>
@@ -388,7 +345,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
                         tds.push(
                           <td
                             key={d}
-                            colSpan={e - s + 1}
+                            colSpan={Math.min(e, numDays) - s + 1}
                             className={`border-l border-gray-300 px-2 py-1 cursor-pointer text-center font-bold text-[11px] uppercase leading-tight hover:opacity-80 transition-opacity ${colorTw(block.bg_color)}`}
                             onClick={() => openEdit(block)}
                             title="Clicca per modificare"
@@ -402,22 +359,15 @@ function BusGeneralPlanning({ token }: { token: string }) {
                       }
                     } else {
                       const sun = isSunday(year, month, d);
-                      const inPrev = dragPreview?.unitId === unit.id;
-                      const dp1 = inPrev ? Math.min(dragPreview!.d1, dragPreview!.d2) : 0;
-                      const dp2 = inPrev ? Math.max(dragPreview!.d1, dragPreview!.d2) : 0;
-                      const highlighted = inPrev && d >= dp1 && d <= dp2;
                       const rowBg = ri % 2 === 0 ? "bg-white" : "bg-gray-50/60";
                       tds.push(
                         <td
                           key={d}
                           className={[
-                            "border-l border-gray-200 h-[46px] w-[44px] min-w-[44px] transition-colors",
-                            sun ? "bg-red-50" : highlighted ? "bg-blue-200" : rowBg,
-                            !highlighted ? "hover:bg-blue-50" : "",
-                          ].filter(Boolean).join(" ")}
-                          onMouseDown={(e) => onCellDown(unit.id, d, e)}
-                          onMouseEnter={() => onCellEnter(unit.id, d)}
-                          onTouchStart={(e) => onCellDown(unit.id, d, e)}
+                            "border-l border-gray-200 h-[46px] w-[44px] min-w-[44px] hover:bg-blue-50 transition-colors",
+                            sun ? "bg-red-50" : rowBg,
+                          ].join(" ")}
+                          onClick={() => onCellClick(unit.id, d)}
                           style={{ cursor: "cell" }}
                         />
                       );
@@ -442,8 +392,8 @@ function BusGeneralPlanning({ token }: { token: string }) {
             </table>
           </div>
           <p className="text-xs text-muted">
-            Tieni premuto e trascina su più giorni per creare un blocco. Domeniche in rosso.
-            Clicca su un blocco per modificarlo o eliminarlo.
+            Clicca su una cella vuota per aggiungere un blocco. Domeniche in rosso.
+            Clicca su un blocco esistente per modificarlo.
           </p>
         </>
       )}
@@ -454,11 +404,36 @@ function BusGeneralPlanning({ token }: { token: string }) {
           title={`Nuovo blocco — ${busUnits.find((u) => u.id === newBlock.unitId)?.label ?? ""}`}
           onClose={() => setNewBlock(null)}
         >
-          <p className="text-xs text-muted mb-3">
-            {newBlock.startDay === newBlock.endDay
-              ? `Giorno ${newBlock.startDay} ${MONTHS_IT[month - 1]}`
-              : `Dal ${newBlock.startDay} al ${newBlock.endDay} ${MONTHS_IT[month - 1]}`}
-          </p>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+              Dal
+              <input
+                type="date"
+                value={newBlock.startDate}
+                min={monthStart}
+                max={monthEnd}
+                onChange={(e) =>
+                  setNewBlock((prev) =>
+                    prev
+                      ? { ...prev, startDate: e.target.value, endDate: e.target.value > prev.endDate ? e.target.value : prev.endDate }
+                      : null
+                  )
+                }
+                className="input-saas text-sm"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+              Al
+              <input
+                type="date"
+                value={newBlock.endDate}
+                min={newBlock.startDate}
+                max={monthEnd}
+                onChange={(e) => setNewBlock((prev) => prev ? { ...prev, endDate: e.target.value } : null)}
+                className="input-saas text-sm"
+              />
+            </label>
+          </div>
           <input
             ref={newInputRef}
             value={newLabel}
@@ -488,13 +463,36 @@ function BusGeneralPlanning({ token }: { token: string }) {
           title={`Modifica — ${busUnits.find((u) => u.id === editBlock.cell.row_key)?.label ?? ""}`}
           onClose={() => setEditBlock(null)}
         >
-          <p className="text-xs text-muted mb-3">
-            {(() => {
-              const s = parseInt(editBlock.cell.cell_date.slice(8), 10);
-              const e = editBlock.cell.end_date ? parseInt(editBlock.cell.end_date.slice(8), 10) : s;
-              return s === e ? `Giorno ${s}` : `Dal ${s} al ${e} ${MONTHS_IT[month - 1]}`;
-            })()}
-          </p>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+              Dal
+              <input
+                type="date"
+                value={editBlock.startDate}
+                min={monthStart}
+                max={monthEnd}
+                onChange={(e) =>
+                  setEditBlock((prev) =>
+                    prev
+                      ? { ...prev, startDate: e.target.value, endDate: e.target.value > prev.endDate ? e.target.value : prev.endDate }
+                      : null
+                  )
+                }
+                className="input-saas text-sm"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+              Al
+              <input
+                type="date"
+                value={editBlock.endDate}
+                min={editBlock.startDate}
+                max={monthEnd}
+                onChange={(e) => setEditBlock((prev) => prev ? { ...prev, endDate: e.target.value } : null)}
+                className="input-saas text-sm"
+              />
+            </label>
+          </div>
           <input
             ref={editInputRef}
             value={editLabel}

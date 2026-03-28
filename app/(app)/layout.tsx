@@ -291,8 +291,7 @@ const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/excel-import", label: "Import Excel", icon: "E" },
       { href: "/scheduler", label: "Scheduler", icon: "J" },
       { href: "/service-workflow", label: "Workflow servizi", icon: "K" },
-      { href: "/audit", label: "Audit", icon: "Q" },
-      { href: "/onboarding", label: "Configurazione", icon: "O" }
+      { href: "/audit", label: "Audit", icon: "Q" }
     ]
   }
 ];
@@ -772,11 +771,6 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     {item.href === "/inbox" && inboxPendingCount > 0 ? (
                       <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
                         {inboxPendingCount > 99 ? "99+" : inboxPendingCount}
-                      </span>
-                    ) : null}
-                    {item.href === "/settings/users" && pendingAccessRequestCount > 0 ? (
-                      <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                        {pendingAccessRequestCount > 99 ? "99+" : pendingAccessRequestCount}
                       </span>
                     ) : null}
                   </span>
