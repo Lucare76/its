@@ -402,7 +402,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
                         className={[
                           "w-[40px] min-w-[40px] py-2 text-center border-l font-bold text-[11px]",
                           sun ? "bg-red-600 text-white border-red-700" :
-                          hol ? "bg-pink-400 text-white border-pink-500" :
+                          hol ? "bg-sky-200 text-sky-900 border-sky-300" :
                                "bg-green-600 text-white border-green-700",
                         ].join(" ")}
                       >
@@ -447,7 +447,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
                           key={d}
                           className="border border-gray-300 w-[40px] min-w-[40px] h-[38px] hover:bg-blue-50 transition-colors"
                           style={{
-                            background: sun ? "#fee2e2" : hol ? "#fce7f3" : rowBg,
+                            background: sun ? "#fee2e2" : hol ? "#bae6fd" : rowBg,
                             cursor: "cell",
                           }}
                           onClick={() => onCellClick(unit.id, d)}
@@ -473,7 +473,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
             </table>
           </div>
           <p className="text-xs text-muted">
-            Clicca su una cella vuota per aggiungere un blocco · Domeniche <span className="text-red-600 font-semibold">rosse</span> · Festività <span className="text-pink-500 font-semibold">rosa</span>
+            Clicca su una cella vuota per aggiungere un blocco · Domeniche <span className="text-red-600 font-semibold">rosse</span> · Festività <span className="text-sky-500 font-semibold">azzurre</span>
           </p>
         </>
       )}
