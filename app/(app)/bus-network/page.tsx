@@ -109,6 +109,8 @@ export default function BusNetworkPage() {
   // Editable bus label
   const [editLabelUnitId, setEditLabelUnitId] = useState<string | null>(null);
   const [editLabelValue, setEditLabelValue] = useState("");
+  const [editCapUnitId, setEditCapUnitId] = useState<string | null>(null);
+  const [editCapValue, setEditCapValue] = useState("");
 
   // Edit stop inline (nome e orario)
   const [editStopTimeId, setEditStopTimeId] = useState<string | null>(null);
@@ -960,7 +962,32 @@ export default function BusNetworkPage() {
                               className={`h-2 rounded-full transition-all ${isFull ? "bg-rose-400" : isLow ? "bg-amber-400" : "bg-emerald-400"}`}
                               style={{ width: `${Math.min(100, pct)}%` }} />
                           </div>
-                          <span className="w-14 text-right text-xs tabular-nums text-slate-500">{paxTotal}/{unit.capacity}</span>
+                          {editCapUnitId === unit.id ? (
+                            <input
+                              autoFocus
+                              type="number"
+                              min={1}
+                              max={300}
+                              value={editCapValue}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => setEditCapValue(e.target.value)}
+                              onBlur={async () => {
+                                const cap = parseInt(editCapValue, 10);
+                                if (!isNaN(cap) && cap >= 1 && cap !== unit.capacity) {
+                                  await post("update_capacity", { unit_id: unit.id, capacity: cap });
+                                }
+                                setEditCapUnitId(null);
+                              }}
+                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditCapUnitId(null); }}
+                              className="w-16 rounded border border-indigo-300 bg-indigo-50 px-1 py-0.5 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                            />
+                          ) : (
+                            <span
+                              className="w-14 cursor-pointer text-right text-xs tabular-nums text-slate-500 hover:text-indigo-600"
+                              title="Clicca per modificare capienza"
+                              onClick={(e) => { e.stopPropagation(); setEditCapUnitId(unit.id); setEditCapValue(String(unit.capacity)); }}
+                            >{paxTotal}/{unit.capacity}</span>
+                          )}
                         </div>
                         {/* Driver info */}
                         {editDriverUnitId === unit.id ? (

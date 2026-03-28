@@ -397,6 +397,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    if (action === "update_capacity") {
+      const parsed = z.object({ unit_id: z.string().uuid(), capacity: z.number().int().min(1).max(300) }).parse(body);
+      const { error } = await auth.admin.from("tenant_bus_units")
+        .update({ capacity: parsed.capacity, updated_at: new Date().toISOString() })
+        .eq("tenant_id", tenantId).eq("id", parsed.unit_id);
+      if (error) throw new Error(error.message);
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
     if (action === "update_label") {
       const parsed = z.object({ unit_id: z.string().uuid(), label: z.string().min(1).max(120).trim() }).parse(body);
       const { error } = await auth.admin.from("tenant_bus_units")
@@ -608,9 +617,12 @@ export async function POST(request: NextRequest) {
       const orderA = (resA.data as { stop_order: number }).stop_order;
       const orderB = (resB.data as { stop_order: number }).stop_order;
       // Swap via valore temporaneo (99999) per evitare conflitti su eventuali vincoli
-      await auth.admin.from("tenant_bus_line_stops").update({ stop_order: 99999, order_index: 99999 }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_a);
-      await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderA, order_index: orderA }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_b);
-      await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderB, order_index: orderB }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_a);
+      const sw1 = await auth.admin.from("tenant_bus_line_stops").update({ stop_order: 99999, order_index: 99999 }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_a);
+      if (sw1.error) throw new Error("Swap step 1: " + sw1.error.message);
+      const sw2 = await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderA, order_index: orderA }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_b);
+      if (sw2.error) throw new Error("Swap step 2: " + sw2.error.message);
+      const sw3 = await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderB, order_index: orderB }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_a);
+      if (sw3.error) throw new Error("Swap step 3: " + sw3.error.message);
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
@@ -1148,12 +1160,10 @@ export async function POST(request: NextRequest) {
       }
 
       function pickBusForLine(lineId: string, pax: number): DBUnit2 | null {
-        const lineUnits = allUnits.filter((u) => u.bus_line_id === lineId);
-        const scored = lineUnits
-          .map((u) => ({ u, remaining: u.capacity - (datePaxMap2.get(u.id) ?? 0) }))
-          .filter((x) => x.remaining >= pax)
-          .sort((a, b) => a.remaining - b.remaining);
-        return scored[0]?.u ?? null;
+        // Riempie i bus in ordine sequenziale (sort_order): prima riempie completamente il primo, poi passa al secondo
+        const lineUnits = [...allUnits.filter((u) => u.bus_line_id === lineId)];
+        // allUnits è già ordinato per sort_order (query ordina .order("sort_order"))
+        return lineUnits.find((u) => (u.capacity - (datePaxMap2.get(u.id) ?? 0)) >= pax) ?? null;
       }
 
       let assigned2 = 0;
