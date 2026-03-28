@@ -929,9 +929,10 @@ export default function BusNetworkPage() {
               {activeTab === "bus" && <div className="flex gap-4 overflow-x-auto pb-2">
                 {busCards.map(({ unit, allocations: cardAllocs }) => {
                   const paxTotal = cardAllocs.reduce((sum, a) => sum + a.pax_assigned, 0);
+                  const remainingSeats = Math.max(0, unit.capacity - paxTotal);
                   const pct = unit.capacity > 0 ? Math.round((paxTotal / unit.capacity) * 100) : 0;
-                  const isLow = unit.remaining_seats <= unit.low_seat_threshold && unit.remaining_seats > 0;
-                  const isFull = unit.remaining_seats <= 0;
+                  const isLow = remainingSeats <= unit.low_seat_threshold && remainingSeats > 0;
+                  const isFull = remainingSeats <= 0;
                   const isClosed = unit.status === "closed" || unit.status === "completed";
 
                   // Group by stop in correct order, within each stop ordina per orario di partenza
@@ -992,9 +993,9 @@ export default function BusNetworkPage() {
                           ) : isFull ? (
                             <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">PIENO</span>
                           ) : isLow ? (
-                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">⚠ {unit.remaining_seats} posti</span>
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">⚠ {remainingSeats} posti</span>
                           ) : (
-                            <span className="text-xs text-slate-400">{unit.remaining_seats} liberi</span>
+                            <span className="text-xs text-slate-400">{remainingSeats} liberi</span>
                           )}
                         </div>
                         {/* Capacity bar */}
