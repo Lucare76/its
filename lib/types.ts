@@ -399,3 +399,31 @@ export interface GpsLiveEntry extends GpsVehiclePosition {
   pms_vehicle_id: string | null;
   pms_label: string | null;
 }
+
+export type FleetControlStatus = "moving" | "stopped" | "warning" | "offline";
+
+export interface GpsControlRoomEntry extends GpsLiveEntry {
+  plate: string | null;
+  default_zone: string | null;
+  current_address: string | null;
+  current_city: string | null;
+  line_name: string | null;
+  driver_name: string | null;
+  status_key: FleetControlStatus;
+  status_label: string;
+  status_icon: string;
+  last_update_seconds: number;
+  blocked: boolean;
+  blocked_reason: string | null;
+  anomalies_count: number;
+  anomaly_severity: "low" | "medium" | "high" | "blocking" | null;
+  active_service: {
+    id: string;
+    customer_name: string;
+    date: string;
+    time: string;
+    status: ServiceStatus;
+    line_name: string | null;
+    hotel_name: string | null;
+  } | null;
+}

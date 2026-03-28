@@ -71,7 +71,6 @@ const capabilityLabels = [
   { capability: "excel_workspace:view", label: "Excel workspace" },
   { capability: "excel_import:view", label: "Import Excel" },
   { capability: "ops_rules:view", label: "Regole operative" },
-  { capability: "statements:view", label: "Estratti conto" },
   { capability: "audit:view", label: "Audit" },
   { capability: "pricing:view", label: "Tariffe e margini" },
   { capability: "pricing:manage", label: "Gestione listini" },

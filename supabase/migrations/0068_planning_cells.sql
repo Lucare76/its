@@ -19,6 +19,7 @@ CREATE INDEX IF NOT EXISTS idx_planning_cells_tenant_type_date
 
 ALTER TABLE tenant_planning_cells ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "tenant_members_planning_cells" ON tenant_planning_cells;
 CREATE POLICY "tenant_members_planning_cells"
   ON tenant_planning_cells
   FOR ALL

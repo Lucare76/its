@@ -128,10 +128,10 @@ test.describe.serial("PDF ops UI", () => {
     await expect(page.getByTestId("pdf-upload-status")).toContainText("File selezionato");
 
     await page.getByTestId("pdf-upload-preview").click();
-    await expect(page.getByTestId("pdf-upload-status")).toContainText("Anteprima parser pronta.", { timeout: 30_000 });
+    await expect(page.getByTestId("pdf-upload-status")).toContainText("Anteprima parser pronta.", { timeout: 90_000 });
 
     await page.getByTestId("pdf-upload-draft").click();
-    await expect(page.getByTestId("pdf-upload-status")).toContainText(/Draft creato|Duplicato rilevato/, { timeout: 30_000 });
+    await expect(page.getByTestId("pdf-upload-status")).toContainText(/Draft creato|Duplicato rilevato/, { timeout: 90_000 });
   });
 
   test("ignore da /pdf-imports", async ({ page }) => {

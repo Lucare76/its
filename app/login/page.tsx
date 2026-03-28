@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 export default function LoginPage() {
+  const defaultLoginMessage = hasSupabaseEnv
+    ? "Accesso riservato. Se hai credenziali attive, puoi entrare subito."
+    : "Supabase non configurato: login non disponibile.";
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -11,18 +14,20 @@ export default function LoginPage() {
   const [agencyName, setAgencyName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string>("Accesso riservato. Se hai credenziali attive, puoi entrare subito.");
+  const [message, setMessage] = useState<string>(defaultLoginMessage);
 
   useEffect(() => {
     if (!hasSupabaseEnv || !supabase) {
-      setMessage("Supabase non configurato: imposta le variabili ambiente prima del login.");
+      setMessage("Supabase non configurato: login non disponibile.");
       return;
     }
     const suspended = new URLSearchParams(window.location.search).get("suspended");
     if (suspended === "1") {
       setMessage("Accesso sospeso per questo tenant. Contatta un admin del tenant per riattivarti.");
+      return;
     }
-  }, []);
+    setMessage(defaultLoginMessage);
+  }, [defaultLoginMessage]);
 
   const hardRedirect = (target: string) => {
     window.location.assign(target);
@@ -206,7 +211,7 @@ export default function LoginPage() {
             Invia link magico via email
           </button>
         ) : null}
-        <p className="text-sm text-slate-600">{message}</p>
+        <p data-testid="login-message" className="text-sm text-slate-600">{message}</p>
         <p className="text-xs text-slate-500">Riceverai una risposta o un link di accesso in breve tempo, quando previsto.</p>
       </div>
     </section>

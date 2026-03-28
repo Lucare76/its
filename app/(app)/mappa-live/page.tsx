@@ -1,25 +1,44 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
-import type { GpsLiveEntry } from "@/lib/types";
+import type { GpsControlRoomEntry } from "@/lib/types";
 
-const DynamicMap = dynamic(
-  () => import("@/components/live-bus-map").then((mod) => mod.LiveBusMap),
-  { ssr: false, loading: () => <div className="card p-4 text-sm text-slate-500">Caricamento mappa...</div> }
-);
+const DynamicMap = dynamic(() => import("@/components/control-room-map").then((mod) => mod.ControlRoomMap), {
+  ssr: false,
+  loading: () => <div className="card p-4 text-sm text-slate-500">Caricamento control room...</div>
+});
 
-const DEFAULT_INTERVAL_S = 30;
+const DEFAULT_REFRESH_SECONDS = 20;
 
-async function accessToken(): Promise<string | null> {
-  if (!hasSupabaseEnv || !supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
+type ControlRoomPayload = {
+  ok?: boolean;
+  error?: string;
+  entries?: GpsControlRoomEntry[];
+  summary?: {
+    total: number;
+    moving: number;
+    stopped: number;
+    warning: number;
+    offline: number;
+    blocked: number;
+  };
+  fetched_at?: string;
+};
+
+function formatRelativeSeconds(seconds: number) {
+  if (seconds < 60) return `${seconds}s fa`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min fa`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} h fa`;
 }
 
-function formatTime(ts: string): string {
+function formatTime(ts: string | null) {
+  if (!ts) return "N/D";
   try {
     return new Date(ts).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   } catch {
@@ -27,282 +46,532 @@ function formatTime(ts: string): string {
   }
 }
 
-function secondsAgo(ts: string): number {
-  return Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+function statusMeta(status: GpsControlRoomEntry["status_key"]) {
+  if (status === "moving") return { badge: "bg-emerald-100 text-emerald-800 border-emerald-200", dot: "bg-emerald-500", label: "In movimento" };
+  if (status === "stopped") return { badge: "bg-rose-100 text-rose-800 border-rose-200", dot: "bg-rose-500", label: "Fermo" };
+  if (status === "warning") return { badge: "bg-amber-100 text-amber-900 border-amber-200", dot: "bg-amber-500", label: "Warning" };
+  return { badge: "bg-slate-200 text-slate-700 border-slate-300", dot: "bg-slate-500", label: "Offline" };
+}
+
+function focusSignals(entry: GpsControlRoomEntry) {
+  const signals: Array<{ label: string; tone: string }> = [];
+  if (entry.blocked) {
+    signals.push({ label: "Mezzo bloccato", tone: "border-rose-200 bg-rose-50 text-rose-700" });
+  }
+  if (entry.anomalies_count > 0) {
+    signals.push({
+      label: `${entry.anomalies_count} anomal${entry.anomalies_count === 1 ? "ia aperta" : "ie aperte"}`,
+      tone: entry.anomaly_severity === "blocking" || entry.anomaly_severity === "high" ? "border-rose-200 bg-rose-50 text-rose-700" : "border-amber-200 bg-amber-50 text-amber-800"
+    });
+  }
+  if (!entry.active_service) {
+    signals.push({ label: "Nessun servizio PMS attivo", tone: "border-slate-200 bg-slate-50 text-slate-600" });
+  }
+  if (entry.current_city) {
+    signals.push({ label: entry.current_city, tone: "border-sky-200 bg-sky-50 text-sky-700" });
+  }
+  return signals.slice(0, 4);
+}
+
+function entryPriority(entry: GpsControlRoomEntry) {
+  if (entry.blocked || entry.anomaly_severity === "blocking" || entry.anomaly_severity === "high") return 0;
+  if (entry.status_key === "stopped" && entry.active_service) return 1;
+  if (entry.status_key === "warning" && entry.active_service) return 2;
+  if (entry.status_key === "offline" && entry.active_service) return 3;
+  if (entry.status_key === "stopped") return 4;
+  if (entry.anomalies_count > 0) return 5;
+  if (entry.active_service) return 6;
+  if (entry.status_key === "warning") return 7;
+  if (entry.status_key === "offline") return 8;
+  return 9;
+}
+
+function priorityBadge(entry: GpsControlRoomEntry) {
+  if (entry.blocked || entry.anomaly_severity === "blocking" || entry.anomaly_severity === "high") {
+    return { label: "Critico", tone: "border-rose-200 bg-rose-50 text-rose-700" };
+  }
+  if (entry.status_key === "stopped" && entry.active_service) {
+    return { label: "Fermo con servizio", tone: "border-rose-200 bg-rose-50 text-rose-700" };
+  }
+  if (entry.status_key === "warning" && entry.active_service) {
+    return { label: "Da verificare", tone: "border-amber-200 bg-amber-50 text-amber-800" };
+  }
+  if (entry.status_key === "offline" && entry.active_service) {
+    return { label: "Offline con servizio", tone: "border-slate-300 bg-slate-100 text-slate-700" };
+  }
+  if (entry.anomalies_count > 0) {
+    return { label: "Anomalia aperta", tone: "border-amber-200 bg-amber-50 text-amber-800" };
+  }
+  if (entry.active_service) {
+    return { label: "Servizio attivo", tone: "border-sky-200 bg-sky-50 text-sky-700" };
+  }
+  return null;
+}
+
+function smartAlerts(entry: GpsControlRoomEntry) {
+  const alerts: Array<{ severity: "high" | "medium" | "low"; title: string; detail: string }> = [];
+  if (entry.blocked) {
+    alerts.push({
+      severity: "high",
+      title: "Mezzo bloccato",
+      detail: entry.blocked_reason ?? "Verifica il fermo mezzo prima di assegnare nuovi servizi."
+    });
+  }
+  if (entry.status_key === "offline" && entry.active_service) {
+    alerts.push({
+      severity: "high",
+      title: "Offline con servizio attivo",
+      detail: `${entry.active_service.time} • ${entry.active_service.customer_name}`
+    });
+  }
+  if (entry.status_key === "stopped" && entry.active_service) {
+    alerts.push({
+      severity: "high",
+      title: "Fermo con servizio attivo",
+      detail: `${entry.active_service.time} • ${entry.active_service.customer_name}`
+    });
+  }
+  if (entry.status_key === "warning" && entry.active_service) {
+    alerts.push({
+      severity: "medium",
+      title: "Velocita bassa su servizio attivo",
+      detail: `${entry.speed_kmh !== null ? `${Math.round(entry.speed_kmh)} km/h` : "velocita N/D"} • ${entry.active_service.customer_name}`
+    });
+  }
+  if (entry.anomalies_count > 0) {
+    alerts.push({
+      severity: entry.anomaly_severity === "high" || entry.anomaly_severity === "blocking" ? "high" : "medium",
+      title: `Anomali${entry.anomalies_count === 1 ? "a aperta" : "e aperte"}`,
+      detail: `${entry.anomalies_count} segnalazion${entry.anomalies_count === 1 ? "e" : "i"} sul mezzo`
+    });
+  }
+  if (!entry.active_service && entry.status_key === "moving") {
+    alerts.push({
+      severity: "low",
+      title: "Mezzo in movimento senza servizio",
+      detail: "Controlla se e un trasferimento non ancora collegato al PMS."
+    });
+  }
+  return alerts;
+}
+
+function alertTone(severity: "high" | "medium" | "low") {
+  if (severity === "high") return "border-rose-200 bg-rose-50 text-rose-800";
+  if (severity === "medium") return "border-amber-200 bg-amber-50 text-amber-900";
+  return "border-sky-200 bg-sky-50 text-sky-800";
+}
+
+async function accessToken() {
+  if (!hasSupabaseEnv || !supabase) return null;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
 }
 
 export default function MappaLivePage() {
-  const [entries, setEntries] = useState<GpsLiveEntry[]>([]);
+  const [entries, setEntries] = useState<GpsControlRoomEntry[]>([]);
+  const [summary, setSummary] = useState<ControlRoomPayload["summary"] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [intervalS, setIntervalS] = useState(DEFAULT_INTERVAL_S);
   const [lineFilter, setLineFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState<"all" | "online" | "offline">("all");
-  const [countdown, setCountdown] = useState(0);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [statusFilter, setStatusFilter] = useState<"all" | GpsControlRoomEntry["status_key"]>("all");
+  const [search, setSearch] = useState("");
+  const [refreshSeconds, setRefreshSeconds] = useState(DEFAULT_REFRESH_SECONDS);
+  const [countdown, setCountdown] = useState(DEFAULT_REFRESH_SECONDS);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchLive = useEffectEvent(async () => {
+  const fetchControlRoom = useEffectEvent(async (initial = false) => {
     const token = await accessToken();
     if (!token) {
       setError("Sessione non valida.");
       setLoading(false);
+      setRefreshing(false);
       return;
     }
+
+    if (initial) {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+
     try {
-      const res = await fetch("/api/gps/live", {
-        headers: { Authorization: `Bearer ${token}` }
+      const response = await fetch("/api/gps/control-room", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store"
       });
-      const json = (await res.json()) as {
-        ok?: boolean;
-        error?: string;
-        entries?: GpsLiveEntry[];
-        fetched_at?: string;
-      };
-      if (!res.ok || !json.ok) {
-        setError(json.error ?? "Errore recupero posizioni GPS.");
-        setLoading(false);
+      const body = (await response.json().catch(() => null)) as ControlRoomPayload | null;
+      if (!response.ok || !body?.ok) {
+        setError(body?.error ?? "Errore recupero control room.");
+        setEntries([]);
+        setSummary(null);
         return;
       }
-      setEntries(json.entries ?? []);
-      setFetchedAt(json.fetched_at ?? new Date().toISOString());
+      const nextEntries = body.entries ?? [];
+      setEntries(nextEntries);
+      setSummary(body.summary ?? null);
+      setFetchedAt(body.fetched_at ?? new Date().toISOString());
+      setSelectedId((current) => current ?? nextEntries[0]?.radius_vehicle_id ?? null);
       setError(null);
-    } catch {
-      setError("Errore di rete. Verifica la connessione.");
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : "Errore di rete.");
+      setEntries([]);
+      setSummary(null);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
-    setLoading(false);
   });
 
-  const startPolling = useEffectEvent(() => {
+  const restartPolling = useEffectEvent(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (countdownRef.current) clearInterval(countdownRef.current);
 
-    setCountdown(intervalS);
+    setCountdown(refreshSeconds);
     timerRef.current = setInterval(() => {
-      void fetchLive();
-      setCountdown(intervalS);
-    }, intervalS * 1000);
+      void fetchControlRoom(false);
+      setCountdown(refreshSeconds);
+    }, refreshSeconds * 1000);
 
     countdownRef.current = setInterval(() => {
-      setCountdown((c) => Math.max(0, c - 1));
+      setCountdown((current) => Math.max(0, current - 1));
     }, 1000);
   });
 
   useEffect(() => {
-    void fetchLive().then(() => startPolling());
+    void fetchControlRoom(true).then(() => restartPolling());
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
       if (countdownRef.current) clearInterval(countdownRef.current);
     };
-  }, [intervalS, refreshKey]);
+  }, [refreshSeconds]);
 
-  const lines = useMemo(
-    () => [...new Set(entries.map((e) => e.line_name).filter(Boolean) as string[])].sort(),
+  const lineOptions = useMemo(
+    () => Array.from(new Set(entries.map((entry) => entry.line_name).filter(Boolean) as string[])).sort(),
     [entries]
   );
 
-  const filtered = useMemo(() => {
-    return entries.filter((e) => {
-      const byLine = lineFilter === "all" || e.line_name === lineFilter;
-      const byStatus =
-        statusFilter === "all" ||
-        (statusFilter === "online" && e.online) ||
-        (statusFilter === "offline" && !e.online);
-      return byLine && byStatus;
-    });
-  }, [entries, lineFilter, statusFilter]);
+  const filteredEntries = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return entries
+      .filter((entry) => {
+        const byLine = lineFilter === "all" || entry.line_name === lineFilter;
+        const byStatus = statusFilter === "all" || entry.status_key === statusFilter;
+        const haystack = [entry.pms_label, entry.label, entry.line_name, entry.driver_name, entry.plate, entry.active_service?.customer_name]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const bySearch = needle.length === 0 || haystack.includes(needle);
+        return byLine && byStatus && bySearch;
+      })
+      .sort((left, right) => {
+        const byPriority = entryPriority(left) - entryPriority(right);
+        if (byPriority !== 0) return byPriority;
+        const byActiveService = Number(Boolean(right.active_service)) - Number(Boolean(left.active_service));
+        if (byActiveService !== 0) return byActiveService;
+        return left.last_update_seconds - right.last_update_seconds;
+      });
+  }, [entries, lineFilter, search, statusFilter]);
 
   const selected = useMemo(
-    () => filtered.find((e) => e.radius_vehicle_id === selectedId) ?? null,
-    [filtered, selectedId]
+    () => filteredEntries.find((entry) => entry.radius_vehicle_id === selectedId) ?? filteredEntries[0] ?? null,
+    [filteredEntries, selectedId]
   );
 
-  const handleSelect = (id: string) => setSelectedId(id);
+  const visibleSummary = useMemo(
+    () =>
+      filteredEntries.reduce(
+        (acc, entry) => {
+          acc.total += 1;
+          if (entry.status_key === "moving") acc.moving += 1;
+          if (entry.status_key === "stopped") acc.stopped += 1;
+          if (entry.status_key === "warning") acc.warning += 1;
+          if (entry.status_key === "offline") acc.offline += 1;
+          return acc;
+        },
+        { total: 0, moving: 0, stopped: 0, warning: 0, offline: 0 }
+      ),
+    [filteredEntries]
+  );
+  const fetchedAgoSeconds = fetchedAt ? Math.max(0, Math.floor((Date.now() - new Date(fetchedAt).getTime()) / 1000)) : null;
+  const topAlerts = useMemo(
+    () =>
+      filteredEntries
+        .flatMap((entry) =>
+          smartAlerts(entry).map((alert) => ({
+            ...alert,
+            vehicleId: entry.radius_vehicle_id,
+            vehicleLabel: entry.pms_label ?? entry.label
+          }))
+        )
+        .sort((left, right) => {
+          const rank = { high: 0, medium: 1, low: 2 };
+          return rank[left.severity] - rank[right.severity];
+        })
+        .slice(0, 3),
+    [filteredEntries]
+  );
 
-  const handleRefresh = () => {
-    setLoading(true);
-    setRefreshKey((k) => k + 1);
+  const handleManualRefresh = () => {
+    setCountdown(refreshSeconds);
+    void fetchControlRoom(false);
   };
 
   return (
-    <section className="page-section">
+    <section className="space-y-4">
       <PageHeader
-        title="Mappa Live Bus"
-        subtitle="Tracking GPS in tempo reale dei mezzi."
-        breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Mappa Live" }]}
+        title="Mappa Operativa"
+        subtitle="Control room live per monitorare flotta, anomalie e stato mezzi senza cambiare schermata."
+        breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Mappa Operativa" }]}
+        actions={
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[170px_170px_220px_170px_auto]">
+            <label className="text-sm text-slate-600">
+              Linea
+              <select value={lineFilter} onChange={(event) => setLineFilter(event.target.value)} className="input-saas mt-1">
+                <option value="all">Tutte</option>
+                {lineOptions.map((line) => (
+                  <option key={line} value={line}>
+                    {line}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm text-slate-600">
+              Stato
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "all" | GpsControlRoomEntry["status_key"])} className="input-saas mt-1">
+                <option value="all">Tutti</option>
+                <option value="moving">In movimento</option>
+                <option value="stopped">Fermi</option>
+                <option value="warning">Warning</option>
+                <option value="offline">Offline</option>
+              </select>
+            </label>
+            <label className="text-sm text-slate-600">
+              Cerca bus
+              <input value={search} onChange={(event) => setSearch(event.target.value)} className="input-saas mt-1" placeholder="Bus, autista, cliente..." />
+            </label>
+            <label className="text-sm text-slate-600">
+              Refresh
+              <select value={refreshSeconds} onChange={(event) => setRefreshSeconds(Number(event.target.value))} className="input-saas mt-1">
+                <option value={15}>15 secondi</option>
+                <option value={20}>20 secondi</option>
+                <option value={30}>30 secondi</option>
+              </select>
+            </label>
+            <div className="flex items-end">
+              <button type="button" onClick={handleManualRefresh} className="btn-primary w-full px-4 py-2 text-sm xl:w-auto" disabled={refreshing}>
+                {refreshing ? "Aggiorno..." : "Aggiorna ora"}
+              </button>
+            </div>
+          </div>
+        }
       />
 
-      {/* Barra controlli */}
-      <div className="flex flex-wrap items-center gap-3">
-        <select
-          value={lineFilter}
-          onChange={(e) => setLineFilter(e.target.value)}
-          className="input-saas"
-        >
-          <option value="all">Linea: tutte</option>
-          {lines.map((l) => <option key={l} value={l}>{l}</option>)}
-        </select>
-
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as "all" | "online" | "offline")}
-          className="input-saas"
-        >
-          <option value="all">Stato: tutti</option>
-          <option value="online">Online</option>
-          <option value="offline">Offline</option>
-        </select>
-
-        <select
-          value={String(intervalS)}
-          onChange={(e) => {
-            setIntervalS(Number(e.target.value));
-          }}
-          className="input-saas"
-        >
-          <option value="15">Aggiorna ogni 15s</option>
-          <option value="30">Aggiorna ogni 30s</option>
-          <option value="60">Aggiorna ogni 60s</option>
-        </select>
-
-        <button
-          type="button"
-          onClick={handleRefresh}
-          className="btn-secondary px-3 py-1.5 text-sm"
-        >
-          Aggiorna ora
-        </button>
-
-        <div className="ml-auto flex items-center gap-2 text-xs text-slate-500">
-          {fetchedAt ? (
-            <>
-              <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />
-              Agg. {formatTime(fetchedAt)} &mdash; prossimo tra {countdown}s
-            </>
-          ) : null}
-        </div>
+      <div className="grid gap-3 md:grid-cols-5">
+        <article className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Bus attivi</p>
+          <p className="mt-2 text-3xl font-semibold text-slate-950">{visibleSummary.moving}</p>
+          <p className="mt-1 text-sm text-slate-500">Movimento reale</p>
+        </article>
+        <article className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#fff7ed_100%)] p-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Warning</p>
+          <p className="mt-2 text-3xl font-semibold text-amber-700">{visibleSummary.warning}</p>
+          <p className="mt-1 text-sm text-slate-500">Lenti o da verificare</p>
+        </article>
+        <article className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#fff1f2_100%)] p-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Bus fermi</p>
+          <p className="mt-2 text-3xl font-semibold text-rose-700">{visibleSummary.stopped}</p>
+          <p className="mt-1 text-sm text-slate-500">Stop oltre soglia</p>
+        </article>
+        <article className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f1f5f9_100%)] p-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Offline</p>
+          <p className="mt-2 text-3xl font-semibold text-slate-600">{visibleSummary.offline}</p>
+          <p className="mt-1 text-sm text-slate-500">Ultimo ping oltre soglia</p>
+        </article>
+        <article className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#eef2ff_100%)] p-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Sistema</p>
+          <p className="mt-2 text-lg font-semibold text-slate-950">{summary ? "Operativo" : "In attesa"}</p>
+          <p className="mt-1 text-sm text-slate-500">
+            Ultimo aggiornamento: {fetchedAgoSeconds !== null ? `${formatRelativeSeconds(fetchedAgoSeconds)} • prossimo tra ${countdown}s` : "N/D"}
+          </p>
+        </article>
       </div>
 
-      {error ? (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          {error}
-          {error.includes("RADIUS_REFRESH_TOKEN") ? (
-            <p className="mt-1 text-xs">
-              Configura la variabile env <code>RADIUS_REFRESH_TOKEN</code> per attivare il tracking GPS.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
+      {error ? <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
 
-      {loading && !fetchedAt ? (
-        <div className="card p-6 text-sm text-slate-500">Caricamento posizioni GPS...</div>
+      {loading ? (
+        <div className="card p-6 text-sm text-slate-500">Caricamento control room GPS...</div>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
-          <DynamicMap
-            entries={filtered}
-            selectedId={selectedId}
-            onSelect={handleSelect}
-          />
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)]">
+          <DynamicMap entries={filteredEntries} selectedId={selected?.radius_vehicle_id ?? null} onSelect={setSelectedId} />
 
-          {/* Pannello laterale */}
-          <div className="flex flex-col gap-3">
-            {/* KPI */}
-            <div className="grid grid-cols-3 gap-2">
-              <SectionCard title="Totale">
-                <p className="text-2xl font-semibold text-text">{filtered.length}</p>
-              </SectionCard>
-              <SectionCard title="Online">
-                <p className="text-2xl font-semibold text-emerald-700">
-                  {filtered.filter((e) => e.online).length}
-                </p>
-              </SectionCard>
-              <SectionCard title="Offline">
-                <p className="text-2xl font-semibold text-slate-500">
-                  {filtered.filter((e) => !e.online).length}
-                </p>
-              </SectionCard>
-            </div>
-
-            {/* Dettaglio veicolo selezionato */}
-            {selected ? (
-              <SectionCard title="Dettaglio mezzo">
-                <div className="space-y-1 text-sm">
-                  <p className="font-semibold">{selected.pms_label ?? selected.label}</p>
-                  {selected.pms_vehicle_id ? (
-                    <p className="text-xs text-slate-500">ID PMS: {selected.pms_vehicle_id.slice(0, 8)}…</p>
-                  ) : (
-                    <p className="text-xs text-amber-600">Non collegato a nessun mezzo PMS</p>
-                  )}
-                  {selected.line_name ? <p>Linea: {selected.line_name}</p> : null}
-                  {selected.driver_name ? <p>Autista: {selected.driver_name}</p> : null}
-                  <p>
-                    Posizione: {selected.lat.toFixed(5)}, {selected.lng.toFixed(5)}
-                  </p>
-                  {selected.speed_kmh !== null ? <p>Velocità: {selected.speed_kmh} km/h</p> : null}
-                  {selected.heading !== null ? <p>Direzione: {selected.heading}°</p> : null}
-                  <p>
-                    Stato:{" "}
-                    <span className={selected.online ? "text-emerald-700 font-medium" : "text-slate-500"}>
-                      {selected.online ? "Online" : "Offline"}
-                    </span>
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    Ultimo aggiornamento GPS: {formatTime(selected.timestamp)} ({secondsAgo(selected.timestamp)}s fa)
-                  </p>
-                  {selected.pms_vehicle_id ? (
-                    <a
-                      href="/fleet-ops"
-                      className="mt-2 inline-block text-xs text-blue-600 underline"
-                    >
-                      Apri in Flotta Ops
-                    </a>
-                  ) : null}
+          <div className="space-y-4">
+            <SectionCard
+              title="Alert intelligenti"
+              subtitle={topAlerts.length > 0 ? "Priorita operative da verificare adesso" : "Nessuna criticita rilevata nei mezzi visibili"}
+              className="overflow-hidden rounded-[28px] border border-slate-200 shadow-[0_18px_50px_rgba(15,23,42,0.08)]"
+              bodyClassName="space-y-2 p-4"
+            >
+              {topAlerts.length === 0 ? (
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                  Tutti i mezzi visibili sono in una situazione operativa regolare.
                 </div>
-              </SectionCard>
-            ) : null}
-
-            {/* Lista bus */}
-            <SectionCard title={`Bus (${filtered.length})`} className="max-h-64 overflow-y-auto" bodyClassName="space-y-1.5 p-3">
-              {filtered.length === 0 ? (
-                <p className="text-sm text-slate-500">
-                  {entries.length === 0
-                    ? "Nessun dato GPS disponibile."
-                    : "Nessun mezzo corrisponde ai filtri."}
-                </p>
               ) : (
-                filtered.map((e) => (
+                topAlerts.map((alert) => (
                   <button
-                    key={e.radius_vehicle_id}
+                    key={`${alert.vehicleId}-${alert.title}`}
                     type="button"
-                    onClick={() => setSelectedId(e.radius_vehicle_id)}
-                    className={`w-full rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
-                      selectedId === e.radius_vehicle_id
-                        ? "border-blue-300 bg-blue-50"
-                        : "border-slate-200 bg-white hover:border-slate-300"
-                    }`}
+                    onClick={() => setSelectedId(alert.vehicleId)}
+                    className={`w-full rounded-2xl border px-4 py-3 text-left transition hover:shadow-sm ${alertTone(alert.severity)}`}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium truncate">{e.pms_label ?? e.label}</span>
-                      <span
-                        className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${
-                          e.online ? "bg-emerald-400" : "bg-slate-300"
-                        }`}
-                      />
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold">{alert.title}</p>
+                        <p className="mt-1 truncate text-xs opacity-80">{alert.vehicleLabel}</p>
+                        <p className="mt-1 text-xs opacity-90">{alert.detail}</p>
+                      </div>
+                      <span className="rounded-full border border-current/20 px-2 py-0.5 text-[10px] font-semibold uppercase">
+                        {alert.severity}
+                      </span>
                     </div>
-                    {e.line_name ? (
-                      <p className="text-xs text-slate-500 truncate">{e.line_name}</p>
-                    ) : null}
-                    {e.driver_name ? (
-                      <p className="text-xs text-slate-400 truncate">{e.driver_name}</p>
-                    ) : null}
-                    <p className="text-xs text-slate-400">
-                      Agg. {formatTime(e.timestamp)}
-                    </p>
                   </button>
                 ))
+              )}
+            </SectionCard>
+
+            <SectionCard
+              title="Stato operativo"
+              subtitle={selected ? "Focus sul mezzo selezionato" : `Mezzi visibili: ${filteredEntries.length} / ${entries.length}`}
+              className="overflow-hidden rounded-[28px] border border-slate-200 shadow-[0_18px_50px_rgba(15,23,42,0.08)]"
+              bodyClassName="space-y-3 p-4"
+            >
+              {selected ? (
+                <article className="rounded-2xl border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-base font-semibold text-slate-950">{selected.pms_label ?? selected.label}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">{selected.line_name ?? "Linea non assegnata"} • {selected.driver_name ?? "Autista non assegnato"}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {selected.current_address ?? "Indirizzo non disponibile"}{selected.current_city ? ` • ${selected.current_city}` : ""}
+                      </p>
+                    </div>
+                    <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${statusMeta(selected.status_key).badge}`}>
+                      <span className={`inline-block h-2.5 w-2.5 rounded-full ${statusMeta(selected.status_key).dot}`} />
+                      {selected.status_label}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Velocita</p>
+                      <p className="mt-1 text-lg font-semibold text-slate-950">{selected.speed_kmh !== null ? `${Math.round(selected.speed_kmh)} km/h` : "--"}</p>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Update</p>
+                      <p className="mt-1 text-lg font-semibold text-slate-950">{formatRelativeSeconds(selected.last_update_seconds)}</p>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Servizio</p>
+                      <p className="mt-1 truncate text-sm font-semibold text-slate-950">{selected.active_service?.time ?? "Nessuno"}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {focusSignals(selected).map((signal) => (
+                      <span key={`${selected.radius_vehicle_id}-${signal.label}`} className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${signal.tone}`}>
+                        {signal.label}
+                      </span>
+                    ))}
+                  </div>
+
+                  {selected.active_service ? (
+                    <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50/70 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-700">Servizio attivo PMS</p>
+                      <p className="mt-1.5 text-sm font-semibold text-slate-950">{selected.active_service.customer_name}</p>
+                      <p className="mt-0.5 text-xs text-slate-600">{selected.active_service.date} • {selected.active_service.time} • {selected.active_service.hotel_name ?? "Destinazione non disponibile"}</p>
+                      <p className="mt-0.5 text-xs text-slate-600">Stato servizio: {selected.active_service.status} • Linea: {selected.active_service.line_name ?? "N/D"}</p>
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                      Ultima posizione nota: {selected.lat.toFixed(5)}, {selected.lng.toFixed(5)}
+                    </div>
+                  )}
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Link href="/bus-network" className="btn-secondary px-3 py-1.5 text-xs">Apri Rete Bus</Link>
+                    <Link href="/fleet-ops" className="btn-secondary px-3 py-1.5 text-xs">Apri dettaglio mezzo</Link>
+                  </div>
+                </article>
+              ) : (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">Nessun mezzo disponibile con i filtri attivi.</div>
+              )}
+            </SectionCard>
+
+            <SectionCard
+              title="Lista mezzi"
+              subtitle="Ordinata per priorita operativa: i mezzi piu critici salgono in alto"
+              className="overflow-hidden rounded-[28px] border border-slate-200 shadow-[0_18px_50px_rgba(15,23,42,0.08)]"
+              bodyClassName="max-h-[560px] space-y-2 overflow-y-auto p-4"
+            >
+              {filteredEntries.length === 0 ? (
+                <p className="text-sm text-slate-500">Nessun bus corrisponde ai filtri impostati.</p>
+              ) : (
+                filteredEntries.map((entry) => {
+                  const meta = statusMeta(entry.status_key);
+                  const priority = priorityBadge(entry);
+                  const selectedRow = selected?.radius_vehicle_id === entry.radius_vehicle_id;
+                  return (
+                    <button
+                      key={entry.radius_vehicle_id}
+                      type="button"
+                      onClick={() => setSelectedId(entry.radius_vehicle_id)}
+                      className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                        selectedRow ? "border-slate-900 bg-slate-900 text-white shadow-[0_14px_36px_rgba(15,23,42,0.2)]" : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={selectedRow ? "text-white" : "text-slate-900"}>{entry.status_icon}</span>
+                            <p className={`truncate text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{entry.pms_label ?? entry.label}</p>
+                          </div>
+                          <p className={`mt-1 truncate text-xs ${selectedRow ? "text-slate-300" : "text-slate-500"}`}>{entry.line_name ?? "Linea non assegnata"} • {entry.driver_name ?? "Autista non assegnato"}</p>
+                          <p className={`mt-1 truncate text-[11px] ${selectedRow ? "text-slate-400" : "text-slate-400"}`}>
+                            {entry.current_address ?? "Indirizzo non disponibile"}{entry.current_city ? ` • ${entry.current_city}` : ""}
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${selectedRow ? "border-white/20 bg-white/10 text-white" : meta.badge}`}>
+                            <span className={`inline-block h-2 w-2 rounded-full ${selectedRow ? "bg-white" : meta.dot}`} />
+                            {meta.label}
+                          </span>
+                          {priority ? (
+                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${selectedRow ? "border-white/15 bg-white/10 text-slate-100" : priority.tone}`}>
+                              {priority.label}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className={`mt-3 grid grid-cols-3 gap-2 text-xs ${selectedRow ? "text-slate-200" : "text-slate-500"}`}>
+                        <div>
+                          <p className="uppercase tracking-[0.08em]">Velocita</p>
+                          <p className={`mt-1 text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{entry.speed_kmh !== null ? `${Math.round(entry.speed_kmh)} km/h` : "--"}</p>
+                        </div>
+                        <div>
+                          <p className="uppercase tracking-[0.08em]">Update</p>
+                          <p className={`mt-1 text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{formatRelativeSeconds(entry.last_update_seconds)}</p>
+                        </div>
+                        <div>
+                          <p className="uppercase tracking-[0.08em]">Servizio</p>
+                          <p className={`mt-1 truncate text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{entry.active_service?.time ?? "Nessuno"}</p>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })
               )}
             </SectionCard>
           </div>
