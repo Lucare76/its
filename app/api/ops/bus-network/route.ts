@@ -618,9 +618,6 @@ export async function POST(request: NextRequest) {
       if (resA.error || !resA.data) throw new Error("Fermata A non trovata: " + (resA.error?.message ?? "id non presente"));
       if (resB.error || !resB.data) throw new Error("Fermata B non trovata: " + (resB.error?.message ?? "id non presente"));
 
-      const orderA = (resA.data as { stop_order: number }).stop_order;
-      const orderB = (resB.data as { stop_order: number }).stop_order;
-
       // Leggi tutti gli stop della stessa linea+direzione per riscrivere in blocco
       const refRes = await auth.admin.from("tenant_bus_line_stops")
         .select("id,bus_line_id,direction")
@@ -801,7 +798,6 @@ export async function POST(request: NextRequest) {
         geocoded: withCoords.length,
         skipped: withoutCoords.length,
         skipped_names: withoutCoords.map((s) => s.stop_name).join(", "),
-        debug_order: allOrdered.map((s, i) => `${i + 1}. ${s.stop_name} (lat=${s.lat?.toFixed(4) ?? "N/A"})`),
         ...(await loadBusNetwork(auth))
       });
     }
