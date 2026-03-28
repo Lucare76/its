@@ -217,32 +217,29 @@ function HeaderBellIcon() {
 }
 
 const MAIN_NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
-  admin: [
-    { href: "/dashboard", label: "Cruscotto", icon: "D" },
-    { href: "/arrivals", label: "Arrivi", icon: "A" },
-    { href: "/departures", label: "Partenze", icon: "P" },
-    { href: "/inbox", label: "Posta in arrivo", icon: "I" },
-    { href: "/bus-network", label: "Rete Bus", icon: "B" },
-    { href: "/rete-ischia", label: "Rete Ischia", icon: "O" },
-    { href: "/dispatch", label: "Assegnazioni", icon: "G" },
-    { href: "/mappa-live", label: "Mappa Live GPS", icon: "V" }
-  ],
-  operator: [
-    { href: "/dashboard", label: "Cruscotto", icon: "D" },
-    { href: "/arrivals", label: "Arrivi", icon: "A" },
-    { href: "/departures", label: "Partenze", icon: "P" },
-    { href: "/inbox", label: "Posta in arrivo", icon: "I" },
-    { href: "/bus-network", label: "Rete Bus", icon: "B" },
-    { href: "/rete-ischia", label: "Rete Ischia", icon: "O" },
-    { href: "/dispatch", label: "Assegnazioni", icon: "G" },
-    { href: "/mappa-live", label: "Mappa Live GPS", icon: "V" }
-  ],
+  admin: [],
+  operator: [],
   agency: [
     { href: "/agency", label: "Area Agenzia", icon: "A" },
     { href: "/map", label: "Mappa", icon: "M" }
   ],
   driver: [{ href: "/driver", label: "Area Autista", icon: "R" }]
 };
+
+const OPERATIONS_MAIN_NAV: NavItem[] = [
+  { href: "/dashboard", label: "Cruscotto", icon: "D" },
+  { href: "/mappa-live", label: "Control Room", icon: "M" },
+  { href: "/arrivals", label: "Arrivi", icon: "A" },
+  { href: "/departures", label: "Partenze", icon: "P" },
+  { href: "/inbox", label: "Posta in arrivo", icon: "I" },
+  { href: "/bus-network", label: "Rete Bus", icon: "B" },
+  { href: "/mario-planning", label: "Mario Planning", icon: "P" },
+  { href: "/rete-ischia", label: "Rete Ischia", icon: "O" },
+  { href: "/dispatch", label: "Assegnazioni", icon: "G" }
+];
+
+MAIN_NAV_BY_ROLE.admin = OPERATIONS_MAIN_NAV;
+MAIN_NAV_BY_ROLE.operator = OPERATIONS_MAIN_NAV;
 
 const SETTINGS_GROUPS: NavGroup[] = [
   {
@@ -313,6 +310,15 @@ function canSeeNavItem(item: NavItem, role: UserRole | null, quotesAccess: boole
   return true;
 }
 
+function uniqueNavItems(items: NavItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.href)) return false;
+    seen.add(item.href);
+    return true;
+  });
+}
+
 function pageTitle(pathname: string) {
   const match = [...ALL_NAV_ITEMS]
     .sort((left, right) => right.href.length - left.href.length)
@@ -345,7 +351,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   });
   const title = useMemo(() => pageTitle(pathname), [pathname]);
   const mainNav = useMemo(
-    () => (authRole ? MAIN_NAV_BY_ROLE[authRole].filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides)) : []),
+    () =>
+      authRole
+        ? uniqueNavItems(MAIN_NAV_BY_ROLE[authRole].filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides)))
+        : [],
     [authRole, capabilityOverrides, quotesAccess]
   );
   const settingsGroups = useMemo(() => {
@@ -353,7 +362,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     return SETTINGS_GROUPS
       .map((group) => ({
         ...group,
-        items: group.items.filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides))
+        items: uniqueNavItems(group.items.filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides)))
       }))
       .filter((group) => group.items.length > 0);
   }, [authRole, capabilityOverrides, quotesAccess]);
