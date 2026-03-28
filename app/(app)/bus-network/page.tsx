@@ -952,7 +952,7 @@ export default function BusNetworkPage() {
                     <div key={unit.id}
                       onDragOver={(e) => { e.preventDefault(); setDragOverUnitId(unit.id); }}
                       onDragLeave={() => setDragOverUnitId("")}
-                      onDrop={() => handleDrop(unit.id)}
+                      onDrop={(e) => { e.preventDefault(); handleDrop(unit.id); }}
                       onClick={() => setSelectedBusUnitId(isSelected ? null : unit.id)}
                       className={`relative flex w-72 flex-shrink-0 flex-col rounded-2xl border-2 bg-white shadow-sm transition-all cursor-pointer ${
                         isSelected ? "border-indigo-500 ring-2 ring-indigo-200" :
@@ -1051,7 +1051,7 @@ export default function BusNetworkPage() {
                       </div>
 
                       {/* Passenger list grouped by stop */}
-                      <div className="flex-1 divide-y divide-slate-50 overflow-y-auto">
+                      <div className="flex-1 divide-y divide-slate-50 overflow-y-auto" onDragOver={(e) => e.preventDefault()}>
                         {[...stopGroups.map(({ stop, allocs }) => (
                           <div key={stop.id} className="px-3 py-2">
                             <div className="mb-1 flex items-center justify-between">
