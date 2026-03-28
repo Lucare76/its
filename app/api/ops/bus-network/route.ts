@@ -801,6 +801,7 @@ export async function POST(request: NextRequest) {
         geocoded: withCoords.length,
         skipped: withoutCoords.length,
         skipped_names: withoutCoords.map((s) => s.stop_name).join(", "),
+        debug_order: allOrdered.map((s, i) => `${i + 1}. ${s.stop_name} (lat=${s.lat?.toFixed(4) ?? "N/A"})`),
         ...(await loadBusNetwork(auth))
       });
     }

@@ -428,12 +428,15 @@ export default function BusNetworkPage() {
   const geoSortStops = useCallback(async () => {
     if (!selectedLine) return;
     setGeoSorting(true);
-    const res = await post("geo_sort_stops", { bus_line_id: selectedLine.id, direction, date }) as ({ geocoded?: number; skipped?: number; skipped_names?: string } | null);
+    const res = await post("geo_sort_stops", { bus_line_id: selectedLine.id, direction, date }) as ({ geocoded?: number; skipped?: number; skipped_names?: string; debug_order?: string[] } | null);
     setGeoSorting(false);
     if (res) {
       const msg = `Ordinamento geografico: ${res.geocoded ?? 0} fermate ordinate per latitudine.`;
       const skip = res.skipped ?? 0;
-      setMessage(skip > 0 ? `${msg} ${skip} non geocodificate (messe in fondo): ${res.skipped_names ?? ""}` : msg);
+      const debug = res.debug_order?.join(" | ") ?? "";
+      setMessage(skip > 0
+        ? `${msg} ${skip} non geocodificate: ${res.skipped_names ?? ""}. Ordine: ${debug}`
+        : `${msg} Ordine: ${debug}`);
     }
   }, [selectedLine, direction, post]);
 
