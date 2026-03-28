@@ -739,7 +739,10 @@ export async function POST(request: NextRequest) {
       // Geocodifica solo quelle senza coordinate (rispetta rate-limit Nominatim con pausa 1s)
       for (const stop of allStops) {
         if (stop.lat != null) continue;
-        const geo = await geocodeCity(stop.city || stop.stop_name);
+        // Pulisce il nome fermata rimuovendo prefissi orario tipo "05:30 " e testo dopo trattino
+        const rawQuery = stop.city?.trim() || stop.stop_name;
+        const cleanQuery = rawQuery.replace(/^\d{1,2}:\d{2}\s+/, "").replace(/\s*[-–—]+\s*.+$/, "").trim() || rawQuery;
+        const geo = await geocodeCity(cleanQuery);
         if (!geo) continue;
         await auth.admin.from("tenant_bus_line_stops")
           .update({ lat: geo.lat, lng: geo.lng })
