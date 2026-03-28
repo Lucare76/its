@@ -621,16 +621,11 @@ export async function POST(request: NextRequest) {
       const orderA = (resA.data as { stop_order: number }).stop_order;
       const orderB = (resB.data as { stop_order: number }).stop_order;
 
-      // Aggiorna solo i 2 stop che cambiano — in parallelo (nessun unique constraint su stop_order)
-      // .select("id") forza RETURNING e garantisce che le righe siano state effettivamente aggiornate
-      const [sw1, sw2] = await Promise.all([
-        auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderB, order_index: orderB }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_a).select("id"),
-        auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderA, order_index: orderA }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_b).select("id")
-      ]);
+      // Aggiorna i 2 stop sequenzialmente senza .select() (compatibile con questa versione PostgREST)
+      const sw1 = await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderB, order_index: orderB }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_a);
       if (sw1.error) throw new Error("Swap A: " + sw1.error.message);
+      const sw2 = await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderA, order_index: orderA }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_b);
       if (sw2.error) throw new Error("Swap B: " + sw2.error.message);
-      if (!sw1.data?.length) throw new Error("Fermata A non aggiornata (0 righe) — tenant_id mismatch?");
-      if (!sw2.data?.length) throw new Error("Fermata B non aggiornata (0 righe) — tenant_id mismatch?");
 
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
