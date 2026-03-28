@@ -215,7 +215,10 @@ function BusGeneralPlanning({ token }: { token: string }) {
 
   const loadRows = useCallback(async () => {
     const r = await fetch("/api/planning/bus-rows", { headers: { Authorization: `Bearer ${token}` } });
-    if (!r.ok) return;
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({})) as { error?: string };
+      throw new Error(d.error ?? `HTTP ${r.status}`);
+    }
     const d = (await r.json()) as { rows: BusUnit[] };
     setBusUnits(d.rows ?? []);
   }, [token]);
@@ -232,7 +235,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
   const load = useCallback(async () => {
     setError(null);
     try { await Promise.all([loadRows(), loadCells()]); }
-    catch { setError("Errore caricamento."); }
+    catch (e) { setError(e instanceof Error ? e.message : "Errore caricamento."); }
   }, [loadRows, loadCells]);
 
   useEffect(() => { void load(); }, [load]);
@@ -1099,14 +1102,16 @@ export default function MarioPlanningPage() {
       />
 
       {/* Tab bar — scrollabile su mobile */}
-      <div className="flex gap-1 border-b border-border pb-0 overflow-x-auto">
+      <div className="flex gap-0 border-b-2 border-gray-300 overflow-x-auto">
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
             className={[
-              "px-4 py-2.5 text-sm font-medium rounded-t-lg whitespace-nowrap transition-colors",
-              tab === t.id ? "bg-primary text-white" : "text-muted hover:text-text hover:bg-surface",
+              "px-5 py-2.5 text-sm font-semibold whitespace-nowrap transition-colors border-b-2 -mb-[2px]",
+              tab === t.id
+                ? "border-blue-600 text-blue-700 bg-blue-50"
+                : "border-transparent text-muted hover:text-text hover:bg-gray-100",
             ].join(" ")}
           >
             {t.label}
