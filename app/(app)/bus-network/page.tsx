@@ -566,25 +566,34 @@ export default function BusNetworkPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busCards, selectedBusUnitId, date, direction, selectedLine, payload.allocation_details]);
 
-  // Export tutte le linee: un foglio per linea×direzione (Andata + Ritorno)
+  // Export tutte le linee: un foglio per bus×direzione (1 bus = 1 sheet)
   const exportAllLines = useCallback(async () => {
     const { utils, writeFile } = await import("xlsx");
     const wb = utils.book_new();
+    const usedNames = new Set<string>();
     for (const line of payload.lines) {
+      // Andata prima, poi Ritorno — per ogni linea
       for (const dir of ["arrival", "departure"] as const) {
-        const lineAllocs = payload.allocation_details.filter(
-          (a) => a.bus_line_id === line.id && a.service_date === date && a.direction === dir
-        );
-        const lineUnitsAll = payload.unit_loads.filter((u) => u.bus_line_id === line.id);
-        const rows: Record<string, string | number>[] = [];
+        const dirLabel = dir === "arrival" ? "And" : "Rit";
+        // Unità di questa linea — già ordinate per sort_order dalla query API
+        const lineUnitsAll = payload.units.filter((u) => u.bus_line_id === line.id);
         for (const unit of lineUnitsAll) {
-          const unitAllocs = lineAllocs.filter((a) => a.bus_unit_id === unit.id);
-          rows.push(...buildAllocRows(unit, unitAllocs, line.name));
-        }
-        if (rows.length > 0) {
+          const unitAllocs = payload.allocation_details.filter(
+            (a) => a.bus_unit_id === unit.id && a.service_date === date && a.direction === dir
+          );
+          if (unitAllocs.length === 0) continue;
+          const rows = buildAllocRows(unit, unitAllocs, line.name);
           const ws = utils.json_to_sheet(rows);
           ws["!cols"] = colWidths;
-          const sheetName = `${line.name.slice(0, 20)}_${dir === "arrival" ? "And" : "Rit"}`.slice(0, 31);
+          // Nome foglio univoco ≤ 31 char: LineaCode_BusLabel_Dir
+          const lineShort = (line.code ?? line.name).slice(0, 14);
+          const busShort = unit.label.replace(/\s+/g, "").slice(0, 12);
+          let sheetName = `${lineShort}_${busShort}_${dirLabel}`.slice(0, 31);
+          // Evita duplicati (Excel non permette fogli con lo stesso nome)
+          if (usedNames.has(sheetName)) {
+            sheetName = sheetName.slice(0, 28) + String(usedNames.size).padStart(2, "0");
+          }
+          usedNames.add(sheetName);
           utils.book_append_sheet(wb, ws, sheetName);
         }
       }
