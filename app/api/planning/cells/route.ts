@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
-// GET /api/planning/cells?type=bus|route&year=2025&month=9
+// GET /api/planning/cells?type=bus|route|gruppi&year=2025&month=9
 export async function GET(request: NextRequest) {
   try {
     const auth = await authorizePricingRequest(request);
@@ -55,8 +55,9 @@ export async function GET(request: NextRequest) {
 }
 
 const PostSchema = z.object({
-  type: z.enum(["bus", "route"]),
+  type: z.enum(["bus", "route", "gruppi"]),
   cell_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional().default(null),
   row_key: z.string().min(1).max(200),
   col_index: z.number().int().min(0).max(99).default(0),
   content: z.string().max(500),
@@ -64,7 +65,7 @@ const PostSchema = z.object({
   service_id: z.string().uuid().nullable().optional(),
 });
 
-// POST /api/planning/cells — upsert
+// POST /api/planning/cells — upsert (insert or update)
 export async function POST(request: NextRequest) {
   try {
     const auth = await authorizePricingRequest(request);
@@ -79,6 +80,7 @@ export async function POST(request: NextRequest) {
         tenant_id: tenantId,
         planning_type: parsed.type,
         cell_date: parsed.cell_date,
+        end_date: parsed.end_date ?? null,
         row_key: parsed.row_key,
         col_index: parsed.col_index,
         content: parsed.content,
