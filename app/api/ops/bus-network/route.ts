@@ -614,6 +614,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    // Aggiorna il nome di una fermata esistente
+    if (action === "update_stop_name") {
+      const parsed = z.object({
+        stop_id: z.string().uuid(),
+        stop_name: z.string().min(1).max(200)
+      }).parse(body);
+      const upper = parsed.stop_name.trim().toUpperCase();
+      const { error } = await auth.admin.from("tenant_bus_line_stops")
+        .update({ stop_name: upper, city: upper })
+        .eq("tenant_id", tenantId).eq("id", parsed.stop_id);
+      if (error) throw new Error(error.message);
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
     // Aggiorna l'orario di partenza di una fermata esistente
     if (action === "update_stop_time") {
       const parsed = z.object({

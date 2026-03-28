@@ -110,9 +110,11 @@ export default function BusNetworkPage() {
   const [editLabelUnitId, setEditLabelUnitId] = useState<string | null>(null);
   const [editLabelValue, setEditLabelValue] = useState("");
 
-  // Edit stop pickup_time inline
+  // Edit stop inline (nome e orario)
   const [editStopTimeId, setEditStopTimeId] = useState<string | null>(null);
   const [editStopTimeValue, setEditStopTimeValue] = useState("");
+  const [editStopNameId, setEditStopNameId] = useState<string | null>(null);
+  const [editStopNameValue, setEditStopNameValue] = useState("");
 
   // Geo sort progress
   const [geoSorting, setGeoSorting] = useState(false);
@@ -402,6 +404,12 @@ export default function BusNetworkPage() {
       setAutoAssignResult({ assigned: body.assigned ?? 0, skipped: body.skipped ?? 0, skipped_detail: body.skipped_detail ?? [] });
     }
   }, [post, date, direction]);
+
+  const saveStopName = useCallback(async (stopId: string, name: string) => {
+    if (!name.trim()) return;
+    await post("update_stop_name", { stop_id: stopId, stop_name: name.trim() });
+    setEditStopNameId(null);
+  }, [post]);
 
   const saveStopTime = useCallback(async (stopId: string, time: string) => {
     await post("update_stop_time", { stop_id: stopId, pickup_time: time.trim() || null });
@@ -1252,9 +1260,31 @@ export default function BusNetworkPage() {
                             <div key={stop.id} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
                               <span className="w-5 text-center text-xs tabular-nums text-slate-300">{stop.stop_order}</span>
                               <div className="min-w-0 flex-1">
-                                <span className="text-sm font-medium uppercase text-slate-800">{stop.stop_name}</span>
-                                {stop.city && <span className="ml-2 text-xs text-slate-400">{stop.city}</span>}
-                                {stop.pickup_note && <span className="ml-1 text-xs text-slate-300">· {stop.pickup_note}</span>}
+                                {editStopNameId === stop.id ? (
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      autoFocus
+                                      value={editStopNameValue}
+                                      onChange={(e) => setEditStopNameValue(e.target.value.toUpperCase())}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") void saveStopName(stop.id, editStopNameValue);
+                                        if (e.key === "Escape") setEditStopNameId(null);
+                                      }}
+                                      className="rounded border border-indigo-300 px-1.5 py-0.5 text-sm font-medium uppercase focus:outline-none focus:ring-1 focus:ring-indigo-400" />
+                                    <button onClick={() => void saveStopName(stop.id, editStopNameValue)} disabled={saving}
+                                      className="rounded bg-indigo-600 px-1.5 py-0.5 text-[10px] text-white hover:bg-indigo-700 disabled:opacity-40">✓</button>
+                                    <button onClick={() => setEditStopNameId(null)}
+                                      className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-300">✕</button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => { setEditStopNameId(stop.id); setEditStopNameValue(stop.stop_name); }}
+                                    title="Modifica nome fermata"
+                                    className="text-sm font-medium uppercase text-slate-800 hover:text-indigo-600">
+                                    {stop.stop_name}
+                                  </button>
+                                )}
+                                {editStopNameId !== stop.id && stop.pickup_note && <span className="ml-1 text-xs text-slate-300">· {stop.pickup_note}</span>}
                                 {stop.is_manual && <span className="ml-1 rounded bg-indigo-50 px-1 text-[10px] text-indigo-500">manuale</span>}
                                 {stopAllocs.length > 0 && (
                                   <div className="mt-0.5 space-y-0.5 text-[10px] text-slate-400">
