@@ -93,6 +93,44 @@ function formatTimestamp(ts: string) {
   }
 }
 
+/**
+ * Dispone a spirale i veicoli con la stessa posizione GPS
+ * per evitare sovrapposizione delle icone.
+ */
+function spreadOverlapping(items: GpsControlRoomEntry[]): Array<GpsControlRoomEntry & { _lat: number; _lng: number }> {
+  const OFFSET = 0.00028; // ~31m in gradi — sufficiente a separare le icone a zoom 13
+
+  const groups = new Map<string, GpsControlRoomEntry[]>();
+  for (const item of items) {
+    const key = `${item.lat.toFixed(5)},${item.lng.toFixed(5)}`;
+    const g = groups.get(key);
+    if (g) g.push(item);
+    else groups.set(key, [item]);
+  }
+
+  const result: Array<GpsControlRoomEntry & { _lat: number; _lng: number }> = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      result.push({ ...group[0], _lat: group[0].lat, _lng: group[0].lng });
+      continue;
+    }
+    group.forEach((item, i) => {
+      if (i === 0) {
+        result.push({ ...item, _lat: item.lat, _lng: item.lng });
+      } else {
+        const angle = (2 * Math.PI * (i - 1)) / (group.length - 1);
+        const radius = OFFSET * (1 + Math.floor((i - 1) / 8) * 0.6);
+        result.push({
+          ...item,
+          _lat: item.lat + radius * Math.cos(angle),
+          _lng: item.lng + radius * Math.sin(angle)
+        });
+      }
+    });
+  }
+  return result;
+}
+
 export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -138,10 +176,19 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
     markers.clearLayers();
     const bounds = L.latLngBounds([]);
 
-    entries.forEach((entry) => {
-      if (!entry.lat || !entry.lng) return;
+    const spread = spreadOverlapping(entries.filter((e) => e.lat && e.lng));
+
+    spread.forEach((entry) => {
       const selected = selectedId === entry.radius_vehicle_id;
-      const marker = L.marker([entry.lat, entry.lng], { icon: busIcon(entry, selected), zIndexOffset: selected ? 1200 : 0 });
+      const marker = L.marker([entry._lat, entry._lng], { icon: busIcon(entry, selected), zIndexOffset: selected ? 1200 : 0 });
+
+      // Linea tratteggiata verso la posizione reale se spostato
+      if (entry._lat !== entry.lat || entry._lng !== entry.lng) {
+        L.polyline(
+          [[entry.lat, entry.lng], [entry._lat, entry._lng]],
+          { color: "#94a3b8", weight: 1.2, dashArray: "4 5", opacity: 0.6 }
+        ).addTo(markers);
+      }
 
       const popup = `
         <div style="font-family:ui-sans-serif,system-ui,sans-serif;min-width:220px;color:#0f172a;">
