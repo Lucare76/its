@@ -475,12 +475,19 @@ export default function BusNetworkPage() {
   function buildAllocRows(
     unit: { label: string; driver_name?: string | null; driver_phone?: string | null },
     allocs: AllocationDetail[],
-    lineName: string
+    lineName: string,
+    stops: BusStop[] = []
   ): Record<string, string | number>[] {
+    // Mappa stop_name → stop_order per ordinare correttamente per fermata
+    const stopOrderMap = new Map<string, number>();
+    for (const s of stops) stopOrderMap.set(s.stop_name.toUpperCase(), s.stop_order);
+
     const sorted = [...allocs].sort((a, b) => {
-      const ta = a.stop_pickup_time ?? "99:99";
-      const tb = b.stop_pickup_time ?? "99:99";
-      return ta !== tb ? ta.localeCompare(tb) : (a.service_time ?? "").localeCompare(b.service_time ?? "");
+      const oa = stopOrderMap.get(a.stop_name.toUpperCase()) ?? 9999;
+      const ob = stopOrderMap.get(b.stop_name.toUpperCase()) ?? 9999;
+      if (oa !== ob) return oa - ob;
+      // Stessa fermata: ordina per orario servizio
+      return (a.service_time ?? "").localeCompare(b.service_time ?? "");
     });
     return sorted.map((alloc) => {
       // Estrai hotel/agenzia dai notes se i campi dedicati sono vuoti (workaround PGRST204 o import vecchio)
@@ -529,9 +536,12 @@ export default function BusNetworkPage() {
   // Export linea corrente (tutti i bus della linea selezionata)
   const exportExcel = useCallback(async () => {
     const { utils, writeFile } = await import("xlsx");
+    const lineStopsForExport = payload.stops
+      .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === direction)
+      .sort((a, b) => a.stop_order - b.stop_order);
     const rows: Record<string, string | number>[] = [];
     for (const { unit, allocations: cardAllocs } of busCards) {
-      rows.push(...buildAllocRows(unit, cardAllocs, selectedLine?.name ?? ""));
+      rows.push(...buildAllocRows(unit, cardAllocs, selectedLine?.name ?? "", lineStopsForExport));
     }
     const ws = utils.json_to_sheet(rows);
     ws["!cols"] = colWidths;
@@ -554,7 +564,10 @@ export default function BusNetworkPage() {
         (a) => a.bus_unit_id === unitId && a.service_date === date && a.direction === dir
       );
       if (dirAllocs.length === 0) continue;
-      const rows = buildAllocRows(targetCard.unit, dirAllocs, lineName);
+      const stopsForDir = payload.stops
+        .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === dir)
+        .sort((a, b) => a.stop_order - b.stop_order);
+      const rows = buildAllocRows(targetCard.unit, dirAllocs, lineName, stopsForDir);
       const ws = utils.json_to_sheet(rows);
       ws["!cols"] = colWidths;
       utils.book_append_sheet(wb, ws, dir === "arrival" ? "Andata" : "Ritorno");
@@ -582,7 +595,10 @@ export default function BusNetworkPage() {
             (a) => a.bus_unit_id === unit.id && a.service_date === date && a.direction === dir
           );
           if (unitAllocs.length === 0) continue;
-          const rows = buildAllocRows(unit, unitAllocs, line.name);
+          const stopsForDir = payload.stops
+            .filter((s) => s.bus_line_id === line.id && s.direction === dir)
+            .sort((a, b) => a.stop_order - b.stop_order);
+          const rows = buildAllocRows(unit, unitAllocs, line.name, stopsForDir);
           const ws = utils.json_to_sheet(rows);
           ws["!cols"] = colWidths;
           // Nome foglio univoco ≤ 31 char: LineaCode_BusLabel_Dir
