@@ -226,13 +226,20 @@ export default function BusNetworkPage() {
     [payload.stops, selectedLine, direction]
   );
 
-  // Allocations for this date + direction + line (optionally filtered by selected bus)
-  const dateAllocations = useMemo(
+  // Allocations for this date + direction + line — TUTTE (per calcoli capacità e card)
+  const allDateAllocations = useMemo(
     () => payload.allocation_details.filter(
-      (a) => a.bus_line_id === selectedLine?.id && a.service_date === date && a.direction === direction &&
-        (!selectedBusUnitId || a.bus_unit_id === selectedBusUnitId)
+      (a) => a.bus_line_id === selectedLine?.id && a.service_date === date && a.direction === direction
     ),
-    [payload.allocation_details, selectedLine, date, direction, selectedBusUnitId]
+    [payload.allocation_details, selectedLine, date, direction]
+  );
+
+  // Allocations filtrate per bus selezionato (per vista fermate/percorso)
+  const dateAllocations = useMemo(
+    () => selectedBusUnitId
+      ? allDateAllocations.filter((a) => a.bus_unit_id === selectedBusUnitId)
+      : allDateAllocations,
+    [allDateAllocations, selectedBusUnitId]
   );
 
   // Stops WITH passengers today, ordered correctly
@@ -262,24 +269,24 @@ export default function BusNetworkPage() {
     [payload.services, date, direction, selectedLine, allocatedServiceIds]
   );
 
-  // Per-unit loads filtered by date (capacity must be evaluated per date, not across all dates)
+  // Per-unit loads filtered by date — usa TUTTE le allocazioni (non filtrate per bus selezionato)
   const dateUnitLoads = useMemo(
     () => lineUnits.map((unit) => {
-      const datePax = dateAllocations
+      const datePax = allDateAllocations
         .filter((a) => a.bus_unit_id === unit.id)
         .reduce((sum, a) => sum + a.pax_assigned, 0);
       return { ...unit, pax_assigned: datePax, remaining_seats: Math.max(0, unit.capacity - datePax) };
     }),
-    [lineUnits, dateAllocations]
+    [lineUnits, allDateAllocations]
   );
 
-  // Bus cards
+  // Bus cards — usa TUTTE le allocazioni per mostrare pax corretti su ogni card
   const busCards = useMemo(
     () => dateUnitLoads.map((unit) => ({
       unit,
-      allocations: dateAllocations.filter((a) => a.bus_unit_id === unit.id)
+      allocations: allDateAllocations.filter((a) => a.bus_unit_id === unit.id)
     })),
-    [dateUnitLoads, dateAllocations]
+    [dateUnitLoads, allDateAllocations]
   );
 
   // Line summary for sidebar
