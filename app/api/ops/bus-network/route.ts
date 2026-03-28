@@ -1179,7 +1179,6 @@ export async function POST(request: NextRequest) {
               bus_city_origin: row.city,
               booking_service_kind: "bus_city_hotel",
               status: "new",
-              meeting_point: row.hotel ?? null,
               billing_party_name: row.agency ?? null,
             }).select("id").single();
             if (svcErr || !svc) {
@@ -1196,7 +1195,7 @@ export async function POST(request: NextRequest) {
               p_stop_name: stop.stop_name,
               p_direction: parsed.direction,
               p_pax_assigned: row.pax,
-              p_notes: row.notes ?? null,
+              p_notes: row.hotel ? `Hotel: ${row.hotel}` : (row.notes ?? null),
               p_created_by_user_id: auth.user.id,
             });
             if (allocErr) {
