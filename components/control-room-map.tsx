@@ -31,10 +31,14 @@ function statusPalette(status: GpsControlRoomEntry["status_key"], selected: bool
 }
 
 function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
-  const palette = statusPalette(entry.status_key, selected);
+  const offlineWithActiveService = entry.status_key === "offline" && Boolean(entry.active_service);
+  const palette = offlineWithActiveService && !selected
+    ? { bg: "#be123c", border: "#881337", text: "#fff1f2", glow: "0 0 0 4px rgba(225,29,72,0.24)" }
+    : statusPalette(entry.status_key, selected);
   const label = escapeHtml((entry.pms_label ?? entry.label).slice(0, selected ? 16 : 11));
   const line = escapeHtml((entry.line_name ?? "").slice(0, selected ? 14 : 10));
-  const size = selected ? 52 : 40;
+  const showDetails = selected;
+  const size = selected ? 52 : 38;
   const speed = entry.speed_kmh !== null ? Math.round(entry.speed_kmh) : null;
 
   return L.divIcon({
@@ -52,6 +56,7 @@ function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
           background:${palette.bg};
           color:${palette.text};
           box-shadow:${palette.glow}, 0 10px 24px rgba(15,23,42,0.18);
+          position:relative;
         ">
           <svg xmlns="http://www.w3.org/2000/svg" width="${size - 16}" height="${size - 16}" viewBox="0 0 32 32" fill="none">
             <rect x="5" y="6" width="22" height="13" rx="3.2" stroke="${palette.text}" stroke-width="2"/>
@@ -61,26 +66,47 @@ function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
             <rect x="8" y="9" width="6.5" height="4.5" rx="1.2" fill="${palette.text}" opacity="0.9"/>
             <rect x="17.5" y="9" width="6.5" height="4.5" rx="1.2" fill="${palette.text}" opacity="0.9"/>
           </svg>
+          ${offlineWithActiveService && !selected ? `
+            <div style="
+              position:absolute;
+              top:-6px;
+              right:-6px;
+              min-width:18px;
+              height:18px;
+              border-radius:999px;
+              border:2px solid #fff;
+              background:#fff1f2;
+              color:#9f1239;
+              display:flex;
+              align-items:center;
+              justify-content:center;
+              font-size:10px;
+              font-weight:800;
+              box-shadow:0 6px 16px rgba(15,23,42,0.18);
+            ">!</div>
+          ` : ""}
         </div>
-        <div style="
-          min-width:${selected ? 86 : 64}px;
-          max-width:${selected ? 120 : 86}px;
-          border-radius:${selected ? 10 : 8}px;
-          border:1px solid ${palette.border};
-          background:${selected ? "rgba(255,255,255,0.97)" : "rgba(255,255,255,0.92)"};
-          box-shadow:${selected ? "0 10px 24px rgba(15,23,42,0.14)" : "0 8px 18px rgba(15,23,42,0.10)"};
-          padding:${selected ? "5px 8px" : "4px 6px"};
-          text-align:center;
-          font-family:ui-sans-serif,system-ui,sans-serif;
-        ">
-          <div style="font-size:${selected ? 11 : 10}px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</div>
-          <div style="font-size:${selected ? 10 : 9}px;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${line || "Bus live"}</div>
-          ${selected ? `<div style="font-size:10px;font-weight:700;color:${palette.border};">${speed !== null ? `${speed} km/h` : "-- km/h"}</div>` : ""}
-        </div>
+        ${showDetails ? `
+          <div style="
+            min-width:96px;
+            max-width:124px;
+            border-radius:10px;
+            border:1px solid ${palette.border};
+            background:rgba(255,255,255,0.97);
+            box-shadow:0 10px 24px rgba(15,23,42,0.14);
+            padding:5px 8px;
+            text-align:center;
+            font-family:ui-sans-serif,system-ui,sans-serif;
+          ">
+            <div style="font-size:11px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</div>
+            <div style="font-size:10px;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${line || "Bus live"}</div>
+            <div style="font-size:10px;font-weight:700;color:${palette.border};">${speed !== null ? `${speed} km/h` : "-- km/h"}</div>
+          </div>
+        ` : ""}
       </div>
     `,
-    iconSize: [size + 18, size + (selected ? 42 : 28)],
-    iconAnchor: [size / 2 + 12, size / 2 + 8],
+    iconSize: [size + (showDetails ? 20 : 8), size + (showDetails ? 44 : 8)],
+    iconAnchor: [size / 2 + 8, size / 2 + 8],
     popupAnchor: [0, -(size / 2 + 6)]
   });
 }
@@ -94,38 +120,46 @@ function formatTimestamp(ts: string) {
 }
 
 /**
- * Dispone a spirale i veicoli con la stessa posizione GPS
- * per evitare sovrapposizione delle icone.
+ * Distribuisce i mezzi molto vicini su piccole corone concentriche
+ * per evitare pile di marker nello stesso punto.
  */
 function spreadOverlapping(items: GpsControlRoomEntry[]): Array<GpsControlRoomEntry & { _lat: number; _lng: number }> {
-  const OFFSET = 0.00028; // ~31m in gradi — sufficiente a separare le icone a zoom 13
+  const PROXIMITY = 0.00018; // ~20m
+  const BASE_OFFSET = 0.00022; // ~24m
+  const groups: GpsControlRoomEntry[][] = [];
 
-  const groups = new Map<string, GpsControlRoomEntry[]>();
   for (const item of items) {
-    const key = `${item.lat.toFixed(5)},${item.lng.toFixed(5)}`;
-    const g = groups.get(key);
-    if (g) g.push(item);
-    else groups.set(key, [item]);
+    const group = groups.find((candidate) => {
+      const anchor = candidate[0];
+      return Math.abs(anchor.lat - item.lat) <= PROXIMITY && Math.abs(anchor.lng - item.lng) <= PROXIMITY;
+    });
+    if (group) {
+      group.push(item);
+    } else {
+      groups.push([item]);
+    }
   }
 
   const result: Array<GpsControlRoomEntry & { _lat: number; _lng: number }> = [];
-  for (const group of groups.values()) {
+  for (const group of groups) {
     if (group.length === 1) {
       result.push({ ...group[0], _lat: group[0].lat, _lng: group[0].lng });
       continue;
     }
+
     group.forEach((item, i) => {
-      if (i === 0) {
-        result.push({ ...item, _lat: item.lat, _lng: item.lng });
-      } else {
-        const angle = (2 * Math.PI * (i - 1)) / (group.length - 1);
-        const radius = OFFSET * (1 + Math.floor((i - 1) / 8) * 0.6);
-        result.push({
-          ...item,
-          _lat: item.lat + radius * Math.cos(angle),
-          _lng: item.lng + radius * Math.sin(angle)
-        });
-      }
+      const ring = Math.floor(i / 6);
+      const ringStart = ring * 6;
+      const pointsInRing = Math.min(6, group.length - ringStart);
+      const positionInRing = i - ringStart;
+      const angle = (2 * Math.PI * positionInRing) / pointsInRing;
+      const radius = BASE_OFFSET * (1 + ring * 0.85 + Math.min(group.length, 8) * 0.08);
+
+      result.push({
+        ...item,
+        _lat: item.lat + radius * Math.cos(angle),
+        _lng: item.lng + radius * Math.sin(angle)
+      });
     });
   }
   return result;
@@ -150,7 +184,7 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
-    const map = L.map(containerRef.current, { zoomControl: true, preferCanvas: true }).setView(DEFAULT_CENTER, 12);
+    const map = L.map(containerRef.current, { zoomControl: true }).setView(DEFAULT_CENTER, 12);
     L.tileLayer(TILE_URL, {
       attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
       subdomains: "abcd",
@@ -162,9 +196,10 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
     return () => {
       markersRef.current?.clearLayers();
       markersRef.current = null;
-      map.remove();
       mapRef.current = null;
       fittedRef.current = false;
+      map.off();
+      map.remove();
     };
   }, []);
 
@@ -247,7 +282,7 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
         <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.84)_0%,rgba(255,255,255,0)_100%)]" />
         <div className="pointer-events-none absolute inset-y-0 right-0 w-20 bg-[linear-gradient(270deg,rgba(248,250,252,0.65)_0%,rgba(248,250,252,0)_100%)]" />
 
-        <div className="absolute left-4 top-4 z-[500] flex flex-wrap gap-2">
+        <div className="absolute left-[4.5rem] top-4 z-[500] flex max-w-[calc(100%-5.5rem)] flex-wrap gap-2 md:left-[5rem] md:max-w-[420px]">
           <div className="rounded-2xl border border-white/70 bg-white/92 px-3 py-2 shadow-[0_12px_30px_rgba(15,23,42,0.12)] backdrop-blur">
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Live</p>
             <p className="mt-1 text-lg font-semibold text-slate-950">{summary.total}</p>
