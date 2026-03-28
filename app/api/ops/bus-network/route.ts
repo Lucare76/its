@@ -752,21 +752,24 @@ export async function POST(request: NextRequest) {
 
       // Ordina per latitudine: andata = nord→sud (lat desc), ritorno = sud→nord (lat asc)
       const withCoords = allStops.filter((s): s is RawStop & { lat: number } => s.lat != null);
-      const sorted = withCoords.sort((a, b) =>
+      const withoutCoords = allStops.filter((s) => s.lat == null);
+      const sorted = [...withCoords].sort((a, b) =>
         parsed.direction === "arrival" ? b.lat - a.lat : a.lat - b.lat
       );
 
-      // Aggiorna stop_order
-      for (let i = 0; i < sorted.length; i++) {
+      // Aggiorna stop_order: geocodificate per prime, senza coordinate in fondo
+      const allOrdered = [...sorted, ...withoutCoords];
+      for (let i = 0; i < allOrdered.length; i++) {
         await auth.admin.from("tenant_bus_line_stops")
           .update({ stop_order: i + 1, order_index: i + 1 })
-          .eq("tenant_id", tenantId).eq("id", sorted[i].id);
+          .eq("tenant_id", tenantId).eq("id", allOrdered[i].id);
       }
 
       return NextResponse.json({
         ok: true,
         geocoded: withCoords.length,
-        skipped: allStops.length - withCoords.length,
+        skipped: withoutCoords.length,
+        skipped_names: withoutCoords.map((s) => s.stop_name).join(", "),
         ...(await loadBusNetwork(auth))
       });
     }

@@ -428,9 +428,13 @@ export default function BusNetworkPage() {
   const geoSortStops = useCallback(async () => {
     if (!selectedLine) return;
     setGeoSorting(true);
-    const res = await post("geo_sort_stops", { bus_line_id: selectedLine.id, direction }) as ({ geocoded?: number; skipped?: number } | null);
+    const res = await post("geo_sort_stops", { bus_line_id: selectedLine.id, direction }) as ({ geocoded?: number; skipped?: number; skipped_names?: string } | null);
     setGeoSorting(false);
-    if (res) setMessage(`Ordinamento geografico completato: ${res.geocoded ?? 0} fermate geocodificate, ${res.skipped ?? 0} senza coordinate ignorate.`);
+    if (res) {
+      const msg = `Ordinamento geografico: ${res.geocoded ?? 0} fermate ordinate per latitudine.`;
+      const skip = res.skipped ?? 0;
+      setMessage(skip > 0 ? `${msg} ${skip} non geocodificate (messe in fondo): ${res.skipped_names ?? ""}` : msg);
+    }
   }, [selectedLine, direction, post]);
 
   const timeSortStops = useCallback(async () => {

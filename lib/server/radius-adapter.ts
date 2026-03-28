@@ -55,8 +55,8 @@ async function getAccessToken(): Promise<string> {
   }
 
   const json = await res.json() as Record<string, unknown>;
-  const token = String(json.access_token ?? json.token ?? "");
-  if (!token) throw new Error("Radius OAuth2: access_token non trovato nella risposta.");
+  const token = String(json.access_token ?? json.access ?? json.token ?? "");
+  if (!token) throw new Error(`Radius OAuth2: access_token non trovato nella risposta. Campi: ${Object.keys(json).join(", ")}`);
 
   cachedAccessToken = token;
   cacheExpiresAt = Date.now() + 29 * 24 * 60 * 60 * 1000;
