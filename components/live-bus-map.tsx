@@ -82,6 +82,48 @@ function formatTimestamp(ts: string): string {
   }
 }
 
+/**
+ * Se più veicoli hanno la stessa posizione GPS (stesso parcheggio),
+ * li dispone a spirale intorno al punto originale per evitare la sovrapposizione.
+ */
+function spreadOverlapping(entries: GpsLiveEntry[]): Array<GpsLiveEntry & { _lat: number; _lng: number }> {
+  const OFFSET = 0.0003; // ~33m in gradi — abbastanza per separare le icone a zoom 13–14
+
+  // raggruppa per coordinate arrotondate a 5 decimali (~1m)
+  const groups = new Map<string, GpsLiveEntry[]>();
+  for (const e of entries) {
+    const key = `${e.lat.toFixed(5)},${e.lng.toFixed(5)}`;
+    const g = groups.get(key);
+    if (g) g.push(e);
+    else groups.set(key, [e]);
+  }
+
+  const result: Array<GpsLiveEntry & { _lat: number; _lng: number }> = [];
+
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      result.push({ ...group[0], _lat: group[0].lat, _lng: group[0].lng });
+      continue;
+    }
+    // Spirale: primo al centro, poi in cerchio con raggio crescente
+    group.forEach((entry, i) => {
+      if (i === 0) {
+        result.push({ ...entry, _lat: entry.lat, _lng: entry.lng });
+      } else {
+        const angle = (2 * Math.PI * (i - 1)) / (group.length - 1);
+        const radius = OFFSET * (1 + Math.floor((i - 1) / 8) * 0.5);
+        result.push({
+          ...entry,
+          _lat: entry.lat + radius * Math.cos(angle),
+          _lng: entry.lng + radius * Math.sin(angle)
+        });
+      }
+    });
+  }
+
+  return result;
+}
+
 export function LiveBusMap({ entries, selectedId, onSelect }: LiveBusMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -114,12 +156,21 @@ export function LiveBusMap({ entries, selectedId, onSelect }: LiveBusMapProps) {
     markers.clearLayers();
     const bounds = L.latLngBounds([]);
 
-    entries.forEach((entry) => {
-      if (!entry.lat || !entry.lng) return;
+    const spread = spreadOverlapping(entries.filter((e) => e.lat && e.lng));
 
+    spread.forEach((entry) => {
       const isSelected = selectedId === entry.radius_vehicle_id;
       const icon = busIcon(entry, isSelected);
-      const marker = L.marker([entry.lat, entry.lng], { icon });
+      const marker = L.marker([entry._lat, entry._lng], { icon });
+
+      // Se spostato, traccia una linea tratteggiata verso la posizione reale
+      const displaced = entry._lat !== entry.lat || entry._lng !== entry.lng;
+      if (displaced) {
+        L.polyline(
+          [[entry.lat, entry.lng], [entry._lat, entry._lng]],
+          { color: "#94a3b8", weight: 1.2, dashArray: "4 4", opacity: 0.7 }
+        ).addTo(markers);
+      }
 
       const label = escapeHtml(entry.pms_label ?? entry.label);
       const line = entry.line_name ? `<br/>Linea: ${escapeHtml(entry.line_name)}` : "";
