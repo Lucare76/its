@@ -150,20 +150,41 @@ export async function validateBusMoveRequest(
     throw new Error("Il bus destinazione deve essere diverso dal bus origine.");
   }
 
-  const { data: targetAllocations, error: targetAllocationsError } = await auth.admin
-    .from("tenant_bus_allocations")
-    .select("pax_assigned")
+  // Recupera la data del servizio dell'allocazione per filtrare solo la stessa data
+  const { data: svcRow, error: svcErr } = await auth.admin
+    .from("services")
+    .select("date,direction")
     .eq("tenant_id", input.tenantId)
-    .eq("bus_unit_id", targetUnit.id);
+    .eq("id", allocation.service_id)
+    .single();
+  if (svcErr || !svcRow) throw new Error("Servizio dell'allocazione non trovato.");
+  const serviceDate = (svcRow as { date: string; direction: string }).date;
+  const serviceDirection = (svcRow as { date: string; direction: string }).direction;
 
-  if (targetAllocationsError) {
-    throw new Error(targetAllocationsError.message);
+  // Conta solo i pax del bus destinazione per la stessa data e direzione
+  const { data: sameDateServices, error: sameDateErr } = await auth.admin
+    .from("services")
+    .select("id")
+    .eq("tenant_id", input.tenantId)
+    .eq("date", serviceDate)
+    .eq("direction", serviceDirection);
+  if (sameDateErr) throw new Error(sameDateErr.message);
+
+  const sameDateServiceIds = (sameDateServices ?? []).map((s: { id: string }) => s.id);
+  let assignedToTarget = 0;
+  if (sameDateServiceIds.length > 0) {
+    const { data: targetAllocations, error: targetAllocationsError } = await auth.admin
+      .from("tenant_bus_allocations")
+      .select("pax_assigned")
+      .eq("tenant_id", input.tenantId)
+      .eq("bus_unit_id", targetUnit.id)
+      .in("service_id", sameDateServiceIds);
+    if (targetAllocationsError) throw new Error(targetAllocationsError.message);
+    assignedToTarget = (targetAllocations ?? []).reduce(
+      (total: number, row: { pax_assigned: number | null }) => total + Number(row.pax_assigned ?? 0),
+      0
+    );
   }
-
-  const assignedToTarget = (targetAllocations ?? []).reduce(
-    (total: number, row: { pax_assigned: number | null }) => total + Number(row.pax_assigned ?? 0),
-    0
-  );
   const remainingSeats = Math.max(0, Number(targetUnit.capacity ?? 0) - assignedToTarget);
 
   if (input.paxMoved > remainingSeats) {
