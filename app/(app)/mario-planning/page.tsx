@@ -20,9 +20,7 @@ type PlanningCell = {
 type BusUnit = {
   id: string;
   label: string;
-  capacity: number;
   sort_order: number | null;
-  driver_name: string | null;
 };
 
 type PlanningTab = "bus" | "gruppi" | "route";
@@ -181,18 +179,32 @@ function BusGeneralPlanning({ token }: { token: string }) {
   const [editColor, setEditColor] = useState("yellow");
   const editInputRef = useRef<HTMLInputElement>(null);
 
+  // gestisci mezzi modal
+  const [showManage, setShowManage] = useState(false);
+  const [newRowLabel, setNewRowLabel] = useState("");
+  const [savingRow, setSavingRow] = useState(false);
+
+  const loadRows = useCallback(async () => {
+    const r = await fetch("/api/planning/bus-rows", { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) return;
+    const d = (await r.json()) as { rows: BusUnit[] };
+    setBusUnits(d.rows ?? []);
+  }, [token]);
+
+  const loadCells = useCallback(async () => {
+    const r = await fetch(`/api/planning/cells?type=bus&year=${year}&month=${month}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) return;
+    const d = (await r.json()) as { cells: PlanningCell[] };
+    setCells(d.cells ?? []);
+  }, [token, year, month]);
+
   const load = useCallback(async () => {
     setError(null);
-    try {
-      const r = await fetch(`/api/planning/cells?type=bus&year=${year}&month=${month}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!r.ok) throw new Error();
-      const d = (await r.json()) as { bus_units: BusUnit[]; cells: PlanningCell[] };
-      setBusUnits(d.bus_units ?? []);
-      setCells(d.cells ?? []);
-    } catch { setError("Errore caricamento."); }
-  }, [token, year, month]);
+    try { await Promise.all([loadRows(), loadCells()]); }
+    catch { setError("Errore caricamento."); }
+  }, [loadRows, loadCells]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (newBlock) setTimeout(() => newInputRef.current?.focus(), 30); }, [newBlock]);
@@ -302,15 +314,42 @@ function BusGeneralPlanning({ token }: { token: string }) {
     } finally { setSaving(false); }
   };
 
+  const addRow = async () => {
+    if (!newRowLabel.trim() || savingRow) return;
+    setSavingRow(true);
+    try {
+      await fetch("/api/planning/bus-rows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ label: newRowLabel.trim() }),
+      });
+      setNewRowLabel("");
+      await loadRows();
+    } finally { setSavingRow(false); }
+  };
+
+  const deleteRow = async (id: string) => {
+    if (!confirm("Eliminare questo mezzo? I blocchi pianificati per questo mezzo rimarranno nel DB ma non saranno visibili.")) return;
+    await fetch("/api/planning/bus-rows", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ id }),
+    });
+    await loadRows();
+  };
+
   return (
     <div className="space-y-4">
-      <MonthNav year={year} month={month} minYear={cy - 2} maxYear={cy + 2} setYear={setYear} setMonth={setMonth} />
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <MonthNav year={year} month={month} minYear={cy - 2} maxYear={cy + 2} setYear={setYear} setMonth={setMonth} />
+        <button onClick={() => setShowManage(true)} className="btn-secondary text-sm">⚙ Gestisci mezzi</button>
+      </div>
       {error && <p className="text-sm text-red-500">{error}</p>}
 
       {busUnits.length === 0 ? (
         <div className="card p-8 text-center space-y-2">
-          <p className="text-text font-medium">Nessun mezzo trovato</p>
-          <p className="text-muted text-sm">Aggiungi i mezzi da <a href="/bus-network" className="text-blue-600 underline">Rete Bus</a>.</p>
+          <p className="text-text font-medium">Nessun mezzo configurato</p>
+          <p className="text-muted text-sm">Clicca su "Gestisci mezzi" per aggiungere i bus.</p>
         </div>
       ) : (
         <>
@@ -380,9 +419,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
                         className="sticky left-0 z-10 border-r border-gray-200 px-2 py-1.5 min-w-[140px]"
                         style={{ background: ri % 2 === 0 ? "white" : "#f9fafb" }}
                       >
-                        <div className="font-semibold text-text text-[11px] leading-tight">{unit.label}</div>
-                        <div className="text-muted text-[10px]">POSTI {unit.capacity}</div>
-                        {unit.driver_name && <div className="text-[9px] text-muted opacity-60 truncate">{unit.driver_name}</div>}
+                        <div className="font-semibold text-text text-[11px] leading-tight uppercase">{unit.label}</div>
                       </td>
                       {tds}
                     </tr>
@@ -453,6 +490,44 @@ function BusGeneralPlanning({ token }: { token: string }) {
               {saving ? "…" : "Salva"}
             </button>
             <button className="btn-secondary text-sm" onClick={() => setNewBlock(null)}>Annulla</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Gestisci mezzi modal */}
+      {showManage && (
+        <Modal title="Gestisci mezzi" onClose={() => setShowManage(false)}>
+          <div className="space-y-2 max-h-64 overflow-y-auto mb-4">
+            {busUnits.length === 0 && <p className="text-sm text-muted text-center py-2">Nessun mezzo aggiunto.</p>}
+            {busUnits.map((u) => (
+              <div key={u.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-gray-50 border border-border">
+                <span className="text-sm font-semibold uppercase text-text">{u.label}</span>
+                <button
+                  onClick={() => void deleteRow(u.id)}
+                  className="text-red-500 hover:text-red-700 text-xs px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                >
+                  Elimina
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={newRowLabel}
+              onChange={(e) => setNewRowLabel(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void addRow()}
+              className="input-saas flex-1 text-sm uppercase"
+              placeholder="Es. 350 SHD"
+              // eslint-disable-next-line jsx-a11y/no-autofocus
+              autoFocus
+            />
+            <button
+              onClick={() => void addRow()}
+              disabled={savingRow || !newRowLabel.trim()}
+              className="btn-primary text-sm"
+            >
+              {savingRow ? "…" : "+ Aggiungi"}
+            </button>
           </div>
         </Modal>
       )}
