@@ -621,11 +621,38 @@ export async function POST(request: NextRequest) {
       const orderA = (resA.data as { stop_order: number }).stop_order;
       const orderB = (resB.data as { stop_order: number }).stop_order;
 
-      // Aggiorna i 2 stop sequenzialmente senza .select() (compatibile con questa versione PostgREST)
-      const sw1 = await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderB, order_index: orderB }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_a);
-      if (sw1.error) throw new Error("Swap A: " + sw1.error.message);
-      const sw2 = await auth.admin.from("tenant_bus_line_stops").update({ stop_order: orderA, order_index: orderA }).eq("tenant_id", tenantId).eq("id", parsed.stop_id_b);
-      if (sw2.error) throw new Error("Swap B: " + sw2.error.message);
+      // Leggi tutti gli stop della stessa linea+direzione per riscrivere in blocco
+      const refRes = await auth.admin.from("tenant_bus_line_stops")
+        .select("id,bus_line_id,direction")
+        .eq("tenant_id", tenantId).eq("id", parsed.stop_id_a).single();
+      if (refRes.error || !refRes.data) throw new Error("Fermata A non trovata");
+      const { bus_line_id, direction: stopDir } = refRes.data as { bus_line_id: string; direction: string };
+
+      const allStopsRes = await auth.admin.from("tenant_bus_line_stops")
+        .select("id,stop_order")
+        .eq("tenant_id", tenantId).eq("bus_line_id", bus_line_id).eq("direction", stopDir)
+        .order("stop_order");
+      if (allStopsRes.error) throw new Error(allStopsRes.error.message);
+
+      type StopRow = { id: string; stop_order: number };
+      const allStops = (allStopsRes.data ?? []) as StopRow[];
+      const idxA = allStops.findIndex((s) => s.id === parsed.stop_id_a);
+      const idxB = allStops.findIndex((s) => s.id === parsed.stop_id_b);
+      if (idxA < 0 || idxB < 0) throw new Error("Fermate non trovate nell'elenco");
+
+      const reordered = [...allStops];
+      [reordered[idxA], reordered[idxB]] = [reordered[idxB], reordered[idxA]];
+
+      // Aggiorna tutti in parallelo con stop_order sequenziale (1,2,3,...) — evita stale reads
+      const results = await Promise.all(
+        reordered.map((s, i) =>
+          auth.admin.from("tenant_bus_line_stops")
+            .update({ stop_order: i + 1, order_index: i + 1 })
+            .eq("tenant_id", tenantId).eq("id", s.id)
+        )
+      );
+      const failed = results.find((r) => r.error);
+      if (failed?.error) throw new Error(failed.error.message);
 
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
