@@ -20,6 +20,7 @@ type PlanningCell = {
 type BusUnit = {
   id: string;
   label: string;
+  notes: string | null;
   sort_order: number | null;
 };
 
@@ -53,6 +54,33 @@ function daysInMonth(year: number, month: number) {
 
 function isSunday(year: number, month: number, day: number) {
   return new Date(year, month - 1, day).getDay() === 0;
+}
+
+// Calcola Pasqua (algoritmo anonimo gregoriano) → [mese 1-based, giorno]
+function easterDate(year: number): [number, number] {
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100;
+  const d = Math.floor(b / 4), e = b % 4;
+  const f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return [month, day];
+}
+
+function isItalianHoliday(year: number, month: number, day: number): boolean {
+  const fixed: [number, number][] = [
+    [1, 1], [1, 6], [4, 25], [5, 1], [6, 2],
+    [8, 15], [11, 1], [12, 8], [12, 25], [12, 26],
+  ];
+  if (fixed.some(([m, d]) => m === month && d === day)) return true;
+  // Lunedì di Pasqua
+  const [em, ed] = easterDate(year);
+  const easter = new Date(year, em - 1, ed);
+  easter.setDate(easter.getDate() + 1);
+  return easter.getMonth() + 1 === month && easter.getDate() === day;
 }
 
 function toDateStr(year: number, month: number, day: number) {
@@ -182,6 +210,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
   // gestisci mezzi modal
   const [showManage, setShowManage] = useState(false);
   const [newRowLabel, setNewRowLabel] = useState("");
+  const [newRowNotes, setNewRowNotes] = useState("");
   const [savingRow, setSavingRow] = useState(false);
 
   const loadRows = useCallback(async () => {
@@ -321,9 +350,10 @@ function BusGeneralPlanning({ token }: { token: string }) {
       await fetch("/api/planning/bus-rows", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ label: newRowLabel.trim() }),
+        body: JSON.stringify({ label: newRowLabel.trim(), notes: newRowNotes.trim() || null }),
       });
       setNewRowLabel("");
+      setNewRowNotes("");
       await loadRows();
     } finally { setSavingRow(false); }
   };
@@ -354,20 +384,29 @@ function BusGeneralPlanning({ token }: { token: string }) {
       ) : (
         <>
           <div className="overflow-x-auto rounded-xl border border-border shadow-sm select-none">
-            <table className="border-collapse" style={{ minWidth: `${140 + numDays * 44}px` }}>
+            <table className="border-collapse" style={{ minWidth: `${150 + numDays * 40}px` }}>
               <thead>
                 <tr>
-                  <th className="sticky left-0 z-20 bg-gray-900 text-white px-3 py-2.5 text-left min-w-[140px] border-r border-gray-700 font-bold uppercase text-[11px] tracking-wider">
+                  <th className="sticky left-0 z-20 bg-green-600 text-white px-3 py-2 text-center min-w-[150px] border-r border-green-700 font-bold uppercase text-[12px] tracking-wider">
                     AUTOBUS
                   </th>
-                  {days.map((d) => (
-                    <th
-                      key={d}
-                      className={`w-[44px] min-w-[44px] py-2.5 text-center border-l border-gray-600 font-bold text-[11px] ${isSunday(year, month, d) ? "bg-red-600 text-white" : "bg-gray-900 text-white"}`}
-                    >
-                      {d}
-                    </th>
-                  ))}
+                  {days.map((d) => {
+                    const sun = isSunday(year, month, d);
+                    const hol = !sun && isItalianHoliday(year, month, d);
+                    return (
+                      <th
+                        key={d}
+                        className={[
+                          "w-[40px] min-w-[40px] py-2 text-center border-l font-bold text-[11px]",
+                          sun ? "bg-red-600 text-white border-red-700" :
+                          hol ? "bg-pink-400 text-white border-pink-500" :
+                               "bg-green-600 text-white border-green-700",
+                        ].join(" ")}
+                      >
+                        {d}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -385,7 +424,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
                           <td
                             key={d}
                             colSpan={Math.min(e, numDays) - s + 1}
-                            className={`border-l border-gray-300 px-2 py-1 cursor-pointer text-center font-bold text-[11px] uppercase leading-tight hover:opacity-80 transition-opacity ${colorTw(block.bg_color)}`}
+                            className={`border border-gray-400 px-1 py-0 cursor-pointer text-center font-bold text-[10px] uppercase leading-tight hover:opacity-80 transition-opacity ${colorTw(block.bg_color)}`}
                             onClick={() => openEdit(block)}
                             title="Clicca per modificare"
                           >
@@ -398,16 +437,17 @@ function BusGeneralPlanning({ token }: { token: string }) {
                       }
                     } else {
                       const sun = isSunday(year, month, d);
-                      const rowBg = ri % 2 === 0 ? "bg-white" : "bg-gray-50/60";
+                      const hol = !sun && isItalianHoliday(year, month, d);
+                      const rowBg = ri % 2 === 0 ? "#ffffff" : "#f5f5f5";
                       tds.push(
                         <td
                           key={d}
-                          className={[
-                            "border-l border-gray-200 h-[46px] w-[44px] min-w-[44px] hover:bg-blue-50 transition-colors",
-                            sun ? "bg-red-50" : rowBg,
-                          ].join(" ")}
+                          className="border border-gray-300 w-[40px] min-w-[40px] h-[38px] hover:bg-blue-50 transition-colors"
+                          style={{
+                            background: sun ? "#fee2e2" : hol ? "#fce7f3" : rowBg,
+                            cursor: "cell",
+                          }}
                           onClick={() => onCellClick(unit.id, d)}
-                          style={{ cursor: "cell" }}
                         />
                       );
                       d++;
@@ -416,10 +456,11 @@ function BusGeneralPlanning({ token }: { token: string }) {
                   return (
                     <tr key={unit.id}>
                       <td
-                        className="sticky left-0 z-10 border-r border-gray-200 px-2 py-1.5 min-w-[140px]"
-                        style={{ background: ri % 2 === 0 ? "white" : "#f9fafb" }}
+                        className="sticky left-0 z-10 border border-gray-300 px-2 py-1 min-w-[150px]"
+                        style={{ background: ri % 2 === 0 ? "white" : "#f5f5f5" }}
                       >
-                        <div className="font-semibold text-text text-[11px] leading-tight uppercase">{unit.label}</div>
+                        <div className="font-bold text-text text-[11px] uppercase leading-tight">{unit.label}</div>
+                        {unit.notes && <div className="text-[10px] text-muted leading-tight">{unit.notes}</div>}
                       </td>
                       {tds}
                     </tr>
@@ -429,8 +470,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
             </table>
           </div>
           <p className="text-xs text-muted">
-            Clicca su una cella vuota per aggiungere un blocco. Domeniche in rosso.
-            Clicca su un blocco esistente per modificarlo.
+            Clicca su una cella vuota per aggiungere un blocco · Domeniche <span className="text-red-600 font-semibold">rosse</span> · Festività <span className="text-pink-500 font-semibold">rosa</span>
           </p>
         </>
       )}
@@ -501,30 +541,40 @@ function BusGeneralPlanning({ token }: { token: string }) {
             {busUnits.length === 0 && <p className="text-sm text-muted text-center py-2">Nessun mezzo aggiunto.</p>}
             {busUnits.map((u) => (
               <div key={u.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-gray-50 border border-border">
-                <span className="text-sm font-semibold uppercase text-text">{u.label}</span>
+                <div>
+                  <div className="text-sm font-semibold uppercase text-text">{u.label}</div>
+                  {u.notes && <div className="text-[11px] text-muted">{u.notes}</div>}
+                </div>
                 <button
                   onClick={() => void deleteRow(u.id)}
-                  className="text-red-500 hover:text-red-700 text-xs px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                  className="text-red-500 hover:text-red-700 text-xs px-2 py-1 rounded hover:bg-red-50 transition-colors shrink-0"
                 >
                   Elimina
                 </button>
               </div>
             ))}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 mb-2">
             <input
               value={newRowLabel}
               onChange={(e) => setNewRowLabel(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && void addRow()}
               className="input-saas flex-1 text-sm uppercase"
-              placeholder="Es. 350 SHD"
+              placeholder="Nome mezzo (es. 350 SHD)"
               // eslint-disable-next-line jsx-a11y/no-autofocus
               autoFocus
+            />
+            <input
+              value={newRowNotes}
+              onChange={(e) => setNewRowNotes(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void addRow()}
+              className="input-saas w-28 text-sm"
+              placeholder="Posti (51+1)"
             />
             <button
               onClick={() => void addRow()}
               disabled={savingRow || !newRowLabel.trim()}
-              className="btn-primary text-sm"
+              className="btn-primary text-sm whitespace-nowrap"
             >
               {savingRow ? "…" : "+ Aggiungi"}
             </button>

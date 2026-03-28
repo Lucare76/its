@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
     const tenantId = auth.membership.tenant_id;
     const { data, error } = await auth.admin
       .from("tenant_mario_bus_rows")
-      .select("id, label, sort_order")
+      .select("id, label, notes, sort_order")
       .eq("tenant_id", tenantId)
       .order("sort_order")
       .order("label");
@@ -30,10 +30,14 @@ export async function POST(request: NextRequest) {
     if (auth instanceof NextResponse) return auth;
 
     const body = await request.json();
-    const { label } = z.object({ label: z.string().min(1).max(100) }).parse(body);
+    const { label, notes } = z
+      .object({
+        label: z.string().min(1).max(100),
+        notes: z.string().max(100).nullable().optional(),
+      })
+      .parse(body);
     const tenantId = auth.membership.tenant_id;
 
-    // sort_order = max + 1
     const { data: existing } = await auth.admin
       .from("tenant_mario_bus_rows")
       .select("sort_order")
@@ -44,8 +48,13 @@ export async function POST(request: NextRequest) {
 
     const { data, error } = await auth.admin
       .from("tenant_mario_bus_rows")
-      .insert({ tenant_id: tenantId, label: label.trim().toUpperCase(), sort_order: nextOrder })
-      .select("id, label, sort_order")
+      .insert({
+        tenant_id: tenantId,
+        label: label.trim().toUpperCase(),
+        notes: notes?.trim() ?? null,
+        sort_order: nextOrder,
+      })
+      .select("id, label, notes, sort_order")
       .single();
 
     if (error) throw new Error(error.message);
@@ -55,17 +64,18 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PATCH /api/planning/bus-rows — rinomina o riordina
+// PATCH /api/planning/bus-rows — rinomina, aggiorna notes o riordina
 export async function PATCH(request: NextRequest) {
   try {
     const auth = await authorizePricingRequest(request);
     if (auth instanceof NextResponse) return auth;
 
     const body = await request.json();
-    const { id, label, sort_order } = z
+    const { id, label, notes, sort_order } = z
       .object({
         id: z.string().uuid(),
         label: z.string().min(1).max(100).optional(),
+        notes: z.string().max(100).nullable().optional(),
         sort_order: z.number().int().min(0).optional(),
       })
       .parse(body);
@@ -73,6 +83,7 @@ export async function PATCH(request: NextRequest) {
 
     const update: Record<string, unknown> = {};
     if (label !== undefined) update.label = label.trim().toUpperCase();
+    if (notes !== undefined) update.notes = notes?.trim() ?? null;
     if (sort_order !== undefined) update.sort_order = sort_order;
 
     const { error } = await auth.admin
