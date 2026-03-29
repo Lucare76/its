@@ -14,6 +14,7 @@ import {
 import type { TransportMode } from "@/lib/types";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
+import { PdfClaudeUploader } from "@/components/pdf-claude-uploader";
 
 type PdfImportUiStatus = "preview" | "draft" | "confirmed" | "duplicate" | "ignored" | "failed";
 type BookingKind = "transfer_port_hotel" | "transfer_airport_hotel" | "transfer_train_hotel" | "bus_city_hotel" | "excursion";
@@ -812,6 +813,7 @@ export default function PdfImportsPage() {
 
   return (
     <section className="space-y-4">
+      <PdfClaudeUploader />
       <div data-testid="pdf-imports-page" className="card space-y-3 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
