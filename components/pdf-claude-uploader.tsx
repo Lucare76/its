@@ -112,6 +112,7 @@ export function PdfClaudeUploader() {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function process(file: File) {
@@ -202,8 +203,9 @@ export function PdfClaudeUploader() {
 
   async function saveDraft() {
     if (!data || !agency) return;
+    setSaveError(null);
     const token = await getAccessToken();
-    if (!token) { setError("Sessione scaduta."); return; }
+    if (!token) { setSaveError("Sessione scaduta. Ricarica la pagina."); return; }
     setSaving(true);
     try {
       const res = await fetch("/api/pdf/claude-save-draft", {
@@ -211,11 +213,15 @@ export function PdfClaudeUploader() {
         headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
         body: JSON.stringify({ extracted: data, pdf_base64: pdfBase64, filename, agency })
       });
-      const body = (await res.json()) as { ok?: boolean; inbound_email_id?: string; draft_service_id?: string; error?: string };
-      if (!res.ok || !body.ok) { setError(body.error ?? "Errore salvataggio."); }
-      else { setSavedId(body.inbound_email_id ?? null); }
+      let body: { ok?: boolean; inbound_email_id?: string; draft_service_id?: string; error?: string } = {};
+      try { body = await res.json(); } catch { /* empty */ }
+      if (!res.ok || !body.ok) {
+        setSaveError(body.error ?? `Errore HTTP ${res.status} — controlla la console per dettagli.`);
+      } else {
+        setSavedId(body.inbound_email_id ?? "ok");
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Errore di rete.");
+      setSaveError(e instanceof Error ? e.message : "Errore di rete.");
     } finally {
       setSaving(false);
     }
@@ -224,6 +230,7 @@ export function PdfClaudeUploader() {
   function reset() {
     setStep("idle");
     setError(null);
+    setSaveError(null);
     setAgency(null);
     setData(null);
     setPdfBase64(null);
@@ -439,6 +446,13 @@ export function PdfClaudeUploader() {
                   </div>
                 )}
               </div>
+
+              {/* Errore salvataggio */}
+              {saveError && (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-950/20 dark:text-rose-300">
+                  {saveError}
+                </div>
+              )}
 
               {/* Azioni */}
               <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
