@@ -70,6 +70,8 @@ create table if not exists public.hotels (
   lat double precision not null,
   lng double precision not null,
   zone text not null,
+  small_vehicle_only boolean not null default false,
+  small_vehicle_max_pax integer null,
   created_at timestamptz not null default now()
 );
 

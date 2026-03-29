@@ -66,6 +66,8 @@ export interface Hotel {
   lat: number;
   lng: number;
   zone: "Ischia Porto" | "Ischia Ponte" | "Casamicciola" | "Lacco Ameno" | "Forio" | "Barano" | "Serrara Fontana";
+  small_vehicle_only?: boolean;
+  small_vehicle_max_pax?: number | null;
   source?: string | null;
   source_osm_type?: "node" | "way" | "relation" | null;
   source_osm_id?: number | null;

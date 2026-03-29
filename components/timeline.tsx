@@ -9,6 +9,18 @@ interface TimelineProps {
   }>;
 }
 
+const timelineDateFormatter = new Intl.DateTimeFormat("it-IT", {
+  dateStyle: "short",
+  timeStyle: "short",
+  timeZone: "Europe/Rome"
+});
+
+function formatTimelineDate(value: string) {
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return value;
+  return timelineDateFormatter.format(parsed);
+}
+
 export function Timeline({ events }: TimelineProps) {
   if (events.length === 0) {
     return <div className="rounded-xl border border-dashed border-slate-300 p-3 text-sm text-slate-500">Nessun evento.</div>;
@@ -23,7 +35,7 @@ export function Timeline({ events }: TimelineProps) {
             <span className="text-[10px] uppercase tracking-[0.12em] text-slate-500">{event.type}</span>
           </div>
           {event.detail ? <p className="text-xs text-slate-600">{event.detail}</p> : null}
-          <p className="text-xs text-slate-500">{new Date(event.at).toLocaleString("it-IT")}</p>
+          <p className="text-xs text-slate-500">{formatTimelineDate(event.at)}</p>
           <p className="text-xs text-slate-500">Da: {event.by ?? "sistema"}</p>
         </li>
       ))}

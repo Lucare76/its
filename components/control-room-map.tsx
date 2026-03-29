@@ -11,7 +11,9 @@ interface ControlRoomMapProps {
 }
 
 const DEFAULT_CENTER: [number, number] = [40.7395, 13.9124];
-const TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+
+const TILE_PROVIDER = "OpenStreetMap";
+const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 
 function escapeHtml(value: string) {
   return value
@@ -35,36 +37,51 @@ function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
   const palette = offlineWithActiveService && !selected
     ? { bg: "#be123c", border: "#881337", text: "#fff1f2", glow: "0 0 0 4px rgba(225,29,72,0.24)" }
     : statusPalette(entry.status_key, selected);
-  const label = escapeHtml((entry.pms_label ?? entry.label).slice(0, selected ? 16 : 11));
-  const line = escapeHtml((entry.line_name ?? "").slice(0, selected ? 14 : 10));
+  const iconSurface = "#ffffff";
+  const iconStroke = selected ? "#cbd5e1" : "#d7e0ea";
+  const accent = palette.bg;
+  const label = escapeHtml((entry.pms_label ?? entry.label).slice(0, selected ? 18 : 12));
+  const line = escapeHtml((entry.line_name ?? "").slice(0, selected ? 16 : 11));
   const showDetails = selected;
-  const size = selected ? 52 : 38;
+  const size = selected ? 50 : 34;
   const speed = entry.speed_kmh !== null ? Math.round(entry.speed_kmh) : null;
 
   return L.divIcon({
     className: "",
     html: `
-      <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:5px;">
         <div style="
           width:${size}px;
           height:${size}px;
           display:flex;
           align-items:center;
           justify-content:center;
-          border-radius:16px;
-          border:2px solid ${palette.border};
-          background:${palette.bg};
-          color:${palette.text};
-          box-shadow:${palette.glow}, 0 10px 24px rgba(15,23,42,0.18);
+          border-radius:999px;
+          border:1px solid ${iconStroke};
+          background:${iconSurface};
+          color:${accent};
+          box-shadow:${palette.glow}, 0 8px 18px rgba(15,23,42,0.12);
           position:relative;
+          overflow:hidden;
         ">
-          <svg xmlns="http://www.w3.org/2000/svg" width="${size - 16}" height="${size - 16}" viewBox="0 0 32 32" fill="none">
-            <rect x="5" y="6" width="22" height="13" rx="3.2" stroke="${palette.text}" stroke-width="2"/>
-            <path d="M8 22h16" stroke="${palette.text}" stroke-width="2" stroke-linecap="round"/>
-            <circle cx="10.5" cy="24.5" r="2.5" fill="${palette.text}" opacity="0.95"/>
-            <circle cx="21.5" cy="24.5" r="2.5" fill="${palette.text}" opacity="0.95"/>
-            <rect x="8" y="9" width="6.5" height="4.5" rx="1.2" fill="${palette.text}" opacity="0.9"/>
-            <rect x="17.5" y="9" width="6.5" height="4.5" rx="1.2" fill="${palette.text}" opacity="0.9"/>
+          <div style="
+            position:absolute;
+            inset:auto 0 0 0;
+            height:${selected ? 5 : 4}px;
+            background:${accent};
+            opacity:0.95;
+          "></div>
+          <svg xmlns="http://www.w3.org/2000/svg" width="${size - 8}" height="${size - 8}" viewBox="0 0 40 40" fill="none" style="position:relative;z-index:1;">
+            <path d="M8.5 24.8v-8.4c0-4.1 3.3-7.4 7.4-7.4h7.8c3.9 0 6 1.7 6 5.2v10.6c0 1.9-1.5 3.5-3.5 3.5H12c-1.9 0-3.5-1.6-3.5-3.5Z" fill="#ffffff" stroke="#1f2937" stroke-width="1.8"/>
+            <path d="M11.2 14.9h15.4c1.2 0 1.9.5 1.9 1.5v1.4H10v-1.2c0-1.2.5-1.7 1.2-1.7Z" fill="${accent}"/>
+            <rect x="11.4" y="18.8" width="5.8" height="4.2" rx="0.9" fill="#eef4ff" stroke="#1f2937" stroke-width="1.3"/>
+            <rect x="17.8" y="18.8" width="5.8" height="4.2" rx="0.9" fill="#eef4ff" stroke="#1f2937" stroke-width="1.3"/>
+            <rect x="24.2" y="18.8" width="4" height="5.3" rx="0.9" fill="#eef4ff" stroke="#1f2937" stroke-width="1.3"/>
+            <path d="M13.8 25.8h9.2" stroke="${accent}" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="14.8" cy="28" r="3.6" fill="#1f2937"/>
+            <circle cx="14.8" cy="28" r="2.1" fill="#ffffff"/>
+            <circle cx="25.8" cy="28" r="3.6" fill="#1f2937"/>
+            <circle cx="25.8" cy="28" r="2.1" fill="#ffffff"/>
           </svg>
           ${offlineWithActiveService && !selected ? `
             <div style="
@@ -75,8 +92,8 @@ function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
               height:18px;
               border-radius:999px;
               border:2px solid #fff;
-              background:#fff1f2;
-              color:#9f1239;
+              background:${accent};
+              color:#fff;
               display:flex;
               align-items:center;
               justify-content:center;
@@ -88,19 +105,19 @@ function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
         </div>
         ${showDetails ? `
           <div style="
-            min-width:96px;
-            max-width:124px;
-            border-radius:10px;
-            border:1px solid ${palette.border};
+            min-width:124px;
+            max-width:148px;
+            border-radius:16px;
+            border:1px solid ${iconStroke};
             background:rgba(255,255,255,0.97);
-            box-shadow:0 10px 24px rgba(15,23,42,0.14);
-            padding:5px 8px;
+            box-shadow:0 12px 26px rgba(15,23,42,0.12);
+            padding:8px 11px;
             text-align:center;
             font-family:ui-sans-serif,system-ui,sans-serif;
           ">
             <div style="font-size:11px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</div>
-            <div style="font-size:10px;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${line || "Bus live"}</div>
-            <div style="font-size:10px;font-weight:700;color:${palette.border};">${speed !== null ? `${speed} km/h` : "-- km/h"}</div>
+            <div style="margin-top:2px;font-size:10px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${line || "Bus live"}</div>
+            <div style="margin-top:4px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:#f8fafc;padding:3px 8px;font-size:10px;font-weight:700;color:${accent};">${speed !== null ? `${speed} km/h` : "-- km/h"}</div>
           </div>
         ` : ""}
       </div>
@@ -186,8 +203,7 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
     if (!containerRef.current || mapRef.current) return;
     const map = L.map(containerRef.current, { zoomControl: true }).setView(DEFAULT_CENTER, 12);
     L.tileLayer(TILE_URL, {
-      attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-      subdomains: "abcd",
+      attribution: "&copy; OpenStreetMap contributors",
       maxZoom: 19
     }).addTo(map);
     mapRef.current = map;
@@ -215,7 +231,8 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
 
     spread.forEach((entry) => {
       const selected = selectedId === entry.radius_vehicle_id;
-      const marker = L.marker([entry._lat, entry._lng], { icon: busIcon(entry, selected), zIndexOffset: selected ? 1200 : 0 });
+      const zIndexOffset = selected ? 1400 : entry.status_key === "offline" && entry.active_service ? 900 : 0;
+      const marker = L.marker([entry._lat, entry._lng], { icon: busIcon(entry, selected), zIndexOffset });
 
       // Linea tratteggiata verso la posizione reale se spostato
       if (entry._lat !== entry.lat || entry._lng !== entry.lng) {
@@ -227,20 +244,23 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
 
       const popup = `
         <div style="font-family:ui-sans-serif,system-ui,sans-serif;min-width:220px;color:#0f172a;">
-          <div style="font-size:14px;font-weight:700;">${escapeHtml(entry.pms_label ?? entry.label)}</div>
-          <div style="margin-top:6px;font-size:12px;color:#475569;">Linea: ${escapeHtml(entry.line_name ?? "N/D")}</div>
-          <div style="font-size:12px;color:#475569;">Autista: ${escapeHtml(entry.driver_name ?? "N/D")}</div>
-          <div style="font-size:12px;color:#475569;">Velocita: ${entry.speed_kmh !== null ? `${Math.round(entry.speed_kmh)} km/h` : "N/D"}</div>
-          <div style="font-size:12px;color:#475569;">Indirizzo: ${escapeHtml(entry.current_address ?? "N/D")}${entry.current_city ? ` • ${escapeHtml(entry.current_city)}` : ""}</div>
-          <div style="font-size:12px;color:#475569;">Ultima posizione: ${entry.lat.toFixed(5)}, ${entry.lng.toFixed(5)}</div>
-          <div style="font-size:12px;color:#475569;">Ultimo aggiornamento: ${formatTimestamp(entry.timestamp)}</div>
-          <div style="margin-top:8px;display:inline-flex;border-radius:999px;padding:3px 9px;background:#f8fafc;border:1px solid #cbd5e1;font-size:11px;font-weight:700;">
-            ${escapeHtml(entry.status_label)}
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <div style="font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(entry.pms_label ?? entry.label)}</div>
+            <div style="display:inline-flex;border-radius:999px;padding:3px 9px;background:#f8fafc;border:1px solid #cbd5e1;font-size:11px;font-weight:700;">
+              ${escapeHtml(entry.status_label)}
+            </div>
+          </div>
+          <div style="margin-top:8px;display:grid;gap:4px;font-size:12px;color:#475569;">
+            <div>Linea: ${escapeHtml(entry.line_name ?? "N/D")}</div>
+            <div>Autista: ${escapeHtml(entry.driver_name ?? "N/D")}</div>
+            <div>Velocita: ${entry.speed_kmh !== null ? `${Math.round(entry.speed_kmh)} km/h` : "N/D"}</div>
+            <div>Update: ${formatTimestamp(entry.timestamp)}</div>
+            <div style="line-height:1.35;">${escapeHtml(entry.current_address ?? "N/D")}${entry.current_city ? ` • ${escapeHtml(entry.current_city)}` : ""}</div>
           </div>
         </div>
       `;
 
-      marker.bindPopup(popup, { maxWidth: 260 });
+      marker.bindPopup(popup, { maxWidth: 260, offset: [0, -10] });
       marker.on("click", () => onSelect(entry.radius_vehicle_id));
       marker.addTo(markers);
       bounds.extend([entry.lat, entry.lng]);
@@ -269,45 +289,42 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Fleet Control</p>
             <h3 className="mt-1 text-lg font-semibold text-slate-950">Mappa live mezzi</h3>
           </div>
-          <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">Leaflet • CARTO Voyager</div>
+          <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
+            Leaflet • {TILE_PROVIDER}
+          </div>
         </div>
       </div>
       <div className="relative">
         <div
           ref={containerRef}
           style={{ height: "calc(100vh - 280px)", minHeight: "560px", width: "100%" }}
-          className="bg-[#dfe8ef] [&_.leaflet-control-container]:z-[450] [&_.leaflet-control-zoom]:!border-0 [&_.leaflet-control-zoom]:!shadow-[0_10px_24px_rgba(15,23,42,0.14)] [&_.leaflet-control-zoom_a]:!text-slate-700 [&_.leaflet-control-zoom_a]:!h-10 [&_.leaflet-control-zoom_a]:!w-10 [&_.leaflet-control-zoom_a]:!leading-[38px] [&_.leaflet-control-zoom_a]:!border-slate-200 [&_.leaflet-control-zoom_a]:!bg-white/95 [&_.leaflet-control-zoom_a]:hover:!bg-slate-50 [&_.leaflet-pane.leaflet-tile-pane]:[filter:saturate(1.06)_contrast(1.02)_brightness(1.01)] [&_.leaflet-popup-content-wrapper]:!rounded-2xl [&_.leaflet-popup-content-wrapper]:!shadow-[0_18px_45px_rgba(15,23,42,0.18)] [&_.leaflet-popup-tip]:!shadow-none"
+          className="bg-[#eef3f7] [&_.leaflet-control-container]:z-[450] [&_.leaflet-control-zoom]:!border-0 [&_.leaflet-control-zoom]:!shadow-[0_10px_24px_rgba(15,23,42,0.14)] [&_.leaflet-control-zoom_a]:!text-slate-700 [&_.leaflet-control-zoom_a]:!h-10 [&_.leaflet-control-zoom_a]:!w-10 [&_.leaflet-control-zoom_a]:!leading-[38px] [&_.leaflet-control-zoom_a]:!border-slate-200 [&_.leaflet-control-zoom_a]:!bg-white/95 [&_.leaflet-control-zoom_a]:hover:!bg-slate-50 [&_.leaflet-pane.leaflet-tile-pane]:[filter:saturate(0.92)_contrast(1.03)_brightness(1.02)] [&_.leaflet-popup-content-wrapper]:!rounded-2xl [&_.leaflet-popup-content-wrapper]:!shadow-[0_18px_45px_rgba(15,23,42,0.18)] [&_.leaflet-popup-tip]:!shadow-none"
         />
 
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.84)_0%,rgba(255,255,255,0)_100%)]" />
-        <div className="pointer-events-none absolute inset-y-0 right-0 w-20 bg-[linear-gradient(270deg,rgba(248,250,252,0.65)_0%,rgba(248,250,252,0)_100%)]" />
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-[linear-gradient(180deg,rgba(255,255,255,0.68)_0%,rgba(255,255,255,0)_100%)]" />
 
-        <div className="absolute left-[4.5rem] top-4 z-[500] flex max-w-[calc(100%-5.5rem)] flex-wrap gap-2 md:left-[5rem] md:max-w-[420px]">
-          <div className="rounded-2xl border border-white/70 bg-white/92 px-3 py-2 shadow-[0_12px_30px_rgba(15,23,42,0.12)] backdrop-blur">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Live</p>
-            <p className="mt-1 text-lg font-semibold text-slate-950">{summary.total}</p>
-            <p className="text-xs text-slate-500">mezzi in mappa</p>
-          </div>
-          <div className="rounded-2xl border border-white/70 bg-white/92 px-3 py-2 shadow-[0_12px_30px_rgba(15,23,42,0.12)] backdrop-blur">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Stati</p>
-            <div className="mt-1 flex items-center gap-3 text-xs font-medium text-slate-700">
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />{summary.moving}</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-500" />{summary.warning}</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-rose-500" />{summary.stopped}</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" />{summary.offline}</span>
+        <div className="absolute left-[4.5rem] top-4 z-[500] flex max-w-[calc(100%-5.5rem)] flex-wrap gap-2 md:left-[5rem]">
+          <div className="rounded-full border border-white/80 bg-white/94 px-3 py-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] backdrop-blur">
+            <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-slate-700">
+              <span className="inline-flex items-center gap-1.5 text-slate-900"><span className="h-2.5 w-2.5 rounded-full bg-slate-900" />{summary.total} live</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />{summary.moving}</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-amber-500" />{summary.warning}</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-rose-500" />{summary.stopped}</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" />{summary.offline}</span>
             </div>
           </div>
         </div>
 
-        <div className="absolute bottom-4 left-4 z-[500] max-w-[300px] rounded-2xl border border-white/70 bg-white/92 px-4 py-3 shadow-[0_16px_36px_rgba(15,23,42,0.14)] backdrop-blur">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Legenda</p>
-          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-slate-700">
-            <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />In movimento</span>
-            <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-amber-500" />Lento / warning</span>
-            <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-rose-500" />Fermo</span>
-            <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" />Offline</span>
+        <div className="absolute bottom-4 left-4 z-[500] rounded-full border border-white/80 bg-white/94 px-3 py-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] backdrop-blur">
+          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-700">
+            <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />In movimento</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-amber-500" />Warning</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-rose-500" />Fermo</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" />Offline</span>
           </div>
         </div>
+
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-[linear-gradient(0deg,rgba(255,255,255,0.54)_0%,rgba(255,255,255,0)_100%)]" />
 
       </div>
     </div>

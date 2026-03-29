@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { parseRole } from "@/lib/rbac";
+import { resolvePreferredMembership } from "@/lib/tenant-preference";
 import { agencyProfileSetupSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -67,12 +68,11 @@ async function authorizeAgencyProfileRequest(request: NextRequest): Promise<Auth
     return NextResponse.json({ error: "Sessione non valida." }, { status: 401 });
   }
 
-  const { data: membership, error: membershipError } = await admin
+  const { data: memberships, error: membershipError } = await admin
     .from("memberships")
     .select("tenant_id, agency_id, role, full_name, suspended")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  const membershipRow = membership as MembershipRow | null;
+    .eq("user_id", user.id);
+  const membershipRow = resolvePreferredMembership((memberships ?? []) as MembershipRow[]);
 
   const role = parseRole(membershipRow?.role ?? undefined);
   if (membershipError || !membershipRow?.tenant_id || !role || membershipRow.suspended === true) {

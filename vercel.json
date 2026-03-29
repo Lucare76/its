@@ -1,1 +1,6 @@
-{}
+{
+  "crons": [
+    { "path": "/api/cron/agency-reminders", "schedule": "0 8 * * *" },
+    { "path": "/api/cron/agency-invoices", "schedule": "0 8 * * *" }
+  ]
+}

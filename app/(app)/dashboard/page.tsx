@@ -41,6 +41,8 @@ function BellIcon() {
   );
 }
 
+const INITIAL_ALERT_NOW_MS = Date.UTC(2026, 0, 1, 0, 0, 0);
+
 export default function OperatorDashboardPage() {
   const { loading, liveConnected, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData({ includeInboundEmails: true });
   const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
@@ -48,7 +50,7 @@ export default function OperatorDashboardPage() {
   const [skippedGroupIds, setSkippedGroupIds] = useState<string[]>([]);
   const [applyingGroupId, setApplyingGroupId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [alertNowMs, setAlertNowMs] = useState(() => Date.now());
+  const [alertNowMs, setAlertNowMs] = useState(INITIAL_ALERT_NOW_MS);
   const [pendingAccessRequestCount, setPendingAccessRequestCount] = useState(0);
 
   useEffect(() => {
@@ -325,29 +327,6 @@ export default function OperatorDashboardPage() {
           </>
         }
       />
-      <article className="card space-y-3 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-semibold text-text">Demo Rapida (5 minuti)</p>
-          <p className="text-xs text-muted">Sequenza consigliata per presentazione commerciale</p>
-        </div>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <Link href="/agency/new-booking" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
-            1. Nuova prenotazione agenzia
-          </Link>
-          <Link href="/inbox" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
-            2. Inbox / Upload PDF draft
-          </Link>
-          <Link href="/ops-summary" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
-            3. Riepiloghi operativi
-          </Link>
-          <Link href="/dispatch" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
-            4. Assegnazioni interne
-          </Link>
-          <Link href="/driver" className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm hover:bg-white">
-            5. Verifica area autista
-          </Link>
-        </div>
-      </article>
       {pendingAccessRequestCount > 0 ? (
         <article className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">

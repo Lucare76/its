@@ -172,7 +172,7 @@ export default function MapPage() {
               <p className="text-safe-wrap">
                 {selectedService.time} - {selectedService.vessel}
               </p>
-              <p className="text-safe-wrap">Hotel: {hotelsById.get(selectedService.hotel_id)?.name ?? "N/D"}</p>
+              <p className="text-safe-wrap">Hotel: {hotelsById.get(selectedService.hotel_id)?.name ?? selectedService.meeting_point ?? "N/D"}</p>
               <p>Autista: {driverNamesById.get(assignmentsByServiceId.get(selectedService.id)?.driver_user_id ?? "") ?? "Non assegnato"}</p>
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <button type="button" onClick={() => void quickAssign(selectedService.id)} className="btn-secondary px-2 py-1 text-xs">
@@ -207,8 +207,8 @@ export default function MapPage() {
                   <p className="truncate" title={`${service.time} - ${service.vessel}`}>
                     {service.time} - {service.vessel}
                   </p>
-                  <p className="truncate" title={`${hotel?.name ?? "N/D"} (${hotel?.zone ?? "N/D"})`}>
-                    {hotel?.name ?? "N/D"} ({hotel?.zone ?? "N/D"})
+                  <p className="truncate" title={`${hotel?.name ?? service.meeting_point ?? "N/D"} (${hotel?.zone ?? "N/D"})`}>
+                    {hotel?.name ?? service.meeting_point ?? "N/D"} ({hotel?.zone ?? "N/D"})
                   </p>
                   <p className="uppercase text-slate-600">{service.status}</p>
                 </article>

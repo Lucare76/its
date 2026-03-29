@@ -15,6 +15,10 @@ function simplifyHotelName(value?: string | null) {
     .trim();
 }
 
+export function normalizeHotelAliasValue(value?: string | null) {
+  return simplifyHotelName(value);
+}
+
 const SOSANDRA_HOTEL_ALIASES: Array<{ canonical: string; aliases: string[] }> = [
   {
     canonical: "Hotel Terme President",

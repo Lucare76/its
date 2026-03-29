@@ -1,5 +1,6 @@
 import { parseRole } from "@/lib/rbac";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { resolvePreferredMembership } from "@/lib/tenant-preference";
 import type { UserRole } from "@/lib/types";
 
 export type ClientSessionMode = "supabase" | "demo";
@@ -99,7 +100,7 @@ export async function getClientSessionContext(): Promise<ClientSessionContext> {
     .limit(50);
 
   const membershipRows = (memberships ?? []) as Array<{ tenant_id: string; role: string }>;
-  const valid = membershipRows.find((item) => parseRole(item.role) !== null) ?? null;
+  const valid = resolvePreferredMembership(membershipRows);
 
   return {
     mode: "supabase",

@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 
 export const runtime = "nodejs";
 
@@ -95,20 +96,35 @@ function tipoToBookingKind(tipo: string): { bookingKind: string; transportMode: 
 }
 
 async function resolveOrCreateHotel(admin: any, tenantId: string, hotelName: string | null) {
-  const name = clean(hotelName) ?? "Hotel da verificare";
+  const rawName = clean(hotelName);
+  const name = canonicalizeKnownHotelName(rawName) ?? rawName ?? "Hotel da verificare";
   const normalizedName = name.toLowerCase();
   const { data: hotels } = await admin.from("hotels").select("id, name").eq("tenant_id", tenantId).limit(500);
+  const { data: aliases } = await admin.from("hotel_aliases").select("hotel_id, alias").eq("tenant_id", tenantId).limit(5000);
   const list = (hotels ?? []) as Array<{ id: string; name: string }>;
+  const aliasList = (aliases ?? []) as Array<{ hotel_id: string; alias: string }>;
   const matched =
     list.find((h) => h.name.toLowerCase() === normalizedName) ??
     list.find((h) => h.name.toLowerCase().includes(normalizedName)) ??
-    list.find((h) => normalizedName.includes(h.name.toLowerCase()));
+    list.find((h) => normalizedName.includes(h.name.toLowerCase())) ??
+    aliasList.find((alias) => normalizeHotelAliasValue(alias.alias) === normalizeHotelAliasValue(name))?.hotel_id;
+  if (typeof matched === "string") return matched;
   if (matched?.id) return matched.id;
   const { data: created } = await admin
     .from("hotels")
     .insert({ tenant_id: tenantId, name, normalized_name: slug(name), address: "Ischia", city: "Ischia", zone: "Ischia Porto", lat: 40.7405, lng: 13.9438, source: "claude_pdf_import", is_active: true })
     .select("id").single();
-  return (created as { id: string } | null)?.id ?? null;
+  const createdId = (created as { id: string } | null)?.id ?? null;
+  if (createdId && rawName && normalizeHotelAliasValue(rawName) !== normalizeHotelAliasValue(name)) {
+    await admin.from("hotel_aliases").insert({
+      tenant_id: tenantId,
+      hotel_id: createdId,
+      alias: rawName,
+      alias_normalized: normalizeHotelAliasValue(rawName),
+      source: "auto_import"
+    });
+  }
+  return createdId;
 }
 
 // ─── Route ─────────────────────────────────────────────────────────────────

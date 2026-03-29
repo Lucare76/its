@@ -4,6 +4,7 @@ export type HotelMatchRow = {
   id: string;
   name: string;
   normalized_name?: string | null;
+  aliases?: string[];
 };
 
 function normalizeHotelText(value: string | null | undefined) {
@@ -55,7 +56,8 @@ export function resolveHotelMatch(hotels: HotelMatchRow[], rawHotelName: string,
       id: hotel.id,
       score: Math.max(
         scoreCandidate(canonicalWanted ?? "", hotel.name),
-        scoreCandidate(canonicalWanted ?? "", hotel.normalized_name ?? "")
+        scoreCandidate(canonicalWanted ?? "", hotel.normalized_name ?? ""),
+        ...(hotel.aliases ?? []).map((alias) => scoreCandidate(canonicalWanted ?? "", alias))
       )
     }))
     .sort((left, right) => right.score - left.score);

@@ -23,99 +23,175 @@ Leggi conferme d'ordine di agenzie di viaggio italiane.
 RISPONDI ESCLUSIVAMENTE con JSON valido. Zero testo aggiuntivo. Zero markdown. Zero backtick.
 Se un campo non è presente usa null, non inventare mai dati.`;
 
+const FLAT_SCHEMA = `
+Restituisci ESATTAMENTE questo JSON:
+{
+  "numero_pratica": "XX/XXXXXX",
+  "cliente_nome": "NOME COGNOME COMPLETO su una riga",
+  "cliente_cellulare": "3XXXXXXXXX oppure null",
+  "n_pax": 2,
+  "hotel": "Nome Hotel completo",
+  "data_arrivo": "YYYY-MM-DD",
+  "data_partenza": "YYYY-MM-DD",
+  "orario_arrivo": "HH:MM oppure null",
+  "orario_partenza": "HH:MM oppure null",
+  "numero_mezzo_andata": "codice treno/volo/corsa oppure null",
+  "numero_mezzo_ritorno": "codice treno/volo/corsa oppure null",
+  "citta_partenza": "città di partenza oppure null",
+  "totale_pratica": 000.00,
+  "tipo_servizio": "transfer_station_hotel oppure transfer_airport_hotel oppure transfer_port_hotel",
+  "agenzia": "Nome Agenzia",
+  "note_operative": "note aggiuntive oppure null"
+}
+
+Regole tipo_servizio:
+- STAZIONE / TRENO / ITALO / TRENITALIA / FLIXBUS → "transfer_station_hotel"
+- AEROPORTO / VOLO / AEREO → "transfer_airport_hotel"
+- PORTO / TRAGHETTO / MEDMAR / SNAV / ALISCAFO → "transfer_port_hotel"
+`;
+
 const AGENCY_PROMPTS: Record<string, string> = {
-  aleste: `Stai leggendo una conferma d'ordine di Aleste Viaggi (Ischia).
-Formato tabellare fisso. Estrai:
-- numero_conferma: dopo "CONFERMA D'ORDINE n."
-- numero_pratica: campo PRATICA (es: 26/002739)
-- data_conferma: campo Data in alto a destra
-- cliente_nome: campo "1° BENEFICIARIO"
-- n_pax: colonna PAX nella riga intestazione pratica (numero intero, es: 2)
-- cliente_cellulare: dopo "CELL:" o "Cellulare/Tel." nella sezione operativa in fondo
-- hotel: colonna DESCRIZIONE nella riga PROGRAMMA
-- data_arrivo / data_partenza: colonne DAL/AL nella riga PROGRAMMA
-- servizi: tabella con colonne DAL AL DESCRIZIONE IMPORTO PAX NUM TOTALE — ogni riga è un servizio
-  - il mezzo si ricava dalla tabella treni/bus sotto (cerca ITALO, FLIXBUS, EASYJET)
-  - compagnia: es "ITALO"
-  - numero_mezzo: solo il numero (es "9919" da "ITALO ITA 9919")
-  - orario: formato HH:MM accanto alla data servizio
-  - partenza: stazione/città di partenza dalla tabella treni (es "TORINO P. NUOVA")
-  - destinazione: stazione/città di arrivo (es "NAPOLI CENTRALE")
-- totale_pratica: campo "Totale pratica EUR"
+  aleste: `Stai leggendo una CONFERMA D'ORDINE di Aleste Viaggi (Ischia).
 
-Rispondi con lo schema JSON richiesto.`,
+ISTRUZIONI CAMPO PER CAMPO:
+- numero_pratica: campo PRATICA (es: "26/002739")
+- cliente_nome: campo "1° BENEFICIARIO" — scrivilo tutto su una riga senza spazi in più (es: "ALLEGRI ORNELLA" non "AL LEGRI ORNELLA")
+- cliente_cellulare: cerca in QUESTO ORDINE:
+    1) dopo "a: CELL:" (con due punti, es: "a: CELL:3282653533")
+    2) dopo "a: CELL." (con punto, es: "a: CELL. 3515859941")
+    3) dopo "Cellulare/Tel."
+    4) qualsiasi numero di 10 cifre che inizia con 3 nel documento
+- n_pax: colonna PAX (numero intero)
+- hotel: campo DESCRIZIONE della riga PROGRAMMA — rimuovi eventuale prefisso "AV " o "26/TRENOB" ecc.
+- data_arrivo: colonna DAL nella riga PROGRAMMA → converti in YYYY-MM-DD (es: "19-apr-26" → "2026-04-19")
+- data_partenza: colonna AL nella riga PROGRAMMA → converti in YYYY-MM-DD (es: "26-apr-26" → "2026-04-26")
+- orario_arrivo: dalla sezione operativa, nel blocco del servizio ANDATA (STAZIONE/HOTEL o PORTO/HOTEL): il valore dopo "Alle" (es: "13:43")
+- orario_partenza: dalla sezione operativa, nel blocco del servizio RITORNO (HOTEL/STAZIONE o HOTEL/PORTO): il valore dopo "Dalle" (es: "13:20")
+- numero_mezzo_andata: dalla sezione operativa tabella treni/voli, riga 1: colonna "num." (es: "ITA 9919") OPPURE dopo "da:" nel blocco andata (es: "ITALO 9919")
+- numero_mezzo_ritorno: dalla sezione operativa tabella treni/voli, riga 2: colonna "num." (es: "ITA 9940") OPPURE dopo "da:" nel blocco ritorno (es: "ITALO 9940")
+- citta_partenza: dopo "M.p.:" nel blocco andata OPPURE prima riga della tabella operativa (es: "TORINO P. NUOVA")
+- totale_pratica: numero dopo "Totale pratica EUR" (es: 104.00)
+- tipo_servizio: deduci dalla descrizione servizi
 
-  angelino: `Stai leggendo una conferma d'ordine di Angelino Tour & Events (Forio, Ischia).
-Formato tabella compatta. ATTENZIONE: questo PDF ha encoding non standard, leggi dall'immagine.
-Estrai:
-- numero_conferma: dopo "CONFERMA D'ORDINE n."
-- numero_pratica: campo "pratica" (es: 26/000102)
-- cliente_nome: campo "1° beneficiario"
+ESEMPIO OUTPUT per un PDF con treno:
+{
+  "numero_pratica": "26/002739",
+  "cliente_nome": "ALLEGRI ORNELLA",
+  "cliente_cellulare": "3282653533",
+  "n_pax": 2,
+  "hotel": "ISOLA VERDE HOTEL & THERMAL SPA",
+  "data_arrivo": "2026-04-19",
+  "data_partenza": "2026-04-26",
+  "orario_arrivo": "13:43",
+  "orario_partenza": "13:20",
+  "numero_mezzo_andata": "ITA 9919",
+  "numero_mezzo_ritorno": "ITA 9940",
+  "citta_partenza": "TORINO P. NUOVA",
+  "totale_pratica": 104.00,
+  "tipo_servizio": "transfer_station_hotel",
+  "agenzia": "Aleste Viaggi",
+  "note_operative": null
+}
+${FLAT_SCHEMA}`,
+
+  angelino: `Stai leggendo una CONFERMA D'ORDINE di Angelino Tour & Events (Forio, Ischia).
+ATTENZIONE: PDF con encoding non standard, leggi dall'immagine.
+
+ISTRUZIONI CAMPO PER CAMPO:
+- numero_pratica: campo "pratica" (es: "26/000102")
+- cliente_nome: campo "1° beneficiario" — tutto su una riga
+- cliente_cellulare: cerca numero 10 cifre che inizia con 3
 - n_pax: campo "pax" in alto a destra
 - hotel: campo "descrizione" accanto a "programma"
-- data_arrivo / data_partenza: campi "dal" / "al" nella riga programma
-- servizi: tabella con colonne "dal al descrizione importo tasse pax num totale"
-  - tipo: il testo descrizione (es: "TRASFERIMENTO STAZIONE NAPOLI - HOTEL IS")
-  - mezzo: deducilo dal tipo (STAZIONE→TRENO, AEROPORTO→AEREO, PORTO→ALISCAFO/TRAGHETTO)
-- nominativi passeggeri: tabella "num nominativo" in fondo — mettili in note_operative
+- data_arrivo / data_partenza: campi "dal" / "al" → YYYY-MM-DD
+- orario_arrivo: orario del primo servizio (andata) se presente
+- orario_partenza: orario del secondo servizio (ritorno) se presente
+- numero_mezzo_andata: codice treno/volo andata se presente
+- numero_mezzo_ritorno: codice treno/volo ritorno se presente
+- citta_partenza: città di partenza deducibile dal servizio andata
 - totale_pratica: "Totale pratica EUR"
+- tipo_servizio: deduci da descrizione
+- note_operative: nominativi passeggeri dalla tabella "num nominativo"
+${FLAT_SCHEMA}`,
 
-Rispondi con lo schema JSON richiesto.`,
+  holidayweb: `Stai leggendo una CONFERMA D'ORDINE di Holiday Web (Lacco Ameno, Ischia).
+ATTENZIONE: PDF con encoding non standard, leggi dall'immagine.
 
-  holidayweb: `Stai leggendo una conferma d'ordine di Holiday Web (Lacco Ameno, Ischia).
-Formato tabella compatta. ATTENZIONE: questo PDF ha encoding non standard, leggi dall'immagine.
-Estrai:
-- numero_conferma: dopo "CONFERMA D'ORDINE n."
-- numero_pratica: campo "pratica" (es: 25/000898)
-- cliente_nome: campo "1° beneficiario"
+ISTRUZIONI CAMPO PER CAMPO:
+- numero_pratica: campo "pratica" (es: "25/000898")
+- cliente_nome: campo "1° beneficiario" — tutto su una riga
+- cliente_cellulare: cerca numero 10 cifre che inizia con 3
 - n_pax: campo "pax"
 - hotel: campo "descrizione" nella riga "programma"
-- data_arrivo / data_partenza: campi "dal" / "al"
-- servizi: tabella con colonne "dal al descrizione importo tasse pax num totale"
-  - per le tratte: "ISCHIA TRANSFER SERVICE-ISCHIA (NA)" indica trasferimento locale
-  - cerca "PONTE SAN GIOVANNI", "PORTO SAN GIOVANNI" per identificare la città di partenza
-- nominativi: tabella "num nominativo" → metti in note_operative
+- data_arrivo / data_partenza: campi "dal" / "al" → YYYY-MM-DD
+- orario_arrivo: orario servizio andata se presente
+- orario_partenza: orario servizio ritorno se presente
+- numero_mezzo_andata: codice treno/volo andata ("PONTE SAN GIOVANNI" indica stazione)
+- numero_mezzo_ritorno: codice treno/volo ritorno
+- citta_partenza: deduci da "PONTE SAN GIOVANNI", "PORTO SAN GIOVANNI" o simile
 - totale_pratica: "Totale pratica EUR"
+- tipo_servizio: deduci da descrizione
+- note_operative: nominativi dalla tabella "num nominativo"
+${FLAT_SCHEMA}`,
 
-Rispondi con lo schema JSON richiesto.`,
+  sosandra: `Stai leggendo un documento di Sosandra Tour / Rossella Viaggi (Ischia Porto).
+Può essere una CONFERMA SERVIZIO (lettera libera) OPPURE un VOUCHER SNAV compilato.
 
-  sosandra: `Stai leggendo una conferma servizio di Sosandra Tour / Rossella Viaggi (Ischia Porto).
-Formato lettera libera, NON tabellare.
-Estrai:
-- numero_conferma: cerca numero documento nel testo se presente, altrimenti null
-- cliente_nome: cerca "Sigg" o "a nome" o "Clienti"
-- cliente_cellulare: dopo "Cellulare cliente" (ignora se c'è scritto "TRF NORMALE" o "AGGIUNTA DI 1 PAX")
-- n_pax: cerca "numero persone" o "numero X persone"
+CASO A — Lettera di conferma servizio (riconosci perché inizia con "Alla C.A Ischia Transfert" o "Oggetto: Transfer"):
+- numero_pratica: null
+- cliente_nome: dopo "per i Sigg" o "a nome" — tutto su una riga (es: "Scala Roberto")
+- cliente_cellulare: dopo "Cellulare cliente" — IGNORA se contiene "TRF NORMALE", "AGGIUNTA DI 1 PAX", "ATTESA SALDO" → metti null in quel caso
+- n_pax: dopo "numero persone" o "numero X persone"
 - hotel: dopo "per Hotel" o "Hotel Cristallo" o "Hotel President" ecc.
-- data_arrivo: dopo "Arrivo giorno"
-- data_partenza: dopo "Ritorno giorno"
-- servizi[0] (andata): data_arrivo, tipo "TRANSFER STAZIONE/HOTEL", mezzo dal contesto (ITALO→TRENO, BUS→BUS)
-- servizi[1] (ritorno): data_partenza, tipo "TRANSFER HOTEL/STAZIONE", orario partenza dal testo
-- note_operative: includi TUTTO quello che sta nel riquadro "Orario di prelevamento da Hotel",
-  e qualunque nota tipo "AGGIUNTA DI 1 PAX", "ATTESA SALDO €XX"
-- totale_pratica: null (Sosandra non riporta totale nel documento transfer)
+- data_arrivo: dopo "Arrivo giorno" → YYYY-MM-DD
+- data_partenza: dopo "Ritorno giorno" → YYYY-MM-DD
+- orario_arrivo: orario del mezzo in arrivo (dopo "alle ore") — es: "13:53", "07:45"
+- orario_partenza: orario prelevamento ritorno (dopo "prelevamento alle ore") — es: "14:35", "08:00"
+- numero_mezzo_andata: numero treno/bus andata se indicato (es: "ITALO")
+- numero_mezzo_ritorno: numero treno/bus ritorno se indicato
+- citta_partenza: città di partenza (es: "MILANO", "LARGO MAZZONI DIFRONTE NEGOZIO SMEA")
+- totale_pratica: null
+- tipo_servizio: deduci (ITALO/TRENO→station, BUS→station, SNAV/ALISCAFO→port)
+- note_operative: testo nel riquadro "Orario di prelevamento da Hotel" + note tipo "AGGIUNTA DI 1 PAX", "ATTESA SALDO"
 
-Rispondi con lo schema JSON richiesto.`,
+CASO B — Voucher SNAV compilato (riconosci perché ha logo SNAV, "Numero Passeggeri:" e checkbox orari ☐/☑):
+- cliente_nome: unisci "Nome:" + "Cognome:" su una riga (es: "Salvatore Valentino")
+- cliente_cellulare: campo "Cellulare:"
+- n_pax: campo "Numero Passeggeri:"
+- hotel: campo "Hotel di destinazione:"
+- data_arrivo: campo "Data di Arrivo ad Ischia:" → YYYY-MM-DD
+- data_partenza: campo "Data di Partenza da Ischia:" → YYYY-MM-DD
+- orario_arrivo: orario selezionato (checkbox marcato) colonna "da Napoli Beverello a Casamicciola" (es: "08:25")
+- orario_partenza: orario selezionato colonna "da Casamicciola a Napoli Beverello" (es: "09:45")
+- numero_mezzo_andata: null
+- numero_mezzo_ritorno: null
+- citta_partenza: "NAPOLI BEVERELLO"
+- totale_pratica: null
+- tipo_servizio: "transfer_port_hotel"
+- numero_pratica: null
+${FLAT_SCHEMA}`,
 
-  zigolo: `Stai leggendo un "Elenco richieste conferme annullamenti servizi" di Zigolo Viaggi (Barano d'Ischia).
-Estrai:
-- numero_conferma: numero dopo "n." nel titolo (es: "000038")
-- numero_pratica: campo "Pratica" (es: 26/000248)
-- data_conferma: campo "Data"
-- cliente_nome: colonna "Beneficiari"
-- hotel: deducilo dal contesto se presente
-- data_arrivo: campo "Dal"
-- servizi: tabella con colonne "NUM Servizio Beneficiari" + tabella importi sotto
-  - tipo: descrizione servizio (es: "GIRO DELL'ISOLA IN BUS")
-  - mezzo: deducilo dal tipo (IN BUS→BUS, ecc.)
+  zigolo: `Stai leggendo un documento "Elenco richieste conferme annullamenti servizi" di Zigolo Viaggi (Barano d'Ischia).
+
+ISTRUZIONI CAMPO PER CAMPO:
+- numero_pratica: campo "Pratica" (es: "26/000248")
+- cliente_nome: colonna "Beneficiari" — tutto su una riga
+- cliente_cellulare: cerca numero 10 cifre che inizia con 3 se presente
+- n_pax: numero passeggeri se indicato
+- hotel: deduci dal contesto se presente
+- data_arrivo: campo "Dal" → YYYY-MM-DD
+- data_partenza: campo "Al" se presente → YYYY-MM-DD
+- orario_arrivo / orario_partenza: orari indicati nel documento
+- numero_mezzo_andata / numero_mezzo_ritorno: null
+- citta_partenza: null
 - totale_pratica: campo "TOTALE EUR"
+- tipo_servizio: deduci dalla descrizione
+${FLAT_SCHEMA}`,
 
-Rispondi con lo schema JSON richiesto.`,
-
-  unknown: `Stai leggendo una conferma d'ordine di un'agenzia di viaggio italiana non identificata.
-Cerca tutti i campi dello schema JSON nelle posizioni tipiche di documenti simili.
-Imposta "agenzia" con il nome esatto dell'agenzia mittente che trovi nell'intestazione.
-Rispondi con lo schema JSON richiesto.`
+  unknown: `Stai leggendo una conferma d'ordine di un'agenzia di viaggio italiana.
+Cerca tutti i campi nelle posizioni tipiche del documento.
+Per "agenzia" usa il nome esatto che trovi nell'intestazione del documento.
+${FLAT_SCHEMA}`
 };
 
 async function callClaude(body: Record<string, unknown>): Promise<Response> {

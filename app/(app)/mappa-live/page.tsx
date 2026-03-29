@@ -517,12 +517,12 @@ export default function MappaLivePage() {
               bodyClassName="space-y-3 p-4"
             >
               {selected ? (
-                <article className="rounded-2xl border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-3">
+                <article className="rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="text-base font-semibold text-slate-950">{selected.pms_label ?? selected.label}</p>
-                      <p className="mt-0.5 text-xs text-slate-500">{selected.line_name ?? "Linea non assegnata"} • {selected.driver_name ?? "Autista non assegnato"}</p>
-                      <p className="mt-0.5 text-xs text-slate-500">
+                      <p className="text-lg font-semibold tracking-[-0.02em] text-slate-950">{selected.pms_label ?? selected.label}</p>
+                      <p className="mt-1 text-xs text-slate-500">{selected.line_name ?? "Linea non assegnata"} • {selected.driver_name ?? "Autista non assegnato"}</p>
+                      <p className="mt-1 text-xs text-slate-500">
                         {selected.current_address ?? "Indirizzo non disponibile"}{selected.current_city ? ` • ${selected.current_city}` : ""}
                       </p>
                     </div>
@@ -532,16 +532,16 @@ export default function MappaLivePage() {
                     </span>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-3 gap-2">
-                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Velocita</p>
                       <p className="mt-1 text-lg font-semibold text-slate-950">{selected.speed_kmh !== null ? `${Math.round(selected.speed_kmh)} km/h` : "--"}</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Update</p>
                       <p className="mt-1 text-lg font-semibold text-slate-950">{formatRelativeSeconds(selected.last_update_seconds)}</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Servizio</p>
                       <p className="mt-1 truncate text-sm font-semibold text-slate-950">{selected.active_service?.time ?? "Nessuno"}</p>
                     </div>
@@ -556,19 +556,19 @@ export default function MappaLivePage() {
                   </div>
 
                   {selected.active_service ? (
-                    <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50/70 p-3">
+                    <div className="mt-4 rounded-[22px] border border-sky-200 bg-[linear-gradient(180deg,rgba(240,249,255,0.92)_0%,rgba(255,255,255,0.98)_100%)] p-4 shadow-[0_12px_28px_rgba(14,165,233,0.08)]">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-700">Servizio attivo PMS</p>
                       <p className="mt-1.5 text-sm font-semibold text-slate-950">{selected.active_service.customer_name}</p>
-                      <p className="mt-0.5 text-xs text-slate-600">{selected.active_service.date} • {selected.active_service.time} • {selected.active_service.hotel_name ?? "Destinazione non disponibile"}</p>
-                      <p className="mt-0.5 text-xs text-slate-600">Stato servizio: {selected.active_service.status} • Linea: {selected.active_service.line_name ?? "N/D"}</p>
+                      <p className="mt-1 text-xs text-slate-600">{selected.active_service.date} • {selected.active_service.time} • {selected.active_service.hotel_name ?? "Destinazione non disponibile"}</p>
+                      <p className="mt-1 text-xs text-slate-600">Stato servizio: {selected.active_service.status} • Linea: {selected.active_service.line_name ?? "N/D"}</p>
                     </div>
                   ) : (
-                    <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                    <div className="mt-4 rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-4 text-xs text-slate-600 shadow-[0_12px_28px_rgba(15,23,42,0.05)]">
                       Ultima posizione nota: {selected.lat.toFixed(5)}, {selected.lng.toFixed(5)}
                     </div>
                   )}
 
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-4 flex flex-wrap gap-2">
                     <Link href="/bus-network" className="btn-secondary px-3 py-1.5 text-xs">Apri Rete Bus</Link>
                     <Link href="/fleet-ops" className="btn-secondary px-3 py-1.5 text-xs">Apri dettaglio mezzo</Link>
                   </div>

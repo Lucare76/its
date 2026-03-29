@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { auditLog } from "@/lib/server/ops-audit";
+import { resolvePreferredMembership } from "@/lib/tenant-preference";
 
 export type PricingAuthContext = {
   admin: any;
@@ -36,11 +37,12 @@ export async function authorizePricingRequest(
     return NextResponse.json({ error: "Sessione non valida." }, { status: 401 });
   }
 
-  const { data: membership, error: membershipError } = await admin
+  const { data: memberships, error: membershipError } = await admin
     .from("memberships")
     .select("tenant_id, role, suspended")
-    .eq("user_id", user.id)
-    .maybeSingle();
+    .eq("user_id", user.id);
+  const membershipRows = (memberships ?? []) as Array<{ tenant_id: string; role: string; suspended?: boolean | null }>;
+  const membership = resolvePreferredMembership(membershipRows);
   if (membershipError || !membership?.tenant_id) {
     auditLog({ event: "auth_membership_missing", level: "warn", userId: user.id, details: { route: request.nextUrl.pathname } });
     return NextResponse.json({ error: "Membership non trovata." }, { status: 403 });

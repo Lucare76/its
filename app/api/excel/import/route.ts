@@ -47,6 +47,7 @@ type HotelRow = {
   id: string;
   name: string;
   normalized_name?: string | null;
+  aliases?: string[];
 };
 
 const presetConfig = {
@@ -107,7 +108,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Errore caricamento hotel per import Excel." }, { status: 500 });
   }
 
-  const hotelRows = (hotels ?? []) as HotelRow[];
+  const { data: aliasRows } = await auth.admin
+    .from("hotel_aliases")
+    .select("hotel_id, alias")
+    .eq("tenant_id", auth.membership.tenant_id)
+    .limit(5000);
+
+  const aliasesByHotel = new Map<string, string[]>();
+  for (const row of (aliasRows ?? []) as Array<{ hotel_id: string; alias: string }>) {
+    const bucket = aliasesByHotel.get(row.hotel_id) ?? [];
+    bucket.push(row.alias);
+    aliasesByHotel.set(row.hotel_id, bucket);
+  }
+
+  const hotelRows = ((hotels ?? []) as HotelRow[]).map((hotel) => ({
+    ...hotel,
+    aliases: aliasesByHotel.get(hotel.id) ?? []
+  }));
   const preset = presetConfig[parsed.data.preset_key];
   const validRows: Array<{ rowIndex: number; payload: z.infer<typeof serviceCreateSchema> }> = [];
   const errors: Array<{ row_index: number; message: string }> = [];

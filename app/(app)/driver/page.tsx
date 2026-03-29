@@ -275,7 +275,7 @@ export default function DriverPage() {
             </p>
           </div>
           <div className="rounded-xl border border-border bg-surface-2 p-3 text-sm">
-            <p className="font-medium">{focusedHotel?.name ?? "Hotel N/D"}</p>
+            <p className="font-medium">{focusedHotel?.name ?? focused.service.meeting_point ?? "Hotel N/D"}</p>
             <p className="text-muted">{focusedHotel?.zone ?? "Zona N/D"}</p>
             <p className="text-muted">{focused.assignment.vehicle_label}</p>
           </div>
@@ -365,7 +365,7 @@ export default function DriverPage() {
                     <span className="text-xs text-muted">{entry.service.time}</span>
                   </div>
                   <p className="mt-1 text-xs uppercase text-muted">{entry.service.status}</p>
-                  <p className="text-xs text-muted">{hotel?.name ?? "Hotel N/D"}</p>
+                  <p className="text-xs text-muted">{hotel?.name ?? entry.service.meeting_point ?? "Hotel N/D"}</p>
                 </button>
               );
             })}
@@ -393,7 +393,7 @@ export default function DriverPage() {
                     </span>
                   </div>
                   <p className="mt-1 text-xs uppercase text-muted">{entry.service.status}</p>
-                  <p className="text-xs text-muted">{hotel?.name ?? "Hotel N/D"}</p>
+                  <p className="text-xs text-muted">{hotel?.name ?? entry.service.meeting_point ?? "Hotel N/D"}</p>
                 </button>
               );
             })}

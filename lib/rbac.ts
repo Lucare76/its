@@ -33,10 +33,10 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/fleet-ops", roles: ["admin", "operator", "driver"] },
   { prefix: "/mappa-live", roles: ["admin", "operator"] },
   { prefix: "/preventivo-ops", roles: ["admin", "operator"] },
-  { prefix: "/map", roles: ["admin", "operator", "agency"] },
+  { prefix: "/map", roles: ["admin", "operator"] },
   { prefix: "/ingestion", roles: ["admin", "operator"] },
   { prefix: "/inbox", roles: ["admin", "operator"] },
-  { prefix: "/pdf-imports", roles: ["admin", "operator"] },
+  { prefix: "/pdf-imports", roles: ["admin"] },
   { prefix: "/pricing", roles: ["admin", "operator"] },
   { prefix: "/settings/users", roles: ["admin"] },
   { prefix: "/settings/whatsapp", roles: ["admin"] },
@@ -148,7 +148,7 @@ export const routeCapabilityMap: Array<{ prefix: string; capability: AppCapabili
   { prefix: "/fleet-ops", capability: "fleet_ops:view" },
   { prefix: "/preventivo-ops", capability: "quotes:view" },
   { prefix: "/inbox", capability: "inbox:manage" },
-  { prefix: "/pdf-imports", capability: "pdf_imports:manage" },
+  { prefix: "/pdf-imports", capability: "pdf_imports:debug" },
   { prefix: "/pricing/margins", capability: "pricing:view" },
   { prefix: "/pricing", capability: "pricing:view" }
 ];

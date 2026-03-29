@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { parseRole } from "@/lib/rbac";
+import { resolvePreferredMembership } from "@/lib/tenant-preference";
 import { agencyBookingCreateSchema } from "@/lib/validation";
 import { sendAgencyBookingConfirmationEmail } from "@/lib/server/agency-booking-email";
 import { auditLog } from "@/lib/server/ops-audit";
@@ -65,11 +66,16 @@ async function authorizeAgencyRequest(request: NextRequest): Promise<AuthContext
     return NextResponse.json({ error: "Sessione non valida." }, { status: 401 });
   }
 
-  const { data: membership, error: membershipError } = await admin
+  const { data: memberships, error: membershipError } = await admin
     .from("memberships")
     .select("tenant_id, agency_id, role, full_name")
-    .eq("user_id", user.id)
-    .maybeSingle();
+    .eq("user_id", user.id);
+  const membership = resolvePreferredMembership(
+    ((memberships ?? []) as Array<{ tenant_id: string; agency_id?: string | null; role: string; full_name?: string | null }>).map((item) => ({
+      ...item,
+      suspended: false
+    }))
+  );
 
   const role = parseRole(membership?.role);
   if (membershipError || !membership?.tenant_id || !role) {

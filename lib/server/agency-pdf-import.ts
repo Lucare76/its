@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { buildAgencyPdfPreview } from "@/lib/server/agency-pdf-preview";
 import { ensureDefaultBusLotConfig } from "@/lib/server/bus-lot-configs";
-import { canonicalizeKnownHotelName } from "@/lib/server/hotel-aliases";
+import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 import { auditLog } from "@/lib/server/ops-audit";
 import { extractPdfHeaderTextFromBase64, extractPdfTextFromBase64 } from "@/lib/server/pdf-text";
 import { tryMatchAndApplyPricing } from "@/lib/server/pricing-matching";
@@ -509,17 +509,25 @@ async function resolveHotelId(admin: any, tenantId: string, hotelName: string | 
     .select("id, name")
     .eq("tenant_id", tenantId)
     .limit(500);
+  const { data: aliasesData } = await admin
+    .from("hotel_aliases")
+    .select("hotel_id, alias")
+    .eq("tenant_id", tenantId)
+    .limit(5000);
   if (hotelsError) {
     throw new Error(`Hotel lookup failed: ${hotelsError.message}`);
   }
   let hotels = (hotelsData ?? []) as Array<{ id: string; name: string }>;
+  const aliases = (aliasesData ?? []) as Array<{ hotel_id: string; alias: string }>;
   const canonicalHotelName = canonicalizeKnownHotelName(hotelName);
   const normalizedHotel = clean(canonicalHotelName)?.toLowerCase() ?? null;
 
   const matched =
     hotels.find((hotel) => normalizedHotel && hotel.name.toLowerCase() === normalizedHotel) ??
     hotels.find((hotel) => normalizedHotel && hotel.name.toLowerCase().includes(normalizedHotel)) ??
-    hotels.find((hotel) => normalizedHotel && normalizedHotel.includes(hotel.name.toLowerCase()));
+    hotels.find((hotel) => normalizedHotel && normalizedHotel.includes(hotel.name.toLowerCase())) ??
+    aliases.find((alias) => normalizeHotelAliasValue(alias.alias) === normalizeHotelAliasValue(canonicalHotelName))?.hotel_id;
+  if (typeof matched === "string") return matched;
   if (matched?.id) return matched.id;
 
   let createHotelAttempt = await admin
@@ -554,7 +562,18 @@ async function resolveHotelId(admin: any, tenantId: string, hotelName: string | 
       .single();
   }
 
-  return createHotelAttempt.data?.id ?? null;
+  const createdId = createHotelAttempt.data?.id ?? null;
+  if (createdId && clean(hotelName) && normalizeHotelAliasValue(hotelName) !== normalizeHotelAliasValue(canonicalHotelName)) {
+    await admin.from("hotel_aliases").insert({
+      tenant_id: tenantId,
+      hotel_id: createdId,
+      alias: clean(hotelName),
+      alias_normalized: normalizeHotelAliasValue(hotelName),
+      source: "auto_import"
+    });
+  }
+
+  return createdId;
 }
 
 function buildServiceNotes(

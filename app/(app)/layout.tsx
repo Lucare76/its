@@ -232,6 +232,7 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/arrivals", label: "Arrivi", icon: "A" },
   { href: "/departures", label: "Partenze", icon: "P" },
   { href: "/inbox", label: "Posta in arrivo", icon: "I" },
+  { href: "/biglietti-medmar", label: "Biglietti MEDMAR", icon: "⚓" },
   { href: "/bus-network", label: "Rete Bus", icon: "B" },
   { href: "/mario-planning", label: "Mario Planning", icon: "P" },
   { href: "/rete-ischia", label: "Rete Ischia", icon: "O" },
@@ -286,7 +287,6 @@ const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/services/new", label: "Nuovo servizio", icon: "N" },
       { href: "/notifications", label: "Notifiche", icon: "!" },
       { href: "/analytics", label: "Analisi", icon: "Y" },
-      { href: "/pdf-imports", label: "Import PDF", icon: "F" },
       { href: "/excel-workspace", label: "Excel workspace", icon: "X" },
       { href: "/excel-import", label: "Import Excel", icon: "E" },
       { href: "/scheduler", label: "Scheduler", icon: "J" },
@@ -575,20 +575,31 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
-    const oscillator = ctx.createOscillator();
-    const gain = ctx.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(880, ctx.currentTime);
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.05, ctx.currentTime + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.22);
-    oscillator.connect(gain);
-    gain.connect(ctx.destination);
-    oscillator.start();
-    oscillator.stop(ctx.currentTime + 0.24);
-    window.setTimeout(() => {
-      void ctx.close();
-    }, 320);
+    void ctx.resume();
+    // Annuncio stazione: ding (Sol) → dong (Mi) → dong (Do) → pausa → annuncio
+    const tones = [
+      { freq: 783.99, start: 0.0, duration: 0.45 },   // Sol5
+      { freq: 659.25, start: 0.45, duration: 0.45 },  // Mi5
+      { freq: 523.25, start: 0.9, duration: 0.6 },    // Do5
+      { freq: 659.25, start: 1.7, duration: 0.35 },   // Mi5
+      { freq: 783.99, start: 2.05, duration: 0.35 },  // Sol5
+      { freq: 659.25, start: 2.4, duration: 0.55 },   // Mi5
+    ];
+    for (const tone of tones) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(tone.freq, ctx.currentTime + tone.start);
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + tone.start);
+      gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + tone.start + 0.03);
+      gain.gain.setValueAtTime(0.12, ctx.currentTime + tone.start + tone.duration - 0.08);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + tone.start + tone.duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + tone.start);
+      osc.stop(ctx.currentTime + tone.start + tone.duration);
+    }
+    window.setTimeout(() => { void ctx.close(); }, 3500);
   };
 
   useEffect(() => {
@@ -682,6 +693,27 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       }
     };
   }, [authRole, authTenantId, inboxSoundEnabled]);
+
+  // Polling automatico email ogni 5 minuti
+  useEffect(() => {
+    if (!authTenantId || !["admin", "operator"].includes(authRole ?? "")) return;
+
+    const doImport = async () => {
+      try {
+        const { data: sessionData } = await supabase!.auth.getSession();
+        const token = sessionData.session?.access_token;
+        if (!token) return;
+        await fetch("/api/email/operational-import", {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}` }
+        });
+      } catch { /* silenzioso */ }
+    };
+
+    doImport(); // prima chiamata subito
+    const interval = setInterval(doImport, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [authTenantId, authRole]);
 
   if (authLoading) {
     return <div className="card p-4 text-sm text-muted">Verifica sessione...</div>;

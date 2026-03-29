@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
+import { sendAccessApprovalEmail } from "@/lib/server/access-approval-email";
+import { sendPasswordResetEmail } from "@/lib/server/password-reset-email";
 import { capabilityRoleMap, type AppCapability } from "@/lib/rbac";
+import { resolvePreferredMembership } from "@/lib/tenant-preference";
+import type { UserRole } from "@/lib/types";
 import {
   adminRoleCapabilityOverrideSchema,
   adminUserCreateSchema,
@@ -72,11 +76,13 @@ async function requireAdminMembership(request: NextRequest) {
     return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
   }
 
-  const { data: membership, error: membershipError } = await admin
+  const { data: memberships, error: membershipError } = await admin
     .from("memberships")
     .select("tenant_id, role, full_name, suspended")
-    .eq("user_id", user.id)
-    .maybeSingle();
+    .eq("user_id", user.id);
+
+  const membershipRows = (memberships ?? []) as Array<{ tenant_id: string; role: UserRole; full_name: string; suspended?: boolean | null }>;
+  const membership = resolvePreferredMembership(membershipRows);
 
   if (membershipError || !membership?.tenant_id) {
     return { error: NextResponse.json({ error: "Tenant not found" }, { status: 404 }) };
@@ -244,11 +250,79 @@ export async function PATCH(request: NextRequest) {
 
   const rawBody = await request.json().catch(() => null);
 
+  if (
+    rawBody &&
+    typeof rawBody === "object" &&
+    "action" in rawBody &&
+    rawBody.action === "send_reset_password_email" &&
+    typeof rawBody.user_id === "string" &&
+    rawBody.user_id.trim()
+  ) {
+    const userId = rawBody.user_id.trim();
+
+    const membershipLookup = await auth.admin
+      .from("memberships")
+      .select("user_id, full_name")
+      .eq("tenant_id", auth.membership.tenant_id)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (membershipLookup.error || !membershipLookup.data?.user_id) {
+      return NextResponse.json({ error: "Utente non trovato nel tenant." }, { status: 404 });
+    }
+
+    const userResult = await auth.admin.auth.admin.getUserById(userId);
+    const targetEmail = userResult.data.user?.email ?? null;
+    if (userResult.error || !targetEmail) {
+      return NextResponse.json({ error: userResult.error?.message ?? "Email utente non disponibile." }, { status: 400 });
+    }
+
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || request.nextUrl.origin;
+    const redirectTo = `${appUrl.replace(/\/$/, "")}/auth/update-password`;
+    const linkResult = await auth.admin.auth.admin.generateLink({
+      type: "recovery",
+      email: targetEmail,
+      options: {
+        redirectTo
+      }
+    });
+
+    const resetUrl = linkResult.data?.properties?.action_link ?? null;
+    if (linkResult.error || !resetUrl) {
+      return NextResponse.json({ error: linkResult.error?.message ?? "Generazione link reset fallita." }, { status: 500 });
+    }
+
+    const emailResult = await sendPasswordResetEmail({
+      to: targetEmail,
+      fullName: membershipLookup.data.full_name,
+      resetUrl
+    });
+
+    if (emailResult.status === "failed") {
+      return NextResponse.json({ error: emailResult.error ?? "Invio email reset fallito." }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      reset_email: {
+        user_id: userId,
+        email: targetEmail,
+        status: emailResult.status
+      }
+    });
+  }
+
   const capabilityParsed = adminRoleCapabilityOverrideSchema.safeParse(rawBody);
   if (capabilityParsed.success) {
     const { role, capability, enabled } = capabilityParsed.data;
     if (!(capability in capabilityRoleMap)) {
       return NextResponse.json({ error: "Capability non riconosciuta." }, { status: 400 });
+    }
+    if (role === "agency") {
+      return NextResponse.json(
+        { error: "Il ruolo agenzia ha accesso solo a Prenotazioni agenzia e non puo ricevere altri permessi da questa schermata." },
+        { status: 400 }
+      );
     }
 
     const { error: upsertError } = await auth.admin
@@ -420,6 +494,12 @@ export async function PATCH(request: NextRequest) {
     if (approvalUpdate.error || !approvalUpdate.data?.id) {
       return NextResponse.json({ error: approvalUpdate.error?.message ?? "Approvazione richiesta fallita." }, { status: 500 });
     }
+    await sendAccessApprovalEmail({
+      to: requestRow.email,
+      fullName: requestRow.full_name,
+      role: approvedRole,
+      agencyName: requestRow.agency_name ?? null
+    }).catch(() => undefined);
 
     return NextResponse.json({
       ok: true,

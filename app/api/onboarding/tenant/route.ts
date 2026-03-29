@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { parseRole, type AppCapability } from "@/lib/rbac";
+import { resolvePreferredMembership } from "@/lib/tenant-preference";
 import { onboardingTenantSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -59,10 +60,7 @@ export async function GET(request: NextRequest) {
     }
 
     const membershipRows = memberships as Array<{ tenant_id: string | null; role: string | null; suspended?: boolean | null }>;
-    const membership =
-      membershipRows.find(
-        (item) => Boolean(item.tenant_id) && parseRole(item.role ?? undefined) !== null && item.suspended !== true
-      ) ?? null;
+    const membership = resolvePreferredMembership(membershipRows);
     if (!membership?.tenant_id) {
       const hasSuspendedMembership = membershipRows.some(
         (item) => Boolean(item.tenant_id) && parseRole(item.role ?? undefined) !== null && item.suspended === true
@@ -128,8 +126,7 @@ export async function POST(request: NextRequest) {
     }
 
     const membershipRows = (existingMemberships ?? []) as Array<{ tenant_id: string | null; role: string | null; suspended?: boolean | null }>;
-    const existingValidMembership =
-      membershipRows.find((item) => Boolean(item.tenant_id) && parseRole(item.role ?? undefined) !== null) ?? null;
+    const existingValidMembership = resolvePreferredMembership(membershipRows);
 
     if (existingValidMembership?.tenant_id) {
       if (existingValidMembership.suspended === true) {
