@@ -108,7 +108,10 @@ export function PdfClaudeUploader() {
   const [data, setData] = useState<ExtractedData | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [filename, setFilename] = useState<string | null>(null);
+  const [pdfBase64, setPdfBase64] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedId, setSavedId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function process(file: File) {
@@ -121,6 +124,7 @@ export function PdfClaudeUploader() {
     setError(null);
     setAgency(null);
     setData(null);
+    setSavedId(null);
     setFilename(file.name);
 
     const token = await getAccessToken();
@@ -133,6 +137,7 @@ export function PdfClaudeUploader() {
     let base64: string;
     try {
       base64 = await fileToBase64(file);
+      setPdfBase64(base64);
     } catch {
       setStep("error");
       setError("Errore nella lettura del file.");
@@ -195,11 +200,34 @@ export function PdfClaudeUploader() {
     if (file) void process(file);
   }
 
+  async function saveDraft() {
+    if (!data || !agency) return;
+    const token = await getAccessToken();
+    if (!token) { setError("Sessione scaduta."); return; }
+    setSaving(true);
+    try {
+      const res = await fetch("/api/pdf/claude-save-draft", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ extracted: data, pdf_base64: pdfBase64, filename, agency })
+      });
+      const body = (await res.json()) as { ok?: boolean; inbound_email_id?: string; draft_service_id?: string; error?: string };
+      if (!res.ok || !body.ok) { setError(body.error ?? "Errore salvataggio."); }
+      else { setSavedId(body.inbound_email_id ?? null); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Errore di rete.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function reset() {
     setStep("idle");
     setError(null);
     setAgency(null);
     setData(null);
+    setPdfBase64(null);
+    setSavedId(null);
     setFilename(null);
     if (inputRef.current) inputRef.current.value = "";
   }
@@ -413,13 +441,32 @@ export function PdfClaudeUploader() {
               </div>
 
               {/* Azioni */}
-              <div className="flex flex-wrap gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
+              <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
+                {savedId ? (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700">
+                      Bozza creata
+                    </span>
+                    <a href="/pdf-imports" className="btn-secondary px-4 py-2 text-sm">
+                      Vai a Revisione PDF
+                    </a>
+                    <a href="/arrivals" className="btn-secondary px-4 py-2 text-sm">
+                      Vai agli Arrivi
+                    </a>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void saveDraft()}
+                    disabled={saving}
+                    className="btn-primary px-5 py-2 text-sm disabled:opacity-60"
+                  >
+                    {saving ? "Salvataggio..." : "Crea bozza servizio"}
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => {
-                    const json = JSON.stringify(data, null, 2);
-                    navigator.clipboard.writeText(json).catch(() => null);
-                  }}
+                  onClick={() => { navigator.clipboard.writeText(JSON.stringify(data, null, 2)).catch(() => null); }}
                   className="btn-secondary px-4 py-2 text-sm"
                 >
                   Copia JSON

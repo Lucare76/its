@@ -28,14 +28,19 @@ const AGENCY_PROMPTS: Record<string, string> = {
 Formato tabellare fisso. Estrai:
 - numero_conferma: dopo "CONFERMA D'ORDINE n."
 - numero_pratica: campo PRATICA (es: 26/002739)
+- data_conferma: campo Data in alto a destra
 - cliente_nome: campo "1° BENEFICIARIO"
-- cliente_cellulare: dopo "CELL:" o "Cellulare/Tel." nella sezione operativa
+- n_pax: colonna PAX nella riga intestazione pratica (numero intero, es: 2)
+- cliente_cellulare: dopo "CELL:" o "Cellulare/Tel." nella sezione operativa in fondo
 - hotel: colonna DESCRIZIONE nella riga PROGRAMMA
 - data_arrivo / data_partenza: colonne DAL/AL nella riga PROGRAMMA
-- servizi: tabella con colonne DAL AL DESCRIZIONE IMPORTO — ogni riga è un servizio
+- servizi: tabella con colonne DAL AL DESCRIZIONE IMPORTO PAX NUM TOTALE — ogni riga è un servizio
   - il mezzo si ricava dalla tabella treni/bus sotto (cerca ITALO, FLIXBUS, EASYJET)
+  - compagnia: es "ITALO"
   - numero_mezzo: solo il numero (es "9919" da "ITALO ITA 9919")
   - orario: formato HH:MM accanto alla data servizio
+  - partenza: stazione/città di partenza dalla tabella treni (es "TORINO P. NUOVA")
+  - destinazione: stazione/città di arrivo (es "NAPOLI CENTRALE")
 - totale_pratica: campo "Totale pratica EUR"
 
 Rispondi con lo schema JSON richiesto.`,
