@@ -309,15 +309,18 @@ export async function POST(request: NextRequest) {
   };
 
   // ── Inserisci inbound_email ───────────────────────────────────────────────
+  const bodyText = `Import manuale PDF con Claude AI. Agenzia: ${agencyLabel}. Pratica: ${practiceNumber ?? "N/D"}.`;
+
   const { data: inboundEmail, error: inboundError } = await (auth.admin as any)
     .from("inbound_emails")
     .insert({
       tenant_id: tenantId,
       from_email: "operator@manual-upload.local",
       subject: `Import Claude AI: ${filename}`,
+      raw_text: bodyText,
+      body_text: bodyText,
       extracted_text: JSON.stringify(extracted, null, 2),
       parsed_json: parsedJson,
-      body_text: `Import manuale PDF con Claude AI. Agenzia: ${agencyLabel}. Pratica: ${practiceNumber ?? "N/D"}.`,
       created_at: new Date().toISOString()
     })
     .select("id")
