@@ -8,17 +8,7 @@ import type { Hotel, Service } from "@/lib/types";
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function isMedmarService(s: Service): boolean {
-  return (
-    s.booking_service_kind === "transfer_port_hotel" ||
-    s.service_type_code === "transfer_hotel_port" ||
-    (s.booking_service_kind == null &&
-      (s.vessel?.toLowerCase().includes("medmar") ||
-        s.vessel?.toLowerCase().includes("snav") ||
-        s.vessel?.toLowerCase().includes("traghetto") ||
-        s.vessel?.toLowerCase().includes("aliscafo") ||
-        s.vessel?.toLowerCase().includes("pozzuoli") ||
-        s.vessel?.toLowerCase().includes("napoli")))
-  );
+  return (s.vessel ?? "").toLowerCase().includes("medmar");
 }
 
 function todayIso() {
@@ -226,17 +216,17 @@ export default function BigliettiMedmarPage() {
     <section className="space-y-5">
       <div className="flex flex-wrap items-end gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Biglietti MEDMAR / SNAV</h1>
+          <h1 className="text-2xl font-semibold">Biglietti MEDMAR</h1>
           <p className="text-sm text-slate-500">Transfer via porto — arrivo e partenza per cliente, pronti per prenotazione</p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2 text-sm">
           <label className="text-xs font-medium text-slate-600">
             Dal
-            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="ml-1 input-saas" />
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value || todayIso())} className="ml-1 input-saas" />
           </label>
           <label className="text-xs font-medium text-slate-600">
             Al
-            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="ml-1 input-saas" />
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value || addDays(todayIso(), 14))} className="ml-1 input-saas" />
           </label>
         </div>
       </div>
@@ -246,7 +236,7 @@ export default function BigliettiMedmarPage() {
 
       {!loading && bookingGroups.length === 0 && (
         <div className="card p-6 text-center text-sm text-slate-500">
-          Nessun biglietto MEDMAR / SNAV nel periodo selezionato.
+          Nessun biglietto MEDMAR nel periodo selezionato.
         </div>
       )}
 

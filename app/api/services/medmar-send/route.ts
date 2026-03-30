@@ -52,7 +52,7 @@ function generateMedmarEmailHtml(data: {
 </head>
 <body>
 <div class="card">
-  <div class="badge">⚓ Biglietto MEDMAR / SNAV</div>
+  <div class="badge">⚓ Biglietto MEDMAR</div>
   <h2>Conferma servizio marittimo</h2>
   <p class="subtitle">Pratica ${data.pratica} — ${data.agencyName}</p>
 
@@ -189,7 +189,7 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({
         from: `Ischia Transfer Service <${fromEmail}>`,
         to: [agencyEmail],
-        subject: `Biglietto MEDMAR/SNAV — ${customerName} (${pratica})`,
+        subject: `Biglietto MEDMAR — ${customerName} (${pratica})`,
         html
       })
     });
