@@ -202,6 +202,7 @@ export default function InboxPage() {
   const [pdfUploadError, setPdfUploadError] = useState<string | null>(null);
   const [pdfUploadPreview, setPdfUploadPreview] = useState<Record<string, unknown> | null>(null);
   const [pdfEditForm, setPdfEditForm] = useState<FormState>(EMPTY_FORM);
+  const [pdfDuplicateWarning, setPdfDuplicateWarning] = useState<string | null>(null);
 
   const handleCopy = (text: string, field: string) => {
     void copyToClipboard(text).then(() => {
@@ -350,7 +351,7 @@ export default function InboxPage() {
     }
   };
 
-  const createDraftFromUploadedPdf = async () => {
+  const createDraftFromUploadedPdf = async (force = false) => {
     if (!pdfUploadFile || !pdfUploadPreview) {
       setPdfUploadError("Esegui prima l'anteprima del PDF.");
       return;
@@ -363,6 +364,7 @@ export default function InboxPage() {
 
     setPdfUploadSaving(true);
     setPdfUploadError(null);
+    setPdfDuplicateWarning(null);
     try {
       const pdfBase64 = await fileToBase64(pdfUploadFile);
       const detectedAgency = String((pdfUploadPreview?.claude_extracted as Record<string,unknown> | undefined)?.agency ?? "manual_upload");
@@ -376,10 +378,15 @@ export default function InboxPage() {
           form: pdfEditForm,
           pdf_base64: pdfBase64,
           filename: pdfUploadFile.name,
-          agency: detectedAgency
+          agency: detectedAgency,
+          force
         })
       });
-      const body = (await response.json().catch(() => null)) as { ok?: boolean; inbound_email_id?: string; error?: string } | null;
+      const body = (await response.json().catch(() => null)) as { ok?: boolean; inbound_email_id?: string; duplicate?: boolean; error?: string } | null;
+      if (response.status === 409 && body?.duplicate) {
+        setPdfDuplicateWarning(body.error ?? "PDF già importato.");
+        return;
+      }
       if (!response.ok || !body?.ok || !body?.inbound_email_id) {
         throw new Error(body?.error ?? "Creazione bozza da PDF non riuscita.");
       }
@@ -1152,18 +1159,36 @@ export default function InboxPage() {
                     </div>
 
                     {/* Bottone conferma in fondo */}
-                    <div className="border-t border-slate-200 p-4">
-                      {pdfUploadError ? (
-                        <p className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{pdfUploadError}</p>
+                    <div className="border-t border-slate-200 p-4 space-y-2">
+                      {pdfDuplicateWarning ? (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                          <p className="text-xs font-semibold text-amber-800">⚠ PDF già importato</p>
+                          <p className="mt-0.5 text-xs text-amber-700">{pdfDuplicateWarning}</p>
+                          <div className="mt-2 flex gap-2">
+                            <button type="button" onClick={() => void createDraftFromUploadedPdf(true)}
+                              className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700">
+                              Salva comunque
+                            </button>
+                            <button type="button" onClick={() => setPdfDuplicateWarning(null)}
+                              className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100">
+                              Annulla
+                            </button>
+                          </div>
+                        </div>
                       ) : null}
-                      <button
-                        type="button"
-                        onClick={() => void createDraftFromUploadedPdf()}
-                        className="btn-primary w-full py-2.5 text-sm"
-                        disabled={pdfUploadLoading || pdfUploadSaving}
-                      >
-                        {pdfUploadSaving ? "Salvataggio in corso..." : "✓ Conferma e crea servizio"}
-                      </button>
+                      {pdfUploadError ? (
+                        <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{pdfUploadError}</p>
+                      ) : null}
+                      {!pdfDuplicateWarning ? (
+                        <button
+                          type="button"
+                          onClick={() => void createDraftFromUploadedPdf()}
+                          className="btn-primary w-full py-2.5 text-sm"
+                          disabled={pdfUploadLoading || pdfUploadSaving}
+                        >
+                          {pdfUploadSaving ? "Salvataggio in corso..." : "✓ Conferma e crea servizio"}
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 )}

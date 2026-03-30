@@ -140,7 +140,7 @@ export async function POST(request: NextRequest) {
   try { body = (await request.json()) as typeof body; }
   catch { return NextResponse.json({ ok: false, error: "Body JSON non valido." }, { status: 400 }); }
 
-  const { form, pdf_base64, filename = "upload.pdf", agency = "unknown" } = body;
+  const { form, pdf_base64, filename = "upload.pdf", agency = "unknown", force = false } = body as typeof body & { force?: boolean };
   if (!form) return NextResponse.json({ ok: false, error: "Dati form mancanti." }, { status: 400 });
 
   // ── Validazione campi obbligatori ─────────────────────────────────────────
@@ -173,6 +173,24 @@ export async function POST(request: NextRequest) {
   const compositeKey = slug(`${customerName}|${arrivalDate}|${hotelName ?? "hotel-nd"}`);
   const dedupeKey = hashString([practiceNumber, customerName, arrivalDate, hotelName, textHash].filter(Boolean).join("|")).slice(0, 24);
   const externalReference = practiceNumber ?? compositeKey;
+
+  // ── Controllo duplicato PDF ───────────────────────────────────────────────
+  if (!force) {
+    const { data: dupService } = await (auth.admin as any)
+      .from("services")
+      .select("id, customer_name, date")
+      .eq("tenant_id", tenantId)
+      .ilike("notes", `%[pdf_hash:${pdfHash}]%`)
+      .maybeSingle();
+    if (dupService?.id) {
+      return NextResponse.json({
+        ok: false,
+        duplicate: true,
+        existing_service_id: dupService.id,
+        error: `Questo PDF è già stato importato (${dupService.customer_name} — ${dupService.date}). Vuoi salvarlo comunque?`
+      }, { status: 409 });
+    }
+  }
 
   const normalizedForJson = {
     parser_key: `claude_${agency}`,

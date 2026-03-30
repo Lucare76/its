@@ -221,6 +221,7 @@ export type ClaudeEmailExtractResult = {
 // ─── Tipi interni ────────────────────────────────────────────────────────────
 
 type ClaudeJson = {
+  agency_key?: string | null;
   // Schema piatto (preferito)
   numero_pratica?: string | null;
   cliente_nome?: string | null;
@@ -326,6 +327,38 @@ function buildContent(pdfBase64: string | null, textParts: string[]) {
   return content;
 }
 
+// ─── Prompt combinato (detect + extract in una sola chiamata) ───────────────
+
+const COMBINED_PROMPT = `PASSO 1 — Identifica l'agenzia dal logo/intestazione/formato del documento:
+- "aleste"     → Aleste Viaggi (intestazione "ALESTE", tabella PROGRAMMA/SERVIZI, codice pratica "2X/XXXXXX")
+- "angelino"   → Angelino Tour & Events (Forio, Ischia)
+- "holidayweb" → Holiday Web (Lacco Ameno, Ischia)
+- "sosandra"   → Sosandra / Rossella Viaggi (lettera libera o voucher SNAV con checkbox orari)
+- "zigolo"     → Zigolo Viaggi ("Elenco richieste conferme annullamenti servizi", Barano d'Ischia)
+- "unknown"    → agenzia non riconosciuta
+
+PASSO 2 — Estrai i dati usando le istruzioni specifiche per l'agenzia identificata:
+
+══ SE aleste ══
+${AGENCY_PROMPTS.aleste}
+
+══ SE angelino ══
+${AGENCY_PROMPTS.angelino}
+
+══ SE holidayweb ══
+${AGENCY_PROMPTS.holidayweb}
+
+══ SE sosandra ══
+${AGENCY_PROMPTS.sosandra}
+
+══ SE zigolo ══
+${AGENCY_PROMPTS.zigolo}
+
+══ SE unknown ══
+${AGENCY_PROMPTS.unknown}
+
+Aggiungi al JSON il campo "agency_key" con il codice agenzia identificato (aleste/angelino/holidayweb/sosandra/zigolo/unknown).`;
+
 // ─── Export principale ──────────────────────────────────────────────────────
 
 export async function claudeEmailExtract(
@@ -337,49 +370,27 @@ export async function claudeEmailExtract(
     throw new Error("ANTHROPIC_API_KEY non configurata sul server.");
   }
 
-  // ── Step 1: detect agency ─────────────────────────────────────────────────
-  const detectContent = buildContent(pdfBase64, [
-    emailSubject ? `Oggetto email: ${emailSubject}` : "",
-    emailBody ? `Testo email:\n${emailBody.slice(0, 2000)}` : "",
-    "Rispondi SOLO con il nome agenzia in minuscolo senza spazi: aleste | angelino | holidayweb | sosandra | zigolo | unknown"
-  ]);
-
-  const detectRes = await callClaude({
-    model: MODEL,
-    max_tokens: 50,
-    messages: [{ role: "user", content: detectContent }]
-  });
-
-  let agency = "unknown";
-  if (detectRes.ok) {
-    const detectData = (await detectRes.json()) as { content?: Array<{ text?: string }> };
-    const raw = detectData.content?.map((b) => b.text ?? "").join("").trim().toLowerCase() ?? "";
-    const known = ["aleste", "angelino", "holidayweb", "sosandra", "zigolo"];
-    agency = known.find((a) => raw.includes(a)) ?? "unknown";
-  }
-
-  // ── Step 2: extract data ──────────────────────────────────────────────────
-  const agencyPrompt = AGENCY_PROMPTS[agency] ?? AGENCY_PROMPTS.unknown;
-  const extractContent = buildContent(pdfBase64, [
+  // Singola chiamata: detect + extract in un colpo solo, PDF inviato una volta sola
+  const content = buildContent(pdfBase64, [
     emailSubject ? `Oggetto email: ${emailSubject}` : "",
     emailBody ? `Testo email:\n${emailBody.slice(0, 3000)}` : "",
-    agencyPrompt
+    COMBINED_PROMPT
   ]);
 
-  const extractRes = await callClaude({
+  const res = await callClaude({
     model: MODEL,
-    max_tokens: 1200,
+    max_tokens: 1400,
     system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: extractContent }]
+    messages: [{ role: "user", content }]
   });
 
-  if (!extractRes.ok) {
-    const errText = await extractRes.text();
+  if (!res.ok) {
+    const errText = await res.text();
     throw new Error(`Errore Claude extraction: ${errText}`);
   }
 
-  const extractData = (await extractRes.json()) as { content?: Array<{ text?: string }> };
-  let rawText = extractData.content?.map((b) => b.text ?? "").join("") ?? "";
+  const resData = (await res.json()) as { content?: Array<{ text?: string }> };
+  let rawText = resData.content?.map((b) => b.text ?? "").join("") ?? "";
   rawText = rawText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
   const match = rawText.match(/\{[\s\S]*\}/);
 
@@ -387,7 +398,9 @@ export async function claudeEmailExtract(
     throw new Error("Claude non ha restituito JSON valido dall'estrazione.");
   }
 
-  const rawJson = JSON.parse(match[0]) as ClaudeJson;
+  const rawJson = JSON.parse(match[0]) as ClaudeJson & { agency_key?: string };
+  const known = ["aleste", "angelino", "holidayweb", "sosandra", "zigolo"];
+  const agency = known.includes(rawJson.agency_key ?? "") ? (rawJson.agency_key as string) : "unknown";
   const form = claudeJsonToForm(rawJson, agency);
 
   return { agency, form, rawJson: rawJson as Record<string, unknown> };
