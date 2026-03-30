@@ -10,7 +10,7 @@ import type { Hotel, Service } from "@/lib/types";
 function isMedmarService(s: Service): boolean {
   return (
     s.booking_service_kind === "transfer_port_hotel" ||
-    s.booking_service_kind === "transfer_hotel_port" ||
+    s.service_type_code === "transfer_hotel_port" ||
     (s.booking_service_kind == null &&
       (s.vessel?.toLowerCase().includes("medmar") ||
         s.vessel?.toLowerCase().includes("snav") ||

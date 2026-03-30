@@ -10,6 +10,7 @@ export interface ClientSessionContext {
   userId: string | null;
   tenantId: string | null;
   role: UserRole | null;
+  accessToken: string | null;
 }
 
 const E2E_SESSION_STORAGE_KEY = "__it_e2e_session";
@@ -31,7 +32,8 @@ export function getE2ETestSessionOverride(): ClientSessionContext | null {
       mode: "supabase",
       userId: parsed.userId,
       tenantId: parsed.tenantId,
-      role
+      role,
+      accessToken: null
     };
   } catch {
     return null;
@@ -51,7 +53,8 @@ export async function getClientSessionContext(): Promise<ClientSessionContext> {
       mode: "supabase",
       userId: null,
       tenantId: null,
-      role: null
+      role: null,
+      accessToken: null
     };
   }
 
@@ -61,7 +64,8 @@ export async function getClientSessionContext(): Promise<ClientSessionContext> {
       mode: "supabase",
       userId: null,
       tenantId: null,
-      role: null
+      role: null,
+      accessToken: null
     };
   }
 
@@ -85,7 +89,8 @@ export async function getClientSessionContext(): Promise<ClientSessionContext> {
           mode: "supabase",
           userId: userData.user.id,
           tenantId: resolvedTenantId,
-          role: resolvedRole
+          role: resolvedRole,
+          accessToken
         };
       }
     } catch {
@@ -106,6 +111,7 @@ export async function getClientSessionContext(): Promise<ClientSessionContext> {
     mode: "supabase",
     userId: userData.user.id,
     tenantId: valid?.tenant_id ?? null,
-    role: valid ? parseRole(valid.role) : null
+    role: valid ? parseRole(valid.role) : null,
+    accessToken
   };
 }

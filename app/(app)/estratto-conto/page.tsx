@@ -9,6 +9,7 @@ import { getClientSessionContext } from "@/lib/supabase/client-session";
 type AgencyRow = {
   id: string;
   name: string;
+  active?: boolean | null;
   invoice_email: string | null;
   contact_email: string | null;
   booking_email: string | null;
