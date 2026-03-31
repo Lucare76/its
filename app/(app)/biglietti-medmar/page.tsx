@@ -74,6 +74,7 @@ export default function BigliettiMedmarPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [sending, setSending] = useState<string | null>(null); // key del gruppo in invio
   const [sentKeys, setSentKeys] = useState<Set<string>>(new Set());
+  const [showSent, setShowSent] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [sendModal, setSendModal] = useState<{ group: BookingGroup; pdfFile: File | null } | null>(null);
 
@@ -188,15 +189,20 @@ export default function BigliettiMedmarPage() {
     return [...map.values()].sort((a, b) => a.refDate.localeCompare(b.refDate));
   }, [medmarServices, hotelsById]);
 
+  const visibleGroups = useMemo(
+    () => showSent ? bookingGroups : bookingGroups.filter((g) => g.sentAt == null && !sentKeys.has(g.key)),
+    [bookingGroups, showSent, sentKeys]
+  );
+
   const byDate = useMemo(() => {
     const map = new Map<string, BookingGroup[]>();
-    for (const g of bookingGroups) {
+    for (const g of visibleGroups) {
       const k = g.refDate || "senza-data";
       if (!map.has(k)) map.set(k, []);
       map.get(k)!.push(g);
     }
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [bookingGroups]);
+  }, [visibleGroups]);
 
   const handleSend = async (g: BookingGroup, pdfFile: File | null) => {
     if (!token || sending) return;
@@ -255,6 +261,12 @@ export default function BigliettiMedmarPage() {
             onClick={() => { if (tenantId) void loadData(tenantId, dateFrom, dateTo); }}
             className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700">
             Cerca
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowSent((v) => !v)}
+            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${showSent ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}>
+            {showSent ? "✓ Inviati visibili" : "Mostra inviati"}
           </button>
         </div>
       </div>
