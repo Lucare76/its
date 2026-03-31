@@ -158,7 +158,7 @@ export default function ArrivalsPage() {
     return buildOperationalInstances(data.services)
       .filter((instance) =>
         instance.direction === "arrival" &&
-        instance.date === selectedDate &&
+        (!q ? instance.date === selectedDate : true) &&
         (agencyFilter === "all" || instance.service.billing_party_name?.trim().toLowerCase() === agencyFilter.toLowerCase()) &&
         (!q || (instance.service.customer_name ?? "").toLowerCase().includes(q) || (instance.service.phone ?? "").toLowerCase().includes(q))
       )
