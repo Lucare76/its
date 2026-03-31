@@ -328,6 +328,7 @@ export default function MappaLivePage() {
 
   const handleManualRefresh = () => {
     setCountdown(refreshSeconds);
+    // eslint-disable-next-line react-hooks/rules-of-hooks
     void fetchControlRoom(false);
   };
 

@@ -9,14 +9,11 @@ export default function UpdatePasswordPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("Verifica link di recupero in corso...");
+  const [message, setMessage] = useState(supabase ? "Verifica link di recupero in corso..." : "Supabase non configurato.");
 
   useEffect(() => {
     const client = supabase;
-    if (!client) {
-      setMessage("Supabase non configurato.");
-      return;
-    }
+    if (!client) return;
 
     let active = true;
 

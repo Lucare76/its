@@ -382,7 +382,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
       {busUnits.length === 0 ? (
         <div className="card p-8 text-center space-y-2">
           <p className="text-text font-medium">Nessun mezzo configurato</p>
-          <p className="text-muted text-sm">Clicca su "Gestisci mezzi" per aggiungere i bus.</p>
+          <p className="text-muted text-sm">Clicca su &quot;Gestisci mezzi&quot; per aggiungere i bus.</p>
         </div>
       ) : (
         <>
