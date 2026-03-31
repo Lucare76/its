@@ -7,7 +7,7 @@ export type HotelMatchRow = {
   aliases?: string[];
 };
 
-function normalizeHotelText(value: string | null | undefined) {
+export function normalizeHotelText(value: string | null | undefined) {
   return String(value ?? "")
     .toLowerCase()
     .normalize("NFD")

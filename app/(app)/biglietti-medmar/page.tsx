@@ -234,6 +234,7 @@ export default function BigliettiMedmarPage() {
   };
 
   return (
+    <>
     <section className="space-y-5">
       <div className="flex flex-wrap items-end gap-4">
         <div>
@@ -516,5 +517,6 @@ export default function BigliettiMedmarPage() {
         </div>
       </div>
     )}
+    </>
   );
 }
