@@ -319,6 +319,7 @@ export async function POST(request: NextRequest) {
       billing_party_name: form.agenzia,
       outbound_time: outboundTime,
       return_time: returnTime,
+      departure_date: departureDate,
       source_total_amount_cents: sourceTotalCents,
       source_price_per_pax_cents: sourcePricePerPaxCents,
       source_amount_currency: "EUR",

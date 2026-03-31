@@ -13,6 +13,7 @@ export default function DeparturesPage() {
   const todayIso = new Date().toISOString().slice(0, 10);
   const [selectedDate, setSelectedDate] = useState(todayIso);
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
+  const [search, setSearch] = useState("");
 
   const hotelsById = useMemo(() => new Map(data.hotels.map((hotel) => [hotel.id, hotel])), [data.hotels]);
   const tenantId = data.services[0]?.tenant_id ?? "";
@@ -31,17 +32,17 @@ export default function DeparturesPage() {
     return ["all", ...Array.from(seen.values()).sort((a, b) => a.localeCompare(b, "it"))];
   }, [data.services]);
 
-  const departures = useMemo(
-    () =>
-      buildOperationalInstances(data.services)
-        .filter((instance) =>
-          instance.direction === "departure" &&
-          instance.date === selectedDate &&
-          (agencyFilter === "all" || instance.service.billing_party_name?.trim().toLowerCase() === agencyFilter.toLowerCase())
-        )
-        .sort((left, right) => left.time.localeCompare(right.time)),
-    [data.services, selectedDate, agencyFilter]
-  );
+  const departures = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return buildOperationalInstances(data.services)
+      .filter((instance) =>
+        instance.direction === "departure" &&
+        instance.date === selectedDate &&
+        (agencyFilter === "all" || instance.service.billing_party_name?.trim().toLowerCase() === agencyFilter.toLowerCase()) &&
+        (!q || (instance.service.customer_name ?? "").toLowerCase().includes(q) || (instance.service.phone ?? "").toLowerCase().includes(q))
+      )
+      .sort((left, right) => left.time.localeCompare(right.time));
+  }, [data.services, selectedDate, agencyFilter, search]);
 
   const totalPax = departures.reduce((sum, item) => sum + item.service.pax, 0);
   const busCount = departures.filter(
@@ -74,6 +75,16 @@ export default function DeparturesPage() {
                   <option key={name} value={name}>{name === "all" ? "Tutte le agenzie" : name}</option>
                 ))}
               </select>
+            </label>
+            <label className="text-sm">
+              Cerca
+              <input
+                type="search"
+                placeholder="Nome, cognome o telefono..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="input-saas mt-1 min-w-52"
+              />
             </label>
           </div>
         }

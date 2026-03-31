@@ -127,6 +127,7 @@ export default function ArrivalsPage() {
   const [selectedDate, setSelectedDate] = useState(todayIso);
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
+  const [search, setSearch] = useState("");
 
   const hotelsById = useMemo(() => new Map(data.hotels.map((hotel) => [hotel.id, hotel])), [data.hotels]);
   const tenantId = data.services[0]?.tenant_id ?? "";
@@ -152,17 +153,17 @@ export default function ArrivalsPage() {
     void refresh?.();
   };
 
-  const arrivals = useMemo(
-    () =>
-      buildOperationalInstances(data.services)
-        .filter((instance) =>
-          instance.direction === "arrival" &&
-          instance.date === selectedDate &&
-          (agencyFilter === "all" || instance.service.billing_party_name?.trim().toLowerCase() === agencyFilter.toLowerCase())
-        )
-        .sort((left, right) => left.time.localeCompare(right.time)),
-    [data.services, selectedDate, agencyFilter]
-  );
+  const arrivals = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return buildOperationalInstances(data.services)
+      .filter((instance) =>
+        instance.direction === "arrival" &&
+        instance.date === selectedDate &&
+        (agencyFilter === "all" || instance.service.billing_party_name?.trim().toLowerCase() === agencyFilter.toLowerCase()) &&
+        (!q || (instance.service.customer_name ?? "").toLowerCase().includes(q) || (instance.service.phone ?? "").toLowerCase().includes(q))
+      )
+      .sort((left, right) => left.time.localeCompare(right.time));
+  }, [data.services, selectedDate, agencyFilter, search]);
 
   const totalPax = arrivals.reduce((sum, item) => sum + item.service.pax, 0);
   const busCount = arrivals.filter(
@@ -189,6 +190,16 @@ export default function ArrivalsPage() {
                   <option key={name} value={name}>{name === "all" ? "Tutte le agenzie" : name}</option>
                 ))}
               </select>
+            </label>
+            <label className="text-sm">
+              <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Cerca</span>
+              <input
+                type="search"
+                placeholder="Nome, cognome o telefono..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="input-saas mt-1 min-w-52"
+              />
             </label>
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
               <span className="font-semibold text-slate-700">{formatIsoDateShort(selectedDate)}</span>

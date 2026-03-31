@@ -74,6 +74,17 @@ export default function BigliettiMedmarPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [sending, setSending] = useState<string | null>(null); // key del gruppo in invio
   const [sentKeys, setSentKeys] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [sendModal, setSendModal] = useState<{ group: BookingGroup; pdfFile: File | null } | null>(null);
+
+  const handleDelete = async (g: BookingGroup) => {
+    if (!supabase || !tenantId) return;
+    if (!confirm(`Eliminare la prenotazione di ${g.customerName}? L'operazione non è reversibile.`)) return;
+    setDeleting(g.key);
+    await supabase.from("services").delete().in("id", g.allServiceIds).eq("tenant_id", tenantId);
+    setDeleting(null);
+    if (tenantId) void loadData(tenantId);
+  };
 
   const handleCopy = (text: string, key: string) => {
     void copyText(text).then(() => {
@@ -84,13 +95,15 @@ export default function BigliettiMedmarPage() {
 
   const loadData = useCallback(async (tid: string) => {
     if (!supabase) return;
+    const qFrom = /^\d{4}-\d{2}-\d{2}$/.test(dateFrom) ? dateFrom : todayIso();
+    const qTo   = /^\d{4}-\d{2}-\d{2}$/.test(dateTo)   ? dateTo   : addDays(todayIso(), 14);
     const [servicesRes, hotelsRes] = await Promise.all([
       supabase.from("services")
         .select("*, medmar_ticket_sent_at, medmar_ticket_sent_by")
         .eq("tenant_id", tid)
         .eq("is_draft", false)
-        .gte("date", dateFrom)
-        .lte("date", dateTo)
+        .gte("date", qFrom)
+        .lte("date", qTo)
         .order("date")
         .order("time"),
       supabase.from("hotels").select("id, name").eq("tenant_id", tid).limit(500)
@@ -185,21 +198,29 @@ export default function BigliettiMedmarPage() {
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [bookingGroups]);
 
-  const handleSend = async (g: BookingGroup) => {
+  const handleSend = async (g: BookingGroup, pdfFile: File | null) => {
     if (!token || sending) return;
+    setSendModal(null);
     setSending(g.key);
     try {
+      let pdf_base64: string | undefined;
+      let pdf_filename: string | undefined;
+      if (pdfFile) {
+        const buf = await pdfFile.arrayBuffer();
+        pdf_base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        pdf_filename = pdfFile.name;
+      }
       const res = await fetch("/api/services/medmar-send", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-        body: JSON.stringify({ service_ids: g.allServiceIds })
+        body: JSON.stringify({ service_ids: g.allServiceIds, pdf_base64, pdf_filename })
       });
       const data = (await res.json()) as { ok: boolean; sent_to?: string | null; error?: string };
       if (data.ok) {
         setSentKeys((prev) => new Set([...prev, g.key]));
         if (tenantId) void loadData(tenantId);
         const msg = data.sent_to
-          ? `Email inviata a ${data.sent_to}`
+          ? `Email inviata a ${data.sent_to}${pdfFile ? " con biglietto allegato" : ""}`
           : "Marcato come fatto (nessuna email agenzia configurata)";
         alert(msg);
       } else {
@@ -222,11 +243,11 @@ export default function BigliettiMedmarPage() {
         <div className="ml-auto flex flex-wrap items-center gap-2 text-sm">
           <label className="text-xs font-medium text-slate-600">
             Dal
-            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value || todayIso())} className="ml-1 input-saas" />
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="ml-1 input-saas" />
           </label>
           <label className="text-xs font-medium text-slate-600">
             Al
-            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value || addDays(todayIso(), 14))} className="ml-1 input-saas" />
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="ml-1 input-saas" />
           </label>
         </div>
       </div>
@@ -295,78 +316,111 @@ export default function BigliettiMedmarPage() {
                   </div>
 
                   {/* Arrivo + Partenza */}
-                  <div className="border-t border-slate-100 divide-y divide-slate-100">
-                    <div className="flex items-center gap-3 px-4 py-2.5">
-                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">A</div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-semibold text-slate-700">
-                          {g.arrivo ? `${formatDate(g.arrivo.date ?? "")} · ${g.arrivo.time ?? "orario N/D"}` : "—"}
-                        </p>
-                        <p className="text-[11px] text-slate-400">
-                          {g.arrivo ? (g.arrivo.vessel ?? g.arrivo.booking_service_kind ?? "porto N/D") : "nessun arrivo"}
-                        </p>
+                  {(() => {
+                    // Partenza può venire da: servizio separato, oppure departure_date/return_time sul servizio arrivo
+                    const partenzaDate = g.partenza?.date ?? g.arrivo?.departure_date ?? null;
+                    const partenzaTime = g.partenza?.time ?? g.arrivo?.return_time ?? null;
+                    const partenzaVessel = g.partenza?.vessel ?? g.arrivo?.vessel ?? "MEDMAR";
+                    const hasPartenza = !!(partenzaDate || partenzaTime);
+                    return (
+                      <div className="border-t border-slate-100 divide-y divide-slate-100">
+                        <div className="flex items-center gap-3 px-4 py-2.5">
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">A</div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold text-slate-700">
+                              {g.arrivo ? `${formatDate(g.arrivo.date ?? "")} · ${g.arrivo.time ?? "orario N/D"}` : "—"}
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              {g.arrivo ? (g.arrivo.vessel ?? g.arrivo.booking_service_kind ?? "porto N/D") : "nessun arrivo"}
+                            </p>
+                          </div>
+                          {g.arrivo && (
+                            <button type="button"
+                              onClick={() => handleCopy(`Arrivo ${g.arrivo!.date} ${g.arrivo!.time ?? ""}`, `arr-${g.key}`)}
+                              className="shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50">
+                              {copied === `arr-${g.key}` ? "✓" : "⎘"}
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 px-4 py-2.5">
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-700">P</div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold text-slate-700">
+                              {hasPartenza
+                                ? `${partenzaDate ? formatDate(partenzaDate) : "data N/D"} · ${partenzaTime ?? "orario N/D"}`
+                                : "—"}
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              {hasPartenza ? partenzaVessel : "nessuna partenza"}
+                            </p>
+                          </div>
+                          {hasPartenza && (
+                            <button type="button"
+                              onClick={() => handleCopy(`Partenza ${partenzaDate ?? ""} ${partenzaTime ?? ""}`.trim(), `par-${g.key}`)}
+                              className="shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50">
+                              {copied === `par-${g.key}` ? "✓" : "⎘"}
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      {g.arrivo && (
+                    );
+                  })()}
+
+                  {/* Bottoni copia — campi form MEDMAR */}
+                  {(() => {
+                    // Split nome → cognome (tutto tranne prima parola) + nome (prima parola)
+                    const nameParts = g.customerName.trim().split(/\s+/);
+                    const nomeFirst = nameParts[0] ?? "";
+                    const cognomeLast = nameParts.slice(1).join(" ");
+                    const tel = g.phone ?? "";
+                    const email = "info@ischiatransferservice.it";
+                    // Copia tutto: cognome \t nome \t tel \t email (tab-separated per incollare nei campi)
+                    const copyAllText = [cognomeLast || nomeFirst, cognomeLast ? nomeFirst : "", tel, email]
+                      .filter(Boolean).join("\t");
+                    return (
+                      <div className="border-t border-slate-100 bg-slate-50 px-4 py-3 space-y-2">
                         <button type="button"
-                          onClick={() => handleCopy(`Arrivo ${g.arrivo!.date} ${g.arrivo!.time ?? ""}`, `arr-${g.key}`)}
-                          className="shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50">
-                          {copied === `arr-${g.key}` ? "✓" : "⎘"}
+                          onClick={() => handleCopy(copyAllText, `all-${g.key}`)}
+                          className="w-full rounded-lg border border-blue-300 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 text-center">
+                          {copied === `all-${g.key}` ? "✓ Copiato!" : "⎘ Copia tutto (Cognome · Nome · Tel · Email)"}
                         </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 px-4 py-2.5">
-                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-700">P</div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-semibold text-slate-700">
-                          {g.partenza ? `${formatDate(g.partenza.date ?? "")} · ${g.partenza.time ?? "orario N/D"}` : "—"}
-                        </p>
-                        <p className="text-[11px] text-slate-400">
-                          {g.partenza ? (g.partenza.vessel ?? g.partenza.booking_service_kind ?? "porto N/D") : "nessuna partenza"}
-                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {cognomeLast && (
+                            <button type="button"
+                              onClick={() => handleCopy(cognomeLast, `cgn-${g.key}`)}
+                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
+                              {copied === `cgn-${g.key}` ? "✓" : "⎘"} Cognome
+                            </button>
+                          )}
+                          <button type="button"
+                            onClick={() => handleCopy(nomeFirst, `nome-${g.key}`)}
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
+                            {copied === `nome-${g.key}` ? "✓" : "⎘"} Nome
+                          </button>
+                          {tel && (
+                            <button type="button"
+                              onClick={() => handleCopy(tel, `tel-${g.key}`)}
+                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
+                              {copied === `tel-${g.key}` ? "✓" : "⎘"} {tel}
+                            </button>
+                          )}
+                          <button type="button"
+                            onClick={() => handleCopy(email, `email-${g.key}`)}
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
+                            {copied === `email-${g.key}` ? "✓ Email" : "⎘ Email"}
+                          </button>
+                        </div>
                       </div>
-                      {g.partenza && (
-                        <button type="button"
-                          onClick={() => handleCopy(`Partenza ${g.partenza!.date} ${g.partenza!.time ?? ""}`, `par-${g.key}`)}
-                          className="shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50">
-                          {copied === `par-${g.key}` ? "✓" : "⎘"}
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                    );
+                  })()}
 
-                  {/* Bottoni copia */}
-                  <div className="border-t border-slate-100 bg-slate-50 px-4 py-3 flex flex-wrap gap-2">
-                    <button type="button"
-                      onClick={() => handleCopy(g.customerName, `nome-${g.key}`)}
-                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
-                      {copied === `nome-${g.key}` ? "✓ Nome" : "⎘ Nome"}
-                    </button>
-                    {g.phone && (
-                      <button type="button"
-                        onClick={() => handleCopy(g.phone!, `tel-${g.key}`)}
-                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
-                        {copied === `tel-${g.key}` ? "✓" : "⎘"} {g.phone}
-                      </button>
-                    )}
-                    <button type="button"
-                      onClick={() => handleCopy("info@ischiatransferservice.it", `email-${g.key}`)}
-                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
-                      {copied === `email-${g.key}` ? "✓ Email" : "⎘ Email"}
-                    </button>
-                    <button type="button"
-                      onClick={() => handleCopy(String(g.pax), `pax-${g.key}`)}
-                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
-                      {copied === `pax-${g.key}` ? "✓" : "⎘"} {g.pax} pax
-                    </button>
-                  </div>
-
-                  {/* Bottone Fatto e invia */}
-                  <div className="px-4 pb-4 pt-2">
+                  {/* Bottone Fatto e invia + Elimina */}
+                  <div className="px-4 pb-4 pt-2 space-y-2">
                     {isSent ? (
                       <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2">
                         <span className="text-xs text-emerald-700 font-semibold">✓ Email inviata all&apos;agenzia</span>
                         <button type="button"
-                          onClick={() => void handleSend(g)}
+                          onClick={() => setSendModal({ group: g, pdfFile: null })}
                           className="ml-auto text-[10px] text-emerald-600 underline hover:no-underline">
                           Reinvia
                         </button>
@@ -374,11 +428,17 @@ export default function BigliettiMedmarPage() {
                     ) : (
                       <button type="button"
                         disabled={isSending}
-                        onClick={() => void handleSend(g)}
+                        onClick={() => setSendModal({ group: g, pdfFile: null })}
                         className="w-full rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
                         {isSending ? "Invio in corso..." : "✓ Fatto e invia all'agenzia"}
                       </button>
                     )}
+                    <button type="button"
+                      disabled={deleting === g.key}
+                      onClick={() => void handleDelete(g)}
+                      className="w-full rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed">
+                      {deleting === g.key ? "Eliminazione..." : "Elimina prenotazione"}
+                    </button>
                   </div>
                 </div>
               );
@@ -387,5 +447,68 @@ export default function BigliettiMedmarPage() {
         </div>
       ))}
     </section>
+
+    {/* Modal invio con allegato PDF */}
+    {sendModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-slate-800">Invia biglietto all&apos;agenzia</h2>
+            <button type="button" onClick={() => setSendModal(null)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+          </div>
+
+          <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 space-y-0.5">
+            <p className="text-sm font-semibold text-slate-800">{sendModal.group.customerName}</p>
+            <p className="text-xs text-slate-500">{sendModal.group.hotel} · {sendModal.group.pax} pax</p>
+            {sendModal.group.pratica && <p className="text-xs text-slate-400 font-mono">Pratica: {sendModal.group.pratica}</p>}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">
+              Allega biglietto MEDMAR (PDF)
+            </label>
+            <label className={`flex flex-col items-center justify-center w-full h-28 border-2 border-dashed rounded-xl cursor-pointer transition ${sendModal.pdfFile ? "border-emerald-400 bg-emerald-50" : "border-slate-300 bg-slate-50 hover:bg-slate-100"}`}>
+              <input
+                type="file"
+                accept="application/pdf"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  setSendModal((prev) => prev ? { ...prev, pdfFile: f } : null);
+                }}
+              />
+              {sendModal.pdfFile ? (
+                <>
+                  <span className="text-2xl">📎</span>
+                  <span className="text-sm font-medium text-emerald-700 mt-1 max-w-[260px] truncate">{sendModal.pdfFile.name}</span>
+                  <span className="text-xs text-emerald-600">Clicca per cambiare file</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-2xl text-slate-400">📄</span>
+                  <span className="text-sm text-slate-500 mt-1">Clicca per selezionare il PDF</span>
+                  <span className="text-xs text-slate-400">oppure trascina qui</span>
+                </>
+              )}
+            </label>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button type="button"
+              onClick={() => setSendModal(null)}
+              className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
+              Annulla
+            </button>
+            <button type="button"
+              onClick={() => void handleSend(sendModal.group, sendModal.pdfFile)}
+              disabled={!sendModal.pdfFile || sending === sendModal.group.key}
+              className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed">
+              {sending === sendModal.group.key ? "Invio..." : "Invia con allegato"}
+            </button>
+          </div>
+
+        </div>
+      </div>
+    )}
   );
 }

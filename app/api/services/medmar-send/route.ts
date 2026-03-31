@@ -95,11 +95,11 @@ export async function POST(request: NextRequest) {
   const tenantId = auth.membership.tenant_id;
   const userId = auth.user.id;
 
-  let body: { service_ids?: string[] };
+  let body: { service_ids?: string[]; pdf_base64?: string; pdf_filename?: string };
   try { body = (await request.json()) as typeof body; }
   catch { return NextResponse.json({ ok: false, error: "Body non valido." }, { status: 400 }); }
 
-  const { service_ids } = body;
+  const { service_ids, pdf_base64, pdf_filename = "biglietto-medmar.pdf" } = body;
   if (!service_ids?.length) {
     return NextResponse.json({ ok: false, error: "service_ids obbligatorio." }, { status: 400 });
   }
@@ -183,15 +183,19 @@ export async function POST(request: NextRequest) {
       sentAt: now
     });
 
+    const emailPayload: Record<string, unknown> = {
+      from: `Ischia Transfer Service <${fromEmail}>`,
+      to: [agencyEmail],
+      subject: `Biglietto MEDMAR — ${customerName} (${pratica})`,
+      html
+    };
+    if (pdf_base64) {
+      emailPayload.attachments = [{ filename: pdf_filename, content: pdf_base64 }];
+    }
     await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${process.env.RESEND_API_KEY}` },
-      body: JSON.stringify({
-        from: `Ischia Transfer Service <${fromEmail}>`,
-        to: [agencyEmail],
-        subject: `Biglietto MEDMAR — ${customerName} (${pratica})`,
-        html
-      })
+      body: JSON.stringify(emailPayload)
     });
   }
 
