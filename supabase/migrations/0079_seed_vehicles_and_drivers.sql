@@ -1,16 +1,8 @@
 -- Seed veicoli Ischia Transfer Service
 -- Tenant: d200b89a-64c7-4f8d-a430-95a33b83047a
 
--- ── Unique constraint su plate (idempotente) ──────────────────────────────────
-do $$ begin
-  if not exists (
-    select 1 from pg_constraint
-    where conname = 'vehicles_plate_unique'
-      and conrelid = 'public.vehicles'::regclass
-  ) then
-    alter table public.vehicles add constraint vehicles_plate_unique unique (plate);
-  end if;
-end $$;
+-- ── Unique index su plate (idempotente, usato da ON CONFLICT) ────────────────
+create unique index if not exists vehicles_plate_unique on public.vehicles (plate);
 
 -- ── Veicoli ──────────────────────────────────────────────────────────────────
 insert into vehicles (id, tenant_id, label, plate, capacity, vehicle_size, active, notes)
