@@ -83,7 +83,7 @@ export default function BigliettiMedmarPage() {
     setDeleting(g.key);
     await supabase.from("services").delete().in("id", g.allServiceIds).eq("tenant_id", tenantId);
     setDeleting(null);
-    if (tenantId) void loadData(tenantId);
+    if (tenantId) void loadData(tenantId, dateFrom, dateTo);
   };
 
   const handleCopy = (text: string, key: string) => {
@@ -93,10 +93,10 @@ export default function BigliettiMedmarPage() {
     });
   };
 
-  const loadData = useCallback(async (tid: string) => {
+  const loadData = useCallback(async (tid: string, from?: string, to?: string) => {
     if (!supabase) return;
-    const qFrom = /^\d{4}-\d{2}-\d{2}$/.test(dateFrom) ? dateFrom : todayIso();
-    const qTo   = /^\d{4}-\d{2}-\d{2}$/.test(dateTo)   ? dateTo   : addDays(todayIso(), 14);
+    const qFrom = /^\d{4}-\d{2}-\d{2}$/.test(from ?? "") ? from! : todayIso();
+    const qTo   = /^\d{4}-\d{2}-\d{2}$/.test(to ?? "")   ? to!   : addDays(todayIso(), 14);
     const [servicesRes, hotelsRes] = await Promise.all([
       supabase.from("services")
         .select("*, medmar_ticket_sent_at, medmar_ticket_sent_by")
@@ -111,7 +111,7 @@ export default function BigliettiMedmarPage() {
     if (servicesRes.error) { setError(servicesRes.error.message); return; }
     setServices((servicesRes.data ?? []) as Service[]);
     setHotels((hotelsRes.data ?? []) as Hotel[]);
-  }, [dateFrom, dateTo]);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -123,7 +123,7 @@ export default function BigliettiMedmarPage() {
       }
       setTenantId(session.tenantId);
       setToken(session.accessToken ?? null);
-      await loadData(session.tenantId);
+      await loadData(session.tenantId, dateFrom, dateTo);
       if (active) setLoading(false);
     };
     void load();
@@ -218,7 +218,7 @@ export default function BigliettiMedmarPage() {
       const data = (await res.json()) as { ok: boolean; sent_to?: string | null; error?: string };
       if (data.ok) {
         setSentKeys((prev) => new Set([...prev, g.key]));
-        if (tenantId) void loadData(tenantId);
+        if (tenantId) void loadData(tenantId, dateFrom, dateTo);
         const msg = data.sent_to
           ? `Email inviata a ${data.sent_to}${pdfFile ? " con biglietto allegato" : ""}`
           : "Marcato come fatto (nessuna email agenzia configurata)";
@@ -249,6 +249,12 @@ export default function BigliettiMedmarPage() {
             Al
             <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="ml-1 input-saas" />
           </label>
+          <button
+            type="button"
+            onClick={() => { if (tenantId) void loadData(tenantId, dateFrom, dateTo); }}
+            className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700">
+            Cerca
+          </button>
         </div>
       </div>
 
