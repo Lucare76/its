@@ -23,7 +23,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   // Campi aggiornabili
   const allowed = [
     "name", "billing_name", "legal_name", "contact_email", "booking_email",
-    "phone", "notes", "default_pricing_notes",
+    "phone", "notes", "default_pricing_notes", "parser_key_hint",
+    "sender_domains", "default_enabled_booking_kinds",
     "invoice_email", "invoice_cadence", "invoice_send_day", "invoice_enabled",
     "vat_number", "pec_email", "sdi_code", "active"
   ];

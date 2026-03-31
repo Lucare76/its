@@ -94,16 +94,16 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = await buildAgencyPayload(auth.admin, parsed.data);
-    const { error } = await auth.admin.from("agencies").insert({
+    const { data: inserted, error } = await auth.admin.from("agencies").insert({
       tenant_id: auth.membership.tenant_id,
       ...payload,
       active: true
-    });
+    }).select("id").single();
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, id: inserted?.id ?? null });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Errore interno server." }, { status: 500 });
   }
