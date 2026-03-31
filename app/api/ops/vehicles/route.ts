@@ -34,20 +34,20 @@ export async function GET(request: NextRequest) {
     if (auth instanceof NextResponse) return auth;
     const tenantId = auth.membership.tenant_id;
 
-    const [vehiclesResult, anomaliesResult, membersResult] = await Promise.all([
+    const [vehiclesResult, anomaliesResult, driversResult] = await Promise.all([
       auth.admin.from("vehicles").select("*").eq("tenant_id", tenantId).order("label"),
       auth.admin.from("vehicle_anomalies").select("*").eq("tenant_id", tenantId).order("reported_at", { ascending: false }),
-      auth.admin.from("memberships").select("user_id, tenant_id, role, full_name").eq("tenant_id", tenantId)
+      auth.admin.from("driver_profiles").select("id, full_name, phone, active").eq("tenant_id", tenantId).eq("active", true).order("full_name")
     ]);
 
-    const error = vehiclesResult.error || anomaliesResult.error || membersResult.error;
+    const error = vehiclesResult.error || anomaliesResult.error || driversResult.error;
     if (error) throw new Error(error.message);
 
     return NextResponse.json({
       ok: true,
       vehicles: vehiclesResult.data ?? [],
       anomalies: anomaliesResult.data ?? [],
-      drivers: (membersResult.data ?? []).filter((member: { role: string }) => member.role === "driver")
+      drivers: driversResult.data ?? []
     });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
         plate: parsed.plate ?? null,
         capacity: parsed.capacity ?? null,
         vehicle_size: parsed.vehicle_size ?? null,
-        habitual_driver_user_id: parsed.habitual_driver_user_id ?? null,
+        habitual_driver_profile_id: parsed.habitual_driver_user_id ?? null,
         default_zone: parsed.default_zone ?? null,
         blocked_until: parsed.blocked_until ?? null,
         blocked_reason: parsed.blocked_reason ?? null,
@@ -135,19 +135,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const [vehiclesResult, anomaliesResult, membersResult] = await Promise.all([
+    const [vehiclesResult, anomaliesResult, driversResult] = await Promise.all([
       auth.admin.from("vehicles").select("*").eq("tenant_id", tenantId).order("label"),
       auth.admin.from("vehicle_anomalies").select("*").eq("tenant_id", tenantId).order("reported_at", { ascending: false }),
-      auth.admin.from("memberships").select("user_id, tenant_id, role, full_name").eq("tenant_id", tenantId)
+      auth.admin.from("driver_profiles").select("id, full_name, phone, active").eq("tenant_id", tenantId).eq("active", true).order("full_name")
     ]);
-    const error = vehiclesResult.error || anomaliesResult.error || membersResult.error;
+    const error = vehiclesResult.error || anomaliesResult.error || driversResult.error;
     if (error) throw new Error(error.message);
 
     return NextResponse.json({
       ok: true,
       vehicles: vehiclesResult.data ?? [],
       anomalies: anomaliesResult.data ?? [],
-      drivers: (membersResult.data ?? []).filter((member: { role: string }) => member.role === "driver")
+      drivers: driversResult.data ?? []
     });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });

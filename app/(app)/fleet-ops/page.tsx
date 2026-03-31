@@ -12,6 +12,7 @@ type Vehicle = {
   active: boolean;
   vehicle_size?: "small" | "medium" | "large" | "bus" | null;
   habitual_driver_user_id?: string | null;
+  habitual_driver_profile_id?: string | null;
   default_zone?: string | null;
   blocked_until?: string | null;
   blocked_reason?: string | null;
@@ -20,7 +21,7 @@ type Vehicle = {
   radius_vehicle_id?: string | null;
 };
 
-type Driver = { user_id: string; full_name: string };
+type Driver = { id: string; full_name: string; phone?: string | null };
 
 type Anomaly = {
   id: string;
@@ -74,7 +75,7 @@ export default function FleetOpsPage() {
 
   const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? vehicles[0] ?? null;
   const selectedAnomalies = anomalies.filter((item) => item.vehicle_id === selectedVehicle?.id && item.active);
-  const driverNameById = useMemo(() => new Map(drivers.map((driver) => [driver.user_id, driver.full_name])), [drivers]);
+  const driverNameById = useMemo(() => new Map(drivers.map((driver) => [driver.id, driver.full_name])), [drivers]);
 
   const post = async (body: Record<string, unknown>) => {
     const token = await accessToken();
@@ -155,9 +156,9 @@ export default function FleetOpsPage() {
                   <option value="large">large</option>
                   <option value="bus">bus</option>
                 </select>
-                <select id="fleet-driver" className="input-saas" defaultValue={selectedVehicle.habitual_driver_user_id ?? ""}>
+                <select id="fleet-driver" className="input-saas" defaultValue={selectedVehicle.habitual_driver_profile_id ?? ""}>
                   <option value="">Nessun autista abituale</option>
-                  {drivers.map((driver) => <option key={driver.user_id} value={driver.user_id}>{driver.full_name}</option>)}
+                  {drivers.map((driver) => <option key={driver.id} value={driver.id}>{driver.full_name}</option>)}
                 </select>
                 <input id="fleet-zone" className="input-saas" defaultValue={selectedVehicle.default_zone ?? ""} placeholder="Zona abituale / hotel area" />
                 <input id="fleet-blocked-until" className="input-saas" type="datetime-local" defaultValue={selectedVehicle.blocked_until ? selectedVehicle.blocked_until.slice(0, 16) : ""} />
@@ -188,7 +189,7 @@ export default function FleetOpsPage() {
                     label: (document.getElementById("fleet-label") as HTMLInputElement | null)?.value ?? selectedVehicle.label,
                     plate: (document.getElementById("fleet-plate") as HTMLInputElement | null)?.value ?? "",
                     vehicle_size: (document.getElementById("fleet-size") as HTMLSelectElement | null)?.value ?? "medium",
-                    habitual_driver_user_id: (document.getElementById("fleet-driver") as HTMLSelectElement | null)?.value ?? null,
+                    habitual_driver_user_id: (document.getElementById("fleet-driver") as HTMLSelectElement | null)?.value || null,
                     default_zone: (document.getElementById("fleet-zone") as HTMLInputElement | null)?.value ?? "",
                     blocked_until: (document.getElementById("fleet-blocked-until") as HTMLInputElement | null)?.value || null,
                     blocked_reason: (document.getElementById("fleet-blocked-reason") as HTMLInputElement | null)?.value ?? "",
@@ -276,7 +277,7 @@ export default function FleetOpsPage() {
                 <tr key={vehicle.id} className="border-t border-slate-100">
                   <td className="px-3 py-2">{vehicle.label}</td>
                   <td className="px-3 py-2">
-                    {vehicle.habitual_driver_user_id ? driverNameById.get(vehicle.habitual_driver_user_id) ?? vehicle.habitual_driver_user_id : "N/D"}
+                    {vehicle.habitual_driver_profile_id ? driverNameById.get(vehicle.habitual_driver_profile_id) ?? "N/D" : "N/D"}
                   </td>
                   <td className="px-3 py-2">{vehicle.default_zone ?? "N/D"}</td>
                   <td className="px-3 py-2">
