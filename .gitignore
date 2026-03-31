@@ -1,4 +1,6 @@
 .vercel
+.claude
+.env
 .env*.local
 supabase/env.txt
 .next
@@ -6,3 +8,5 @@ node_modules
 playwright-report
 test-results
 *.log
+samples/review-test-*.pdf
+samples/review-test-e2e-*.pdf
