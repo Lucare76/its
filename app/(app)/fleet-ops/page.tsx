@@ -268,12 +268,37 @@ export default function FleetOpsPage() {
                       <td className="px-3 py-2.5">
                         <span className={`inline-block h-2.5 w-2.5 rounded-full ${hasGps ? "bg-emerald-400" : "bg-slate-200"}`} title={hasGps ? vehicle.radius_vehicle_id ?? "" : "Nessun GPS"} />
                       </td>
-                      <td className="px-3 py-2.5">
-                        {isBlocked ? (
-                          <span className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">Bloccato</span>
-                        ) : (
-                          <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">OK</span>
-                        )}
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          title={vehicle.active ? "Clicca per disattivare" : "Clicca per attivare"}
+                          onClick={() => void post({
+                            action: "upsert_vehicle",
+                            id: vehicle.id,
+                            label: vehicle.label,
+                            plate: vehicle.plate ?? null,
+                            vehicle_size: vehicle.vehicle_size ?? "medium",
+                            habitual_driver_user_id: vehicle.habitual_driver_profile_id ?? null,
+                            default_zone: vehicle.default_zone ?? null,
+                            blocked_until: vehicle.blocked_until ?? null,
+                            blocked_reason: vehicle.blocked_reason ?? null,
+                            notes: vehicle.notes ?? null,
+                            radius_vehicle_id: vehicle.radius_vehicle_id ?? null,
+                            capacity: vehicle.capacity ?? null,
+                            is_blocked_manual: vehicle.is_blocked_manual ?? false,
+                            active: !vehicle.active,
+                          })}
+                          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition hover:opacity-80 ${
+                            isBlocked
+                              ? "border-rose-200 bg-rose-50 text-rose-700"
+                              : vehicle.active
+                              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                              : "border-slate-200 bg-slate-100 text-slate-400"
+                          }`}
+                        >
+                          <span className={`h-1.5 w-1.5 rounded-full ${vehicle.active && !isBlocked ? "bg-emerald-500" : isBlocked ? "bg-rose-500" : "bg-slate-300"}`} />
+                          {isBlocked ? "Bloccato" : vehicle.active ? "Attivo" : "Inattivo"}
+                        </button>
                       </td>
                     </tr>
                   );
