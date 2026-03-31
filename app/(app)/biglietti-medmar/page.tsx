@@ -385,7 +385,7 @@ export default function BigliettiMedmarPage() {
                     );
                   })()}
 
-                  {/* Bottoni copia — campi form MEDMAR */}
+                  {/* Bottoni copia — campi form MEDMAR (uno per campo) */}
                   {(() => {
                     // Split nome → cognome (tutto tranne prima parola) + nome (prima parola)
                     const nameParts = g.customerName.trim().split(/\s+/);
@@ -393,16 +393,9 @@ export default function BigliettiMedmarPage() {
                     const cognomeLast = nameParts.slice(1).join(" ");
                     const tel = g.phone ?? "";
                     const email = "info@ischiatransferservice.it";
-                    // Copia tutto: cognome \t nome \t tel \t email (tab-separated per incollare nei campi)
-                    const copyAllText = [cognomeLast || nomeFirst, cognomeLast ? nomeFirst : "", tel, email]
-                      .filter(Boolean).join("\t");
                     return (
-                      <div className="border-t border-slate-100 bg-slate-50 px-4 py-3 space-y-2">
-                        <button type="button"
-                          onClick={() => handleCopy(copyAllText, `all-${g.key}`)}
-                          className="w-full rounded-lg border border-blue-300 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 text-center">
-                          {copied === `all-${g.key}` ? "✓ Copiato!" : "⎘ Copia tutto (Cognome · Nome · Tel · Email)"}
-                        </button>
+                      <div className="border-t border-slate-100 bg-slate-50 px-4 py-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-2">Copia campo per campo →</p>
                         <div className="flex flex-wrap gap-2">
                           {cognomeLast && (
                             <button type="button"
