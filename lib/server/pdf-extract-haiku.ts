@@ -71,8 +71,8 @@ ISTRUZIONI CAMPO PER CAMPO:
 - data_partenza: colonna AL nella riga PROGRAMMA → converti in YYYY-MM-DD (es: "26-apr-26" → "2026-04-26")
 - orario_arrivo: dalla sezione operativa, nel blocco del servizio ANDATA (STAZIONE/HOTEL o PORTO/HOTEL): il valore dopo "Alle" (es: "13:43")
 - orario_partenza: dalla sezione operativa, nel blocco del servizio RITORNO (HOTEL/STAZIONE o HOTEL/PORTO): il valore dopo "Dalle" (es: "13:20")
-- numero_mezzo_andata: dalla sezione operativa tabella treni/voli, riga 1: colonna "num." (es: "ITA 9919") OPPURE dopo "da:" nel blocco andata (es: "ITALO 9919")
-- numero_mezzo_ritorno: dalla sezione operativa tabella treni/voli, riga 2: colonna "num." (es: "ITA 9940") OPPURE dopo "da:" nel blocco ritorno (es: "ITALO 9940")
+- numero_mezzo_andata: per PORTO/TRAGHETTO scrivi esattamente "MEDMAR" oppure "SNAV" (deduci dal documento). Per treni/aerei: codice treno/volo dalla tabella operativa riga 1, colonna "num." (es: "ITA 9919") OPPURE dopo "da:" (es: "ITALO 9919")
+- numero_mezzo_ritorno: per PORTO/TRAGHETTO scrivi "MEDMAR" oppure "SNAV" (stesso del ritorno). Per treni/aerei: codice treno/volo riga 2 (es: "ITA 9940") OPPURE dopo "da:" nel blocco ritorno
 - citta_partenza: dopo "M.p.:" nel blocco andata OPPURE prima riga della tabella operativa (es: "TORINO P. NUOVA")
 - totale_pratica: numero dopo "Totale pratica EUR" (es: 104.00)
 - tipo_servizio: deduci dalla descrizione servizi (STAZIONE→station, AEROPORTO→airport, TRAGHETTO/MEDMAR/SNAV→port)
@@ -111,8 +111,8 @@ ISTRUZIONI CAMPO PER CAMPO:
 - data_arrivo / data_partenza: campi "dal" / "al" → YYYY-MM-DD
 - orario_arrivo: orario del primo servizio (andata) se presente
 - orario_partenza: orario del secondo servizio (ritorno) se presente
-- numero_mezzo_andata: codice treno/volo andata se presente
-- numero_mezzo_ritorno: codice treno/volo ritorno se presente
+- numero_mezzo_andata: per PORTO scrivi "MEDMAR" o "SNAV". Per treni/aerei: codice se presente
+- numero_mezzo_ritorno: per PORTO scrivi "MEDMAR" o "SNAV". Per treni/aerei: codice se presente
 - citta_partenza: città di partenza deducibile dal servizio andata
 - totale_pratica: "Totale pratica EUR"
 - tipo_servizio: deduci da descrizione (STAZIONE→station, AEROPORTO→airport, PORTO→port)
@@ -131,8 +131,8 @@ ISTRUZIONI CAMPO PER CAMPO:
 - data_arrivo / data_partenza: campi "dal" / "al" → YYYY-MM-DD
 - orario_arrivo: orario servizio andata se presente
 - orario_partenza: orario servizio ritorno se presente
-- numero_mezzo_andata: codice treno/volo andata ("PONTE SAN GIOVANNI" indica stazione)
-- numero_mezzo_ritorno: codice treno/volo ritorno
+- numero_mezzo_andata: per PORTO scrivi "MEDMAR" o "SNAV". Per treni/aerei: codice se presente ("PONTE SAN GIOVANNI" indica stazione)
+- numero_mezzo_ritorno: per PORTO scrivi "MEDMAR" o "SNAV". Per treni/aerei: codice se presente
 - citta_partenza: deduci da "PONTE SAN GIOVANNI", "PORTO SAN GIOVANNI" o simile
 - totale_pratica: "Totale pratica EUR"
 - tipo_servizio: deduci da descrizione
@@ -152,8 +152,8 @@ CASO A — Lettera di conferma servizio (riconosci perché inizia con "Alla C.A 
 - data_partenza: dopo "Ritorno giorno" → YYYY-MM-DD
 - orario_arrivo: orario del mezzo in arrivo (dopo "alle ore") — es: "13:53", "07:45"
 - orario_partenza: orario prelevamento ritorno (dopo "prelevamento alle ore") — es: "14:35", "08:00"
-- numero_mezzo_andata: numero treno/bus andata se indicato
-- numero_mezzo_ritorno: numero treno/bus ritorno se indicato
+- numero_mezzo_andata: per PORTO/ALISCAFO scrivi "MEDMAR" o "SNAV". Per treni/bus: numero se indicato
+- numero_mezzo_ritorno: per PORTO/ALISCAFO scrivi "MEDMAR" o "SNAV". Per treni/bus: numero se indicato
 - citta_partenza: città di partenza
 - totale_pratica: null
 - tipo_servizio: deduci (ITALO/TRENO→station, BUS→station, SNAV/ALISCAFO→port)
@@ -187,7 +187,8 @@ ISTRUZIONI CAMPO PER CAMPO:
 - data_arrivo: campo "Dal" → YYYY-MM-DD
 - data_partenza: campo "Al" se presente → YYYY-MM-DD
 - orario_arrivo / orario_partenza: orari indicati nel documento
-- numero_mezzo_andata / numero_mezzo_ritorno: null
+- numero_mezzo_andata: per PORTO scrivi "MEDMAR" o "SNAV" se deducibile, altrimenti null
+- numero_mezzo_ritorno: per PORTO scrivi "MEDMAR" o "SNAV" se deducibile, altrimenti null
 - citta_partenza: null
 - totale_pratica: campo "TOTALE EUR"
 - tipo_servizio: deduci dalla descrizione (IN BUS→station o bus, TRAGHETTO→port)

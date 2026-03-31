@@ -310,7 +310,9 @@ export async function POST(request: NextRequest) {
       time: outboundTime,
       service_type: "transfer",
       direction: "arrival",
-      vessel: arrivalPlace ?? "Transfer da PDF",
+      vessel: bookingKind === "transfer_port_hotel"
+        ? (trainArrivalNumber ?? arrivalPlace ?? "MEDMAR")
+        : (arrivalPlace ?? "Transfer da PDF"),
       pax: passengers,
       hotel_id: hotelId,
       customer_name: customerName,
