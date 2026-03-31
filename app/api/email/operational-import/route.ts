@@ -14,6 +14,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
+    // IMAP non configurato — non è un errore applicativo, restituisce 200
+    if (message.includes("Missing IMAP_HOST") || message.includes("IMAP_HOST/IMAP_USER/IMAP_PASS")) {
+      return NextResponse.json({ ok: false, error: "IMAP non configurato (IMAP_HOST/IMAP_USER/IMAP_PASS mancanti).", imap_not_configured: true });
+    }
     console.error("[operational-import] ERRORE:", message);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
