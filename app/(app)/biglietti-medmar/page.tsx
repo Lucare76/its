@@ -393,9 +393,16 @@ export default function BigliettiMedmarPage() {
                     const cognomeLast = nameParts.slice(1).join(" ");
                     const tel = g.phone ?? "";
                     const email = "info@ischiatransferservice.it";
+                    // Formato per bookmarklet: COGNOME\tNOME\tTEL\tEMAIL
+                    const medmarClipboard = [cognomeLast || nomeFirst, cognomeLast ? nomeFirst : "", tel, email].join("\t");
                     return (
-                      <div className="border-t border-slate-100 bg-slate-50 px-4 py-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-2">Copia campo per campo →</p>
+                      <div className="border-t border-slate-100 bg-slate-50 px-4 py-3 space-y-2">
+                        <button type="button"
+                          onClick={() => handleCopy(medmarClipboard, `medmar-${g.key}`)}
+                          className="w-full rounded-lg border border-indigo-300 bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 text-center">
+                          {copied === `medmar-${g.key}` ? "✓ Pronto! Vai su MEDMAR e clicca il bookmark" : "⎘ Copia per MEDMAR (usa con bookmark)"}
+                        </button>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">oppure campo per campo →</p>
                         <div className="flex flex-wrap gap-2">
                           {cognomeLast && (
                             <button type="button"
