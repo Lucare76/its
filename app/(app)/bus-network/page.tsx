@@ -6,11 +6,11 @@ import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import BusImportModal from "./BusImportModal";
 
 type BusLine = { id: string; code: string; name: string; family_code: string; family_name: string; variant_label?: string | null };
-type BusStop = { id: string; bus_line_id: string; direction: "arrival" | "departure"; stop_name: string; city: string; pickup_note?: string | null; pickup_time?: string | null; stop_order: number; is_manual: boolean };
-type BusUnit = { id: string; bus_line_id: string; label: string; capacity: number; low_seat_threshold: number; minimum_passengers?: number | null; status: "open" | "low" | "closed" | "completed"; manual_close: boolean; close_reason?: string | null; driver_name?: string | null; driver_phone?: string | null };
+type BusStop = { id: string; bus_line_id: string; direction: "arrival" | "departure"; stop_name: string; city: string; pickup_note?: string | null; pickup_time?: string | null; stop_order: number; is_manual: boolean; lat?: number | null; lng?: number | null };
+type BusUnit = { id: string; bus_line_id: string; label: string; capacity: number; low_seat_threshold: number; minimum_passengers?: number | null; status: "open" | "low" | "closed" | "completed"; manual_close: boolean; close_reason?: string | null; driver_name_outbound?: string | null; driver_phone_outbound?: string | null; driver_name_return?: string | null; driver_phone_return?: string | null };
 type BusAllocation = { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; stop_id?: string | null; stop_name: string; direction: "arrival" | "departure"; pax_assigned: number };
 type BusMove = { id: string; service_id: string; from_bus_unit_id?: string | null; to_bus_unit_id?: string | null; stop_name?: string | null; pax_moved: number; reason?: string | null; created_at: string; customer_name?: string | null; customer_phone?: string | null; hotel_name?: string | null; source_bus_label?: string | null; target_bus_label?: string | null; moved_full_allocation?: boolean };
-type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; stop_pickup_note?: string | null; stop_pickup_time?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_name?: string | null; agency_name?: string | null; notes?: string | null; created_at?: string };
+type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; stop_pickup_note?: string | null; stop_pickup_time?: string | null; hotel_pickup_time?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_name?: string | null; agency_name?: string | null; notes?: string | null; created_at?: string };
 type BusService = { id: string; customer_name: string; customer_display_name: string; date: string; time: string; pax: number; direction: "arrival" | "departure"; bus_city_origin?: string | null; transport_code?: string | null; phone_display: string; hotel_name: string; derived_family_code: string; derived_family_name: string; derived_line_code?: string | null; derived_line_name?: string | null; suggested_stop_name?: string | null };
 type UnitLoad = BusUnit & { pax_assigned: number; remaining_seats: number; suggested_status: string };
 type StopLoad = BusStop & { pax_assigned: number };
@@ -220,9 +220,22 @@ export default function BusNetworkPage() {
   );
 
   const lineStops = useMemo(
-    () => payload.stops
-      .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === direction)
-      .sort((a, b) => a.stop_order - b.stop_order),
+    () => {
+      const filtered = payload.stops.filter(
+        (s) => s.bus_line_id === selectedLine?.id && s.direction === direction
+      );
+      if (direction === "departure") {
+        // Ritorno: ordina per latitudine crescente (sud→nord). Fallback su stop_order se lat mancante.
+        return [...filtered].sort((a, b) => {
+          if (a.lat != null && b.lat != null) return a.lat - b.lat;
+          if (a.lat != null) return -1;
+          if (b.lat != null) return 1;
+          return a.stop_order - b.stop_order;
+        });
+      }
+      // Andata: nord→sud = lat decrescente (o stop_order crescente come prima)
+      return [...filtered].sort((a, b) => a.stop_order - b.stop_order);
+    },
     [payload.stops, selectedLine, direction]
   );
 
@@ -480,7 +493,7 @@ export default function BusNetworkPage() {
   }, [selectedLine, payload.stops, direction, post]);
 
   function buildAllocRows(
-    unit: { label: string; driver_name?: string | null; driver_phone?: string | null },
+    unit: { label: string; driverName?: string | null; driverPhone?: string | null },
     allocs: AllocationDetail[],
     lineName: string,
     stops: BusStop[] = []
@@ -513,15 +526,106 @@ export default function BusNetworkPage() {
         Nominativo: alloc.customer_name,
         "Cell.": alloc.customer_phone ?? "",
         "Hotel destinazione": alloc.hotel_name || hotelFromNotes || "",
-        Incasso: "",
         Note: cleanNote,
-        Pranzo: "",
         Agenzia: alloc.agency_name || agencyFromNotes || "",
         Linea: lineName,
         Bus: unit.label,
-        Autista: unit.driver_name ?? "",
+        Autista: unit.driverName ?? "",
       };
     });
+  }
+
+  // Costruisce il foglio in formato PARTENZE (per direzione "departure")
+  function buildDepartureSheet(
+    utils: import("xlsx").XLSX$Utils,
+    allocs: AllocationDetail[],
+    stops: BusStop[],
+    driverName?: string | null,
+    driverPhone?: string | null
+  ) {
+    const stopOrderMap = new Map<string, number>();
+    for (const s of stops) stopOrderMap.set(s.stop_name.toUpperCase(), s.stop_order);
+
+    // Righe passeggeri: ordina per orario P.KUP hotel (ritorno), poi nominativo
+    const sorted = [...allocs].sort((a, b) => {
+      const ta = (a.hotel_pickup_time ?? a.stop_pickup_time ?? "99:99").slice(0, 5);
+      const tb = (b.hotel_pickup_time ?? b.stop_pickup_time ?? "99:99").slice(0, 5);
+      if (ta !== tb) return ta.localeCompare(tb);
+      return (a.customer_name ?? "").localeCompare(b.customer_name ?? "");
+    });
+
+    // Header autista + titolo + intestazioni
+    const aoa: (string | number)[][] = [
+      [`AUTISTA: ${driverName || "N/D"}`, "", "", "", "", "", "", ""],
+      [`CELL: ${driverPhone || "N/D"}`, "", "", "", "", "", "", ""],
+      ["", "", "", "", "", "", "", ""],
+      ["PARTENZE", "", "", "", "", "", "", ""],
+      ["P.KUP", "hotel partenza", "n° pax", "nominativo", "cell", "destinazione", "agenzia", "note"],
+    ];
+
+    let totalPax = 0;
+    for (const alloc of sorted) {
+      const rawNotes = alloc.notes ?? "";
+      const hotelFromNotes = rawNotes.match(/Hotel:\s*([^·\n]+)/)?.[1]?.trim() ?? "";
+      const agencyFromNotes = rawNotes.match(/Agenzia:\s*([^·\n]+)/)?.[1]?.trim() ?? "";
+      const cleanNote = rawNotes
+        .replace(/Hotel:\s*[^·\n]+·?\s*/gi, "")
+        .replace(/Agenzia:\s*[^·\n]+·?\s*/gi, "")
+        .trim();
+
+      // hotel partenza = hotel in Ischia (dove sale il passeggero)
+      // destinazione   = solo il nome della fermata di scarico (senza note tecniche)
+      const hotelPartenza = alloc.hotel_name || hotelFromNotes;
+      const destinazione = alloc.stop_name;
+
+      aoa.push([
+        (alloc.hotel_pickup_time ?? alloc.stop_pickup_time ?? "").slice(0, 5),
+        hotelPartenza,
+        alloc.pax_assigned,
+        alloc.customer_name,
+        alloc.customer_phone ?? "",
+        destinazione,
+        alloc.agency_name || agencyFromNotes,
+        cleanNote,
+      ]);
+      totalPax += alloc.pax_assigned;
+    }
+
+    // Riga vuota + TOTALE
+    aoa.push(["", "", "", "", "", "", "", ""]);
+    aoa.push(["", "TOTALE", totalPax, "", "", "", "", ""]);
+
+    // Sezione SCARICO: solo fermate con passeggeri, in ordine di stop_order
+    const usedStopNames = new Set(sorted.map((a) => a.stop_name.toUpperCase()));
+    // SCARICO: fermate con passeggeri, ordinate geograficamente sud→nord (lat crescente)
+    const usedStops = stops
+      .filter((s) => usedStopNames.has(s.stop_name.toUpperCase()))
+      .sort((a, b) => {
+        if (a.lat != null && b.lat != null) return a.lat - b.lat;
+        if (a.lat != null) return -1;
+        if (b.lat != null) return 1;
+        return a.stop_order - b.stop_order;
+      });
+    if (usedStops.length > 0) {
+      aoa.push(["", "", "", "", "", "", "", ""]);
+      aoa.push(["SCARICO", "", "", "", "", "", "", ""]);
+      for (const stop of usedStops) {
+        aoa.push(["", "", "", stop.stop_name, "", "", "", ""]);
+      }
+    }
+
+    const ws = utils.aoa_to_sheet(aoa as (string | number)[][]);
+    ws["!cols"] = [
+      { wch: 8 },  // P.KUP
+      { wch: 22 }, // hotel partenza
+      { wch: 7 },  // n° pax
+      { wch: 30 }, // nominativo
+      { wch: 16 }, // cell
+      { wch: 36 }, // destinazione
+      { wch: 20 }, // agenzia
+      { wch: 22 }, // note
+    ];
+    return ws;
   }
 
   const colWidths = [
@@ -531,9 +635,7 @@ export default function BusNetworkPage() {
     { wch: 30 }, // Nominativo
     { wch: 16 }, // Cell.
     { wch: 28 }, // Hotel destinazione
-    { wch: 10 }, // Incasso
     { wch: 22 }, // Note
-    { wch: 8 },  // Pranzo
     { wch: 22 }, // Agenzia
     { wch: 18 }, // Linea
     { wch: 14 }, // Bus
@@ -546,14 +648,24 @@ export default function BusNetworkPage() {
     const lineStopsForExport = payload.stops
       .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === direction)
       .sort((a, b) => a.stop_order - b.stop_order);
-    const rows: Record<string, string | number>[] = [];
-    for (const { unit, allocations: cardAllocs } of busCards) {
-      rows.push(...buildAllocRows(unit, cardAllocs, selectedLine?.name ?? "", lineStopsForExport));
+    let ws;
+    if (direction === "departure") {
+      const allAllocs = busCards.flatMap((c) => c.allocations);
+      const firstUnit = busCards[0]?.unit;
+      ws = buildDepartureSheet(utils, allAllocs, lineStopsForExport, firstUnit?.driver_name_return, firstUnit?.driver_phone_return);
+    } else {
+      const rows: Record<string, string | number>[] = [];
+      for (const { unit, allocations: cardAllocs } of busCards) {
+        rows.push(...buildAllocRows(
+          { label: unit.label, driverName: unit.driver_name_outbound, driverPhone: unit.driver_phone_outbound },
+          cardAllocs, selectedLine?.name ?? "", lineStopsForExport
+        ));
+      }
+      ws = utils.json_to_sheet(rows);
+      (ws as Record<string, unknown>)["!cols"] = colWidths;
     }
-    const ws = utils.json_to_sheet(rows);
-    ws["!cols"] = colWidths;
     const wb = utils.book_new();
-    utils.book_append_sheet(wb, ws, (selectedLine?.name ?? "Bus").slice(0, 31));
+    utils.book_append_sheet(wb, ws as never, (selectedLine?.name ?? "Bus").slice(0, 31));
     writeFile(wb, `bus_${selectedLine?.code ?? "export"}_${date}_${direction === "arrival" ? "Andata" : "Ritorno"}.xlsx`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busCards, date, direction, selectedLine]);
@@ -574,10 +686,18 @@ export default function BusNetworkPage() {
       const stopsForDir = payload.stops
         .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === dir)
         .sort((a, b) => a.stop_order - b.stop_order);
-      const rows = buildAllocRows(targetCard.unit, dirAllocs, lineName, stopsForDir);
-      const ws = utils.json_to_sheet(rows);
-      ws["!cols"] = colWidths;
-      utils.book_append_sheet(wb, ws, dir === "arrival" ? "Andata" : "Ritorno");
+      let ws;
+      if (dir === "departure") {
+        ws = buildDepartureSheet(utils, dirAllocs, stopsForDir, targetCard.unit.driver_name_return, targetCard.unit.driver_phone_return);
+      } else {
+        const rows = buildAllocRows(
+          { label: targetCard.unit.label, driverName: targetCard.unit.driver_name_outbound, driverPhone: targetCard.unit.driver_phone_outbound },
+          dirAllocs, lineName, stopsForDir
+        );
+        ws = utils.json_to_sheet(rows);
+        (ws as Record<string, unknown>)["!cols"] = colWidths;
+      }
+      utils.book_append_sheet(wb, ws as never, dir === "arrival" ? "Andata" : "Ritorno");
     }
     if (wb.SheetNames.length === 0) return;
     const lineCode = selectedLine?.code ?? "bus";
@@ -605,9 +725,17 @@ export default function BusNetworkPage() {
           const stopsForDir = payload.stops
             .filter((s) => s.bus_line_id === line.id && s.direction === dir)
             .sort((a, b) => a.stop_order - b.stop_order);
-          const rows = buildAllocRows(unit, unitAllocs, line.name, stopsForDir);
-          const ws = utils.json_to_sheet(rows);
-          ws["!cols"] = colWidths;
+          let ws;
+          if (dir === "departure") {
+            ws = buildDepartureSheet(utils, unitAllocs, stopsForDir, unit.driver_name_return, unit.driver_phone_return);
+          } else {
+            const rows = buildAllocRows(
+              { label: unit.label, driverName: unit.driver_name_outbound, driverPhone: unit.driver_phone_outbound },
+              unitAllocs, line.name, stopsForDir
+            );
+            ws = utils.json_to_sheet(rows);
+            (ws as Record<string, unknown>)["!cols"] = colWidths;
+          }
           // Nome foglio univoco ≤ 31 char: LineaCode_BusLabel_Dir
           const lineShort = (line.code ?? line.name).slice(0, 14);
           const busShort = unit.label.replace(/\s+/g, "").slice(0, 12);
@@ -617,7 +745,7 @@ export default function BusNetworkPage() {
             sheetName = sheetName.slice(0, 28) + String(usedNames.size).padStart(2, "0");
           }
           usedNames.add(sheetName);
-          utils.book_append_sheet(wb, ws, sheetName);
+          utils.book_append_sheet(wb, ws as never, sheetName);
         }
       }
     }
@@ -627,9 +755,14 @@ export default function BusNetworkPage() {
   }, [payload, date]);
 
   const saveDriver = useCallback(async (unitId: string) => {
-    await post("update_driver", { unit_id: unitId, driver_name: editDriverName.trim() || null, driver_phone: editDriverPhone.trim() || null });
+    await post("update_driver", {
+      unit_id: unitId,
+      direction: direction === "departure" ? "return" : "outbound",
+      driver_name: editDriverName.trim() || null,
+      driver_phone: editDriverPhone.trim() || null,
+    });
     setEditDriverUnitId("");
-  }, [post, editDriverName, editDriverPhone]);
+  }, [post, editDriverName, editDriverPhone, direction]);
 
   const confirmApprovePendingWithNewStop = useCallback(async () => {
     if (!approvePending || !pendingNewStop || !selectedLine) return;
@@ -1041,21 +1174,32 @@ export default function BusNetworkPage() {
                         </div>
                         {/* Driver info */}
                         {editDriverUnitId === unit.id ? (
-                          <div className="mt-2 flex gap-1">
-                            <input value={editDriverName} onChange={(e) => setEditDriverName(e.target.value)}
-                              placeholder="Nome autista" className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1 text-xs" />
-                            <input value={editDriverPhone} onChange={(e) => setEditDriverPhone(e.target.value)}
-                              placeholder="Telefono" className="w-24 rounded border border-slate-200 px-2 py-1 text-xs" />
-                            <button onClick={() => void saveDriver(unit.id)} disabled={saving}
-                              className="rounded bg-indigo-600 px-2 py-1 text-xs text-white hover:bg-indigo-700 disabled:opacity-40">✓</button>
-                            <button onClick={() => setEditDriverUnitId("")} className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600 hover:bg-slate-200">✕</button>
+                          <div className="mt-2 space-y-1">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                              Autista {direction === "departure" ? "Ritorno" : "Andata"}
+                            </p>
+                            <div className="flex gap-1">
+                              <input value={editDriverName} onChange={(e) => setEditDriverName(e.target.value)}
+                                placeholder="Nome autista" className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1 text-xs" />
+                              <input value={editDriverPhone} onChange={(e) => setEditDriverPhone(e.target.value)}
+                                placeholder="Telefono" className="w-24 rounded border border-slate-200 px-2 py-1 text-xs" />
+                              <button onClick={() => void saveDriver(unit.id)} disabled={saving}
+                                className="rounded bg-indigo-600 px-2 py-1 text-xs text-white hover:bg-indigo-700 disabled:opacity-40">✓</button>
+                              <button onClick={() => setEditDriverUnitId("")} className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600 hover:bg-slate-200">✕</button>
+                            </div>
                           </div>
-                        ) : (
-                          <button onClick={() => { setEditDriverUnitId(unit.id); setEditDriverName(unit.driver_name ?? ""); setEditDriverPhone(unit.driver_phone ?? ""); }}
-                            className="mt-1.5 flex w-full items-center gap-1 text-left text-xs text-slate-400 hover:text-slate-600">
-                            🚗 {unit.driver_name ? <span className="font-medium text-slate-600">{unit.driver_name}{unit.driver_phone ? ` · ${unit.driver_phone}` : ""}</span> : <span className="italic">Aggiungi autista</span>}
-                          </button>
-                        )}
+                        ) : (() => {
+                          const dName = direction === "departure" ? unit.driver_name_return : unit.driver_name_outbound;
+                          const dPhone = direction === "departure" ? unit.driver_phone_return : unit.driver_phone_outbound;
+                          return (
+                            <button onClick={() => { setEditDriverUnitId(unit.id); setEditDriverName(dName ?? ""); setEditDriverPhone(dPhone ?? ""); }}
+                              className="mt-1.5 flex w-full items-center gap-1 text-left text-xs text-slate-400 hover:text-slate-600">
+                              🚗 {dName
+                                ? <span className="font-medium text-slate-600">{dName}{dPhone ? ` · ${dPhone}` : ""}</span>
+                                : <span className="italic">Autista {direction === "departure" ? "Ritorno" : "Andata"} — aggiungi</span>}
+                            </button>
+                          );
+                        })()}
                       </div>
 
                       {/* Passenger list grouped by stop */}
@@ -1084,7 +1228,14 @@ export default function BusNetworkPage() {
                                   <div className="truncate text-sm font-semibold uppercase text-slate-800">
                                     {alloc.customer_name}
                                   </div>
-                                  <div className="truncate text-xs uppercase text-slate-400">{alloc.hotel_name ?? "—"}</div>
+                                  <div className="flex items-center gap-1 truncate">
+                                    <span className="truncate text-xs uppercase text-slate-400">{alloc.hotel_name ?? "—"}</span>
+                                    {direction === "departure" && alloc.hotel_pickup_time && (
+                                      <span className="shrink-0 rounded bg-amber-50 px-1 text-[9px] font-semibold text-amber-600">
+                                        {alloc.hotel_pickup_time.slice(0, 5)}
+                                      </span>
+                                    )}
+                                  </div>
                                   {alloc.customer_phone && (
                                     <div className="text-xs text-slate-300">{alloc.customer_phone}</div>
                                   )}

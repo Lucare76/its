@@ -85,7 +85,7 @@ function normalizeMergeName(value: string) {
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
     .replace(/['".,]/g, " ")
-    .replace(/\b(?:hotel|albergo|terme|resort|spa|club|grand|parco|villa|exclusive|boutique|relax)\b/g, " ")
+    .replace(/\b(?:hotel|albergo|terme|resort|spa|club|grand|parco|exclusive|boutique|relax)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -96,7 +96,7 @@ function scoreMergeCandidate(leftName: string, rightName: string) {
   const right = normalizeMergeName(rightName);
   if (!left || !right) return 0;
   if (left === right) return 100;
-  if (left.includes(right) || right.includes(left)) return 94;
+  if (left.length >= 5 && right.length >= 5 && (left.includes(right) || right.includes(left))) return 94;
   const leftTokens = left.split(" ").filter(Boolean);
   const rightTokens = new Set(right.split(" ").filter(Boolean));
   const shared = leftTokens.filter((token) => rightTokens.has(token));
@@ -123,6 +123,7 @@ export default function HotelsPage() {
   const [allHotelsForMerge, setAllHotelsForMerge] = useState<HotelListItem[]>([]);
   const [serviceUsageByHotelId, setServiceUsageByHotelId] = useState<Record<string, number>>({});
   const [dismissedMergeKeys, setDismissedMergeKeys] = useState<string[]>([]);
+  const mergeStorageKey = tenantId ? `hotel_dismissed_merges_${tenantId}` : null;
   const [showAdminTools, setShowAdminTools] = useState(false);
   const [aliasHotelId, setAliasHotelId] = useState("");
   const [aliasValue, setAliasValue] = useState("");
@@ -255,6 +256,14 @@ export default function HotelsPage() {
       isActive = false;
     };
   }, [loadAliases, loadHotels, loadMergeContext]);
+
+  useEffect(() => {
+    if (!mergeStorageKey) return;
+    try {
+      const stored = localStorage.getItem(mergeStorageKey);
+      if (stored) setDismissedMergeKeys(JSON.parse(stored) as string[]);
+    } catch { /* ignore */ }
+  }, [mergeStorageKey]);
 
   const hasMore = items.length < totalCount;
   const canManageHotels = role === "admin" || role === "operator";
@@ -628,7 +637,13 @@ export default function HotelsPage() {
         throw new Error(deleteError.message);
       }
 
-      setDismissedMergeKeys((current) => current.filter((key) => key !== candidate.key));
+      setDismissedMergeKeys((current) => {
+        const next = current.filter((key) => key !== candidate.key);
+        if (mergeStorageKey) {
+          try { localStorage.setItem(mergeStorageKey, JSON.stringify(next)); } catch { /* ignore */ }
+        }
+        return next;
+      });
       setMessage(`Merge completato: "${candidate.secondaryName}" unificato dentro "${candidate.primaryName}".`);
       await Promise.all([loadHotels(tenantId, search, 0, false), loadAliases(tenantId), loadMergeContext(tenantId)]);
     } catch (mergeError) {
@@ -988,7 +1003,15 @@ export default function HotelsPage() {
                         <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
-                            onClick={() => setDismissedMergeKeys((current) => [...current, candidate.key])}
+                            onClick={() => {
+                              setDismissedMergeKeys((current) => {
+                                const next = [...current, candidate.key];
+                                if (mergeStorageKey) {
+                                  try { localStorage.setItem(mergeStorageKey, JSON.stringify(next)); } catch { /* ignore */ }
+                                }
+                                return next;
+                              });
+                            }}
                             className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
                           >
                             Ignora

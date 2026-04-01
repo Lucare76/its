@@ -123,6 +123,10 @@ export default function FleetOpsPage() {
   const [anomalyForm, setAnomalyForm] = useState(EMPTY_ANOMALY);
   const [showAnomalyPanel, setShowAnomalyPanel] = useState(false);
   const [sizeFilter, setSizeFilter] = useState<string>("all");
+  const [isNewVehicle, setIsNewVehicle] = useState(false);
+  const [driverFormOpen, setDriverFormOpen] = useState(false);
+  const [editingDriverId, setEditingDriverId] = useState<string | null>(null);
+  const [driverForm, setDriverForm] = useState({ full_name: "", phone: "" });
 
   const load = useEffectEvent(async () => {
     const token = await accessToken();
@@ -145,6 +149,12 @@ export default function FleetOpsPage() {
   );
 
   useEffect(() => {
+    if (isNewVehicle) {
+      setForm(EMPTY_FORM);
+      setShowAnomalyPanel(false);
+      setAnomalyForm(EMPTY_ANOMALY);
+      return;
+    }
     if (!selectedVehicle) return;
     setForm({
       label: selectedVehicle.label,
@@ -163,7 +173,7 @@ export default function FleetOpsPage() {
     });
     setShowAnomalyPanel(false);
     setAnomalyForm(EMPTY_ANOMALY);
-  }, [selectedVehicle?.id]);
+  }, [selectedVehicle?.id, isNewVehicle]);
 
   const selectedAnomalies = anomalies.filter((a) => a.vehicle_id === selectedVehicleId && a.active);
   const driverNameById = useMemo(() => new Map(drivers.map((d) => [d.id, d.full_name])), [drivers]);
@@ -173,9 +183,9 @@ export default function FleetOpsPage() {
     setTimeout(() => setToast(null), 3000);
   }
 
-  const post = async (body: Record<string, unknown>) => {
+  const post = async (body: Record<string, unknown>): Promise<boolean> => {
     const token = await accessToken();
-    if (!token) return;
+    if (!token) return false;
     setSaving(true);
     const response = await fetch("/api/ops/vehicles", {
       method: "POST",
@@ -184,11 +194,12 @@ export default function FleetOpsPage() {
     });
     const json = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; vehicles?: Vehicle[]; anomalies?: Anomaly[]; drivers?: Driver[] } | null;
     setSaving(false);
-    if (!response.ok || !json?.ok) { showToast(json?.error ?? "Operazione non riuscita.", false); return; }
+    if (!response.ok || !json?.ok) { showToast(json?.error ?? "Operazione non riuscita.", false); return false; }
     setVehicles(json.vehicles ?? []);
     setDrivers(json.drivers ?? []);
     setAnomalies(json.anomalies ?? []);
     showToast("Salvato.", true);
+    return true;
   };
 
   const filteredVehicles = useMemo(
@@ -225,7 +236,7 @@ export default function FleetOpsPage() {
           { label: "Mezzi attivi", value: vehicles.filter((v) => v.active).length, color: "text-slate-800" },
           { label: "Mezzi bloccati", value: vehicles.filter((v) => v.is_blocked_manual || v.blocked_until).length, color: "text-rose-700" },
           { label: "Anomalie aperte", value: anomalies.filter((a) => a.active).length, color: "text-amber-700" },
-          { label: "Autisti in rosa", value: drivers.length, color: "text-slate-800" },
+          { label: "Autisti attivi", value: drivers.length, color: "text-slate-800" },
         ].map((stat) => (
           <div key={stat.label} className="rounded-2xl border border-border bg-white px-5 py-4 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{stat.label}</p>
@@ -241,6 +252,13 @@ export default function FleetOpsPage() {
           title="Veicoli"
           actions={
             <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => { setIsNewVehicle(true); setSelectedVehicleId(""); }}
+                className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+              >
+                + Nuovo mezzo
+              </button>
               {["all", "bus", "large", "medium", "small"].map((size) => (
                 <button
                   key={size}
@@ -276,7 +294,7 @@ export default function FleetOpsPage() {
                   return (
                     <tr
                       key={vehicle.id}
-                      onClick={() => setSelectedVehicleId(vehicle.id)}
+                      onClick={() => { setSelectedVehicleId(vehicle.id); setIsNewVehicle(false); }}
                       className={`cursor-pointer transition ${isSelected ? "bg-blue-50/70" : "hover:bg-slate-50/80"}`}
                     >
                       <td className="px-3 py-2.5">
@@ -362,9 +380,9 @@ export default function FleetOpsPage() {
 
         {/* ── Pannello modifica ───────────────────────────────────────────── */}
         <div className="space-y-4">
-          <SectionCard title={selectedVehicle ? selectedVehicle.label : "Seleziona un mezzo"} subtitle="Dettaglio e modifica">
-            {!selectedVehicle ? (
-              <p className="text-sm text-muted">Clicca un veicolo nella tabella.</p>
+          <SectionCard title={isNewVehicle ? "Nuovo mezzo" : selectedVehicle ? selectedVehicle.label : "Seleziona un mezzo"} subtitle={isNewVehicle ? "Crea nuovo mezzo" : "Dettaglio e modifica"}>
+            {!selectedVehicle && !isNewVehicle ? (
+              <p className="text-sm text-muted">Clicca un veicolo nella tabella o crea un nuovo mezzo.</p>
             ) : (
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
@@ -415,181 +433,267 @@ export default function FleetOpsPage() {
                     type="button"
                     disabled={saving}
                     className="btn-primary flex-1 py-2 text-sm disabled:opacity-50"
-                    onClick={() => void post({
-                      action: "upsert_vehicle",
-                      id: selectedVehicle.id,
-                      label: form.label,
-                      plate: form.plate || null,
-                      vehicle_size: form.vehicle_size,
-                      habitual_driver_user_id: form.habitual_driver_profile_id || null,
-                      default_zone: form.default_zone || null,
-                      blocked_until: form.blocked_until || null,
-                      blocked_reason: form.blocked_reason || null,
-                      notes: form.notes || null,
-                      radius_vehicle_id: form.radius_vehicle_id || null,
-                      capacity: form.capacity ? Number(form.capacity) : null,
-                      is_blocked_manual: Boolean(form.blocked_reason),
-                      insurance_expiry: form.insurance_expiry || null,
-                      road_tax_expiry: form.road_tax_expiry || null,
-                      inspection_expiry: form.inspection_expiry || null,
-                    })}
+                    onClick={async () => {
+                      const ok = await post({
+                        action: "upsert_vehicle",
+                        ...(!isNewVehicle && selectedVehicle ? { id: selectedVehicle.id } : {}),
+                        label: form.label,
+                        plate: form.plate || null,
+                        vehicle_size: form.vehicle_size,
+                        habitual_driver_user_id: form.habitual_driver_profile_id || null,
+                        default_zone: form.default_zone || null,
+                        blocked_until: form.blocked_until || null,
+                        blocked_reason: form.blocked_reason || null,
+                        notes: form.notes || null,
+                        radius_vehicle_id: form.radius_vehicle_id || null,
+                        capacity: form.capacity ? Number(form.capacity) : null,
+                        is_blocked_manual: Boolean(form.blocked_reason),
+                        insurance_expiry: form.insurance_expiry || null,
+                        road_tax_expiry: form.road_tax_expiry || null,
+                        inspection_expiry: form.inspection_expiry || null,
+                      });
+                      if (ok && isNewVehicle) setIsNewVehicle(false);
+                    }}
                   >
-                    {saving ? "Salvataggio..." : "Salva mezzo"}
+                    {saving ? "Salvataggio..." : isNewVehicle ? "Crea mezzo" : "Salva mezzo"}
                   </button>
-                  {form.radius_vehicle_id ? (
+                  {!isNewVehicle && form.radius_vehicle_id ? (
                     <a href="/mappa-live" className="rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-700 hover:bg-teal-100 flex items-center">
                       GPS
                     </a>
                   ) : null}
-                </div>
-
-                {/* Documenti */}
-                <details className="rounded-xl border border-slate-200" open={
-                  expiryStatus(selectedVehicle.insurance_expiry) !== "ok" ||
-                  expiryStatus(selectedVehicle.road_tax_expiry) !== "ok" ||
-                  expiryStatus(selectedVehicle.inspection_expiry) !== "ok"
-                }>
-                  <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-700">
-                    Scadenze documenti
-                  </summary>
-                  <div className="grid grid-cols-1 gap-3 border-t border-slate-100 px-4 py-3">
-                    {[
-                      { label: "Assicurazione", field: "insurance_expiry" as const, val: selectedVehicle.insurance_expiry },
-                      { label: "Bollo",          field: "road_tax_expiry"   as const, val: selectedVehicle.road_tax_expiry },
-                      { label: "Collaudo",       field: "inspection_expiry" as const, val: selectedVehicle.inspection_expiry },
-                    ].map(({ label, field, val }) => {
-                      const status = expiryStatus(form[field] || val);
-                      return (
-                        <label key={field} className="text-xs font-semibold text-slate-500">
-                          <div className="flex items-center justify-between">
-                            <span>{label}</span>
-                            {form[field] && (
-                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${EXPIRY_BADGE[status]}`}>
-                                {status === "expired" ? "Scaduto" : status === "soon" ? "In scadenza" : "OK"}
-                              </span>
-                            )}
-                          </div>
-                          <input
-                            type="date"
-                            className="input-saas mt-1 w-full"
-                            value={form[field]}
-                            onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
-                          />
-                        </label>
-                      );
-                    })}
-                  </div>
-                </details>
-
-                {/* Blocco */}
-                <details className="rounded-xl border border-slate-200">
-                  <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700 select-none">
-                    {selectedVehicle.is_blocked_manual || selectedVehicle.blocked_until ? "⚠ Mezzo bloccato — modifica blocco" : "Blocca mezzo"}
-                  </summary>
-                  <div className="grid grid-cols-2 gap-3 border-t border-slate-100 px-4 py-3">
-                    <label className="col-span-2 text-xs font-semibold text-slate-500">
-                      Motivo blocco
-                      <input className="input-saas mt-1 w-full" value={form.blocked_reason} onChange={(e) => setForm((f) => ({ ...f, blocked_reason: e.target.value }))} placeholder="Guasto, revisione..." />
-                    </label>
-                    <label className="col-span-2 text-xs font-semibold text-slate-500">
-                      Bloccato fino a
-                      <input type="datetime-local" className="input-saas mt-1 w-full" value={form.blocked_until} onChange={(e) => setForm((f) => ({ ...f, blocked_until: e.target.value }))} />
-                    </label>
-                  </div>
-                </details>
-
-                {/* Anomalie aperte */}
-                {selectedAnomalies.length > 0 ? (
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Anomalie aperte ({selectedAnomalies.length})</p>
-                    {selectedAnomalies.map((anomaly) => (
-                      <div key={anomaly.id} className="rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2.5 text-sm">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="font-semibold text-slate-800">{anomaly.title}</p>
-                            <p className="text-xs text-slate-500">{anomaly.description ?? ""}</p>
-                          </div>
-                          <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${SEVERITY_BADGE[anomaly.severity]}`}>
-                            {SEVERITY_LABEL[anomaly.severity]}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                          onClick={() => void post({ action: "resolve_anomaly", anomaly_id: anomaly.id, vehicle_id: selectedVehicle.id })}
-                        >
-                          Segna come risolto
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-
-                {/* Segnala anomalia */}
-                <details className="rounded-xl border border-slate-200" open={showAnomalyPanel}>
-                  <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700 select-none" onClick={() => setShowAnomalyPanel((v) => !v)}>
-                    Segnala anomalia
-                  </summary>
-                  <div className="grid gap-3 border-t border-slate-100 px-4 py-3">
-                    <label className="text-xs font-semibold text-slate-500">
-                      Titolo
-                      <input className="input-saas mt-1 w-full" value={anomalyForm.title} onChange={(e) => setAnomalyForm((f) => ({ ...f, title: e.target.value }))} placeholder="es. Pneumatico forato" />
-                    </label>
-                    <label className="text-xs font-semibold text-slate-500">
-                      Gravità
-                      <select className="input-saas mt-1 w-full" value={anomalyForm.severity} onChange={(e) => setAnomalyForm((f) => ({ ...f, severity: e.target.value }))}>
-                        <option value="low">Bassa</option>
-                        <option value="medium">Media</option>
-                        <option value="high">Alta</option>
-                        <option value="blocking">Bloccante</option>
-                      </select>
-                    </label>
-                    <label className="text-xs font-semibold text-slate-500">
-                      Bloccato fino a (opzionale)
-                      <input type="datetime-local" className="input-saas mt-1 w-full" value={anomalyForm.blocked_until} onChange={(e) => setAnomalyForm((f) => ({ ...f, blocked_until: e.target.value }))} />
-                    </label>
-                    <label className="text-xs font-semibold text-slate-500">
-                      Descrizione
-                      <textarea rows={2} className="input-saas mt-1 w-full resize-none" value={anomalyForm.description} onChange={(e) => setAnomalyForm((f) => ({ ...f, description: e.target.value }))} />
-                    </label>
+                  {!isNewVehicle && selectedVehicle ? (
                     <button
                       type="button"
-                      className="btn-secondary py-2 text-sm"
-                      onClick={() => {
-                        void post({
-                          action: "report_anomaly",
-                          vehicle_id: selectedVehicle.id,
-                          title: anomalyForm.title,
-                          severity: anomalyForm.severity,
-                          blocked_until: anomalyForm.blocked_until || null,
-                          description: anomalyForm.description || null,
-                        });
-                        setAnomalyForm(EMPTY_ANOMALY);
-                        setShowAnomalyPanel(false);
+                      disabled={saving}
+                      className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                      onClick={async () => {
+                        if (!confirm(`Eliminare definitivamente "${selectedVehicle.label}"?`)) return;
+                        const ok = await post({ action: "delete_vehicle", id: selectedVehicle.id });
+                        if (ok) setSelectedVehicleId("");
                       }}
                     >
-                      Invia segnalazione
+                      Elimina
                     </button>
-                  </div>
-                </details>
+                  ) : null}
+                </div>
+
+                {/* Documenti, blocco e anomalie solo in modifica */}
+                {!isNewVehicle && selectedVehicle ? (
+                  <>
+                    <details className="rounded-xl border border-slate-200" open={
+                      expiryStatus(selectedVehicle.insurance_expiry) !== "ok" ||
+                      expiryStatus(selectedVehicle.road_tax_expiry) !== "ok" ||
+                      expiryStatus(selectedVehicle.inspection_expiry) !== "ok"
+                    }>
+                      <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-700">
+                        Scadenze documenti
+                      </summary>
+                      <div className="grid grid-cols-1 gap-3 border-t border-slate-100 px-4 py-3">
+                        {[
+                          { label: "Assicurazione", field: "insurance_expiry" as const, val: selectedVehicle.insurance_expiry },
+                          { label: "Bollo",          field: "road_tax_expiry"   as const, val: selectedVehicle.road_tax_expiry },
+                          { label: "Collaudo",       field: "inspection_expiry" as const, val: selectedVehicle.inspection_expiry },
+                        ].map(({ label, field, val }) => {
+                          const status = expiryStatus(form[field] || val);
+                          return (
+                            <label key={field} className="text-xs font-semibold text-slate-500">
+                              <div className="flex items-center justify-between">
+                                <span>{label}</span>
+                                {form[field] && (
+                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${EXPIRY_BADGE[status]}`}>
+                                    {status === "expired" ? "Scaduto" : status === "soon" ? "In scadenza" : "OK"}
+                                  </span>
+                                )}
+                              </div>
+                              <input
+                                type="date"
+                                className="input-saas mt-1 w-full"
+                                value={form[field]}
+                                onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </details>
+
+                    <details className="rounded-xl border border-slate-200">
+                      <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700 select-none">
+                        {selectedVehicle.is_blocked_manual || selectedVehicle.blocked_until ? "⚠ Mezzo bloccato — modifica blocco" : "Blocca mezzo"}
+                      </summary>
+                      <div className="grid grid-cols-2 gap-3 border-t border-slate-100 px-4 py-3">
+                        <label className="col-span-2 text-xs font-semibold text-slate-500">
+                          Motivo blocco
+                          <input className="input-saas mt-1 w-full" value={form.blocked_reason} onChange={(e) => setForm((f) => ({ ...f, blocked_reason: e.target.value }))} placeholder="Guasto, revisione..." />
+                        </label>
+                        <label className="col-span-2 text-xs font-semibold text-slate-500">
+                          Bloccato fino a
+                          <input type="datetime-local" className="input-saas mt-1 w-full" value={form.blocked_until} onChange={(e) => setForm((f) => ({ ...f, blocked_until: e.target.value }))} />
+                        </label>
+                      </div>
+                    </details>
+
+                    {selectedAnomalies.length > 0 ? (
+                      <div className="space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Anomalie aperte ({selectedAnomalies.length})</p>
+                        {selectedAnomalies.map((anomaly) => (
+                          <div key={anomaly.id} className="rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2.5 text-sm">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <p className="font-semibold text-slate-800">{anomaly.title}</p>
+                                <p className="text-xs text-slate-500">{anomaly.description ?? ""}</p>
+                              </div>
+                              <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${SEVERITY_BADGE[anomaly.severity]}`}>
+                                {SEVERITY_LABEL[anomaly.severity]}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                              onClick={() => void post({ action: "resolve_anomaly", anomaly_id: anomaly.id, vehicle_id: selectedVehicle.id })}
+                            >
+                              Segna come risolto
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    <details className="rounded-xl border border-slate-200" open={showAnomalyPanel}>
+                      <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700 select-none" onClick={() => setShowAnomalyPanel((v) => !v)}>
+                        Segnala anomalia
+                      </summary>
+                      <div className="grid gap-3 border-t border-slate-100 px-4 py-3">
+                        <label className="text-xs font-semibold text-slate-500">
+                          Titolo
+                          <input className="input-saas mt-1 w-full" value={anomalyForm.title} onChange={(e) => setAnomalyForm((f) => ({ ...f, title: e.target.value }))} placeholder="es. Pneumatico forato" />
+                        </label>
+                        <label className="text-xs font-semibold text-slate-500">
+                          Gravità
+                          <select className="input-saas mt-1 w-full" value={anomalyForm.severity} onChange={(e) => setAnomalyForm((f) => ({ ...f, severity: e.target.value }))}>
+                            <option value="low">Bassa</option>
+                            <option value="medium">Media</option>
+                            <option value="high">Alta</option>
+                            <option value="blocking">Bloccante</option>
+                          </select>
+                        </label>
+                        <label className="text-xs font-semibold text-slate-500">
+                          Bloccato fino a (opzionale)
+                          <input type="datetime-local" className="input-saas mt-1 w-full" value={anomalyForm.blocked_until} onChange={(e) => setAnomalyForm((f) => ({ ...f, blocked_until: e.target.value }))} />
+                        </label>
+                        <label className="text-xs font-semibold text-slate-500">
+                          Descrizione
+                          <textarea rows={2} className="input-saas mt-1 w-full resize-none" value={anomalyForm.description} onChange={(e) => setAnomalyForm((f) => ({ ...f, description: e.target.value }))} />
+                        </label>
+                        <button
+                          type="button"
+                          className="btn-secondary py-2 text-sm"
+                          onClick={() => {
+                            void post({
+                              action: "report_anomaly",
+                              vehicle_id: selectedVehicle.id,
+                              title: anomalyForm.title,
+                              severity: anomalyForm.severity,
+                              blocked_until: anomalyForm.blocked_until || null,
+                              description: anomalyForm.description || null,
+                            });
+                            setAnomalyForm(EMPTY_ANOMALY);
+                            setShowAnomalyPanel(false);
+                          }}
+                        >
+                          Invia segnalazione
+                        </button>
+                      </div>
+                    </details>
+                  </>
+                ) : null}
               </div>
             )}
           </SectionCard>
 
           {/* Autisti */}
-          <SectionCard title="Autisti in rosa">
+          <SectionCard title="Elenco autisti">
             <div className="divide-y divide-slate-100">
               {drivers.map((driver) => (
-                <div key={driver.id} className="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
+                <div key={driver.id} className="flex items-center justify-between gap-2 py-2.5 first:pt-0">
                   <span className="font-medium text-slate-800">{driver.full_name}</span>
-                  {driver.phone ? (
-                    <a href={`tel:${driver.phone}`} className="text-sm text-blue-600 hover:underline">{driver.phone}</a>
-                  ) : (
-                    <span className="text-xs text-slate-300">N/D</span>
-                  )}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {driver.phone ? (
+                      <a href={`tel:${driver.phone}`} className="text-sm text-blue-600 hover:underline">{driver.phone}</a>
+                    ) : (
+                      <span className="text-xs text-slate-300">N/D</span>
+                    )}
+                    <button
+                      type="button"
+                      className="rounded-lg border border-slate-200 px-2 py-0.5 text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600"
+                      onClick={() => { setEditingDriverId(driver.id); setDriverForm({ full_name: driver.full_name, phone: driver.phone ?? "" }); setDriverFormOpen(true); }}
+                    >
+                      Modifica
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-slate-200 px-2 py-0.5 text-xs text-slate-400 hover:border-rose-200 hover:text-rose-600"
+                      onClick={async () => {
+                        if (!confirm(`Rimuovere ${driver.full_name} dall'elenco?`)) return;
+                        await post({ action: "delete_driver", id: driver.id });
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
               ))}
               {drivers.length === 0 ? <p className="text-sm text-muted">Nessun autista.</p> : null}
+            </div>
+
+            <div className="mt-3 border-t border-slate-100 pt-3">
+              {!driverFormOpen ? (
+                <button
+                  type="button"
+                  className="text-xs font-medium text-blue-600 hover:underline"
+                  onClick={() => { setDriverFormOpen(true); setEditingDriverId(null); setDriverForm({ full_name: "", phone: "" }); }}
+                >
+                  + Nuovo autista
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-slate-500">{editingDriverId ? "Modifica autista" : "Nuovo autista"}</p>
+                  <label className="block text-xs font-semibold text-slate-500">
+                    Nome e cognome
+                    <input className="input-saas mt-1 w-full" value={driverForm.full_name} onChange={(e) => setDriverForm((f) => ({ ...f, full_name: e.target.value }))} placeholder="es. Mario Rossi" />
+                  </label>
+                  <label className="block text-xs font-semibold text-slate-500">
+                    Telefono
+                    <input className="input-saas mt-1 w-full" value={driverForm.phone} onChange={(e) => setDriverForm((f) => ({ ...f, phone: e.target.value }))} placeholder="es. 3471234567" />
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={saving || !driverForm.full_name.trim()}
+                      className="btn-primary flex-1 py-1.5 text-xs disabled:opacity-50"
+                      onClick={async () => {
+                        const ok = await post({
+                          action: "upsert_driver",
+                          ...(editingDriverId ? { id: editingDriverId } : {}),
+                          full_name: driverForm.full_name.trim(),
+                          phone: driverForm.phone.trim() || null,
+                        });
+                        if (ok) { setDriverFormOpen(false); setEditingDriverId(null); setDriverForm({ full_name: "", phone: "" }); }
+                      }}
+                    >
+                      {saving ? "..." : editingDriverId ? "Salva" : "Crea"}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-50"
+                      onClick={() => { setDriverFormOpen(false); setEditingDriverId(null); }}
+                    >
+                      Annulla
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </SectionCard>
         </div>

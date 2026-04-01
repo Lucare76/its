@@ -13,7 +13,7 @@ export function normalizeHotelText(value: string | null | undefined) {
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
     .replace(/['".,]/g, " ")
-    .replace(/\b(?:hotel|terme|resort|spa|club|grand|park|villa|relax|exclusive|boutique)\b/g, " ")
+    .replace(/\b(?:hotel|terme|resort|spa|club|grand|park|relax|exclusive|boutique)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -32,7 +32,7 @@ function scoreCandidate(wantedRaw: string, candidateRaw: string) {
 
   if (!wanted || !candidate) return 0;
   if (wanted === candidate) return 100;
-  if (candidate.includes(wanted) || wanted.includes(candidate)) return 92;
+  if (wanted.length >= 5 && candidate.length >= 5 && (candidate.includes(wanted) || wanted.includes(candidate))) return 92;
 
   const wantedTokens = tokenize(wanted);
   const candidateTokens = new Set(tokenize(candidate));

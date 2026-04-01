@@ -75,6 +75,7 @@ const unitUpdateSchema = z.object({
 
 const updateDriverSchema = z.object({
   unit_id: z.string().uuid(),
+  direction: z.enum(["outbound", "return"]).default("outbound"),
   driver_name: z.string().max(120).optional().nullable(),
   driver_phone: z.string().max(60).optional().nullable()
 });
@@ -417,11 +418,13 @@ export async function POST(request: NextRequest) {
 
     if (action === "update_driver") {
       const parsed = updateDriverSchema.parse(body);
+      const isReturn = parsed.direction === "return";
       const { error } = await auth.admin
         .from("tenant_bus_units")
         .update({
-          driver_name: parsed.driver_name ?? null,
-          driver_phone: parsed.driver_phone ?? null,
+          ...(isReturn
+            ? { driver_name_return: parsed.driver_name ?? null, driver_phone_return: parsed.driver_phone ?? null }
+            : { driver_name_outbound: parsed.driver_name ?? null, driver_phone_outbound: parsed.driver_phone ?? null }),
           updated_at: new Date().toISOString()
         })
         .eq("tenant_id", tenantId)

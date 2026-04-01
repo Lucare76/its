@@ -29,6 +29,7 @@
     "@hookform/resolvers": "^3.10.0",
     "@supabase/supabase-js": "^2.57.2",
     "clsx": "^2.1.1",
+    "exceljs": "^4.4.0",
     "imapflow": "^1.2.12",
     "leaflet": "^1.9.4",
     "mailparser": "^3.9.3",

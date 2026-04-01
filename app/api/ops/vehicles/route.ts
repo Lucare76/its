@@ -31,6 +31,12 @@ const anomalySchema = z.object({
   blocked_until: z.string().datetime().optional().nullable()
 });
 
+const driverSchema = z.object({
+  id: z.string().uuid().optional(),
+  full_name: z.string().min(2).max(120),
+  phone: z.string().max(32).optional().nullable(),
+});
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await authorizePricingRequest(request, ["admin", "operator", "driver"]);
@@ -119,6 +125,39 @@ export async function POST(request: NextRequest) {
           .eq("tenant_id", tenantId)
           .eq("id", parsed.vehicle_id);
       }
+    }
+
+    if (action === "delete_vehicle") {
+      if (!["admin", "operator"].includes(auth.membership.role)) {
+        return NextResponse.json({ ok: false, error: "Ruolo non autorizzato." }, { status: 403 });
+      }
+      const vehicleId = String(body?.id ?? "");
+      if (!vehicleId) return NextResponse.json({ ok: false, error: "ID mancante." }, { status: 400 });
+      const { error } = await auth.admin.from("vehicles").delete().eq("tenant_id", tenantId).eq("id", vehicleId);
+      if (error) throw new Error(error.message);
+    }
+
+    if (action === "upsert_driver") {
+      if (!["admin", "operator"].includes(auth.membership.role)) {
+        return NextResponse.json({ ok: false, error: "Ruolo non autorizzato." }, { status: 403 });
+      }
+      const parsed = driverSchema.parse(body);
+      const payload = { tenant_id: tenantId, full_name: parsed.full_name, phone: parsed.phone ?? null, active: true };
+      const query = parsed.id
+        ? auth.admin.from("driver_profiles").update({ full_name: payload.full_name, phone: payload.phone }).eq("tenant_id", tenantId).eq("id", parsed.id)
+        : auth.admin.from("driver_profiles").insert(payload);
+      const { error } = await query;
+      if (error) throw new Error(error.message);
+    }
+
+    if (action === "delete_driver") {
+      if (!["admin", "operator"].includes(auth.membership.role)) {
+        return NextResponse.json({ ok: false, error: "Ruolo non autorizzato." }, { status: 403 });
+      }
+      const driverId = String(body?.id ?? "");
+      if (!driverId) return NextResponse.json({ ok: false, error: "ID mancante." }, { status: 400 });
+      const { error } = await auth.admin.from("driver_profiles").update({ active: false }).eq("tenant_id", tenantId).eq("id", driverId);
+      if (error) throw new Error(error.message);
     }
 
     if (action === "resolve_anomaly") {
