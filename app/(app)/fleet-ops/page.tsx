@@ -19,6 +19,9 @@ type Vehicle = {
   notes?: string | null;
   is_blocked_manual?: boolean | null;
   radius_vehicle_id?: string | null;
+  insurance_expiry?: string | null;
+  road_tax_expiry?: string | null;
+  inspection_expiry?: string | null;
 };
 
 type Driver = { id: string; full_name: string; phone?: string | null };
@@ -79,6 +82,26 @@ const EMPTY_FORM = {
   notes: "",
   radius_vehicle_id: "",
   capacity: "",
+  insurance_expiry: "",
+  road_tax_expiry: "",
+  inspection_expiry: "",
+};
+
+function expiryStatus(dateStr: string | null | undefined): "ok" | "soon" | "expired" | "none" {
+  if (!dateStr) return "none";
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const expiry = new Date(`${dateStr}T00:00:00`);
+  const diffDays = Math.floor((expiry.getTime() - today.getTime()) / 86400000);
+  if (diffDays < 0) return "expired";
+  if (diffDays <= 30) return "soon";
+  return "ok";
+}
+
+const EXPIRY_BADGE: Record<string, string> = {
+  ok:      "bg-emerald-50 text-emerald-700 border-emerald-200",
+  soon:    "bg-amber-50 text-amber-700 border-amber-200",
+  expired: "bg-rose-50 text-rose-700 border-rose-200",
+  none:    "bg-slate-50 text-slate-400 border-slate-200",
 };
 
 const EMPTY_ANOMALY = {
@@ -134,6 +157,9 @@ export default function FleetOpsPage() {
       notes: selectedVehicle.notes ?? "",
       radius_vehicle_id: selectedVehicle.radius_vehicle_id ?? "",
       capacity: String(selectedVehicle.capacity ?? ""),
+      insurance_expiry: selectedVehicle.insurance_expiry ?? "",
+      road_tax_expiry: selectedVehicle.road_tax_expiry ?? "",
+      inspection_expiry: selectedVehicle.inspection_expiry ?? "",
     });
     setShowAnomalyPanel(false);
     setAnomalyForm(EMPTY_ANOMALY);
@@ -238,6 +264,7 @@ export default function FleetOpsPage() {
                   <th className="px-3 py-2.5">Posti</th>
                   <th className="px-3 py-2.5">Autista abituale</th>
                   <th className="px-3 py-2.5">GPS</th>
+                  <th className="px-3 py-2.5">Documenti</th>
                   <th className="px-3 py-2.5">Stato</th>
                 </tr>
               </thead>
@@ -267,6 +294,31 @@ export default function FleetOpsPage() {
                       </td>
                       <td className="px-3 py-2.5">
                         <span className={`inline-block h-2.5 w-2.5 rounded-full ${hasGps ? "bg-emerald-400" : "bg-slate-200"}`} title={hasGps ? vehicle.radius_vehicle_id ?? "" : "Nessun GPS"} />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {(() => {
+                          const docs = [
+                            { key: "Ass.", val: vehicle.insurance_expiry },
+                            { key: "Bollo", val: vehicle.road_tax_expiry },
+                            { key: "Coll.", val: vehicle.inspection_expiry },
+                          ];
+                          const worst = docs.reduce<"ok" | "soon" | "expired" | "none">((acc, d) => {
+                            const s = expiryStatus(d.val);
+                            if (s === "expired") return "expired";
+                            if (s === "soon" && acc !== "expired") return "soon";
+                            if (s === "ok" && acc === "none") return "ok";
+                            return acc;
+                          }, "none");
+                          if (worst === "none") return <span className="text-slate-300 text-xs">—</span>;
+                          const expiredDocs = docs.filter(d => expiryStatus(d.val) === "expired").map(d => d.key);
+                          const soonDocs = docs.filter(d => expiryStatus(d.val) === "soon").map(d => d.key);
+                          const label = expiredDocs.length ? `Scaduto: ${expiredDocs.join(", ")}` : soonDocs.length ? `In scadenza: ${soonDocs.join(", ")}` : "OK";
+                          return (
+                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${EXPIRY_BADGE[worst]}`} title={label}>
+                              {worst === "expired" ? "⚠ Scaduto" : worst === "soon" ? "⚠ In scad." : "✓ OK"}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                         <button
@@ -377,6 +429,9 @@ export default function FleetOpsPage() {
                       radius_vehicle_id: form.radius_vehicle_id || null,
                       capacity: form.capacity ? Number(form.capacity) : null,
                       is_blocked_manual: Boolean(form.blocked_reason),
+                      insurance_expiry: form.insurance_expiry || null,
+                      road_tax_expiry: form.road_tax_expiry || null,
+                      inspection_expiry: form.inspection_expiry || null,
                     })}
                   >
                     {saving ? "Salvataggio..." : "Salva mezzo"}
@@ -387,6 +442,44 @@ export default function FleetOpsPage() {
                     </a>
                   ) : null}
                 </div>
+
+                {/* Documenti */}
+                <details className="rounded-xl border border-slate-200" open={
+                  expiryStatus(selectedVehicle.insurance_expiry) !== "ok" ||
+                  expiryStatus(selectedVehicle.road_tax_expiry) !== "ok" ||
+                  expiryStatus(selectedVehicle.inspection_expiry) !== "ok"
+                }>
+                  <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-700">
+                    Scadenze documenti
+                  </summary>
+                  <div className="grid grid-cols-1 gap-3 border-t border-slate-100 px-4 py-3">
+                    {[
+                      { label: "Assicurazione", field: "insurance_expiry" as const, val: selectedVehicle.insurance_expiry },
+                      { label: "Bollo",          field: "road_tax_expiry"   as const, val: selectedVehicle.road_tax_expiry },
+                      { label: "Collaudo",       field: "inspection_expiry" as const, val: selectedVehicle.inspection_expiry },
+                    ].map(({ label, field, val }) => {
+                      const status = expiryStatus(form[field] || val);
+                      return (
+                        <label key={field} className="text-xs font-semibold text-slate-500">
+                          <div className="flex items-center justify-between">
+                            <span>{label}</span>
+                            {form[field] && (
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${EXPIRY_BADGE[status]}`}>
+                                {status === "expired" ? "Scaduto" : status === "soon" ? "In scadenza" : "OK"}
+                              </span>
+                            )}
+                          </div>
+                          <input
+                            type="date"
+                            className="input-saas mt-1 w-full"
+                            value={form[field]}
+                            onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                </details>
 
                 {/* Blocco */}
                 <details className="rounded-xl border border-slate-200">

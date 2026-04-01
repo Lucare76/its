@@ -17,7 +17,10 @@ const vehicleSchema = z.object({
   notes: z.string().max(2000).optional().nullable(),
   is_blocked_manual: z.boolean().optional().default(false),
   active: z.boolean().optional().default(true),
-  radius_vehicle_id: z.string().max(120).optional().nullable()
+  radius_vehicle_id: z.string().max(120).optional().nullable(),
+  insurance_expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  road_tax_expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  inspection_expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable()
 });
 
 const anomalySchema = z.object({
@@ -80,7 +83,10 @@ export async function POST(request: NextRequest) {
         notes: parsed.notes ?? null,
         is_blocked_manual: parsed.is_blocked_manual,
         active: parsed.active,
-        radius_vehicle_id: parsed.radius_vehicle_id ?? null
+        radius_vehicle_id: parsed.radius_vehicle_id ?? null,
+        insurance_expiry: parsed.insurance_expiry ?? null,
+        road_tax_expiry: parsed.road_tax_expiry ?? null,
+        inspection_expiry: parsed.inspection_expiry ?? null
       };
       const query = parsed.id
         ? auth.admin.from("vehicles").update(payload).eq("tenant_id", tenantId).eq("id", parsed.id)
