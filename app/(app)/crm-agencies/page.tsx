@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
@@ -534,7 +534,7 @@ export default function CrmAgenciesPage() {
     return data.session?.access_token ?? null;
   };
 
-  const load = async () => {
+  const load = useEffectEvent(async () => {
     const token = await getToken();
     if (!token) {
       setErrorMessage("Sessione non valida.");
@@ -559,7 +559,7 @@ export default function CrmAgenciesPage() {
     setPriceLists(body?.price_lists ?? []);
     setRules(body?.pricing_rules ?? []);
     setLoading(false);
-  };
+  });
 
   useEffect(() => {
     void load();
