@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
@@ -128,60 +128,70 @@ export default function FleetOpsPage() {
   const [editingDriverId, setEditingDriverId] = useState<string | null>(null);
   const [driverForm, setDriverForm] = useState({ full_name: "", phone: "" });
 
-  const load = useEffectEvent(async () => {
+  const showToast = useCallback((text: string, ok: boolean) => {
+    setToast({ text, ok });
+    setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  const resetVehicleEditor = useCallback(() => {
+    setForm(EMPTY_FORM);
+    setShowAnomalyPanel(false);
+    setAnomalyForm(EMPTY_ANOMALY);
+  }, []);
+
+  const populateVehicleEditor = useCallback((vehicle: Vehicle) => {
+    setForm({
+      label: vehicle.label,
+      plate: vehicle.plate ?? "",
+      vehicle_size: vehicle.vehicle_size ?? "medium",
+      habitual_driver_profile_id: vehicle.habitual_driver_profile_id ?? "",
+      default_zone: vehicle.default_zone ?? "",
+      blocked_until: vehicle.blocked_until?.slice(0, 16) ?? "",
+      blocked_reason: vehicle.blocked_reason ?? "",
+      notes: vehicle.notes ?? "",
+      radius_vehicle_id: vehicle.radius_vehicle_id ?? "",
+      capacity: String(vehicle.capacity ?? ""),
+      insurance_expiry: vehicle.insurance_expiry ?? "",
+      road_tax_expiry: vehicle.road_tax_expiry ?? "",
+      inspection_expiry: vehicle.inspection_expiry ?? "",
+    });
+    setShowAnomalyPanel(false);
+    setAnomalyForm(EMPTY_ANOMALY);
+  }, []);
+
+  const load = useCallback(async () => {
     const token = await accessToken();
     if (!token) { setLoading(false); return; }
     const response = await fetch("/api/ops/vehicles", { headers: { Authorization: `Bearer ${token}` } });
     const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; vehicles?: Vehicle[]; drivers?: Driver[]; anomalies?: Anomaly[] } | null;
     if (!response.ok || !body?.ok) { setLoading(false); showToast(body?.error ?? "Errore caricamento flotta.", false); return; }
-    setVehicles(body.vehicles ?? []);
+    const nextVehicles = body.vehicles ?? [];
+    setVehicles(nextVehicles);
     setDrivers(body.drivers ?? []);
     setAnomalies(body.anomalies ?? []);
-    setSelectedVehicleId((current) => current || body.vehicles?.[0]?.id || "");
+    setSelectedVehicleId((current) => {
+      if (current) return current;
+      const firstVehicle = nextVehicles[0] ?? null;
+      if (firstVehicle) populateVehicleEditor(firstVehicle);
+      return firstVehicle?.id ?? "";
+    });
     setLoading(false);
-  });
+  }, [populateVehicleEditor, showToast]);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [load]);
 
   const selectedVehicle = useMemo(
     () => vehicles.find((v) => v.id === selectedVehicleId) ?? null,
     [vehicles, selectedVehicleId]
   );
 
-  useEffect(() => {
-    if (isNewVehicle) {
-      setForm(EMPTY_FORM);
-      setShowAnomalyPanel(false);
-      setAnomalyForm(EMPTY_ANOMALY);
-      return;
-    }
-    if (!selectedVehicle) return;
-    setForm({
-      label: selectedVehicle.label,
-      plate: selectedVehicle.plate ?? "",
-      vehicle_size: selectedVehicle.vehicle_size ?? "medium",
-      habitual_driver_profile_id: selectedVehicle.habitual_driver_profile_id ?? "",
-      default_zone: selectedVehicle.default_zone ?? "",
-      blocked_until: selectedVehicle.blocked_until?.slice(0, 16) ?? "",
-      blocked_reason: selectedVehicle.blocked_reason ?? "",
-      notes: selectedVehicle.notes ?? "",
-      radius_vehicle_id: selectedVehicle.radius_vehicle_id ?? "",
-      capacity: String(selectedVehicle.capacity ?? ""),
-      insurance_expiry: selectedVehicle.insurance_expiry ?? "",
-      road_tax_expiry: selectedVehicle.road_tax_expiry ?? "",
-      inspection_expiry: selectedVehicle.inspection_expiry ?? "",
-    });
-    setShowAnomalyPanel(false);
-    setAnomalyForm(EMPTY_ANOMALY);
-  }, [selectedVehicle?.id, isNewVehicle]);
-
   const selectedAnomalies = anomalies.filter((a) => a.vehicle_id === selectedVehicleId && a.active);
   const driverNameById = useMemo(() => new Map(drivers.map((d) => [d.id, d.full_name])), [drivers]);
-
-  function showToast(text: string, ok: boolean) {
-    setToast({ text, ok });
-    setTimeout(() => setToast(null), 3000);
-  }
 
   const post = async (body: Record<string, unknown>): Promise<boolean> => {
     const token = await accessToken();
@@ -254,7 +264,7 @@ export default function FleetOpsPage() {
             <div className="flex gap-1.5">
               <button
                 type="button"
-                onClick={() => { setIsNewVehicle(true); setSelectedVehicleId(""); }}
+                onClick={() => { setIsNewVehicle(true); setSelectedVehicleId(""); resetVehicleEditor(); }}
                 className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
               >
                 + Nuovo mezzo
@@ -294,7 +304,7 @@ export default function FleetOpsPage() {
                   return (
                     <tr
                       key={vehicle.id}
-                      onClick={() => { setSelectedVehicleId(vehicle.id); setIsNewVehicle(false); }}
+                      onClick={() => { setSelectedVehicleId(vehicle.id); setIsNewVehicle(false); populateVehicleEditor(vehicle); }}
                       className={`cursor-pointer transition ${isSelected ? "bg-blue-50/70" : "hover:bg-slate-50/80"}`}
                     >
                       <td className="px-3 py-2.5">

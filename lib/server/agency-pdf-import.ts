@@ -1449,6 +1449,9 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
   if (!hotelId) {
     throw new Error("Nessun hotel disponibile per il tenant.");
   }
+  if (!normalized.outbound_time) {
+    throw new Error("Orario arrivo mancante o non riconosciuto nel PDF. Completa la review manuale con un orario reale prima della conferma.");
+  }
 
   const finalNotes = buildServiceNotes(normalized, {
     mode: "final",

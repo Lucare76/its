@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
@@ -528,13 +528,13 @@ export default function CrmAgenciesPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
 
-  const getToken = async () => {
+  const getToken = useCallback(async () => {
     if (!hasSupabaseEnv || !supabase) return null;
     const { data } = await supabase.auth.getSession();
     return data.session?.access_token ?? null;
-  };
+  }, []);
 
-  const load = useEffectEvent(async () => {
+  const load = useCallback(async () => {
     const token = await getToken();
     if (!token) {
       setErrorMessage("Sessione non valida.");
@@ -559,11 +559,14 @@ export default function CrmAgenciesPage() {
     setPriceLists(body?.price_lists ?? []);
     setRules(body?.pricing_rules ?? []);
     setLoading(false);
-  });
+  }, [getToken]);
 
   useEffect(() => {
-    void load();
-  }, []);
+    const timeout = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [load]);
 
   function showToast(text: string, ok: boolean) {
     setToast({ text, ok });

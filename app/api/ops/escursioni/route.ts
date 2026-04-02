@@ -3,13 +3,22 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
 
-type ExcursionLine = { id: string; name: string; description: string | null; color: string; icon: string; active: boolean; sort_order: number };
+type ExcursionLine = {
+  id: string; name: string; description: string | null; color: string; icon: string;
+  active: boolean; sort_order: number; days_of_week: number[]; excursion_type: string;
+  price_agency_cents: number; price_retail_cents: number; return_time: string | null;
+  min_pax: number; valid_from: string | null;
+};
 type ExcursionUnit = { id: string; excursion_line_id: string; excursion_date: string; label: string; capacity: number; departure_time: string | null; vehicle_id: string | null; driver_profile_id: string | null; notes: string | null; status: string };
 type ExcursionAllocation = { id: string; excursion_unit_id: string; customer_name: string; pax: number; hotel_name: string | null; pickup_time: string | null; phone: string | null; agency_name: string | null; notes: string | null };
+type ExcursionPickup = { id: string; excursion_line_id: string; location: string; pickup_time: string; sort_order: number };
 
 async function loadData(auth: Awaited<ReturnType<typeof authorizePricingRequest>>, date: string) {
   if (auth instanceof NextResponse) throw new Error("unauthorized");
   const tenantId = auth.membership.tenant_id;
+
+  // Giorno della settimana per filtrare le linee (0=Dom...6=Sab)
+  const dow = new Date(date + "T12:00:00").getDay();
 
   const unitIds = await auth.admin
     .from("excursion_units")
@@ -19,7 +28,7 @@ async function loadData(auth: Awaited<ReturnType<typeof authorizePricingRequest>
     .then((r) => (r.data ?? []).map((u) => u.id));
 
   const [linesRes, unitsRes, allocRes, vehiclesRes, driversRes] = await Promise.all([
-    auth.admin.from("excursion_lines").select("*").eq("tenant_id", tenantId).eq("active", true).order("sort_order"),
+    auth.admin.from("excursion_lines").select("*").eq("tenant_id", tenantId).eq("active", true).contains("days_of_week", [dow]).order("sort_order"),
     auth.admin.from("excursion_units").select("*").eq("tenant_id", tenantId).eq("excursion_date", date).order("label"),
     unitIds.length > 0
       ? auth.admin.from("excursion_allocations").select("*").in("excursion_unit_id", unitIds).order("pickup_time").order("customer_name")
@@ -31,10 +40,19 @@ async function loadData(auth: Awaited<ReturnType<typeof authorizePricingRequest>
   if (linesRes.error) throw new Error(linesRes.error.message);
   if (unitsRes.error) throw new Error(unitsRes.error.message);
 
+  const lines = (linesRes.data ?? []) as ExcursionLine[];
+
+  // Carica orari pickup solo per le linee del giorno
+  const lineIds = lines.map((l) => l.id);
+  const pickupsRes = lineIds.length > 0
+    ? await auth.admin.from("excursion_pickups").select("*").in("excursion_line_id", lineIds).order("sort_order")
+    : { data: [], error: null };
+
   return {
-    lines: (linesRes.data ?? []) as ExcursionLine[],
+    lines,
     units: (unitsRes.data ?? []) as ExcursionUnit[],
     allocations: (allocRes.data ?? []) as ExcursionAllocation[],
+    pickups: (pickupsRes.data ?? []) as ExcursionPickup[],
     vehicles: vehiclesRes.data ?? [],
     drivers: driversRes.data ?? [],
   };

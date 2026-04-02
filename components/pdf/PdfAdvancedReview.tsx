@@ -116,6 +116,10 @@ function amountInputToCents(value: string) {
   return Math.round(numeric * 100);
 }
 
+function isValidClockTime(value: string) {
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value.trim());
+}
+
 function formFromRow(row: PdfImportDetail | null): ReviewForm {
   const source = (row?.effective_normalized ?? {}) as Record<string, unknown>;
   const dedupe = (row?.dedupe ?? {}) as Record<string, unknown>;
@@ -340,6 +344,16 @@ export function PdfAdvancedReview({
     setBusy("save");
     setError(null);
     setMessage(null);
+    if (reviewForm.outbound_time.trim() && !isValidClockTime(reviewForm.outbound_time)) {
+      setError("L'orario andata deve essere valido nel formato HH:MM.");
+      setBusy(null);
+      return;
+    }
+    if (reviewForm.return_time.trim() && !isValidClockTime(reviewForm.return_time)) {
+      setError("L'orario ritorno deve essere valido nel formato HH:MM.");
+      setBusy(null);
+      return;
+    }
     try {
       await tokenFetch("/api/email/pdf-imports/review", {
         inbound_email_id: row.inbound_email_id,
@@ -486,10 +500,12 @@ export function PdfAdvancedReview({
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Cliente</span><input className="input-saas" value={reviewForm.customer_full_name} onChange={(event) => setReviewForm((current) => ({ ...current, customer_full_name: event.target.value }))} /></label>
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Agenzia fatturazione</span><input className="input-saas" value={reviewForm.billing_party_name} onChange={(event) => setReviewForm((current) => ({ ...current, billing_party_name: event.target.value }))} /></label>
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Data arrivo</span><input className="input-saas" value={reviewForm.arrival_date} onChange={(event) => setReviewForm((current) => ({ ...current, arrival_date: event.target.value }))} /></label>
-            <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">{getOutwardTimeLabel(reviewContext(reviewForm))}</span><input className="input-saas" value={reviewForm.outbound_time} onChange={(event) => setReviewForm((current) => ({ ...current, outbound_time: event.target.value }))} /></label>
+            <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">{getOutwardTimeLabel(reviewContext(reviewForm))}</span><input type="time" step="300" className="input-saas" value={reviewForm.outbound_time} onChange={(event) => setReviewForm((current) => ({ ...current, outbound_time: event.target.value }))} /></label>
             <label className="space-y-1 md:col-span-2"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Hotel / destinazione</span><input className="input-saas" value={reviewForm.hotel_or_destination} onChange={(event) => setReviewForm((current) => ({ ...current, hotel_or_destination: event.target.value }))} /></label>
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Passeggeri</span><input className="input-saas" value={reviewForm.passengers} onChange={(event) => setReviewForm((current) => ({ ...current, passengers: event.target.value }))} /></label>
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Numero pratica</span><input className="input-saas" value={reviewForm.practice_number} onChange={(event) => setReviewForm((current) => ({ ...current, practice_number: event.target.value }))} /></label>
+            <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Data ritorno</span><input className="input-saas" value={reviewForm.departure_date} onChange={(event) => setReviewForm((current) => ({ ...current, departure_date: event.target.value }))} /></label>
+            <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">{getReturnTimeLabel(reviewContext(reviewForm))}</span><input type="time" step="300" className="input-saas" value={reviewForm.return_time} onChange={(event) => setReviewForm((current) => ({ ...current, return_time: event.target.value }))} /></label>
             <label className="space-y-1 md:col-span-2"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Note</span><textarea rows={2} className="input-saas resize-none" value={reviewForm.notes} onChange={(event) => setReviewForm((current) => ({ ...current, notes: event.target.value }))} /></label>
           </div>
           {busSuggestions.length > 0 ? (

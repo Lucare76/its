@@ -9,6 +9,13 @@ import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 type ExcursionLine = {
   id: string; name: string; description: string | null;
   color: string; icon: string; active: boolean; sort_order: number;
+  days_of_week: number[]; excursion_type: string;
+  price_agency_cents: number; price_retail_cents: number;
+  return_time: string | null; min_pax: number; valid_from: string | null;
+};
+type ExcursionPickup = {
+  id: string; excursion_line_id: string; location: string;
+  pickup_time: string; sort_order: number;
 };
 type ExcursionUnit = {
   id: string; excursion_line_id: string; excursion_date: string;
@@ -23,6 +30,13 @@ type ExcursionAllocation = {
 };
 type Vehicle = { id: string; label: string; plate: string; capacity: number };
 type Driver = { id: string; full_name: string; phone: string | null };
+
+const DAYS_LABEL = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"];
+const TYPE_LABEL: Record<string, string> = { mare: "🌊 Mare", terra: "🏔 Terra", misto: "🌍 Misto" };
+
+function fmtPrice(cents: number) {
+  return cents > 0 ? `€${(cents / 100).toFixed(0)}` : "—";
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -379,6 +393,7 @@ export default function EscursioniPage() {
   const [lines, setLines] = useState<ExcursionLine[]>([]);
   const [units, setUnits] = useState<ExcursionUnit[]>([]);
   const [allocations, setAllocations] = useState<ExcursionAllocation[]>([]);
+  const [pickups, setPickups] = useState<ExcursionPickup[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [loading, setLoading] = useState(true);
@@ -397,13 +412,17 @@ export default function EscursioniPage() {
     const res = await fetch(`/api/ops/escursioni?date=${d}`, { headers: { Authorization: `Bearer ${token}` } });
     const body = await res.json().catch(() => null);
     if (body?.ok) {
-      setLines(body.lines ?? []);
+      const newLines = body.lines ?? [];
+      setLines(newLines);
       setUnits(body.units ?? []);
       setAllocations(body.allocations ?? []);
+      setPickups(body.pickups ?? []);
       setVehicles(body.vehicles ?? []);
       setDrivers(body.drivers ?? []);
-      if (!selectedLineId && body.lines?.length > 0) {
-        setSelectedLineId(body.lines[0].id);
+      if (!selectedLineId && newLines.length > 0) {
+        setSelectedLineId(newLines[0].id);
+      } else if (selectedLineId && !newLines.find((l: ExcursionLine) => l.id === selectedLineId) && newLines.length > 0) {
+        setSelectedLineId(newLines[0].id);
       }
     }
     setLoading(false);
@@ -466,9 +485,11 @@ export default function EscursioniPage() {
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar: linee escursione */}
         <div className="w-56 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50 p-3">
-          <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Escursioni</p>
+          <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Oggi disponibili</p>
           {loading ? (
             <p className="px-2 text-xs text-slate-400">Caricamento...</p>
+          ) : lines.length === 0 ? (
+            <p className="px-2 text-xs text-slate-400">Nessuna escursione oggi.</p>
           ) : (
             <div className="space-y-1">
               {lines.map((line) => {
@@ -489,9 +510,10 @@ export default function EscursioniPage() {
                       <p className={`truncate text-sm font-medium ${active ? "text-slate-900" : "text-slate-600"}`}>
                         {line.name}
                       </p>
-                      {lineUnitCount > 0 && (
-                        <p className="text-[10px] text-slate-400">{lineUnitCount} bus · {linePax} pax</p>
-                      )}
+                      <p className="text-[10px] text-slate-400">
+                        {line.price_retail_cents > 0 ? `${fmtPrice(line.price_agency_cents)} · ${fmtPrice(line.price_retail_cents)}` : ""}
+                        {lineUnitCount > 0 ? ` · ${lineUnitCount} bus · ${linePax} pax` : ""}
+                      </p>
                     </div>
                     {active && (
                       <div className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: line.color }} />
@@ -510,27 +532,70 @@ export default function EscursioniPage() {
           ) : (
             <>
               {/* Header linea */}
-              <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="text-3xl">{selectedLine.icon}</span>
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-900">{selectedLine.name}</h2>
-                    {selectedLine.description && (
-                      <p className="text-sm text-slate-500">{selectedLine.description}</p>
-                    )}
+              <div className="mb-4 space-y-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <span className="text-3xl">{selectedLine.icon}</span>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-lg font-bold text-slate-900">{selectedLine.name}</h2>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+                          {TYPE_LABEL[selectedLine.excursion_type] ?? selectedLine.excursion_type}
+                        </span>
+                        {selectedLine.min_pax > 0 && (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                            min {selectedLine.min_pax} pax
+                          </span>
+                        )}
+                        {totalLinePax > 0 && (
+                          <span className="rounded-full px-2 py-0.5 text-xs font-semibold text-white" style={{ backgroundColor: selectedLine.color }}>
+                            {totalLinePax} pax · {lineUnits.length} bus
+                          </span>
+                        )}
+                      </div>
+                      {selectedLine.description && (
+                        <p className="text-sm text-slate-500">{selectedLine.description}</p>
+                      )}
+                      <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
+                        {selectedLine.price_agency_cents > 0 && (
+                          <span>💼 Netto: <strong>{fmtPrice(selectedLine.price_agency_cents)}</strong></span>
+                        )}
+                        {selectedLine.price_retail_cents > 0 && (
+                          <span>🏷️ Vendita: <strong>{fmtPrice(selectedLine.price_retail_cents)}</strong></span>
+                        )}
+                        {selectedLine.return_time && (
+                          <span>🔄 Ritorno: <strong>{selectedLine.return_time.slice(0, 5)}</strong></span>
+                        )}
+                        <span>📅 {selectedLine.days_of_week.map((d) => DAYS_LABEL[d]).join(", ")}</span>
+                      </div>
+                    </div>
                   </div>
-                  {totalLinePax > 0 && (
-                    <span className="rounded-full px-3 py-1 text-sm font-semibold text-white" style={{ backgroundColor: selectedLine.color }}>
-                      {totalLinePax} pax totali · {lineUnits.length} bus
-                    </span>
-                  )}
+                  <button
+                    onClick={() => setShowAddUnit(true)}
+                    disabled={saving}
+                    className="shrink-0 rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40">
+                    + Aggiungi bus
+                  </button>
                 </div>
-                <button
-                  onClick={() => setShowAddUnit(true)}
-                  disabled={saving}
-                  className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40">
-                  + Aggiungi bus
-                </button>
+
+                {/* Orari pickup per questa linea */}
+                {(() => {
+                  const linePickups = pickups.filter((p) => p.excursion_line_id === selectedLine.id);
+                  if (linePickups.length === 0) return null;
+                  return (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Orari raccolta</p>
+                      <div className="flex flex-wrap gap-3">
+                        {linePickups.map((p) => (
+                          <div key={p.id} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5">
+                            <span className="text-xs font-semibold text-slate-700">{p.pickup_time.slice(0, 5)}</span>
+                            <span className="text-xs text-slate-500">{p.location}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Bus list */}

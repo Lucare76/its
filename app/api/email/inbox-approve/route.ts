@@ -147,7 +147,7 @@ export async function POST(request: NextRequest) {
   if (!clean(form.hotel)) return NextResponse.json({ ok: false, error: "Hotel obbligatorio." }, { status: 422 });
 
   const departureDate = parseDate(form.data_partenza);
-  const outboundTime = normalizeTime(form.orario_arrivo) ?? "00:00";
+  const outboundTime = normalizeTime(form.orario_arrivo);
   const returnTime = normalizeTime(form.orario_partenza);
   const customerName = clean(form.cliente_nome) ?? "Cliente da verificare";
   const hotelName = clean(form.hotel);
@@ -161,6 +161,12 @@ export async function POST(request: NextRequest) {
   const sourcePricePerPaxCents = sourceTotalCents && passengers > 0 ? Math.round(sourceTotalCents / passengers) : null;
 
   const { bookingKind, transportMode } = tipoToBookingKind(form.tipo_servizio ?? "transfer_station_hotel");
+  if (!outboundTime) {
+    return NextResponse.json(
+      { ok: false, error: "Orario arrivo non valido o mancante. Inserisci un orario reale nel formato HH:MM prima di confermare." },
+      { status: 422 }
+    );
+  }
 
   const textHash = hashString(JSON.stringify(form)).slice(0, 24);
   const compositeKey = slug(`${customerName}|${arrivalDate}|${hotelName ?? "hotel-nd"}`);

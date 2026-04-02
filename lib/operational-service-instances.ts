@@ -12,8 +12,12 @@ export type OperationalInstance = {
 function normalizeTime(value?: string | null) {
   const raw = String(value ?? "").trim();
   const match = raw.match(/^([01]?\d|2[0-3]):([0-5]\d)/);
-  if (!match) return "00:00";
+  if (!match) return "--:--";
   return `${match[1].padStart(2, "0")}:${match[2]}`;
+}
+
+function sortTimeKey(value: string) {
+  return value === "--:--" ? "99:99" : value;
 }
 
 function isOperationallyVisible(service: Service) {
@@ -55,7 +59,7 @@ export function buildOperationalInstances(services: Service[]) {
 
   return instances.sort((a, b) => {
     if (a.date !== b.date) return a.date.localeCompare(b.date);
-    if (a.time !== b.time) return a.time.localeCompare(b.time);
+    if (a.time !== b.time) return sortTimeKey(a.time).localeCompare(sortTimeKey(b.time));
     return a.service.customer_name.localeCompare(b.service.customer_name);
   });
 }
@@ -69,4 +73,3 @@ export function groupOperationalInstancesByDate(instances: OperationalInstance[]
   }
   return map;
 }
-
