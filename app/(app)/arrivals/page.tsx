@@ -46,6 +46,8 @@ function EditServiceModal({
   const [time, setTime] = useState(service.time ?? "");
   const [phone, setPhone] = useState(service.phone ?? "");
   const [notes, setNotes] = useState(service.notes ?? "");
+  const [placeType, setPlaceType] = useState<"hotel" | "station" | "airport">((service as { place_type?: string }).place_type as "hotel" | "station" | "airport" ?? "hotel");
+  const [meetingPoint, setMeetingPoint] = useState<string>((service as { meeting_point?: string }).meeting_point ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,6 +90,8 @@ function EditServiceModal({
         time: trimmedTime,
         phone,
         notes,
+        place_type: placeType,
+        meeting_point: placeType !== "hotel" ? meetingPoint.trim() || null : null,
       })
       .eq("id", service.id)
       .eq("tenant_id", tenantId);
@@ -173,6 +177,29 @@ function EditServiceModal({
             Note
             <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} className="mt-1 input-saas w-full resize-none" />
           </label>
+
+          {/* Provenienza — Liste Bruno */}
+          <div className="sm:col-span-2">
+            <p className="mb-1 text-xs font-medium text-slate-600">Provenienza <span className="font-normal text-slate-400">(Liste Bruno)</span></p>
+            <div className="flex gap-2">
+              <select
+                value={placeType}
+                onChange={(e) => setPlaceType(e.target.value as "hotel" | "station" | "airport")}
+                className="input-saas w-36 shrink-0">
+                <option value="hotel">🏨 Hotel</option>
+                <option value="station">🚂 Stazione</option>
+                <option value="airport">✈️ Aeroporto</option>
+              </select>
+              {placeType !== "hotel" && (
+                <input
+                  value={meetingPoint}
+                  onChange={(e) => setMeetingPoint(e.target.value)}
+                  placeholder={placeType === "station" ? "es. Napoli Centrale" : "es. Capodichino"}
+                  className="input-saas flex-1"
+                />
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="flex gap-2 justify-end">
