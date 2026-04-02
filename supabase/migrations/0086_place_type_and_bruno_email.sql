@@ -20,3 +20,8 @@ alter table public.tenant_operational_settings
 
 comment on column public.tenant_operational_settings.bruno_email is
   'Email di Bruno: destinatario delle Liste Bruno inviate da Karmen Peach.';
+
+-- ── Seed email Bruno per Ischia Transfer Service ──────────────────────────────
+insert into public.tenant_operational_settings (tenant_id, bruno_email)
+values ('d200b89a-64c7-4f8d-a430-95a33b83047a', 'info@campanialimousine.com')
+on conflict (tenant_id) do update set bruno_email = excluded.bruno_email;
