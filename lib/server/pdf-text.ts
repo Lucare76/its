@@ -312,19 +312,14 @@ export async function extractPdfTextFromBase64(contentBase64: string) {
     const extracted = parsed.text?.trim() ?? "";
 
     const corrupted = hasCorruptedPdfTextShape(extracted);
-    console.log("[pdf-text] extracted length:", extracted.length, "| corrupted:", corrupted);
-    console.log("[pdf-text] extracted preview:", extracted.slice(0, 500).replace(/\n/g, "↵"));
 
     if (!corrupted) {
       return cleanExtractedPdfText(extracted);
     }
 
-    console.log("[pdf-text] running OCR fallback...");
     const ocrText = await runServerCompatiblePdfOcr(contentBase64);
-    console.log("[pdf-text] OCR result length:", ocrText.length, "| preview:", ocrText.slice(0, 500).replace(/\n/g, "↵"));
     return cleanExtractedPdfText(ocrText.trim() || extracted);
-  } catch (err) {
-    console.log("[pdf-text] pdf-parse error:", err);
+  } catch {
     const fallback = await runServerCompatiblePdfOcr(contentBase64);
     return cleanExtractedPdfText(fallback);
   }
