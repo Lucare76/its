@@ -3,6 +3,20 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
 
+async function hasColumn(admin: any, table: string, column: string) {
+  const { error } = await admin.from(table).select(column).limit(1);
+  if (!error) return true;
+  if ((error as { code?: string }).code === "42703") return false;
+  throw new Error(`Schema probe failed for ${table}.${column}: ${error.message}`);
+}
+
+async function hasTable(admin: any, table: string) {
+  const { error } = await admin.from(table).select("*").limit(1);
+  if (!error) return true;
+  if ((error as { code?: string }).code === "42P01") return false;
+  throw new Error(`Schema probe failed for table ${table}: ${error.message}`);
+}
+
 type ExcursionLine = {
   id: string; name: string; description: string | null; color: string; icon: string;
   active: boolean; sort_order: number; days_of_week: number[]; excursion_type: string;
@@ -19,6 +33,16 @@ async function loadData(auth: Awaited<ReturnType<typeof authorizePricingRequest>
 
   // Giorno della settimana per filtrare le linee (0=Dom...6=Sab)
   const dow = new Date(date + "T12:00:00").getDay();
+  const [supportsDaysOfWeek, supportsExcursionType, supportsAgencyPrice, supportsRetailPrice, supportsReturnTime, supportsMinPax, supportsValidFrom, supportsPickups] = await Promise.all([
+    hasColumn(auth.admin, "excursion_lines", "days_of_week"),
+    hasColumn(auth.admin, "excursion_lines", "excursion_type"),
+    hasColumn(auth.admin, "excursion_lines", "price_agency_cents"),
+    hasColumn(auth.admin, "excursion_lines", "price_retail_cents"),
+    hasColumn(auth.admin, "excursion_lines", "return_time"),
+    hasColumn(auth.admin, "excursion_lines", "min_pax"),
+    hasColumn(auth.admin, "excursion_lines", "valid_from"),
+    hasTable(auth.admin, "excursion_pickups"),
+  ]);
 
   const unitIds = await auth.admin
     .from("excursion_units")
@@ -27,8 +51,35 @@ async function loadData(auth: Awaited<ReturnType<typeof authorizePricingRequest>
     .eq("excursion_date", date)
     .then((r) => (r.data ?? []).map((u) => u.id));
 
+  const lineSelect = [
+    "id",
+    "name",
+    "description",
+    "color",
+    "icon",
+    "active",
+    "sort_order",
+    supportsDaysOfWeek ? "days_of_week" : null,
+    supportsExcursionType ? "excursion_type" : null,
+    supportsAgencyPrice ? "price_agency_cents" : null,
+    supportsRetailPrice ? "price_retail_cents" : null,
+    supportsReturnTime ? "return_time" : null,
+    supportsMinPax ? "min_pax" : null,
+    supportsValidFrom ? "valid_from" : null,
+  ].filter(Boolean).join(",");
+
+  const linesQuery = auth.admin
+    .from("excursion_lines")
+    .select(lineSelect)
+    .eq("tenant_id", tenantId)
+    .eq("active", true);
+
+  if (supportsDaysOfWeek) {
+    linesQuery.contains("days_of_week", [dow]);
+  }
+
   const [linesRes, unitsRes, allocRes, vehiclesRes, driversRes] = await Promise.all([
-    auth.admin.from("excursion_lines").select("*").eq("tenant_id", tenantId).eq("active", true).contains("days_of_week", [dow]).order("sort_order"),
+    linesQuery.order("sort_order"),
     auth.admin.from("excursion_units").select("*").eq("tenant_id", tenantId).eq("excursion_date", date).order("label"),
     unitIds.length > 0
       ? auth.admin.from("excursion_allocations").select("*").in("excursion_unit_id", unitIds).order("pickup_time").order("customer_name")
@@ -40,13 +91,30 @@ async function loadData(auth: Awaited<ReturnType<typeof authorizePricingRequest>
   if (linesRes.error) throw new Error(linesRes.error.message);
   if (unitsRes.error) throw new Error(unitsRes.error.message);
 
-  const lines = (linesRes.data ?? []) as ExcursionLine[];
+  const lines = ((linesRes.data ?? []) as Array<Record<string, unknown>>).map((line) => ({
+    id: String(line.id),
+    name: String(line.name),
+    description: typeof line.description === "string" ? line.description : null,
+    color: typeof line.color === "string" ? line.color : "#6366f1",
+    icon: typeof line.icon === "string" ? line.icon : "🚌",
+    active: typeof line.active === "boolean" ? line.active : true,
+    sort_order: typeof line.sort_order === "number" ? line.sort_order : 0,
+    days_of_week: Array.isArray(line.days_of_week) ? (line.days_of_week as number[]) : [],
+    excursion_type: typeof line.excursion_type === "string" ? line.excursion_type : "misto",
+    price_agency_cents: typeof line.price_agency_cents === "number" ? line.price_agency_cents : 0,
+    price_retail_cents: typeof line.price_retail_cents === "number" ? line.price_retail_cents : 0,
+    return_time: typeof line.return_time === "string" ? line.return_time : null,
+    min_pax: typeof line.min_pax === "number" ? line.min_pax : 1,
+    valid_from: typeof line.valid_from === "string" ? line.valid_from : null,
+  })) as ExcursionLine[];
 
   // Carica orari pickup solo per le linee del giorno
   const lineIds = lines.map((l) => l.id);
-  const pickupsRes = lineIds.length > 0
+  const pickupsRes = supportsPickups && lineIds.length > 0
     ? await auth.admin.from("excursion_pickups").select("*").in("excursion_line_id", lineIds).order("sort_order")
     : { data: [], error: null };
+
+  if (pickupsRes.error) throw new Error(pickupsRes.error.message);
 
   return {
     lines,
