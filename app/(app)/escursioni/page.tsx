@@ -32,6 +32,114 @@ async function getToken() {
   return data.session?.access_token ?? null;
 }
 
+async function downloadExcel(date: string) {
+  const token = await getToken();
+  if (!token) return;
+  const res = await fetch(`/api/exports/escursioni?date=${date}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `escursioni_${date}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function printPdf(
+  date: string,
+  lines: ExcursionLine[],
+  units: ExcursionUnit[],
+  allocations: ExcursionAllocation[],
+  vehicles: Vehicle[],
+  drivers: Driver[]
+) {
+  const dateLabel = new Date(date + "T12:00:00").toLocaleDateString("it-IT", {
+    weekday: "long", day: "numeric", month: "long", year: "numeric",
+  });
+
+  const sections = lines
+    .map((line) => {
+      const lineUnits = units.filter((u) => u.excursion_line_id === line.id);
+      if (lineUnits.length === 0) return "";
+
+      const busBlocks = lineUnits.map((unit) => {
+        const driver = drivers.find((d) => d.id === unit.driver_profile_id);
+        const vehicle = vehicles.find((v) => v.id === unit.vehicle_id);
+        const unitAllocs = allocations.filter((a) => a.excursion_unit_id === unit.id);
+        const totalPax = unitAllocs.reduce((s, a) => s + a.pax, 0);
+
+        const rows = unitAllocs.length === 0
+          ? `<tr><td colspan="6" style="color:#94a3b8;font-style:italic;padding:6px 8px">Nessun passeggero</td></tr>`
+          : unitAllocs.map((a) => `
+              <tr>
+                <td>${a.pickup_time?.slice(0, 5) ?? "—"}</td>
+                <td><strong>${a.customer_name}</strong></td>
+                <td style="text-align:center">${a.pax}</td>
+                <td>${a.hotel_name ?? "—"}</td>
+                <td>${a.agency_name ?? "—"}</td>
+                <td>${a.phone ?? ""} ${a.notes ? `· ${a.notes}` : ""}</td>
+              </tr>`).join("");
+
+        return `
+          <div style="margin-bottom:20px;break-inside:avoid">
+            <div style="background:#1e293b;color:white;padding:8px 12px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between;align-items:center">
+              <span style="font-weight:700;font-size:14px">🚌 ${unit.label}${unit.departure_time ? ` — partenza ${unit.departure_time.slice(0, 5)}` : ""}</span>
+              <span style="font-size:12px;opacity:.75">${totalPax}/${unit.capacity} pax${driver ? ` · ${driver.full_name}` : ""}${vehicle ? ` · ${vehicle.label}` : ""}</span>
+            </div>
+            <table width="100%" style="border-collapse:collapse;font-size:12px;border:1px solid #e2e8f0;border-top:none">
+              <thead>
+                <tr style="background:#f8fafc;color:#64748b;font-size:10px;text-transform:uppercase">
+                  <th style="padding:5px 8px;text-align:left">Pickup</th>
+                  <th style="padding:5px 8px;text-align:left">Cliente</th>
+                  <th style="padding:5px 8px;text-align:center">Pax</th>
+                  <th style="padding:5px 8px;text-align:left">Hotel</th>
+                  <th style="padding:5px 8px;text-align:left">Agenzia</th>
+                  <th style="padding:5px 8px;text-align:left">Tel / Note</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>`;
+      }).join("");
+
+      return `
+        <div style="margin-bottom:32px">
+          <h2 style="font-size:16px;font-weight:700;margin:0 0 10px;color:#0f172a;border-bottom:2px solid #e2e8f0;padding-bottom:6px">
+            ${line.icon} ${line.name}
+          </h2>
+          ${busBlocks}
+        </div>`;
+    })
+    .filter(Boolean)
+    .join("");
+
+  const html = `<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8">
+    <title>Escursioni ${dateLabel}</title>
+    <style>
+      body { font-family: -apple-system, Arial, sans-serif; margin: 0; padding: 20px; color: #0f172a; }
+      table td, table th { border-bottom: 1px solid #e2e8f0; padding: 5px 8px; }
+      @media print { body { padding: 10px; } }
+    </style></head><body>
+    <div style="margin-bottom:20px">
+      <p style="margin:0;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.1em">Ischia Transfer Service</p>
+      <h1 style="margin:4px 0;font-size:20px">Escursioni — ${dateLabel}</h1>
+    </div>
+    ${sections || "<p style='color:#94a3b8'>Nessuna escursione per questa data.</p>"}
+  </body></html>`;
+
+  const win = window.open("", "_blank", "width=900,height=700");
+  if (!win) return;
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  setTimeout(() => { win.print(); }, 400);
+}
+
 function fmtDate(iso: string) {
   return new Date(iso + "T12:00:00").toLocaleDateString("it-IT", {
     weekday: "long", day: "numeric", month: "long", year: "numeric",
@@ -280,6 +388,7 @@ export default function EscursioniPage() {
   // Form nuovo bus
   const [showAddUnit, setShowAddUnit] = useState(false);
   const [unitForm, setUnitForm] = useState({ label: "Bus 1", capacity: 50, departure_time: "" });
+  const [exportingExcel, setExportingExcel] = useState(false);
 
   const load = useCallback(async (d: string) => {
     const token = await getToken();
@@ -337,6 +446,21 @@ export default function EscursioniPage() {
         <span className="text-sm text-slate-500">{fmtDate(date)}</span>
 
         {message && <span className="ml-2 text-xs text-rose-600">{message}</span>}
+
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => printPdf(date, lines, units, allocations, vehicles, drivers)}
+            disabled={units.length === 0}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40">
+            🖨️ Stampa PDF
+          </button>
+          <button
+            onClick={async () => { setExportingExcel(true); await downloadExcel(date); setExportingExcel(false); }}
+            disabled={exportingExcel || units.length === 0}
+            className="flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-40">
+            {exportingExcel ? "..." : "📊 Excel"}
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
