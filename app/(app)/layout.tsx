@@ -79,7 +79,7 @@ function renderNavIcon(icon: string) {
     case "MARIO":
       return <img src="/mario-icon.png" alt="Mario" className="h-6 w-6 object-contain" aria-hidden="true" />;
     case "KARMEN":
-      return <img src="/karmen-peach.png" alt="Karmen" className="h-6 w-6 object-contain" aria-hidden="true" />;
+      return <img src="/karmen-icon.png" alt="Karmen" className="h-6 w-6 object-contain" aria-hidden="true" />;
     case "G":
       return (
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" className={common} aria-hidden="true">
@@ -946,7 +946,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   >
                     {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-pink-500" /> : null}
                     <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-pink-500 text-white shadow-sm" : "bg-white text-pink-400 ring-1 ring-pink-200"} ${karmenPeachOpen ? "h-20 w-20" : "h-8 w-8"}`}>
-                      <img src="/karmen-peach.png" alt="Karmen" className={`object-contain transition-all duration-300 ${karmenPeachOpen ? "h-16 w-16" : "h-6 w-6"}`} aria-hidden="true" />
+                      <img src="/karmen-icon.png" alt="Karmen" className={`object-contain transition-all duration-300 ${karmenPeachOpen ? "h-16 w-16" : "h-6 w-6"}`} aria-hidden="true" />
                     </span>
                     {!collapsed ? (
                       <span className="flex min-w-0 flex-1 items-center justify-between gap-1">
