@@ -21,6 +21,15 @@ type NavGroup = {
   items: NavItem[];
 };
 
+// Gruppo collassabile nel main nav (es. Mario Boss)
+type NavMainGroup = {
+  type: "group";
+  key: string;
+  label: string;
+  icon: string;
+  items: NavItem[];
+};
+
 function iconWrapClass(active: boolean) {
   return active
     ? "bg-slate-900 text-white shadow-sm"
@@ -60,6 +69,17 @@ function renderNavIcon(icon: string) {
           <path d="M3.5 4.5h9v5h-9zM5 12.5h0M11 12.5h0M4.5 9.5h7" />
         </svg>
       );
+    case "E":
+      return (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" className={common} aria-hidden="true">
+          <path d="M8 2.5s-4 3-4 6.5a4 4 0 0 0 8 0c0-3.5-4-6.5-4-6.5z" />
+          <path d="M8 7v4M6 9l2-2 2 2" />
+        </svg>
+      );
+    case "MARIO":
+      return <img src="/mario-icon.png" alt="Mario" className="h-6 w-6 object-contain" aria-hidden="true" />;
+    case "KARMEN":
+      return <img src="/karmen-peach.png" alt="Karmen" className="h-6 w-6 object-contain" aria-hidden="true" />;
     case "G":
       return (
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" className={common} aria-hidden="true">
@@ -233,11 +253,31 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/departures", label: "Partenze", icon: "P" },
   { href: "/inbox", label: "Posta in arrivo", icon: "I" },
   { href: "/biglietti-medmar", label: "Biglietti MEDMAR", icon: "⚓" },
-  { href: "/bus-network", label: "Rete Bus", icon: "B" },
-  { href: "/mario-planning", label: "Mario Planning", icon: "P" },
-  { href: "/rete-ischia", label: "Rete Ischia", icon: "O" },
   { href: "/dispatch", label: "Assegnazioni", icon: "G" }
 ];
+
+const MARIO_BOSS_GROUP: NavMainGroup = {
+  type: "group",
+  key: "mario-boss",
+  label: "Mario Boss",
+  icon: "MARIO",
+  items: [
+    { href: "/mario-planning", label: "Planning", icon: "P" },
+    { href: "/bus-network", label: "Linea Bus", icon: "B" },
+    { href: "/rete-ischia", label: "Transfer Ischia", icon: "O" },
+    { href: "/escursioni", label: "Escursioni", icon: "E" },
+  ]
+};
+
+const KARMEN_PEACH_GROUP: NavMainGroup = {
+  type: "group",
+  key: "karmen-peach",
+  label: "Karmen Peach",
+  icon: "KARMEN",
+  items: [
+    { href: "/liste-bruno", label: "Liste Bruno", icon: "S" },
+  ]
+};
 
 MAIN_NAV_BY_ROLE.admin = OPERATIONS_MAIN_NAV;
 MAIN_NAV_BY_ROLE.operator = OPERATIONS_MAIN_NAV;
@@ -296,7 +336,7 @@ const SETTINGS_GROUPS: NavGroup[] = [
   }
 ];
 
-const ALL_NAV_ITEMS = [...Object.values(MAIN_NAV_BY_ROLE).flat(), ...SETTINGS_GROUPS.flatMap((group) => group.items)];
+const ALL_NAV_ITEMS = [...Object.values(MAIN_NAV_BY_ROLE).flat(), ...MARIO_BOSS_GROUP.items, ...KARMEN_PEACH_GROUP.items, ...SETTINGS_GROUPS.flatMap((group) => group.items)];
 
 function matchesPath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
@@ -330,7 +370,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [marioBossOpen, setMarioBossOpen] = useState(true);
+  const [karmenPeachOpen, setKarmenPeachOpen] = useState(true);
   const [inboxPendingCount, setInboxPendingCount] = useState(0);
   const [pendingAccessRequestCount, setPendingAccessRequestCount] = useState(0);
   const [liveToastMessage, setLiveToastMessage] = useState<string | null>(null);
@@ -560,7 +601,11 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   }, [pathname, router]);
 
   useEffect(() => {
-    if (collapsed) { setSettingsOpen(false); setUserMenuOpen(false); }
+    if (!collapsed) return;
+    const timeout = window.setTimeout(() => {
+      setSettingsOpen(false);
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [collapsed]);
 
   useEffect(() => {
@@ -829,6 +874,116 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
               );
             })}
 
+            {/* Mario Boss — gruppo collassabile */}
+            {(() => {
+              const groupActive = MARIO_BOSS_GROUP.items.some((i) => matchesPath(pathname, i.href));
+              return (
+                <div className="mt-0.5">
+                  <button
+                    type="button"
+                    title={collapsed ? MARIO_BOSS_GROUP.label : undefined}
+                    onClick={() => { if (!collapsed) setMarioBossOpen((v) => !v); }}
+                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
+                      groupActive
+                        ? "border-slate-200 bg-white text-slate-950 shadow-[0_8px_20px_rgba(15,23,42,0.08)]"
+                        : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                    } ${collapsed ? "justify-center" : ""}`}
+                  >
+                    {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-red-500" /> : null}
+                    <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-red-600 text-white shadow-sm" : "bg-white text-red-500 ring-1 ring-red-200"} ${marioBossOpen ? "h-20 w-20" : "h-8 w-8"}`}>
+                      <img src="/mario-icon.png" alt="Mario" className={`object-contain transition-all duration-300 ${marioBossOpen ? "h-16 w-16" : "h-6 w-6"}`} aria-hidden="true" />
+                    </span>
+                    {!collapsed ? (
+                      <span className="flex min-w-0 flex-1 items-center justify-between gap-1">
+                        <span className="truncate text-sm font-semibold">{MARIO_BOSS_GROUP.label}</span>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className={`h-3 w-3 shrink-0 transition-transform ${marioBossOpen ? "rotate-90" : ""}`} aria-hidden="true">
+                          <path d="M6 3.5l4 4.5-4 4.5" />
+                        </svg>
+                      </span>
+                    ) : null}
+                  </button>
+                  {!collapsed && marioBossOpen && (
+                    <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-red-100 pl-2">
+                      {MARIO_BOSS_GROUP.items.map((item) => {
+                        const active = matchesPath(pathname, item.href);
+                        return (
+                          <Link
+                            key={item.href}
+                            href={item.href}
+                            className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
+                              active
+                                ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm"
+                                : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                            }`}
+                          >
+                            <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                              {renderNavIcon(item.icon)}
+                            </span>
+                            <span className="truncate">{item.label}</span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Karmen Peach — gruppo collassabile */}
+            {(() => {
+              const groupActive = KARMEN_PEACH_GROUP.items.some((i) => matchesPath(pathname, i.href));
+              return (
+                <div className="mt-0.5">
+                  <button
+                    type="button"
+                    title={collapsed ? KARMEN_PEACH_GROUP.label : undefined}
+                    onClick={() => { if (!collapsed) setKarmenPeachOpen((v) => !v); }}
+                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
+                      groupActive
+                        ? "border-slate-200 bg-white text-slate-950 shadow-[0_8px_20px_rgba(15,23,42,0.08)]"
+                        : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                    } ${collapsed ? "justify-center" : ""}`}
+                  >
+                    {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-pink-500" /> : null}
+                    <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-pink-500 text-white shadow-sm" : "bg-white text-pink-400 ring-1 ring-pink-200"} ${karmenPeachOpen ? "h-20 w-20" : "h-8 w-8"}`}>
+                      <img src="/karmen-peach.png" alt="Karmen" className={`object-contain transition-all duration-300 ${karmenPeachOpen ? "h-16 w-16" : "h-6 w-6"}`} aria-hidden="true" />
+                    </span>
+                    {!collapsed ? (
+                      <span className="flex min-w-0 flex-1 items-center justify-between gap-1">
+                        <span className="truncate text-sm font-semibold">{KARMEN_PEACH_GROUP.label}</span>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className={`h-3 w-3 shrink-0 transition-transform ${karmenPeachOpen ? "rotate-90" : ""}`} aria-hidden="true">
+                          <path d="M6 3.5l4 4.5-4 4.5" />
+                        </svg>
+                      </span>
+                    ) : null}
+                  </button>
+                  {!collapsed && karmenPeachOpen && (
+                    <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-pink-100 pl-2">
+                      {KARMEN_PEACH_GROUP.items.map((item) => {
+                        const active = matchesPath(pathname, item.href);
+                        return (
+                          <Link
+                            key={item.href}
+                            href={item.href}
+                            className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
+                              active
+                                ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm"
+                                : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                            }`}
+                          >
+                            <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                              {renderNavIcon(item.icon)}
+                            </span>
+                            <span className="truncate">{item.label}</span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* Impostazioni */}
             {settingsGroups.length > 0 ? (
               <div className="mt-4 border-t border-slate-200 pt-3">
@@ -902,7 +1057,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       </aside>
 
       <div className="space-y-4">
-        <header className="card space-y-4 px-4 py-4 md:px-5">
+        <header className="card relative z-30 space-y-4 px-4 py-4 md:px-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Vista operativa</p>
@@ -934,59 +1089,53 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 <span className="hidden sm:inline">Richieste agenzia</span>
               </Link>
             ) : null}
-            <div className="relative">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setUserMenuOpen((prev) => !prev)}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 hover:shadow"
-                title="Menu utente"
+                onClick={toggleTheme}
+                className="btn-secondary px-3 py-2 text-xs sm:text-sm"
+                title={isDark ? "Passa alla modalità chiara" : "Passa alla modalità scura"}
               >
-                {(authRole ?? "U").slice(0, 2).toUpperCase()}
+                <span className="inline-flex items-center gap-2">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0" aria-hidden="true">
+                    {isDark
+                      ? <path d="M8 3.5a4.5 4.5 0 1 0 4.5 4.5A3.5 3.5 0 0 1 8 3.5Z" />
+                      : <><circle cx="8" cy="8" r="2.5" /><path d="M8 2v1.5M8 12.5V14M2 8h1.5M12.5 8H14M3.8 3.8l1 1M11.2 11.2l1 1M11.2 3.8l-1 1M4.8 11.2l-1 1" /></>}
+                  </svg>
+                  <span className="hidden lg:inline">{isDark ? "Modalità chiara" : "Modalità scura"}</span>
+                  <span className="lg:hidden">Tema</span>
+                </span>
               </button>
-              {userMenuOpen ? (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
-                  <div className="absolute right-0 top-11 z-50 w-52 rounded-2xl border border-slate-200 bg-white py-1.5 shadow-xl">
-                    <div className="border-b border-slate-100 px-4 py-2.5">
-                      <p className="text-xs font-semibold text-slate-900 capitalize">{authRole ?? "utente"}</p>
-                      <p className="text-[11px] text-slate-400">Ischia Transfer PMS</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => { toggleTheme(); setUserMenuOpen(false); }}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0" aria-hidden="true">
-                        {isDark
-                          ? <path d="M8 3.5a4.5 4.5 0 1 0 4.5 4.5A3.5 3.5 0 0 1 8 3.5Z" />
-                          : <><circle cx="8" cy="8" r="2.5" /><path d="M8 2v1.5M8 12.5V14M2 8h1.5M12.5 8H14M3.8 3.8l1 1M11.2 11.2l1 1M11.2 3.8l-1 1M4.8 11.2l-1 1" /></>}
-                      </svg>
-                      {isDark ? "Modalità chiara" : "Modalità scura"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { toggleInboxSound(); setUserMenuOpen(false); }}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0" aria-hidden="true">
-                        <path d="M3.5 6h2l3-3v10l-3-3h-2zM10.5 6.5a2.5 2.5 0 0 1 0 3" />
-                      </svg>
-                      Suono inbox — {inboxSoundEnabled ? "ON" : "OFF"}
-                    </button>
-                    <div className="my-1 border-t border-slate-100" />
-                    <button
-                      type="button"
-                      onClick={handleSignOut}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-rose-600 hover:bg-rose-50"
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0" aria-hidden="true">
-                        <path d="M10.5 5.5 13 8l-2.5 2.5M13 8H6M7 3.5H3.5v9H7" />
-                      </svg>
-                      Esci
-                    </button>
-                  </div>
-                </>
-              ) : null}
+              <button
+                type="button"
+                onClick={toggleInboxSound}
+                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs shadow-sm transition sm:text-sm ${
+                  inboxSoundEnabled
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+                title={`Suono inbox ${inboxSoundEnabled ? "attivo" : "disattivo"}`}
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0" aria-hidden="true">
+                  <path d="M3.5 6h2l3-3v10l-3-3h-2zM10.5 6.5a2.5 2.5 0 0 1 0 3" />
+                </svg>
+                <span className="hidden lg:inline">Suono inbox {inboxSoundEnabled ? "ON" : "OFF"}</span>
+                <span className="lg:hidden">Inbox {inboxSoundEnabled ? "ON" : "OFF"}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-600 shadow-sm transition hover:bg-rose-100 sm:text-sm"
+                title="Esci"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0" aria-hidden="true">
+                  <path d="M10.5 5.5 13 8l-2.5 2.5M13 8H6M7 3.5H3.5v9H7" />
+                </svg>
+                <span>Esci</span>
+              </button>
+              <div className="inline-flex h-9 min-w-9 items-center justify-center rounded-full border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-700 shadow-sm">
+                {(authRole ?? "U").slice(0, 2).toUpperCase()}
+              </div>
             </div>
           </div>
           </div>
@@ -1049,3 +1198,4 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     </section>
   );
 }
+
