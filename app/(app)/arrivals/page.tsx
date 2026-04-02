@@ -8,6 +8,10 @@ import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-
 import { supabase } from "@/lib/supabase/client";
 import type { Service, Hotel } from "@/lib/types";
 
+function isValidClockTime(value: string) {
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
+}
+
 function formatArrivalServiceTypeLabel(service: Service) {
   const key = service.service_type_code ?? service.booking_service_kind ?? service.service_type ?? "";
   if (key === "transfer_port_hotel") return "Porto - Hotel";
@@ -45,17 +49,43 @@ function EditServiceModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Aggiunta nuovo hotel
+  const [addingHotel, setAddingHotel] = useState(false);
+  const [newHotelName, setNewHotelName] = useState("");
+  const [savingHotel, setSavingHotel] = useState(false);
+
+  const createHotel = async () => {
+    if (!supabase || !newHotelName.trim()) return;
+    setSavingHotel(true);
+    const { data, error: err } = await supabase
+      .from("hotels")
+      .insert({ name: newHotelName.trim(), tenant_id: tenantId, address: "", lat: 0, lng: 0, zone: "" })
+      .select("id")
+      .single();
+    setSavingHotel(false);
+    if (err) { setError(err.message); return; }
+    if (data) setHotelId(data.id);
+    setAddingHotel(false);
+    setNewHotelName("");
+    onSaved(); // ricarica lista hotel
+  };
+
   const save = async () => {
     if (!supabase) return;
+    const trimmedTime = time.trim();
+    if (!isValidClockTime(trimmedTime)) {
+      setError("Inserisci un orario valido nel formato HH:MM.");
+      return;
+    }
     setSaving(true);
     setError(null);
     const { error: err } = await supabase
       .from("services")
       .update({
-        hotel_id: hotelId,
+        hotel_id: hotelId || null,
         customer_name: customerName,
         pax: Number(pax) || 1,
-        time,
+        time: trimmedTime,
         phone,
         notes,
       })
@@ -78,14 +108,45 @@ function EditServiceModal({
         {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>}
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="text-xs font-medium text-slate-600 sm:col-span-2">
-            Hotel
-            <select value={hotelId} onChange={(e) => setHotelId(e.target.value)} className="mt-1 input-saas w-full">
-              {hotels.map((h) => (
-                <option key={h.id} value={h.id}>{h.name}</option>
-              ))}
-            </select>
-          </label>
+          <div className="sm:col-span-2">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-medium text-slate-600">Hotel</span>
+              <button
+                type="button"
+                onClick={() => setAddingHotel((v) => !v)}
+                className="text-xs text-indigo-600 hover:text-indigo-800"
+              >
+                {addingHotel ? "Annulla" : "+ Nuovo hotel"}
+              </button>
+            </div>
+            {addingHotel ? (
+              <div className="flex gap-2">
+                <input
+                  autoFocus
+                  value={newHotelName}
+                  onChange={(e) => setNewHotelName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") void createHotel(); }}
+                  placeholder="Nome hotel..."
+                  className="input-saas flex-1"
+                />
+                <button
+                  type="button"
+                  onClick={() => void createHotel()}
+                  disabled={savingHotel || !newHotelName.trim()}
+                  className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50"
+                >
+                  {savingHotel ? "..." : "Crea"}
+                </button>
+              </div>
+            ) : (
+              <select value={hotelId} onChange={(e) => setHotelId(e.target.value)} className="input-saas w-full">
+                <option value="">— Nessun hotel —</option>
+                {hotels.map((h) => (
+                  <option key={h.id} value={h.id}>{h.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
           <label className="text-xs font-medium text-slate-600 sm:col-span-2">
             Nome cliente
             <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="mt-1 input-saas w-full" />
@@ -96,7 +157,13 @@ function EditServiceModal({
           </label>
           <label className="text-xs font-medium text-slate-600">
             Orario
-            <input value={time} onChange={(e) => setTime(e.target.value)} placeholder="HH:MM" className="mt-1 input-saas w-full" />
+            <input
+              type="time"
+              step="300"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className="mt-1 input-saas w-full"
+            />
           </label>
           <label className="text-xs font-medium text-slate-600 sm:col-span-2">
             Telefono

@@ -43,6 +43,10 @@ function fmtDate(iso: string): string {
   return new Date(iso + "T12:00:00").toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 }
 
+function isValidClockTime(value: string) {
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value.trim());
+}
+
 export default function BusNetworkPage() {
   const [payload, setPayload] = useState<ApiPayload>(emptyPayload);
   const [loading, setLoading] = useState(true);
@@ -434,7 +438,9 @@ export default function BusNetworkPage() {
   }, [post]);
 
   const saveStopTime = useCallback(async (stopId: string, time: string) => {
-    await post("update_stop_time", { stop_id: stopId, pickup_time: time.trim() || null });
+    const normalizedTime = time.trim();
+    if (normalizedTime && !isValidClockTime(normalizedTime)) return;
+    await post("update_stop_time", { stop_id: stopId, pickup_time: normalizedTime || null });
     setEditStopTimeId(null);
   }, [post]);
 
@@ -467,12 +473,14 @@ export default function BusNetworkPage() {
 
   const addStop = useCallback(async () => {
     if (!newStopName.trim() || !newStopCity.trim() || !selectedLine) return;
+    const normalizedPickupTime = newStopPickupTime.trim();
+    if (normalizedPickupTime && !isValidClockTime(normalizedPickupTime)) return;
     const existing = payload.stops.filter((s) => s.bus_line_id === selectedLine.id && s.direction === direction);
     const maxOrder = existing.reduce((max, s) => Math.max(max, s.stop_order), 0);
     await post("add_stop", {
       bus_line_id: selectedLine.id, direction,
       stop_name: newStopName.trim().toUpperCase(), city: newStopCity.trim(),
-      pickup_time: newStopPickupTime.trim() || null,
+      pickup_time: normalizedPickupTime || null,
       stop_order: maxOrder + 1, pickup_note: null, lat: null, lng: null
     });
     setNewStopName("");

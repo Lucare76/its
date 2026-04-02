@@ -70,7 +70,14 @@ values
   -- CASAMICCIOLA T (3 hotel)
   ('CRISTALLO',            'CASAMICCIOLA T', '05:30', '10:00', '10:00'),
   ('GRAN PARADISO',        'CASAMICCIOLA T', '05:30', '10:00', '10:00'),
-  ('STELLA MARIS',         'CASAMICCIOLA T', '05:30', '10:00', '10:00')
+  ('STELLA MARIS',         'CASAMICCIOLA T', '05:30', '10:00', '10:00'),
+  -- Hotel aggiuntivi non nel seed originale
+  ('FLORIDIANA',           'ISCHIA',         '05:15', '10:10', '10:10'),
+  ('ORIENTE',              'ISCHIA',         '05:15', '10:10', '10:10'),
+  ('PARCO AURORA',         'ISCHIA',         '05:15', '10:10', '10:10'),
+  ('LA ROSA',              'FORIO',          '05:00', '09:50', '09:50'),
+  ('PARK IMPERIAL',        'FORIO',          '05:00', '09:50', '09:50'),
+  ('SORRISO',              'FORIO',          '05:00', '09:50', '09:50')
 on conflict (upper(trim(hotel_name))) do update
   set comune                     = excluded.comune,
       pickup_time_linea_italia    = excluded.pickup_time_linea_italia,

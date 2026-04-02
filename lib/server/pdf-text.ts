@@ -22,9 +22,16 @@ function hasCorruptedPdfTextShape(text: string) {
   const looksLikeEmptyForm =
     /Nome:\s*\n\s*Cognome:\s*\n\s*Data di Arrivo ad Ischia:/i.test(normalized) ||
     /Cellulare:\s*\n\s*Hotel di destinazione:/i.test(normalized) ||
-    /Hotel di destinazione:\s*\n\s*Scegli l[’']?orario di partenza/i.test(normalized);
+    /Hotel di destinazione:\s*\n\s*Scegli l[‘’]?orario di partenza/i.test(normalized);
 
-  return weirdRatio > 0.02 || (words.length < 20 && printable.length < 300) || looksLikeEmptyForm;
+  // Se il testo sembra un form vuoto ma contiene già i valori compilati,
+  // non mandare all’OCR: il layer di testo ha entrambi (template + compilato)
+  const hasFilledValues =
+    /Numero Passeggeri:\s*[0-9]/i.test(normalized) ||
+    /Data di Arrivo ad Ischia:\s*[0-3]?[0-9][/.]/i.test(normalized) ||
+    /Cellulare:\s*[+0-9]{7}/i.test(normalized);
+
+  return weirdRatio > 0.02 || (words.length < 20 && printable.length < 300) || (looksLikeEmptyForm && !hasFilledValues);
 }
 
 async function runWindowsPdfOcr(contentBase64: string) {
@@ -304,13 +311,20 @@ export async function extractPdfTextFromBase64(contentBase64: string) {
     const parsed = await parsePdf(buffer);
     const extracted = parsed.text?.trim() ?? "";
 
-    if (!hasCorruptedPdfTextShape(extracted)) {
+    const corrupted = hasCorruptedPdfTextShape(extracted);
+    console.log("[pdf-text] extracted length:", extracted.length, "| corrupted:", corrupted);
+    console.log("[pdf-text] extracted preview:", extracted.slice(0, 500).replace(/\n/g, "↵"));
+
+    if (!corrupted) {
       return cleanExtractedPdfText(extracted);
     }
 
+    console.log("[pdf-text] running OCR fallback...");
     const ocrText = await runServerCompatiblePdfOcr(contentBase64);
+    console.log("[pdf-text] OCR result length:", ocrText.length, "| preview:", ocrText.slice(0, 500).replace(/\n/g, "↵"));
     return cleanExtractedPdfText(ocrText.trim() || extracted);
-  } catch {
+  } catch (err) {
+    console.log("[pdf-text] pdf-parse error:", err);
     const fallback = await runServerCompatiblePdfOcr(contentBase64);
     return cleanExtractedPdfText(fallback);
   }

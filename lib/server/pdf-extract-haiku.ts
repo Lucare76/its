@@ -293,7 +293,19 @@ function isUsableText(text: string): boolean {
   const words = (text.match(/[A-Za-zÀ-ÿ]{3,}/g) ?? []).length;
   const controlChars = (text.match(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g) ?? []).length;
   const corruptRatio = controlChars / Math.max(text.length, 1);
-  return text.length > 200 && words >= 15 && corruptRatio < 0.02;
+  if (text.length <= 200 || words < 15 || corruptRatio >= 0.02) return false;
+  // Form vuoto: ha le etichette ma non i valori compilati → forzare PDF base64 (visivo)
+  const normalized = text.replace(/\r/g, "\n");
+  const looksLikeEmptyForm =
+    /Nome:\s*[\n\r]\s*Cognome:/i.test(normalized) ||
+    /Cellulare:\s*[\n\r]\s*Hotel di destinazione:/i.test(normalized) ||
+    /Numero Passeggeri:\s*[\n\r]/i.test(normalized);
+  const hasFilledValues =
+    /Numero Passeggeri:\s*[0-9]/i.test(normalized) ||
+    /Data di Arrivo ad Ischia:\s*[0-9]/i.test(normalized) ||
+    /Cellulare:\s*[+0-9]{7}/i.test(normalized);
+  if (looksLikeEmptyForm && !hasFilledValues) return false;
+  return true;
 }
 
 // ─── Chiamata API ────────────────────────────────────────────────────────────

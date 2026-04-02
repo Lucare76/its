@@ -60,11 +60,14 @@ function parseIsoDate(raw?: string | null) {
 }
 
 function parsePassengerCount(sourceText: string) {
-  const raw =
-    sourceText.match(/Numero Passeggeri[:\s]*([A-Za-z0-9{},]+)/i)?.[1] ??
-    sourceText.match(/Pnsseggeri[:\s]*([A-Za-z0-9{},]+)/i)?.[1] ??
-    sourceText.match(/Passeggeri[:\s]*([A-Za-z0-9{},]+)/i)?.[1] ??
-    null;
+  // Richiede una cifra immediatamente dopo l'etichetta (evita di catturare testo template vuoto)
+  // Usa l'ultimo match perché il PDF contiene prima il template vuoto, poi il form compilato
+  const allMatches = [
+    ...sourceText.matchAll(/Numero Passeggeri[:\s]+([0-9][0-9]?)/gi),
+    ...sourceText.matchAll(/Pnsseggeri[:\s]+([0-9][0-9]?)/gi),
+    ...sourceText.matchAll(/Passeggeri[:\s]+([0-9][0-9]?)/gi),
+  ];
+  const raw = allMatches.length > 0 ? allMatches[allMatches.length - 1][1] : null;
   const digits = normalizeDigits(raw);
   return digits ? Number(digits.slice(0, 2)) : null;
 }
@@ -244,18 +247,22 @@ function parseDimhotelsVoucherPdfText(sourceText: string): ParsedTransferPdfPayl
     returnTime: chosenTimes.returnTime ?? scannedTimes.returnTime
   };
 
+  const DATE_PAT = /([0-3]?\d[/.:-][01]?\d[/.:-](?:\d{2}|\d{4}))/i;
+  // Usa il LAST match per saltare il template vuoto che appare prima del form compilato nel PDF
+  const allArrivalMatches = [...compact.matchAll(/Data di Arrivo ad Ischia:\s*([0-3]?\d[/.:-][01]?\d[/.:-](?:\d{2}|\d{4}))/gi)];
+  const allDepartureMatches = [...compact.matchAll(/Data di Partenza da Ischia:\s*([0-3]?\d[/.:-][01]?\d[/.:-](?:\d{2}|\d{4}))/gi)];
   const pairedDateMatch = compact.match(
     /\b([0-3]?\d[/.:-][01]?\d[/.:-](?:\d{2}|\d{4}))\s+Data di Arrivo ad Ischia:\s*([0-3]?\d[/.:-][01]?\d[/.:-](?:\d{2}|\d{4}))\s+Data di Partenza da Ischia:/i
   );
   const arrivalDate = parseIsoDate(
-    clean(pairedDateMatch?.[1] ?? null) ??
-      clean(lines.find((line) => /Data di Arrivo ad Ischia:/i.test(line))?.match(/Data di Arrivo ad Ischia:\s*([0-3]?\d[/.:-][01]?\d[/.:-](?:\d{2}|\d{4}))/i)?.[1] ?? null) ??
-      clean(compact.match(/\b([0-3]?\d[/.:-][01]?\d[/.:-](?:\d{2}|\d{4}))\s+Data di Arrivo ad Ischia:/i)?.[1] ?? null)
+    clean(allArrivalMatches[allArrivalMatches.length - 1]?.[1] ?? null) ??
+      clean(pairedDateMatch?.[1] ?? null) ??
+      clean(compact.match(new RegExp(`\\b${DATE_PAT.source}\\s+Data di Arrivo ad Ischia:`, "i"))?.[1] ?? null)
   );
   const departureDate = parseIsoDate(
-    clean(pairedDateMatch?.[2] ?? null) ??
-      clean(lines.find((line) => /Data di Partenza da Ischia:/i.test(line))?.match(/Data di Partenza da Ischia:\s*([0-3]?\d[/.:-][01]?\d[/.:-](?:\d{2}|\d{4}))/i)?.[1] ?? null) ??
-      clean(compact.match(/\b([0-3]?\d[/.:-][01]?\d[/.:-](?:\d{2}|\d{4}))\s+Data di Partenza da Ischia:/i)?.[1] ?? null)
+    clean(allDepartureMatches[allDepartureMatches.length - 1]?.[1] ?? null) ??
+      clean(pairedDateMatch?.[2] ?? null) ??
+      clean(compact.match(new RegExp(`\\b${DATE_PAT.source}\\s+Data di Partenza da Ischia:`, "i"))?.[1] ?? null)
   );
 
   const arrivalService: ParsedTransferService = {
