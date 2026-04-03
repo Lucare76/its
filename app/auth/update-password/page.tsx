@@ -65,7 +65,7 @@ export default function UpdatePasswordPage() {
     const currentMetadata = (userResponse.data.user?.user_metadata ?? {}) as Record<string, unknown>;
     const { error } = await client.auth.updateUser({
       password: password.trim(),
-      user_metadata: {
+      data: {
         ...currentMetadata,
         password_change_required: false
       }
