@@ -950,16 +950,40 @@ export default function InboxPage() {
 
                   {/* Pulsante approva + smista escursione + elimina */}
                   <div className="flex flex-wrap items-center gap-3">
-                    <button type="button" onClick={() => void approveEmail()}
-                      disabled={submitting || !canApprove}
-                      className="btn-primary px-6 py-2.5 text-sm disabled:opacity-50">
-                      {submitting ? "Approvazione..." : "Approva e crea servizio"}
-                    </button>
-                    <button type="button" onClick={() => void openEscursionePanel()}
-                      disabled={submitting}
-                      className="rounded-lg border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50">
-                      🎯 Smista → Escursione
-                    </button>
+                    {form.tipo_servizio === "excursion" ? (
+                      <>
+                        <div className="flex items-center gap-2 rounded-xl border-2 border-violet-300 bg-violet-50 px-4 py-2.5">
+                          <span className="text-base">🎯</span>
+                          <div>
+                            <p className="text-xs font-bold text-violet-800">Rilevata escursione</p>
+                            <p className="text-[11px] text-violet-600">Claude ha riconosciuto una prenotazione escursione</p>
+                          </div>
+                        </div>
+                        <button type="button" onClick={() => void openEscursionePanel()}
+                          disabled={submitting}
+                          className="rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-violet-700 shadow-sm disabled:opacity-50">
+                          🎯 Smista → Escursione
+                        </button>
+                        <button type="button" onClick={() => void approveEmail()}
+                          disabled={submitting || !canApprove}
+                          className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm text-slate-500 hover:bg-slate-50 disabled:opacity-50">
+                          {submitting ? "..." : "Crea servizio transfer"}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" onClick={() => void approveEmail()}
+                          disabled={submitting || !canApprove}
+                          className="btn-primary px-6 py-2.5 text-sm disabled:opacity-50">
+                          {submitting ? "Approvazione..." : "Approva e crea servizio"}
+                        </button>
+                        <button type="button" onClick={() => void openEscursionePanel()}
+                          disabled={submitting}
+                          className="rounded-lg border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50">
+                          🎯 Smista → Escursione
+                        </button>
+                      </>
+                    )}
                     <p className="text-xs text-slate-400">Il servizio apparirà in Arrivi e Partenze</p>
                     <button type="button" onClick={() => void deleteEmail()}
                       disabled={submitting}

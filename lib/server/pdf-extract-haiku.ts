@@ -40,7 +40,7 @@ Restituisci ESATTAMENTE questo JSON:
   "numero_mezzo_ritorno": "codice treno/volo/corsa oppure null",
   "citta_partenza": "città di partenza oppure null",
   "totale_pratica": 000.00,
-  "tipo_servizio": "transfer_station_hotel oppure transfer_airport_hotel oppure transfer_port_hotel",
+  "tipo_servizio": "transfer_station_hotel oppure transfer_airport_hotel oppure transfer_port_hotel oppure excursion",
   "agenzia": "Nome Agenzia",
   "note_operative": "note aggiuntive oppure null",
   "agency_key": "aleste oppure angelino oppure holidayweb oppure sosandra oppure zigolo oppure unknown"
@@ -50,6 +50,8 @@ Regole tipo_servizio:
 - STAZIONE / TRENO / ITALO / TRENITALIA / FLIXBUS → "transfer_station_hotel"
 - AEROPORTO / VOLO / AEREO → "transfer_airport_hotel"
 - PORTO / TRAGHETTO / MEDMAR / SNAV / ALISCAFO → "transfer_port_hotel"
+- ESCURSIONE / GIRO ISOLA / CAPRI / SORRENTO / POSITANO / AMALFI / PROCIDA / POMPEI / CASERTA / NAPOLI / CASTELLO / MORTELLA / NITRODI / COOKING CLASS / CRATERI → "excursion"
+  (usa "excursion" ogni volta che il documento riguarda una gita o escursione, NON un transfer da/per stazione/aeroporto/porto)
 `;
 
 // ─── Prompt agenzie ──────────────────────────────────────────────────────────
