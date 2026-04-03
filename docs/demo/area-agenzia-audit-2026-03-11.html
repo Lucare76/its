@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ischia Transfer - Audit Area Agenzia (11/03/2026)</title>
+    <style>
+      :root {
+        --ink: #0f172a;
+        --muted: #475569;
+        --line: #cbd5e1;
+        --bg: #f8fafc;
+        --ok-bg: #dcfce7;
+        --ok-ink: #166534;
+        --warn-bg: #fef3c7;
+        --warn-ink: #92400e;
+        --bad-bg: #fee2e2;
+        --bad-ink: #991b1b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: linear-gradient(180deg, #e2e8f0 0%, #f8fafc 180px);
+        color: var(--ink);
+        font-family: "Segoe UI", Arial, sans-serif;
+        line-height: 1.45;
+      }
+      .page {
+        max-width: 920px;
+        margin: 24px auto;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 30px 32px;
+      }
+      h1, h2 {
+        margin: 0 0 10px;
+      }
+      h1 {
+        font-size: 26px;
+        line-height: 1.1;
+      }
+      h2 {
+        font-size: 17px;
+        margin-top: 26px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+      }
+      p, li {
+        font-size: 13px;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 12px;
+        margin: 10px 0 16px;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin: 18px 0 8px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+      }
+      .card strong {
+        display: block;
+        font-size: 12px;
+        margin-bottom: 4px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      ul {
+        margin: 8px 0 0 18px;
+        padding: 0;
+      }
+      li + li {
+        margin-top: 5px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .ok {
+        background: var(--ok-bg);
+        color: var(--ok-ink);
+      }
+      .warn {
+        background: var(--warn-bg);
+        color: var(--warn-ink);
+      }
+      .bad {
+        background: var(--bad-bg);
+        color: var(--bad-ink);
+      }
+      code {
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+        background: #f1f5f9;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+      .footer {
+        margin-top: 28px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <h1>Ischia Transfer Beta - Audit Funzionale Area Agenzia</h1>
+      <div class="meta">Report tecnico locale generato il 11/03/2026 dopo verifica runtime su Next.js + Supabase reale.</div>
+
+      <div class="summary">
+        <div class="card">
+          <strong>Stato Modulo</strong>
+          <span class="badge ok">Funzionante localmente</span>
+        </div>
+        <div class="card">
+          <strong>Quality Gate</strong>
+          <span class="badge ok">pnpm lint OK</span>
+          <br />
+          <span class="badge ok" style="margin-top: 6px;">pnpm build OK</span>
+        </div>
+        <div class="card">
+          <strong>Email Conferma</strong>
+          <span class="badge warn">Configurata ma non operativa</span>
+        </div>
+      </div>
+
+      <h2>A. Stato Area Agenzia</h2>
+      <ul>
+        <li>Pagine controllate: <code>/agency/new-booking</code> e <code>/agency/bookings</code>.</li>
+        <li>API verificate realmente: <code>POST /api/agency/bookings</code> e <code>GET /api/agency/bookings</code>.</li>
+        <li>Autenticazione verificata con utenti demo reali Supabase: <code>agency@demo.com</code>, <code>admin@demo.com</code>, <code>operator@demo.com</code>.</li>
+        <li>Ruoli confermati: <code>agency</code> e <code>admin</code> autorizzati, <code>operator</code> bloccato con <code>403</code>, richieste senza token bloccate con <code>401</code>.</li>
+        <li>Salvataggio reale verificato su <code>services</code>; creazione evento iniziale verificata su <code>status_events</code>.</li>
+        <li>Lettura elenco prenotazioni verificata con join su <code>hotels(name, zone)</code>.</li>
+      </ul>
+
+      <h2>B. Problemi Trovati</h2>
+      <ul>
+        <li>Bug runtime confermato: il filtro <code>GET /api/agency/bookings</code> mostrava all'utente agency solo i servizi creati da lui tramite <code>created_by_user_id</code>.</li>
+        <li>Effetto del bug: una prenotazione creata da admin per la stessa agenzia non era visibile in <code>/agency/bookings</code>.</li>
+        <li>Disallineamento client/server: il form iniziale usava <code>arrival_time=12:00</code> e <code>departure_time=09:00</code> nello stesso giorno.</li>
+        <li>La migration <code>0019_agency_booking_module.sql</code> non copre da sola tutto il runtime; il codice usa anche <code>services.created_by_user_id</code> e <code>agencies.external_code</code>.</li>
+        <li>Invio email non completato: Resend risponde <code>403</code> per dominio mittente non ancora verificato.</li>
+      </ul>
+
+      <h2>C. Fix Applicati</h2>
+      <ul>
+        <li>Aggiornato il filtro di <code>GET /api/agency/bookings</code> per includere sia <code>created_by_user_id</code> sia <code>agency_id</code>.</li>
+        <li>Aggiunta validazione Zod per bloccare <code>departure &lt; arrival</code> gia a livello schema.</li>
+        <li>Allineato il default del form impostando <code>departure_time=12:00</code>.</li>
+        <li>Corrette anche due stringhe JSX fuori modulo per chiudere gli errori ESLint e riportare il workspace a <code>pnpm lint OK</code>.</li>
+      </ul>
+
+      <h2>D. Integrazione Supabase</h2>
+      <ul>
+        <li>Connessione database operativa: endpoint locale <code>/api/health</code> restituisce <code>server.ok = true</code>.</li>
+        <li>Env presenti in locale: <code>NEXT_PUBLIC_SUPABASE_URL</code>, <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code>.</li>
+        <li>Tabelle usate nel flusso: <code>memberships</code>, <code>hotels</code>, <code>agencies</code>, <code>services</code>, <code>status_events</code>.</li>
+        <li>Campi realmente usati nel salvataggio: <code>agency_id</code>, <code>created_by_user_id</code>, <code>booking_service_kind</code>, <code>customer_first_name</code>, <code>customer_last_name</code>, <code>customer_email</code>, <code>arrival_date</code>, <code>arrival_time</code>, <code>departure_date</code>, <code>departure_time</code>, <code>transport_code</code>, <code>bus_city_origin</code>, <code>include_ferry_tickets</code>, <code>ferry_details</code>, <code>excursion_details</code>, campi email confirmation.</li>
+        <li>Metadata hotel: nel record viene salvato <code>hotel_id</code>; <code>hotel_name</code> e <code>hotel_zone</code> vengono letti via join, non snapshottati su <code>services</code>.</li>
+      </ul>
+
+      <h2>E. Coerenza Migration 0019</h2>
+      <ul>
+        <li><code>0019_agency_booking_module.sql</code> e coerente per i campi modulo booking estesi su <code>services</code>.</li>
+        <li>Il runtime attuale richiede anche colonne gia introdotte altrove o riallineate in <code>0020_agency_booking_runtime_alignment.sql</code>.</li>
+        <li>Conclusione: <code>0019</code> e corretta ma non autosufficiente come unica migration del modulo.</li>
+      </ul>
+
+      <h2>F. Simulazione Inserimento Reale</h2>
+      <ul>
+        <li>Inserimento reale eseguito con utente <code>agency@demo.com</code>.</li>
+        <li>Record creato in <code>services</code> con ID reale e stato <code>new</code>.</li>
+        <li>Creato un <code>status_events</code> iniziale con stato <code>new</code> e <code>by_user_id</code> valorizzato.</li>
+        <li>Campi ferry salvati correttamente in <code>ferry_details</code>.</li>
+        <li>Test amministrativo eseguito: prenotazione creata da admin per <code>Agency Demo</code> e resa visibile all'utente agency dopo il fix.</li>
+      </ul>
+
+      <h2>G. Configurazione Email / Resend</h2>
+      <ul>
+        <li>Env rilevate come presenti: <code>RESEND_API_KEY</code>, <code>AGENCY_BOOKING_FROM_EMAIL</code>, <code>AGENCY_BOOKING_BETA_RECIPIENT_EMAIL</code>.</li>
+        <li>Stato funzionale attuale: invio non riuscito per verifica dominio Resend non completata.</li>
+        <li>Prossimo passo operativo: verificare su Resend il dominio reale <code>ischiatransferservice.it</code> e poi usare un mittente come <code>booking@ischiatransferservice.it</code>.</li>
+      </ul>
+
+      <h2>H. Stato Finale</h2>
+      <p><span class="badge ok">Area Agenzia funzionante localmente: SI</span></p>
+      <p><span class="badge warn">Email conferma Resend: NO, da completare lato DNS/domain verification</span></p>
+
+      <div class="footer">
+        Report generato sul workspace locale <code>ischia-transfer-beta</code> dopo test runtime, verifica codice, lint e build.
+      </div>
+    </main>
+  </body>
+</html>

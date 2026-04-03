@@ -1,0 +1,178 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  AGENCY
+  OPERATOR
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
+enum TravelMode {
+  SHIP
+  TRAIN
+}
+
+enum VehicleType {
+  CAR
+  VAN
+  MINIBUS
+  BUS
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(AGENCY)
+  createdAt    DateTime @default(now())
+  lastPasswordChangeAt DateTime?
+  lastPasswordChangeIp String?
+  bookings     Booking[]
+  statements   AccountStatement[]
+  resetTokens  PasswordResetToken[]
+  refreshTokens RefreshToken[]
+}
+
+model Booking {
+  id         Int           @id @default(autoincrement())
+  service    String
+  passengers Int
+  priceTotal Float?
+  source     String?
+  sourceMessageId String? @unique
+  sourceSender String?
+  sourceSubject String?
+  travelMode TravelMode?
+  travelRef  String?
+  arrivalAt  DateTime?
+  status     BookingStatus @default(PENDING)
+  createdAt  DateTime      @default(now())
+  approvedAt DateTime?
+  approvedBy Int?
+  rejectedAt DateTime?
+  rejectedBy Int?
+  rejectionReason String?
+  agencyId   Int
+  agency     User          @relation(fields: [agencyId], references: [id])
+  hotelId    Int?
+  hotel      Hotel?        @relation(fields: [hotelId], references: [id])
+  dispatch   DispatchPlan?
+}
+
+model AccountStatement {
+  id            Int      @id @default(autoincrement())
+  agencyId      Int
+  agency        User     @relation(fields: [agencyId], references: [id])
+  periodStart   DateTime
+  periodEnd     DateTime
+  bookingsCount Int
+  passengersSum Int
+  grossTotal    Float
+  generatedBy   Int?
+  generatedAt   DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([agencyId, periodStart, periodEnd])
+  @@index([periodStart, periodEnd])
+}
+
+model Hotel {
+  id        Int       @id @default(autoincrement())
+  name      String
+  address   String
+  latitude  Float
+  longitude Float
+  createdAt DateTime  @default(now())
+  bookings  Booking[]
+
+  @@unique([name, address])
+}
+
+model DispatchPlan {
+  id         Int      @id @default(autoincrement())
+  bookingId  Int      @unique
+  booking    Booking  @relation(fields: [bookingId], references: [id])
+  scheduledAt DateTime
+  vehicle    String
+  driverName String
+  notes      String?
+  createdBy  Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Vehicle {
+  id        Int         @id @default(autoincrement())
+  name      String      @unique
+  capacity  Int
+  type      VehicleType
+  isActive  Boolean     @default(true)
+  notes     String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  unavailability VehicleUnavailability[]
+}
+
+model VehicleUnavailability {
+  id        Int      @id @default(autoincrement())
+  vehicleId Int
+  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id])
+  startAt   DateTime
+  endAt     DateTime
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([vehicleId, startAt, endAt])
+}
+
+model PasswordResetToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+}
+
+model ActivityLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String
+  entityType String
+  entityId   Int?
+  meta       Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([entityType, createdAt])
+}
+
+model RefreshToken {
+  id          Int      @id @default(autoincrement())
+  tokenHash   String   @unique
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id])
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime @default(now())
+  createdByIp String?
+  userAgent   String?
+
+  @@index([userId, expiresAt])
+}

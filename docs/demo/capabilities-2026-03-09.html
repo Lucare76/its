@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Ischia Transfer Beta - Capacita Attuali (09/03/2026)</title>
+    <style>
+      :root {
+        --ink: #0f172a;
+        --muted: #475569;
+        --line: #cbd5e1;
+        --brand: #0b5cab;
+        --bg: #f8fafc;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Arial, sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+        line-height: 1.4;
+      }
+      .page {
+        width: 210mm;
+        min-height: 297mm;
+        margin: 0 auto;
+        background: #fff;
+        padding: 14mm;
+      }
+      h1, h2, h3 { margin: 0 0 8px; line-height: 1.2; }
+      h1 { font-size: 26px; color: var(--brand); }
+      h2 {
+        margin-top: 16px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 18px;
+      }
+      h3 { margin-top: 10px; font-size: 14px; }
+      p, li { font-size: 12px; }
+      ul { margin: 6px 0 0 18px; padding: 0; }
+      .meta {
+        margin: 8px 0 12px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        background: #f1f5f9;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: #fff;
+      }
+      .small { color: var(--muted); font-size: 11px; }
+      .ok { color: #166534; font-weight: 600; }
+      .warn { color: #92400e; font-weight: 600; }
+      .footer { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <h1>Ischia Transfer Beta - Capacita Attuali</h1>
+      <div class="meta">
+        <p><strong>Data documento:</strong> 9 marzo 2026</p>
+        <p><strong>Scopo:</strong> quadro sintetico delle funzionalita realmente disponibili oggi per demo commerciale.</p>
+      </div>
+
+      <h2>1. Piattaforma Core</h2>
+      <div class="grid">
+        <section class="card">
+          <h3>Architettura</h3>
+          <ul>
+            <li>Frontend Next.js App Router + TypeScript strict + Tailwind.</li>
+            <li>Backend su Supabase (Auth, Postgres, RLS multi-tenant).</li>
+            <li>Mappa con Leaflet + OpenStreetMap.</li>
+            <li>Deploy target Vercel.</li>
+          </ul>
+        </section>
+        <section class="card">
+          <h3>Ruoli e sicurezza</h3>
+          <ul>
+            <li>Ruoli supportati: <strong>admin, operator, driver, agency</strong>.</li>
+            <li>RBAC lato app + policy RLS lato database.</li>
+            <li>Isolamento dati per tenant su tabelle business.</li>
+          </ul>
+        </section>
+      </div>
+
+      <h2>2. Operativita Giornaliera</h2>
+      <ul>
+        <li>Dashboard KPI e monitoraggio stato servizi.</li>
+        <li>Creazione e modifica prenotazioni transfer/bus tour.</li>
+        <li>Dispatch: assegnazione autista e mezzo.</li>
+        <li>Vista driver mobile-first con avanzamento stato servizio.</li>
+        <li>Mappa operativa con hotel e servizi.</li>
+      </ul>
+
+      <h2>3. Modulo Hotel Ischia (OSM)</h2>
+      <ul>
+        <li>Import hotel da Overpass API (OpenStreetMap) via endpoint admin.</li>
+        <li>Campi gestiti: nome, nome normalizzato, indirizzo, citta, zona, coordinate, fonte OSM, stato attivo.</li>
+        <li>Deduplica per <code>source_osm_type + source_osm_id</code> e fallback <code>nome normalizzato + coordinate</code>.</li>
+        <li>Fallback robusto query Overpass (area + bbox Ischia) con endpoint multipli.</li>
+        <li>Caching import per ridurre chiamate esterne e mantenere stabilita operativa.</li>
+        <li>Gestione manuale in UI: modifica dati, attiva/disattiva, alias hotel, evidenza record incompleti.</li>
+      </ul>
+      <p class="small">Tabelle dedicate: <code>hotels</code>, <code>hotel_aliases</code>, <code>hotel_import_runs</code>.</p>
+
+      <h2>4. Ingestion e Automazioni</h2>
+      <ul>
+        <li>Import email inbound e conversione verso draft service.</li>
+        <li>Parser PDF/email per supporto estrazione dati operativi.</li>
+        <li>WhatsApp Cloud API: invio reminder, webhook stato, job cron.</li>
+        <li>Configurazione tenant WhatsApp da pannello admin.</li>
+      </ul>
+
+      <h2>5. Pricing e Reportistica</h2>
+      <ul>
+        <li>Modulo pricing con regole, override e storico.</li>
+        <li>Export servizi e analytics (endpoint dedicati, incluso formato Excel).</li>
+      </ul>
+
+      <h2>6. Stato Qualita Tecnica</h2>
+      <ul>
+        <li class="ok">Build applicativa: OK.</li>
+        <li class="ok">Lint: OK (presenti warning legacy non bloccanti nel client storico).</li>
+        <li>Validazione payload API tramite Zod nei punti sensibili.</li>
+      </ul>
+
+      <h2>7. Limiti Operativi da esplicitare in demo</h2>
+      <ul>
+        <li class="warn">Overpass/Nominatim sono servizi pubblici: possibili timeout, rate limit, risposte incomplete.</li>
+        <li class="warn">Dati OSM non sempre perfetti: alcuni hotel possono richiedere correzione manuale.</li>
+        <li>Per questo il sistema salva su DB e consente revisione operatore/alias.</li>
+      </ul>
+
+      <div class="footer">
+        <p><strong>Messaggio commerciale sintetico:</strong> la piattaforma e gia utilizzabile per flusso end-to-end (prenotazione, dispatch, driver, reminder, export) con nuovo asset hotel localizzato per Ischia e governance dati lato operatore.</p>
+      </div>
+    </main>
+  </body>
+</html>

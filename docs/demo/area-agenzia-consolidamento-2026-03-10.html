@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ischia Transfer - Consolidamento Area Agenzia (10/03/2026)</title>
+    <style>
+      :root {
+        --ink: #0f172a;
+        --muted: #475569;
+        --line: #cbd5e1;
+        --bg: #f8fafc;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: "Segoe UI", Arial, sans-serif;
+        line-height: 1.45;
+      }
+      .page {
+        max-width: 900px;
+        margin: 24px auto;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 28px 30px;
+      }
+      h1, h2 {
+        margin: 0 0 10px;
+      }
+      h1 {
+        font-size: 24px;
+      }
+      h2 {
+        font-size: 17px;
+        margin-top: 24px;
+      }
+      p, li {
+        font-size: 13px;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 14px;
+      }
+      ul {
+        margin: 8px 0 0 18px;
+        padding: 0;
+      }
+      .ok {
+        font-weight: 700;
+      }
+      code {
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+        background: #f1f5f9;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <h1>Ischia Transfer Beta - Consolidamento Area Agenzia</h1>
+      <div class="meta">Data report: 10/03/2026</div>
+
+      <h2>1. Lavoro completato</h2>
+      <ul>
+        <li>Consolidato modulo <code>Area Agenzia</code> con API reali Supabase: <code>POST/GET /api/agency/bookings</code>.</li>
+        <li>Consolidata pagina form reale: <code>/agency/new-booking</code>.</li>
+        <li>Consolidata pagina elenco reale: <code>/agency/bookings</code>.</li>
+        <li>Verificata coerenza con <code>services</code>, <code>status_events</code>, metadati hotel.</li>
+        <li>Compatibilita mantenuta con dispatch e pricing.</li>
+      </ul>
+
+      <h2>2. Migration 0019</h2>
+      <ul>
+        <li>Migration presente: <code>supabase/migrations/0019_agency_booking_module.sql</code>.</li>
+        <li>Copertura campi modulo completa: booking kind, customer names/email, arrivo/partenza, ferry/excursion, stato invio email.</li>
+        <li>Aggiunti check constraints e indici dedicati.</li>
+        <li>Stato: pronta in repo, da applicare su Supabase reale.</li>
+      </ul>
+
+      <h2>3. Email conferma agenzia</h2>
+      <ul>
+        <li>Invio conferma gia pronto via Resend.</li>
+        <li>Env minime: <code>RESEND_API_KEY</code>, <code>AGENCY_BOOKING_FROM_EMAIL</code>.</li>
+        <li>Fallback non bloccante mantenuto: se Resend non configurato, prenotazione salvata e stato email <code>skipped</code>.</li>
+        <li>Eliminato hardcode destinatario: ora fallback beta tramite env <code>AGENCY_BOOKING_BETA_RECIPIENT_EMAIL</code>.</li>
+      </ul>
+
+      <h2>4. Setup mailbox beta PDF (rennasday@gmail.com)</h2>
+      <ul>
+        <li>Allineata pipeline IMAP per supportare env <code>IMAP_*</code> (con fallback legacy <code>EMAIL_*</code>).</li>
+        <li>Env beta previste: <code>IMAP_HOST</code>, <code>IMAP_PORT</code>, <code>IMAP_USER</code>, <code>IMAP_PASS</code>, <code>IMAP_TLS</code>, <code>IMAP_MAILBOX</code>.</li>
+        <li>Nessuna credenziale hardcoded nel codice.</li>
+      </ul>
+
+      <h2>5. Pipeline inbound/PDF e idempotenza</h2>
+      <ul>
+        <li>Compatibilita verificata su <code>/api/inbound/email</code> e <code>/api/email/import-pdf</code>.</li>
+        <li>Idempotenza pratica mantenuta con marker <code>[practice:NN/NNNNNN]</code>.</li>
+        <li>No duplicazione automatica di status events o assegnazioni nella pipeline ingestion.</li>
+      </ul>
+
+      <h2>6. Base parser PDF multi-agenzia</h2>
+      <ul>
+        <li>Aggiunta registry parser: <code>lib/server/agency-pdf-parser-registry.ts</code>.</li>
+        <li>Hook parser collegato a inbound, import-pdf e import test IMAP.</li>
+        <li>Predisposte 5 chiavi parser agenzia + fallback <code>agency_default</code>.</li>
+        <li>Parser dedicati per ciascuna agenzia: ancora da implementare (roadmap pronta).</li>
+      </ul>
+
+      <h2>7. Documentazione operativa prodotta</h2>
+      <ul>
+        <li><code>docs/ops/agency-area-production-checklist.md</code></li>
+        <li><code>docs/ops/beta-mailbox-rennasday-setup.md</code></li>
+        <li><code>docs/ops/pdf-multi-agency-parser-roadmap.md</code></li>
+      </ul>
+
+      <h2>8. Esito quality gate</h2>
+      <p><span class="ok">pnpm lint: OK</span></p>
+      <p><span class="ok">pnpm build: OK</span></p>
+    </main>
+  </body>
+  </html>
+
