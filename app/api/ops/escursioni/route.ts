@@ -78,7 +78,7 @@ async function loadData(auth: Awaited<ReturnType<typeof authorizePricingRequest>
     linesQuery.contains("days_of_week", [dow]);
   }
 
-  const [linesRes, unitsRes, allocRes, vehiclesRes, driversRes] = await Promise.all([
+  const [linesRes, unitsRes, allocRes, vehiclesRes, driversRes, hotelsRes, agenciesRes] = await Promise.all([
     linesQuery.order("sort_order"),
     auth.admin.from("excursion_units").select("*").eq("tenant_id", tenantId).eq("excursion_date", date).order("label"),
     unitIds.length > 0
@@ -86,6 +86,8 @@ async function loadData(auth: Awaited<ReturnType<typeof authorizePricingRequest>
       : Promise.resolve({ data: [], error: null }),
     auth.admin.from("vehicles").select("id,label,plate,capacity").eq("tenant_id", tenantId).eq("active", true).order("label"),
     auth.admin.from("driver_profiles").select("id,full_name,phone").eq("tenant_id", tenantId).eq("active", true).order("full_name"),
+    auth.admin.from("hotels").select("id,name").eq("tenant_id", tenantId).eq("active", true).order("name"),
+    auth.admin.from("agencies").select("id,name").eq("tenant_id", tenantId).order("name"),
   ]);
 
   if (linesRes.error) throw new Error(linesRes.error.message);
@@ -123,6 +125,8 @@ async function loadData(auth: Awaited<ReturnType<typeof authorizePricingRequest>
     pickups: (pickupsRes.data ?? []) as ExcursionPickup[],
     vehicles: vehiclesRes.data ?? [],
     drivers: driversRes.data ?? [],
+    hotelNames: ((hotelsRes.data ?? []) as Array<{ id: string; name: string }>).map((h) => h.name),
+    agencyNames: ((agenciesRes.data ?? []) as Array<{ id: string; name: string }>).map((a) => a.name),
   };
 }
 

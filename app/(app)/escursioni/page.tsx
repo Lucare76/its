@@ -179,13 +179,15 @@ const STATUS_COLOR: Record<string, string> = {
 // ── BusCard ───────────────────────────────────────────────────────────────────
 
 function UnitCard({
-  unit, allocations, vehicles, drivers, saving,
+  unit, allocations, vehicles, drivers, hotelNames, agencyNames, saving,
   onUpdate, onDelete, onAddPassenger, onRemovePassenger,
 }: {
   unit: ExcursionUnit;
   allocations: ExcursionAllocation[];
   vehicles: Vehicle[];
   drivers: Driver[];
+  hotelNames: string[];
+  agencyNames: string[];
   saving: boolean;
   onUpdate: (patch: Record<string, unknown>) => void;
   onDelete: () => void;
@@ -320,14 +322,26 @@ function UnitCard({
         {/* Form aggiungi passeggero */}
         {addingPax && (
           <div className="space-y-2 border-t border-indigo-100 bg-indigo-50 px-4 py-3">
+            {/* datalist per autocomplete */}
+            <datalist id={`hotels-${unit.id}`}>
+              {hotelNames.map((h) => <option key={h} value={h} />)}
+            </datalist>
+            <datalist id={`agencies-${unit.id}`}>
+              {agencyNames.map((a) => <option key={a} value={a} />)}
+            </datalist>
+
             <div className="grid grid-cols-2 gap-2">
               <input value={paxForm.customer_name}
                 onChange={(e) => setPaxForm((f) => ({ ...f, customer_name: e.target.value }))}
                 placeholder="Nome cliente *" className="col-span-2 rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-              <input value={paxForm.hotel_name}
+              <input
+                list={`hotels-${unit.id}`}
+                value={paxForm.hotel_name}
                 onChange={(e) => setPaxForm((f) => ({ ...f, hotel_name: e.target.value }))}
                 placeholder="Hotel" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-              <input value={paxForm.agency_name}
+              <input
+                list={`agencies-${unit.id}`}
+                value={paxForm.agency_name}
                 onChange={(e) => setPaxForm((f) => ({ ...f, agency_name: e.target.value }))}
                 placeholder="Agenzia" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
               <input type="time" value={paxForm.pickup_time}
@@ -387,6 +401,8 @@ export default function EscursioniPage() {
   const [pickups, setPickups] = useState<ExcursionPickup[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [hotelNames, setHotelNames] = useState<string[]>([]);
+  const [agencyNames, setAgencyNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -410,6 +426,8 @@ export default function EscursioniPage() {
       setPickups(body.pickups ?? []);
       setVehicles(body.vehicles ?? []);
       setDrivers(body.drivers ?? []);
+      setHotelNames(body.hotelNames ?? []);
+      setAgencyNames(body.agencyNames ?? []);
       if (!selectedLineId && newLines.length > 0) {
         setSelectedLineId(newLines[0].id);
       } else if (selectedLineId && !newLines.find((l: ExcursionLine) => l.id === selectedLineId) && newLines.length > 0) {
@@ -605,6 +623,8 @@ export default function EscursioniPage() {
                     allocations={allocations}
                     vehicles={vehicles}
                     drivers={drivers}
+                    hotelNames={hotelNames}
+                    agencyNames={agencyNames}
                     saving={saving}
                     onUpdate={(patch) => void post("update_unit", { unit_id: unit.id, ...patch })}
                     onDelete={() => void post("delete_unit", { unit_id: unit.id })}
