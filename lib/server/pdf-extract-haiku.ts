@@ -41,6 +41,7 @@ Restituisci ESATTAMENTE questo JSON:
   "citta_partenza": "città di partenza oppure null",
   "totale_pratica": 000.00,
   "tipo_servizio": "transfer_station_hotel oppure transfer_airport_hotel oppure transfer_port_hotel oppure excursion",
+  "tipo_barca_ritorno": "traghetto oppure aliscafo oppure null",
   "agenzia": "Nome Agenzia",
   "note_operative": "note aggiuntive oppure null",
   "agency_key": "aleste oppure angelino oppure holidayweb oppure sosandra oppure zigolo oppure unknown"
@@ -52,6 +53,12 @@ Regole tipo_servizio:
 - PORTO / TRAGHETTO / MEDMAR / SNAV / ALISCAFO → "transfer_port_hotel"
 - ESCURSIONE / GIRO ISOLA / CAPRI / SORRENTO / POSITANO / AMALFI / PROCIDA / POMPEI / CASERTA / NAPOLI / CASTELLO / MORTELLA / NITRODI / COOKING CLASS / CRATERI → "excursion"
   (usa "excursion" ogni volta che il documento riguarda una gita o escursione, NON un transfer da/per stazione/aeroporto/porto)
+
+Regole tipo_barca_ritorno (solo per transfer stazione o aeroporto con ritorno):
+- Se nel documento del RITORNO è specificato TRAGHETTO / MEDMAR / NAVE → "traghetto"
+- Se nel documento del RITORNO è specificato ALISCAFO / SNAV / ALILAURO / VELOCE / NORMALE → "aliscafo"
+- Se l'agenzia è Aleste Viaggi → "traghetto" (Aleste è SEMPRE traghetto)
+- Se non deducibile → null
 `;
 
 // ─── Prompt agenzie ──────────────────────────────────────────────────────────
@@ -230,6 +237,7 @@ export type ClaudeFormState = {
   note: string;
   numero_pratica: string;
   agenzia: string;
+  tipo_barca_ritorno: string;
 };
 
 export type HaikuExtractResult = {
@@ -257,6 +265,7 @@ type ClaudeJson = {
   note_operative?: string | null;
   agenzia?: string | null;
   tipo_servizio?: string | null;
+  tipo_barca_ritorno?: string | null;
   servizi?: Array<{
     orario?: string | null;
     numero_mezzo?: string | null;
@@ -360,7 +369,8 @@ function jsonToForm(json: ClaudeJson, agency: string): ClaudeFormState {
     totale_pratica: json.totale_pratica ? String(json.totale_pratica) : "",
     note: json.note_operative ?? "",
     numero_pratica: json.numero_pratica ?? "",
-    agenzia: AGENCY_LABELS[agency] ?? json.agenzia ?? agency
+    agenzia: AGENCY_LABELS[agency] ?? json.agenzia ?? agency,
+    tipo_barca_ritorno: agency === "aleste" ? "traghetto" : (json.tipo_barca_ritorno ?? "")
   };
 }
 
