@@ -126,12 +126,49 @@ async function loadData(auth: Awaited<ReturnType<typeof authorizePricingRequest>
   };
 }
 
+const DEFAULT_BUSES = 3;
+const DEFAULT_CAPACITY = 50;
+
+async function ensureDefaultUnits(
+  auth: Awaited<ReturnType<typeof authorizePricingRequest>>,
+  lines: ExcursionLine[],
+  units: ExcursionUnit[],
+  date: string,
+  tenantId: string
+) {
+  if (auth instanceof NextResponse) return;
+  const linesWithoutUnits = lines.filter(
+    (l) => !units.some((u) => u.excursion_line_id === l.id)
+  );
+  if (linesWithoutUnits.length === 0) return;
+
+  const toInsert = linesWithoutUnits.flatMap((line) =>
+    Array.from({ length: DEFAULT_BUSES }, (_, i) => ({
+      tenant_id: tenantId,
+      excursion_line_id: line.id,
+      excursion_date: date,
+      label: `Bus ${i + 1}`,
+      capacity: DEFAULT_CAPACITY,
+      status: "open",
+    }))
+  );
+
+  await auth.admin.from("excursion_units").insert(toInsert);
+}
+
 export async function GET(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
+    const tenantId = auth.membership.tenant_id;
     const date = req.nextUrl.searchParams.get("date") ?? new Date().toISOString().slice(0, 10);
-    return NextResponse.json({ ok: true, ...(await loadData(auth, date)) });
+    const data = await loadData(auth, date);
+    // Auto-crea 3 bus da 50 pax per ogni linea del giorno senza unità
+    await ensureDefaultUnits(auth, data.lines, data.units, date, tenantId);
+    // Ricarica se sono stati creati nuovi bus
+    const hasNew = data.lines.some((l) => !data.units.some((u) => u.excursion_line_id === l.id));
+    const finalData = hasNew ? await loadData(auth, date) : data;
+    return NextResponse.json({ ok: true, ...finalData });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Errore" }, { status: 500 });
   }
