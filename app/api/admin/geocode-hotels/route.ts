@@ -7,32 +7,53 @@ export const runtime = "nodejs";
 
 type NominatimResult = { lat: string; lon: string; display_name: string };
 
-// Chiama Nominatim (OpenStreetMap) per un indirizzo sull'isola d'Ischia
-async function geocodeAddress(address: string): Promise<{ lat: number; lng: number } | null> {
-  const query = `${address}, Ischia, Italy`;
+// Bounding box dell'isola d'Ischia per validare i risultati Nominatim
+const ISCHIA_BOUNDS = { minLat: 40.67, maxLat: 40.77, minLng: 13.82, maxLng: 13.98 };
+
+function isWithinIschia(lat: number, lng: number): boolean {
+  return lat >= ISCHIA_BOUNDS.minLat && lat <= ISCHIA_BOUNDS.maxLat &&
+         lng >= ISCHIA_BOUNDS.minLng && lng <= ISCHIA_BOUNDS.maxLng;
+}
+
+async function nominatimSearch(query: string): Promise<{ lat: number; lng: number } | null> {
   const url = new URL("https://nominatim.openstreetmap.org/search");
   url.searchParams.set("q", query);
   url.searchParams.set("format", "json");
-  url.searchParams.set("limit", "1");
+  url.searchParams.set("limit", "5");
   url.searchParams.set("countrycodes", "it");
-  url.searchParams.set("viewbox", "13.82,40.67,13.98,40.77");  // bounding box Ischia
-  url.searchParams.set("bounded", "1");
+  // viewbox come suggerimento, senza bounded=1 per non escludere risultati validi
+  url.searchParams.set("viewbox", "13.82,40.67,13.98,40.77");
 
   const res = await fetch(url.toString(), {
-    headers: {
-      "User-Agent": "IschiaTransfer/1.0 (info@campanialimousine.com)"
-    }
+    headers: { "User-Agent": "IschiaTransfer/1.0 (info@campanialimousine.com)" }
   });
   if (!res.ok) return null;
 
   const data = (await res.json()) as NominatimResult[];
-  const first = data[0];
-  if (!first) return null;
+  // Prendi il primo risultato che cade dentro l'isola d'Ischia
+  for (const result of data) {
+    const lat = parseFloat(result.lat);
+    const lng = parseFloat(result.lon);
+    if (Number.isFinite(lat) && Number.isFinite(lng) && isWithinIschia(lat, lng)) {
+      return { lat, lng };
+    }
+  }
+  return null;
+}
 
-  const lat = parseFloat(first.lat);
-  const lng = parseFloat(first.lon);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  return { lat, lng };
+// Chiama Nominatim con fallback progressivo se l'indirizzo esatto non viene trovato
+async function geocodeAddress(address: string, hotelName: string): Promise<{ lat: number; lng: number } | null> {
+  // Tentativo 1: indirizzo completo + Ischia
+  const result1 = await nominatimSearch(`${address}, Ischia, Italy`);
+  if (result1) return result1;
+
+  await new Promise<void>((r) => setTimeout(r, 1100));
+
+  // Tentativo 2: solo nome hotel + Ischia
+  const result2 = await nominatimSearch(`${hotelName}, Ischia, Italy`);
+  if (result2) return result2;
+
+  return null;
 }
 
 // Dato lat/lng, restituisce la zona più vicina in base alla distanza dai centroidi
@@ -114,7 +135,7 @@ export async function POST(request: NextRequest) {
     // Rate limit Nominatim: 1 req/s
     await sleep(1100);
 
-    const coords = await geocodeAddress(address);
+    const coords = await geocodeAddress(address, hotel.name);
     if (!coords) {
       failed += 1;
       continue;
