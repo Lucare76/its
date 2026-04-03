@@ -194,7 +194,6 @@ function UnitCard({
 }) {
   const [addingPax, setAddingPax] = useState(false);
   const [paxForm, setPaxForm] = useState({ customer_name: "", pax: 1, hotel_name: "", pickup_time: "", phone: "", agency_name: "", notes: "" });
-  const [editingDriver, setEditingDriver] = useState(false);
 
   const unitAllocs = allocations.filter((a) => a.excursion_unit_id === unit.id);
   const totalPax = unitAllocs.reduce((s, a) => s + a.pax, 0);
@@ -206,50 +205,17 @@ function UnitCard({
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       {/* Header bus */}
-      <div className="flex items-center gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-bold text-slate-900">{unit.label}</span>
-            {unit.departure_time && (
-              <span className="text-sm font-mono text-slate-600">⏰ {unit.departure_time.slice(0, 5)}</span>
-            )}
-            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLOR[unit.status]}`}>
-              {STATUS_LABEL[unit.status]}
-            </span>
-          </div>
-
-          {/* Barra capacità */}
-          <div className="mt-2 flex items-center gap-2">
-            <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
-              <div
-                className={`h-full rounded-full transition-all ${pctFull >= 100 ? "bg-rose-500" : pctFull >= 80 ? "bg-amber-400" : "bg-emerald-500"}`}
-                style={{ width: `${pctFull}%` }}
-              />
-            </div>
-            <span className="shrink-0 text-xs font-semibold text-slate-600">
-              {totalPax}/{unit.capacity} pax
-            </span>
-            {remaining > 0 && (
-              <span className="shrink-0 text-xs text-slate-400">({remaining} liberi)</span>
-            )}
-          </div>
-
-          {/* Mezzo e autista */}
-          <div className="mt-1.5 flex flex-wrap gap-3 text-xs text-slate-500">
-            {vehicle && <span>🚌 {vehicle.label} · {vehicle.plate}</span>}
-            {driver && <span>👤 {driver.full_name}{driver.phone ? ` · ${driver.phone}` : ""}</span>}
-          </div>
-        </div>
-
-        {/* Azioni */}
-        <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <div className="flex gap-1">
-            <button
-              onClick={() => setEditingDriver((v) => !v)}
-              disabled={saving}
-              className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100 disabled:opacity-40">
-              ✏️ Assegna
-            </button>
+      <div className="border-b border-slate-100 bg-slate-50 px-4 py-3 space-y-2">
+        {/* Riga 1: nome + stato + azioni */}
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-slate-900">{unit.label}</span>
+          {unit.departure_time && (
+            <span className="font-mono text-sm text-slate-600">⏰ {unit.departure_time.slice(0, 5)}</span>
+          )}
+          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLOR[unit.status]}`}>
+            {STATUS_LABEL[unit.status]}
+          </span>
+          <div className="ml-auto flex gap-1">
             <select
               value={unit.status}
               disabled={saving}
@@ -268,36 +234,59 @@ function UnitCard({
             </button>
           </div>
         </div>
-      </div>
 
-      {/* Form assegna mezzo/autista */}
-      {editingDriver && (
-        <div className="grid grid-cols-2 gap-2 border-b border-slate-100 bg-indigo-50 px-4 py-3">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Mezzo</label>
-            <select
-              value={unit.vehicle_id ?? ""}
-              onChange={(e) => onUpdate({ vehicle_id: e.target.value || null })}
-              className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs">
-              <option value="">— Nessuno —</option>
-              {vehicles.map((v) => <option key={v.id} value={v.id}>{v.label} ({v.capacity}p) · {v.plate}</option>)}
-            </select>
+        {/* Barra capacità */}
+        <div className="flex items-center gap-2">
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+            <div
+              className={`h-full rounded-full transition-all ${pctFull >= 100 ? "bg-rose-500" : pctFull >= 80 ? "bg-amber-400" : "bg-emerald-500"}`}
+              style={{ width: `${pctFull}%` }}
+            />
           </div>
+          <span className="shrink-0 text-xs font-semibold text-slate-600">{totalPax}/{unit.capacity} pax</span>
+          {remaining > 0 && <span className="shrink-0 text-xs text-slate-400">({remaining} liberi)</span>}
+        </div>
+
+        {/* Riga 2: autista + mezzo — sempre visibili */}
+        <div className="grid grid-cols-2 gap-2">
+          {/* Autista */}
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Autista</label>
+            <label className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">Autista</label>
             <select
               value={unit.driver_profile_id ?? ""}
+              disabled={saving}
               onChange={(e) => onUpdate({ driver_profile_id: e.target.value || null })}
-              className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs">
-              <option value="">— Nessuno —</option>
-              {drivers.map((d) => <option key={d.id} value={d.id}>{d.full_name}</option>)}
+              className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 disabled:opacity-50">
+              <option value="">— Nessun autista —</option>
+              {drivers.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.full_name}{d.phone ? ` · ${d.phone}` : ""}
+                </option>
+              ))}
             </select>
+            {driver?.phone && (
+              <p className="mt-0.5 text-[11px] text-slate-500">📞 {driver.phone}</p>
+            )}
           </div>
-          <div className="col-span-2 flex justify-end">
-            <button onClick={() => setEditingDriver(false)} className="text-xs text-slate-500 hover:text-slate-700">Chiudi</button>
+          {/* Mezzo */}
+          <div>
+            <label className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">Mezzo</label>
+            <select
+              value={unit.vehicle_id ?? ""}
+              disabled={saving}
+              onChange={(e) => onUpdate({ vehicle_id: e.target.value || null })}
+              className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 disabled:opacity-50">
+              <option value="">— Nessun mezzo —</option>
+              {vehicles.map((v) => (
+                <option key={v.id} value={v.id}>{v.label} ({v.capacity}p) · {v.plate}</option>
+              ))}
+            </select>
+            {vehicle && (
+              <p className="mt-0.5 text-[11px] text-slate-500">🚌 {vehicle.label} · {vehicle.plate}</p>
+            )}
           </div>
         </div>
-      )}
+      </div>
 
       {/* Lista passeggeri */}
       <div className="divide-y divide-slate-100">
