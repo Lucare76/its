@@ -266,6 +266,7 @@ const MARIO_BOSS_GROUP: NavMainGroup = {
     { href: "/bus-network", label: "Linea Bus", icon: "B" },
     { href: "/rete-ischia", label: "Transfer Ischia", icon: "O" },
     { href: "/escursioni", label: "Escursioni", icon: "E" },
+    { href: "/preventivo-ops", label: "Area preventivi", icon: "%", requiresQuotesAccess: true },
   ]
 };
 
@@ -317,10 +318,6 @@ const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/report-center", label: "Centro report", icon: "R" },
       { href: "/bus-tours", label: "Servizi bus", icon: "B" }
     ]
-  },
-  {
-    title: "Preventivi",
-    items: [{ href: "/preventivo-ops", label: "Area preventivi", icon: "%", requiresQuotesAccess: true }]
   },
   {
     title: "Tecnico e sistema",
