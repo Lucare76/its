@@ -192,6 +192,17 @@ export default function InboxPage() {
   const [pdfAdvancedLoading, setPdfAdvancedLoading] = useState(false);
   const [pdfAdvancedError, setPdfAdvancedError] = useState<string | null>(null);
   const [pdfAdvancedRow, setPdfAdvancedRow] = useState<PdfImportDetail | null>(null);
+
+  // Smista come escursione
+  const [escursioneOpen, setEscursioneOpen] = useState(false);
+  const [escursioneParsing, setEscursioneParsing] = useState(false);
+  const [escursioneError, setEscursioneError] = useState<string | null>(null);
+  type EscBooking = { customer_name: string; pax: number; hotel_name: string | null; agency_name: string | null; phone: string | null; excursion_name: string | null; excursion_date: string | null; notes: string | null; unit_id: string; confirmed: boolean };
+  const [escursioneBookings, setEscursioneBookings] = useState<EscBooking[]>([]);
+  const [escursioneUnits, setEscursioneUnits] = useState<Array<{ id: string; label: string; excursion_line_id: string }>>([]);
+  const [escursioneLines, setEscursioneLines] = useState<Array<{ id: string; name: string }>>([]);
+  const [escursioneDate, setEscursioneDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [escursioneSaving, setEscursioneSaving] = useState(false);
   const [pdfUploadOpen, setPdfUploadOpen] = useState(false);
   const [pdfUploadFile, setPdfUploadFile] = useState<File | null>(null);
   const [pdfUploadSubject, setPdfUploadSubject] = useState("");
@@ -513,6 +524,69 @@ export default function InboxPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const openEscursionePanel = async () => {
+    if (!selectedEmail) return;
+    setEscursioneOpen(true);
+    setEscursioneBookings([]);
+    setEscursioneError(null);
+    setEscursioneParsing(true);
+    const token = await getToken();
+    if (!token) { setEscursioneParsing(false); return; }
+
+    // Carica units + lines per la data selezionata
+    const dataRes = await fetch(`/api/ops/escursioni?date=${escursioneDate}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const dataBody = await dataRes.json().catch(() => null);
+    if (dataBody?.ok) {
+      setEscursioneUnits(dataBody.units ?? []);
+      setEscursioneLines(dataBody.lines ?? []);
+    }
+
+    // Estrai passeggeri con Claude
+    const text = selectedEmail.body_text ?? selectedEmail.raw_text ?? "";
+    const res = await fetch("/api/email/import-escursioni", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ text, date: escursioneDate }),
+    });
+    const body = await res.json().catch(() => null);
+    setEscursioneParsing(false);
+    if (!body?.ok) { setEscursioneError(body?.error ?? "Errore analisi."); return; }
+    const defaultUnit = (dataBody?.units ?? [])[0]?.id ?? "";
+    setEscursioneBookings((body.bookings ?? []).map((b: Omit<EscBooking, "unit_id" | "confirmed">) => ({
+      ...b, unit_id: defaultUnit, confirmed: true,
+    })));
+  };
+
+  const confirmEscursioneImport = async () => {
+    const token = await getToken();
+    if (!token) return;
+    setEscursioneSaving(true);
+    const toImport = escursioneBookings.filter((b) => b.confirmed && b.unit_id);
+    for (const b of toImport) {
+      await fetch("/api/ops/escursioni", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          action: "add_passenger",
+          date: escursioneDate,
+          excursion_unit_id: b.unit_id,
+          customer_name: b.customer_name,
+          pax: b.pax,
+          hotel_name: b.hotel_name || null,
+          agency_name: b.agency_name || null,
+          phone: b.phone || null,
+          notes: b.notes || null,
+          pickup_time: null,
+        }),
+      });
+    }
+    setEscursioneSaving(false);
+    setEscursioneOpen(false);
+    setMessage(`${toImport.length} passeggeri importati in Escursioni.`);
   };
 
   if (!hasLoadedInbox) {
@@ -874,12 +948,17 @@ export default function InboxPage() {
                     </label>
                   </section>
 
-                  {/* Pulsante approva + elimina */}
+                  {/* Pulsante approva + smista escursione + elimina */}
                   <div className="flex flex-wrap items-center gap-3">
                     <button type="button" onClick={() => void approveEmail()}
                       disabled={submitting || !canApprove}
                       className="btn-primary px-6 py-2.5 text-sm disabled:opacity-50">
                       {submitting ? "Approvazione..." : "Approva e crea servizio"}
+                    </button>
+                    <button type="button" onClick={() => void openEscursionePanel()}
+                      disabled={submitting}
+                      className="rounded-lg border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50">
+                      🎯 Smista → Escursione
                     </button>
                     <p className="text-xs text-slate-400">Il servizio apparirà in Arrivi e Partenze</p>
                     <button type="button" onClick={() => void deleteEmail()}
@@ -904,6 +983,84 @@ export default function InboxPage() {
         </div>
         ) : null}
       </div>
+
+      {/* Pannello laterale: smista come escursione */}
+      {escursioneOpen && (
+        <div className="fixed inset-0 z-[80] flex justify-end bg-slate-950/30 backdrop-blur-[1px]">
+          <div className="flex h-full w-full max-w-lg flex-col border-l border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-4">
+              <span className="text-xl">🎯</span>
+              <div className="flex-1">
+                <p className="font-bold text-slate-900">Smista come Escursione</p>
+                <p className="text-xs text-slate-500">{selectedEmail?.subject ?? ""}</p>
+              </div>
+              <button onClick={() => setEscursioneOpen(false)} className="text-slate-400 hover:text-slate-700">✕</button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              {/* Selettore data */}
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-medium text-slate-500">Data escursione:</label>
+                <input type="date" value={escursioneDate}
+                  onChange={async (e) => {
+                    setEscursioneDate(e.target.value);
+                    const token = await getToken();
+                    if (!token) return;
+                    const res = await fetch(`/api/ops/escursioni?date=${e.target.value}`, { headers: { Authorization: `Bearer ${token}` } });
+                    const body = await res.json().catch(() => null);
+                    if (body?.ok) { setEscursioneUnits(body.units ?? []); setEscursioneLines(body.lines ?? []); }
+                  }}
+                  className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm" />
+              </div>
+
+              {escursioneParsing && <p className="text-sm text-slate-400">Analisi in corso con Claude...</p>}
+              {escursioneError && <p className="text-xs text-rose-600">{escursioneError}</p>}
+
+              {!escursioneParsing && escursioneBookings.length === 0 && !escursioneError && (
+                <p className="text-sm text-slate-400">Nessuna prenotazione estratta.</p>
+              )}
+
+              {escursioneBookings.map((b, i) => (
+                <div key={i} className={`rounded-xl border p-3 ${b.confirmed ? "border-violet-200 bg-violet-50" : "border-slate-200 bg-slate-50 opacity-50"}`}>
+                  <div className="flex items-start gap-2">
+                    <input type="checkbox" checked={b.confirmed}
+                      onChange={(e) => setEscursioneBookings((prev) => prev.map((x, j) => j === i ? { ...x, confirmed: e.target.checked } : x))}
+                      className="mt-0.5 h-4 w-4 accent-violet-600" />
+                    <div className="flex-1 space-y-1 text-xs">
+                      <p><strong>{b.customer_name}</strong> · {b.pax} pax</p>
+                      {b.hotel_name && <p className="text-slate-500">🏨 {b.hotel_name}</p>}
+                      {b.agency_name && <p className="text-slate-500">🏢 {b.agency_name}</p>}
+                      {b.excursion_name && <p className="text-slate-500">🗺 {b.excursion_name}</p>}
+                      {b.phone && <p className="text-slate-400">📞 {b.phone}</p>}
+                      {b.notes && <p className="text-slate-400">{b.notes}</p>}
+                      <select
+                        value={b.unit_id}
+                        onChange={(e) => setEscursioneBookings((prev) => prev.map((x, j) => j === i ? { ...x, unit_id: e.target.value } : x))}
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs">
+                        <option value="">— Assegna bus —</option>
+                        {escursioneUnits.map((u) => {
+                          const lineName = escursioneLines.find((l) => l.id === u.excursion_line_id)?.name ?? "";
+                          return <option key={u.id} value={u.id}>{lineName} · {u.label}</option>;
+                        })}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="border-t border-slate-100 px-5 py-4 flex justify-between gap-2">
+              <button onClick={() => setEscursioneOpen(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600">Annulla</button>
+              <button
+                disabled={escursioneSaving || escursioneBookings.filter((b) => b.confirmed && b.unit_id).length === 0}
+                onClick={() => void confirmEscursioneImport()}
+                className="rounded-lg bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-40">
+                {escursioneSaving ? "Salvataggio..." : `✅ Importa ${escursioneBookings.filter((b) => b.confirmed && b.unit_id).length} in Escursioni`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pdfAdvancedOpen ? (
         <div className="fixed inset-0 z-[80] flex justify-end bg-slate-950/30 backdrop-blur-[1px]">

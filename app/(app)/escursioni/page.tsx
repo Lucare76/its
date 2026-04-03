@@ -412,7 +412,7 @@ export default function EscursioniPage() {
   const [unitForm, setUnitForm] = useState({ label: "Bus 1", capacity: 50, departure_time: "" });
   const [exportingExcel, setExportingExcel] = useState(false);
 
-  // Import da email/PDF
+  // Import da email
   const [showImport, setShowImport] = useState(false);
   const [importText, setImportText] = useState("");
   const [importParsing, setImportParsing] = useState(false);
@@ -423,6 +423,18 @@ export default function EscursioniPage() {
     unit_id: string; confirmed: boolean;
   }>>([]);
   const [importError, setImportError] = useState("");
+
+  // Import da Excel
+  const [showExcelImport, setShowExcelImport] = useState(false);
+  const [excelFile, setExcelFile] = useState<File | null>(null);
+  const [excelParsing, setExcelParsing] = useState(false);
+  const [excelResults, setExcelResults] = useState<Array<{
+    customer_name: string; pax: number; hotel_name: string | null;
+    agency_name: string | null; phone: string | null;
+    excursion_name: string | null; excursion_date: string | null; notes: string | null;
+    unit_id: string; confirmed: boolean;
+  }>>([]);
+  const [excelError, setExcelError] = useState("");
 
   const load = useCallback(async (d: string) => {
     const token = await getToken();
@@ -488,6 +500,11 @@ export default function EscursioniPage() {
         {message && <span className="ml-2 text-xs text-rose-600">{message}</span>}
 
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => { setShowExcelImport(true); setExcelResults([]); setExcelFile(null); setExcelError(""); }}
+            className="flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100">
+            📊 Importa Excel
+          </button>
           <button
             onClick={() => { setShowImport(true); setImportResults([]); setImportText(""); setImportError(""); }}
             className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100">
@@ -700,6 +717,124 @@ export default function EscursioniPage() {
                 {saving ? "..." : "Crea bus"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal import Excel */}
+      {showExcelImport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex w-full max-w-2xl flex-col gap-4 rounded-2xl bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-slate-900">📊 Importa prenotazioni da Excel</h2>
+              <button onClick={() => setShowExcelImport(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+            <p className="text-xs text-slate-500">
+              Il file deve avere le colonne: <strong>Cliente, Pax, Hotel, Agenzia, Telefono, Escursione, Data, Note</strong>
+              <br />L&apos;ordine non importa — i nomi delle colonne vengono riconosciuti automaticamente.
+            </p>
+
+            {excelResults.length === 0 ? (
+              <>
+                <div className="flex flex-col gap-3">
+                  <input type="file" accept=".xlsx,.xls,.ods,.csv"
+                    onChange={(e) => setExcelFile(e.target.files?.[0] ?? null)}
+                    className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-50 file:px-4 file:py-2 file:text-xs file:font-medium file:text-emerald-700 hover:file:bg-emerald-100" />
+                  {excelFile && <p className="text-xs text-slate-500">📎 {excelFile.name} ({(excelFile.size / 1024).toFixed(0)} KB)</p>}
+                </div>
+                {excelError && <p className="text-xs text-rose-600">{excelError}</p>}
+                <div className="flex justify-end gap-2">
+                  <button onClick={() => setShowExcelImport(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">Annulla</button>
+                  <button
+                    disabled={excelParsing || !excelFile}
+                    onClick={async () => {
+                      if (!excelFile) return;
+                      setExcelParsing(true); setExcelError("");
+                      const token = await getToken();
+                      if (!token) { setExcelParsing(false); return; }
+                      const fd = new FormData();
+                      fd.append("file", excelFile);
+                      const res = await fetch("/api/excel/import-escursioni", {
+                        method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd,
+                      });
+                      const body = await res.json().catch(() => null);
+                      setExcelParsing(false);
+                      if (!body?.ok) { setExcelError(body?.error ?? "Errore lettura file."); return; }
+                      const defaultUnitId = units.find((u) => u.excursion_line_id === selectedLineId)?.id ?? "";
+                      setExcelResults((body.rows ?? []).map((b: { customer_name: string; pax: number; hotel_name: string | null; agency_name: string | null; phone: string | null; excursion_name: string | null; excursion_date: string | null; notes: string | null }) => ({
+                        ...b, unit_id: defaultUnitId, confirmed: true,
+                      })));
+                    }}
+                    className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40">
+                    {excelParsing ? "Lettura..." : "📖 Leggi file"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-xs font-medium text-slate-500">{excelResults.length} righe trovate — spunta quelle da importare e assegna il bus</p>
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {excelResults.map((r, i) => (
+                    <div key={i} className={`rounded-xl border p-3 ${r.confirmed ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50 opacity-50"}`}>
+                      <div className="flex items-start gap-3">
+                        <input type="checkbox" checked={r.confirmed}
+                          onChange={(e) => setExcelResults((prev) => prev.map((x, j) => j === i ? { ...x, confirmed: e.target.checked } : x))}
+                          className="mt-0.5 h-4 w-4 rounded accent-emerald-600" />
+                        <div className="flex-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                          <div><span className="text-slate-400">Cliente:</span> <strong>{r.customer_name}</strong></div>
+                          <div><span className="text-slate-400">Pax:</span> <strong>{r.pax}</strong></div>
+                          <div><span className="text-slate-400">Hotel:</span> {r.hotel_name ?? "—"}</div>
+                          <div><span className="text-slate-400">Agenzia:</span> {r.agency_name ?? "—"}</div>
+                          {r.excursion_name && <div><span className="text-slate-400">Escursione:</span> {r.excursion_name}</div>}
+                          {r.excursion_date && <div><span className="text-slate-400">Data:</span> {r.excursion_date}</div>}
+                          {r.phone && <div><span className="text-slate-400">Tel:</span> {r.phone}</div>}
+                        </div>
+                        <select
+                          value={r.unit_id}
+                          onChange={(e) => setExcelResults((prev) => prev.map((x, j) => j === i ? { ...x, unit_id: e.target.value } : x))}
+                          className="shrink-0 rounded-lg border border-slate-200 px-2 py-1 text-xs">
+                          <option value="">— Bus —</option>
+                          {units.map((u) => {
+                            const lineName = lines.find((l) => l.id === u.excursion_line_id)?.name ?? "";
+                            return <option key={u.id} value={u.id}>{lineName} · {u.label}</option>;
+                          })}
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {excelError && <p className="text-xs text-rose-600">{excelError}</p>}
+                <div className="flex justify-between gap-2">
+                  <button onClick={() => setExcelResults([])} className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">← Ricarica file</button>
+                  <div className="flex gap-2">
+                    <button onClick={() => setShowExcelImport(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600">Annulla</button>
+                    <button
+                      disabled={saving || excelResults.filter((r) => r.confirmed && r.unit_id).length === 0}
+                      onClick={async () => {
+                        const toImport = excelResults.filter((r) => r.confirmed && r.unit_id);
+                        for (const b of toImport) {
+                          await post("add_passenger", {
+                            excursion_unit_id: b.unit_id,
+                            customer_name: b.customer_name,
+                            pax: b.pax,
+                            hotel_name: b.hotel_name || null,
+                            agency_name: b.agency_name || null,
+                            phone: b.phone || null,
+                            notes: b.notes || null,
+                            pickup_time: null,
+                          });
+                        }
+                        setShowExcelImport(false);
+                        setExcelResults([]);
+                        setExcelFile(null);
+                      }}
+                      className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40">
+                      ✅ Importa {excelResults.filter((r) => r.confirmed && r.unit_id).length} passeggeri
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
