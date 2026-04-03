@@ -103,7 +103,7 @@ function printPdf(
           <div style="margin-bottom:20px;break-inside:avoid">
             <div style="background:#1e293b;color:white;padding:8px 12px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between;align-items:center">
               <span style="font-weight:700;font-size:14px">🚌 ${unit.label}${unit.departure_time ? ` — partenza ${unit.departure_time.slice(0, 5)}` : ""}</span>
-              <span style="font-size:12px;opacity:.75">${totalPax}/${unit.capacity} pax${driver ? ` · ${driver.full_name}` : ""}${vehicle ? ` · ${vehicle.label}` : ""}</span>
+              <span style="font-size:12px;opacity:.75">${totalPax}/${unit.capacity} pax${driver ? ` · ${driver.full_name}${driver.phone ? ` 📞 ${driver.phone}` : ""}` : ""}${vehicle ? ` · ${vehicle.label}` : ""}</span>
             </div>
             <table width="100%" style="border-collapse:collapse;font-size:12px;border:1px solid #e2e8f0;border-top:none">
               <thead>
@@ -265,7 +265,9 @@ function UnitCard({
               ))}
             </select>
             {driver?.phone && (
-              <p className="mt-0.5 text-[11px] text-slate-500">📞 {driver.phone}</p>
+              <a href={`tel:${driver.phone}`} className="mt-0.5 block text-[11px] font-medium text-indigo-600 hover:text-indigo-800">
+                📞 {driver.phone}
+              </a>
             )}
           </div>
           {/* Mezzo */}
