@@ -576,6 +576,7 @@ function TabServiziIsola() {
     setLoading(false);
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void load(); }, [load]);
 
   const post = useCallback(async (action: string, data: Record<string, unknown>) => {

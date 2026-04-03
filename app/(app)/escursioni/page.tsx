@@ -461,6 +461,7 @@ export default function EscursioniPage() {
     setLoading(false);
   }, [selectedLineId]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void load(date); }, [load, date]);
 
   const post = useCallback(async (action: string, data: Record<string, unknown>) => {
@@ -571,7 +572,7 @@ export default function EscursioniPage() {
         {/* Main: bus della linea selezionata */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
           {!selectedLine ? (
-            <p className="text-sm text-slate-400">Seleziona un'escursione.</p>
+            <p className="text-sm text-slate-400">Seleziona un&apos;escursione.</p>
           ) : (
             <>
               {/* Header linea */}

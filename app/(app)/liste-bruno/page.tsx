@@ -185,6 +185,7 @@ export default function ListeBrunoPage() {
     setLoading(false);
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void load(date); }, [load, date]);
 
   const post = useCallback(async (action: string, data: Record<string, unknown>) => {

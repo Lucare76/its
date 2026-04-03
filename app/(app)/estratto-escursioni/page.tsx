@@ -120,6 +120,7 @@ export default function EstrattoCursioniPage() {
     setLoading(false);
   }, [from, to, agencyFilter]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void load(); }, [load]);
 
   const grandTotal = statements.reduce((s, st) => s + st.total_agency_cents, 0);

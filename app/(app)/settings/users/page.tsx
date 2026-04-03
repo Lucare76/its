@@ -573,9 +573,9 @@ export default function SettingsUsersPage() {
                 onChange={(event) => setForm((prev) => ({ ...prev, gender: event.target.value }))}
                 className="input-saas"
               >
-                <option value="">— Non specificato —</option>
+                <option value="">&mdash; Non specificato &mdash;</option>
                 <option value="male">Uomo</option>
-                <option value="female">Donna 🍄</option>
+                <option value="female">Donna</option>
               </select>
             </label>
 
