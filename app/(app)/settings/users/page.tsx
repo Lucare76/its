@@ -25,6 +25,7 @@ type UserFormState = {
   email: string;
   password: string;
   role: UserRole;
+  gender?: string;
 };
 
 type PendingAccessRequestRow = {
@@ -44,7 +45,8 @@ const defaultForm: UserFormState = {
   full_name: "",
   email: "",
   password: "",
-  role: "operator"
+  role: "operator",
+  gender: ""
 };
 
 const roleDescriptions: Array<{ role: UserRole; label: string; description: string }> = [
@@ -547,7 +549,7 @@ export default function SettingsUsersPage() {
               />
             </label>
 
-            <label className="grid gap-1 md:col-span-2">
+            <label className="grid gap-1">
               <span className="text-sm font-medium text-text">Ruolo</span>
               <select
                 value={form.role}
@@ -559,6 +561,19 @@ export default function SettingsUsersPage() {
                     {item.label}
                   </option>
                 ))}
+              </select>
+            </label>
+
+            <label className="grid gap-1">
+              <span className="text-sm font-medium text-text">Genere</span>
+              <select
+                value={form.gender ?? ""}
+                onChange={(event) => setForm((prev) => ({ ...prev, gender: event.target.value }))}
+                className="input-saas"
+              >
+                <option value="">— Non specificato —</option>
+                <option value="male">Uomo</option>
+                <option value="female">Donna 🍄</option>
               </select>
             </label>
 

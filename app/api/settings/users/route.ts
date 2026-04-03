@@ -180,12 +180,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Esiste gia un utente con questo nome nel tenant." }, { status: 409 });
   }
 
+  const gender = typeof (parsed.data as Record<string, unknown>).gender === "string"
+    ? (parsed.data as Record<string, unknown>).gender as string
+    : null;
+
   const userResult = await auth.admin.auth.admin.createUser({
     email,
     password: parsed.data.password,
     email_confirm: true,
     user_metadata: {
-      full_name: fullName
+      full_name: fullName,
+      ...(gender ? { gender } : {})
     }
   });
 

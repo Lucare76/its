@@ -378,6 +378,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [liveToastMessage, setLiveToastMessage] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authRole, setAuthRole] = useState<UserRole | null>(null);
+  const [authGender, setAuthGender] = useState<string | null>(null);
   const [authTenantId, setAuthTenantId] = useState<string | null>(null);
   const [agencySetupRequired, setAgencySetupRequired] = useState(false);
   const [capabilityOverrides, setCapabilityOverrides] = useState<CapabilityOverrides>({});
@@ -533,6 +534,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
       setNeedsOnboarding(false);
       setAuthRole(resolvedRole);
+      setAuthGender(typeof userData.user.user_metadata?.gender === "string" ? userData.user.user_metadata.gender : null);
       setAuthTenantId(resolvedTenantId);
       setCapabilityOverrides(onboardingPayload?.capability_overrides ?? {});
       let resolvedAgencySetupRequired = false;
@@ -1134,9 +1136,17 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 </svg>
                 <span>Esci</span>
               </button>
-              <div className="inline-flex h-9 min-w-9 items-center justify-center rounded-full border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-700 shadow-sm">
-                {(authRole ?? "U").slice(0, 2).toUpperCase()}
-              </div>
+              {authRole === "operator" && authGender === "female" ? (
+                <img
+                  src="/toadette-avatar.png"
+                  alt="Operatrice"
+                  className="h-14 w-14 object-contain drop-shadow-md"
+                />
+              ) : (
+                <div className="inline-flex h-9 min-w-9 items-center justify-center rounded-full border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-700 shadow-sm">
+                  {(authRole ?? "U").slice(0, 2).toUpperCase()}
+                </div>
+              )}
             </div>
           </div>
           </div>
