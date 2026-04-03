@@ -125,6 +125,7 @@ export default function HotelsPage() {
   const [dismissedMergeKeys, setDismissedMergeKeys] = useState<string[]>([]);
   const mergeStorageKey = tenantId ? `hotel_dismissed_merges_${tenantId}` : null;
   const [showAdminTools, setShowAdminTools] = useState(false);
+  const [geocoding, setGeocoding] = useState(false);
   const [aliasHotelId, setAliasHotelId] = useState("");
   const [aliasValue, setAliasValue] = useState("");
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -398,6 +399,38 @@ export default function HotelsPage() {
     await Promise.all([loadHotels(tenantId, search, 0, false), loadMergeContext(tenantId)]);
     setImporting(false);
     setMessage(`Aggiornati ${updated} hotel (compilazione automatica coordinate/zona).`);
+  };
+
+  const geocodeHotels = async (force: boolean) => {
+    if (!tenantId || !supabase) return;
+    setGeocoding(true);
+    setMessage("");
+    setError("");
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) { setError("Sessione non valida. Rifai login."); setGeocoding(false); return; }
+
+      const response = await fetch("/api/admin/geocode-hotels", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ force })
+      });
+
+      const payload = await response.json().catch(() => null) as { ok?: boolean; error?: string; report?: { total: number; updated: number; failed: number; skipped: number } } | null;
+      if (!response.ok || !payload?.ok) {
+        setError(payload?.error ?? "Geocoding non riuscito.");
+        setGeocoding(false);
+        return;
+      }
+      const r = payload.report!;
+      setMessage(`Geocoding completato. Processati: ${r.total}, aggiornati: ${r.updated}, falliti: ${r.failed}, saltati (indirizzo incompleto): ${r.skipped}.`);
+      await Promise.all([loadHotels(tenantId, search, 0, false), loadMergeContext(tenantId)]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Errore geocoding.");
+    } finally {
+      setGeocoding(false);
+    }
   };
 
   const triggerOverpassImport = async () => {
@@ -852,6 +885,28 @@ export default function HotelsPage() {
                       className="input-saas font-medium disabled:opacity-50"
                     >
                       {importing ? "Aggiornamento..." : "Compila lat/lng mancanti"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void geocodeHotels(false)}
+                      disabled={geocoding || importing}
+                      className="input-saas font-medium disabled:opacity-50"
+                      title="Chiama OpenStreetMap per ricavare le coordinate reali dagli indirizzi (solo hotel con coordinate di default)"
+                    >
+                      {geocoding ? "Geocoding in corso..." : "Geocodifica indirizzi"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm("Forza geocoding su TUTTI gli hotel, anche quelli già geocodificati?")) {
+                          void geocodeHotels(true);
+                        }
+                      }}
+                      disabled={geocoding || importing}
+                      className="input-saas font-medium disabled:opacity-50"
+                      title="Forza geocoding su tutti gli hotel, inclusi quelli già con coordinate precise"
+                    >
+                      Forza geocoding tutti
                     </button>
                     <label className="input-saas font-medium hover:bg-slate-50">
                       Carica CSV (id,name,address,zone,lat,lng)

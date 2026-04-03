@@ -44,6 +44,16 @@ export function inferZoneFromText(input: string): HotelZone | null {
   return null;
 }
 
+export const ZONE_TO_CITY: Record<HotelZone, string> = {
+  "Ischia Porto":    "Ischia",
+  "Ischia Ponte":    "Ischia",
+  Casamicciola:      "Casamicciola Terme",
+  "Lacco Ameno":     "Lacco Ameno",
+  Forio:             "Forio",
+  Barano:            "Barano d'Ischia",
+  "Serrara Fontana": "Serrara Fontana"
+};
+
 export function isMissingCoordinates(lat?: number | null, lng?: number | null) {
   if (lat == null || lng == null) return true;
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return true;
