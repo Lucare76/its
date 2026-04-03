@@ -49,7 +49,7 @@ async function loadData(auth: Awaited<ReturnType<typeof authorizePricingRequest>
     .select("id")
     .eq("tenant_id", tenantId)
     .eq("excursion_date", date)
-    .then((r) => (r.data ?? []).map((u) => u.id));
+    .then((r: { data: Array<{ id: string }> | null }) => (r.data ?? []).map((u) => u.id));
 
   const lineSelect = [
     "id",

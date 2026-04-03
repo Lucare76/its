@@ -340,7 +340,7 @@ function PickupRunCard({
                   vehicles={vehicles}
                   drivers={drivers}
                   saving={saving}
-                  onUpdate={(patch) => void onPost("upsert_bus", { bus_id: bus.id, run_id: run.id, ...bus, ...patch, date })}
+                  onUpdate={(patch) => { const { run_id: _r, ...busRest } = bus; void onPost("upsert_bus", { bus_id: bus.id, run_id: run.id, ...busRest, ...patch, date }); }}
                   onRemove={() => void onPost("remove_bus", { bus_id: bus.id, date })}
                 />
               ))}

@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
       .select("id")
       .eq("tenant_id", tenantId)
       .eq("excursion_date", date)
-      .then((r) => (r.data ?? []).map((u: { id: string }) => u.id));
+      .then((r: { data: Array<{ id: string }> | null }) => (r.data ?? []).map((u) => u.id));
 
     const [linesRes, unitsRes, allocRes, vehiclesRes, driversRes] = await Promise.all([
       auth.admin.from("excursion_lines").select("*").eq("tenant_id", tenantId).eq("active", true).order("sort_order"),

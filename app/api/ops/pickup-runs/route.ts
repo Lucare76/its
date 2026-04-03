@@ -149,7 +149,7 @@ async function loadPickupRuns(auth: PricingAuthContext, date: string) {
           .from("pickup_runs")
           .select("id")
           .eq("tenant_id", tenantId)
-          .eq("run_date", date)).data?.map((r) => r.id) ?? []
+          .eq("run_date", date)).data?.map((r: { id: string }) => r.id) ?? []
       )
       .order("arrival_time"),
     auth.admin
@@ -161,7 +161,7 @@ async function loadPickupRuns(auth: PricingAuthContext, date: string) {
           .from("pickup_runs")
           .select("id")
           .eq("tenant_id", tenantId)
-          .eq("run_date", date)).data?.map((r) => r.id) ?? []
+          .eq("run_date", date)).data?.map((r: { id: string }) => r.id) ?? []
       ),
     auth.admin
       .from("port_routing_rules")
@@ -244,9 +244,11 @@ export async function POST(req: NextRequest) {
 
       if (svcErr) throw new Error(svcErr.message);
 
+      type SvcRow = { id: string; time: string | null; vessel: string | null; pax: number | null; hotel_id: string | null; notes: string | null; hotels: { zone: string | null } | null };
+
       // Filtra per porto: vessel o notes contiene il porto (case-insensitive)
       const portLower = port.toLowerCase();
-      const filtered = (services ?? []).filter((s) => {
+      const filtered = ((services ?? []) as SvcRow[]).filter((s) => {
         const vessel = (s.vessel ?? "").toLowerCase();
         const notes = (s.notes ?? "").toLowerCase();
         return vessel.includes(portLower) || notes.includes(portLower);
@@ -376,7 +378,7 @@ export async function POST(req: NextRequest) {
         .from("pickup_run_arrivals")
         .select("pax")
         .eq("run_id", run_id);
-      const totalPax = (allArrivals ?? []).reduce((s, a) => s + (a.pax ?? 0), 0);
+      const totalPax = (allArrivals ?? []).reduce((s: number, a: { pax: number | null }) => s + (a.pax ?? 0), 0);
       await auth.admin.from("pickup_runs").update({ total_pax: totalPax }).eq("id", run_id);
 
       const data = await loadPickupRuns(auth, date);
@@ -393,7 +395,7 @@ export async function POST(req: NextRequest) {
         .from("pickup_run_arrivals")
         .select("pax")
         .eq("run_id", run_id);
-      const totalPax = (allArrivals ?? []).reduce((s, a) => s + (a.pax ?? 0), 0);
+      const totalPax = (allArrivals ?? []).reduce((s: number, a: { pax: number | null }) => s + (a.pax ?? 0), 0);
       await auth.admin.from("pickup_runs").update({ total_pax: totalPax }).eq("id", run_id);
 
       const data = await loadPickupRuns(auth, date);
