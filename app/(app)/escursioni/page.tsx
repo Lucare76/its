@@ -412,6 +412,18 @@ export default function EscursioniPage() {
   const [unitForm, setUnitForm] = useState({ label: "Bus 1", capacity: 50, departure_time: "" });
   const [exportingExcel, setExportingExcel] = useState(false);
 
+  // Import da email/PDF
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importParsing, setImportParsing] = useState(false);
+  const [importResults, setImportResults] = useState<Array<{
+    customer_name: string; pax: number; hotel_name: string | null;
+    agency_name: string | null; phone: string | null;
+    excursion_name: string | null; excursion_date: string | null; notes: string | null;
+    unit_id: string; confirmed: boolean;
+  }>>([]);
+  const [importError, setImportError] = useState("");
+
   const load = useCallback(async (d: string) => {
     const token = await getToken();
     if (!token) { setLoading(false); return; }
@@ -476,6 +488,11 @@ export default function EscursioniPage() {
         {message && <span className="ml-2 text-xs text-rose-600">{message}</span>}
 
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => { setShowImport(true); setImportResults([]); setImportText(""); setImportError(""); }}
+            className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100">
+            📧 Importa email
+          </button>
           <button
             onClick={() => printPdf(date, lines, units, allocations, vehicles, drivers)}
             disabled={units.length === 0}
@@ -683,6 +700,122 @@ export default function EscursioniPage() {
                 {saving ? "..." : "Crea bus"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal import email/PDF */}
+      {showImport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex w-full max-w-2xl flex-col gap-4 rounded-2xl bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-slate-900">📧 Importa prenotazioni da email</h2>
+              <button onClick={() => setShowImport(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+            <p className="text-xs text-slate-500">Incolla il corpo dell&apos;email o del documento di prenotazione. Claude estrarrà automaticamente i passeggeri.</p>
+
+            {importResults.length === 0 ? (
+              <>
+                <textarea
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                  rows={10}
+                  placeholder="Incolla qui il testo dell'email o del documento..."
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                {importError && <p className="text-xs text-rose-600">{importError}</p>}
+                <div className="flex justify-end gap-2">
+                  <button onClick={() => setShowImport(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">Annulla</button>
+                  <button
+                    disabled={importParsing || importText.trim().length < 10}
+                    onClick={async () => {
+                      setImportParsing(true);
+                      setImportError("");
+                      const token = await getToken();
+                      if (!token) { setImportParsing(false); return; }
+                      const res = await fetch("/api/email/import-escursioni", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                        body: JSON.stringify({ text: importText, date }),
+                      });
+                      const body = await res.json().catch(() => null);
+                      setImportParsing(false);
+                      if (!body?.ok) { setImportError(body?.error ?? "Errore nell'analisi."); return; }
+                      const defaultUnitId = units.find((u) => u.excursion_line_id === selectedLineId)?.id ?? "";
+                      setImportResults((body.bookings ?? []).map((b: { customer_name: string; pax: number; hotel_name: string | null; agency_name: string | null; phone: string | null; excursion_name: string | null; excursion_date: string | null; notes: string | null }) => ({
+                        ...b, unit_id: defaultUnitId, confirmed: true,
+                      })));
+                    }}
+                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40">
+                    {importParsing ? "Analisi in corso..." : "🔍 Analizza"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-xs font-medium text-slate-500">{importResults.length} prenotazioni estratte — controlla e conferma</p>
+                <div className="space-y-2">
+                  {importResults.map((r, i) => (
+                    <div key={i} className={`rounded-xl border p-3 ${r.confirmed ? "border-indigo-200 bg-indigo-50" : "border-slate-200 bg-slate-50 opacity-50"}`}>
+                      <div className="flex items-start gap-3">
+                        <input type="checkbox" checked={r.confirmed}
+                          onChange={(e) => setImportResults((prev) => prev.map((x, j) => j === i ? { ...x, confirmed: e.target.checked } : x))}
+                          className="mt-0.5 h-4 w-4 rounded accent-indigo-600" />
+                        <div className="flex-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                          <div><span className="text-slate-400">Cliente:</span> <strong>{r.customer_name}</strong></div>
+                          <div><span className="text-slate-400">Pax:</span> <strong>{r.pax}</strong></div>
+                          <div><span className="text-slate-400">Hotel:</span> {r.hotel_name ?? "—"}</div>
+                          <div><span className="text-slate-400">Agenzia:</span> {r.agency_name ?? "—"}</div>
+                          {r.excursion_name && <div className="col-span-2"><span className="text-slate-400">Escursione:</span> {r.excursion_name}</div>}
+                          {r.notes && <div className="col-span-2"><span className="text-slate-400">Note:</span> {r.notes}</div>}
+                        </div>
+                        <div className="shrink-0">
+                          <select
+                            value={r.unit_id}
+                            onChange={(e) => setImportResults((prev) => prev.map((x, j) => j === i ? { ...x, unit_id: e.target.value } : x))}
+                            className="rounded-lg border border-slate-200 px-2 py-1 text-xs">
+                            <option value="">— Bus —</option>
+                            {units.map((u) => {
+                              const lineName = lines.find((l) => l.id === u.excursion_line_id)?.name ?? "";
+                              return <option key={u.id} value={u.id}>{lineName} · {u.label}</option>;
+                            })}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {importError && <p className="text-xs text-rose-600">{importError}</p>}
+                <div className="flex justify-between gap-2">
+                  <button onClick={() => setImportResults([])} className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">← Modifica testo</button>
+                  <div className="flex gap-2">
+                    <button onClick={() => setShowImport(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">Annulla</button>
+                    <button
+                      disabled={saving || importResults.filter((r) => r.confirmed && r.unit_id).length === 0}
+                      onClick={async () => {
+                        const toImport = importResults.filter((r) => r.confirmed && r.unit_id);
+                        for (const b of toImport) {
+                          await post("add_passenger", {
+                            excursion_unit_id: b.unit_id,
+                            customer_name: b.customer_name,
+                            pax: b.pax,
+                            hotel_name: b.hotel_name || null,
+                            agency_name: b.agency_name || null,
+                            phone: b.phone || null,
+                            notes: b.notes || null,
+                            pickup_time: null,
+                          });
+                        }
+                        setShowImport(false);
+                        setImportResults([]);
+                        setImportText("");
+                      }}
+                      className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40">
+                      ✅ Importa {importResults.filter((r) => r.confirmed && r.unit_id).length} prenotazioni
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

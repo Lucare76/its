@@ -276,6 +276,7 @@ const KARMEN_PEACH_GROUP: NavMainGroup = {
   icon: "KARMEN",
   items: [
     { href: "/liste-bruno", label: "Liste Bruno", icon: "S" },
+    { href: "/estratto-escursioni", label: "Estratto Escursioni", icon: "S" },
   ]
 };
 
