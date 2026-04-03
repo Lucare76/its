@@ -128,6 +128,7 @@ export default function SettingsUsersPage() {
   const [updatingCapabilityKey, setUpdatingCapabilityKey] = useState<string | null>(null);
   const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
   const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
+  const [genderDrafts, setGenderDrafts] = useState<Record<string, string>>({});
   const [requestRoleDrafts, setRequestRoleDrafts] = useState<Record<string, UserRole>>({});
   const [message, setMessage] = useState("Caricamento utenti tenant...");
 
@@ -242,10 +243,10 @@ export default function SettingsUsersPage() {
     setMessage(`Utente creato: ${createdUser.full_name} (${createdUser.role}).`);
   };
 
-  const updateMembership = async (membership: MembershipRow, nextRole: UserRole, nextPassword?: string, nextSuspended?: boolean) => {
+  const updateMembership = async (membership: MembershipRow, nextRole: UserRole, nextPassword?: string, nextSuspended?: boolean, nextGender?: string) => {
     if (!hasSupabaseEnv || !supabase || updatingUserId) return;
     setUpdatingUserId(membership.user_id);
-    setMessage(`Aggiornamento ruolo di ${membership.full_name}...`);
+    setMessage(`Aggiornamento di ${membership.full_name}...`);
 
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
@@ -266,7 +267,8 @@ export default function SettingsUsersPage() {
         full_name: membership.full_name,
         role: nextRole,
         password: nextPassword?.trim() ? nextPassword.trim() : undefined,
-        suspended: nextSuspended ?? membership.suspended ?? false
+        suspended: nextSuspended ?? membership.suspended ?? false,
+        gender: nextGender?.trim() || undefined
       })
     });
 
@@ -909,6 +911,30 @@ export default function SettingsUsersPage() {
                       {updatingUserId === membership.user_id ? "Salvataggio..." : "Salva password"}
                     </button>
                   </div>
+
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Genere</span>
+                    <div className="flex gap-2">
+                      <select
+                        value={genderDrafts[membership.user_id] ?? ""}
+                        onChange={(event) => setGenderDrafts((prev) => ({ ...prev, [membership.user_id]: event.target.value }))}
+                        className="input-saas flex-1"
+                        disabled={updatingUserId === membership.user_id}
+                      >
+                        <option value="">— —</option>
+                        <option value="male">Uomo</option>
+                        <option value="female">Donna 🍄</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="btn-secondary h-[42px] px-3 py-2 text-xs whitespace-nowrap"
+                        disabled={updatingUserId === membership.user_id || !genderDrafts[membership.user_id]}
+                        onClick={() => void updateMembership(membership, membership.role, undefined, membership.suspended ?? false, genderDrafts[membership.user_id])}
+                      >
+                        Salva
+                      </button>
+                    </div>
+                  </label>
 
                   <div className="grid gap-1">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Reset via email</span>

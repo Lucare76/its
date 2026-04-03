@@ -77,9 +77,9 @@ function renderNavIcon(icon: string) {
         </svg>
       );
     case "MARIO":
-      return <img src="/mario-icon.png" alt="Mario" className="h-6 w-6 object-contain" aria-hidden="true" />;
+      return <span className="flex h-6 w-6 items-center justify-center text-base" aria-hidden="true">🎮</span>;
     case "KARMEN":
-      return <img src="/karmen-icon.png" alt="Karmen" className="h-6 w-6 object-contain" aria-hidden="true" />;
+      return <span className="flex h-6 w-6 items-center justify-center text-base" aria-hidden="true">🌸</span>;
     case "G":
       return (
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" className={common} aria-hidden="true">
@@ -272,7 +272,7 @@ const MARIO_BOSS_GROUP: NavMainGroup = {
 const KARMEN_PEACH_GROUP: NavMainGroup = {
   type: "group",
   key: "karmen-peach",
-  label: "Karmen Peach",
+  label: "Karmen",
   icon: "KARMEN",
   items: [
     { href: "/liste-bruno", label: "Liste Bruno", icon: "S" },
@@ -379,6 +379,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [authLoading, setAuthLoading] = useState(true);
   const [authRole, setAuthRole] = useState<UserRole | null>(null);
   const [authGender, setAuthGender] = useState<string | null>(null);
+  const [authName, setAuthName] = useState<string | null>(null);
   const [authTenantId, setAuthTenantId] = useState<string | null>(null);
   const [agencySetupRequired, setAgencySetupRequired] = useState(false);
   const [capabilityOverrides, setCapabilityOverrides] = useState<CapabilityOverrides>({});
@@ -535,6 +536,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       setNeedsOnboarding(false);
       setAuthRole(resolvedRole);
       setAuthGender(typeof userData.user.user_metadata?.gender === "string" ? userData.user.user_metadata.gender : null);
+      setAuthName(typeof userData.user.user_metadata?.full_name === "string" ? userData.user.user_metadata.full_name : null);
       setAuthTenantId(resolvedTenantId);
       setCapabilityOverrides(onboardingPayload?.capability_overrides ?? {});
       let resolvedAgencySetupRequired = false;
@@ -878,7 +880,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             })}
 
             {/* Mario Boss — gruppo collassabile */}
-            {(() => {
+            {authRole === "admin" && (() => {
               const groupActive = MARIO_BOSS_GROUP.items.some((i) => matchesPath(pathname, i.href));
               return (
                 <div className="mt-0.5">
@@ -893,8 +895,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     } ${collapsed ? "justify-center" : ""}`}
                   >
                     {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-red-500" /> : null}
-                    <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-red-600 text-white shadow-sm" : "bg-white text-red-500 ring-1 ring-red-200"} ${marioBossOpen ? "h-20 w-20" : "h-8 w-8"}`}>
-                      <img src="/mario-icon.png" alt="Mario" className={`object-contain transition-all duration-300 ${marioBossOpen ? "h-16 w-16" : "h-6 w-6"}`} aria-hidden="true" />
+                    <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-red-600 text-white shadow-sm" : "bg-white text-red-500 ring-1 ring-red-200"} ${marioBossOpen ? "h-10 w-10" : "h-8 w-8"}`}>
+                      <span className={`transition-all duration-300 ${marioBossOpen ? "text-2xl" : "text-base"}`} aria-hidden="true">🎮</span>
                     </span>
                     {!collapsed ? (
                       <span className="flex min-w-0 flex-1 items-center justify-between gap-1">
@@ -933,7 +935,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             })()}
 
             {/* Karmen Peach — gruppo collassabile */}
-            {(() => {
+            {authRole === "admin" && (() => {
               const groupActive = KARMEN_PEACH_GROUP.items.some((i) => matchesPath(pathname, i.href));
               return (
                 <div className="mt-0.5">
@@ -948,8 +950,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     } ${collapsed ? "justify-center" : ""}`}
                   >
                     {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-pink-500" /> : null}
-                    <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-pink-500 text-white shadow-sm" : "bg-white text-pink-400 ring-1 ring-pink-200"} ${karmenPeachOpen ? "h-20 w-20" : "h-8 w-8"}`}>
-                      <img src="/karmen-icon.png" alt="Karmen" className={`object-contain transition-all duration-300 ${karmenPeachOpen ? "h-16 w-16" : "h-6 w-6"}`} aria-hidden="true" />
+                    <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-pink-500 text-white shadow-sm" : "bg-white text-pink-400 ring-1 ring-pink-200"} ${karmenPeachOpen ? "h-10 w-10" : "h-8 w-8"}`}>
+                      <span className={`transition-all duration-300 ${karmenPeachOpen ? "text-2xl" : "text-base"}`} aria-hidden="true">🌸</span>
                     </span>
                     {!collapsed ? (
                       <span className="flex min-w-0 flex-1 items-center justify-between gap-1">
@@ -1136,11 +1138,29 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 </svg>
                 <span>Esci</span>
               </button>
-              {authRole === "operator" && authGender === "female" ? (
+              {authRole === "admin" && authName?.toLowerCase().includes("mario") ? (
+                <img
+                  src="/mario-avatar.png"
+                  alt="Mario"
+                  className="h-24 w-24 object-contain drop-shadow-md"
+                />
+              ) : authRole === "admin" && (authName?.toLowerCase().includes("karmen") || authName?.toLowerCase().includes("peach")) ? (
+                <img
+                  src="/karmen-avatar.png"
+                  alt="Karmen"
+                  className="h-24 w-24 object-contain drop-shadow-md"
+                />
+              ) : authRole === "operator" && authGender === "female" ? (
                 <img
                   src="/toadette-avatar.png"
                   alt="Operatrice"
-                  className="h-14 w-14 object-contain drop-shadow-md"
+                  className="h-24 w-24 object-contain drop-shadow-md"
+                />
+              ) : authRole === "operator" && authGender === "male" ? (
+                <img
+                  src="/bowser-avatar.png"
+                  alt="Operatore"
+                  className="h-24 w-24 object-contain drop-shadow-md"
                 />
               ) : (
                 <div className="inline-flex h-9 min-w-9 items-center justify-center rounded-full border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-700 shadow-sm">

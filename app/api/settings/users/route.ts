@@ -550,23 +550,24 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: updateResult.error?.message ?? "Aggiornamento utente fallito." }, { status: 500 });
   }
 
+  const updateGender = typeof (parsed.data as Record<string, unknown>).gender === "string"
+    ? (parsed.data as Record<string, unknown>).gender as string
+    : null;
+
+  const metadataPatch: Record<string, string> = { full_name: parsed.data.full_name.trim() };
+  if (updateGender) metadataPatch.gender = updateGender;
+
   if (parsed.data.password) {
     const passwordUpdate = await auth.admin.auth.admin.updateUserById(parsed.data.user_id, {
       password: parsed.data.password,
-      user_metadata: {
-        full_name: parsed.data.full_name.trim()
-      }
+      user_metadata: metadataPatch
     });
     if (passwordUpdate.error) {
       return NextResponse.json({ error: passwordUpdate.error.message }, { status: 500 });
     }
   } else {
     await auth.admin.auth.admin
-      .updateUserById(parsed.data.user_id, {
-        user_metadata: {
-          full_name: parsed.data.full_name.trim()
-        }
-      })
+      .updateUserById(parsed.data.user_id, { user_metadata: metadataPatch })
       .catch(() => undefined);
   }
 

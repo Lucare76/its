@@ -236,7 +236,8 @@ export const adminUserCreateSchema = z.object({
   full_name: z.string().min(2).max(120),
   email: z.string().email().max(160),
   password: z.string().min(8).max(120),
-  role: roleSchema
+  role: roleSchema,
+  gender: z.string().max(20).optional()
 });
 
 export const adminUserUpdateSchema = z.object({
@@ -244,7 +245,8 @@ export const adminUserUpdateSchema = z.object({
   full_name: z.string().min(2).max(120),
   role: roleSchema,
   password: z.string().min(8).max(120).optional(),
-  suspended: z.boolean().optional()
+  suspended: z.boolean().optional(),
+  gender: z.string().max(20).optional()
 });
 
 export const adminRoleCapabilityOverrideSchema = z.object({
