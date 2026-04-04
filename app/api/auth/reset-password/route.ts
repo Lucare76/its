@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
 
   const updateResult = await admin.auth.admin.updateUserById(existingUser.id, {
     password: temporaryPassword,
-    data: {
+    user_metadata: {
       ...((existingUser.user_metadata ?? {}) as Record<string, unknown>),
       password_change_required: true
     }
