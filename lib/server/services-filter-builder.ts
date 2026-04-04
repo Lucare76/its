@@ -40,7 +40,7 @@ function sanitizeOrValue(raw: string) {
   return raw.replace(/[,%]/g, " ");
 }
 
-export async function buildServicesQuery({ admin, filters, select }: BuildServicesQueryArgs) {
+export async function buildServicesQuery({ admin, filters, select }: BuildServicesQueryArgs): Promise<{ query: any }> {
   const parsed = serviceQueryFiltersSchema.parse(filters);
 
   let query = admin.from("services").select(select).eq("tenant_id", parsed.tenant_id);
@@ -90,5 +90,8 @@ export async function buildServicesQuery({ admin, filters, select }: BuildServic
     query = query.in("id", actorServiceIds.length > 0 ? actorServiceIds : [nilUuid]);
   }
 
-  return query;
+  // Wrapping in a plain object avoids the JS thenable-chaining gotcha: the Supabase
+  // query builder implements .then(), so `await asyncFn()` that returns a builder
+  // would silently execute the query instead of returning the builder itself.
+  return { query };
 }
