@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { PasswordStrengthMeter } from "@/components/password-strength-meter";
 
 export default function UpdatePasswordPage() {
   const [password, setPassword] = useState("");
@@ -103,6 +104,7 @@ export default function UpdatePasswordPage() {
               disabled={!ready || saving}
               required
             />
+            <PasswordStrengthMeter password={password} />
           </label>
 
           <label className="grid gap-1.5">

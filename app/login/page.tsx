@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { PasswordStrengthMeter } from "@/components/password-strength-meter";
 
 export default function LoginPage() {
   const defaultLoginMessage = hasSupabaseEnv
@@ -224,6 +225,7 @@ export default function LoginPage() {
                 {showPassword ? "Nascondi" : "Mostra"}
               </button>
             </div>
+            {mode === "register" && <PasswordStrengthMeter password={password} />}
           </label>
         ) : null}
         <button
