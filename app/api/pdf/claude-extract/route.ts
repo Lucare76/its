@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { extractWithHaiku } from "@/lib/server/pdf-extract-haiku";
+import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 
 export const runtime = "nodejs";
 
@@ -43,11 +44,21 @@ export async function POST(request: NextRequest) {
 
   try {
     const result = await extractWithHaiku(pdf_base64, email_body, email_subject);
+
+    // Per servizi bus: usa sempre l'orario dal catalogo fermate (è la fonte autoritativa)
+    const form = { ...result.form };
+    if (form.tipo_servizio === "bus_city_hotel" && form.citta_partenza) {
+      const busStop = resolveBusStop(form.citta_partenza);
+      if (busStop?.time) {
+        form.orario_arrivo = busStop.time;
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       agency: result.agency,
       data: result.rawJson,
-      form: result.form,
+      form,
       text_mode: result.textMode
     });
   } catch (err) {

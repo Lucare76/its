@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
+import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 
 export const runtime = "nodejs";
 
@@ -88,9 +89,153 @@ function hashString(v: string) {
   return createHash("sha256").update(v).digest("hex");
 }
 
+function normCity(c: string) {
+  return c.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+async function tryAutoAllocateBus(
+  admin: any,
+  tenantId: string,
+  serviceId: string,
+  familyCode: string,
+  canonicalCity: string | null,
+  pax: number,
+  arrivalDate: string,
+  departureDate: string | null,
+  userId: string | null
+): Promise<{ allocated: boolean; unit_label?: string; reason?: string }> {
+  // 1. Trova la linea bus del tenant con questo family code
+  const { data: lines } = await admin
+    .from("tenant_bus_lines")
+    .select("id, code, name")
+    .eq("tenant_id", tenantId)
+    .eq("family_code", familyCode)
+    .eq("active", true)
+    .limit(1);
+  if (!lines?.length) return { allocated: false, reason: "nessuna linea bus configurata per " + familyCode };
+
+  const lineId = lines[0].id as string;
+
+  // 2. Trova i bus unit aperti per questa linea
+  const { data: units } = await admin
+    .from("tenant_bus_units")
+    .select("id, label, capacity, status, manual_close, sort_order")
+    .eq("bus_line_id", lineId)
+    .eq("active", true)
+    .eq("manual_close", false)
+    .neq("status", "closed")
+    .neq("status", "completed")
+    .order("sort_order");
+  if (!units?.length) return { allocated: false, reason: "nessun bus disponibile" };
+
+  // 3. Conta i pax già allocati su questa data per ciascun unit
+  const unitIds = (units as Array<{ id: string }>).map((u) => u.id);
+  const { data: allocations } = await admin
+    .from("tenant_bus_allocations")
+    .select("bus_unit_id, pax_assigned, direction, services!inner(date)")
+    .in("bus_unit_id", unitIds)
+    .eq("services.date", arrivalDate)
+    .eq("direction", "arrival");
+
+  const usedByUnit = new Map<string, number>();
+  for (const a of (allocations ?? []) as Array<{ bus_unit_id: string; pax_assigned: number }>) {
+    usedByUnit.set(a.bus_unit_id, (usedByUnit.get(a.bus_unit_id) ?? 0) + a.pax_assigned);
+  }
+
+  // 4. Scegli il bus con più posti liberi che può ospitare i pax
+  const bestUnit = (units as Array<{ id: string; label: string; capacity: number }>)
+    .map((u) => ({ ...u, remaining: u.capacity - (usedByUnit.get(u.id) ?? 0) }))
+    .filter((u) => u.remaining >= pax)
+    .sort((a, b) => b.remaining - a.remaining)[0];
+  if (!bestUnit) return { allocated: false, reason: "nessun bus con posti sufficienti" };
+
+  // 5. Trova la fermata di andata nel DB
+  const { data: arrivalStops } = await admin
+    .from("tenant_bus_line_stops")
+    .select("id, stop_name, city")
+    .eq("bus_line_id", lineId)
+    .eq("direction", "arrival")
+    .eq("active", true);
+
+  const targetCity = normCity(canonicalCity ?? "");
+
+  // Match esatto prima, poi substring — evita che "ROMA" vinca su "ROMA TIBURTINA"
+  function findStop(stops: Array<{ id: string; stop_name: string; city: string }>) {
+    if (!canonicalCity) return null;
+    const list = stops as Array<{ id: string; stop_name: string; city: string }>;
+    // 1. match esatto
+    const exact = list.find((s) => normCity(s.city) === targetCity);
+    if (exact) return exact;
+    // 2. il candidato più specifico (città più lunga) che contiene il target o viceversa
+    const fuzzy = list
+      .filter((s) => {
+        const c = normCity(s.city);
+        return c.includes(targetCity) || targetCity.includes(c);
+      })
+      .sort((a, b) => normCity(b.city).length - normCity(a.city).length);
+    return fuzzy[0] ?? null;
+  }
+
+  const arrivalStop = findStop(arrivalStops ?? []);
+
+  if (!arrivalStop) return { allocated: false, reason: "fermata andata non trovata per " + (canonicalCity ?? "N/D") };
+
+  // 6. Alloca andata
+  const { error: errArr } = await admin.rpc("allocate_bus_service", {
+    p_tenant_id: tenantId,
+    p_service_id: serviceId,
+    p_bus_line_id: lineId,
+    p_bus_unit_id: bestUnit.id,
+    p_stop_id: arrivalStop.id,
+    p_stop_name: arrivalStop.stop_name,
+    p_direction: "arrival",
+    p_pax_assigned: pax,
+    p_notes: "Auto-assegnato da import PDF",
+    p_created_by_user_id: userId
+  });
+  if (errArr) return { allocated: false, reason: "errore allocazione andata: " + errArr.message };
+
+  // 7. Alloca ritorno se c'è data di partenza
+  if (departureDate) {
+    // Cerca fermate direzione "departure", con fallback a "arrival" (stesse città)
+    const { data: departureStops } = await admin
+      .from("tenant_bus_line_stops")
+      .select("id, stop_name, city")
+      .eq("bus_line_id", lineId)
+      .eq("direction", "departure")
+      .eq("active", true);
+
+    const departureStop = findStop(departureStops ?? [])
+      ?? findStop(arrivalStops ?? []); // fallback: stesse fermate andata (stessa città, direzione opposta)
+
+    if (departureStop) {
+      const { error: errDep } = await admin.rpc("allocate_bus_service", {
+        p_tenant_id: tenantId,
+        p_service_id: serviceId,
+        p_bus_line_id: lineId,
+        p_bus_unit_id: bestUnit.id,
+        p_stop_id: departureStop.id,
+        p_stop_name: departureStop.stop_name,
+        p_direction: "departure",
+        p_pax_assigned: pax,
+        p_notes: "Auto-assegnato da import PDF",
+        p_created_by_user_id: userId
+      });
+      if (errDep) {
+        console.warn("[auto-alloc] errore allocazione ritorno:", errDep.message);
+      }
+    } else {
+      console.warn("[auto-alloc] fermata ritorno non trovata per:", canonicalCity);
+    }
+  }
+
+  return { allocated: true, unit_label: bestUnit.label };
+}
+
 function tipoToBookingKind(tipo: string): { bookingKind: string; transportMode: string } {
   if (tipo === "transfer_airport_hotel") return { bookingKind: "transfer_airport_hotel", transportMode: "unknown" };
   if (tipo === "transfer_port_hotel") return { bookingKind: "transfer_port_hotel", transportMode: "hydrofoil" };
+  if (tipo === "bus_city_hotel") return { bookingKind: "bus_city_hotel", transportMode: "bus" };
   if (tipo === "excursion") return { bookingKind: "excursion", transportMode: "bus" };
   return { bookingKind: "transfer_train_hotel", transportMode: "train" };
 }
@@ -150,7 +295,6 @@ export async function POST(request: NextRequest) {
   if (!clean(form.hotel)) return NextResponse.json({ ok: false, error: "Hotel obbligatorio." }, { status: 422 });
 
   const departureDate = parseDate(form.data_partenza);
-  const outboundTime = normalizeTime(form.orario_arrivo);
   const returnTime = normalizeTime(form.orario_partenza);
   const customerName = clean(form.cliente_nome) ?? "Cliente da verificare";
   const hotelName = clean(form.hotel);
@@ -164,7 +308,20 @@ export async function POST(request: NextRequest) {
   const sourcePricePerPaxCents = sourceTotalCents && passengers > 0 ? Math.round(sourceTotalCents / passengers) : null;
 
   const { bookingKind, transportMode } = tipoToBookingKind(form.tipo_servizio ?? "transfer_station_hotel");
-  if (!outboundTime) {
+
+  // Per servizi bus: risoluzione bidirezionale della fermata (città o indirizzo pickupNote)
+  const resolvedBusStop = bookingKind === "bus_city_hotel" ? resolveBusStop(arrivalPlace) : null;
+
+  // Orario andata: dal form; se assente nei bus, prende l'orario dal catalogo fermate
+  const outboundTime = normalizeTime(form.orario_arrivo) ?? (bookingKind === "bus_city_hotel" ? (resolvedBusStop?.time ?? null) : null);
+  const canonicalBusCity = resolvedBusStop?.canonicalCity ?? arrivalPlace;
+  const busPickupNote = resolvedBusStop?.pickupNote ?? null;
+  const busLineCode = resolvedBusStop?.lineCode ?? null;
+  const busLineName = resolvedBusStop?.lineName ?? null;
+  const busFamilyCode = resolvedBusStop?.familyCode ?? null;
+  const busFamilyName = resolvedBusStop?.familyName ?? null;
+  // Per i servizi bus l'orario è opzionale (spesso non presente nel PDF)
+  if (!outboundTime && bookingKind !== "bus_city_hotel") {
     return NextResponse.json(
       { ok: false, error: "Orario arrivo non valido o mancante. Inserisci un orario reale nel formato HH:MM prima di salvare." },
       { status: 422 }
@@ -300,7 +457,9 @@ export async function POST(request: NextRequest) {
     `[pdf_composite:${compositeKey}]`,
     trainArrivalNumber ? `[train_arrival_number:${trainArrivalNumber}]` : null,
     trainDepartureNumber ? `[train_departure_number:${trainDepartureNumber}]` : null,
-    arrivalPlace ? `pickup/porto: ${arrivalPlace}` : null,
+    bookingKind !== "bus_city_hotel" && arrivalPlace ? `pickup/porto: ${arrivalPlace}` : null,
+    busLineCode ? `[bus_line_suggested:${busLineCode}]` : null,
+    busFamilyCode ? `[bus_family:${busFamilyCode}]` : null,
     hotelName ? `hotel/destinazione: ${hotelName}` : null,
     clean(form.note)
   ].filter(Boolean).join(" | ");
@@ -318,7 +477,12 @@ export async function POST(request: NextRequest) {
       direction: "arrival",
       vessel: bookingKind === "transfer_port_hotel"
         ? (trainArrivalNumber ?? arrivalPlace ?? "MEDMAR")
+        : bookingKind === "bus_city_hotel"
+        ? (canonicalBusCity ?? "Bus da verificare")
         : (arrivalPlace ?? "Transfer da PDF"),
+      meeting_point: bookingKind === "bus_city_hotel" ? (busPickupNote ?? canonicalBusCity) : null,
+      bus_city_origin: bookingKind === "bus_city_hotel" ? (canonicalBusCity ?? null) : null,
+      transport_code: bookingKind === "bus_city_hotel" ? (busFamilyCode ?? null) : null,
       pax: passengers,
       hotel_id: hotelId,
       customer_name: customerName,
@@ -347,5 +511,30 @@ export async function POST(request: NextRequest) {
     .update({ parsed_json: { ...parsedJson, pdf_import: { ...parsedJson.pdf_import, linked_service_id: service.id } } })
     .eq("id", inboundEmail.id);
 
-  return NextResponse.json({ ok: true, inbound_email_id: inboundEmail.id, draft_service_id: service.id });
+  // ── Auto-allocazione bus ──────────────────────────────────────────────────
+  let autoAllocResult: { allocated: boolean; unit_label?: string; reason?: string } = { allocated: false };
+  if (bookingKind === "bus_city_hotel" && busFamilyCode && canonicalBusCity) {
+    console.log("[auto-alloc] Avvio allocazione bus:", { busFamilyCode, canonicalBusCity, passengers, arrivalDate, departureDate });
+    autoAllocResult = await tryAutoAllocateBus(
+      auth.admin,
+      tenantId,
+      service.id,
+      busFamilyCode,
+      canonicalBusCity,
+      passengers,
+      arrivalDate,
+      departureDate,
+      userId
+    ).catch((err) => ({ allocated: false, reason: String(err?.message ?? err) }));
+    console.log("[auto-alloc] Risultato:", autoAllocResult);
+  } else {
+    console.log("[auto-alloc] Skip — bookingKind:", bookingKind, "busFamilyCode:", busFamilyCode, "canonicalBusCity:", canonicalBusCity);
+  }
+
+  return NextResponse.json({
+    ok: true,
+    inbound_email_id: inboundEmail.id,
+    draft_service_id: service.id,
+    auto_allocation: autoAllocResult
+  });
 }

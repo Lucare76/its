@@ -19,7 +19,7 @@ type TenantMembershipRow = {
   user_id: string;
   tenant_id: string;
   agency_id?: string | null;
-  role: "admin" | "operator" | "driver" | "agency";
+  role: "admin" | "operator" | "driver" | "agency" | "supervisor";
   full_name: string;
   created_at?: string | null;
   suspended?: boolean;
@@ -28,7 +28,7 @@ type TenantMembershipRow = {
 type CapabilityOverrideRow = {
   id: string;
   tenant_id: string;
-  role: "admin" | "operator" | "driver" | "agency";
+  role: "admin" | "operator" | "driver" | "agency" | "supervisor";
   capability: AppCapability;
   enabled: boolean;
   created_at?: string | null;
@@ -42,7 +42,7 @@ type AccessRequestRow = {
   email: string;
   full_name: string;
   agency_name?: string | null;
-  requested_role?: "admin" | "operator" | "driver" | "agency" | null;
+  requested_role?: "admin" | "operator" | "driver" | "agency" | "supervisor" | null;
   status: "pending" | "approved" | "rejected";
   created_at?: string | null;
   review_notes?: string | null;
@@ -89,7 +89,7 @@ async function requireAdminMembership(request: NextRequest) {
     return { error: NextResponse.json({ error: "Tenant not found" }, { status: 404 }) };
   }
 
-  if (membership.role !== "admin") {
+  if (membership.role !== "admin" && membership.role !== "supervisor") {
     return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   }
 

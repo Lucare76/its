@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const roleSchema = z.enum(["admin", "operator", "driver", "agency"]);
+export const roleSchema = z.enum(["admin", "operator", "driver", "agency", "supervisor"]);
 
 export const serviceStatusSchema = z.enum(["needs_review", "new", "assigned", "partito", "arrivato", "completato", "problema", "cancelled"]);
 export const serviceTypeSchema = z.enum(["transfer", "bus_tour"]);

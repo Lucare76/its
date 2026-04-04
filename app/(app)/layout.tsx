@@ -240,6 +240,7 @@ function HeaderBellIcon() {
 const MAIN_NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
   admin: [],
   operator: [],
+  supervisor: [],
   agency: [
     { href: "/agency", label: "Area Agenzia", icon: "A" },
     { href: "/map", label: "Mappa", icon: "M" }
@@ -284,6 +285,7 @@ const KARMEN_PEACH_GROUP: NavMainGroup = {
 
 MAIN_NAV_BY_ROLE.admin = OPERATIONS_MAIN_NAV;
 MAIN_NAV_BY_ROLE.operator = OPERATIONS_MAIN_NAV;
+MAIN_NAV_BY_ROLE.supervisor = OPERATIONS_MAIN_NAV;
 
 const SETTINGS_GROUPS: NavGroup[] = [
   {
@@ -400,7 +402,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     [authRole, capabilityOverrides, quotesAccess]
   );
   const settingsGroups = useMemo(() => {
-    if (authRole !== "admin") return [];
+    if (authRole !== "admin" && authRole !== "supervisor") return [];
     return SETTINGS_GROUPS
       .map((group) => ({
         ...group,
@@ -416,7 +418,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
   const redirectByRole = (role: UserRole | null) => {
     if (!role) return "/login";
-    if (role === "admin" || role === "operator") return "/dashboard";
+    if (role === "admin" || role === "operator" || role === "supervisor") return "/dashboard";
     if (role === "driver") return "/driver";
     return "/agency";
   };
@@ -464,6 +466,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       const { data: userData, error: userError } = await supabase.auth.getUser();
       if (!active) return;
       if (userError || !userData.user) {
+        // Clear stale session data (e.g. invalid/expired refresh token) before redirecting,
+        // so the Supabase client does not keep retrying with a bad token.
+        await supabase.auth.signOut().catch(() => undefined);
+        if (!active) return;
         setNeedsOnboarding(false);
         setAuthRole(null);
         setAuthTenantId(null);
@@ -631,34 +637,11 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
   const playInboxSound = () => {
     if (typeof window === "undefined") return;
-    const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    void ctx.resume();
-    // Annuncio stazione: ding (Sol) → dong (Mi) → dong (Do) → pausa → annuncio
-    const tones = [
-      { freq: 783.99, start: 0.0, duration: 0.45 },   // Sol5
-      { freq: 659.25, start: 0.45, duration: 0.45 },  // Mi5
-      { freq: 523.25, start: 0.9, duration: 0.6 },    // Do5
-      { freq: 659.25, start: 1.7, duration: 0.35 },   // Mi5
-      { freq: 783.99, start: 2.05, duration: 0.35 },  // Sol5
-      { freq: 659.25, start: 2.4, duration: 0.55 },   // Mi5
-    ];
-    for (const tone of tones) {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(tone.freq, ctx.currentTime + tone.start);
-      gain.gain.setValueAtTime(0.0001, ctx.currentTime + tone.start);
-      gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + tone.start + 0.03);
-      gain.gain.setValueAtTime(0.12, ctx.currentTime + tone.start + tone.duration - 0.08);
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + tone.start + tone.duration);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(ctx.currentTime + tone.start);
-      osc.stop(ctx.currentTime + tone.start + tone.duration);
-    }
-    window.setTimeout(() => { void ctx.close(); }, 3500);
+    const audio = new Audio("/mario.mp3");
+    audio.currentTime = 0;
+    audio.play().then(() => {
+      window.setTimeout(() => { audio.pause(); audio.currentTime = 0; }, 2200);
+    }).catch(() => { /* autoplay bloccato */ });
   };
 
   useEffect(() => {

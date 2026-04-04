@@ -53,7 +53,7 @@ type StatusEventRow = {
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator"]);
+    const auth = await authorizePricingRequest(request, ["admin", "supervisor"]);
     if (auth instanceof NextResponse) return auth;
 
     const limitRaw = Number(request.nextUrl.searchParams.get("limit") ?? 80);

@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
+import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 
 export const runtime = "nodejs";
 
@@ -88,6 +89,7 @@ function hashString(v: string) {
 function tipoToBookingKind(tipo: string): { bookingKind: string; transportMode: string } {
   if (tipo === "transfer_airport_hotel") return { bookingKind: "transfer_airport_hotel", transportMode: "unknown" };
   if (tipo === "transfer_port_hotel") return { bookingKind: "transfer_port_hotel", transportMode: "hydrofoil" };
+  if (tipo === "bus_city_hotel") return { bookingKind: "bus_city_hotel", transportMode: "bus" };
   if (tipo === "excursion") return { bookingKind: "excursion", transportMode: "bus" };
   return { bookingKind: "transfer_train_hotel", transportMode: "train" };
 }
@@ -147,7 +149,6 @@ export async function POST(request: NextRequest) {
   if (!clean(form.hotel)) return NextResponse.json({ ok: false, error: "Hotel obbligatorio." }, { status: 422 });
 
   const departureDate = parseDate(form.data_partenza);
-  const outboundTime = normalizeTime(form.orario_arrivo);
   const returnTime = normalizeTime(form.orario_partenza);
   const customerName = clean(form.cliente_nome) ?? "Cliente da verificare";
   const hotelName = clean(form.hotel);
@@ -161,7 +162,13 @@ export async function POST(request: NextRequest) {
   const sourcePricePerPaxCents = sourceTotalCents && passengers > 0 ? Math.round(sourceTotalCents / passengers) : null;
 
   const { bookingKind, transportMode } = tipoToBookingKind(form.tipo_servizio ?? "transfer_station_hotel");
-  if (!outboundTime) {
+
+  // Orario andata: dal form; se assente nei bus, prende l'orario dal catalogo fermate
+  const resolvedBusStop = bookingKind === "bus_city_hotel" ? resolveBusStop(arrivalPlace) : null;
+  const outboundTime = normalizeTime(form.orario_arrivo) ?? (bookingKind === "bus_city_hotel" ? (resolvedBusStop?.time ?? null) : null);
+
+  // Per i servizi bus l'orario è opzionale (spesso non presente nel PDF)
+  if (!outboundTime && bookingKind !== "bus_city_hotel") {
     return NextResponse.json(
       { ok: false, error: "Orario arrivo non valido o mancante. Inserisci un orario reale nel formato HH:MM prima di confermare." },
       { status: 422 }

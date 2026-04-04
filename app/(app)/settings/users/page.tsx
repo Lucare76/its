@@ -50,6 +50,7 @@ const defaultForm: UserFormState = {
 };
 
 const roleDescriptions: Array<{ role: UserRole; label: string; description: string }> = [
+  { role: "supervisor", label: "Supervisor", description: "Accesso completo a tutte le sezioni incluso Audit. Riservato al gestore del sistema." },
   { role: "admin", label: "Admin", description: "Accesso completo, configurazioni, utenti, listini e supervisione operativa." },
   { role: "operator", label: "Operatore", description: "Gestisce servizi, review PDF, inbox, pianificazione e riepiloghi." },
   { role: "driver", label: "Autista", description: "Vede solo i servizi assegnati e la parte mobile operativa." },
@@ -97,6 +98,7 @@ function formatCreatedAt(value?: string | null) {
 }
 
 function roleSwitchLabel(role: UserRole) {
+  if (role === "supervisor") return "Supervisor";
   if (role === "admin") return "Admin";
   if (role === "operator") return "Operatore";
   if (role === "driver") return "Autista";
@@ -108,6 +110,7 @@ function isAgencyLockedCapability(role: UserRole, capability: AppCapability) {
 }
 
 function roleBadgeTone(role: UserRole) {
+  if (role === "supervisor") return "bg-purple-100 text-purple-700";
   if (role === "admin") return "bg-slate-100 text-slate-700";
   if (role === "operator") return "bg-sky-100 text-sky-700";
   if (role === "driver") return "bg-emerald-100 text-emerald-700";

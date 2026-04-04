@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { claudeEmailExtract } from "@/lib/server/claude-email-extract";
 import { isPdfAttachment } from "@/lib/server/pdf-text";
+import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 
 export const runtime = "nodejs";
 
@@ -34,17 +35,32 @@ export async function POST(request: NextRequest) {
   const bytes = Buffer.from(await file.arrayBuffer());
   const pdfBase64 = bytes.toString("base64");
 
-  const result = await claudeEmailExtract(pdfBase64, bodyText, subject);
+  try {
+    const result = await claudeEmailExtract(pdfBase64, bodyText, subject);
 
-  // Restituisce in formato claude_extracted così il frontend usa claudeExtractedToForm
-  return NextResponse.json({
-    ok: true,
-    mode: "claude_preview",
-    filename: file.name,
-    claude_extracted: {
-      agency: result.agency,
-      form: result.form,
-      raw_json: result.rawJson
+    // Per servizi bus: usa l'orario dal catalogo fermate (fonte autoritativa)
+    const enrichedForm = { ...result.form };
+    if (enrichedForm.tipo_servizio === "bus_city_hotel" && enrichedForm.citta_partenza) {
+      const busStop = resolveBusStop(enrichedForm.citta_partenza);
+      if (busStop?.time) {
+        enrichedForm.orario_arrivo = busStop.time;
+      }
     }
-  });
+
+    // Restituisce in formato claude_extracted così il frontend usa claudeExtractedToForm
+    return NextResponse.json({
+      ok: true,
+      mode: "claude_preview",
+      filename: file.name,
+      claude_extracted: {
+        agency: result.agency,
+        form: enrichedForm,
+        raw_json: result.rawJson
+      }
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Errore durante l'analisi del PDF.";
+    console.error("[preview-pdf] errore Claude:", message);
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+  }
 }

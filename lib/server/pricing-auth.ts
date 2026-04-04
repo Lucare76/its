@@ -11,7 +11,7 @@ export type PricingAuthContext = {
 
 export async function authorizePricingRequest(
   request: NextRequest,
-  roles: string[] = ["admin", "operator"]
+  roles: string[] = ["admin", "operator", "supervisor"]
 ): Promise<PricingAuthContext | NextResponse> {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

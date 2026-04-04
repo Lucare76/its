@@ -38,9 +38,9 @@ Restituisci ESATTAMENTE questo JSON:
   "orario_partenza": "HH:MM oppure null",
   "numero_mezzo_andata": "codice treno/volo/corsa oppure null",
   "numero_mezzo_ritorno": "codice treno/volo/corsa oppure null",
-  "citta_partenza": "città di partenza oppure null",
+  "citta_partenza": "indirizzo COMPLETO della fermata bus oppure nome COMPLETO della stazione incluso terminal (es. 'ROMA TIBURTINA' non 'ROMA', 'Largo Mazzoni difronte negozio SMEA') oppure null",
   "totale_pratica": 000.00,
-  "tipo_servizio": "transfer_station_hotel oppure transfer_airport_hotel oppure transfer_port_hotel oppure excursion",
+  "tipo_servizio": "transfer_station_hotel oppure transfer_airport_hotel oppure transfer_port_hotel oppure bus_city_hotel oppure excursion",
   "tipo_barca_ritorno": "traghetto oppure aliscafo oppure null",
   "agenzia": "Nome Agenzia",
   "note_operative": "note aggiuntive oppure null",
@@ -51,8 +51,12 @@ Regole tipo_servizio:
 - STAZIONE / TRENO / ITALO / TRENITALIA / FLIXBUS → "transfer_station_hotel"
 - AEROPORTO / VOLO / AEREO → "transfer_airport_hotel"
 - PORTO / TRAGHETTO / MEDMAR / SNAV / ALISCAFO → "transfer_port_hotel"
+- BUS / AUTOBUS / PULLMAN / LARGO / PIAZZA / FERMATA BUS (prelevamento da una via o fermata in città) → "bus_city_hotel"
 - ESCURSIONE / GIRO ISOLA / CAPRI / SORRENTO / POSITANO / AMALFI / PROCIDA / POMPEI / CASERTA / NAPOLI / CASTELLO / MORTELLA / NITRODI / COOKING CLASS / CRATERI → "excursion"
   (usa "excursion" ogni volta che il documento riguarda una gita o escursione, NON un transfer da/per stazione/aeroporto/porto)
+
+Regole numero_mezzo:
+- Se tipo_servizio è "bus_city_hotel" → numero_mezzo_andata e numero_mezzo_ritorno sono sempre null. Non inventare codici treno o volo.
 
 Regole tipo_barca_ritorno (solo per transfer stazione o aeroporto con ritorno):
 - Se nel documento del RITORNO è specificato TRAGHETTO / MEDMAR / NAVE → "traghetto"
@@ -110,42 +114,50 @@ ${FLAT_SCHEMA}`,
 
   angelino: `Stai leggendo una CONFERMA D'ORDINE di Angelino Tour & Events (Forio, Ischia).
 ATTENZIONE: PDF con encoding non standard, leggi dall'immagine.
+REGOLA FONDAMENTALE: Angelino gestisce ESCLUSIVAMENTE servizi bus. tipo_servizio è SEMPRE "bus_city_hotel".
 
 ISTRUZIONI CAMPO PER CAMPO:
-- numero_pratica: campo "pratica" (es: "26/000102")
+- numero_pratica: campo "pratica" (es: "26/000127")
 - cliente_nome: campo "1° beneficiario" — tutto su una riga
-- cliente_cellulare: cerca numero 10 cifre che inizia con 3
+- cliente_cellulare: cerca numero 10 cifre che inizia con 3; null se assente
 - n_pax: campo "pax" in alto a destra
 - hotel: campo "descrizione" accanto a "programma"
 - data_arrivo / data_partenza: campi "dal" / "al" → YYYY-MM-DD
-- orario_arrivo: orario del primo servizio (andata) se presente
-- orario_partenza: orario del secondo servizio (ritorno) se presente
-- numero_mezzo_andata: per PORTO scrivi "MEDMAR" o "SNAV". Per treni/aerei: codice se presente
-- numero_mezzo_ritorno: per PORTO scrivi "MEDMAR" o "SNAV". Per treni/aerei: codice se presente
-- citta_partenza: città di partenza deducibile dal servizio andata
-- totale_pratica: "Totale pratica EUR"
-- tipo_servizio: deduci da descrizione (STAZIONE→station, AEROPORTO→airport, PORTO→port)
-- note_operative: nominativi passeggeri dalla tabella "num nominativo"
+- orario_arrivo: cerca un orario HH:MM esplicitamente scritto nel documento; null se non presente (NON inventare)
+- orario_partenza: cerca un orario HH:MM esplicitamente scritto nel documento; null se non presente (NON inventare)
+- numero_mezzo_andata: sempre null (servizio bus, nessun codice mezzo)
+- numero_mezzo_ritorno: sempre null (servizio bus, nessun codice mezzo)
+- citta_partenza: cerca nelle righe descrizione della tabella servizi il nome della fermata bus.
+    La riga andata ha formato "FERMATA - ISCHIA" → usa FERMATA come citta_partenza.
+    La riga ritorno ha formato "ISCHIA - FERMATA" → stesso valore.
+    Esempi: "PERUGIA - ISCHIA" → "PERUGIA"; "PONTE SAN GIOVANNI - ISCHIA" → "PONTE SAN GIOVANNI".
+- totale_pratica: valore dopo "Totale pratica EUR"
+- tipo_servizio: SEMPRE "bus_city_hotel" (Angelino fa solo bus)
+- note_operative: nominativi dalla tabella "num nominativo" (es: "1 ERCOLI LUANA 2 RAICHINI GIOVANNA")
 ${FLAT_SCHEMA}`,
 
   holidayweb: `Stai leggendo una CONFERMA D'ORDINE di Holiday Web (Lacco Ameno, Ischia).
 ATTENZIONE: PDF con encoding non standard, leggi dall'immagine.
+REGOLA FONDAMENTALE: Holiday Web gestisce ESCLUSIVAMENTE servizi bus. tipo_servizio è SEMPRE "bus_city_hotel".
 
 ISTRUZIONI CAMPO PER CAMPO:
-- numero_pratica: campo "pratica" (es: "25/000898")
+- numero_pratica: campo "pratica" (es: "25/000898", "26/001144")
 - cliente_nome: campo "1° beneficiario" — tutto su una riga
-- cliente_cellulare: cerca numero 10 cifre che inizia con 3
+- cliente_cellulare: cerca numero 10 cifre che inizia con 3; null se assente
 - n_pax: campo "pax"
 - hotel: campo "descrizione" nella riga "programma"
 - data_arrivo / data_partenza: campi "dal" / "al" → YYYY-MM-DD
-- orario_arrivo: orario servizio andata se presente
-- orario_partenza: orario servizio ritorno se presente
-- numero_mezzo_andata: per PORTO scrivi "MEDMAR" o "SNAV". Per treni/aerei: codice se presente ("PONTE SAN GIOVANNI" indica stazione)
-- numero_mezzo_ritorno: per PORTO scrivi "MEDMAR" o "SNAV". Per treni/aerei: codice se presente
-- citta_partenza: deduci da "PONTE SAN GIOVANNI", "PORTO SAN GIOVANNI" o simile
-- totale_pratica: "Totale pratica EUR"
-- tipo_servizio: deduci da descrizione
-- note_operative: nominativi dalla tabella "num nominativo"
+- orario_arrivo: cerca un orario HH:MM esplicitamente scritto nel documento; null se non presente (NON inventare orari)
+- orario_partenza: cerca un orario HH:MM esplicitamente scritto nel documento; null se non presente (NON inventare orari)
+- numero_mezzo_andata: sempre null (servizio bus, nessun codice mezzo)
+- numero_mezzo_ritorno: sempre null (servizio bus, nessun codice mezzo)
+- citta_partenza: cerca nelle righe descrizione della tabella servizi il nome della fermata bus.
+    La riga andata ha formato "FERMATA - ISCHIA" → usa FERMATA come citta_partenza.
+    La riga ritorno ha formato "ISCHIA - FERMATA" → stesso valore.
+    Esempi: "PONTE SAN GIOVANNI - ISCHIA" → "PONTE SAN GIOVANNI"; "ROMA TIBURTINA - ISCHIA" → "ROMA TIBURTINA".
+- totale_pratica: valore dopo "Totale pratica EUR"
+- tipo_servizio: SEMPRE "bus_city_hotel" (Holiday Web fa solo bus)
+- note_operative: nominativi dalla tabella "num nominativo" (es: "1 TEDESCHI MARIANO 2 PEPPUCCI EUGENIA")
 ${FLAT_SCHEMA}`,
 
   sosandra: `Stai leggendo un documento di Sosandra Tour / Rossella Viaggi / Dimhotels (Ischia Porto).
@@ -154,7 +166,7 @@ Può essere una CONFERMA SERVIZIO (lettera libera) OPPURE un VOUCHER SNAV compil
 CASO A — Lettera di conferma servizio (riconosci perché inizia con "Alla C.A Ischia Transfert" o "Oggetto: Transfer"):
 - numero_pratica: null
 - cliente_nome: dopo "per i Sigg" o "a nome" — tutto su una riga (es: "Scala Roberto")
-- cliente_cellulare: dopo "Cellulare cliente" — IGNORA se contiene "TRF NORMALE", "AGGIUNTA DI 1 PAX", "ATTESA SALDO" → metti null in quel caso
+- cliente_cellulare: cerca TUTTE le righe "Cellulare cliente ..." nel documento; IGNORA quelle che contengono "TRF NORMALE", "AGGIUNTA DI 1 PAX", "ATTESA SALDO"; usa il PRIMO numero valido di 10 cifre che inizia con 3 trovato tra le righe rimanenti → null se nessuna riga valida
 - n_pax: dopo "numero persone" o "numero X persone"
 - hotel: dopo "per Hotel" o nome hotel esplicito
 - data_arrivo: dopo "Arrivo giorno" → YYYY-MM-DD
@@ -163,9 +175,13 @@ CASO A — Lettera di conferma servizio (riconosci perché inizia con "Alla C.A 
 - orario_partenza: orario prelevamento ritorno (dopo "prelevamento alle ore") — es: "14:35", "08:00"
 - numero_mezzo_andata: per PORTO/ALISCAFO scrivi "MEDMAR" o "SNAV". Per treni/bus: numero se indicato
 - numero_mezzo_ritorno: per PORTO/ALISCAFO scrivi "MEDMAR" o "SNAV". Per treni/bus: numero se indicato
-- citta_partenza: città di partenza
 - totale_pratica: null
-- tipo_servizio: deduci (ITALO/TRENO→station, BUS→station, SNAV/ALISCAFO→port)
+- tipo_servizio: deduci (ITALO/TRENO→transfer_station_hotel, BUS/AUTOBUS/PULLMAN/LARGO/PIAZZA→bus_city_hotel, SNAV/ALISCAFO→transfer_port_hotel)
+- citta_partenza:
+    * Per servizi BUS (bus_city_hotel): estrai l'indirizzo COMPLETO della fermata bus (es. "LARGO MAZZONI DIFRONTE NEGOZIO SMEA"). Se non c'è indirizzo specifico, usa il nome COMPLETO della stazione/terminal incluso il sottotipo (es: "ROMA TIBURTINA" non "ROMA", "ROMA ANAGNINA" non "ROMA", "NAPOLI CENTRALE" non "NAPOLI"). Se ci sono due fermate distinte (es. TIBURTINA e ANAGNINA), usa la PRIMA citata nel documento.
+    * Per treni → città e nome stazione completo (es. "TORINO PORTA NUOVA", "ROMA TIBURTINA")
+    * Per porto/SNAV/ALISCAFO → null
+- numero_mezzo_andata / numero_mezzo_ritorno: per servizi BUS (bus_city_hotel) → sempre null. Non inventare codici treno o volo.
 - note_operative: testo aggiuntivo + note tipo "AGGIUNTA DI 1 PAX", "ATTESA SALDO"
 
 CASO B — Voucher SNAV compilato (riconosci perché ha logo SNAV, "Numero Passeggeri:" e checkbox orari ☐/☑):
@@ -342,6 +358,7 @@ function normalizeTipo(raw: string | null | undefined): string {
   const r = raw.toLowerCase();
   if (r.includes("airport") || r.includes("aeroporto")) return "transfer_airport_hotel";
   if (r.includes("port") || r.includes("porto") || r.includes("traghetto") || r.includes("medmar") || r.includes("snav")) return "transfer_port_hotel";
+  if (r.includes("bus_city") || r.includes("bus city") || r.includes("bus_hotel") || r === "bus_city_hotel") return "bus_city_hotel";
   return "transfer_station_hotel";
 }
 
@@ -446,6 +463,49 @@ export async function extractWithHaiku(
   // agency_key dal JSON ha priorità sulla regex se è un'agenzia nota
   const jsonAgencyKey = rawJson.agency_key ?? "";
   const finalAgency = (KNOWN_AGENCIES as readonly string[]).includes(jsonAgencyKey) ? jsonAgencyKey : agency;
+
+  // Se il modello ha auto-identificato un'agenzia diversa da quella rilevata via regex
+  // (es. PDF HolidayWeb con testo corrotto → regex → "unknown", AI → "holidayweb"),
+  // facciamo un secondo passaggio con il prompt corretto per ottenere dati accurati.
+  if (finalAgency !== agency && AGENCY_PROMPTS[finalAgency]) {
+    const correctPrompt = AGENCY_PROMPTS[finalAgency];
+    const contentParts2: unknown[] = [];
+    if (!textMode && pdfBase64) {
+      contentParts2.push({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: pdfBase64 }
+      });
+    }
+    if (page1Text) {
+      contentParts2.push({ type: "text", text: `[PRIMA PAGINA PDF]\n${page1Text}` });
+    }
+    if (emailSnippet) {
+      contentParts2.push({ type: "text", text: `[TESTO EMAIL]\n${emailSnippet}` });
+    }
+    contentParts2.push({ type: "text", text: correctPrompt });
+
+    const res2 = await callHaiku({
+      model: MODEL,
+      max_tokens: 1000,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content: contentParts2 }]
+    });
+    if (res2.ok) {
+      const resData2 = (await res2.json()) as { content?: Array<{ text?: string }> };
+      let rawText2 = resData2.content?.map((b) => b.text ?? "").join("") ?? "";
+      rawText2 = rawText2.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+      const match2 = rawText2.match(/\{[\s\S]*\}/);
+      if (match2) {
+        const rawJson2 = JSON.parse(match2[0]) as ClaudeJson & { agency_key?: string };
+        return {
+          agency: finalAgency,
+          form: jsonToForm(rawJson2, finalAgency),
+          rawJson: rawJson2 as Record<string, unknown>,
+          textMode
+        };
+      }
+    }
+  }
 
   const form = jsonToForm(rawJson, finalAgency);
 

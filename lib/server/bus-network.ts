@@ -123,10 +123,19 @@ export function getDefaultStopsForLine(code: string): BusNetworkStop[] {
         stop_name: stop.city,
         city: stop.city,
         pickup_note: stop.pickupNote,
-        sort_key: stop.time
+        sort_key: stop.time,
+        lat: stop.lat ?? null,
+        lng: stop.lng ?? null
       }))
     )
-    .sort((left, right) => left.sort_key.localeCompare(right.sort_key))
+    .sort((left, right) => {
+      // Prefer geographic order (lat desc = north→south) when coords are available.
+      // Fall back to departure time for stops without coordinates.
+      if (typeof left.lat === "number" && typeof right.lat === "number") {
+        return right.lat - left.lat;
+      }
+      return left.sort_key.localeCompare(right.sort_key);
+    })
     .filter((stop, index, all) => all.findIndex((candidate) => candidate.stop_name === stop.stop_name) === index);
 
   const outbound = outwardStops.map((stop, index) => ({
@@ -139,8 +148,8 @@ export function getDefaultStopsForLine(code: string): BusNetworkStop[] {
     city: stop.city,
     pickup_note: stop.pickup_note,
     stop_order: index + 1,
-    lat: null,
-    lng: null,
+    lat: stop.lat,
+    lng: stop.lng,
     is_manual: false,
     active: true
   }));
@@ -154,8 +163,8 @@ export function getDefaultStopsForLine(code: string): BusNetworkStop[] {
     city: stop.city,
     pickup_note: stop.pickup_note,
     stop_order: index + 1,
-    lat: null,
-    lng: null,
+    lat: stop.lat,
+    lng: stop.lng,
     is_manual: false,
     active: true
   }));
