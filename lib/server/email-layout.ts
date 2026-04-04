@@ -8,7 +8,7 @@ import { getLogoDataUri } from "@/lib/server/logo";
 export function emailHtml(body: string, options?: { title?: string; preheader?: string }): string {
   const logo = getLogoDataUri();
   const logoBlock = logo
-    ? `<img src="${logo}" alt="Ischia Transfer Service" style="width:480px;max-width:100%;height:auto;display:block;margin:0 auto;" />`
+    ? `<img src="${logo}" alt="Ischia Transfer Service" style="width:100%;height:auto;display:block;" />`
     : `<div style="font-size:26px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;text-align:center;">Ischia Transfer Service</div>`;
 
   const preheader = options?.preheader
@@ -33,7 +33,7 @@ ${preheader}
 
   <!-- HEADER con logo -->
   <tr>
-    <td style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:16px 32px;text-align:center;">
+    <td style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:0;text-align:center;">
       ${logoBlock}
     </td>
   </tr>
