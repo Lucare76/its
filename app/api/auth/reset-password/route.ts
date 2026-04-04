@@ -134,3 +134,4 @@ export async function POST(request: NextRequest) {
     .catch(() => undefined);
 
   return NextResponse.json({ ok: true, message: "Email con password temporanea inviata." }, { status: 200 });
+}
