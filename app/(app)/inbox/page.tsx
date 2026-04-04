@@ -44,6 +44,7 @@ const TIPO_LABELS: Record<string, string> = {
   transfer_station_hotel: "Transfer Stazione / Hotel",
   transfer_airport_hotel: "Transfer Aeroporto / Hotel",
   transfer_port_hotel: "Transfer Porto / Hotel",
+  bus_city_hotel: "Bus Città / Hotel",
   excursion: "Escursione"
 };
 
@@ -102,6 +103,22 @@ function claudeExtractedToForm(claudeExtracted: Record<string, unknown> | null):
 
 function text(value: unknown) {
   return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+// Converte qualsiasi stringa data in formato YYYY-MM-DD per <input type="date">
+// Se non riconoscibile restituisce "" (campo vuoto, l'utente la inserisce manualmente)
+function toDateValue(raw: string): string {
+  if (!raw) return "";
+  // Già ISO
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  // DD/MM/YYYY o D/M/YYYY
+  const dmy = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (dmy) {
+    const [, d, m, y] = dmy;
+    const year = y!.length === 2 ? `20${y}` : y;
+    return `${year}-${m!.padStart(2, "0")}-${d!.padStart(2, "0")}`;
+  }
+  return "";
 }
 
 function normalizedPdfToForm(normalized: Record<string, unknown> | null): FormState {
@@ -187,7 +204,7 @@ export default function InboxPage() {
   const [approveError, setApproveError] = useState<string | null>(null);
   const [approvedServiceId, setApprovedServiceId] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [authRole, setAuthRole] = useState<"admin" | "operator" | "driver" | "agency" | null>(null);
+  const [authRole, setAuthRole] = useState<"admin" | "operator" | "driver" | "agency" | "supervisor" | null>(null);
   const [pdfAdvancedOpen, setPdfAdvancedOpen] = useState(false);
   const [pdfAdvancedLoading, setPdfAdvancedLoading] = useState(false);
   const [pdfAdvancedError, setPdfAdvancedError] = useState<string | null>(null);
@@ -884,9 +901,9 @@ export default function InboxPage() {
                       </label>
                       <label className="text-xs font-medium text-slate-600">
                         Data arrivo *
-                        <input value={form.data_arrivo} onChange={(e) => setField("data_arrivo", e.target.value)}
-                          className={`mt-1 input-saas w-full ${!form.data_arrivo ? "border-amber-300 bg-amber-50" : ""}`}
-                          placeholder="Es. 2026-04-19" />
+                        <input type="date" value={toDateValue(form.data_arrivo)}
+                          onChange={(e) => setField("data_arrivo", e.target.value)}
+                          className={`mt-1 input-saas w-full ${!form.data_arrivo ? "border-amber-300 bg-amber-50" : ""}`} />
                       </label>
                       <label className="text-xs font-medium text-slate-600">
                         Orario arrivo
@@ -895,8 +912,9 @@ export default function InboxPage() {
                       </label>
                       <label className="text-xs font-medium text-slate-600">
                         Data partenza
-                        <input value={form.data_partenza} onChange={(e) => setField("data_partenza", e.target.value)}
-                          className="mt-1 input-saas w-full" placeholder="Es. 2026-04-26" />
+                        <input type="date" value={toDateValue(form.data_partenza)}
+                          onChange={(e) => setField("data_partenza", e.target.value)}
+                          className="mt-1 input-saas w-full" />
                       </label>
                       <label className="text-xs font-medium text-slate-600">
                         Orario partenza
@@ -927,9 +945,9 @@ export default function InboxPage() {
                           className="mt-1 input-saas w-full" placeholder="Es. 9940" />
                       </label>
                       <label className="text-xs font-medium text-slate-600">
-                        Città / stazione partenza
+                        {form.tipo_servizio === "bus_city_hotel" ? "Fermata bus / indirizzo prelevamento" : "Città / stazione partenza"}
                         <input value={form.citta_partenza} onChange={(e) => setField("citta_partenza", e.target.value)}
-                          className="mt-1 input-saas w-full" placeholder="Es. Torino P. Nuova" />
+                          className="mt-1 input-saas w-full" placeholder={form.tipo_servizio === "bus_city_hotel" ? "Es. Largo Mazzoni difronte SMEA" : "Es. Torino P. Nuova"} />
                       </label>
                       <label className="text-xs font-medium text-slate-600">
                         Totale pratica (€)
@@ -1272,6 +1290,13 @@ export default function InboxPage() {
                       {/* Andata */}
                       <div>
                         <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Andata (arrivo a Ischia)</p>
+                        {pdfEditForm.tipo_servizio === "bus_city_hotel" && (
+                          <label className="block text-xs font-medium text-slate-600 mb-2">
+                            Fermata bus / Meeting point
+                            <input className="mt-1 input-saas w-full" placeholder="Es. Largo Mazzoni difronte SMEA — Roma Tiburtina" value={pdfEditForm.citta_partenza}
+                              onChange={(e) => setPdfEditForm(p => ({ ...p, citta_partenza: e.target.value }))} />
+                          </label>
+                        )}
                         <div className="grid gap-2 sm:grid-cols-4">
                           <label className="sm:col-span-2 block text-xs font-medium text-slate-600">
                             Data
@@ -1283,17 +1308,25 @@ export default function InboxPage() {
                             <input className="mt-1 input-saas w-full" placeholder="10:30" value={pdfEditForm.orario_arrivo}
                               onChange={(e) => setPdfEditForm(p => ({ ...p, orario_arrivo: e.target.value }))} />
                           </label>
+                          {pdfEditForm.tipo_servizio !== "bus_city_hotel" && (
                           <label className="block text-xs font-medium text-slate-600">
                             N° mezzo
                             <input className="mt-1 input-saas w-full" placeholder="IC 730" value={pdfEditForm.treno_andata}
                               onChange={(e) => setPdfEditForm(p => ({ ...p, treno_andata: e.target.value }))} />
                           </label>
+                          )}
                         </div>
                       </div>
 
                       {/* Ritorno */}
                       <div>
                         <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Ritorno (partenza da Ischia)</p>
+                        {pdfEditForm.tipo_servizio === "bus_city_hotel" && (
+                          <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                            <span className="font-medium text-slate-700">Fermata bus / Meeting point: </span>
+                            {pdfEditForm.citta_partenza || <span className="italic">non specificata</span>}
+                          </div>
+                        )}
                         <div className="grid gap-2 sm:grid-cols-4">
                           <label className="sm:col-span-2 block text-xs font-medium text-slate-600">
                             Data
@@ -1305,11 +1338,13 @@ export default function InboxPage() {
                             <input className="mt-1 input-saas w-full" placeholder="08:00" value={pdfEditForm.orario_partenza}
                               onChange={(e) => setPdfEditForm(p => ({ ...p, orario_partenza: e.target.value }))} />
                           </label>
+                          {pdfEditForm.tipo_servizio !== "bus_city_hotel" && (
                           <label className="block text-xs font-medium text-slate-600">
                             N° mezzo
                             <input className="mt-1 input-saas w-full" placeholder="IC 731" value={pdfEditForm.treno_ritorno}
                               onChange={(e) => setPdfEditForm(p => ({ ...p, treno_ritorno: e.target.value }))} />
                           </label>
+                          )}
                         </div>
                       </div>
 

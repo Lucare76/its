@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { z } from "zod";
 
-type Role = "admin" | "operator" | "driver" | "agency";
+type Role = "admin" | "operator" | "driver" | "agency" | "supervisor";
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 

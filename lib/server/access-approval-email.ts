@@ -3,7 +3,7 @@ export type AccessApprovalEmailStatus = "sent" | "failed" | "skipped";
 export interface AccessApprovalEmailInput {
   to: string | null;
   fullName: string;
-  role: "admin" | "operator" | "driver" | "agency";
+  role: "admin" | "operator" | "driver" | "agency" | "supervisor";
   agencyName?: string | null;
 }
 

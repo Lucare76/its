@@ -28,7 +28,7 @@ const payloadSchema = z
     path: ["dateFrom"]
   });
 
-type Role = "admin" | "operator" | "driver" | "agency";
+type Role = "admin" | "operator" | "driver" | "agency" | "supervisor";
 
 type ServiceRow = {
   id: string;
@@ -581,7 +581,7 @@ export async function buildServicesExportXlsx(request: NextRequest) {
       return NextResponse.json({ error: "Ruolo driver non autorizzato all'export." }, { status: 403 });
     }
 
-    const builtBaseQuery = (await buildServicesQuery({
+    const { query: builtBaseQuery } = await buildServicesQuery({
       admin,
       filters: {
         tenant_id: tenantId,
@@ -596,7 +596,7 @@ export async function buildServicesExportXlsx(request: NextRequest) {
       },
       select:
         "id, tenant_id, date, time, service_type, direction, vessel, pax, hotel_id, customer_name, billing_party_name, outbound_time, return_time, arrival_date, arrival_time, departure_date, departure_time, booking_service_kind, service_type_code, transport_mode, transport_code, train_arrival_number, train_departure_number, source_total_amount_cents, source_price_per_pax_cents, source_amount_currency, phone, notes, meeting_point, bus_plate, status"
-    })) as any;
+    });
 
     let servicesQuery = builtBaseQuery.order("date", { ascending: true }).order("time", { ascending: true });
 
