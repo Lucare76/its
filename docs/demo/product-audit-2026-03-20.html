@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ischia Transfer - Audit prodotto e operativita 20/03/2026</title>
+    <style>
+      :root {
+        --ink: #0f172a;
+        --muted: #475569;
+        --line: #cbd5e1;
+        --brand: #0b5cab;
+        --brand-soft: #dbeafe;
+        --ok-bg: #dcfce7;
+        --ok-ink: #166534;
+        --warn-bg: #fef3c7;
+        --warn-ink: #92400e;
+        --bad-bg: #fee2e2;
+        --bad-ink: #991b1b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: "Segoe UI", Arial, sans-serif;
+        line-height: 1.45;
+        background:
+          radial-gradient(circle at top left, rgba(11, 92, 171, 0.11), transparent 28%),
+          linear-gradient(180deg, #eff6ff 0%, #f8fafc 180px);
+      }
+      .page {
+        width: 210mm;
+        min-height: 297mm;
+        margin: 0 auto;
+        padding: 11mm;
+        background: white;
+      }
+      h1, h2, h3, p { margin: 0; }
+      h1 {
+        font-size: 27px;
+        line-height: 1.08;
+        color: var(--brand);
+      }
+      h2 {
+        margin-top: 15px;
+        padding-top: 7px;
+        border-top: 1px solid var(--line);
+        font-size: 15px;
+      }
+      p, li { font-size: 12px; }
+      ul { margin: 6px 0 0 18px; padding: 0; }
+      li + li { margin-top: 4px; }
+      .hero {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px 14px;
+        background: linear-gradient(135deg, var(--brand-soft), #ffffff 72%);
+      }
+      .meta {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 11px;
+      }
+      .card strong {
+        display: block;
+        font-size: 11px;
+        margin-bottom: 4px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .two-col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 8px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .ok { background: var(--ok-bg); color: var(--ok-ink); }
+      .warn { background: var(--warn-bg); color: var(--warn-ink); }
+      .bad { background: var(--bad-bg); color: var(--bad-ink); }
+      code {
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 11px;
+        background: #f1f5f9;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+      .small { font-size: 11px; color: var(--muted); }
+      .footer {
+        margin-top: 14px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <h1>Ischia Transfer Beta - Audit prodotto e operativita</h1>
+        <p class="meta">
+          Report aggiornato al 20 marzo 2026. Basato su sviluppo reale, test live su Vercel, import PDF/email,
+          OCR Google Vision, review operativa e generazione draft/servizi.
+        </p>
+      </section>
+
+      <section class="summary">
+        <article class="card">
+          <strong>Stato generale</strong>
+          <p><span class="badge warn">Beta operativa ma ancora fragile</span></p>
+        </article>
+        <article class="card">
+          <strong>Quality Gate</strong>
+          <p><span class="badge ok">lint OK</span> <span class="badge ok">build OK</span></p>
+        </article>
+        <article class="card">
+          <strong>Punto forte</strong>
+          <p><span class="badge ok">Import PDF reale sbloccato</span></p>
+        </article>
+        <article class="card">
+          <strong>Punto critico</strong>
+          <p><span class="badge bad">Review/dispatch ancora confusi</span></p>
+        </article>
+      </section>
+
+      <h2>1. Cosa funziona davvero oggi</h2>
+      <ul>
+        <li>upload PDF manuale con preview, draft, review e conferma;</li>
+        <li>import reale da mailbox Gmail/IMAP con allegato PDF e creazione draft;</li>
+        <li>OCR Google Vision in produzione per voucher immagine-only;</li>
+        <li>parser dedicati stabilizzati per piu famiglie reali: Aleste, Sosandra/Rossella, Angelino, Holiday, Dimhotels/SNAV, Zigolo;</li>
+        <li>servizi confermati che finiscono nel gestionale operativo;</li>
+        <li>deploy Vercel allineato al repo corretto;</li>
+        <li>correzione recente della vista <code>Import PDF</code> per mostrare nei confermati i dati del servizio collegato, non i vecchi dati parser.</li>
+      </ul>
+
+      <h2>2. Cosa abbiamo scoperto lavorando su casi reali</h2>
+      <ul>
+        <li>locale e produzione possono leggere OCR in modo leggermente diverso: quindi alcuni fix vanno validati online, non solo in locale;</li>
+        <li>i PDF text-based reggono bene; i PDF immagine-only o semiscansiti richiedono OCR e piu normalizzazione;</li>
+        <li>lato business ci sono almeno tre famiglie distinte da non confondere: voucher transfer, documenti riepilogativi agenzia, fogli dispatch giornalieri;</li>
+        <li>la inbox e il modulo <code>Import PDF</code> oggi si sovrappongono un po troppo e questo genera incertezza operativa;</li>
+        <li>l'assegnazione autista/mezzo non deve essere obbligatoria in fase di import: appartiene al dispatch successivo.</li>
+      </ul>
+
+      <h2>3. Problemi reali emersi</h2>
+      <div class="two-col">
+        <article class="card">
+          <strong>Problemi di flusso</strong>
+          <ul>
+            <li><code>Posta in arrivo</code> e <code>Import PDF</code> non separano abbastanza bene triage, review e conferma;</li>
+            <li>un import a bassa qualita puo arrivare troppo vicino alla conferma finale;</li>
+            <li>la review dalla inbox puo restituire errori tipo <code>Invalid</code> su campi tecnici come ora/telefono;</li>
+            <li>il dispatch oggi chiede attenzione manuale e non rende ancora chiaro che driver e mezzo possono arrivare dopo.</li>
+          </ul>
+        </article>
+        <article class="card">
+          <strong>Problemi di modello</strong>
+          <ul>
+            <li>un file Excel come <code>LISTA SERVIZI ISCHIA</code> non e un PDF import classico: e un foglio operativo giornaliero;</li>
+            <li>manca un importatore Excel nativo per fogli dispatch;</li>
+            <li>non tutti i documenti agenzia sono prenotazioni singole: alcuni sono elenchi, altri sono istruzioni operative;</li>
+            <li>la UI dei confermati deve sempre riflettere il servizio reale, non la preview storica.</li>
+          </ul>
+        </article>
+      </div>
+
+      <h2>4. Cambiamenti che conviene fare subito</h2>
+      <ul>
+        <li><strong>Separare nettamente i flussi:</strong> Inbox = triage, Import PDF = review, Dispatch = assegnazione driver/mezzo.</li>
+        <li><strong>Bloccare meglio la conferma:</strong> se qualita parser e bassa e mancano campi chiave, niente conferma rapida.</li>
+        <li><strong>Rendere il dispatch una fase successiva:</strong> prima conferma servizio, poi assegnazione autista e veicolo.</li>
+        <li><strong>Introdurre l'import Excel giornaliero:</strong> quel file va trattato come lista operativa/dispatch, non come parser PDF.</li>
+        <li><strong>Ridurre la lentezza dell'import:</strong> OCR solo quando serve davvero, cosa che abbiamo gia iniziato a fare.</li>
+      </ul>
+
+      <h2>5. Raccomandazione di prodotto</h2>
+      <p>
+        La Beta non va piu pensata solo come “lettore di PDF”, ma come sistema con tre ingressi distinti:
+        <code>PDF agenzia</code>, <code>email operativa</code>, <code>foglio dispatch giornaliero</code>.
+        Oggi il primo ingresso e gia abbastanza forte. Il secondo e stato sbloccato. Il terzo e il prossimo vero salto di qualita.
+      </p>
+
+      <h2>6. Priorita pratica suggerita</h2>
+      <ul>
+        <li><strong>Priorita 1:</strong> mettere in sicurezza review e conferma, cosi non si confermano servizi sporchi per errore;</li>
+        <li><strong>Priorita 2:</strong> chiarire il dispatch come fase separata e non bloccante;</li>
+        <li><strong>Priorita 3:</strong> aggiungere import Excel per la lista servizi del giorno;</li>
+        <li><strong>Priorita 4:</strong> fondere meglio dati da email e PDF quando il documento e incompleto.</li>
+      </ul>
+
+      <h2>7. Verdetto finale</h2>
+      <p>
+        Quello che abbiamo costruito e gia utile e reale, ma il prossimo guadagno non viene da “aggiungere altri parser a caso”.
+        Viene dal rendere piu chiari i tre momenti operativi: <strong>ingresso</strong>, <strong>review</strong>, <strong>dispatch</strong>.
+        Se facciamo questo cambio, il sistema smette di sembrare solo tecnico e comincia a somigliare davvero a un gestionale operativo vendibile.
+      </p>
+
+      <div class="footer small">
+        Audit generato automaticamente dal progetto locale Ischia Transfer Beta il 20/03/2026.
+      </div>
+    </main>
+  </body>
+</html>

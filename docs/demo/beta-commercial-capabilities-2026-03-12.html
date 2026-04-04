@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ischia Transfer Beta - Cosa puoi vendere oggi</title>
+    <style>
+      :root {
+        --ink: #0f172a;
+        --muted: #475569;
+        --line: #cbd5e1;
+        --brand: #0f766e;
+        --brand-soft: #ccfbf1;
+        --bg: #f8fafc;
+        --ok: #166534;
+        --warn: #92400e;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at top right, rgba(15, 118, 110, 0.12), transparent 28%),
+          linear-gradient(180deg, #e6fffb 0%, #f8fafc 180px);
+        color: var(--ink);
+        font-family: "Segoe UI", Arial, sans-serif;
+        line-height: 1.45;
+      }
+      .page {
+        width: 210mm;
+        min-height: 297mm;
+        margin: 0 auto;
+        padding: 14mm;
+        background: white;
+      }
+      h1, h2, h3, p { margin: 0; }
+      h1 {
+        font-size: 28px;
+        line-height: 1.1;
+        color: var(--brand);
+        max-width: 620px;
+      }
+      h2 {
+        margin-top: 18px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 17px;
+      }
+      h3 {
+        font-size: 13px;
+        margin-bottom: 6px;
+      }
+      p, li {
+        font-size: 12px;
+      }
+      ul {
+        margin: 6px 0 0 18px;
+        padding: 0;
+      }
+      li + li {
+        margin-top: 4px;
+      }
+      .hero {
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: linear-gradient(135deg, var(--brand-soft), #ffffff 68%);
+      }
+      .meta {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: #fff;
+      }
+      .card strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 11px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 10px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .ok {
+        background: #dcfce7;
+        color: var(--ok);
+      }
+      .warn {
+        background: #fef3c7;
+        color: var(--warn);
+      }
+      .small {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .footer {
+        margin-top: 16px;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+      }
+      code {
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 11px;
+        background: #f1f5f9;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <h1>Ischia Transfer Beta: cosa puoi gia vendere e mostrare oggi</h1>
+        <p class="meta">Documento commerciale sintetico basato sullo stato reale verificato il 12 marzo 2026.</p>
+      </section>
+
+      <section class="summary">
+        <article class="card">
+          <strong>Stato Piattaforma</strong>
+          <p>Beta reale su stack moderno, con backend Supabase, ruoli attivi e build verificata.</p>
+        </article>
+        <article class="card">
+          <strong>Uso Commerciale</strong>
+          <p>Adatta a demo vendita, pilot operativo e primi flussi controllati con clienti/agenzie.</p>
+        </article>
+        <article class="card">
+          <strong>Qualita Tecnica</strong>
+          <p><span class="badge ok">Lint OK</span> <span class="badge ok">Typecheck OK</span> <span class="badge ok">Build OK</span></p>
+        </article>
+      </section>
+
+      <h2>1. Cosa puoi gia mostrare a un cliente</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Portale operativo completo</h3>
+          <ul>
+            <li>dashboard servizi e KPI operativi;</li>
+            <li>dispatch con vista lavori e assegnazioni;</li>
+            <li>area driver mobile-first;</li>
+            <li>mappa con Leaflet + OpenStreetMap;</li>
+            <li>interfaccia agenzia per inserimento prenotazioni.</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Esperienza commerciale credibile</h3>
+          <ul>
+            <li>pagine pubbliche marketing gia presenti;</li>
+            <li>preventivo e sezioni servizi/contatti/flotta;</li>
+            <li>accesso per ruoli distinti: admin, operator, driver, agency;</li>
+            <li>dimostrazione concreta del ciclo prenotazione → dispatch → driver.</li>
+          </ul>
+        </article>
+      </div>
+
+      <h2>2. Cosa puoi gia usare internamente</h2>
+      <ul>
+        <li>creazione manuale servizi transfer e bus tour;</li>
+        <li>assegnazione autista e mezzo nelle pagine operative;</li>
+        <li>tracking stato servizio per flusso giornaliero;</li>
+        <li>gestione hotel e dati geografici per Ischia;</li>
+        <li>multi-tenant con <code>tenant_id</code> e ruoli separati;</li>
+        <li>validazione payload con Zod nei punti sensibili;</li>
+        <li>pricing, margini, override e storico;</li>
+        <li>export e analytics disponibili.</li>
+      </ul>
+
+      <h2>3. Cosa puoi gia proporre alle agenzie</h2>
+      <ul>
+        <li>modulo prenotazioni agenzia reale su [services] e non solo demo;</li>
+        <li>lista prenotazioni agenzia con filtro sui propri record;</li>
+        <li>evento iniziale su <code>status_events</code> creato automaticamente;</li>
+        <li>controlli anti-duplicato in creazione booking;</li>
+        <li>verifica reale eseguita: creazione booking riuscita, lista aggiornata, evento stato creato.</li>
+      </ul>
+      <p class="small">Smoke test reale eseguito il 12 marzo 2026 con utente agency demo collegato al progetto Supabase configurato.</p>
+
+      <h2>4. Cosa puoi gia usare per ridurre lavoro manuale</h2>
+      <ul>
+        <li>import email/PDF con pipeline dedicata;</li>
+        <li>review operatore dei draft generati da PDF;</li>
+        <li>conferma import e passaggio del booking nel flusso operativo;</li>
+        <li>arricchimento metadata PDF su dashboard e dispatch.</li>
+      </ul>
+
+      <h2>5. Cosa manca per andare live senza attriti</h2>
+      <ul>
+        <li>verifica definitiva del dominio email su Resend, per abilitare conferme email booking;</li>
+        <li>validazione finale su progetto Supabase/Vercel di produzione;</li>
+        <li>check SQL finale di migration <code>0019</code> + <code>0020</code> e policy RLS;</li>
+        <li>smoke test finale con utenti e dati reali del tenant target.</li>
+      </ul>
+      <p><span class="badge warn">Nota operativa</span> La conferma email agenzia oggi fallisce se il dominio mittente non e verificato su Resend.</p>
+
+      <h2>6. Messaggio commerciale consigliato</h2>
+      <div class="card">
+        <p>Questa beta e gia abbastanza solida per essere mostrata e testata con clienti pilota: consente prenotazione, dispatch, driver flow, import PDF/email e gestione agency su backend reale. Non e ancora il go-live definitivo full production, ma e una base vendibile per pilot e prevendita operativa.</p>
+      </div>
+
+      <div class="footer">
+        <p><strong>Documento collegato:</strong> checklist tecnica aggiornata in <code>docs/ops/agency-area-production-checklist.md</code>.</p>
+      </div>
+    </main>
+  </body>
+</html>
