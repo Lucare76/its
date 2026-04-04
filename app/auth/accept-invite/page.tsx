@@ -1,10 +1,10 @@
 "use client";
 
 import { useSearchParams, useRouter } from "next/navigation";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useState, Suspense } from "react";
 import { PasswordStrengthMeter } from "@/components/password-strength-meter";
 
-export default function AcceptInvitePage() {
+function AcceptInviteForm() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const token = searchParams.get("token") || "";
@@ -128,5 +128,13 @@ export default function AcceptInvitePage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function AcceptInvitePage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50" />}>
+      <AcceptInviteForm />
+    </Suspense>
   );
 }
