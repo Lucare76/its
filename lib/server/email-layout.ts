@@ -33,12 +33,8 @@ ${preheader}
 
   <!-- HEADER con logo -->
   <tr>
-    <td style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:40px 48px 36px;text-align:center;">
+    <td style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:28px 48px;text-align:center;">
       ${logoBlock}
-      <div style="margin-top:20px;height:1px;background:rgba(255,255,255,0.15);"></div>
-      <div style="margin-top:16px;font-size:11px;font-weight:600;letter-spacing:0.25em;text-transform:uppercase;color:rgba(255,255,255,0.5);">
-        Ischia Transfer Service
-      </div>
     </td>
   </tr>
 
