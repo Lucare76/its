@@ -58,8 +58,18 @@ export default function DriverPage() {
   const [savingNote, setSavingNote] = useState(false);
   const [isOnline, setIsOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [tab, setTab] = useState<Tab>("oggi");
+  const [driverName, setDriverName] = useState<string>("");
 
   const driverUserId = role === "driver" ? userId : null;
+
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getUser().then(({ data: authData }) => {
+      const meta = authData?.user?.user_metadata as Record<string, unknown> | undefined;
+      const name = (meta?.full_name ?? meta?.name ?? "") as string;
+      if (name) setDriverName(name);
+    });
+  }, []);
 
   const persistStatus = useCallback(
     async (serviceId: string, status: ServiceStatus, currentTenantId: string | null = tenantId) => {
@@ -169,7 +179,7 @@ export default function DriverPage() {
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Autista</p>
-            <p className="mt-0.5 text-lg font-bold">{data.assignments.find((a) => a.driver_user_id === driverUserId)?.driver_name ?? "Driver"}</p>
+            <p className="mt-0.5 text-lg font-bold">{driverName || "Driver"}</p>
           </div>
           <span className={`rounded-full px-3 py-1 text-xs font-bold ${isOnline ? "bg-emerald-500 text-white" : "bg-rose-500 text-white"}`}>
             {isOnline ? "● Online" : "● Offline"}
