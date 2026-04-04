@@ -1,4 +1,4 @@
-import { emailHtml } from "@/lib/server/email-layout";
+import { emailHtml, emailButton } from "@/lib/server/email-layout";
 
 export type PasswordResetEmailStatus = "sent" | "failed" | "skipped";
 
@@ -29,13 +29,22 @@ function buildPlainText(input: PasswordResetEmailInput) {
 }
 
 function buildHtml(input: PasswordResetEmailInput) {
-  return emailHtml([
-    `<p>Ciao <strong>${input.fullName}</strong>,</p>`,
-    "<p>abbiamo ricevuto una richiesta di reset password per il tuo accesso Ischia Transfer.</p>",
-    `<p style="margin:24px 0;"><a href="${input.resetUrl}" style="display:inline-block;padding:14px 24px;border-radius:10px;background:#1e3a5f;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;">Imposta nuova password</a></p>`,
-    `<p style="font-size:13px;color:#64748b;">Se il bottone non funziona, copia e incolla questo link nel browser:<br /><a href="${input.resetUrl}" style="color:#1e3a5f;">${input.resetUrl}</a></p>`,
-    "<p>Se non hai richiesto tu il reset, puoi ignorare questa email.</p>",
-  ].join(""));
+  return emailHtml(`
+    <p style="font-size:17px;margin-bottom:8px;">Ciao <strong>${input.fullName}</strong>,</p>
+    <p style="color:#475569;margin-bottom:8px;">Abbiamo ricevuto una richiesta di reset password per il tuo account <strong>Ischia Transfer Service</strong>.</p>
+    <p style="color:#475569;margin-bottom:24px;">Clicca il bottone qui sotto per impostare una nuova password. Il link è valido per <strong>60 minuti</strong>.</p>
+
+    ${emailButton("🔑 Imposta nuova password", input.resetUrl)}
+
+    <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 18px;margin:20px 0;font-size:13px;color:#92400e;">
+      ⚠️ Se non hai richiesto tu il reset, ignora questa email. La tua password rimane invariata.
+    </div>
+
+    <p style="font-size:12px;color:#94a3b8;border-top:1px solid #f1f5f9;padding-top:16px;">
+      Il bottone non funziona? Copia e incolla questo link:<br/>
+      <a href="${input.resetUrl}" style="color:#3b82f6;word-break:break-all;">${input.resetUrl}</a>
+    </p>
+  `, { title: "Reset password — Ischia Transfer", preheader: "Reimposta la tua password di accesso" });
 }
 
 export async function sendPasswordResetEmail(input: PasswordResetEmailInput): Promise<PasswordResetEmailResult> {

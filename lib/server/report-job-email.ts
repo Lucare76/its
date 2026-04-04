@@ -150,28 +150,61 @@ function buildPlainText(jobType: ReportJobType, ownerName: string | null, target
 function buildHtml(jobType: ReportJobType, ownerName: string | null, targetDate: string, lines: SummaryLine[]) {
   const owner = ownerName?.trim() || "Agenzia";
   const totalPax = lines.reduce((sum, line) => sum + line.pax, 0);
-  const intro =
-    jobType === "bus_monday"
-      ? `Ti inviamo il riepilogo linea bus della domenica <strong>${targetDate}</strong>, con arrivi e partenze della tua agenzia.`
-      : `Ti inviamo il riepilogo operativo <strong>${labelForJobType(jobType).toLowerCase()}</strong> con target <strong>${targetDate}</strong>.`;
+  const arrivals = lines.filter((l) => l.direction === "arrival").length;
+  const departures = lines.filter((l) => l.direction === "departure").length;
 
   const rows = lines
-    .sort((left, right) => `${left.date}T${left.time}`.localeCompare(`${right.date}T${right.time}`))
-    .map(
-      (line) =>
-        `<tr><td style="padding:6px 8px;border:1px solid #dbe3ea;">${line.date}</td><td style="padding:6px 8px;border:1px solid #dbe3ea;">${line.time}</td><td style="padding:6px 8px;border:1px solid #dbe3ea;">${line.direction === "arrival" ? "Arrivo" : "Partenza"}</td><td style="padding:6px 8px;border:1px solid #dbe3ea;">${line.customer_name}</td><td style="padding:6px 8px;border:1px solid #dbe3ea;">${line.hotel_or_destination ?? "N/D"}</td><td style="padding:6px 8px;border:1px solid #dbe3ea;text-align:right;">${line.pax}</td></tr>`
-    )
-    .join("");
+    .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
+    .map((line, i) => {
+      const isArrival = line.direction === "arrival";
+      const bg = i % 2 === 0 ? "#ffffff" : "#f8fafc";
+      return `<tr style="background:${bg};">
+        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;">${line.date}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${line.time}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">
+          <span style="display:inline-block;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:700;${isArrival ? "background:#dcfce7;color:#166534;" : "background:#fef9c3;color:#854d0e;"}">${isArrival ? "▼ Arrivo" : "▲ Partenza"}</span>
+        </td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${line.customer_name}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;">${line.hotel_or_destination ?? "N/D"}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:center;color:#1e3a5f;">${line.pax}</td>
+      </tr>`;
+    }).join("");
 
-  return wrapEmail([
-    `<p>Ciao <strong>${owner}</strong>,</p>`,
-    `<p>${intro}</p>`,
-    `<p><strong>Servizi nel lotto:</strong> ${lines.length} &nbsp;·&nbsp; <strong>Pax totali:</strong> ${totalPax}</p>`,
-    `<table style="border-collapse:collapse;width:100%;font-size:13px;margin-top:16px;">`,
-    `<thead><tr style="background:#f1f5f9;"><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Data</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Ora</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Direzione</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Cliente</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Hotel / Destinazione</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:right;">Pax</th></tr></thead>`,
-    `<tbody>${rows}</tbody>`,
-    `</table>`,
-  ].join(""));
+  return wrapEmail(`
+    <p style="font-size:17px;margin-bottom:6px;">Ciao <strong>${owner}</strong>,</p>
+    <p style="color:#475569;margin-bottom:28px;">
+      ${jobType === "bus_monday"
+        ? `Ti inviamo il riepilogo <strong>linea bus di domenica ${targetDate}</strong>.`
+        : `Ti inviamo il riepilogo operativo <strong>${labelForJobType(jobType).toLowerCase()}</strong> per il <strong>${targetDate}</strong>.`}
+    </p>
+
+    <div style="display:flex;gap:12px;margin-bottom:28px;">
+      ${[
+        { label: "Servizi totali", value: lines.length, color: "#1e3a5f" },
+        { label: "Pax totali",    value: totalPax,      color: "#0e7490" },
+        { label: "Arrivi",        value: arrivals,       color: "#166534" },
+        { label: "Partenze",      value: departures,     color: "#854d0e" },
+      ].map(s => `
+        <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px;text-align:center;">
+          <div style="font-size:24px;font-weight:800;color:${s.color};">${s.value}</div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;">${s.label}</div>
+        </div>`).join("")}
+    </div>
+
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+      <thead>
+        <tr style="background:linear-gradient(135deg,#0f2744,#1e3a5f);">
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Data</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Ora</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Dir.</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Cliente</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Hotel / Dest.</th>
+          <th style="padding:12px;text-align:center;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Pax</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `, { title: `Riepilogo ${labelForJobType(jobType)} — ${targetDate}`, preheader: `${lines.length} servizi · ${totalPax} pax · ${targetDate}` });
 }
 
 export async function sendOperationalReportEmail(params: {

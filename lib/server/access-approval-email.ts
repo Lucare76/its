@@ -1,4 +1,4 @@
-import { emailHtml } from "@/lib/server/email-layout";
+import { emailHtml, emailDataTable } from "@/lib/server/email-layout";
 
 export type AccessApprovalEmailStatus = "sent" | "failed" | "skipped";
 
@@ -42,16 +42,28 @@ function buildPlainText(input: AccessApprovalEmailInput) {
 }
 
 function buildHtml(input: AccessApprovalEmailInput) {
-  return emailHtml([
-    `<p>Ciao <strong>${input.fullName}</strong>,</p>`,
-    "<p>la tua richiesta di accesso è stata approvata.</p>",
-    `<table style="width:100%;border-collapse:collapse;margin:16px 0;">`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;width:140px;">Ruolo assegnato</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${roleLabel(input.role)}</td></tr>`,
-    input.agencyName?.trim() ? `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Agenzia</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.agencyName.trim()}</td></tr>` : "",
-    `</table>`,
-    `<p>${input.role === "agency" ? "Ora puoi accedere alla tua area dedicata e inserire le prenotazioni agenzia." : "Ora puoi accedere al gestionale con il ruolo assegnato."}</p>`,
-    "<p>Se hai bisogno di supporto, contatta Ischia Transfer Service.</p>",
-  ].join(""));
+  const rows: Array<[string, string]> = [["🎭 Ruolo", roleLabel(input.role)]];
+  if (input.agencyName?.trim()) rows.push(["🏢 Agenzia", input.agencyName.trim()]);
+
+  return emailHtml(`
+    <div style="text-align:center;margin-bottom:32px;">
+      <div style="display:inline-block;background:#dcfce7;border-radius:50%;width:64px;height:64px;line-height:64px;font-size:32px;margin-bottom:16px;">✅</div>
+      <h2 style="font-size:22px;font-weight:800;color:#0f2744;margin:0 0 8px;">Accesso approvato!</h2>
+      <p style="color:#475569;font-size:15px;margin:0;">Benvenuto/a in <strong>Ischia Transfer Service</strong></p>
+    </div>
+
+    <p style="color:#475569;margin-bottom:20px;">Ciao <strong>${input.fullName}</strong>, la tua richiesta di accesso è stata approvata. Di seguito i dettagli del tuo account.</p>
+
+    ${emailDataTable(rows)}
+
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px 20px;margin:24px 0;font-size:14px;color:#166534;">
+      ${input.role === "agency"
+        ? "🏢 Puoi ora accedere alla tua <strong>area agenzia</strong> per inserire e gestire le prenotazioni."
+        : "🖥️ Puoi ora accedere al <strong>gestionale operativo</strong> con le autorizzazioni del tuo ruolo."}
+    </div>
+
+    <p style="font-size:13px;color:#94a3b8;">Per assistenza scrivi a <a href="mailto:info@ischiatransferservice.it" style="color:#3b82f6;">info@ischiatransferservice.it</a></p>
+  `, { title: "Accesso approvato — Ischia Transfer", preheader: "Il tuo accesso è stato approvato" });
 }
 
 export async function sendAccessApprovalEmail(input: AccessApprovalEmailInput): Promise<AccessApprovalEmailResult> {

@@ -1,77 +1,147 @@
 /**
- * GET /api/admin/email-preview?template=otp|booking|reset|approval|report|invoice
+ * GET /api/admin/email-preview?template=otp|booking|reset|approval|report|invoice|reminder
  * Restituisce l'HTML del template richiesto con dati di esempio.
  * Solo per admin/supervisor in sviluppo/staging.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { emailHtml } from "@/lib/server/email-layout";
-import { generateInvoiceHtml } from "@/lib/server/invoice-pdf";
+import { emailHtml, emailButton, emailHighlightBox, emailDataTable } from "@/lib/server/email-layout";
+import { generateInvoiceHtml, generateReminderEmailHtml } from "@/lib/server/invoice-pdf";
 
 export const runtime = "nodejs";
 
+function buildOtpSample(): string {
+  return emailHtml(`
+    <p style="font-size:17px;margin-bottom:8px;">Ciao <strong>Mario Rossi</strong>,</p>
+    <p style="color:#475569;margin-bottom:24px;">Hai richiesto un codice di accesso per <strong>Ischia Transfer Service</strong>. Usa il codice qui sotto per completare il login.</p>
+    ${emailHighlightBox(`
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:#64748b;margin-bottom:12px;">Il tuo codice di verifica</div>
+      <div style="font-family:'Courier New',monospace;font-size:38px;font-weight:800;letter-spacing:10px;color:#0f2744;">847291</div>
+      <div style="font-size:12px;color:#94a3b8;margin-top:12px;">⏱ Valido per 10 minuti</div>
+    `)}
+    <p style="font-size:13px;color:#94a3b8;border-top:1px solid #f1f5f9;padding-top:20px;margin-top:8px;">
+      Se non hai richiesto questo codice, ignora questa email. Il tuo account è al sicuro.
+    </p>
+  `, { title: "Codice di verifica — Ischia Transfer", preheader: "Il tuo codice è 847291" });
+}
+
+function buildBookingSample(): string {
+  return emailHtml(`
+    <p style="font-size:17px;margin-bottom:6px;">Ciao <strong>Famiglia Esposito</strong>,</p>
+    <p style="color:#475569;margin-bottom:24px;">La tua prenotazione è stata ricevuta con successo. Di seguito il riepilogo del servizio.</p>
+    <div style="background:linear-gradient(135deg,#0f2744,#1e3a5f);border-radius:14px;padding:20px 24px;margin-bottom:24px;">
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Servizio prenotato</div>
+      <div style="font-size:22px;font-weight:800;color:#ffffff;">Transfer Porto → Hotel</div>
+      <div style="font-size:14px;color:rgba(255,255,255,0.7);margin-top:4px;">📍 Grand Hotel Excelsior</div>
+    </div>
+    ${emailDataTable([
+      ["👥 Passeggeri", "4 persone"],
+      ["✈️ Arrivo", "15/06/2026 alle 14:30"],
+      ["🏠 Partenza", "22/06/2026 alle 10:00"],
+      ["📝 Note", "Bagaglio extra, bambino in passeggino"],
+    ])}
+    <p style="color:#475569;margin-top:20px;">Il nostro team ti contatterà per eventuali dettagli operativi. Grazie per aver scelto Ischia Transfer Service!</p>
+  `, { title: "Conferma prenotazione — Ischia Transfer", preheader: "Prenotazione confermata — Grand Hotel Excelsior, 15/06/2026" });
+}
+
+function buildResetSample(): string {
+  return emailHtml(`
+    <p style="font-size:17px;margin-bottom:8px;">Ciao <strong>Luca Renna</strong>,</p>
+    <p style="color:#475569;margin-bottom:8px;">Abbiamo ricevuto una richiesta di reset password per il tuo account <strong>Ischia Transfer Service</strong>.</p>
+    <p style="color:#475569;margin-bottom:24px;">Clicca il bottone qui sotto per impostare una nuova password. Il link è valido per <strong>60 minuti</strong>.</p>
+    ${emailButton("🔑 Imposta nuova password", "#")}
+    <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 18px;margin:20px 0;font-size:13px;color:#92400e;">
+      ⚠️ Se non hai richiesto tu il reset, ignora questa email. La tua password rimane invariata.
+    </div>
+    <p style="font-size:12px;color:#94a3b8;border-top:1px solid #f1f5f9;padding-top:16px;">
+      Il bottone non funziona? Copia e incolla questo link:<br/>
+      <a href="#" style="color:#3b82f6;">https://ischiatransferservice.it/reset-password?token=abc123...</a>
+    </p>
+  `, { title: "Reset password — Ischia Transfer", preheader: "Reimposta la tua password di accesso" });
+}
+
+function buildApprovalSample(): string {
+  return emailHtml(`
+    <div style="text-align:center;margin-bottom:32px;">
+      <div style="display:inline-block;background:#dcfce7;border-radius:50%;width:64px;height:64px;line-height:64px;font-size:32px;margin-bottom:16px;">✅</div>
+      <h2 style="font-size:22px;font-weight:800;color:#0f2744;margin:0 0 8px;">Accesso approvato!</h2>
+      <p style="color:#475569;font-size:15px;margin:0;">Benvenuto/a in <strong>Ischia Transfer Service</strong></p>
+    </div>
+    <p style="color:#475569;margin-bottom:20px;">Ciao <strong>Giovanna Ferrari</strong>, la tua richiesta di accesso è stata approvata. Di seguito i dettagli del tuo account.</p>
+    ${emailDataTable([
+      ["🎭 Ruolo", "Agenzia"],
+      ["🏢 Agenzia", "Aleste Viaggi"],
+    ])}
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px 20px;margin:24px 0;font-size:14px;color:#166534;">
+      🏢 Puoi ora accedere alla tua <strong>area agenzia</strong> per inserire e gestire le prenotazioni.
+    </div>
+    <p style="font-size:13px;color:#94a3b8;">Per assistenza scrivi a <a href="mailto:info@ischiatransferservice.it" style="color:#3b82f6;">info@ischiatransferservice.it</a></p>
+  `, { title: "Accesso approvato — Ischia Transfer", preheader: "Il tuo accesso è stato approvato" });
+}
+
+function buildReportSample(): string {
+  const sampleLines = [
+    { date: "2026-06-15", time: "09:00", direction: "arrival" as const, customer_name: "Famiglia Bianchi", hotel_or_destination: "Hotel Moresco", pax: 3 },
+    { date: "2026-06-15", time: "11:30", direction: "arrival" as const, customer_name: "Coppia Verdi", hotel_or_destination: "Hotel Regina Isabella", pax: 2 },
+    { date: "2026-06-15", time: "14:00", direction: "departure" as const, customer_name: "Rossi Group", hotel_or_destination: "Porto Ischia", pax: 6 },
+    { date: "2026-06-16", time: "08:45", direction: "arrival" as const, customer_name: "Tour Esposito", hotel_or_destination: "Hotel San Montano", pax: 4 },
+  ];
+  const totalPax = sampleLines.reduce((s, l) => s + l.pax, 0);
+  const arrivals = sampleLines.filter(l => l.direction === "arrival").length;
+  const departures = sampleLines.filter(l => l.direction === "departure").length;
+
+  const rows = sampleLines.map((line, i) => {
+    const isArrival = line.direction === "arrival";
+    const bg = i % 2 === 0 ? "#ffffff" : "#f8fafc";
+    return `<tr style="background:${bg};">
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;">${line.date}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${line.time}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">
+        <span style="display:inline-block;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:700;${isArrival ? "background:#dcfce7;color:#166534;" : "background:#fef9c3;color:#854d0e;"}">${isArrival ? "▼ Arrivo" : "▲ Partenza"}</span>
+      </td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${line.customer_name}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;">${line.hotel_or_destination}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:center;color:#1e3a5f;">${line.pax}</td>
+    </tr>`;
+  }).join("");
+
+  return emailHtml(`
+    <p style="font-size:17px;margin-bottom:6px;">Ciao <strong>Aleste Viaggi</strong>,</p>
+    <p style="color:#475569;margin-bottom:28px;">Ti inviamo il riepilogo operativo <strong>riepilogo arrivi +48h</strong> per il <strong>15/06/2026</strong>.</p>
+    <div style="display:flex;gap:12px;margin-bottom:28px;">
+      ${[
+        { label: "Servizi totali", value: sampleLines.length, color: "#1e3a5f" },
+        { label: "Pax totali",    value: totalPax,            color: "#0e7490" },
+        { label: "Arrivi",        value: arrivals,             color: "#166534" },
+        { label: "Partenze",      value: departures,           color: "#854d0e" },
+      ].map(s => `
+        <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px;text-align:center;">
+          <div style="font-size:24px;font-weight:800;color:${s.color};">${s.value}</div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;">${s.label}</div>
+        </div>`).join("")}
+    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+      <thead>
+        <tr style="background:linear-gradient(135deg,#0f2744,#1e3a5f);">
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Data</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Ora</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Dir.</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Cliente</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Hotel / Dest.</th>
+          <th style="padding:12px;text-align:center;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Pax</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `, { title: "Riepilogo arrivi +48h — 15/06/2026", preheader: `${sampleLines.length} servizi · ${totalPax} pax · 15/06/2026` });
+}
+
 const SAMPLES: Record<string, () => string> = {
-  otp: () => emailHtml([
-    `<p>Ciao <strong>Mario Rossi</strong>,</p>`,
-    "<p>Hai ricevuto una richiesta di accesso al tuo account Ischia Transfer Service.</p>",
-    "<p><strong>Codice di verifica (valido 10 minuti):</strong></p>",
-    `<p style="word-break:break-word;font-family:monospace;background:#f0f4ff;border:2px solid #c7d7f0;padding:16px 20px;border-radius:10px;font-size:22px;letter-spacing:4px;text-align:center;color:#1e3a5f;">847291</p>`,
-    "<p>Se non hai richiesto questo codice, ignora questo messaggio.</p>",
-  ].join("")),
-
-  booking: () => emailHtml([
-    `<p>Ciao <strong>Famiglia Esposito</strong>,</p>`,
-    "<p>abbiamo ricevuto la tua prenotazione Ischia Transfer.</p>",
-    `<table style="width:100%;border-collapse:collapse;margin:16px 0;">`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;width:140px;">Servizio</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">Transfer Porto → Hotel</td></tr>`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Hotel/Struttura</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">Grand Hotel Excelsior</td></tr>`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Pax</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">4</td></tr>`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Arrivo</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">15/06/2026 14:30</td></tr>`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Partenza</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">22/06/2026 10:00</td></tr>`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Note</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">Bagaglio extra, bambino in passeggino</td></tr>`,
-    `</table>`,
-    "<p>Ti contatteremo per eventuali dettagli operativi.</p>",
-  ].join("")),
-
-  reset: () => emailHtml([
-    `<p>Ciao <strong>Luca Renna</strong>,</p>`,
-    "<p>abbiamo ricevuto una richiesta di reset password per il tuo accesso Ischia Transfer.</p>",
-    `<p style="margin:24px 0;"><a href="#" style="display:inline-block;padding:14px 24px;border-radius:10px;background:#1e3a5f;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;">Imposta nuova password</a></p>`,
-    `<p style="font-size:13px;color:#64748b;">Se il bottone non funziona, copia e incolla questo link nel browser:<br /><a href="#" style="color:#1e3a5f;">https://ischiatransferservice.it/reset-password?token=abc123...</a></p>`,
-    "<p>Se non hai richiesto tu il reset, puoi ignorare questa email.</p>",
-  ].join("")),
-
-  approval: () => emailHtml([
-    `<p>Ciao <strong>Giovanna Ferrari</strong>,</p>`,
-    "<p>la tua richiesta di accesso è stata approvata.</p>",
-    `<table style="width:100%;border-collapse:collapse;margin:16px 0;">`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;width:140px;">Ruolo assegnato</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">Agenzia</td></tr>`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Agenzia</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">Aleste Viaggi</td></tr>`,
-    `</table>`,
-    "<p>Ora puoi accedere alla tua area dedicata e inserire le prenotazioni agenzia.</p>",
-    "<p>Se hai bisogno di supporto, contatta Ischia Transfer Service.</p>",
-  ].join("")),
-
-  report: () => {
-    const rows = [
-      ["15/06/2026", "09:00", "Arrivo", "Famiglia Bianchi", "Hotel Moresco", "3"],
-      ["15/06/2026", "11:30", "Arrivo", "Coppia Verdi", "Hotel Regina Isabella", "2"],
-      ["15/06/2026", "14:00", "Partenza", "Rossi Group", "Porto Ischia", "6"],
-      ["16/06/2026", "08:45", "Arrivo", "Tour Esposito", "Hotel San Montano", "4"],
-    ].map(([d,t,dir,c,h,p]) =>
-      `<tr><td style="padding:8px 10px;border:1px solid #dbe3ea;">${d}</td><td style="padding:8px 10px;border:1px solid #dbe3ea;">${t}</td><td style="padding:8px 10px;border:1px solid #dbe3ea;">${dir}</td><td style="padding:8px 10px;border:1px solid #dbe3ea;">${c}</td><td style="padding:8px 10px;border:1px solid #dbe3ea;">${h}</td><td style="padding:8px 10px;border:1px solid #dbe3ea;text-align:right;">${p}</td></tr>`
-    ).join("");
-    const { emailHtml: wrap } = require("@/lib/server/email-layout");
-    return wrap([
-      `<p>Ciao <strong>Aleste Viaggi</strong>,</p>`,
-      `<p>Ti inviamo il riepilogo arrivi +48h con target <strong>15/06/2026</strong>.</p>`,
-      `<p><strong>Servizi nel lotto:</strong> 4 &nbsp;·&nbsp; <strong>Pax totali:</strong> 15</p>`,
-      `<table style="border-collapse:collapse;width:100%;font-size:13px;margin-top:16px;">`,
-      `<thead><tr style="background:#f1f5f9;"><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Data</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Ora</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Direzione</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Cliente</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Hotel</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:right;">Pax</th></tr></thead>`,
-      `<tbody>${rows}</tbody></table>`,
-    ].join(""));
-  },
-
+  otp:      buildOtpSample,
+  booking:  buildBookingSample,
+  reset:    buildResetSample,
+  approval: buildApprovalSample,
+  report:   buildReportSample,
   invoice: () => generateInvoiceHtml({
     agencyName: "Aleste Viaggi S.r.l.",
     agencyEmail: "info@alesteviaggi.it",
@@ -87,6 +157,16 @@ const SAMPLES: Record<string, () => string> = {
       { numero_pratica: "AV-2024-004", cliente_nome: "Tour Esposito", data_servizio: "2026-06-18", tipo_servizio: "Transfer Porto→Hotel", importo_cents: 49500 },
     ],
   }),
+  reminder: () => generateReminderEmailHtml(
+    "Aleste Viaggi",
+    [
+      { customer_name: "Famiglia Bianchi", date: "2026-06-15", time: "09:00", direction: "arrival", hotel: "Hotel Moresco" },
+      { customer_name: "Coppia Verdi", date: "2026-06-15", time: "11:30", direction: "arrival", hotel: "Hotel Regina Isabella" },
+      { customer_name: "Rossi Group", date: "2026-06-15", time: "14:00", direction: "departure", hotel: "Porto Ischia" },
+      { customer_name: "Tour Esposito", date: "2026-06-16", time: "08:45", direction: "arrival", hotel: "Hotel San Montano" },
+    ],
+    48
+  ),
 };
 
 export async function GET(request: NextRequest) {

@@ -5,6 +5,7 @@
  */
 
 import { getLogoDataUri } from "@/lib/server/logo";
+import { emailHtml } from "@/lib/server/email-layout";
 
 export type InvoiceLineItem = {
   numero_pratica: string;
@@ -37,15 +38,16 @@ function formatCents(cents: number): string {
 export function generateInvoiceHtml(data: InvoiceData): string {
   const logoUri = getLogoDataUri();
   const logoHtml = logoUri
-    ? `<img src="${logoUri}" alt="Ischia Transfer Service" style="height:48px;width:auto;display:block;margin-bottom:8px;" />`
-    : "";
+    ? `<img src="${logoUri}" alt="Ischia Transfer Service" style="height:110px;width:auto;display:block;" />`
+    : `<div style="font-size:22px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">Ischia Transfer Service</div>`;
+
   const rows = data.items.map((item, i) => `
-    <tr class="${i % 2 === 0 ? "row-even" : "row-odd"}">
-      <td class="col-pratica">${item.numero_pratica || "—"}</td>
-      <td class="col-nome">${item.cliente_nome}</td>
-      <td class="col-data">${formatDate(item.data_servizio)}</td>
-      <td class="col-tipo">${item.tipo_servizio}</td>
-      <td class="col-importo">${formatCents(item.importo_cents)}</td>
+    <tr>
+      <td style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${item.numero_pratica || "—"}</td>
+      <td style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${item.cliente_nome}</td>
+      <td style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${formatDate(item.data_servizio)}</td>
+      <td style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${item.tipo_servizio}</td>
+      <td style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:#0f2744;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${formatCents(item.importo_cents)}</td>
     </tr>
   `).join("");
 
@@ -57,87 +59,93 @@ export function generateInvoiceHtml(data: InvoiceData): string {
 <title>Estratto conto — ${data.agencyName}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 13px; color: #1a1a1a; background: #fff; padding: 32px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; border-bottom: 2px solid #1e3a5f; padding-bottom: 20px; }
-  .header-left h1 { font-size: 22px; font-weight: 700; color: #1e3a5f; }
-  .header-left p { font-size: 13px; color: #555; margin-top: 4px; }
-  .header-right { text-align: right; font-size: 12px; color: #555; }
-  .header-right strong { font-size: 14px; color: #1a1a1a; }
-  .meta { display: flex; gap: 32px; margin-bottom: 24px; }
-  .meta-box { background: #f4f6fa; border-radius: 8px; padding: 12px 16px; flex: 1; }
-  .meta-box label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #888; display: block; margin-bottom: 4px; }
-  .meta-box span { font-size: 14px; font-weight: 600; color: #1a1a1a; }
-  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-  thead tr { background: #1e3a5f; color: #fff; }
-  thead th { padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
-  .col-pratica { width: 130px; }
-  .col-data { width: 90px; }
-  .col-tipo { width: 160px; }
-  .col-importo { width: 100px; text-align: right; }
-  td { padding: 9px 12px; border-bottom: 1px solid #eee; }
-  .col-importo { text-align: right; font-weight: 500; }
-  .row-even { background: #fff; }
-  .row-odd { background: #f9fafc; }
-  .total-row { background: #f0f4ff !important; font-weight: 700; }
-  .total-row td { border-top: 2px solid #1e3a5f; padding: 12px; font-size: 14px; }
-  .footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid #eee; font-size: 11px; color: #888; text-align: center; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 13px; color: #1a1a1a; background: #f1f5f9; }
   @media print {
-    body { padding: 16px; }
-    .no-print { display: none; }
+    body { background: #fff; }
+    .no-print { display: none !important; }
+    .page { box-shadow: none !important; margin: 0 !important; border-radius: 0 !important; }
   }
 </style>
 </head>
 <body>
-  <div class="header">
-    <div class="header-left">
-      ${logoHtml}
-      <h1>Ischia Transfer Service</h1>
-      <p>Estratto conto servizi</p>
-    </div>
-    <div class="header-right">
-      <strong>${data.agencyName}</strong><br/>
-      ${data.agencyEmail ? data.agencyEmail + "<br/>" : ""}
-      Rif. ${data.invoiceId.slice(0, 8).toUpperCase()}<br/>
-      Emesso il ${formatDate(data.createdAt.slice(0, 10))}
-    </div>
-  </div>
+  <div class="page" style="max-width:860px;margin:32px auto;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 4px 40px rgba(0,0,0,0.10);">
 
-  <div class="meta">
-    <div class="meta-box">
-      <label>Periodo</label>
-      <span>${formatDate(data.periodFrom)} — ${formatDate(data.periodTo)}</span>
+    <!-- HEADER GRADIENT -->
+    <div style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);padding:36px 40px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td style="vertical-align:middle;">
+            ${logoHtml}
+          </td>
+          <td style="vertical-align:top;text-align:right;">
+            <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Estratto conto</div>
+            <div style="font-size:28px;font-weight:900;color:#ffffff;line-height:1.1;">${data.agencyName}</div>
+            ${data.agencyEmail ? `<div style="font-size:13px;color:rgba(255,255,255,0.6);margin-top:6px;">${data.agencyEmail}</div>` : ""}
+            <div style="margin-top:12px;display:inline-block;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:6px 14px;font-size:12px;color:rgba(255,255,255,0.8);">
+              Rif. <strong style="color:#ffffff;">${data.invoiceId.slice(0, 8).toUpperCase()}</strong> &nbsp;·&nbsp; Emesso il ${formatDate(data.createdAt.slice(0, 10))}
+            </div>
+          </td>
+        </tr>
+      </table>
     </div>
-    <div class="meta-box">
-      <label>Pratiche</label>
-      <span>${data.items.length}</span>
-    </div>
-    <div class="meta-box">
-      <label>Totale</label>
-      <span>${formatCents(data.totalCents)}</span>
-    </div>
-  </div>
 
-  <table>
-    <thead>
-      <tr>
-        <th class="col-pratica">N. Pratica</th>
-        <th class="col-nome">Cliente</th>
-        <th class="col-data">Data</th>
-        <th class="col-tipo">Servizio</th>
-        <th class="col-importo">Importo</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rows}
-      <tr class="total-row">
-        <td colspan="4">TOTALE</td>
-        <td class="col-importo">${formatCents(data.totalCents)}</td>
-      </tr>
-    </tbody>
-  </table>
+    <!-- KPI BOXES -->
+    <div style="padding:28px 40px 0;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td style="width:33%;padding-right:10px;">
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:18px 20px;">
+              <div style="font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;">Periodo</div>
+              <div style="font-size:15px;font-weight:700;color:#0f2744;">${formatDate(data.periodFrom)} — ${formatDate(data.periodTo)}</div>
+            </div>
+          </td>
+          <td style="width:33%;padding:0 5px;">
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:18px 20px;text-align:center;">
+              <div style="font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;">Pratiche</div>
+              <div style="font-size:32px;font-weight:900;color:#0e7490;">${data.items.length}</div>
+            </div>
+          </td>
+          <td style="width:33%;padding-left:10px;">
+            <div style="background:linear-gradient(135deg,#0f2744,#1e3a5f);border-radius:14px;padding:18px 20px;text-align:right;">
+              <div style="font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Totale</div>
+              <div style="font-size:26px;font-weight:900;color:#ffffff;">${formatCents(data.totalCents)}</div>
+            </div>
+          </td>
+        </tr>
+      </table>
+    </div>
 
-  <div class="footer">
-    Ischia Transfer Service S.r.l. — Via Cilento 14/C, 80077 Ischia (NA) — P.IVA IT 05931311210
+    <!-- TABLE -->
+    <div style="padding:28px 40px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+        <thead>
+          <tr style="background:linear-gradient(135deg,#0f2744,#1e3a5f);">
+            <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:120px;">N. Pratica</th>
+            <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);">Cliente</th>
+            <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:90px;">Data</th>
+            <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:150px;">Servizio</th>
+            <th style="padding:12px 14px;text-align:right;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:100px;">Importo</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+          <tr>
+            <td colspan="4" style="padding:14px 14px;border-top:2px solid #1e3a5f;font-size:13px;font-weight:800;color:#0f2744;text-transform:uppercase;letter-spacing:0.06em;background:#f0f6ff;">Totale complessivo</td>
+            <td style="padding:14px 14px;border-top:2px solid #1e3a5f;font-size:16px;font-weight:900;text-align:right;color:#0f2744;background:#f0f6ff;">${formatCents(data.totalCents)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- FOOTER -->
+    <div style="margin:0 40px 32px;padding:18px 24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;text-align:center;">
+      <div style="font-size:11px;color:#94a3b8;line-height:1.8;">
+        <strong style="color:#475569;">Ischia Transfer Service S.r.l.</strong><br/>
+        Via Cilento 14/C, 80077 Ischia (NA) &nbsp;·&nbsp; P.IVA IT 05931311210<br/>
+        <span style="color:#cbd5e1;">Documento generato automaticamente il ${formatDate(data.createdAt.slice(0, 10))}</span>
+      </div>
+    </div>
+
   </div>
 </body>
 </html>`;
@@ -152,37 +160,50 @@ export function generateReminderEmailHtml(
   hoursAhead: number
 ): string {
   const label = hoursAhead <= 24 ? "nelle prossime 24 ore" : "nelle prossime 48 ore";
-  const rows = services.map((s) => `
-    <tr>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;">${s.customer_name.toUpperCase()}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;">${s.date.split("-").reverse().join("/")}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;">${s.time ?? "—"}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;">${s.direction === "arrival" ? "Arrivo" : "Partenza"}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;">${s.hotel ?? "—"}</td>
-    </tr>
-  `).join("");
+  const arrivals = services.filter((s) => s.direction === "arrival").length;
+  const departures = services.filter((s) => s.direction === "departure").length;
 
-  return `<!DOCTYPE html>
-<html lang="it">
-<head><meta charset="UTF-8"/></head>
-<body style="font-family:-apple-system,Arial,sans-serif;font-size:14px;color:#1a1a1a;padding:32px;max-width:640px;">
-  <h2 style="color:#1e3a5f;margin-bottom:8px;">Riepilogo servizi — ${agencyName}</h2>
-  <p style="color:#555;margin-bottom:24px;">Di seguito i servizi programmati <strong>${label}</strong>.</p>
-  <table style="width:100%;border-collapse:collapse;font-size:13px;">
-    <thead>
-      <tr style="background:#1e3a5f;color:#fff;">
-        <th style="padding:10px 12px;text-align:left;">Cliente</th>
-        <th style="padding:10px 12px;text-align:left;">Data</th>
-        <th style="padding:10px 12px;text-align:left;">Orario</th>
-        <th style="padding:10px 12px;text-align:left;">Tipo</th>
-        <th style="padding:10px 12px;text-align:left;">Hotel</th>
-      </tr>
-    </thead>
-    <tbody>${rows}</tbody>
-  </table>
-  <p style="margin-top:24px;font-size:12px;color:#888;">
-    Ischia Transfer Service S.r.l. — Via Cilento 14/C, 80077 Ischia (NA)
-  </p>
-</body>
-</html>`;
+  const rows = services.map((s, i) => {
+    const isArrival = s.direction === "arrival";
+    const bg = i % 2 === 0 ? "#ffffff" : "#f8fafc";
+    return `<tr style="background:${bg};">
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${s.customer_name}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;">${s.date.split("-").reverse().join("/")}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${s.time ?? "—"}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">
+        <span style="display:inline-block;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:700;${isArrival ? "background:#dcfce7;color:#166534;" : "background:#fef9c3;color:#854d0e;"}">${isArrival ? "▼ Arrivo" : "▲ Partenza"}</span>
+      </td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;">${s.hotel ?? "—"}</td>
+    </tr>`;
+  }).join("");
+
+  return emailHtml(`
+    <p style="font-size:17px;margin-bottom:6px;">Ciao <strong>${agencyName}</strong>,</p>
+    <p style="color:#475569;margin-bottom:28px;">Di seguito i servizi programmati <strong>${label}</strong>.</p>
+
+    <div style="display:flex;gap:12px;margin-bottom:28px;">
+      ${[
+        { label: "Servizi totali", value: services.length, color: "#1e3a5f" },
+        { label: "Arrivi",         value: arrivals,         color: "#166534" },
+        { label: "Partenze",       value: departures,       color: "#854d0e" },
+      ].map(s => `
+        <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px;text-align:center;">
+          <div style="font-size:28px;font-weight:800;color:${s.color};">${s.value}</div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;">${s.label}</div>
+        </div>`).join("")}
+    </div>
+
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+      <thead>
+        <tr style="background:linear-gradient(135deg,#0f2744,#1e3a5f);">
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Cliente</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Data</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Orario</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Dir.</th>
+          <th style="padding:12px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Hotel</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `, { title: `Riepilogo servizi — ${agencyName}`, preheader: `${services.length} servizi programmati ${label}` });
 }

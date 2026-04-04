@@ -1,4 +1,4 @@
-import { emailHtml } from "@/lib/server/email-layout";
+import { emailHtml, emailDataTable } from "@/lib/server/email-layout";
 
 export type AgencyBookingEmailStatus = "sent" | "failed" | "skipped";
 
@@ -41,20 +41,26 @@ function buildPlainText(input: AgencyBookingEmailInput) {
 }
 
 function buildHtml(input: AgencyBookingEmailInput) {
-  const notes = input.notes ? input.notes : "-";
-  return emailHtml([
-    `<p>Ciao <strong>${input.customerName}</strong>,</p>`,
-    "<p>abbiamo ricevuto la tua prenotazione Ischia Transfer.</p>",
-    `<table style="width:100%;border-collapse:collapse;margin:16px 0;">`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;width:140px;">Servizio</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.serviceKindLabel}</td></tr>`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Hotel/Struttura</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.hotelName}</td></tr>`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Pax</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.pax}</td></tr>`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Arrivo</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.arrivalDate} ${input.arrivalTime}</td></tr>`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Partenza</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.departureDate} ${input.departureTime}</td></tr>`,
-    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Note</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${notes}</td></tr>`,
-    `</table>`,
-    "<p>Ti contatteremo per eventuali dettagli operativi.</p>",
-  ].join(""));
+  const notes = input.notes ? input.notes : "—";
+  return emailHtml(`
+    <p style="font-size:17px;margin-bottom:6px;">Ciao <strong>${input.customerName}</strong>,</p>
+    <p style="color:#475569;margin-bottom:24px;">La tua prenotazione è stata ricevuta con successo. Di seguito il riepilogo del servizio.</p>
+
+    <div style="background:linear-gradient(135deg,#0f2744,#1e3a5f);border-radius:14px;padding:20px 24px;margin-bottom:24px;">
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Servizio prenotato</div>
+      <div style="font-size:22px;font-weight:800;color:#ffffff;">${input.serviceKindLabel}</div>
+      <div style="font-size:14px;color:rgba(255,255,255,0.7);margin-top:4px;">📍 ${input.hotelName}</div>
+    </div>
+
+    ${emailDataTable([
+      ["👥 Passeggeri", `${input.pax} persone`],
+      ["✈️ Arrivo", `${input.arrivalDate} alle ${input.arrivalTime}`],
+      ["🏠 Partenza", `${input.departureDate} alle ${input.departureTime}`],
+      ["📝 Note", notes],
+    ])}
+
+    <p style="color:#475569;margin-top:20px;">Il nostro team ti contatterà per eventuali dettagli operativi. Grazie per aver scelto Ischia Transfer Service!</p>
+  `, { title: "Conferma prenotazione — Ischia Transfer", preheader: `Prenotazione confermata — ${input.hotelName}, ${input.arrivalDate}` });
 }
 
 export async function sendAgencyBookingConfirmationEmail(input: AgencyBookingEmailInput): Promise<AgencyBookingEmailResult> {

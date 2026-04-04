@@ -9,6 +9,7 @@ const TEMPLATES = [
   { key: "approval", label: "Approvazione accesso",    desc: "Email inviata quando un nuovo utente viene approvato" },
   { key: "report",   label: "Riepilogo operativo",     desc: "Report arrivi/partenze inviato alle agenzie" },
   { key: "invoice",  label: "Estratto conto / PDF",    desc: "Fattura HTML con tabella servizi e totale" },
+  { key: "reminder", label: "Reminder servizi",         desc: "Email riepilogo servizi imminenti inviata alle agenzie" },
 ];
 
 export default function EmailPreviewPage() {
