@@ -333,7 +333,8 @@ const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/scheduler", label: "Scheduler", icon: "J" },
       { href: "/service-workflow", label: "Workflow servizi", icon: "K" },
       { href: "/audit", label: "Audit", icon: "Q" },
-      { href: "/settings/system", label: "Stato sistema", icon: "⚙" }
+      { href: "/settings/system", label: "Stato sistema", icon: "⚙" },
+      { href: "/settings/email-preview", label: "Anteprima email", icon: "✉" }
     ]
   }
 ];
@@ -800,8 +801,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   return (
     <>
       <MotivationalModal />
-      <section className="grid min-h-[calc(100vh-86px)] grid-cols-1 gap-5 py-4 md:grid-cols-[auto_1fr] md:gap-6 md:py-6">
-      <aside className={`sticky top-24 hidden h-fit md:block transition-all duration-200 ${collapsed ? "w-[72px]" : "w-[260px]"}`}>
+      <section className={`grid min-h-[calc(100vh-86px)] grid-cols-1 gap-5 py-4 md:py-6 ${authRole === "driver" ? "" : "md:grid-cols-[auto_1fr] md:gap-6"}`}>
+      <aside className={`sticky top-24 h-fit transition-all duration-200 ${authRole === "driver" ? "hidden" : `hidden md:block ${collapsed ? "w-[72px]" : "w-[260px]"}`}`}>
         <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-3 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
 
           {/* Brand + collapse */}

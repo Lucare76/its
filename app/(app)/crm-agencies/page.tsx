@@ -611,9 +611,30 @@ export default function CrmAgenciesPage() {
     return date.toISOString().slice(0, 10);
   })();
 
+  const now = new Date();
+  const thisMonthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 10);
+  const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10);
+
+  const handleToggleActive = async (agency: AgencyRow) => {
+    const token = await getToken();
+    if (!token) return;
+    const response = await fetch(`/api/agencies/${agency.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ active: !agency.active }),
+    });
+    if (response.ok) {
+      showToast(`"${agency.name}" ${agency.active ? "disattivata" : "attivata"}.`, true);
+      void load();
+    } else {
+      showToast("Errore aggiornamento stato.", false);
+    }
+  };
+
   const agencyStats = useMemo(
     () =>
-      activeAgencies
+      agencies
         .map((agency) => {
           const services = tenantData.services.filter(
             (s) => (s.billing_party_name ?? "").trim() === agency.name
@@ -623,18 +644,26 @@ export default function CrmAgenciesPage() {
             acc[key] = (acc[key] ?? 0) + 1;
             return acc;
           }, {});
+          const sorted = [...services].sort((a, b) => b.date.localeCompare(a.date));
+          const revenueTotal = services.reduce((sum, s) => sum + ((s as any).source_total_amount_cents ?? 0), 0);
+          const thisMonth = services.filter((s) => s.date >= thisMonthStart).length;
+          const prevMonth = services.filter((s) => s.date >= prevMonthStart && s.date <= prevMonthEnd).length;
           return {
             agency,
             lists: priceLists.filter((p) => p.agency_id === agency.id && p.active).length,
             rules: rules.filter((r) => r.agency_id === agency.id && r.active).length,
             services: services.length,
             pax: services.reduce((sum, s) => sum + s.pax, 0),
-            latestDate: [...services].sort((a, b) => b.date.localeCompare(a.date))[0]?.date ?? null,
+            revenueTotal,
+            thisMonth,
+            prevMonth,
+            latestDate: sorted[0]?.date ?? null,
             next48h: services.filter((s) => s.date >= today && s.date <= window48h).length,
             nextSundayBus: services.filter(
               (s) => s.date === nextSunday && s.service_type_code === "bus_line"
             ).length,
             serviceMix,
+            recentServices: sorted.slice(0, 6),
             statementEnabled: STATEMENT_AGENCY_NAMES.includes(agency.name),
           };
         })
@@ -648,7 +677,7 @@ export default function CrmAgenciesPage() {
               (filter === "active" && agency.active))
           );
         }),
-    [activeAgencies, filter, nextSunday, priceLists, rules, search, tenantData.services, today, window48h]
+    [agencies, filter, nextSunday, priceLists, prevMonthEnd, prevMonthStart, rules, search, tenantData.services, thisMonthStart, today, window48h]
   );
 
   return (
@@ -756,11 +785,18 @@ export default function CrmAgenciesPage() {
                 rules: agencyRules,
                 services,
                 pax,
+                revenueTotal,
+                thisMonth,
+                prevMonth,
                 latestDate,
                 next48h,
                 nextSundayBus,
                 serviceMix,
+                recentServices,
               }) => {
+                const trendDiff = thisMonth - prevMonth;
+                const trendLabel = trendDiff > 0 ? `+${trendDiff}` : trendDiff < 0 ? `${trendDiff}` : "=";
+                const trendColor = trendDiff > 0 ? "text-emerald-600" : trendDiff < 0 ? "text-rose-500" : "text-slate-400";
                 const expanded = expandedIds.has(agency.id);
                 const schedule = invoiceScheduleLabel(agency);
 
@@ -806,9 +842,17 @@ export default function CrmAgenciesPage() {
                         <span>
                           <span className="font-semibold text-slate-700">{pax}</span> pax
                         </span>
-                        {next48h > 0 ? (
+                        {revenueTotal > 0 && (
+                          <span className="font-semibold text-slate-700">
+                            €{(revenueTotal / 100).toLocaleString("it-IT", { maximumFractionDigits: 0 })}
+                          </span>
+                        )}
+                        <span className={`font-semibold ${trendColor}`} title="Questo mese vs mese scorso">
+                          {thisMonth} ({trendLabel})
+                        </span>
+                        {next48h > 0 && (
                           <span className="font-semibold text-amber-600">+48h: {next48h}</span>
-                        ) : null}
+                        )}
                       </div>
 
                       {/* Azioni */}
@@ -825,6 +869,17 @@ export default function CrmAgenciesPage() {
                           }}
                         >
                           Modifica
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleToggleActive(agency)}
+                          className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition ${
+                            agency.active
+                              ? "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                              : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                          }`}
+                        >
+                          {agency.active ? "Disattiva" : "Attiva"}
                         </button>
                         <button
                           type="button"
@@ -977,6 +1032,48 @@ export default function CrmAgenciesPage() {
                                       {label}: {count}
                                     </span>
                                   ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Ultime prenotazioni */}
+                          {recentServices.length > 0 && (
+                            <div className="sm:col-span-2 lg:col-span-3">
+                              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                                Ultime prenotazioni
+                              </p>
+                              <div className="overflow-hidden rounded-xl border border-slate-100">
+                                <table className="w-full text-xs">
+                                  <thead className="bg-slate-50 text-slate-400">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left font-semibold">Data</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Cliente</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Tipo</th>
+                                      <th className="px-3 py-2 text-right font-semibold">Pax</th>
+                                      <th className="px-3 py-2 text-right font-semibold">Stato</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-50">
+                                    {recentServices.map((s) => (
+                                      <tr key={s.id} className="hover:bg-slate-50/60">
+                                        <td className="px-3 py-2 font-mono text-slate-600">{s.date}</td>
+                                        <td className="px-3 py-2 text-slate-700 max-w-[160px] truncate">{s.customer_name}</td>
+                                        <td className="px-3 py-2 text-slate-500">{s.service_type_code ?? s.booking_service_kind ?? s.service_type}</td>
+                                        <td className="px-3 py-2 text-right text-slate-700">{s.pax}</td>
+                                        <td className="px-3 py-2 text-right">
+                                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                            s.status === "completato" ? "bg-emerald-100 text-emerald-700" :
+                                            s.status === "cancelled" ? "bg-rose-100 text-rose-600" :
+                                            s.status === "assigned" ? "bg-blue-100 text-blue-700" :
+                                            "bg-slate-100 text-slate-500"
+                                          }`}>
+                                            {s.status}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
                               </div>
                             </div>
                           )}

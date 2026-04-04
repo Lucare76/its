@@ -1,3 +1,5 @@
+import { emailHtml } from "@/lib/server/email-layout";
+
 export interface OtpEmailInput {
   to: string;
   fullName: string;
@@ -23,14 +25,13 @@ function buildOtpPlainText(input: OtpEmailInput): string {
 }
 
 function buildOtpHtml(input: OtpEmailInput): string {
-  return [
-    `<p>Ciao ${input.fullName},</p>`,
+  return emailHtml([
+    `<p>Ciao <strong>${input.fullName}</strong>,</p>`,
     "<p>Hai ricevuto una richiesta di accesso al tuo account Ischia Transfer Service.</p>",
     "<p><strong>Codice di verifica (valido 10 minuti):</strong></p>",
-    `<p style="word-break: break-word; font-family: monospace; background: #f4f4f4; padding: 12px; border-radius: 6px; font-size: 18px; letter-spacing: 2px;">${input.otpCode}</p>`,
+    `<p style="word-break:break-word;font-family:monospace;background:#f0f4ff;border:2px solid #c7d7f0;padding:16px 20px;border-radius:10px;font-size:22px;letter-spacing:4px;text-align:center;color:#1e3a5f;">${input.otpCode}</p>`,
     "<p>Se non hai richiesto questo codice, ignora questo messaggio.</p>",
-    "<p>Grazie.</p>"
-  ].join("");
+  ].join(""));
 }
 
 export async function sendOtpEmail(input: OtpEmailInput): Promise<OtpEmailResult> {

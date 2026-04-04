@@ -4,6 +4,8 @@
  * oppure viene inviato come email HTML via Resend.
  */
 
+import { getLogoDataUri } from "@/lib/server/logo";
+
 export type InvoiceLineItem = {
   numero_pratica: string;
   cliente_nome: string;
@@ -33,6 +35,10 @@ function formatCents(cents: number): string {
 }
 
 export function generateInvoiceHtml(data: InvoiceData): string {
+  const logoUri = getLogoDataUri();
+  const logoHtml = logoUri
+    ? `<img src="${logoUri}" alt="Ischia Transfer Service" style="height:48px;width:auto;display:block;margin-bottom:8px;" />`
+    : "";
   const rows = data.items.map((item, i) => `
     <tr class="${i % 2 === 0 ? "row-even" : "row-odd"}">
       <td class="col-pratica">${item.numero_pratica || "—"}</td>
@@ -84,6 +90,7 @@ export function generateInvoiceHtml(data: InvoiceData): string {
 <body>
   <div class="header">
     <div class="header-left">
+      ${logoHtml}
       <h1>Ischia Transfer Service</h1>
       <p>Estratto conto servizi</p>
     </div>

@@ -1,3 +1,5 @@
+import { emailHtml } from "@/lib/server/email-layout";
+
 export type AgencyBookingEmailStatus = "sent" | "failed" | "skipped";
 
 export interface AgencyBookingEmailInput {
@@ -40,20 +42,19 @@ function buildPlainText(input: AgencyBookingEmailInput) {
 
 function buildHtml(input: AgencyBookingEmailInput) {
   const notes = input.notes ? input.notes : "-";
-  return [
-    `<p>Ciao ${input.customerName},</p>`,
+  return emailHtml([
+    `<p>Ciao <strong>${input.customerName}</strong>,</p>`,
     "<p>abbiamo ricevuto la tua prenotazione Ischia Transfer.</p>",
-    "<ul>",
-    `<li><strong>Servizio:</strong> ${input.serviceKindLabel}</li>`,
-    `<li><strong>Hotel/Struttura:</strong> ${input.hotelName}</li>`,
-    `<li><strong>Pax:</strong> ${input.pax}</li>`,
-    `<li><strong>Arrivo:</strong> ${input.arrivalDate} ${input.arrivalTime}</li>`,
-    `<li><strong>Partenza:</strong> ${input.departureDate} ${input.departureTime}</li>`,
-    `<li><strong>Note:</strong> ${notes}</li>`,
-    "</ul>",
+    `<table style="width:100%;border-collapse:collapse;margin:16px 0;">`,
+    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;width:140px;">Servizio</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.serviceKindLabel}</td></tr>`,
+    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Hotel/Struttura</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.hotelName}</td></tr>`,
+    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Pax</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.pax}</td></tr>`,
+    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Arrivo</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.arrivalDate} ${input.arrivalTime}</td></tr>`,
+    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Partenza</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.departureDate} ${input.departureTime}</td></tr>`,
+    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Note</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${notes}</td></tr>`,
+    `</table>`,
     "<p>Ti contatteremo per eventuali dettagli operativi.</p>",
-    "<p>Grazie.</p>"
-  ].join("");
+  ].join(""));
 }
 
 export async function sendAgencyBookingConfirmationEmail(input: AgencyBookingEmailInput): Promise<AgencyBookingEmailResult> {

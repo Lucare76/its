@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { emailHtml as wrapEmail } from "@/lib/server/email-layout";
 
 type SummaryLine = {
   date: string;
@@ -162,16 +163,15 @@ function buildHtml(jobType: ReportJobType, ownerName: string | null, targetDate:
     )
     .join("");
 
-  return [
-    `<p>Ciao ${owner},</p>`,
+  return wrapEmail([
+    `<p>Ciao <strong>${owner}</strong>,</p>`,
     `<p>${intro}</p>`,
-    `<p><strong>Servizi nel lotto:</strong> ${lines.length}<br /><strong>Pax totali:</strong> ${totalPax}</p>`,
-    `<table style="border-collapse:collapse;width:100%;font-size:14px;">`,
-    `<thead><tr><th style="padding:6px 8px;border:1px solid #dbe3ea;text-align:left;">Data</th><th style="padding:6px 8px;border:1px solid #dbe3ea;text-align:left;">Ora</th><th style="padding:6px 8px;border:1px solid #dbe3ea;text-align:left;">Direzione</th><th style="padding:6px 8px;border:1px solid #dbe3ea;text-align:left;">Cliente</th><th style="padding:6px 8px;border:1px solid #dbe3ea;text-align:left;">Hotel / Destinazione</th><th style="padding:6px 8px;border:1px solid #dbe3ea;text-align:right;">Pax</th></tr></thead>`,
+    `<p><strong>Servizi nel lotto:</strong> ${lines.length} &nbsp;·&nbsp; <strong>Pax totali:</strong> ${totalPax}</p>`,
+    `<table style="border-collapse:collapse;width:100%;font-size:13px;margin-top:16px;">`,
+    `<thead><tr style="background:#f1f5f9;"><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Data</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Ora</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Direzione</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Cliente</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:left;">Hotel / Destinazione</th><th style="padding:8px 10px;border:1px solid #dbe3ea;text-align:right;">Pax</th></tr></thead>`,
     `<tbody>${rows}</tbody>`,
     `</table>`,
-    `<p style="margin-top:16px;">Messaggio generato automaticamente da Ischia Transfer.</p>`
-  ].join("");
+  ].join(""));
 }
 
 export async function sendOperationalReportEmail(params: {

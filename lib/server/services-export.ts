@@ -489,7 +489,10 @@ function buildOperationalSummarySheet(services: ServiceRow[]) {
     agencyCounts.set(agency, agencyCurrent);
   }
 
+  const exportedAt = new Date().toLocaleString("it-IT");
   const rows: unknown[][] = [
+    ["ISCHIA TRANSFER SERVICE", `Export generato il ${exportedAt}`],
+    [],
     ["Indicatore", "Valore"],
     ["Servizi totali", totalServices],
     ["Pax totali", totalPax],

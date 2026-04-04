@@ -1,3 +1,5 @@
+import { emailHtml } from "@/lib/server/email-layout";
+
 export type PasswordResetEmailStatus = "sent" | "failed" | "skipped";
 
 export interface PasswordResetEmailInput {
@@ -27,14 +29,13 @@ function buildPlainText(input: PasswordResetEmailInput) {
 }
 
 function buildHtml(input: PasswordResetEmailInput) {
-  return [
-    `<p>Ciao ${input.fullName},</p>`,
+  return emailHtml([
+    `<p>Ciao <strong>${input.fullName}</strong>,</p>`,
     "<p>abbiamo ricevuto una richiesta di reset password per il tuo accesso Ischia Transfer.</p>",
-    `<p><a href="${input.resetUrl}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#0f172a;color:#ffffff;text-decoration:none;font-weight:600">Imposta nuova password</a></p>`,
-    `<p>Se il bottone non funziona, copia e incolla questo link nel browser:<br /><a href="${input.resetUrl}">${input.resetUrl}</a></p>`,
+    `<p style="margin:24px 0;"><a href="${input.resetUrl}" style="display:inline-block;padding:14px 24px;border-radius:10px;background:#1e3a5f;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;">Imposta nuova password</a></p>`,
+    `<p style="font-size:13px;color:#64748b;">Se il bottone non funziona, copia e incolla questo link nel browser:<br /><a href="${input.resetUrl}" style="color:#1e3a5f;">${input.resetUrl}</a></p>`,
     "<p>Se non hai richiesto tu il reset, puoi ignorare questa email.</p>",
-    "<p>Grazie.</p>"
-  ].join("");
+  ].join(""));
 }
 
 export async function sendPasswordResetEmail(input: PasswordResetEmailInput): Promise<PasswordResetEmailResult> {

@@ -1,3 +1,5 @@
+import { emailHtml } from "@/lib/server/email-layout";
+
 export type AccessApprovalEmailStatus = "sent" | "failed" | "skipped";
 
 export interface AccessApprovalEmailInput {
@@ -40,21 +42,16 @@ function buildPlainText(input: AccessApprovalEmailInput) {
 }
 
 function buildHtml(input: AccessApprovalEmailInput) {
-  return [
-    `<p>Ciao ${input.fullName},</p>`,
-    "<p>la tua richiesta di accesso e stata approvata.</p>",
-    "<ul>",
-    `<li><strong>Ruolo assegnato:</strong> ${roleLabel(input.role)}</li>`,
-    input.agencyName?.trim() ? `<li><strong>Agenzia:</strong> ${input.agencyName.trim()}</li>` : "",
-    "</ul>",
-    `<p>${
-      input.role === "agency"
-        ? "Ora puoi accedere alla tua area dedicata e inserire le prenotazioni agenzia."
-        : "Ora puoi accedere al gestionale con il ruolo assegnato."
-    }</p>`,
+  return emailHtml([
+    `<p>Ciao <strong>${input.fullName}</strong>,</p>`,
+    "<p>la tua richiesta di accesso è stata approvata.</p>",
+    `<table style="width:100%;border-collapse:collapse;margin:16px 0;">`,
+    `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;width:140px;">Ruolo assegnato</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${roleLabel(input.role)}</td></tr>`,
+    input.agencyName?.trim() ? `<tr><td style="padding:8px 12px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">Agenzia</td><td style="padding:8px 12px;border:1px solid #e2e8f0;">${input.agencyName.trim()}</td></tr>` : "",
+    `</table>`,
+    `<p>${input.role === "agency" ? "Ora puoi accedere alla tua area dedicata e inserire le prenotazioni agenzia." : "Ora puoi accedere al gestionale con il ruolo assegnato."}</p>`,
     "<p>Se hai bisogno di supporto, contatta Ischia Transfer Service.</p>",
-    "<p>Grazie.</p>"
-  ].join("");
+  ].join(""));
 }
 
 export async function sendAccessApprovalEmail(input: AccessApprovalEmailInput): Promise<AccessApprovalEmailResult> {

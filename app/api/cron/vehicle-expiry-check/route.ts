@@ -13,8 +13,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { readFileSync } from "node:fs";
-import path from "node:path";
+import { getLogoDataUri } from "@/lib/server/logo";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -24,7 +23,6 @@ const WARN_DAYS = 7;
 const INSURANCE_GRACE_DAYS = 14;
 const INSURANCE_WARN_WINDOW_DAYS = 8;
 
-let cachedLogoDataUri: string | null | undefined;
 
 type WarningItem = {
   label: string;
@@ -68,17 +66,6 @@ function getWarnWindowDays(docType: string): number {
   return docType === "Assicurazione" ? INSURANCE_WARN_WINDOW_DAYS : WARN_DAYS;
 }
 
-function getLogoDataUri() {
-  if (cachedLogoDataUri !== undefined) return cachedLogoDataUri;
-  try {
-    const filePath = path.join(process.cwd(), "public", "brand", "logo-ischia-transfer-email.png");
-    const base64 = readFileSync(filePath).toString("base64");
-    cachedLogoDataUri = `data:image/png;base64,${base64}`;
-  } catch {
-    cachedLogoDataUri = null;
-  }
-  return cachedLogoDataUri;
-}
 
 async function sendEmail(subject: string, html: string) {
   const key = process.env.RESEND_API_KEY;
