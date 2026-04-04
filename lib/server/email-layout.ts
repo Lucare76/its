@@ -33,7 +33,7 @@ ${preheader}
 
   <!-- HEADER con logo -->
   <tr>
-    <td style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:0;text-align:center;">
+    <td style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:20px 32px;text-align:center;">
       ${logoBlock}
     </td>
   </tr>

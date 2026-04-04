@@ -38,7 +38,7 @@ function formatCents(cents: number): string {
 export function generateInvoiceHtml(data: InvoiceData): string {
   const logoUri = getLogoDataUri();
   const logoHtml = logoUri
-    ? `<img src="${logoUri}" alt="Ischia Transfer Service" style="height:320px;width:auto;display:block;" />`
+    ? `<img src="${logoUri}" alt="Ischia Transfer Service" style="width:280px;height:auto;display:block;" />`
     : `<div style="font-size:22px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">Ischia Transfer Service</div>`;
 
   const rows = data.items.map((item, i) => `
