@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
       email,
       ip_address: ipAddress,
       details: { endpoint: '/api/auth/register', attemptCount: RATE_LIMIT_DEFAULTS.register.maxAttempts }
-    }).catch(() => undefined);
+    }).then(() => undefined, () => undefined);
     
     return NextResponse.json(
       { error: "Troppi tentativi di registrazione. Riprova tra 1 ora." },
@@ -136,7 +136,7 @@ export async function POST(request: NextRequest) {
         ip_address: ipAddress,
         details: { email, full_name: fullName, error: requestInsert.error?.message }
       })
-      .catch(() => undefined);
+      .then(() => undefined, () => undefined);
 
     return NextResponse.json({ error: requestInsert.error?.message ?? "Richiesta accesso non registrata." }, { status: 500 });
   }
@@ -150,7 +150,7 @@ export async function POST(request: NextRequest) {
       ip_address: ipAddress,
       details: { email, full_name: fullName, agency_name: agencyName }
     })
-    .catch(() => undefined);
+    .then(() => undefined, () => undefined);
 
   return NextResponse.json(
     {

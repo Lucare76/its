@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
       .from("otp_sessions")
       .delete()
       .eq("id", otpSession.id)
-      .catch(() => undefined);
+      .then(() => undefined, () => undefined);
 
     return NextResponse.json({ error: "OTP scaduto. Richiedi un nuovo codice" }, { status: 410 });
   }
@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
       .from("otp_sessions")
       .delete()
       .eq("id", otpSession.id)
-      .catch(() => undefined);
+      .then(() => undefined, () => undefined);
 
     return NextResponse.json({ error: "Troppi tentativi falliti. Richiedi un nuovo OTP" }, { status: 429 });
   }
@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
       .from("otp_sessions")
       .update({ attempts_remaining: newAttempts })
       .eq("id", otpSession.id)
-      .catch(() => undefined);
+      .then(() => undefined, () => undefined);
 
     const remaining = Math.max(0, newAttempts);
     return NextResponse.json(
@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
       ip_address: request.headers.get("x-forwarded-for") || "unknown",
       details: { otp_verified: true }
     })
-    .catch(() => undefined);
+    .then(() => undefined, () => undefined);
 
   return NextResponse.json({
     ok: true,

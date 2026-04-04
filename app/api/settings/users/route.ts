@@ -235,7 +235,7 @@ export async function POST(request: NextRequest) {
     }
     const agencyInsert = await auth.admin.from("agencies").insert(agencyInsertPayload).select("id").maybeSingle();
     if (agencyInsert.error || !agencyInsert.data?.id) {
-      await auth.admin.auth.admin.deleteUser(newUserId).catch(() => undefined);
+      await auth.admin.auth.admin.deleteUser(newUserId).then(() => undefined, () => undefined);
       return NextResponse.json({ error: agencyInsert.error?.message ?? "Creazione agenzia fallita." }, { status: 500 });
     }
     createdAgencyId = agencyInsert.data.id;
@@ -250,7 +250,7 @@ export async function POST(request: NextRequest) {
   });
 
   if (membershipInsert.error) {
-    await auth.admin.auth.admin.deleteUser(newUserId).catch(() => undefined);
+    await auth.admin.auth.admin.deleteUser(newUserId).then(() => undefined, () => undefined);
     return NextResponse.json({ error: membershipInsert.error.message }, { status: 500 });
   }
 
@@ -545,7 +545,7 @@ export async function PATCH(request: NextRequest) {
       fullName: requestRow.full_name,
       role: approvedRole,
       agencyName: requestRow.agency_name ?? null
-    }).catch(() => undefined);
+    }).then(() => undefined, () => undefined);
 
     return NextResponse.json({
       ok: true,
@@ -609,7 +609,7 @@ export async function PATCH(request: NextRequest) {
   } else {
     await auth.admin.auth.admin
       .updateUserById(parsed.data.user_id, { user_metadata: metadataPatch })
-      .catch(() => undefined);
+      .then(() => undefined, () => undefined);
   }
 
   return NextResponse.json({ ok: true, user: { ...updateResult.data, suspended: updateResult.data.suspended ?? shouldSuspend } });

@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
       email,
       ip_address: ipAddress,
       details: { endpoint: '/api/auth/reset-password', attemptCount: RATE_LIMIT_DEFAULTS.resetPassword.maxAttempts }
-    }).catch(() => undefined);
+    }).then(() => undefined, () => undefined);
     
     return NextResponse.json(
       { error: "Troppi tentativi di reset. Riprova tra 1 ora." },
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
         ip_address: ipAddress,
         details: { email, user_found: false }
       })
-      .catch(() => undefined);
+      .then(() => undefined, () => undefined);
 
     return NextResponse.json({ ok: true, message: "Controlla la tua casella di posta per le istruzioni." }, { status: 200 });
   }
@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
         ip_address: ipAddress,
         details: { email, error: updateResult.error.message }
       })
-      .catch(() => undefined);
+      .then(() => undefined, () => undefined);
 
     return NextResponse.json({ error: "Impossibile generare password temporanea." }, { status: 500 });
   }
@@ -117,7 +117,7 @@ export async function POST(request: NextRequest) {
         ip_address: ipAddress,
         details: { email, error: `Email send failed: ${sendResult.error}` }
       })
-      .catch(() => undefined);
+      .then(() => undefined, () => undefined);
 
     return NextResponse.json({ error: sendResult.error ?? "Invio email temporanea fallito." }, { status: 500 });
   }
@@ -131,7 +131,7 @@ export async function POST(request: NextRequest) {
       ip_address: ipAddress,
       details: { email }
     })
-    .catch(() => undefined);
+    .then(() => undefined, () => undefined);
 
   return NextResponse.json({ ok: true, message: "Email con password temporanea inviata." }, { status: 200 });
 }

@@ -139,7 +139,7 @@ export async function POST(request: NextRequest) {
       ip_address: request.headers.get("x-forwarded-for") || "unknown",
       details: { email, full_name: fullName, role, method: "direct_invite" }
     })
-    .catch(() => undefined);
+    .then(() => undefined, () => undefined);
 
   return NextResponse.json(
     {

@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     .delete()
     .eq("user_id", userId)
     .lt("expires_at", new Date().toISOString())
-    .catch(() => undefined);
+    .then(() => undefined, () => undefined);
 
   // Delete any existing pending OTP for this user
   await admin
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
     .delete()
     .eq("user_id", userId)
     .is("verified_at", null)
-    .catch(() => undefined);
+    .then(() => undefined, () => undefined);
 
   // Insert new OTP session
   const otpInsert = await admin
@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
       ip_address: request.headers.get("x-forwarded-for") || "unknown",
       details: { otp_sent: true, email }
     })
-    .catch(() => undefined);
+    .then(() => undefined, () => undefined);
 
   return NextResponse.json({
     ok: true,

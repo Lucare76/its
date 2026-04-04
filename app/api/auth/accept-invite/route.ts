@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
   });
 
   if (membershipInsert.error) {
-    await admin.auth.admin.deleteUser(newUserId).catch(() => undefined);
+    await admin.auth.admin.deleteUser(newUserId).then(() => undefined, () => undefined);
     return NextResponse.json({ error: membershipInsert.error.message }, { status: 500 });
   }
 
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
       status: "success",
       details: { email: invite.email, method: "accept_direct_invite", role: invite.role }
     })
-    .catch(() => undefined);
+    .then(() => undefined, () => undefined);
 
   return NextResponse.json({
     ok: true,
