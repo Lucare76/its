@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
     .from("direct_invites")
     .update({ accepted_at: new Date().toISOString() })
     .eq("id", invite.id)
-    .catch(() => undefined);
+    .then(() => undefined, () => undefined);
 
   // Log audit
   await admin
