@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { isDisposableEmail, hasDeliverableEmailDomain } from "@/lib/email-validation";
 import { sendTemporaryPasswordEmail } from "@/lib/server/password-reset-email";
+import { checkRateLimit, RATE_LIMIT_DEFAULTS, type RateLimitConfig } from "@/lib/server/rate-limit";
+import { sendSecurityAlert } from "@/lib/server/security-alert-email";
 
 function generateTemporaryPassword(length = 12) {
   const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
@@ -25,6 +27,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Email non valida" }, { status: 400 });
   }
 
+  // Rate limiting by email
+  const ipAddress = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown";
+  const rateLimitCheck = checkRateLimit("reset_password", email, RATE_LIMIT_DEFAULTS.resetPassword as RateLimitConfig);
+  
+  if (!rateLimitCheck.allowed) {
+    await sendSecurityAlert({
+      type: 'rate_limit_exceeded',
+      email,
+      ip_address: ipAddress,
+      details: { endpoint: '/api/auth/reset-password', attemptCount: RATE_LIMIT_DEFAULTS.resetPassword.maxAttempts }
+    }).catch(() => undefined);
+    
+    return NextResponse.json(
+      { error: "Troppi tentativi di reset. Riprova tra 1 ora." },
+      { status: 429, headers: { "Retry-After": "3600" } }
+    );
+  }
+
   if (isDisposableEmail(email)) {
     return NextResponse.json({ error: "Email temporanea o usa e getta non consentita." }, { status: 400 });
   }
@@ -42,7 +62,17 @@ export async function POST(request: NextRequest) {
   const existingUser = (listResult.data?.users ?? []).find((u) => u.email?.toLowerCase() === email) ?? null;
 
   if (!existingUser?.id) {
-    // Per sicurezza, non riveliamo se l'email esiste o meno
+    // Per sicurezza, non riveliamo se l'email esiste o meno, ma logghiamo il tentativo
+    await admin
+      .from("auth_audit_log")
+      .insert({
+        event_type: "reset_password_requested",
+        status: "success",
+        ip_address: ipAddress,
+        details: { email, user_found: false }
+      })
+      .catch(() => undefined);
+
     return NextResponse.json({ ok: true, message: "Controlla la tua casella di posta per le istruzioni." }, { status: 200 });
   }
 
@@ -50,13 +80,24 @@ export async function POST(request: NextRequest) {
 
   const updateResult = await admin.auth.admin.updateUserById(existingUser.id, {
     password: temporaryPassword,
-    user_metadata: {
+    data: {
       ...((existingUser.user_metadata ?? {}) as Record<string, unknown>),
       password_change_required: true
     }
   });
 
   if (updateResult.error) {
+    await admin
+      .from("auth_audit_log")
+      .insert({
+        user_id: existingUser.id,
+        event_type: "reset_password_requested",
+        status: "failed",
+        ip_address: ipAddress,
+        details: { email, error: updateResult.error.message }
+      })
+      .catch(() => undefined);
+
     return NextResponse.json({ error: "Impossibile generare password temporanea." }, { status: 500 });
   }
 
@@ -67,8 +108,29 @@ export async function POST(request: NextRequest) {
   });
 
   if (sendResult.status === "failed") {
+    await admin
+      .from("auth_audit_log")
+      .insert({
+        user_id: existingUser.id,
+        event_type: "reset_password_requested",
+        status: "failed",
+        ip_address: ipAddress,
+        details: { email, error: `Email send failed: ${sendResult.error}` }
+      })
+      .catch(() => undefined);
+
     return NextResponse.json({ error: sendResult.error ?? "Invio email temporanea fallito." }, { status: 500 });
   }
 
+  await admin
+    .from("auth_audit_log")
+    .insert({
+      user_id: existingUser.id,
+      event_type: "reset_password_requested",
+      status: "success",
+      ip_address: ipAddress,
+      details: { email }
+    })
+    .catch(() => undefined);
+
   return NextResponse.json({ ok: true, message: "Email con password temporanea inviata." }, { status: 200 });
-}

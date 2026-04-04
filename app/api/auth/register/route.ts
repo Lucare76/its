@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { tenantAccessRequestCreateSchema } from "@/lib/validation";
 import { hasDeliverableEmailDomain, isDisposableEmail } from "@/lib/email-validation";
+import { checkRateLimit, RATE_LIMIT_DEFAULTS, type RateLimitConfig } from "@/lib/server/rate-limit";
+import { sendSecurityAlert } from "@/lib/server/security-alert-email";
 
 export const runtime = "nodejs";
 
@@ -16,6 +18,24 @@ export async function POST(request: NextRequest) {
   const email = parsed.data.email.trim().toLowerCase();
   const fullName = parsed.data.full_name.trim();
   const agencyName = parsed.data.agency_name.trim();
+  const ipAddress = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown";
+
+  // Rate limiting by email
+  const rateLimitCheck = checkRateLimit("register", email, RATE_LIMIT_DEFAULTS.register as RateLimitConfig);
+  
+  if (!rateLimitCheck.allowed) {
+    await sendSecurityAlert({
+      type: 'rate_limit_exceeded',
+      email,
+      ip_address: ipAddress,
+      details: { endpoint: '/api/auth/register', attemptCount: RATE_LIMIT_DEFAULTS.register.maxAttempts }
+    }).catch(() => undefined);
+    
+    return NextResponse.json(
+      { error: "Troppi tentativi di registrazione. Riprova tra 1 ora." },
+      { status: 429, headers: { "Retry-After": "3600" } }
+    );
+  }
 
   if (isDisposableEmail(email)) {
     return NextResponse.json({ error: "Email temporanea o usa e getta non consentita." }, { status: 400 });
@@ -24,7 +44,6 @@ export async function POST(request: NextRequest) {
   if (!(await hasDeliverableEmailDomain(email))) {
     return NextResponse.json({ error: "Dominio email non valido o non raggiungibile. Usa un indirizzo valido." }, { status: 400 });
   }
-
   const existingRequest = await admin
     .from("tenant_access_requests")
     .select("id, status")
@@ -108,8 +127,30 @@ export async function POST(request: NextRequest) {
     .maybeSingle();
 
   if (requestInsert.error || !requestInsert.data?.id) {
+    await admin
+      .from("auth_audit_log")
+      .insert({
+        user_id: userId,
+        event_type: "register",
+        status: "failed",
+        ip_address: ipAddress,
+        details: { email, full_name: fullName, error: requestInsert.error?.message }
+      })
+      .catch(() => undefined);
+
     return NextResponse.json({ error: requestInsert.error?.message ?? "Richiesta accesso non registrata." }, { status: 500 });
   }
+
+  await admin
+    .from("auth_audit_log")
+    .insert({
+      user_id: userId,
+      event_type: "register",
+      status: "success",
+      ip_address: ipAddress,
+      details: { email, full_name: fullName, agency_name: agencyName }
+    })
+    .catch(() => undefined);
 
   return NextResponse.json(
     {
