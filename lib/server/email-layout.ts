@@ -8,7 +8,7 @@ import { getLogoDataUri } from "@/lib/server/logo";
 export function emailHtml(body: string, options?: { title?: string; preheader?: string }): string {
   const logo = getLogoDataUri();
   const logoBlock = logo
-    ? `<img src="${logo}" alt="Ischia Transfer Service" style="width:100%;height:auto;display:block;" />`
+    ? `<img src="${logo}" alt="Ischia Transfer Service" style="width:50%;height:auto;display:block;margin:0 auto;" />`
     : `<div style="font-size:26px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;text-align:center;">Ischia Transfer Service</div>`;
 
   const preheader = options?.preheader
