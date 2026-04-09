@@ -144,6 +144,10 @@ export default function BusNetworkPage() {
   const [editCapUnitId, setEditCapUnitId] = useState<string | null>(null);
   const [editCapValue, setEditCapValue] = useState("");
 
+  // Editable pax per allocation
+  const [editPaxAllocId, setEditPaxAllocId] = useState<string | null>(null);
+  const [editPaxValue, setEditPaxValue] = useState("");
+
   // Edit stop inline (nome e orario)
   const [editStopTimeId, setEditStopTimeId] = useState<string | null>(null);
   const [editStopTimeValue, setEditStopTimeValue] = useState("");
@@ -1342,9 +1346,34 @@ export default function BusNetworkPage() {
                                   )}
                                 </div>
                                 <div className="flex flex-shrink-0 flex-col items-end gap-1">
-                                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">
-                                    {alloc.pax_assigned} pax
-                                  </span>
+                                  {editPaxAllocId === alloc.allocation_id ? (
+                                    <input
+                                      autoFocus
+                                      type="number"
+                                      min={1}
+                                      max={120}
+                                      value={editPaxValue}
+                                      onClick={(e) => e.stopPropagation()}
+                                      onChange={(e) => setEditPaxValue(e.target.value)}
+                                      onBlur={async () => {
+                                        const pax = parseInt(editPaxValue, 10);
+                                        if (!isNaN(pax) && pax >= 1 && pax !== alloc.pax_assigned) {
+                                          await post("update_pax", { allocation_id: alloc.allocation_id, pax_assigned: pax });
+                                        }
+                                        setEditPaxAllocId(null);
+                                      }}
+                                      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditPaxAllocId(null); }}
+                                      className="w-14 rounded border border-indigo-300 bg-indigo-50 px-1 py-0.5 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                    />
+                                  ) : (
+                                    <span
+                                      className="cursor-pointer rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600 hover:bg-indigo-100 hover:text-indigo-700"
+                                      title="Clicca per modificare pax"
+                                      onClick={(e) => { e.stopPropagation(); setEditPaxAllocId(alloc.allocation_id); setEditPaxValue(String(alloc.pax_assigned)); }}
+                                    >
+                                      {alloc.pax_assigned} pax
+                                    </span>
+                                  )}
                                   <div className="flex gap-1">
                                     <button onClick={() => openMoveModal(alloc)}
                                       className="rounded border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-600 opacity-0 transition-opacity hover:bg-indigo-50 group-hover:opacity-100">
@@ -1385,7 +1414,34 @@ export default function BusNetworkPage() {
                                 <div className="truncate text-xs uppercase text-slate-400">{alloc.hotel_name ?? "—"}</div>
                               </div>
                               <div className="flex flex-shrink-0 flex-col items-end gap-1">
-                                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">{alloc.pax_assigned} pax</span>
+                                {editPaxAllocId === alloc.allocation_id ? (
+                                  <input
+                                    autoFocus
+                                    type="number"
+                                    min={1}
+                                    max={120}
+                                    value={editPaxValue}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={(e) => setEditPaxValue(e.target.value)}
+                                    onBlur={async () => {
+                                      const pax = parseInt(editPaxValue, 10);
+                                      if (!isNaN(pax) && pax >= 1 && pax !== alloc.pax_assigned) {
+                                        await post("update_pax", { allocation_id: alloc.allocation_id, pax_assigned: pax });
+                                      }
+                                      setEditPaxAllocId(null);
+                                    }}
+                                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditPaxAllocId(null); }}
+                                    className="w-14 rounded border border-indigo-300 bg-indigo-50 px-1 py-0.5 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                  />
+                                ) : (
+                                  <span
+                                    className="cursor-pointer rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600 hover:bg-indigo-100 hover:text-indigo-700"
+                                    title="Clicca per modificare pax"
+                                    onClick={(e) => { e.stopPropagation(); setEditPaxAllocId(alloc.allocation_id); setEditPaxValue(String(alloc.pax_assigned)); }}
+                                  >
+                                    {alloc.pax_assigned} pax
+                                  </span>
+                                )}
                                 <div className="flex gap-1">
                                   <button onClick={() => openMoveModal(alloc)}
                                     className="rounded border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-600 opacity-0 transition-opacity hover:bg-indigo-50 group-hover:opacity-100">

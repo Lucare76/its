@@ -158,6 +158,22 @@ function hasKeywordOverlap(a: string, b: string): boolean {
   ));
 }
 
+// Parole che indicano che il valore è un indirizzo stradale, non un nome di città
+const ADDRESS_INDICATORS = new Set([
+  "davanti", "edicola", "supermercato", "bennet", "esselunga", "lidl", "conad", "coop",
+  "distributore", "eni", "ip", "agip", "tamoil", "shell", "q8",
+  "semaforo", "incrocio", "rotonda", "cavalcavia", "sottopasso",
+  "chiesa", "municipio", "farmacia", "bar", "tabacchi", "ufficio",
+]);
+
+function looksLikeAddress(nc: string): boolean {
+  const words = nc.split(/\s+/);
+  // Se ha più di 3 parole significative oppure contiene indicatori di indirizzo → è un indirizzo
+  const significant = words.filter((w) => w.length >= 4 && !STOP_WORDS.has(w));
+  if (significant.length > 3) return true;
+  return significant.some((w) => ADDRESS_INDICATORS.has(w));
+}
+
 function matchAcrossLines(
   city: string,
   stops: BusStop[],
@@ -177,17 +193,6 @@ function matchAcrossLines(
     (s.pickup_note && normCity(s.pickup_note).includes(nc) && nc.length >= 4)
   );
   if (exact) return { stop: exact, line: findLine(exact), status: "ok" };
-
-  // Fuzzy: substring match su city/stop_name/pickup_note, oppure keyword overlap su pickup_note
-  const fuzzy = dirStops.find((s) => {
-    const sc = normCity(s.city);
-    const sn = normCity(s.stop_name);
-    const sp = s.pickup_note ? normCity(s.pickup_note) : "";
-    return sc.includes(nc) || nc.includes(sc) ||
-      sn.includes(nc) || nc.includes(sn) ||
-      (sp && nc.length >= 4 && (sp.includes(nc) || nc.includes(sp) || hasKeywordOverlap(nc, sp)));
-  });
-  if (fuzzy) return { stop: fuzzy, line: findLine(fuzzy), status: "fuzzy" };
 
   return { stop: null, line: null, status: "pending" };
 }
@@ -364,6 +369,10 @@ function StopSearchSelect({
   const [pendingCreate, setPendingCreate] = useState<{ city: CitySuggestion; nearest: NearestInfo; pickupNote: string } | null>(null);
   const [creating, setCreating] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Autocomplete strade nel campo Fermata
+  const [streetSuggestions, setStreetSuggestions] = useState<{ label: string; detail: string }[]>([]);
+  const [streetOpen, setStreetOpen] = useState(false);
+  const streetDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const q = search.toLowerCase().trim();
 
@@ -380,15 +389,13 @@ function StopSearchSelect({
     }))
     .filter((x) => x.stops.length > 0);
 
-  // Auto-seleziona se c'è un unico match esatto (per nome o città)
+  // Auto-seleziona solo se la query corrisponde ESATTAMENTE al nome città o fermata
   const allCatalogStops = catalogMatches.flatMap((x) => x.stops);
-  const exactMatch = allCatalogStops.length === 1
-    ? allCatalogStops[0]
-    : allCatalogStops.find(
-        (s) => s.city.toLowerCase() === q || s.stop_name.toLowerCase() === q
-      ) ?? null;
+  const exactMatch = allCatalogStops.find(
+    (s) => s.city.toLowerCase() === q || s.stop_name.toLowerCase() === q
+  ) ?? null;
 
-  // Effetto: auto-selezione se match esatto trovato
+  // Effetto: auto-selezione solo su match esatto
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   useEffect(() => {
@@ -407,31 +414,13 @@ function StopSearchSelect({
     const trimmed = v.trim();
     if (trimmed.length < 2) { setCityLoading(false); return; }
 
-    // Se non ci sono match nel catalogo, cerca su Nominatim
+    // Cerca sempre su GeoNames/Photon, indipendentemente dai match nel catalogo
     debounceRef.current = setTimeout(async () => {
-      // Ricontrolla i match locali dopo il debounce
-      const localMatches = stopsByLine.flatMap(({ stops }) =>
-        stops.filter((s) =>
-          s.stop_name.toLowerCase().includes(trimmed.toLowerCase()) ||
-          s.city.toLowerCase().includes(trimmed.toLowerCase())
-        )
-      );
-      if (localMatches.length > 0) { setCityLoading(false); return; }
-
       setCityLoading(true);
       try {
-        const encoded = encodeURIComponent(`${trimmed}, Italy`);
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=6&countrycodes=it`,
-          { headers: { "Accept-Language": "it" } }
-        );
-        const data = (await res.json()) as Array<{ lat: string; lon: string; display_name: string; name: string }>;
-        setCitySuggestions(data.map((d) => ({
-          displayName: d.display_name,
-          shortName: d.name ?? d.display_name.split(",")[0].trim(),
-          lat: parseFloat(d.lat),
-          lng: parseFloat(d.lon),
-        })));
+        const res = await fetch(`/api/geocode/comuni?q=${encodeURIComponent(trimmed)}`);
+        const data = (await res.json()) as { results: CitySuggestion[] };
+        setCitySuggestions(data.results ?? []);
       } catch {
         setCitySuggestions([]);
       } finally {
@@ -497,70 +486,107 @@ function StopSearchSelect({
             </div>
           ))}
 
-          {/* Nessun match → suggerimenti Nominatim per aggiungere nuova fermata */}
-          {!hasCatalogMatches && (
+          {/* Suggerimenti GeoNames — sempre visibili sotto il catalogo */}
+          {cityLoading && (
+            <div className="px-3 py-2 text-xs text-slate-400 animate-pulse border-t border-slate-100">Ricerca comuni...</div>
+          )}
+          {!cityLoading && citySuggestions.length > 0 && (
             <>
-              {cityLoading && (
-                <div className="px-3 py-2 text-xs text-slate-400 animate-pulse">Ricerca città...</div>
-              )}
-              {!cityLoading && citySuggestions.length > 0 && (
-                <>
-                  <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 border-b border-slate-100">
-                    Seleziona la città da aggiungere
-                  </div>
-                  {citySuggestions.map((city, idx) => (
-                    <button key={idx} type="button" onMouseDown={() => handleCitySelect(city)}
-                      className="w-full px-3 py-2 text-left hover:bg-amber-50 border-b border-slate-50 last:border-0">
-                      <div className="text-xs font-medium text-slate-800">{city.shortName}</div>
-                      <div className="text-[10px] text-slate-400 truncate">{city.displayName}</div>
-                    </button>
-                  ))}
-                </>
-              )}
-              {!cityLoading && citySuggestions.length === 0 && (
-                <div className="px-3 py-2 text-xs text-slate-400">
-                  {q.length < 3 ? "Continua a scrivere..." : `Nessun risultato per "${search.trim()}"`}
-                </div>
-              )}
+              <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 bg-amber-50 border-t border-amber-100">
+                Aggiungi nuova fermata
+              </div>
+              {citySuggestions.map((city, idx) => (
+                <button key={idx} type="button" onMouseDown={() => handleCitySelect(city)}
+                  className="w-full px-3 py-2 text-left hover:bg-amber-50 border-b border-slate-50 last:border-0">
+                  <div className="text-xs font-medium text-amber-800">{city.shortName}</div>
+                  <div className="text-[10px] text-slate-400 truncate">{city.displayName}</div>
+                </button>
+              ))}
             </>
+          )}
+          {!cityLoading && citySuggestions.length === 0 && !hasCatalogMatches && (
+            <div className="px-3 py-2 text-xs text-slate-400">
+              {q.length < 3 ? "Continua a scrivere..." : `Nessun risultato per "${search.trim()}"`}
+            </div>
           )}
         </div>
       )}
 
-      {/* Pannello conferma: posizionato absolute per non essere soffocato dalla cella stretta */}
+      {/* Pannello conferma nuova fermata */}
       {pendingCreate && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-72 rounded-lg border border-amber-200 bg-amber-50 shadow-lg p-2.5 space-y-2">
+        <div className="fixed z-[200] mt-1 w-80 rounded-xl border border-amber-200 bg-white shadow-xl"
+          style={{ top: "50%", left: "50%", transform: "translate(-50%, -50%)" }}>
           {creating ? (
-            <div className="py-1 text-xs text-amber-700 animate-pulse">Aggiunta fermata in corso...</div>
+            <div className="px-4 py-6 text-center text-sm text-amber-700 animate-pulse">Aggiunta fermata in corso...</div>
           ) : (
             <>
-              <div className="text-[10px] font-bold uppercase tracking-wide text-amber-700">Nuova fermata</div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-slate-500 w-12 shrink-0">Città</span>
-                <span className="text-xs font-semibold text-slate-800">{pendingCreate.city.shortName.toUpperCase()}</span>
+              <div className="flex items-center justify-between border-b border-amber-100 px-4 py-3">
+                <span className="text-xs font-bold uppercase tracking-wide text-amber-700">Nuova fermata</span>
+                <button type="button" onMouseDown={() => { setPendingCreate(null); setStreetSuggestions([]); onSearchChange(""); }}
+                  className="text-slate-400 hover:text-slate-600 text-sm leading-none">✕</button>
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-[10px] text-slate-500 w-12 shrink-0">Fermata</label>
-                <input
-                  type="text"
-                  value={pendingCreate.pickupNote}
-                  onChange={(e) => setPendingCreate((v) => v && { ...v, pickupNote: e.target.value })}
-                  placeholder="es. Parcheggio Bennet"
-                  className="flex-1 rounded border border-amber-200 bg-white px-2 py-1 text-xs text-slate-700 placeholder-slate-300 focus:outline-none focus:ring-1 focus:ring-amber-300"
-                />
+              <div className="px-4 py-3 space-y-3">
+                {/* Città */}
+                <div className="flex items-center gap-3">
+                  <span className="w-14 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Città</span>
+                  <span className="text-sm font-bold text-slate-800">{pendingCreate.city.shortName.toUpperCase()}</span>
+                </div>
+                {/* Fermata con autocomplete strade */}
+                <div className="flex items-start gap-3">
+                  <label className="w-14 shrink-0 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Fermata</label>
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={pendingCreate.pickupNote}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPendingCreate((prev) => prev && { ...prev, pickupNote: v });
+                        setStreetOpen(true);
+                        if (streetDebounceRef.current) clearTimeout(streetDebounceRef.current);
+                        if (v.trim().length < 2) { setStreetSuggestions([]); return; }
+                        streetDebounceRef.current = setTimeout(async () => {
+                          const res = await fetch(`/api/geocode/streets?q=${encodeURIComponent(v.trim())}&lat=${pendingCreate.city.lat}&lng=${pendingCreate.city.lng}`);
+                          const data = (await res.json()) as { results: { label: string; detail: string }[] };
+                          setStreetSuggestions(data.results ?? []);
+                        }, 300);
+                      }}
+                      onFocus={() => setStreetOpen(true)}
+                      onBlur={() => setTimeout(() => setStreetOpen(false), 200)}
+                      placeholder="es. Parcheggio Bennet, Via Roma..."
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-700 placeholder-slate-300 focus:border-amber-300 focus:outline-none focus:ring-1 focus:ring-amber-300"
+                    />
+                    {streetOpen && streetSuggestions.length > 0 && (
+                      <div className="absolute left-0 top-full z-10 mt-0.5 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                        {streetSuggestions.map((s, si) => (
+                          <button key={si} type="button"
+                            onMouseDown={() => {
+                              setPendingCreate((prev) => prev && { ...prev, pickupNote: s.label });
+                              setStreetSuggestions([]);
+                              setStreetOpen(false);
+                            }}
+                            className="w-full px-3 py-2 text-left hover:bg-amber-50 border-b border-slate-50 last:border-0">
+                            <div className="text-xs font-medium text-slate-800">{s.label}</div>
+                            {s.detail && <div className="text-[10px] text-slate-400">{s.detail}</div>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {/* Posizione nella linea */}
+                <div className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+                  <span className="font-semibold text-slate-700">{pendingCreate.nearest.line.name}</span>
+                  {" · inserita dopo "}<span className="font-medium text-indigo-600">{pendingCreate.nearest.stop.stop_name}</span>
+                  <span className="text-slate-400"> ({pendingCreate.nearest.distKm.toFixed(0)} km)</span>
+                </div>
               </div>
-              <div className="text-[10px] text-slate-500 leading-relaxed">
-                <span className="font-medium">{pendingCreate.nearest.line.name}</span>
-                {" · dopo "}{pendingCreate.nearest.stop.stop_name}
-                {" ("}{pendingCreate.nearest.distKm.toFixed(0)}{" km)"}
-              </div>
-              <div className="flex gap-1.5">
-                <button type="button" onMouseDown={() => { setPendingCreate(null); onSearchChange(""); }}
-                  className="flex-1 rounded border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-500 hover:bg-slate-50">
+              <div className="flex gap-2 border-t border-slate-100 px-4 py-3">
+                <button type="button" onMouseDown={() => { setPendingCreate(null); setStreetSuggestions([]); onSearchChange(""); }}
+                  className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 hover:bg-slate-50">
                   Annulla
                 </button>
                 <button type="button" onMouseDown={() => void handleConfirmCreate()}
-                  className="flex-1 rounded bg-amber-500 px-2 py-1 text-[10px] font-semibold text-white hover:bg-amber-600">
+                  className="flex-1 rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-600">
                   Conferma
                 </button>
               </div>
@@ -612,6 +638,9 @@ export default function BusImportModal({
   const [editingHotels, setEditingHotels] = useState<Set<number>>(new Set());
   // Nomi in modalità modifica (click-to-edit)
   const [editingNames, setEditingNames] = useState<Set<number>>(new Set());
+  // Pax in modalità modifica (click-to-edit)
+  const [editingPax, setEditingPax] = useState<Set<number>>(new Set());
+  const [editingPaxValue, setEditingPaxValue] = useState<Record<number, string>>({});
   // Conferma eliminazione import
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Copia locale degli stop (si aggiorna quando si creano nuove fermate)
@@ -746,17 +775,20 @@ export default function BusImportModal({
         const hasPax = /^\d+$/.test(paxRaw) && parseInt(paxRaw, 10) > 0;
         if (!nameRaw && !(hasCity && hasPax)) continue;
         const name = nameRaw || `Gruppo ${pax} pax`;
-        const cityNorm = extractCity(cityRaw);
         const phone = str(phoneCol);
-        // Accetta rawOrario solo se è un orario valido HH:MM (evita valori spuri da colonne mal-riconosciute)
+        // Estrai orario e città dall'orario — alcuni file usano "04:30 ESINE" nello stesso campo
         const rawOrarioRaw = str(orarioCol);
-        const rawOrario = /^\d{1,2}:\d{2}(:\d{2})?$/.test(rawOrarioRaw.trim()) ? rawOrarioRaw.trim().slice(0, 5) : "";
+        const orarioMatch = rawOrarioRaw.trim().match(/^(\d{1,2}:\d{2})(?::\d{2})?\s*(.*)$/);
+        const rawOrario = orarioMatch ? orarioMatch[1] : "";
+        const cityFromOrario = orarioMatch?.[2]?.trim() ?? "";
+        // Usa la città dalla colonna destinazione; se vuota o solo indirizzo, prova da colonna orario
+        const cityNorm = extractCity(cityRaw) || cityFromOrario;
         // Leggi agenzia da colonna notesCol e da colonna J (con alias mapping)
         const agencyRaw = str(notesCol) || str(agencyJCol);
         const agency = normalizeAgency(agencyRaw);
         const notes = "";
 
-        const { stop, line, status } = matchAcrossLines(cityNorm, allStops, allLines, direction);
+        const { stop, line, status } = matchAcrossLines(cityFromOrario || cityNorm, allStops, allLines, direction);
         // Fallback orario: usa la città canonica matchata (es. "BRESCIA" da "BORGOSATOLLO")
         const canonicalCity = (stop?.city ?? cityNorm).toUpperCase().trim();
         const catalogTime = CATALOG_CITY_TIME[canonicalCity] ?? "";
@@ -948,16 +980,20 @@ export default function BusImportModal({
                               value={row.name}
                               onChange={(e) => setRows((prev) => prev.map((r, ri) => ri === i ? { ...r, name: e.target.value } : r))}
                               onBlur={() => setEditingNames((prev) => { const s = new Set(prev); s.delete(i); return s; })}
+                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditingNames((prev) => { const s = new Set(prev); s.delete(i); return s; }); }}
                               className="w-full rounded border border-indigo-300 px-1 py-0.5 text-xs font-medium uppercase text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-300"
                             />
                           ) : (
                             <div
-                              className="cursor-pointer group"
+                              className="cursor-pointer group flex items-start gap-1"
                               onClick={() => setEditingNames((prev) => new Set(prev).add(i))}
-                              title="Clicca per modificare"
+                              title="Clicca per modificare nome"
                             >
-                              <div className="font-medium uppercase text-slate-800 group-hover:underline decoration-dotted">{row.name}</div>
-                              {row.phone && <div className="text-xs text-slate-400">{row.phone}</div>}
+                              <div className="min-w-0 flex-1">
+                                <div className="font-medium uppercase text-slate-800 group-hover:underline decoration-dotted">{row.name}</div>
+                                {row.phone && <div className="text-xs text-slate-400">{row.phone}</div>}
+                              </div>
+                              <span className="text-[10px] text-slate-300 group-hover:text-slate-400 shrink-0">✎</span>
                             </div>
                           )}
                         </td>
@@ -997,7 +1033,37 @@ export default function BusImportModal({
                           )}
                         </td>
                         <td className="px-3 py-2 text-center">
-                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">{row.pax}</span>
+                          {editingPax.has(i) ? (
+                            <input
+                              autoFocus
+                              type="number"
+                              min={1}
+                              max={120}
+                              value={editingPaxValue[i] ?? String(row.pax)}
+                              onChange={(e) => setEditingPaxValue((prev) => ({ ...prev, [i]: e.target.value }))}
+                              onBlur={() => {
+                                const val = parseInt(editingPaxValue[i] ?? "", 10);
+                                if (!isNaN(val) && val >= 1) {
+                                  setRows((prev) => prev.map((r, ri) => ri === i ? { ...r, pax: val } : r));
+                                }
+                                setEditingPax((prev) => { const s = new Set(prev); s.delete(i); return s; });
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                if (e.key === "Escape") setEditingPax((prev) => { const s = new Set(prev); s.delete(i); return s; });
+                              }}
+                              className="w-12 rounded border border-indigo-300 bg-indigo-50 px-1 py-0.5 text-center text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                            />
+                          ) : (
+                            <span
+                              className="cursor-pointer rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600 hover:bg-indigo-100 hover:text-indigo-700"
+                              title="Clicca per modificare pax"
+                              onClick={() => {
+                                setEditingPaxValue((prev) => ({ ...prev, [i]: String(row.pax) }));
+                                setEditingPax((prev) => new Set(prev).add(i));
+                              }}
+                            >{row.pax}</span>
+                          )}
                         </td>
                         <td className="px-3 py-2">
                           {(row.status === "ok" || row.status === "fuzzy") && !editingRows.has(i) && (

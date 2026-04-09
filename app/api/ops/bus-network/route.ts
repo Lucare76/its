@@ -494,6 +494,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    if (action === "update_pax") {
+      const parsed = z.object({ allocation_id: z.string().uuid(), pax_assigned: z.number().int().min(1).max(120) }).parse(body);
+      const { error } = await auth.admin.from("tenant_bus_allocations")
+        .update({ pax_assigned: parsed.pax_assigned })
+        .eq("tenant_id", tenantId).eq("id", parsed.allocation_id);
+      if (error) throw new Error(error.message);
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
     if (action === "update_label") {
       const parsed = z.object({ unit_id: z.string().uuid(), label: z.string().min(1).max(120).trim() }).parse(body);
       const { error } = await auth.admin.from("tenant_bus_units")
