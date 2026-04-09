@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ischia Transfer - Stato attuale menu gestionale</title>
+    <style>
+      :root {
+        --ink: #0f172a;
+        --muted: #475569;
+        --line: #dbe3ee;
+        --brand: #123b67;
+        --brand-soft: #e8f1fb;
+        --ok-bg: #dcfce7;
+        --ok-ink: #166534;
+        --warn-bg: #fef3c7;
+        --warn-ink: #92400e;
+        --crit-bg: #fee2e2;
+        --crit-ink: #991b1b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: "Segoe UI", Arial, sans-serif;
+        line-height: 1.45;
+        background:
+          radial-gradient(circle at top left, rgba(18, 59, 103, 0.09), transparent 24%),
+          linear-gradient(180deg, #f4f8fc 0%, #ffffff 180px);
+      }
+      .page {
+        width: 210mm;
+        min-height: 297mm;
+        margin: 0 auto;
+        padding: 12mm;
+        background: white;
+      }
+      h1, h2, h3, p { margin: 0; }
+      h1 {
+        max-width: 720px;
+        font-size: 30px;
+        line-height: 1.06;
+        color: var(--brand);
+      }
+      h2 {
+        margin-top: 16px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+        font-size: 16px;
+      }
+      p, li, td, th {
+        font-size: 12px;
+      }
+      ul {
+        margin: 8px 0 0 18px;
+        padding: 0;
+      }
+      li + li {
+        margin-top: 4px;
+      }
+      .hero {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 14px 16px;
+        background: linear-gradient(135deg, var(--brand-soft), #ffffff 72%);
+      }
+      .meta {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 11px;
+        background: #fff;
+      }
+      .label {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .ok { background: var(--ok-bg); color: var(--ok-ink); }
+      .warn { background: var(--warn-bg); color: var(--warn-ink); }
+      .crit { background: var(--crit-bg); color: var(--crit-ink); }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+      }
+      th, td {
+        border: 1px solid var(--line);
+        padding: 8px 9px;
+        vertical-align: top;
+        text-align: left;
+      }
+      th {
+        background: #f8fafc;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+      .small {
+        margin-top: 6px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      code {
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 11px;
+        background: #f1f5f9;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <h1>Ischia Transfer: stato attuale del menu gestionale</h1>
+        <p class="meta">Fotografia reale del prodotto al 30 marzo 2026. Focus: cosa funziona, cosa è già usabile dal cliente e cosa va ancora rifinito.</p>
+      </section>
+
+      <section class="summary">
+        <article class="card">
+          <p><strong>Menu analizzati</strong></p>
+          <p>30+ aree applicative presenti nel prodotto.</p>
+        </article>
+        <article class="card">
+          <p><strong>Qualità tecnica</strong></p>
+          <p><span class="label ok">Typecheck OK</span></p>
+        </article>
+        <article class="card">
+          <p><strong>Copertura test</strong></p>
+          <p>Smoke ed E2E base attivi.</p>
+        </article>
+        <article class="card">
+          <p><strong>Stato globale</strong></p>
+          <p><span class="label ok">Beta operativa</span></p>
+        </article>
+      </section>
+
+      <h2>Come leggere questo report</h2>
+      <ul>
+        <li><span class="label ok">Funziona</span> significa modulo realmente utilizzabile oggi.</li>
+        <li><span class="label warn">Da rifinire</span> significa modulo utile ma ancora da pulire lato UX, naming o automazione.</li>
+        <li><span class="label crit">Critico</span> significa area importante ma ancora delicata dal punto di vista architetturale o di prodotto.</li>
+      </ul>
+
+      <h2>Tabella modulo per modulo</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Modulo</th>
+            <th>Stato</th>
+            <th>Cosa funziona oggi</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Dashboard</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>KPI, panoramica servizi, indicatori operativi e accesso rapido ai moduli principali.</td>
+            <td>Buona base per uso quotidiano.</td>
+          </tr>
+          <tr>
+            <td>Control Room / Mappa live</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>Bus live, stati operativi, alert intelligenti, lista mezzi, reverse geocoding, integrazione PMS.</td>
+            <td>Uno dei moduli più forti oggi.</td>
+          </tr>
+          <tr>
+            <td>Arrivi / Partenze</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>Liste operative giornaliere, hotel, vettori, pax, stato servizi.</td>
+            <td>Già coerente per uso operations.</td>
+          </tr>
+          <tr>
+            <td>Dispatch / Assegnazioni</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>Assegnazione mezzi e autisti, lettura servizi e supporto alla giornata operativa.</td>
+            <td>Da mantenere allineato con planning.</td>
+          </tr>
+          <tr>
+            <td>PDF Imports</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>Preview, draft, review, conferma finale, dedupe, costo PDF, parser per agenzia.</td>
+            <td>Modulo già utile davvero.</td>
+          </tr>
+          <tr>
+            <td>Inbox</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>Gestione email in ingresso, draft da review, collegamento all’import.</td>
+            <td>Importante per il flusso semi-automatico.</td>
+          </tr>
+          <tr>
+            <td>Hotel</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>Registro hotel, alias, import OSM, autofill coordinate, creazione manuale, merge hotel.</td>
+            <td>Auto-create da PDF ora presente.</td>
+          </tr>
+          <tr>
+            <td>Agenzie / CRM Agenzie</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>Gestione anagrafiche, collegamento utenti agency, pricing e bookings dedicati.</td>
+            <td>Buona base commerciale.</td>
+          </tr>
+          <tr>
+            <td>Area Agenzia</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>Login, approvazione, nuova prenotazione, lista prenotazioni, primo setup profilo.</td>
+            <td>Uno dei blocchi più maturi lato prodotto.</td>
+          </tr>
+          <tr>
+            <td>Pricing / Margini</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>Listini, regole, simulatori, margini e workflow tariffario.</td>
+            <td>Già utilizzabile da admin/operator.</td>
+          </tr>
+          <tr>
+            <td>Bus Network / Rete Bus</td>
+            <td><span class="label warn">Da rifinire</span></td>
+            <td>Vista rete, allocazioni, spostamenti, suggerimenti.</td>
+            <td>Valido ma ancora da lucidare in UX e coerenza naming.</td>
+          </tr>
+          <tr>
+            <td>Mario Planning / Planning / Scheduler</td>
+            <td><span class="label warn">Da rifinire</span></td>
+            <td>Planning cells, bus rows, griglia operativa già presenti.</td>
+            <td>Serve consolidamento prodotto e chiarezza di ruolo.</td>
+          </tr>
+          <tr>
+            <td>Excel Import / Excel Workspace</td>
+            <td><span class="label warn">Da rifinire</span></td>
+            <td>Import bus e flussi operativi già presenti.</td>
+            <td>Molto utile internamente, ancora tecnico lato naming/UI.</td>
+          </tr>
+          <tr>
+            <td>Report Center / Audit / Notifications</td>
+            <td><span class="label warn">Da rifinire</span></td>
+            <td>Feed eventi, report jobs, alert operativi e notifiche.</td>
+            <td>Buono, ma può diventare più “enterprise”.</td>
+          </tr>
+          <tr>
+            <td>Rete Ischia</td>
+            <td><span class="label warn">Da rifinire</span></td>
+            <td>Modulo esistente e ora rimesso sotto RBAC.</td>
+            <td>Va chiarito meglio il suo ruolo nel prodotto.</td>
+          </tr>
+          <tr>
+            <td>Services / New Service</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>Creazione manuale servizi, preset formula SNAV/MEDMAR, campi base completi.</td>
+            <td>Già usabile come fallback operativo.</td>
+          </tr>
+          <tr>
+            <td>Driver</td>
+            <td><span class="label ok">Funziona</span></td>
+            <td>Area mobile-first con stato servizio e lettura dati assegnati.</td>
+            <td>Buona base mobile.</td>
+          </tr>
+          <tr>
+            <td>Onboarding / Registrazione utenti</td>
+            <td><span class="label warn">Da rifinire</span></td>
+            <td>Registrazione agency, approvazione admin, richieste accesso, primo setup.</td>
+            <td>Funziona, ma è ancora un’area sensibile di prodotto.</td>
+          </tr>
+          <tr>
+            <td>Auth multi-tenant interno</td>
+            <td><span class="label crit">Critico</span></td>
+            <td>La base tenant esiste e il multi-tenant è reale.</td>
+            <td>Il punto più delicato resta il concetto di tenant attivo per utenti interni con più membership.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Cosa oggi puoi considerare già vendibile</h2>
+      <ul>
+        <li>gestione operativa giornaliera arrivi / partenze / dispatch;</li>
+        <li>control room flotta;</li>
+        <li>import PDF pratiche agenzia con review;</li>
+        <li>area agenzia con onboarding controllato;</li>
+        <li>pricing e margini;</li>
+        <li>registro hotel e normalizzazione hotel.</li>
+      </ul>
+
+      <h2>Cosa rifinirei per prima</h2>
+      <ul>
+        <li>tenant attivo per utenti interni multi-tenant;</li>
+        <li>ripulitura naming e menu dei moduli più tecnici;</li>
+        <li>consolidamento planning / rete bus / scheduler in un linguaggio più prodotto;</li>
+        <li>ulteriore hardening del parser AI PDF con fallback intelligente.</li>
+      </ul>
+
+      <h2>Verdetto finale</h2>
+      <p>Il gestionale oggi non è un mockup: è una beta operativa concreta. Il cuore del prodotto funziona già bene su import pratiche, hotel, operativo giornaliero, dispatch, agency e control room. I punti più importanti ancora da consolidare non sono tanto “mancanze di schermate”, ma soprattutto rifinitura architetturale e chiarezza prodotto sui moduli più tecnici.</p>
+
+      <p class="small">Documento generato localmente dal progetto Ischia Transfer il 30 marzo 2026.</p>
+    </main>
+  </body>
+</html>

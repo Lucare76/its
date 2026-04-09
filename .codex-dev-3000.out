@@ -1,0 +1,62 @@
+
+> ischia-transfer-beta@0.1.0 dev C:\Users\DELL-DESK\ischia-transfer-beta
+> next dev --port 3010 "--port" "3000"
+
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.10.122:3000
+- Environments: .env.local
+
+✓ Starting...
+Creating turbopack project { dir: 'C:\\Users\\DELL-DESK\\ischia-transfer-beta', testMode: true }
+✓ Ready in 2.6s
+[env] presence {
+  NEXT_PUBLIC_SUPABASE_URL: true,
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: true,
+  SUPABASE_SERVICE_ROLE_KEY: true,
+  EMAIL_INBOUND_TOKEN: false,
+  RESEND_API_KEY: true,
+  AGENCY_BOOKING_FROM_EMAIL: true,
+  AGENCY_BOOKING_BETA_RECIPIENT_EMAIL: true,
+  NEXT_PUBLIC_AGENCY_DEFAULT_CONFIRMATION_EMAIL: true,
+  IMAP_HOST: false,
+  IMAP_PORT: false,
+  IMAP_USER: false,
+  IMAP_PASS: false,
+  IMAP_TLS: false,
+  WHATSAPP_TOKEN: false,
+  WHATSAPP_PHONE_NUMBER_ID: false,
+  WHATSAPP_VERIFY_TOKEN: false,
+  WHATSAPP_REMINDER_WINDOW_MINUTES: false,
+  WHATSAPP_REMINDER_2H_ENABLED: false,
+  WHATSAPP_TEMPLATE_LANGUAGE: false,
+  WHATSAPP_ALLOW_TEXT_FALLBACK: false
+}
+ GET /pdf-imports 200 in 1904ms (compile: 1108ms, proxy.ts: 240ms, render: 557ms)
+ GET /pdf-imports 200 in 1647ms (compile: 821ms, proxy.ts: 29ms, render: 797ms)
+ GET /api/onboarding/tenant 200 in 737ms (compile: 234ms, proxy.ts: 4ms, render: 498ms)
+ GET /api/onboarding/tenant 200 in 491ms (compile: 5ms, proxy.ts: 7ms, render: 479ms)
+ GET /api/onboarding/tenant 200 in 348ms (compile: 11ms, proxy.ts: 13ms, render: 325ms)
+ GET /api/onboarding/tenant 200 in 362ms (compile: 18ms, proxy.ts: 13ms, render: 331ms)
+ GET /api/onboarding/tenant 200 in 490ms (compile: 23ms, proxy.ts: 13ms, render: 454ms)
+ GET /api/onboarding/tenant 200 in 491ms (compile: 32ms, proxy.ts: 11ms, render: 448ms)
+ GET /api/email/pdf-imports 200 in 729ms (compile: 66ms, proxy.ts: 10ms, render: 652ms)
+ GET /api/email/pdf-imports 200 in 776ms (compile: 68ms, proxy.ts: 7ms, render: 701ms)
+ GET /api/email/pdf-imports 200 in 696ms (compile: 16ms, proxy.ts: 7ms, render: 673ms)
+ GET /api/email/pdf-imports 200 in 701ms (compile: 9ms, proxy.ts: 7ms, render: 685ms)
+ GET / 200 in 248ms (compile: 89ms, proxy.ts: 8ms, render: 152ms)
+ GET /login 200 in 351ms (compile: 99ms, proxy.ts: 6ms, render: 245ms)
+ GET /dashboard 200 in 318ms (compile: 93ms, proxy.ts: 9ms, render: 216ms)
+ GET /api/onboarding/tenant 200 in 525ms (compile: 4ms, proxy.ts: 4ms, render: 516ms)
+ GET /api/onboarding/tenant 200 in 396ms (compile: 13ms, proxy.ts: 4ms, render: 378ms)
+ GET /api/onboarding/tenant 200 in 475ms (compile: 13ms, proxy.ts: 6ms, render: 456ms)
+ GET /api/onboarding/tenant 200 in 363ms (compile: 4ms, proxy.ts: 5ms, render: 354ms)
+ GET /api/ops/tenant-data?include_inbound_emails=true 200 in 577ms (compile: 57ms, proxy.ts: 5ms, render: 515ms)
+ GET /api/ops/tenant-data?include_inbound_emails=true 200 in 477ms (compile: 5ms, proxy.ts: 5ms, render: 467ms)
+ GET /api/ops/tenant-data?include_inbound_emails=true 200 in 412ms (compile: 10ms, proxy.ts: 5ms, render: 397ms)
+ GET /pdf-imports 200 in 67ms (compile: 11ms, proxy.ts: 6ms, render: 50ms)
+ GET /api/onboarding/tenant 200 in 361ms (compile: 15ms, proxy.ts: 10ms, render: 336ms)
+ GET /api/onboarding/tenant 200 in 365ms (compile: 7ms, proxy.ts: 10ms, render: 348ms)
+ GET /api/onboarding/tenant 200 in 373ms (compile: 22ms, proxy.ts: 10ms, render: 341ms)
+ GET /api/email/pdf-imports 200 in 522ms (compile: 7ms, proxy.ts: 8ms, render: 506ms)
+ GET /api/email/pdf-imports 200 in 53
