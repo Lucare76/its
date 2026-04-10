@@ -1883,6 +1883,16 @@ export default function BusNetworkPage() {
                 );
                 return (
                   <div className="space-y-3">
+                    {linePending.length > 0 && (
+                      <div className="flex justify-end">
+                        <button
+                          onClick={() => void post("clear_pending", { date, bus_line_id: selectedLine?.id, direction })}
+                          className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50"
+                        >
+                          🗑 Svuota tutti i da validare ({linePending.length})
+                        </button>
+                      </div>
+                    )}
                     {linePending.length === 0 ? (
                       <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-slate-400">
                         Nessun passeggero da validare per questa linea e direzione.

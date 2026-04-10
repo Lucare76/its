@@ -56,7 +56,9 @@ type ImportRow = {
   status: "ok" | "fuzzy" | "pending";
   matchedStop: BusStop | null;
   matchedLine: BusLine | null;
-  matchedHotelId: string | null;   // ID hotel nel DB se trovato
+  matchedHotelId: string | null;       // ID hotel nel DB se trovato (match esatto)
+  suggestedHotelId: string | null;     // ID hotel suggerito (match fuzzy)
+  suggestedHotelName: string | null;   // Nome hotel suggerito
 };
 
 // Mappa alias agenzie: il nome raw nel file viene normalizzato al nome ufficiale
@@ -70,12 +72,51 @@ function normalizeAgency(raw: string): string {
   return AGENCY_ALIASES[key] ?? raw.trim();
 }
 
+// Normalizza il nome hotel per il matching (rimuove prefissi comuni, accenti, caratteri speciali)
+function normalizeHotelName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\b(hotel|albergo|residence|locanda|pensione|villa|resort|b&b|bb)\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+// Tenta di abbinare il nome hotel del file Excel con quelli nel DB
+// Ritorna: matchedHotelId (match certo), suggestedHotelId/Name (match fuzzy da confermare)
+function matchHotel(
+  hotelRaw: string,
+  hotels: HotelListItem[]
+): { matchedHotelId: string | null; suggestedHotelId: string | null; suggestedHotelName: string | null } {
+  if (!hotelRaw.trim() || hotels.length === 0) {
+    return { matchedHotelId: null, suggestedHotelId: null, suggestedHotelName: null };
+  }
+  const norm = normalizeHotelName(hotelRaw);
+  if (!norm) return { matchedHotelId: null, suggestedHotelId: null, suggestedHotelName: null };
+
+  // Match esatto (dopo normalizzazione)
+  const exact = hotels.find((h) => normalizeHotelName(h.name) === norm);
+  if (exact) return { matchedHotelId: exact.id, suggestedHotelId: null, suggestedHotelName: null };
+
+  // Match fuzzy: uno contiene l'altro (minimo 3 caratteri)
+  if (norm.length >= 3) {
+    const fuzzy = hotels.find((h) => {
+      const hn = normalizeHotelName(h.name);
+      return hn.length >= 3 && (hn.includes(norm) || norm.includes(hn));
+    });
+    if (fuzzy) return { matchedHotelId: null, suggestedHotelId: fuzzy.id, suggestedHotelName: fuzzy.name };
+  }
+
+  return { matchedHotelId: null, suggestedHotelId: null, suggestedHotelName: null };
+}
+
 // Prefissi indirizzo italiani da rimuovere per estrarre il nome del luogo
 // Ordinati dal più specifico al più generico
 const ADDR_PREFIXES = [
   "casello autostradale ", "casello autost.", "casello aut.", "casello ",
   "stazione ferroviaria ", "stazione fs ", "stzione fs ", "stazione ",
-  "parcheggio scambiatore ", "parcheggio ", "area di servizio ", "autogrill ",
+  "parcheggio scambiatore ", "parcheggio ", "area di servizio ", "area servizio ", "autogrill ",
   "via ", "viale ", "piazza ", "corso ", "largo ", "strada ", "contrada ",
   "p.za ", "p.zza ", "v.le ", "rotonda ", "uscita autostradale ", "uscita ",
 ];
@@ -98,6 +139,15 @@ const CITY_ALIASES: Record<string, string> = {
   "stazione fs": "foligno",
   "stazione f s": "foligno",
   "stazione f.s.": "foligno",
+  // Aree di servizio autostradali → città di riferimento
+  "prenestina ovest": "roma",
+  "prenestina est": "roma",
+  "prenestina": "roma",
+  "tiburtina": "roma",
+  "roma tiburtina": "roma",
+  "anagnina": "roma",
+  "roma anagnina": "roma",
+  "valmontone": "valmontone",
 };
 
 function extractCity(raw: string): string {
@@ -135,44 +185,6 @@ function extractCity(raw: string): string {
   return city;
 }
 
-// Parole da ignorare nel matching per parola-chiave
-// Include parole di infrastruttura trasporti che non identificano univocamente una città
-const STOP_WORDS = new Set([
-  "di", "del", "della", "delle", "dei", "da", "al", "no", "il", "la", "le", "lo", "e",
-  "via", "zona", "area", "nord", "sud", "est", "ovest", "nuovo", "nuova", "san", "santa",
-  "fermata", "piazzale", "parcheggio", "casello", "stazione", "terminal", "largo", "uscita",
-  "distributore", "autostrada", "autostradale", "superstrada", "rotonda", "svincolo",
-  "mercato", "centro", "commerciale", "servizio",
-]);
-
-// Restituisce true se almeno una parola significativa è condivisa tra a e b.
-// Il match substring richiede entrambe le parole ≥5 chars per evitare falsi positivi
-// (es. "arca" in "Hotel Arca" non deve matchare "Petrarca").
-function hasKeywordOverlap(a: string, b: string): boolean {
-  const words = (s: string) => s.split(/\s+/).filter((w) => w.length >= 4 && !STOP_WORDS.has(w));
-  const wa = words(a);
-  const wb = words(b);
-  return wa.some((x) => wb.some((y) =>
-    x === y ||
-    (x.length >= 5 && y.length >= 5 && (x.includes(y) || y.includes(x)))
-  ));
-}
-
-// Parole che indicano che il valore è un indirizzo stradale, non un nome di città
-const ADDRESS_INDICATORS = new Set([
-  "davanti", "edicola", "supermercato", "bennet", "esselunga", "lidl", "conad", "coop",
-  "distributore", "eni", "ip", "agip", "tamoil", "shell", "q8",
-  "semaforo", "incrocio", "rotonda", "cavalcavia", "sottopasso",
-  "chiesa", "municipio", "farmacia", "bar", "tabacchi", "ufficio",
-]);
-
-function looksLikeAddress(nc: string): boolean {
-  const words = nc.split(/\s+/);
-  // Se ha più di 3 parole significative oppure contiene indicatori di indirizzo → è un indirizzo
-  const significant = words.filter((w) => w.length >= 4 && !STOP_WORDS.has(w));
-  if (significant.length > 3) return true;
-  return significant.some((w) => ADDRESS_INDICATORS.has(w));
-}
 
 function matchAcrossLines(
   city: string,
@@ -193,6 +205,14 @@ function matchAcrossLines(
     (s.pickup_note && normCity(s.pickup_note).includes(nc) && nc.length >= 4)
   );
   if (exact) return { stop: exact, line: findLine(exact), status: "ok" };
+
+  // Fuzzy limitato: solo sulla colonna city (non pickup_note → evita falsi positivi)
+  // Copre casi come "PRENESTINA OVEST" → fermata con city "PRENESTINA"
+  const fuzzy = dirStops.find((s) => {
+    const sc = normCity(s.city);
+    return sc.length >= 3 && (sc.includes(nc) || nc.includes(sc));
+  });
+  if (fuzzy) return { stop: fuzzy, line: findLine(fuzzy), status: "fuzzy" };
 
   return { stop: null, line: null, status: "pending" };
 }
@@ -345,6 +365,18 @@ type CreateStopParams = {
   lng: number;
   lineId: string;
   stopOrder: number;
+  orario?: string;
+  hotelId?: string | null;
+};
+
+type PendingCreate = {
+  city: CitySuggestion;
+  nearest: NearestInfo;
+  pickupNote: string;
+  orario: string;
+  hotelId: string | null;
+  hotelName: string;
+  hotelNewForm: { name: string; address: string; city: string } | null;
 };
 
 function StopSearchSelect({
@@ -354,6 +386,8 @@ function StopSearchSelect({
   stopsByLine,
   onSelect,
   onCreateStop,
+  localHotels,
+  onCreateHotel,
 }: {
   rowIdx: number;
   search: string;
@@ -361,18 +395,23 @@ function StopSearchSelect({
   stopsByLine: { line: BusLine; stops: BusStop[] }[];
   onSelect: (stopId: string) => void;
   onCreateStop: (rowIdx: number, params: CreateStopParams) => Promise<void>;
+  localHotels: HotelListItem[];
+  onCreateHotel: (form: { name: string; address: string; city: string }) => Promise<HotelListItem | null>;
 }) {
   const [open, setOpen] = useState(false);
   const [citySuggestions, setCitySuggestions] = useState<CitySuggestion[]>([]);
   const [cityLoading, setCityLoading] = useState(false);
   // Dopo che l'operatore ha scelto la città, il sistema calcola la linea/posizione
-  const [pendingCreate, setPendingCreate] = useState<{ city: CitySuggestion; nearest: NearestInfo; pickupNote: string } | null>(null);
+  const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
   const [creating, setCreating] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Autocomplete strade nel campo Fermata
   const [streetSuggestions, setStreetSuggestions] = useState<{ label: string; detail: string }[]>([]);
   const [streetOpen, setStreetOpen] = useState(false);
   const streetDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Hotel search nel pannello
+  const [hotelSearch, setHotelSearch] = useState("");
+  const [hotelDropOpen, setHotelDropOpen] = useState(false);
 
   const q = search.toLowerCase().trim();
 
@@ -437,12 +476,18 @@ function StopSearchSelect({
     onSearchChange(city.shortName);
     setCitySuggestions([]);
     setOpen(false);
-    setPendingCreate({ city, nearest, pickupNote: "" });
+    setPendingCreate({ city, nearest, pickupNote: "", orario: "", hotelId: null, hotelName: "", hotelNewForm: null });
   }
 
   async function handleConfirmCreate() {
     if (!pendingCreate) return;
     setCreating(true);
+    // Se c'è un nuovo hotel da creare, crealo prima
+    let finalHotelId = pendingCreate.hotelId;
+    if (pendingCreate.hotelNewForm && pendingCreate.hotelNewForm.name.trim()) {
+      const newHotel = await onCreateHotel(pendingCreate.hotelNewForm);
+      if (newHotel) finalHotelId = newHotel.id;
+    }
     await onCreateStop(rowIdx, {
       cityName: pendingCreate.city.shortName,
       pickupNote: pendingCreate.pickupNote.trim() || null,
@@ -450,9 +495,12 @@ function StopSearchSelect({
       lng: pendingCreate.city.lng,
       lineId: pendingCreate.nearest.line.id,
       stopOrder: pendingCreate.nearest.insertAfterOrder,
+      orario: pendingCreate.orario || undefined,
+      hotelId: finalHotelId,
     });
     setCreating(false);
     setPendingCreate(null);
+    setHotelSearch("");
   }
 
   const hasCatalogMatches = catalogMatches.length > 0;
@@ -573,6 +621,74 @@ function StopSearchSelect({
                     )}
                   </div>
                 </div>
+                {/* Orario */}
+                <div className="flex items-center gap-3">
+                  <label className="w-14 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Orario</label>
+                  <input
+                    type="time"
+                    value={pendingCreate.orario}
+                    onChange={(e) => setPendingCreate((prev) => prev && { ...prev, orario: e.target.value })}
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-700 focus:border-amber-300 focus:outline-none focus:ring-1 focus:ring-amber-300"
+                  />
+                </div>
+                {/* Hotel */}
+                <div className="flex items-start gap-3">
+                  <label className="w-14 shrink-0 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Hotel</label>
+                  <div className="relative flex-1">
+                    {pendingCreate.hotelId ? (
+                      <div className="flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                        <span className="text-xs font-medium text-emerald-700">{pendingCreate.hotelName}</span>
+                        <button type="button" onMouseDown={() => setPendingCreate((p) => p && { ...p, hotelId: null, hotelName: "", hotelNewForm: null })}
+                          className="ml-auto text-slate-300 hover:text-slate-500 text-[10px]">✎</button>
+                      </div>
+                    ) : pendingCreate.hotelNewForm ? (
+                      <div className="space-y-1.5">
+                        <input value={pendingCreate.hotelNewForm.name}
+                          onChange={(e) => setPendingCreate((p) => p && { ...p, hotelNewForm: p.hotelNewForm && { ...p.hotelNewForm, name: e.target.value } })}
+                          placeholder="Nome hotel *"
+                          className="w-full rounded border border-slate-200 px-2 py-1 text-xs" />
+                        <input value={pendingCreate.hotelNewForm.address}
+                          onChange={(e) => setPendingCreate((p) => p && { ...p, hotelNewForm: p.hotelNewForm && { ...p.hotelNewForm, address: e.target.value } })}
+                          placeholder="Indirizzo *"
+                          className="w-full rounded border border-slate-200 px-2 py-1 text-xs" />
+                        <input value={pendingCreate.hotelNewForm.city}
+                          onChange={(e) => setPendingCreate((p) => p && { ...p, hotelNewForm: p.hotelNewForm && { ...p.hotelNewForm, city: e.target.value } })}
+                          placeholder="Città *"
+                          className="w-full rounded border border-slate-200 px-2 py-1 text-xs" />
+                        <button type="button" onMouseDown={() => setPendingCreate((p) => p && { ...p, hotelNewForm: null })}
+                          className="text-[10px] text-slate-400 hover:text-slate-600">← Annulla</button>
+                      </div>
+                    ) : (
+                      <>
+                        <input
+                          type="text"
+                          value={hotelSearch}
+                          onChange={(e) => { setHotelSearch(e.target.value); setHotelDropOpen(true); }}
+                          onFocus={() => setHotelDropOpen(true)}
+                          onBlur={() => setTimeout(() => setHotelDropOpen(false), 200)}
+                          placeholder="Cerca hotel (opzionale)..."
+                          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-700 placeholder-slate-300 focus:border-amber-300 focus:outline-none focus:ring-1 focus:ring-amber-300"
+                        />
+                        {hotelDropOpen && hotelSearch.trim().length >= 2 && (
+                          <div className="absolute left-0 top-full z-10 mt-0.5 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg max-h-40 overflow-y-auto">
+                            {localHotels.filter((h) => h.name.toLowerCase().includes(hotelSearch.toLowerCase())).map((h) => (
+                              <button key={h.id} type="button"
+                                onMouseDown={() => { setPendingCreate((p) => p && { ...p, hotelId: h.id, hotelName: h.name }); setHotelSearch(h.name); setHotelDropOpen(false); }}
+                                className="w-full px-3 py-1.5 text-left hover:bg-amber-50 border-b border-slate-50 last:border-0">
+                                <div className="text-xs font-medium text-slate-800">{h.name}</div>
+                              </button>
+                            ))}
+                            <button type="button"
+                              onMouseDown={() => { setPendingCreate((p) => p && { ...p, hotelNewForm: { name: hotelSearch.trim(), address: "", city: pendingCreate.city.shortName } }); setHotelDropOpen(false); }}
+                              className="w-full px-3 py-2 text-left border-t border-slate-100 hover:bg-violet-50">
+                              <span className="text-[10px] font-semibold text-violet-600">+ Crea &quot;{hotelSearch.trim()}&quot;</span>
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
                 {/* Posizione nella linea */}
                 <div className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
                   <span className="font-semibold text-slate-700">{pendingCreate.nearest.line.name}</span>
@@ -581,7 +697,7 @@ function StopSearchSelect({
                 </div>
               </div>
               <div className="flex gap-2 border-t border-slate-100 px-4 py-3">
-                <button type="button" onMouseDown={() => { setPendingCreate(null); setStreetSuggestions([]); onSearchChange(""); }}
+                <button type="button" onMouseDown={() => { setPendingCreate(null); setStreetSuggestions([]); setHotelSearch(""); onSearchChange(""); }}
                   className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 hover:bg-slate-50">
                   Annulla
                 </button>
@@ -662,6 +778,21 @@ export default function BusImportModal({
     setRows((prev) => prev.map((r, i) => i === rowIdx ? { ...r, matchedHotelId: newHotel.id } : r));
   }, []);
 
+  // Versione senza rowIdx — usata dal pannello nuova fermata
+  const handleCreateHotelForStop = useCallback(async (form: { name: string; address: string; city: string }): Promise<HotelListItem | null> => {
+    const token = await getToken();
+    if (!token) return null;
+    const res = await fetch("/api/ops/bus-network", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "create_hotel", name: form.name, address: form.address, city: form.city }),
+    });
+    const body = (await res.json().catch(() => null)) as { ok?: boolean; hotel?: HotelListItem } | null;
+    if (!res.ok || !body?.ok || !body.hotel) return null;
+    setLocalHotels((prev) => [...prev, body.hotel!]);
+    return body.hotel!;
+  }, []);
+
   // Aggiornamento manuale stop per righe "da validare"
   const assignRowStop = useCallback((idx: number, stopId: string, stopsOverride?: BusStop[]) => {
     const pool = stopsOverride ?? localStops;
@@ -705,6 +836,14 @@ export default function BusImportModal({
     const updated = [...localStops, newStop];
     setLocalStops(updated);
     assignRowStop(rowIdx, newStop.id, updated);
+    // Aggiorna orario e hotel sulla riga se forniti
+    if (params.orario || params.hotelId !== undefined) {
+      setRows((prev) => prev.map((r, i) => i !== rowIdx ? r : {
+        ...r,
+        orario: params.orario || r.orario,
+        matchedHotelId: params.hotelId ?? r.matchedHotelId,
+      }));
+    }
   }, [direction, localStops, assignRowStop]);
 
   const handleFile = useCallback(async (file: File) => {
@@ -793,7 +932,8 @@ export default function BusImportModal({
         const canonicalCity = (stop?.city ?? cityNorm).toUpperCase().trim();
         const catalogTime = CATALOG_CITY_TIME[canonicalCity] ?? "";
         const orario = rawOrario || stop?.pickup_time || catalogTime;
-        parsed.push({ name, phone, hotel, agency, cityRaw, cityNorm, orario, pax, notes, status, matchedStop: stop, matchedLine: line, matchedHotelId: null });
+        const { matchedHotelId, suggestedHotelId, suggestedHotelName } = matchHotel(hotel, hotelsList);
+        parsed.push({ name, phone, hotel, agency, cityRaw, cityNorm, orario, pax, notes, status, matchedStop: stop, matchedLine: line, matchedHotelId, suggestedHotelId, suggestedHotelName });
       }
 
       if (parsed.length === 0) { setError("Nessuna riga valida trovata nel file."); return; }
@@ -963,6 +1103,7 @@ export default function BusImportModal({
                       <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Hotel partenza</th>
                       <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Destinazione</th>
                       <th className="px-3 py-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-400">Pax</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Note</th>
                       <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Linea → Fermata</th>
                       <th className="w-6 px-1" />
                     </tr>
@@ -998,33 +1139,59 @@ export default function BusImportModal({
                           )}
                         </td>
                         <td className="px-3 py-2 w-36">
-                          {row.hotel ? (
-                            editingHotels.has(i) ? (
-                              <HotelSearchSelect
-                                rowIdx={i}
-                                initialName={row.hotel}
-                                matchedHotelId={row.matchedHotelId}
-                                localHotels={localHotels}
-                                onMatch={(hotelId) => {
-                                  setRows((prev) => prev.map((r, ri) => ri === i ? { ...r, matchedHotelId: hotelId || null } : r));
-                                  setEditingHotels((prev) => { const s = new Set(prev); s.delete(i); return s; });
-                                }}
-                                onCreate={handleCreateHotel}
-                              />
-                            ) : (
-                              <div
-                                className="cursor-pointer group flex items-center gap-1"
-                                onClick={() => setEditingHotels((prev) => new Set(prev).add(i))}
-                                title="Clicca per modificare hotel"
-                              >
-                                {row.matchedHotelId
-                                  ? <span className="text-xs text-emerald-700 group-hover:underline decoration-dotted">✓ {row.hotel}</span>
-                                  : <span className="text-xs text-slate-500 group-hover:underline decoration-dotted">{row.hotel}</span>
-                                }
-                                <span className="text-[10px] text-slate-300 group-hover:text-slate-400">✎</span>
+                          {editingHotels.has(i) ? (
+                            <HotelSearchSelect
+                              rowIdx={i}
+                              initialName={row.hotel}
+                              matchedHotelId={row.matchedHotelId}
+                              localHotels={localHotels}
+                              onMatch={(hotelId) => {
+                                const matched = localHotels.find((h) => h.id === hotelId);
+                                setRows((prev) => prev.map((r, ri) => ri === i ? { ...r, matchedHotelId: hotelId || null, hotel: matched?.name ?? r.hotel } : r));
+                                setEditingHotels((prev) => { const s = new Set(prev); s.delete(i); return s; });
+                              }}
+                              onCreate={handleCreateHotel}
+                            />
+                          ) : row.matchedHotelId ? (
+                            <div className="cursor-pointer group flex items-center gap-1"
+                              onClick={() => setEditingHotels((prev) => new Set(prev).add(i))}
+                              title="Clicca per modificare hotel">
+                              <span className="text-xs text-emerald-700 group-hover:underline decoration-dotted">✓ {row.hotel}</span>
+                              <span className="text-[10px] text-slate-300 group-hover:text-slate-400 shrink-0">✎</span>
+                            </div>
+                          ) : row.suggestedHotelId && !row.matchedHotelId ? (
+                            <div className="space-y-1">
+                              <div className="text-xs text-amber-700">⚠ {row.hotel}</div>
+                              <div className="rounded bg-amber-50 border border-amber-200 px-2 py-1">
+                                <div className="text-[10px] text-amber-700 mb-1">Forse intendevi <span className="font-semibold">{row.suggestedHotelName}</span>?</div>
+                                <div className="flex gap-1">
+                                  <button type="button"
+                                    onClick={() => setRows((prev) => prev.map((r, ri) => ri === i ? { ...r, matchedHotelId: r.suggestedHotelId, hotel: r.suggestedHotelName ?? r.hotel, suggestedHotelId: null, suggestedHotelName: null } : r))}
+                                    className="flex-1 rounded bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-600">
+                                    ✓ Sì
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setRows((prev) => prev.map((r, ri) => ri === i ? { ...r, suggestedHotelId: null, suggestedHotelName: null } : r))}
+                                    className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50">
+                                    ✕
+                                  </button>
+                                </div>
                               </div>
-                            )
-                          ) : <span className="text-slate-300 text-xs">—</span>}
+                            </div>
+                          ) : row.hotel ? (
+                            <div className="cursor-pointer group flex items-center gap-1"
+                              onClick={() => setEditingHotels((prev) => new Set(prev).add(i))}
+                              title="Hotel non riconosciuto — clicca per abbinare">
+                              <span className="text-xs text-amber-600 group-hover:underline decoration-dotted">⚠ {row.hotel}</span>
+                              <span className="text-[10px] text-slate-300 group-hover:text-slate-400 shrink-0">✎</span>
+                            </div>
+                          ) : (
+                            <button type="button"
+                              onClick={() => setEditingHotels((prev) => new Set(prev).add(i))}
+                              className="text-[10px] text-slate-300 hover:text-violet-500 hover:underline">
+                              + Aggiungi hotel
+                            </button>
+                          )}
                         </td>
                         <td className="px-3 py-2">
                           <div className="text-slate-700 uppercase text-xs">{row.cityNorm || "—"}</div>
@@ -1064,6 +1231,15 @@ export default function BusImportModal({
                               }}
                             >{row.pax}</span>
                           )}
+                        </td>
+                        <td className="px-3 py-2 w-36">
+                          <textarea
+                            value={row.notes}
+                            onChange={(e) => setRows((prev) => prev.map((r, ri) => ri === i ? { ...r, notes: e.target.value } : r))}
+                            placeholder="es. Posto 12, allergie..."
+                            rows={1}
+                            className="w-full resize-none rounded border border-transparent px-1.5 py-1 text-xs text-slate-700 placeholder-slate-300 hover:border-slate-200 focus:border-indigo-300 focus:outline-none focus:ring-0"
+                          />
                         </td>
                         <td className="px-3 py-2">
                           {(row.status === "ok" || row.status === "fuzzy") && !editingRows.has(i) && (
@@ -1105,6 +1281,8 @@ export default function BusImportModal({
                                 setEditingRows((prev) => { const s = new Set(prev); s.delete(i); return s; });
                               }}
                               onCreateStop={handleCreateStop}
+                              localHotels={localHotels}
+                              onCreateHotel={handleCreateHotelForStop}
                             />
                           )}
                         </td>

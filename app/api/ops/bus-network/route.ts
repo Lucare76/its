@@ -1527,6 +1527,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    if (action === "clear_pending") {
+      const parsed = z.object({ date: z.string(), bus_line_id: z.string().uuid().optional(), direction: z.enum(["arrival", "departure"]).optional() }).parse(body);
+      // Leggi gli ID da cancellare poi cancellali
+      let selectQ = auth.admin.from("bus_import_pending").select("id").eq("tenant_id", tenantId).eq("travel_date", parsed.date).eq("status", "pending");
+      if (parsed.bus_line_id) selectQ = selectQ.eq("bus_line_id", parsed.bus_line_id);
+      if (parsed.direction) selectQ = selectQ.eq("direction", parsed.direction);
+      const { data: toDelete } = await selectQ;
+      const ids = (toDelete ?? []).map((r: { id: string }) => r.id);
+      if (ids.length > 0) {
+        await auth.admin.from("bus_import_pending").delete().eq("tenant_id", tenantId).in("id", ids);
+      }
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
     if (action === "transfer_allocation_line") {
       // Solo admin
       if (auth.membership.role !== "admin") {
