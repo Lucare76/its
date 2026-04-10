@@ -32,6 +32,12 @@ const kindOptions: Array<{ value: BookingKind; label: string }> = [
 ];
 const defaultConfirmationEmail = process.env.NEXT_PUBLIC_AGENCY_DEFAULT_CONFIRMATION_EMAIL?.trim() ?? "";
 
+// Orari traghetti da schedule fisso
+const SNAV_ARRIVAL_TIMES = ["08:25", "12:30", "16:20", "19:00"]; // Napoli → Casamicciola
+const SNAV_DEPARTURE_TIMES = ["07:10", "09:45", "14:00", "17:40"]; // Casamicciola → Napoli
+const MEDMAR_ARRIVAL_TIMES = ["08:15", "08:40", "09:40", "12:00", "13:30", "14:20", "15:00", "16:30", "18:30", "19:00"];
+const MEDMAR_DEPARTURE_TIMES = ["06:20", "08:10", "10:10", "10:35", "11:10", "13:35", "15:00", "16:50", "17:00"];
+
 function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -411,9 +417,15 @@ export default function AgencyNewBookingPage() {
           <select
             className="input-saas mt-1"
             value={form.booking_service_kind}
-            onChange={(event) =>
-              setForm((prev) => ({ ...prev, booking_service_kind: event.target.value as BookingKind }))
-            }
+            onChange={(event) => {
+              const kind = event.target.value as BookingKind;
+              setForm((prev) => ({
+                ...prev,
+                booking_service_kind: kind,
+                arrival_time: kind === "formula_snav" ? SNAV_ARRIVAL_TIMES[0] : kind === "formula_medmar" ? MEDMAR_ARRIVAL_TIMES[0] : prev.arrival_time,
+                departure_time: kind === "formula_snav" ? SNAV_DEPARTURE_TIMES[0] : kind === "formula_medmar" ? MEDMAR_DEPARTURE_TIMES[0] : prev.departure_time
+              }));
+            }}
           >
             {kindOptions.map((item) => (
               <option key={item.value} value={item.value}>
@@ -545,12 +557,24 @@ export default function AgencyNewBookingPage() {
         </label>
         <label className="text-sm">
           {contextLabels.arrivalTimeLabel}
-          <input
-            type="time"
-            className="input-saas mt-1"
-            value={form.arrival_time}
-            onChange={(event) => setForm((prev) => ({ ...prev, arrival_time: event.target.value }))}
-          />
+          {(isSnavKind || selectedKind === "formula_medmar") ? (
+            <select
+              className="input-saas mt-1"
+              value={form.arrival_time}
+              onChange={(event) => setForm((prev) => ({ ...prev, arrival_time: event.target.value }))}
+            >
+              {(isSnavKind ? SNAV_ARRIVAL_TIMES : MEDMAR_ARRIVAL_TIMES).map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="time"
+              className="input-saas mt-1"
+              value={form.arrival_time}
+              onChange={(event) => setForm((prev) => ({ ...prev, arrival_time: event.target.value }))}
+            />
+          )}
         </label>
         <label className="text-sm">
           {contextLabels.departureDateLabel}
@@ -563,12 +587,24 @@ export default function AgencyNewBookingPage() {
         </label>
         <label className="text-sm">
           {contextLabels.departureTimeLabel}
-          <input
-            type="time"
-            className="input-saas mt-1"
-            value={form.departure_time}
-            onChange={(event) => setForm((prev) => ({ ...prev, departure_time: event.target.value }))}
-          />
+          {(isSnavKind || selectedKind === "formula_medmar") ? (
+            <select
+              className="input-saas mt-1"
+              value={form.departure_time}
+              onChange={(event) => setForm((prev) => ({ ...prev, departure_time: event.target.value }))}
+            >
+              {(isSnavKind ? SNAV_DEPARTURE_TIMES : MEDMAR_DEPARTURE_TIMES).map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="time"
+              className="input-saas mt-1"
+              value={form.departure_time}
+              onChange={(event) => setForm((prev) => ({ ...prev, departure_time: event.target.value }))}
+            />
+          )}
         </label>
 
         {showTransportCodeField ? (

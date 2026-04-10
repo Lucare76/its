@@ -30,10 +30,15 @@ type AgencyRow = {
 };
 
 async function hasColumn(admin: SupabaseClient, table: string, column: string) {
-  const { error } = await admin.from(table).select(column).limit(1);
-  if (!error) return true;
-  if ((error as { code?: string }).code === "42703") return false;
-  throw new Error(`Schema probe failed for ${table}.${column}: ${error.message}`);
+  try {
+    const { error } = await admin.from(table).select(column).limit(1);
+    if (!error) return true;
+    if ((error as { code?: string }).code === "42703") return false;
+    // Per qualsiasi altro errore (permessi, rete) assume colonna assente
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 async function authorizeAgencyProfileRequest(request: NextRequest): Promise<AuthContext | NextResponse> {
@@ -156,27 +161,32 @@ async function resolveAgency(auth: AuthContext) {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = await authorizeAgencyProfileRequest(request);
-  if (auth instanceof NextResponse) return auth;
+  try {
+    const auth = await authorizeAgencyProfileRequest(request);
+    if (auth instanceof NextResponse) return auth;
 
-  const resolved = await resolveAgency(auth);
-  if (resolved.error) {
-    return NextResponse.json({ error: resolved.error }, { status: 500 });
-  }
-  if (!resolved.agency?.id) {
-    return NextResponse.json({ error: "Anagrafica agenzia non trovata." }, { status: 404 });
-  }
-
-  return NextResponse.json({
-    ok: true,
-    agency: {
-      ...resolved.agency,
-      setup_required: resolved.supportsSetupRequired ? resolved.agency.setup_required ?? false : false
+    const resolved = await resolveAgency(auth);
+    if (resolved.error) {
+      return NextResponse.json({ error: resolved.error }, { status: 500 });
     }
-  });
+    if (!resolved.agency?.id) {
+      return NextResponse.json({ error: "Anagrafica agenzia non trovata." }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      agency: {
+        ...resolved.agency,
+        setup_required: resolved.supportsSetupRequired ? resolved.agency.setup_required ?? false : false
+      }
+    });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
 
 export async function PATCH(request: NextRequest) {
+  try {
   const auth = await authorizeAgencyProfileRequest(request);
   if (auth instanceof NextResponse) return auth;
 
@@ -246,4 +256,7 @@ export async function PATCH(request: NextRequest) {
       setup_required: resolved.supportsSetupRequired ? updatedAgency.setup_required ?? false : false
     }
   });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
