@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ischia Transfer - Report Attivita Notturna 2026-03-11</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --text: #0f172a;
+        --muted: #475569;
+        --line: #cbd5e1;
+        --bg-soft: #f8fafc;
+        --blue: #1d4ed8;
+      }
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        color: var(--text);
+        line-height: 1.45;
+        font-size: 12px;
+        background: white;
+      }
+      .wrap {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 24px;
+      }
+      h2 {
+        margin: 22px 0 8px;
+        font-size: 15px;
+        color: var(--blue);
+      }
+      p {
+        margin: 6px 0;
+      }
+      .meta {
+        margin-top: 8px;
+        color: var(--muted);
+      }
+      .box {
+        border: 1px solid var(--line);
+        background: var(--bg-soft);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-top: 10px;
+      }
+      ul {
+        margin: 6px 0 0 18px;
+        padding: 0;
+      }
+      li {
+        margin: 3px 0;
+      }
+      .code {
+        font-family: "Courier New", monospace;
+      }
+      .ok {
+        font-weight: bold;
+        color: #166534;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Ischia Transfer Beta - Report Attivita Notturna</h1>
+      <p class="meta">Data: 11 marzo 2026</p>
+      <p class="meta">Ambiente live: <span class="code">https://ischia-transfer.vercel.app</span></p>
+
+      <h2>1) Stabilizzazione Login e Routing</h2>
+      <div class="box">
+        <ul>
+          <li>Risolto loop login/onboarding/dashboard lato App Shell.</li>
+          <li>Controllo tenant/ruolo reso affidabile via endpoint server <span class="code">/api/onboarding/tenant</span>.</li>
+          <li>Aggiunto supporto robusto parsing ruolo (gestione maiuscole/spazi per <span class="code">admin/operator/driver/agency</span>).</li>
+          <li>Aggiunto fallback login con link magico email per sblocco rapido demo.</li>
+        </ul>
+      </div>
+
+      <h2>2) Onboarding Demo-Ready (Express)</h2>
+      <div class="box">
+        <ul>
+          <li>Step 1 (creazione azienda/tenant) come percorso principale per avvio demo.</li>
+          <li>Redirect automatico a dashboard dopo Step 1 completato.</li>
+          <li>Setup avanzato (driver/mezzi/hotel/zone) separato e opzionale.</li>
+          <li>Bottone rapido <span class="code">Vai alla dashboard</span> con tenant attivo visibile.</li>
+        </ul>
+      </div>
+
+      <h2>3) Dashboard e UX Operativa</h2>
+      <div class="box">
+        <ul>
+          <li>Correzione layout KPI per mobile/desktop (no overlap testi).</li>
+          <li>Griglia KPI con breakpoints stabili e tipografia adattiva.</li>
+          <li>Gestione errore tenant/sessione in dashboard con CTA verso onboarding.</li>
+        </ul>
+      </div>
+
+      <h2>4) Inbox / PDF / Prenotazioni</h2>
+      <div class="box">
+        <ul>
+          <li>Inbox: messaggi bloccanti ora persistenti (non scompaiono subito).</li>
+          <li>Inbox: banner con CTA login/onboarding quando manca sessione o tenant.</li>
+          <li>Nuova prenotazione: CTA dirette a onboarding/hotel se hotel mancanti.</li>
+          <li>Pipeline PDF/inbox mantenuta compatibile con draft service.</li>
+        </ul>
+      </div>
+
+      <h2>5) Deploy e Qualita</h2>
+      <div class="box">
+        <ul>
+          <li>Deploy multipli effettuati con alias finale su dominio ufficiale.</li>
+          <li><span class="code">pnpm lint</span>: <span class="ok">OK</span></li>
+          <li><span class="code">pnpm build</span>: <span class="ok">OK</span></li>
+        </ul>
+      </div>
+
+      <h2>6) Pronto per Domani (attivita con te su Supabase)</h2>
+      <div class="box">
+        <p>Preparata checklist operativa:</p>
+        <p class="code">docs/ops/tomorrow-supabase-checklist.md</p>
+        <ul>
+          <li>verifica membership utente admin</li>
+          <li>verifica env produzione</li>
+          <li>smoke test end-to-end mattina</li>
+        </ul>
+      </div>
+    </div>
+  </body>
+</html>

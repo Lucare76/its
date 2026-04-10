@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ischia Transfer Beta - Audit operativo reale (13/03/2026)</title>
+    <style>
+      :root {
+        --ink: #0f172a;
+        --muted: #475569;
+        --line: #cbd5e1;
+        --brand: #0b5cab;
+        --brand-soft: #dbeafe;
+        --ok-bg: #dcfce7;
+        --ok-ink: #166534;
+        --warn-bg: #fef3c7;
+        --warn-ink: #92400e;
+        --bad-bg: #fee2e2;
+        --bad-ink: #991b1b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at top left, rgba(11, 92, 171, 0.11), transparent 28%),
+          linear-gradient(180deg, #eff6ff 0%, #f8fafc 180px);
+        color: var(--ink);
+        font-family: "Segoe UI", Arial, sans-serif;
+        line-height: 1.42;
+      }
+      .page {
+        width: 210mm;
+        min-height: 297mm;
+        margin: 0 auto;
+        padding: 11mm;
+        background: #fff;
+      }
+      h1, h2, h3, p {
+        margin: 0;
+      }
+      h1 {
+        font-size: 27px;
+        line-height: 1.08;
+        color: var(--brand);
+        max-width: 760px;
+      }
+      h2 {
+        margin-top: 15px;
+        padding-top: 7px;
+        border-top: 1px solid var(--line);
+        font-size: 15px;
+      }
+      p, li {
+        font-size: 12px;
+      }
+      ul {
+        margin: 6px 0 0 18px;
+        padding: 0;
+      }
+      li + li {
+        margin-top: 4px;
+      }
+      .hero {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px 14px;
+        background: linear-gradient(135deg, var(--brand-soft), #ffffff 72%);
+      }
+      .meta {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 11px;
+      }
+      .card strong {
+        display: block;
+        font-size: 11px;
+        margin-bottom: 4px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .two-col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 8px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .ok {
+        background: var(--ok-bg);
+        color: var(--ok-ink);
+      }
+      .warn {
+        background: var(--warn-bg);
+        color: var(--warn-ink);
+      }
+      .bad {
+        background: var(--bad-bg);
+        color: var(--bad-ink);
+      }
+      code {
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 11px;
+        background: #f1f5f9;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+      .small {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .footer {
+        margin-top: 14px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <h1>Ischia Transfer Beta - Audit operativo reale del gestionale</h1>
+        <p class="meta">Report aggiornato al 13 marzo 2026. Basato su analisi codice, route UI/API, health check, smoke test reali, <code>pnpm lint</code> e <code>pnpm build</code>.</p>
+      </section>
+
+      <section class="summary">
+        <article class="card">
+          <strong>Verdetto</strong>
+          <p><span class="badge warn">Operativo supervisionato</span></p>
+        </article>
+        <article class="card">
+          <strong>Quality Gate</strong>
+          <p><span class="badge ok">lint OK</span> <span class="badge ok">build OK</span></p>
+        </article>
+        <article class="card">
+          <strong>Smoke Test</strong>
+          <p><span class="badge ok">agency OK</span> <span class="badge ok">pdf OK</span></p>
+        </article>
+        <article class="card">
+          <strong>Bloccanti</strong>
+          <p><span class="badge bad">email inbound / resend / whatsapp</span></p>
+        </article>
+      </section>
+
+      <h2>A. Cosa si puo fare oggi davvero</h2>
+      <ul>
+        <li>login reale Supabase con ruoli da <code>/login</code>;</li>
+        <li>routing per ruolo verso <code>/dashboard</code>, <code>/driver</code> e <code>/agency</code>;</li>
+        <li>dashboard operativa reale con KPI, inbox, servizi e suggerimenti dispatch;</li>
+        <li>creazione servizi manuali da <code>/services/new</code> con scrittura su <code>services</code> e <code>status_events</code>;</li>
+        <li>dispatch da <code>/dispatch</code> con assegnazioni, filtri e aggiornamento stato;</li>
+        <li>area agenzia con creazione booking e lista booking;</li>
+        <li>upload PDF, review/edit, confirm e ignore da <code>/pdf-imports</code>;</li>
+        <li>distinzione manuale vs PDF in dashboard/dispatch con metadati parser e review;</li>
+        <li>driver panel con avanzamento stato servizio;</li>
+        <li>modulo pricing esposto da UI e collegato a API reali.</li>
+      </ul>
+
+      <h2>B. Cosa si puo fare solo parzialmente</h2>
+      <ul>
+        <li>email conferma booking agenzia: flusso presente ma oggi fallisce per dominio Resend non verificato;</li>
+        <li>parser PDF: il flusso funziona, ma la copertura parser dedicati e limitata; verificato forte soprattutto <code>agency_aleste_viaggi</code>;</li>
+        <li>pricing, analytics, hotels, map, planning, bus tours: presenti e collegati, ma non tutti hanno avuto nello stesso turno uno smoke test profondo come agency/PDF;</li>
+        <li>inbox/email ingestion: UI e API presenti, ma l’automazione vera dipende da env mancanti.</li>
+      </ul>
+
+      <h2>C. Cosa non si puo ancora fare</h2>
+      <ul>
+        <li>automazione completa ingestione email da IMAP/webhook: mancano <code>IMAP_*</code> e <code>EMAIL_INBOUND_TOKEN</code>;</li>
+        <li>operativita WhatsApp: mancano <code>WHATSAPP_*</code>;</li>
+        <li>invio email booking affidabile da beta reale finche Resend/domain verification non e sistemato;</li>
+        <li>copertura parser PDF ampia e robusta per molte agenzie diverse.</li>
+      </ul>
+
+      <h2>D. Funzioni disponibili da UI</h2>
+      <div class="two-col">
+        <article class="card">
+          <strong>Pagine operative realmente usabili</strong>
+          <ul>
+            <li><code>/dashboard</code></li>
+            <li><code>/dispatch</code></li>
+            <li><code>/services/new</code></li>
+            <li><code>/driver</code></li>
+            <li><code>/agency/new-booking</code></li>
+            <li><code>/agency/bookings</code></li>
+          </ul>
+        </article>
+        <article class="card">
+          <strong>Altre UI presenti e collegate</strong>
+          <ul>
+            <li><code>/inbox</code></li>
+            <li><code>/pdf-imports</code></li>
+            <li><code>/pricing</code></li>
+            <li><code>/analytics</code></li>
+            <li><code>/hotels</code></li>
+            <li><code>/bus-tours</code></li>
+          </ul>
+        </article>
+      </div>
+
+      <h2>E. Funzioni disponibili solo da API, script o test</h2>
+      <ul>
+        <li>smoke suite: <code>scripts/run-beta-smoke.mjs</code>;</li>
+        <li>test dedicati: <code>test-agency-area-flow.mjs</code>, <code>test-pdf-parser-selection.mjs</code>, <code>test-pdf-review-flow.mjs</code>;</li>
+        <li>API PDF specialistiche: <code>/api/email/preview-pdf</code>, <code>/api/email/import-pdf</code>, <code>/api/email/confirm-pdf</code>, review/ignore;</li>
+        <li>alcune verifiche di parser, dedupe e review sono dimostrate in script piu che in un percorso operatore lineare unico.</li>
+      </ul>
+
+      <h2>F. Bloccanti attuali</h2>
+      <ul>
+        <li>Resend non pronto: conferma email booking non affidabile oggi;</li>
+        <li>env inbound email assenti: niente automazione casella email;</li>
+        <li>env WhatsApp assenti;</li>
+        <li>parte dell’API agency usa <code>SUPABASE_SERVICE_ROLE_KEY</code> e filtri applicativi: funziona, ma va considerata backend trusted, non semplice flusso client.</li>
+      </ul>
+
+      <h2>G. Verdetto finale</h2>
+      <p><span class="badge ok">Oggi il gestionale consente davvero login, servizi manuali, dashboard, dispatch, area agenzia, PDF review/confirm e status tracking.</span></p>
+      <p style="margin-top: 8px;"><span class="badge bad">Oggi non consente ancora email booking affidabili, automazione inbound email e operativita WhatsApp completa.</span></p>
+      <p class="small" style="margin-top: 8px;">Livello attuale: non e piu demo tecnica. E un gestionale operativo supervisionato, vicino a quasi beta ma non ancora beta reale piena.</p>
+
+      <div class="footer">
+        <p><strong>Verifiche eseguite:</strong> <code>pnpm.cmd lint</code> OK, <code>pnpm.cmd build</code> OK, health check OK, smoke test agency/PDF/dashboard-dispatch OK, parser selection OK.</p>
+      </div>
+    </main>
+  </body>
+</html>

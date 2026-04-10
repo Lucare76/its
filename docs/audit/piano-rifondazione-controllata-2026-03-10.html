@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Piano di Rifondazione Controllata - Ischia Transfer - 10/03/2026</title>
+    <style>
+      :root {
+        --text: #0f172a;
+        --muted: #475569;
+        --line: #cbd5e1;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 34px;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 12px;
+        line-height: 1.45;
+        color: var(--text);
+        background: #fff;
+      }
+      h1 { margin: 0 0 8px; font-size: 22px; }
+      h2 {
+        margin: 18px 0 8px;
+        font-size: 15px;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 4px;
+      }
+      h3 { margin: 14px 0 6px; font-size: 13px; }
+      p { margin: 6px 0; }
+      ul { margin: 6px 0 10px 18px; padding: 0; }
+      li { margin: 3px 0; }
+      code {
+        font-family: Consolas, Monaco, monospace;
+        font-size: 11px;
+        background: #f1f5f9;
+        padding: 1px 4px;
+        border-radius: 4px;
+      }
+      .meta { color: var(--muted); margin-bottom: 10px; }
+      .box {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin: 10px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Piano di Rifondazione Controllata - Ischia Transfer</h1>
+    <p class="meta">Data: 10/03/2026</p>
+    <p class="meta">Fonte di verità: audit tecnico/funzionale della codebase esistente.</p>
+
+    <h2>Direzione ufficiale</h2>
+    <ul>
+      <li>Base unica ufficiale: ramo Next.js + Supabase.</li>
+      <li>Legacy <code>server/</code> + <code>client/</code> prima congelato, poi dismesso.</li>
+      <li>Auth e ruoli governati da sessione Supabase + memberships DB.</li>
+      <li>Demo mode separata in modo netto da production mode.</li>
+    </ul>
+
+    <h2>Cosa tenere</h2>
+    <ul>
+      <li>Modulo pricing (regole, matching, override, storico, margini).</li>
+      <li>Dispatch + scoring autisti + planning + driver app realtime/offline queue.</li>
+      <li>Hotel OSM import + alias + run log.</li>
+      <li>Pipeline inbox/email/PDF come base da consolidare.</li>
+      <li>Export Excel servizi/analytics e modulo analytics.</li>
+      <li>Strato RLS multi-tenant già presente in Supabase.</li>
+    </ul>
+
+    <h2>Cosa rifattorizzare</h2>
+    <ul>
+      <li>Autorizzazione pagine: allineare UI routing a sessione Supabase reale.</li>
+      <li>Demo mode: boundary chiara a livello store/API/UI.</li>
+      <li>Nuova prenotazione e area agenzia: da demo-store a persistenza Supabase reale.</li>
+      <li>Pipeline inbound: endpoint unificato e regole tenant esplicite.</li>
+      <li>File monolitici (<code>inbox</code>, <code>pricing</code>) in moduli più piccoli e testabili.</li>
+      <li>Allineamento <code>bootstrap.sql</code>, migration e documentazione.</li>
+    </ul>
+
+    <h2>Cosa eliminare/isolare</h2>
+    <ul>
+      <li>Congelare subito il legacy come read-only.</li>
+      <li>Rimuovere il legacy dal flusso CI/CD e dal deploy.</li>
+      <li>Archiviare legacy in branch/repo dedicato, poi rimuoverlo dal trunk.</li>
+      <li>Rimuovere endpoint di test/debug non protetti in produzione.</li>
+    </ul>
+
+    <h2>Ordine corretto dei lavori</h2>
+    <ol>
+      <li>Freeze legacy + governance tecnica.</li>
+      <li>Hardening auth/ruoli.</li>
+      <li>Separazione demo/prod.</li>
+      <li>Nuova prenotazione production-ready.</li>
+      <li>Area agenzia production-ready.</li>
+      <li>Consolidamento pipeline email/PDF tenant-safe.</li>
+      <li>Refactor mirato senza toccare feature core.</li>
+      <li>Decommission legacy definitivo + hardening finale.</li>
+    </ol>
+
+    <h2>File e moduli coinvolti</h2>
+    <ul>
+      <li>Auth/routing: <code>proxy.ts</code>, <code>lib/rbac.ts</code>, <code>app/login/page.tsx</code>.</li>
+      <li>Demo/store: <code>lib/use-demo-store.ts</code>, <code>lib/demo-data.ts</code>.</li>
+      <li>Prenotazioni/agenzia: <code>app/(app)/services/new/page.tsx</code>, <code>app/(app)/agency/*</code>, <code>app/api/services/list/route.ts</code>.</li>
+      <li>Inbox/email/PDF: <code>app/(app)/inbox/page.tsx</code>, <code>app/api/inbound/email/route.ts</code>, <code>app/api/email/import-pdf/route.ts</code>, <code>lib/server/pdf-text.ts</code>.</li>
+      <li>DB/RLS: <code>supabase/migrations/*</code>, <code>supabase/bootstrap.sql</code>, <code>supabase/seed_demo.sql</code>.</li>
+      <li>QA/release: <code>tests/e2e/*</code>, <code>playwright.config.ts</code>, <code>README.md</code>.</li>
+      <li>Legacy da dismettere: <code>server/</code>, <code>client/</code>.</li>
+    </ul>
+
+    <h2>Rischi principali</h2>
+    <ul>
+      <li>Regressioni funzionali durante rimozione dipendenze demo-store.</li>
+      <li>Incoerenza auth se migrazione UI/API fatta a metà.</li>
+      <li>Rischio multi-tenant inbound se tenant resolution non blindata.</li>
+      <li>Drift SQL tra bootstrap, migration e ambienti.</li>
+      <li>Impatto su demo commerciale se rollout non progressivo.</li>
+    </ul>
+
+    <h2>Roadmap tecnica a step</h2>
+    <ol>
+      <li><strong>Step 1 (1 settimana)</strong>: freeze legacy, ADR architetturale, baseline quality (lint/build/e2e smoke).</li>
+      <li><strong>Step 2 (1 settimana)</strong>: hardening auth/ruoli e rimozione dipendenza da role-cookie per autorizzazione reale.</li>
+      <li><strong>Step 3 (1-2 settimane)</strong>: separazione demo/prod con feature flag espliciti.</li>
+      <li><strong>Step 4 (1-2 settimane)</strong>: nuova prenotazione Supabase-first con eventi stato.</li>
+      <li><strong>Step 5 (1 settimana)</strong>: area agenzia con query tenant/user reali.</li>
+      <li><strong>Step 6 (1-2 settimane)</strong>: pipeline inbound unica tenant-safe e idempotente.</li>
+      <li><strong>Step 7 (1 settimana)</strong>: rifattorizzazione moduli grandi senza regressione comportamentale.</li>
+      <li><strong>Step 8 (1 settimana)</strong>: decommission legacy, docs/runbook finali, release candidate production-ready.</li>
+    </ol>
+
+    <div class="box">
+      <strong>Esito atteso</strong>
+      <p>Consolidamento evolutivo (non riscrittura da zero), con salvaguardia delle feature già mature: pricing, dispatch, hotel OSM, export e driver app.</p>
+    </div>
+  </body>
+</html>
