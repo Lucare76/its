@@ -148,7 +148,8 @@ async function resolveAgencyId(
         tenant_id: auth.membership.tenant_id,
         name: baseName,
         external_code: externalCode,
-        active: true
+        active: true,
+        notes: ""
       })
       .select("id")
       .single()
@@ -157,7 +158,8 @@ async function resolveAgencyId(
         .insert({
           tenant_id: auth.membership.tenant_id,
           name: baseName,
-          active: true
+          active: true,
+          notes: ""
         })
         .select("id")
         .single();
@@ -170,7 +172,8 @@ async function resolveAgencyId(
             tenant_id: auth.membership.tenant_id,
             name: fallbackName,
             external_code: externalCode,
-            active: true
+            active: true,
+            notes: ""
           })
           .select("id")
           .single()
@@ -179,7 +182,8 @@ async function resolveAgencyId(
           .insert({
             tenant_id: auth.membership.tenant_id,
             name: fallbackName,
-            active: true
+            active: true,
+            notes: ""
           })
           .select("id")
           .single();

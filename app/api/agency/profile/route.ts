@@ -108,7 +108,8 @@ async function resolveAgency(auth: AuthContext) {
       name: auth.membership.full_name.trim() || auth.user.email?.split("@")[0] || "Agenzia",
       active: true,
       contact_email: auth.user.email,
-      booking_email: auth.user.email
+      booking_email: auth.user.email,
+      notes: ""
     };
     if (supportsExternalCode) {
       insertPayload.external_code = externalCode;
