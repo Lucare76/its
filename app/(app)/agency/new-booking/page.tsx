@@ -412,7 +412,7 @@ export default function AgencyNewBookingPage() {
           {fieldErrors.customer_phone ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.customer_phone}</span> : null}
         </label>
         <label className="text-sm">
-          Email cliente (per conferma)
+          Email conferma (Ischia Transfer)
           <input
             type="email"
             className="input-saas mt-1"
