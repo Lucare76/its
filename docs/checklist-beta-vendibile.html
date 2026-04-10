@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Checklist Beta Vendibile - Ischia Transfer</title>
+    <style>
+      :root {
+        --bg: #eef4fb;
+        --panel: #ffffff;
+        --ink: #142033;
+        --muted: #63748b;
+        --line: #d9e4f1;
+        --brand: #113b67;
+        --brand-2: #0f6b9b;
+        --ok-bg: #e9f7ef;
+        --ok-ink: #18794e;
+        --warn-bg: #fff4df;
+        --warn-ink: #a15c00;
+        --todo-bg: #fdebec;
+        --todo-ink: #b42318;
+        --soft: #f7fafc;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Arial, sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(15, 107, 155, 0.12), transparent 28%),
+          linear-gradient(180deg, #f4f8fc 0%, var(--bg) 100%);
+        color: var(--ink);
+      }
+
+      .page {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 40px 24px 56px;
+      }
+
+      .hero {
+        background: linear-gradient(135deg, var(--brand) 0%, #1f5f93 58%, var(--brand-2) 100%);
+        color: #fff;
+        border-radius: 28px;
+        padding: 32px;
+        box-shadow: 0 28px 60px rgba(17, 59, 103, 0.18);
+      }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        opacity: 0.78;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(34px, 5vw, 52px);
+        line-height: 1.02;
+      }
+
+      .hero p {
+        max-width: 780px;
+        margin: 14px 0 0;
+        font-size: 18px;
+        line-height: 1.55;
+        color: rgba(255, 255, 255, 0.9);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        margin-top: 22px;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 22px 22px 20px;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+      }
+
+      .card h2 {
+        margin: 0 0 14px;
+        font-size: 22px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .ok {
+        background: var(--ok-bg);
+        color: var(--ok-ink);
+      }
+
+      .warn {
+        background: var(--warn-bg);
+        color: var(--warn-ink);
+      }
+
+      .todo {
+        background: var(--todo-bg);
+        color: var(--todo-ink);
+      }
+
+      ul {
+        margin: 14px 0 0;
+        padding-left: 18px;
+      }
+
+      li {
+        margin: 10px 0;
+        line-height: 1.5;
+      }
+
+      .section-title {
+        margin: 28px 0 12px;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .timeline {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 18px;
+        margin-top: 18px;
+      }
+
+      .step {
+        background: var(--soft);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 18px;
+      }
+
+      .step h3 {
+        margin: 0 0 10px;
+        font-size: 18px;
+      }
+
+      .definition {
+        margin-top: 22px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 24px;
+      }
+
+      .definition ol {
+        margin: 12px 0 0;
+        padding-left: 22px;
+      }
+
+      .definition li {
+        margin: 12px 0;
+      }
+
+      .footer-note {
+        margin-top: 18px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      @media (max-width: 900px) {
+        .grid,
+        .timeline {
+          grid-template-columns: 1fr;
+        }
+
+        .page {
+          padding: 24px 16px 40px;
+        }
+
+        .hero {
+          padding: 24px;
+          border-radius: 22px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">Ischia Transfer Service</p>
+        <h1>Checklist Beta Vendibile</h1>
+        <p>
+          Documento interno per capire cosa è già pronto, cosa è quasi pronto e quali
+          punti dobbiamo chiudere per dire con serenità che la beta è presentabile,
+          usabile e vendibile.
+        </p>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <span class="badge ok">Pronto</span>
+          <ul>
+            <li>Inbox operativa con import email e PDF.</li>
+            <li>Arrivi e partenze con modifica servizi.</li>
+            <li>Rete bus e assegnazioni operative.</li>
+            <li>Flotta con mezzi, autisti, scadenze e alert mail.</li>
+            <li>Invio email brandizzato e funzionante.</li>
+            <li>Ruoli e struttura multi-tenant già impostati.</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <span class="badge warn">Quasi Pronto</span>
+          <ul>
+            <li>Escursioni con programma reale, da consolidare lato dati e UX.</li>
+            <li>Import PDF da testare ancora su più casi reali agenzia per agenzia.</li>
+            <li>Orari operativi più protetti, ma con storico sporco ancora da governare.</li>
+            <li>Dashboard e flussi top-level molto migliorati, ancora da rifinire.</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <span class="badge todo">Da Chiudere Subito</span>
+          <ul>
+            <li>Test end-to-end reali: import, creazione servizio, comparsa in vista, assegnazione e follow-up.</li>
+            <li>Chiudere eventuali errori `500` nei moduli nuovi o nelle migration recenti.</li>
+            <li>Verificare che tutte le migration recenti siano davvero applicate su Supabase.</li>
+            <li>Pulire o classificare i dati legacy che inquinano la lettura operativa.</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <span class="badge todo">Bloccanti Veri</span>
+          <ul>
+            <li>Un modulo che si rompe durante la demo o in giornata operativa.</li>
+            <li>Un PDF reale che crea dati sbagliati o tempi falsi.</li>
+            <li>Escursioni non allineate al programma reale.</li>
+            <li>Orari non affidabili o mail operative che non arrivano.</li>
+          </ul>
+        </article>
+      </section>
+
+      <p class="section-title">To-Do Prioritaria</p>
+      <section class="timeline">
+        <article class="step">
+          <h3>Oggi</h3>
+          <ul>
+            <li>Chiudere i bug operativi che si vedono subito in demo.</li>
+            <li>Provare almeno un flusso reale completo inbox → servizio → assegnazione.</li>
+            <li>Confermare che escursioni, arrivi e partenze non abbiano errori bloccanti.</li>
+          </ul>
+        </article>
+
+        <article class="step">
+          <h3>Questa Settimana</h3>
+          <ul>
+            <li>Consolidare import PDF sulle agenzie principali.</li>
+            <li>Ripulire i dati legacy più pericolosi per la lettura operativa.</li>
+            <li>Stabilizzare il modulo escursioni con seed, pickup e programma reale.</li>
+          </ul>
+        </article>
+
+        <article class="step">
+          <h3>Post-Demo</h3>
+          <ul>
+            <li>Manuale cliente finale.</li>
+            <li>Export Excel/PDF più premium.</li>
+            <li>Rifiniture UI, warning minori e pulizia tecnica non bloccante.</li>
+          </ul>
+        </article>
+      </section>
+
+      <section class="definition">
+        <p class="section-title" style="margin-top:0">Definizione Pratica</p>
+        <h2 style="margin:0">Quando la beta è davvero vendibile</h2>
+        <ol>
+          <li>Importiamo una richiesta reale senza rompere nulla.</li>
+          <li>Il servizio finisce nella vista giusta con dati affidabili.</li>
+          <li>Lo assegniamo a mezzo, bus o autista senza workaround.</li>
+          <li>Le mail operative arrivano davvero.</li>
+          <li>Una demo end-to-end di 10 minuti fila liscia e senza imbarazzi.</li>
+        </ol>
+        <p class="footer-note">
+          Questa checklist è pensata come strumento interno di priorità. Possiamo rifinirla più avanti in versione
+          cliente, PDF o presentazione commerciale.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

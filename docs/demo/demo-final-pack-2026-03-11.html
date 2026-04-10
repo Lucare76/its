@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ischia Transfer - Pacchetto Demo Finale 2026-03-11</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; color: #0f172a; font-size: 12px; line-height: 1.45; }
+      .wrap { max-width: 820px; margin: 0 auto; padding: 24px; }
+      h1 { margin: 0 0 8px; font-size: 24px; }
+      h2 { margin: 18px 0 8px; font-size: 15px; color: #1d4ed8; }
+      .meta { color: #475569; margin: 4px 0; }
+      .box { border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; padding: 10px 12px; }
+      ul, ol { margin: 6px 0 0 18px; padding: 0; }
+      li { margin: 3px 0; }
+      code { font-family: "Courier New", monospace; }
+      .ok { color: #166534; font-weight: bold; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Ischia Transfer - Pacchetto Demo Finale</h1>
+      <p class="meta">Data: 11 marzo 2026</p>
+      <p class="meta">Live: <code>https://ischia-transfer.vercel.app</code></p>
+
+      <h2>1) Stato Funzionale Attuale</h2>
+      <div class="box">
+        <ul>
+          <li>Login e routing stabili (niente loop login/onboarding/dashboard).</li>
+          <li>Onboarding express pronto per avvio rapido tenant.</li>
+          <li>Dashboard responsive con KPI leggibili mobile/desktop.</li>
+          <li>Area agenzia con form reale, validazioni e anti-duplicato.</li>
+          <li>Inbox PDF con draft e conferma rapida operatore.</li>
+          <li>Dispatch e Driver flow già collegati.</li>
+        </ul>
+      </div>
+
+      <h2>2) Script Demo 5 Minuti</h2>
+      <div class="box">
+        <ol>
+          <li><code>/dashboard</code> (panoramica KPI)</li>
+          <li><code>/agency/new-booking</code> (creazione servizio)</li>
+          <li><code>/inbox</code> (upload PDF + draft)</li>
+          <li><code>/dispatch</code> (assegnazione)</li>
+          <li><code>/driver</code> (conferma lato autista)</li>
+        </ol>
+      </div>
+
+      <h2>3) Asset consegnati</h2>
+      <div class="box">
+        <ul>
+          <li>Report attività notturna (PDF)</li>
+          <li>Report avanzamento forte (PDF)</li>
+          <li>Script demo 5 minuti (PDF)</li>
+          <li>Pagina app dedicata: <code>/demo-ready</code></li>
+        </ul>
+      </div>
+
+      <h2>4) Qualità tecnica</h2>
+      <div class="box">
+        <ul>
+          <li><code>pnpm lint</code>: <span class="ok">OK</span></li>
+          <li><code>pnpm build</code>: <span class="ok">OK</span></li>
+          <li>Deploy produzione Vercel: <span class="ok">OK</span></li>
+        </ul>
+      </div>
+
+      <h2>5) Prossimo passo con te (Supabase)</h2>
+      <div class="box">
+        <ul>
+          <li>validazione membership/admin reale</li>
+          <li>env Resend/IMAP in produzione</li>
+          <li>smoke test finale con dati reali agenzia</li>
+        </ul>
+      </div>
+    </div>
+  </body>
+</html>
