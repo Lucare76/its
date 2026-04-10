@@ -412,15 +412,6 @@ export default function AgencyNewBookingPage() {
           {fieldErrors.customer_phone ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.customer_phone}</span> : null}
         </label>
         <label className="text-sm">
-          Email conferma (Ischia Transfer)
-          <input
-            type="email"
-            className="input-saas mt-1"
-            value={form.customer_email}
-            onChange={(event) => setForm((prev) => ({ ...prev, customer_email: event.target.value }))}
-          />
-        </label>
-        <label className="text-sm">
           Pax*
           <input
             type="number"
