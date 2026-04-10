@@ -406,6 +406,22 @@ export default function AgencyNewBookingPage() {
       ) : null}
 
       <div className="card grid gap-3 p-4 md:grid-cols-2 md:p-5">
+        <label className="text-sm md:col-span-2">
+          Tipo servizio*
+          <select
+            className="input-saas mt-1"
+            value={form.booking_service_kind}
+            onChange={(event) =>
+              setForm((prev) => ({ ...prev, booking_service_kind: event.target.value as BookingKind }))
+            }
+          >
+            {kindOptions.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
         {isSnavKind ? (
           <label className="text-sm md:col-span-2">
             Nome completo cliente*
@@ -518,22 +534,6 @@ export default function AgencyNewBookingPage() {
             </>
           )}
         </div>
-        <label className="text-sm md:col-span-2">
-          Tipo servizio*
-          <select
-            className="input-saas mt-1"
-            value={form.booking_service_kind}
-            onChange={(event) =>
-              setForm((prev) => ({ ...prev, booking_service_kind: event.target.value as BookingKind }))
-            }
-          >
-            {kindOptions.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-        </label>
         <label className="text-sm">
           {contextLabels.arrivalDateLabel}
           <input
