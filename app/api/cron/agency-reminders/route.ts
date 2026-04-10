@@ -11,7 +11,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { generateReminderEmailHtml } from "@/lib/server/invoice-pdf";
+import { buildServiceListEmailHtml } from "@/lib/server/service-list-email";
+import { generateAgencyActionToken } from "@/lib/server/agency-action-token";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -78,10 +79,12 @@ export async function POST(request: NextRequest) {
       const email = agency.invoice_email ?? agency.contact_email ?? agency.booking_email;
       if (!email || !agency.invoice_enabled) continue;
 
+      const appBaseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://ischiatransferservice.it";
+
       // Servizi nelle prossime 48h
       const { data: services48h } = await admin
         .from("services")
-        .select("customer_name, date, time, direction, hotel_id")
+        .select("id, customer_name, date, time, direction, hotel_id, pax")
         .eq("tenant_id", tenantId)
         .eq("is_draft", false)
         .ilike("billing_party_name", `%${agency.name}%`)
@@ -89,18 +92,32 @@ export async function POST(request: NextRequest) {
         .order("time");
 
       if ((services48h ?? []).length > 0) {
-        const serviceList = (services48h ?? []).map((s: any) => ({
-          customer_name: s.customer_name,
-          date: s.date,
-          time: s.time,
-          direction: s.direction,
-          hotel: hotelsById.get(s.hotel_id) ?? undefined
-        }));
+        const cancelTokens48: Record<string, string> = {};
+        const serviceList = (services48h ?? []).map((s: any) => {
+          const token = generateAgencyActionToken({ sid: s.id, aid: agency.id, tid: tenantId, act: "cancel" });
+          cancelTokens48[s.id] = token;
+          return {
+            service_id: s.id,
+            customer_name: s.customer_name,
+            date: s.date,
+            time: s.time,
+            direction: s.direction as "arrival" | "departure",
+            hotel_or_destination: hotelsById.get(s.hotel_id) ?? null,
+            pax: s.pax ?? 1,
+          };
+        });
         try {
           await sendEmail(
             email,
             `Riepilogo servizi ${date48h.split("-").reverse().join("/")} — ${agency.name}`,
-            generateReminderEmailHtml(agency.name, serviceList, 48)
+            buildServiceListEmailHtml({
+              agencyName: agency.name,
+              type: "reminder_48h",
+              targetDate: date48h.split("-").reverse().join("/"),
+              lines: serviceList,
+              cancelTokens: cancelTokens48,
+              appBaseUrl,
+            })
           );
           sent++;
         } catch { errors++; }
@@ -110,7 +127,7 @@ export async function POST(request: NextRequest) {
       if (isSunday48h) {
         const { data: services24h } = await admin
           .from("services")
-          .select("customer_name, date, time, direction, hotel_id")
+          .select("id, customer_name, date, time, direction, hotel_id, pax")
           .eq("tenant_id", tenantId)
           .eq("is_draft", false)
           .ilike("billing_party_name", `%${agency.name}%`)
@@ -118,18 +135,32 @@ export async function POST(request: NextRequest) {
           .order("time");
 
         if ((services24h ?? []).length > 0) {
-          const serviceList = (services24h ?? []).map((s: any) => ({
-            customer_name: s.customer_name,
-            date: s.date,
-            time: s.time,
-            direction: s.direction,
-            hotel: hotelsById.get(s.hotel_id) ?? undefined
-          }));
+          const cancelTokens24: Record<string, string> = {};
+          const serviceList = (services24h ?? []).map((s: any) => {
+            const token = generateAgencyActionToken({ sid: s.id, aid: agency.id, tid: tenantId, act: "cancel" });
+            cancelTokens24[s.id] = token;
+            return {
+              service_id: s.id,
+              customer_name: s.customer_name,
+              date: s.date,
+              time: s.time,
+              direction: s.direction as "arrival" | "departure",
+              hotel_or_destination: hotelsById.get(s.hotel_id) ?? null,
+              pax: s.pax ?? 1,
+            };
+          });
           try {
             await sendEmail(
               email,
               `Riepilogo domenica ${date24h.split("-").reverse().join("/")} — ${agency.name}`,
-              generateReminderEmailHtml(agency.name, serviceList, 24)
+              buildServiceListEmailHtml({
+                agencyName: agency.name,
+                type: "reminder_24h",
+                targetDate: date24h.split("-").reverse().join("/"),
+                lines: serviceList,
+                cancelTokens: cancelTokens24,
+                appBaseUrl,
+              })
             );
             sent++;
           } catch { errors++; }

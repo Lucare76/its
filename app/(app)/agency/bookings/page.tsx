@@ -113,6 +113,8 @@ export default function AgencyBookingsPage() {
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [editMessage, setEditMessage] = useState("");
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelConfirm, setCancelConfirm] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -245,6 +247,26 @@ export default function AgencyBookingsPage() {
     setEditMessage("Salvato.");
   };
 
+  const cancelBooking = async () => {
+    if (!selectedBooking || !accessToken) return;
+    setCancelling(true);
+    setCancelConfirm(false);
+    const res = await fetch(`/api/agency/bookings/${selectedBooking.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const data = await res.json().catch(() => null) as { ok?: boolean; already_cancelled?: boolean; error?: string } | null;
+    setCancelling(false);
+    if (data?.already_cancelled) {
+      setBookings((prev) => prev.map((row) => row.id === selectedBooking.id ? { ...row, status: "cancelled" } : row));
+      setEditMessage("Tratta già annullata.");
+      return;
+    }
+    if (!res.ok) { setEditMessage(data?.error ?? "Annullamento fallito."); return; }
+    setBookings((prev) => prev.map((row) => row.id === selectedBooking.id ? { ...row, status: "cancelled" } : row));
+    setEditMessage("Tratta annullata. L'operatore è stato notificato.");
+  };
+
   if (loading) {
     return <div className="card p-4 text-sm text-slate-500">Caricamento prenotazioni...</div>;
   }
@@ -322,7 +344,7 @@ export default function AgencyBookingsPage() {
                 <button
                   key={row.id}
                   type="button"
-                  onClick={() => { setSelectedBookingId(row.id); setIsEditing(false); setEditMessage(""); }}
+                  onClick={() => { setSelectedBookingId(row.id); setIsEditing(false); setEditMessage(""); setCancelConfirm(false); }}
                   className={`w-full rounded-2xl border p-4 text-left ${selectedBooking?.id === row.id ? "border-primary bg-blue-50/40" : "border-border bg-surface/80"}`}
                 >
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -451,16 +473,22 @@ export default function AgencyBookingsPage() {
                   <p className="mt-2 text-sm text-muted whitespace-pre-wrap">{selectedBooking.notes?.trim() || "Nessuna nota disponibile."}</p>
                 </article>
 
-                {editMessage === "Salvato." && <p className="text-xs text-green-600">Modifiche salvate.</p>}
+                {editMessage && (
+                  <p className={`text-xs font-medium ${editMessage.includes("annullat") ? "text-amber-700" : editMessage === "Salvato." ? "text-green-600" : "text-rose-600"}`}>
+                    {editMessage}
+                  </p>
+                )}
 
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => { setEditDraft(toEditDraft(selectedBooking)); setIsEditing(true); setEditMessage(""); }}
-                    className="btn-primary"
-                  >
-                    Modifica
-                  </button>
+                  {selectedBooking.status !== "cancelled" && (
+                    <button
+                      type="button"
+                      onClick={() => { setEditDraft(toEditDraft(selectedBooking)); setIsEditing(true); setEditMessage(""); setCancelConfirm(false); }}
+                      className="btn-primary"
+                    >
+                      Modifica
+                    </button>
+                  )}
                   <Link href="/agency/new-booking" className="btn-secondary">
                     Nuova prenotazione
                   </Link>
@@ -468,6 +496,51 @@ export default function AgencyBookingsPage() {
                     Apri in dispatch
                   </Link>
                 </div>
+
+                {selectedBooking.status !== "cancelled" && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                    {!cancelConfirm ? (
+                      <button
+                        type="button"
+                        onClick={() => setCancelConfirm(true)}
+                        className="text-sm font-semibold text-amber-700 hover:text-amber-900"
+                      >
+                        Annulla questa tratta →
+                      </button>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-sm font-semibold text-amber-900">
+                          Confermi l'annullamento di {selectedBooking.customer_name}?
+                        </p>
+                        <p className="text-xs text-amber-700">
+                          La tratta rimarrà registrata per l'estratto conto. L'operatore verrà avvisato e deciderà se applicare penali o sconti.
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void cancelBooking()}
+                            disabled={cancelling}
+                            className="rounded-lg bg-amber-700 px-4 py-2 text-xs font-bold text-white hover:bg-amber-800 disabled:opacity-60"
+                          >
+                            {cancelling ? "Annullamento..." : "Sì, annulla tratta"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCancelConfirm(false)}
+                            className="rounded-lg border border-amber-300 px-4 py-2 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                          >
+                            No, torna indietro
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {selectedBooking.status === "cancelled" && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                    Tratta annullata — in attesa di verifica operatore per penali/sconti.
+                  </div>
+                )}
               </div>
             )}
           </SectionCard>

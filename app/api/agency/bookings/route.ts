@@ -290,7 +290,12 @@ export async function POST(request: NextRequest) {
     const serviceType = bookingKind === "excursion" ? "bus_tour" : "transfer";
     const notes = parsed.data.notes.trim();
     const customerName = `${(parsed.data.customer_first_name ?? "").trim()} ${parsed.data.customer_last_name.trim()}`.trim();
-    const transportCode = (parsed.data.transport_code ?? "").trim();
+    const transportCodeOut = (parsed.data.transport_code ?? "").trim();
+    const transportCodeReturn = (parsed.data.transport_code_return ?? "").trim();
+    // Combina andata e ritorno in un unico campo (es. "FR1234 / FR5678")
+    const transportCode = transportCodeOut && transportCodeReturn
+      ? `${transportCodeOut} / ${transportCodeReturn}`
+      : transportCodeOut || transportCodeReturn;
     const busCityOrigin = (parsed.data.bus_city_origin ?? "").trim();
     const customerEmail = (parsed.data.customer_email ?? "").trim();
     const ferryOutboundCode = (parsed.data.ferry_outbound_code ?? "").trim();

@@ -296,7 +296,11 @@ export default function BigliettiMedmarPage() {
                   [g.customerName, `${g.pax} pax`, g.phone ?? "", g.hotel,
                    g.pratica ? `Pratica: ${g.pratica}` : "",
                    g.arrivo ? `Arrivo: ${g.arrivo.date} ${g.arrivo.time ?? ""}` : "",
-                   g.partenza ? `Partenza: ${g.partenza.date} ${g.partenza.time ?? ""}` : ""
+                   (() => {
+                     const pd = g.partenza?.date ?? g.arrivo?.departure_date ?? null;
+                     const pt = g.partenza?.time ?? g.arrivo?.departure_time ?? g.arrivo?.return_time ?? null;
+                     return (pd || pt) ? `Partenza: ${pd ?? ""} ${pt ?? ""}`.trim() : "";
+                   })()
                   ].filter(Boolean).join(" | ")
                 ).join("\n"),
                 `all-${date}`
@@ -338,7 +342,7 @@ export default function BigliettiMedmarPage() {
                   {(() => {
                     // Partenza può venire da: servizio separato, oppure departure_date/return_time sul servizio arrivo
                     const partenzaDate = g.partenza?.date ?? g.arrivo?.departure_date ?? null;
-                    const partenzaTime = g.partenza?.time ?? g.arrivo?.return_time ?? null;
+                    const partenzaTime = g.partenza?.time ?? g.arrivo?.departure_time ?? g.arrivo?.return_time ?? null;
                     const partenzaVessel = g.partenza?.vessel ?? g.arrivo?.vessel ?? "MEDMAR";
                     const hasPartenza = !!(partenzaDate || partenzaTime);
                     return (

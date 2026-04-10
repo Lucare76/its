@@ -16,6 +16,7 @@ export type ServiceLine = {
   direction: "arrival" | "departure";
   transport_type?: string | null;   // treno | volo | traghetto | aliscafo
   transport_time?: string | null;   // orario treno/volo/traghetto
+  service_id?: string | null;       // per generare link annullamento
 };
 
 export type ServiceListEmailType =
@@ -52,18 +53,26 @@ export function buildServiceListEmailHtml(params: {
   lines: ServiceLine[];
   /** Token per il link di revisione agenzia (mostra bottoni Approva/Modifica) */
   reviewToken?: string;
+  /** Mappa service_id → cancel_token per link annullamento per riga */
+  cancelTokens?: Record<string, string>;
+  /** URL base app per costruire i link (es. https://ischiatransferservice.it) */
+  appBaseUrl?: string;
 }): string {
-  const { agencyName, type, targetDate, lines, reviewToken } = params;
+  const { agencyName, type, targetDate, lines, reviewToken, cancelTokens, appBaseUrl } = params;
   const label = TYPE_LABELS[type];
   const totalPax  = lines.reduce((s, l) => s + l.pax, 0);
   const arrivals  = lines.filter((l) => l.direction === "arrival").length;
   const departures = lines.filter((l) => l.direction === "departure").length;
+
+  const appUrl = appBaseUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "https://ischiatransferservice.it";
 
   const rows = [...lines]
     .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
     .map((line, i) => {
       const isArr = line.direction === "arrival";
       const bg = i % 2 === 0 ? "#ffffff" : "#f8fafc";
+      const cancelToken = line.service_id && cancelTokens ? cancelTokens[line.service_id] : null;
+      const cancelUrl = cancelToken ? `${appUrl}/agency-action?token=${encodeURIComponent(cancelToken)}` : null;
       return `<tr style="background:${bg};">
         <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;">${line.date}</td>
         <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${line.time}</td>
@@ -76,6 +85,11 @@ export function buildServiceListEmailHtml(params: {
         <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${line.customer_name}</td>
         <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;">${line.hotel_or_destination ?? "N/D"}</td>
         <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:center;color:#1e3a5f;">${line.pax}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;text-align:center;">
+          ${cancelUrl
+            ? `<a href="${cancelUrl}" style="display:inline-block;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;background:#fee2e2;color:#991b1b;text-decoration:none;">✕ Annulla</a>`
+            : ""}
+        </td>
       </tr>`;
     }).join("");
 
@@ -84,8 +98,8 @@ export function buildServiceListEmailHtml(params: {
     ? "linear-gradient(135deg,#0e7490,#0369a1)"   // azzurro — reminder urgente
     : "linear-gradient(135deg,#0f2744,#1e3a5f)";   // navy — riepilogo operativo
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://ischiatransferservice.it";
   const reviewUrl = reviewToken ? `${appUrl}/review/${reviewToken}` : null;
+  const newBookingUrl = `${appUrl}/agency/new-booking`;
 
   return emailHtml(`
     <p style="font-size:17px;margin-bottom:6px;">Ciao <strong>${agencyName}</strong>,</p>
@@ -108,7 +122,7 @@ export function buildServiceListEmailHtml(params: {
       style="border-collapse:collapse;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
       <thead>
         <tr style="background:${headerBg};">
-          ${["Data","Ora","Dir.","Cliente","Hotel / Dest.","Pax"].map((h, idx) =>
+          ${["Data","Ora","Dir.","Cliente","Hotel / Dest.","Pax",""].map((h, idx) =>
             `<th style="padding:12px;text-align:${idx === 5 ? "center" : "left"};font-size:11px;font-weight:700;
               letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.75);">${h}</th>`
           ).join("")}
@@ -116,6 +130,22 @@ export function buildServiceListEmailHtml(params: {
       </thead>
       <tbody>${rows}</tbody>
     </table>
+
+    <div style="margin-top:24px;padding:16px 20px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;">
+      <p style="margin:0 0 12px;font-size:13px;color:#0369a1;font-weight:600;">Hai bisogno di aggiungere o modificare un servizio?</p>
+      <table cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td style="padding-right:10px;">
+            <a href="${newBookingUrl}"
+              style="display:inline-block;background:#0f2744;color:#fff;text-decoration:none;
+                padding:10px 20px;border-radius:8px;font-weight:700;font-size:13px;">
+              + Aggiungi servizio
+            </a>
+          </td>
+        </tr>
+      </table>
+      <p style="margin:10px 0 0;font-size:11px;color:#64748b;">Richiede accesso con le tue credenziali.</p>
+    </div>
 
     ${reviewUrl ? `
     <div style="margin-top:32px;padding-top:24px;border-top:1px solid #e2e8f0;text-align:center;">

@@ -136,6 +136,7 @@ export const agencyBookingCreateSchema = z
     departure_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     departure_time: z.string().regex(/^\d{2}:\d{2}$/),
     transport_code: z.string().max(80).optional().or(z.literal("")),
+    transport_code_return: z.string().max(80).optional().or(z.literal("")),
     bus_city_origin: z.string().max(120).optional().or(z.literal("")),
     include_ferry_tickets: z.boolean().default(false),
     ferry_outbound_code: z.string().max(80).optional().or(z.literal("")),
@@ -171,6 +172,24 @@ export const agencyBookingCreateSchema = z
         message: "Citta di partenza bus obbligatoria.",
         path: ["bus_city_origin"]
       });
+    }
+    if (value.booking_service_kind === "bus_city_hotel") {
+      const arrDate = new Date(`${value.arrival_date}T12:00:00`);
+      if (arrDate.getDay() !== 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Le linee bus sono operative solo la domenica.",
+          path: ["arrival_date"]
+        });
+      }
+      const depDate = new Date(`${value.departure_date}T12:00:00`);
+      if (depDate.getDay() !== 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "La data di ritorno per linea bus deve essere domenica.",
+          path: ["departure_date"]
+        });
+      }
     }
     if (value.booking_service_kind === "excursion" && (!value.excursion_title || value.excursion_title.trim().length < 2)) {
       ctx.addIssue({

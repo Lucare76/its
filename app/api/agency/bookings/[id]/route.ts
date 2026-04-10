@@ -4,6 +4,17 @@ import { z } from "zod";
 import { parseRole } from "@/lib/rbac";
 import { auditLog } from "@/lib/server/ops-audit";
 
+async function sendEmail(to: string, subject: string, html: string) {
+  const key = process.env.RESEND_API_KEY;
+  const from = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransferservice.it";
+  if (!key) return;
+  await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({ from: `Ischia Transfer Service <${from}>`, to: [to], subject, html })
+  });
+}
+
 export const runtime = "nodejs";
 
 const bookingPatchSchema = z.object({
@@ -142,5 +153,107 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   } catch (error) {
     auditLog({ event: "agency_booking_update_failed", level: "error", details: { message: error instanceof Error ? error.message : "Unknown error" } });
     return NextResponse.json({ error: "Errore interno server." }, { status: 500 });
+  }
+}
+
+/**
+ * DELETE /api/agency/bookings/[id]
+ * Annulla la tratta (status = cancelled). NON elimina il record — rimane per l'estratto agenzia.
+ * L'operatore riceve notifica email e decide penale/sconto.
+ */
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const authHeader = request.headers.get("authorization");
+    if (!supabaseUrl || !serviceRoleKey) return NextResponse.json({ error: "Configurazione server mancante." }, { status: 500 });
+    if (!authHeader?.startsWith("Bearer ")) return NextResponse.json({ error: "Sessione non valida." }, { status: 401 });
+
+    const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    const token = authHeader.slice("Bearer ".length);
+    const { data: { user }, error: userError } = await admin.auth.getUser(token);
+    if (userError || !user) return NextResponse.json({ error: "Sessione non valida." }, { status: 401 });
+
+    const { data: membership } = await admin
+      .from("memberships")
+      .select("tenant_id, agency_id, role, full_name")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    const role = parseRole(membership?.role);
+    if (!membership?.tenant_id || !role || (role !== "agency" && role !== "admin")) {
+      return NextResponse.json({ error: "Ruolo non autorizzato." }, { status: 403 });
+    }
+
+    const { id: serviceId } = await params;
+    const supportsCreatedByUserId = await hasColumn(admin, "services", "created_by_user_id");
+
+    let query = admin
+      .from("services")
+      .select("id, status, customer_name, date, time, direction, hotel_id, pax, agency_id, agencies(name), hotels(name)")
+      .eq("id", serviceId)
+      .eq("tenant_id", membership.tenant_id);
+
+    if (role === "agency") {
+      if (membership.agency_id && supportsCreatedByUserId) {
+        query = query.or(`agency_id.eq.${membership.agency_id},created_by_user_id.eq.${user.id}`);
+      } else if (membership.agency_id) {
+        query = query.eq("agency_id", membership.agency_id);
+      } else if (supportsCreatedByUserId) {
+        query = query.eq("created_by_user_id", user.id);
+      } else {
+        return NextResponse.json({ error: "Schema incompleto: impossibile verificare l'agenzia." }, { status: 503 });
+      }
+    }
+
+    const { data: service } = await query.maybeSingle();
+    if (!service?.id) return NextResponse.json({ error: "Prenotazione non trovata." }, { status: 404 });
+    if (service.status === "cancelled") return NextResponse.json({ ok: true, already_cancelled: true });
+
+    // Annulla
+    await admin.from("services").update({ status: "cancelled" }).eq("id", serviceId).eq("tenant_id", membership.tenant_id);
+    await admin.from("status_events").insert({
+      tenant_id: membership.tenant_id,
+      service_id: serviceId,
+      status: "cancelled",
+      by_user_id: user.id
+    });
+
+    // Notifica operatore
+    const operatorEmail = process.env.OPERATOR_NOTIFICATION_EMAIL ?? process.env.AGENCY_BOOKING_FROM_EMAIL ?? null;
+    if (operatorEmail) {
+      const agencyName =
+        Array.isArray(service.agencies) ? (service.agencies[0] as { name?: string })?.name ?? "Agenzia"
+        : (service.agencies as { name?: string } | null)?.name ?? (membership.full_name as string | null | undefined) ?? "Agenzia";
+      const hotelName =
+        Array.isArray(service.hotels) ? (service.hotels[0] as { name?: string })?.name ?? "N/D"
+        : (service.hotels as { name?: string } | null)?.name ?? "N/D";
+      const dateFormatted = (service.date as string)?.split("-").reverse().join("/") ?? service.date;
+      const dirLabel = service.direction === "arrival" ? "Arrivo" : "Partenza";
+      await sendEmail(
+        operatorEmail,
+        `⚠️ Annullamento tratta — ${agencyName} — ${dateFormatted}`,
+        `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;">
+          <h2 style="color:#991b1b;margin-bottom:8px;">Annullamento tratta richiesto dall'agenzia</h2>
+          <p style="color:#475569;">L'agenzia <strong>${agencyName}</strong> ha annullato la seguente tratta dall'area prenotazioni:</p>
+          <table style="width:100%;border-collapse:collapse;margin:20px 0;">
+            <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;width:40%;">Cliente</td><td style="padding:8px 12px;">${service.customer_name}</td></tr>
+            <tr><td style="padding:8px 12px;background:#f1f5f9;font-weight:600;">Data / Ora</td><td style="padding:8px 12px;">${dateFormatted} alle ${service.time}</td></tr>
+            <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;">Tipo</td><td style="padding:8px 12px;">${dirLabel}</td></tr>
+            <tr><td style="padding:8px 12px;background:#f1f5f9;font-weight:600;">Hotel</td><td style="padding:8px 12px;">${hotelName}</td></tr>
+            <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;">Pax</td><td style="padding:8px 12px;">${service.pax}</td></tr>
+          </table>
+          <p style="color:#64748b;font-size:13px;background:#fef9c3;padding:12px 16px;border-radius:8px;border:1px solid #d97706;">
+            <strong>Azione richiesta:</strong> verificare se applicare una penale o uno sconto sull'estratto conto agenzia.
+          </p>
+          <p style="color:#64748b;font-size:13px;margin-top:12px;">Il servizio è stato marcato come <strong>Annullato</strong> nel sistema.</p>
+        </div>`
+      );
+    }
+
+    auditLog({ event: "agency_booking_cancelled", tenantId: membership.tenant_id, userId: user.id, role, serviceId, outcome: "cancelled" });
+    return NextResponse.json({ ok: true, cancelled: true });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Errore interno." }, { status: 500 });
   }
 }
