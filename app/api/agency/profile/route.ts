@@ -56,21 +56,38 @@ async function authorizeAgencyProfileRequest(request: NextRequest): Promise<Auth
 }
 
 async function resolveAgency(auth: AuthContext) {
-  const supportsExternalCode = await hasColumn(auth.admin, "agencies", "external_code");
-  const supportsSetupRequired = await hasColumn(auth.admin, "agencies", "setup_required");
+  const [
+    supportsExternalCode,
+    supportsSetupRequired,
+    supportsVatNumber,
+    supportsPecEmail,
+    supportsSdiCode,
+    supportsLegalName,
+    supportsBillingName,
+    supportsNotes
+  ] = await Promise.all([
+    hasColumn(auth.admin, "agencies", "external_code"),
+    hasColumn(auth.admin, "agencies", "setup_required"),
+    hasColumn(auth.admin, "agencies", "vat_number"),
+    hasColumn(auth.admin, "agencies", "pec_email"),
+    hasColumn(auth.admin, "agencies", "sdi_code"),
+    hasColumn(auth.admin, "agencies", "legal_name"),
+    hasColumn(auth.admin, "agencies", "billing_name"),
+    hasColumn(auth.admin, "agencies", "notes")
+  ]);
   const externalCode = `auth_user:${auth.user.id}`;
   const selectColumns = [
     "id",
     "name",
-    "legal_name",
-    "billing_name",
+    supportsLegalName ? "legal_name" : null,
+    supportsBillingName ? "billing_name" : null,
     "contact_email",
     "booking_email",
     "phone",
-    "vat_number",
-    "pec_email",
-    "sdi_code",
-    "notes",
+    supportsVatNumber ? "vat_number" : null,
+    supportsPecEmail ? "pec_email" : null,
+    supportsSdiCode ? "sdi_code" : null,
+    supportsNotes ? "notes" : null,
     "active",
     supportsSetupRequired ? "setup_required" : null
   ]
@@ -135,7 +152,7 @@ async function resolveAgency(auth: AuthContext) {
     agencyRow = insertedAgency;
   }
 
-  return { agency: agencyRow, supportsSetupRequired };
+  return { agency: agencyRow, supportsSetupRequired, supportsVatNumber, supportsPecEmail, supportsSdiCode, supportsLegalName, supportsBillingName, supportsNotes };
 }
 
 export async function GET(request: NextRequest) {
@@ -178,20 +195,18 @@ export async function PATCH(request: NextRequest) {
 
   const updatePayload: Record<string, unknown> = {
     name: parsed.data.name.trim(),
-    legal_name: parsed.data.legal_name.trim(),
-    billing_name: parsed.data.billing_name.trim(),
     contact_email: parsed.data.contact_email.trim().toLowerCase(),
     booking_email: parsed.data.booking_email.trim().toLowerCase(),
     phone: parsed.data.phone.trim(),
-    vat_number: parsed.data.vat_number.trim(),
-    pec_email: parsed.data.pec_email?.trim().toLowerCase() || null,
-    sdi_code: parsed.data.sdi_code?.trim().toUpperCase() || null,
-    notes: parsed.data.notes?.trim() || null,
     active: true
   };
-  if (resolved.supportsSetupRequired) {
-    updatePayload.setup_required = false;
-  }
+  if (resolved.supportsLegalName) updatePayload.legal_name = parsed.data.legal_name.trim();
+  if (resolved.supportsBillingName) updatePayload.billing_name = parsed.data.billing_name.trim();
+  if (resolved.supportsVatNumber) updatePayload.vat_number = parsed.data.vat_number.trim();
+  if (resolved.supportsPecEmail) updatePayload.pec_email = parsed.data.pec_email?.trim().toLowerCase() || null;
+  if (resolved.supportsSdiCode) updatePayload.sdi_code = parsed.data.sdi_code?.trim().toUpperCase() || null;
+  if (resolved.supportsNotes) updatePayload.notes = parsed.data.notes?.trim() || null;
+  if (resolved.supportsSetupRequired) updatePayload.setup_required = false;
 
   const update = await auth.admin
     .from("agencies")
@@ -202,15 +217,15 @@ export async function PATCH(request: NextRequest) {
       [
         "id",
         "name",
-        "legal_name",
-        "billing_name",
+        resolved.supportsLegalName ? "legal_name" : null,
+        resolved.supportsBillingName ? "billing_name" : null,
         "contact_email",
         "booking_email",
         "phone",
-        "vat_number",
-        "pec_email",
-        "sdi_code",
-        "notes",
+        resolved.supportsVatNumber ? "vat_number" : null,
+        resolved.supportsPecEmail ? "pec_email" : null,
+        resolved.supportsSdiCode ? "sdi_code" : null,
+        resolved.supportsNotes ? "notes" : null,
         "active",
         resolved.supportsSetupRequired ? "setup_required" : null
       ]

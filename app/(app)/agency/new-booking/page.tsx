@@ -104,6 +104,7 @@ export default function AgencyNewBookingPage() {
   const [submitting, setSubmitting] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [role, setRole] = useState<AgencyRole | null>(null);
+  const [tenantId, setTenantId] = useState<string | null>(null);
   const [hotels, setHotels] = useState<HotelOption[]>([]);
   const [agencies, setAgencies] = useState<AgencyOption[]>([]);
   const [form, setForm] = useState({
@@ -128,6 +129,11 @@ export default function AgencyNewBookingPage() {
     agency_id: ""
   });
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [addingHotel, setAddingHotel] = useState(false);
+  const [newHotelName, setNewHotelName] = useState("");
+  const [newHotelAddress, setNewHotelAddress] = useState("");
+  const [newHotelCity, setNewHotelCity] = useState("");
+  const [savingHotel, setSavingHotel] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -148,6 +154,7 @@ export default function AgencyNewBookingPage() {
       }
 
       setRole(session.role);
+      setTenantId(session.tenantId);
       const { data: tokenData } = await supabase.auth.getSession();
       const token = tokenData.session?.access_token ?? null;
       setAccessToken(token);
@@ -192,6 +199,36 @@ export default function AgencyNewBookingPage() {
       active = false;
     };
   }, []);
+
+  const createHotel = async () => {
+    if (!supabase || !tenantId || !newHotelName.trim()) return;
+    setSavingHotel(true);
+    const { data, error } = await supabase
+      .from("hotels")
+      .insert({
+        tenant_id: tenantId,
+        name: newHotelName.trim().toUpperCase(),
+        address: newHotelAddress.trim() || "",
+        city: newHotelCity.trim() || null,
+        lat: 0,
+        lng: 0,
+        zone: ""
+      })
+      .select("id, name, zone")
+      .single();
+    setSavingHotel(false);
+    if (error || !data?.id) {
+      setMessage(`Errore creazione hotel: ${error?.message ?? "sconosciuto"}`);
+      return;
+    }
+    const newHotel = { id: data.id, name: data.name, zone: data.zone ?? null } as HotelOption;
+    setHotels((prev) => [...prev, newHotel].sort((a, b) => a.name.localeCompare(b.name, "it")));
+    setForm((prev) => ({ ...prev, hotel_id: data.id }));
+    setAddingHotel(false);
+    setNewHotelName("");
+    setNewHotelAddress("");
+    setNewHotelCity("");
+  };
 
   const selectedKind = form.booking_service_kind;
   const isSnavKind = selectedKind === "formula_snav";
@@ -423,22 +460,64 @@ export default function AgencyNewBookingPage() {
           />
           {fieldErrors.pax ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.pax}</span> : null}
         </label>
-        <label className="text-sm">
-          Hotel / Struttura*
-          <select
-            className="input-saas mt-1"
-            value={form.hotel_id}
-            onChange={(event) => setForm((prev) => ({ ...prev, hotel_id: event.target.value }))}
-          >
-            {hotels.map((hotel) => (
-              <option key={hotel.id} value={hotel.id}>
-                {hotel.name}
-                {hotel.zone ? ` - ${hotel.zone}` : ""}
-              </option>
-            ))}
-          </select>
-          {fieldErrors.hotel_id ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.hotel_id}</span> : null}
-        </label>
+        <div className="text-sm">
+          <div className="flex items-center justify-between">
+            <span>Hotel / Struttura*</span>
+            <button
+              type="button"
+              onClick={() => setAddingHotel((v) => !v)}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              {addingHotel ? "Annulla" : "+ Nuovo hotel"}
+            </button>
+          </div>
+          {addingHotel ? (
+            <div className="mt-2 space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3">
+              <input
+                className="input-saas"
+                placeholder="Nome hotel*"
+                value={newHotelName}
+                onChange={(e) => setNewHotelName(e.target.value)}
+              />
+              <input
+                className="input-saas"
+                placeholder="Indirizzo"
+                value={newHotelAddress}
+                onChange={(e) => setNewHotelAddress(e.target.value)}
+              />
+              <input
+                className="input-saas"
+                placeholder="Città"
+                value={newHotelCity}
+                onChange={(e) => setNewHotelCity(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={() => void createHotel()}
+                disabled={savingHotel || !newHotelName.trim()}
+                className="btn-primary w-full py-1.5 text-xs disabled:opacity-60"
+              >
+                {savingHotel ? "Salvataggio..." : "Salva hotel"}
+              </button>
+            </div>
+          ) : (
+            <>
+              <select
+                className="input-saas mt-1"
+                value={form.hotel_id}
+                onChange={(event) => setForm((prev) => ({ ...prev, hotel_id: event.target.value }))}
+              >
+                {hotels.map((hotel) => (
+                  <option key={hotel.id} value={hotel.id}>
+                    {hotel.name}
+                    {hotel.zone ? ` - ${hotel.zone}` : ""}
+                  </option>
+                ))}
+              </select>
+              {fieldErrors.hotel_id ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.hotel_id}</span> : null}
+            </>
+          )}
+        </div>
         <label className="text-sm md:col-span-2">
           Tipo servizio*
           <select
