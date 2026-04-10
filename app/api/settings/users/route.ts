@@ -73,7 +73,8 @@ async function ensureAgencyForUser(params: {
     external_code: externalCode,
     active: true,
     contact_email: email,
-    booking_email: email
+    booking_email: email,
+    notes: ""
   };
   if (supportsSetupRequired) {
     upsertPayload.setup_required = true;
@@ -291,7 +292,8 @@ export async function POST(request: NextRequest) {
       external_code: `auth_user:${newUserId}`,
       active: true,
       contact_email: email,
-      booking_email: email
+      booking_email: email,
+      notes: ""
     };
     if (supportsSetupRequired) {
       agencyInsertPayload.setup_required = true;
@@ -517,7 +519,8 @@ export async function PATCH(request: NextRequest) {
           external_code: externalCode,
           active: true,
           contact_email: requestRow.email,
-          booking_email: requestRow.email
+          booking_email: requestRow.email,
+          notes: ""
         };
         if (supportsSetupRequired) {
           agencyInsertPayload.setup_required = true;
