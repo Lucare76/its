@@ -738,7 +738,15 @@ export default function AgencyNewBookingPage() {
               type="date"
               className="input-saas mt-1"
               value={form.arrival_date}
-              onChange={(event) => setForm((prev) => ({ ...prev, arrival_date: event.target.value }))}
+              onChange={(event) => {
+                const newDate = event.target.value;
+                setForm((prev) => ({
+                  ...prev,
+                  arrival_date: newDate,
+                  // Per le escursioni la data di fine coincide con quella di inizio
+                  departure_date: prev.booking_service_kind === "excursion" ? newDate : prev.departure_date
+                }));
+              }}
             />
             {selectedKind === "bus_city_hotel" && form.arrival_date && !isSunday(form.arrival_date) ? (
               <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
