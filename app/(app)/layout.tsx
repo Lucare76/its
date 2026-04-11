@@ -871,6 +871,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   <span className="lg:hidden">Tema</span>
                 </span>
               </button>
+              {authRole !== "agency" && (
               <button
                 type="button"
                 onClick={toggleInboxSound}
@@ -887,6 +888,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 <span className="hidden lg:inline">Suono inbox {inboxSoundEnabled ? "ON" : "OFF"}</span>
                 <span className="lg:hidden">Inbox {inboxSoundEnabled ? "ON" : "OFF"}</span>
               </button>
+              )}
               <button
                 type="button"
                 onClick={handleSignOut}

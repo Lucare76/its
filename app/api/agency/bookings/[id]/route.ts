@@ -129,6 +129,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: "Nessun campo da aggiornare." }, { status: 400 });
     }
 
+    // Fetch service details for notification email
+    const { data: serviceForMail } = await admin
+      .from("services")
+      .select("customer_name, date, arrival_date, arrival_time, departure_date, departure_time, pax, hotels(name), agencies(name)")
+      .eq("id", serviceId)
+      .eq("tenant_id", membership.tenant_id)
+      .maybeSingle();
+
     const { error: updateError } = await admin
       .from("services")
       .update(update)
@@ -137,6 +145,37 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     if (updateError) {
       return NextResponse.json({ error: updateError.message }, { status: 500 });
+    }
+
+    // Notifica operatore della modifica
+    const operatorEmail = process.env.OPERATOR_NOTIFICATION_EMAIL ?? process.env.AGENCY_BOOKING_FROM_EMAIL ?? null;
+    if (operatorEmail && serviceForMail) {
+      const agencyNameMail =
+        Array.isArray(serviceForMail.agencies) ? (serviceForMail.agencies[0] as { name?: string })?.name ?? "Agenzia"
+        : (serviceForMail.agencies as { name?: string } | null)?.name ?? (membership as { full_name?: string | null }).full_name ?? "Agenzia";
+      const hotelNameMail =
+        Array.isArray(serviceForMail.hotels) ? (serviceForMail.hotels[0] as { name?: string })?.name ?? "N/D"
+        : (serviceForMail.hotels as { name?: string } | null)?.name ?? "N/D";
+      const pivotDate = (serviceForMail.arrival_date ?? serviceForMail.date) as string | null;
+      const dateLabel = pivotDate ? pivotDate.split("-").reverse().join("/") : "—";
+      const changedFields = Object.keys(update).filter((k) => k !== "customer_name").join(", ");
+      await sendEmail(
+        operatorEmail,
+        `✏️ Modifica prenotazione — ${agencyNameMail} — ${dateLabel}`,
+        `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;">
+          <h2 style="color:#1e3a8a;margin-bottom:8px;">Prenotazione modificata dall'agenzia</h2>
+          <p style="color:#475569;">L'agenzia <strong>${agencyNameMail}</strong> ha modificato la seguente prenotazione:</p>
+          <table style="width:100%;border-collapse:collapse;margin:20px 0;">
+            <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;width:40%;">Cliente</td><td style="padding:8px 12px;">${serviceForMail.customer_name ?? "—"}</td></tr>
+            <tr><td style="padding:8px 12px;background:#f1f5f9;font-weight:600;">Hotel</td><td style="padding:8px 12px;">${hotelNameMail}</td></tr>
+            <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;">Data servizio</td><td style="padding:8px 12px;">${dateLabel}</td></tr>
+            <tr><td style="padding:8px 12px;background:#f1f5f9;font-weight:600;">Campi modificati</td><td style="padding:8px 12px;">${changedFields}</td></tr>
+          </table>
+          <p style="color:#64748b;font-size:13px;background:#eff6ff;padding:12px 16px;border-radius:8px;border:1px solid #93c5fd;">
+            Accedi al gestionale per verificare i dettagli aggiornati.
+          </p>
+        </div>`
+      );
     }
 
     auditLog({

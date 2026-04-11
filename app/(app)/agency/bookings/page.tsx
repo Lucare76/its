@@ -197,17 +197,41 @@ export default function AgencyBookingsPage() {
     });
   }, [bookings, confirmationFilter, kindFilter, search, statusFilter, windowFilter]);
 
-  const summary = useMemo(
-    () => ({
+  const summary = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return {
       total: bookings.length,
-      future: bookings.filter((row) => (row.arrival_date ?? row.departure_date ?? row.date) >= new Date().toISOString().slice(0, 10)).length,
-      needsReview: bookings.filter((row) => row.status === "needs_review").length,
-      sentConfirmations: bookings.filter((row) => row.email_confirmation_status === "sent").length
-    }),
-    [bookings]
-  );
+      future: bookings.filter((row) => (row.arrival_date ?? row.departure_date ?? row.date) >= today && row.status !== "cancelled").length,
+      pending: bookings.filter((row) => row.approval_status === "pending_operator" && row.status !== "cancelled").length,
+      confirmed: bookings.filter((row) => row.approval_status === "confirmed" && row.status !== "cancelled").length,
+    };
+  }, [bookings]);
 
   const selectedBooking = filtered.find((row) => row.id === selectedBookingId) ?? filtered[0] ?? null;
+
+  // Raggruppa per mese (YYYY-MM) basato su arrival_date
+  const groupedByMonth = useMemo(() => {
+    const groups: { monthKey: string; label: string; rows: BookingRow[] }[] = [];
+    const map = new Map<string, BookingRow[]>();
+    for (const row of filtered) {
+      const pivot = row.arrival_date ?? row.departure_date ?? row.date;
+      const key = pivot ? pivot.slice(0, 7) : "senza-data";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(row);
+    }
+    // Ordina mesi decrescente (più recente prima)
+    const sorted = [...map.entries()].sort(([a], [b]) => b.localeCompare(a));
+    for (const [key, rows] of sorted) {
+      let label = "Senza data";
+      if (key !== "senza-data") {
+        const [y, m] = key.split("-");
+        const monthName = new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("it-IT", { month: "long", year: "numeric" });
+        label = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+      }
+      groups.push({ monthKey: key, label, rows });
+    }
+    return groups;
+  }, [filtered]);
 
   const saveEdit = async () => {
     if (!editDraft || !selectedBooking || !accessToken) return;
@@ -291,58 +315,65 @@ export default function AgencyBookingsPage() {
         subtitle="Storico richieste agenzia con filtri, KPI e dettaglio operativo del singolo servizio."
       />
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <SectionCard title="Prenotazioni totali" subtitle="Storico disponibile" loading={loading}>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <SectionCard title="Totale prenotazioni" subtitle="Storico disponibile" loading={loading}>
           <p className="text-3xl font-semibold text-text">{summary.total}</p>
         </SectionCard>
-        <SectionCard title="Servizi futuri" subtitle="Arrivi o partenze in programma" loading={loading}>
+        <SectionCard title="Servizi futuri" subtitle="In programma" loading={loading}>
           <p className="text-3xl font-semibold text-text">{summary.future}</p>
         </SectionCard>
-        <SectionCard title="Da verificare" subtitle="Servizi in review" loading={loading}>
-          <p className="text-3xl font-semibold text-text">{summary.needsReview}</p>
+        <SectionCard title="In attesa" subtitle="Risposta operatore" loading={loading}>
+          <p className="text-3xl font-semibold text-text">{summary.pending}</p>
         </SectionCard>
-        <SectionCard title="Conferme inviate" subtitle="Email conferma spedite" loading={loading}>
-          <p className="text-3xl font-semibold text-text">{summary.sentConfirmations}</p>
+        <SectionCard title="Confermate" subtitle="Approvate dall'operatore" loading={loading}>
+          <p className="text-3xl font-semibold text-text">{summary.confirmed}</p>
         </SectionCard>
       </div>
 
-      <FilterBar colsClassName="md:grid-cols-2 xl:grid-cols-5">
+      {/* Barra di ricerca rapida per nome cliente */}
+      <div className="flex items-center gap-2 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4 shrink-0 text-indigo-500">
+          <circle cx="6.5" cy="6.5" r="4" /><path d="M10.5 10.5 14 14" />
+        </svg>
         <input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Cerca cliente, hotel o riferimento"
-          className="input-saas"
+          placeholder="Cerca per nome o cognome del cliente..."
+          className="flex-1 bg-transparent text-sm text-slate-700 placeholder:text-slate-400 outline-none"
         />
+        {search && (
+          <button onClick={() => setSearch("")} className="text-slate-400 hover:text-slate-600 text-lg leading-none">×</button>
+        )}
+      </div>
+
+      <FilterBar colsClassName="md:grid-cols-2 xl:grid-cols-4">
         <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)} className="input-saas">
           <option value="all">Tipo: tutti</option>
           <option value="transfer_port_hotel">Porto - Hotel</option>
           <option value="transfer_airport_hotel">Aeroporto - Hotel</option>
           <option value="transfer_train_hotel">Stazione - Hotel</option>
-          <option value="bus_city_hotel">Bus citta - Hotel</option>
+          <option value="bus_city_hotel">Bus città - Hotel</option>
           <option value="excursion">Escursione</option>
+          <option value="formula_snav">Formula SNAV</option>
+          <option value="formula_medmar">Formula MEDMAR</option>
         </select>
         <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="input-saas">
           <option value="all">Stato: tutti</option>
-          <option value="needs_review">Da verificare</option>
-          <option value="new">Pronti operativi</option>
+          <option value="new">Operativi</option>
           <option value="assigned">Presi in carico</option>
-          <option value="partito">Partiti</option>
-          <option value="arrivato">Arrivati</option>
           <option value="completato">Chiusi</option>
-          <option value="problema">Problema</option>
           <option value="cancelled">Annullati</option>
         </select>
+        <select value={windowFilter} onChange={(event) => setWindowFilter(event.target.value as "all" | "future" | "past")} className="input-saas">
+          <option value="future">Prossimi</option>
+          <option value="past">Storico passato</option>
+          <option value="all">Tutti i periodi</option>
+        </select>
         <select value={confirmationFilter} onChange={(event) => setConfirmationFilter(event.target.value)} className="input-saas">
-          <option value="all">Conferma email: tutte</option>
-          <option value="sent">Inviata</option>
+          <option value="all">Email: tutte</option>
+          <option value="sent">Conferma inviata</option>
           <option value="pending">In attesa</option>
           <option value="failed">Fallita</option>
-          <option value="skipped">Saltata</option>
-        </select>
-        <select value={windowFilter} onChange={(event) => setWindowFilter(event.target.value as "all" | "future" | "past")} className="input-saas">
-          <option value="future">Finestra: future</option>
-          <option value="past">Storico passato</option>
-          <option value="all">Tutte</option>
         </select>
       </FilterBar>
 
@@ -350,32 +381,45 @@ export default function AgencyBookingsPage() {
         <EmptyState title={message || "Nessuna prenotazione trovata."} compact />
       ) : (
         <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-          <SectionCard title="Lista prenotazioni" subtitle={`Prenotazioni trovate: ${filtered.length}`}>
-            <div className="space-y-3">
-              {filtered.map((row) => (
-                <button
-                  key={row.id}
-                  type="button"
-                  onClick={() => { setSelectedBookingId(row.id); setIsEditing(false); setEditMessage(""); setCancelConfirm(false); }}
-                  className={`w-full rounded-2xl border p-4 text-left ${selectedBooking?.id === row.id ? "border-primary bg-blue-50/40" : "border-border bg-surface/80"}`}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold text-text">{row.customer_name}</p>
-                      <p className="text-xs text-muted">{serviceKindLabels[row.booking_service_kind ?? ""] ?? "Transfer"}</p>
-                    </div>
-                    <div className="flex flex-col items-end gap-1">
-                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-slate-700">{row.status}</span>
-                      <ApprovalBadge status={row.approval_status} />
-                    </div>
+          <SectionCard title="Lista prenotazioni" subtitle={`${filtered.length} prenotazion${filtered.length === 1 ? "e" : "i"} trovate`}>
+            <div className="space-y-5">
+              {groupedByMonth.map(({ monthKey, label, rows: monthRows }) => (
+                <div key={monthKey}>
+                  {/* Intestazione mese */}
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="text-xs font-bold uppercase tracking-widest text-slate-500">{label}</span>
+                    <span className="text-[10px] rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">{monthRows.length}</span>
+                    <div className="flex-1 h-px bg-slate-100" />
                   </div>
-                  <div className="mt-3 grid gap-1 text-xs text-muted md:grid-cols-2">
-                    <p>Arrivo: {formatDateTime(row.arrival_date ?? row.date, row.arrival_time ?? row.time)}</p>
-                    <p>Partenza: {formatDateTime(row.departure_date, row.departure_time)}</p>
-                    <p>Hotel: {row.hotel_name}</p>
-                    <p>Conferma: {formatEmailConfirmationStatus(row.email_confirmation_status)}</p>
+
+                  <div className="space-y-2">
+                    {monthRows.map((row) => (
+                      <button
+                        key={row.id}
+                        type="button"
+                        onClick={() => { setSelectedBookingId(row.id); setIsEditing(false); setEditMessage(""); setCancelConfirm(false); }}
+                        className={`w-full rounded-2xl border p-3.5 text-left transition-colors ${selectedBooking?.id === row.id ? "border-indigo-300 bg-indigo-50/60" : "border-border bg-surface/80 hover:bg-slate-50"}`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-text">{row.customer_name}</p>
+                            <p className="text-xs text-muted">{serviceKindLabels[row.booking_service_kind ?? ""] ?? "Transfer"} · {row.hotel_name}</p>
+                          </div>
+                          <div className="flex flex-col items-end gap-1">
+                            <ApprovalBadge status={row.approval_status} />
+                            {row.status === "cancelled" && (
+                              <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] text-slate-500">Annullata</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted">
+                          <span>Arrivo: {formatDateTime(row.arrival_date ?? row.date, row.arrival_time ?? row.time)}</span>
+                          {row.departure_date && <span>Rientro: {formatDateTime(row.departure_date, row.departure_time)}</span>}
+                        </div>
+                      </button>
+                    ))}
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           </SectionCard>

@@ -59,7 +59,6 @@ export function MotivationalModal({ storageIdentity, userName }: Props) {
     getMotivationalQuote()
       .then((q) => {
         setQuote(q);
-        // Piccolo ritardo per non apparire subito al caricamento
         setTimeout(() => setIsOpen(true), 1200);
         if (!isDev) localStorage.setItem(key, JSON.stringify({ date: today, quote: q }));
       })
@@ -71,40 +70,64 @@ export function MotivationalModal({ storageIdentity, userName }: Props) {
   const firstName = firstNameOnly(userName);
 
   return (
-    <div
-      className="fixed bottom-5 right-5 z-50 w-72 rounded-2xl shadow-xl border border-slate-200 bg-white overflow-hidden"
-      style={{ animation: "slideUpFade 0.3s ease-out" }}
-    >
+    <>
       <style>{`
-        @keyframes slideUpFade {
-          from { opacity: 0; transform: translateY(12px); }
-          to   { opacity: 1; transform: translateY(0); }
+        @keyframes popIn {
+          from { opacity: 0; transform: scale(0.95) translateY(8px); }
+          to   { opacity: 1; transform: scale(1) translateY(0); }
         }
       `}</style>
 
-      {/* Striscia colorata sottile in cima */}
-      <div className="h-1 w-full" style={{ background: "linear-gradient(90deg, #4338ca, #7c3aed)" }} />
+      {/* Backdrop leggero — click chiude */}
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center px-4"
+        style={{ background: "rgba(0,0,0,0.25)" }}
+        onClick={() => setIsOpen(false)}
+      >
+        {/* Card centrata, compatta */}
+        <div
+          className="relative w-full max-w-xs rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden"
+          style={{ animation: "popIn 0.25s ease-out" }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Striscia colorata */}
+          <div className="h-1" style={{ background: "linear-gradient(90deg, #4338ca, #7c3aed)" }} />
 
-      <div className="px-4 pt-3 pb-4">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-semibold text-slate-500">
-            {greeting()}{firstName ? `, ${firstName}` : ""} ⛴
-          </span>
-          <button
-            onClick={() => setIsOpen(false)}
-            className="text-slate-300 hover:text-slate-500 transition text-lg leading-none"
-            aria-label="Chiudi"
-          >
-            ×
-          </button>
+          <div className="px-5 pt-4 pb-5">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-semibold text-slate-700">
+                {greeting()}{firstName ? `, ${firstName}` : ""} ⛴
+              </span>
+              <button
+                onClick={() => setIsOpen(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition"
+                aria-label="Chiudi"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                  <path d="M3 3l10 10M13 3L3 13" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Frase */}
+            <p className="text-sm text-slate-600 leading-relaxed italic border-l-2 border-indigo-300 pl-3">
+              &ldquo;{quote}&rdquo;
+            </p>
+
+            {/* Footer */}
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={() => setIsOpen(false)}
+                className="rounded-lg px-4 py-1.5 text-xs font-semibold text-white transition"
+                style={{ background: "linear-gradient(135deg, #4338ca, #7c3aed)" }}
+              >
+                Inizia la giornata →
+              </button>
+            </div>
+          </div>
         </div>
-
-        {/* Frase */}
-        <p className="text-xs text-slate-600 leading-relaxed italic">
-          &ldquo;{quote}&rdquo;
-        </p>
       </div>
-    </div>
+    </>
   );
 }
