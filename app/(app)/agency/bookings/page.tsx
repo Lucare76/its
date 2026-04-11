@@ -117,7 +117,7 @@ export default function AgencyBookingsPage() {
   const [kindFilter, setKindFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [confirmationFilter, setConfirmationFilter] = useState("all");
-  const [windowFilter, setWindowFilter] = useState<"all" | "future" | "past">("future");
+  const [windowFilter, setWindowFilter] = useState<"all" | "future" | "past">("all");
   const [bookings, setBookings] = useState<BookingRow[]>([]);
   const [selectedBookingId, setSelectedBookingId] = useState<string | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -365,9 +365,9 @@ export default function AgencyBookingsPage() {
           <option value="cancelled">Annullati</option>
         </select>
         <select value={windowFilter} onChange={(event) => setWindowFilter(event.target.value as "all" | "future" | "past")} className="input-saas">
-          <option value="future">Prossimi</option>
-          <option value="past">Storico passato</option>
           <option value="all">Tutti i periodi</option>
+          <option value="future">Solo prossimi</option>
+          <option value="past">Solo passati</option>
         </select>
         <select value={confirmationFilter} onChange={(event) => setConfirmationFilter(event.target.value)} className="input-saas">
           <option value="all">Email: tutte</option>
