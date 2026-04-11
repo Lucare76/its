@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { generateInvoiceHtml, type InvoiceLineItem } from "@/lib/server/invoice-pdf";
+import { sendEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -36,16 +37,6 @@ function shouldSendToday(cadence: string, sendDay: number, today: Date): boolean
   return false;
 }
 
-async function sendEmail(to: string, subject: string, html: string) {
-  const key = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransfer.it";
-  if (!key) return;
-  await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({ from: `Ischia Transfer Service <${from}>`, to: [to], subject, html })
-  });
-}
 
 export async function POST(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -157,11 +148,11 @@ export async function POST(request: NextRequest) {
       const periodLabel = fm === tm ? `${months[Number(fm)-1]} ${fy}` : `${months[Number(fm)-1]}-${months[Number(tm)-1]} ${fy}`;
 
       try {
-        await sendEmail(
-          email,
-          `Estratto conto ${periodLabel} — ${agency.name}`,
-          html
-        );
+        await sendEmail({
+          to: email,
+          subject: `Estratto conto ${periodLabel} — ${agency.name}`,
+          html,
+        });
         sent++;
       } catch { skipped++; }
     }

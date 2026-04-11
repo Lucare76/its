@@ -3,17 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { parseRole } from "@/lib/rbac";
 import { auditLog } from "@/lib/server/ops-audit";
-
-async function sendEmail(to: string, subject: string, html: string) {
-  const key = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransferservice.it";
-  if (!key) return;
-  await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({ from: `Ischia Transfer Service <${from}>`, to: [to], subject, html })
-  });
-}
+import { sendEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -159,10 +149,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const pivotDate = (serviceForMail.arrival_date ?? serviceForMail.date) as string | null;
       const dateLabel = pivotDate ? pivotDate.split("-").reverse().join("/") : "—";
       const changedFields = Object.keys(update).filter((k) => k !== "customer_name").join(", ");
-      await sendEmail(
-        operatorEmail,
-        `✏️ Modifica prenotazione — ${agencyNameMail} — ${dateLabel}`,
-        `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;">
+      await sendEmail({
+        to: operatorEmail,
+        subject: `✏️ Modifica prenotazione — ${agencyNameMail} — ${dateLabel}`,
+        html: `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;">
           <h2 style="color:#1e3a8a;margin-bottom:8px;">Prenotazione modificata dall'agenzia</h2>
           <p style="color:#475569;">L'agenzia <strong>${agencyNameMail}</strong> ha modificato la seguente prenotazione:</p>
           <table style="width:100%;border-collapse:collapse;margin:20px 0;">
@@ -174,8 +164,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           <p style="color:#64748b;font-size:13px;background:#eff6ff;padding:12px 16px;border-radius:8px;border:1px solid #93c5fd;">
             Accedi al gestionale per verificare i dettagli aggiornati.
           </p>
-        </div>`
-      );
+        </div>`,
+      });
     }
 
     auditLog({
@@ -199,6 +189,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
  * DELETE /api/agency/bookings/[id]
  * Annulla la tratta (status = cancelled). NON elimina il record — rimane per l'estratto agenzia.
  * L'operatore riceve notifica email e decide penale/sconto.
+ *
+ * Body opzionale (JSON):
+ *   cancel_legs  "arrival" | "departure" | "both"  (default "both")
+ *   cancel_note  string (facoltativo — motivo cancellazione)
  */
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -224,12 +218,19 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
       return NextResponse.json({ error: "Ruolo non autorizzato." }, { status: 403 });
     }
 
+    // Legge body opzionale (cancel_legs, cancel_note)
+    const bodyRaw = await request.json().catch(() => null) as { cancel_legs?: string; cancel_note?: string } | null;
+    const cancelLegs: "arrival" | "departure" | "both" =
+      bodyRaw?.cancel_legs === "arrival" ? "arrival" :
+      bodyRaw?.cancel_legs === "departure" ? "departure" : "both";
+    const cancelNote = typeof bodyRaw?.cancel_note === "string" ? bodyRaw.cancel_note.trim() : "";
+
     const { id: serviceId } = await params;
     const supportsCreatedByUserId = await hasColumn(admin, "services", "created_by_user_id");
 
     let query = admin
       .from("services")
-      .select("id, status, customer_name, date, time, direction, hotel_id, pax, agency_id, agencies(name), hotels(name)")
+      .select("id, status, customer_name, date, time, direction, hotel_id, pax, arrival_date, departure_date, agency_id, agencies(name), hotels(name)")
       .eq("id", serviceId)
       .eq("tenant_id", membership.tenant_id);
 
@@ -251,11 +252,21 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
 
     // Annulla
     await admin.from("services").update({ status: "cancelled" }).eq("id", serviceId).eq("tenant_id", membership.tenant_id);
+
+    const legLabel =
+      cancelLegs === "arrival" ? "andata" :
+      cancelLegs === "departure" ? "ritorno" : "andata+ritorno";
+    const eventNotes = [
+      `Tratta: ${legLabel}`,
+      cancelNote ? `Motivo: ${cancelNote}` : null,
+    ].filter(Boolean).join(" | ");
+
     await admin.from("status_events").insert({
       tenant_id: membership.tenant_id,
       service_id: serviceId,
       status: "cancelled",
-      by_user_id: user.id
+      by_user_id: user.id,
+      ...(eventNotes ? { notes: eventNotes } : {}),
     });
 
     // Notifica operatore
@@ -267,30 +278,33 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
       const hotelName =
         Array.isArray(service.hotels) ? (service.hotels[0] as { name?: string })?.name ?? "N/D"
         : (service.hotels as { name?: string } | null)?.name ?? "N/D";
-      const dateFormatted = (service.date as string)?.split("-").reverse().join("/") ?? service.date;
-      const dirLabel = service.direction === "arrival" ? "Arrivo" : "Partenza";
-      await sendEmail(
-        operatorEmail,
-        `⚠️ Annullamento tratta — ${agencyName} — ${dateFormatted}`,
-        `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;">
-          <h2 style="color:#991b1b;margin-bottom:8px;">Annullamento tratta richiesto dall'agenzia</h2>
-          <p style="color:#475569;">L'agenzia <strong>${agencyName}</strong> ha annullato la seguente tratta dall'area prenotazioni:</p>
+      const dateFormatted = (service.arrival_date ?? service.date as string)?.split("-").reverse().join("/") ?? "—";
+      const legHuman =
+        cancelLegs === "arrival" ? "Solo andata" :
+        cancelLegs === "departure" ? "Solo ritorno" : "Andata + Ritorno";
+
+      await sendEmail({
+        to: operatorEmail,
+        subject: `Annullamento richiesto — ${agencyName} — ${service.customer_name} — ${dateFormatted}`,
+        html: `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;">
+          <h2 style="color:#991b1b;margin-bottom:8px;">Annullamento tratta — richiesta agenzia</h2>
+          <p style="color:#475569;">L'agenzia <strong>${agencyName}</strong> ha richiesto l'annullamento:</p>
           <table style="width:100%;border-collapse:collapse;margin:20px 0;">
             <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;width:40%;">Cliente</td><td style="padding:8px 12px;">${service.customer_name}</td></tr>
-            <tr><td style="padding:8px 12px;background:#f1f5f9;font-weight:600;">Data / Ora</td><td style="padding:8px 12px;">${dateFormatted} alle ${service.time}</td></tr>
-            <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;">Tipo</td><td style="padding:8px 12px;">${dirLabel}</td></tr>
-            <tr><td style="padding:8px 12px;background:#f1f5f9;font-weight:600;">Hotel</td><td style="padding:8px 12px;">${hotelName}</td></tr>
-            <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;">Pax</td><td style="padding:8px 12px;">${service.pax}</td></tr>
+            <tr><td style="padding:8px 12px;background:#f1f5f9;font-weight:600;">Data</td><td style="padding:8px 12px;">${dateFormatted}</td></tr>
+            <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;">Hotel</td><td style="padding:8px 12px;">${hotelName}</td></tr>
+            <tr><td style="padding:8px 12px;background:#f1f5f9;font-weight:600;">Pax</td><td style="padding:8px 12px;">${service.pax}</td></tr>
+            <tr><td style="padding:8px 12px;background:#fef2f2;font-weight:700;color:#991b1b;">Tratta</td><td style="padding:8px 12px;color:#991b1b;font-weight:600;">${legHuman}</td></tr>
+            ${cancelNote ? `<tr><td style="padding:8px 12px;background:#fef9c3;font-weight:600;color:#854d0e;">Motivo</td><td style="padding:8px 12px;color:#854d0e;">${cancelNote}</td></tr>` : ""}
           </table>
           <p style="color:#64748b;font-size:13px;background:#fef9c3;padding:12px 16px;border-radius:8px;border:1px solid #d97706;">
-            <strong>Azione richiesta:</strong> verificare se applicare una penale o uno sconto sull'estratto conto agenzia.
+            <strong>Azione richiesta:</strong> decidere se applicare una penale. Usa "Cancella con penale" nella sezione Richieste agenzie.
           </p>
-          <p style="color:#64748b;font-size:13px;margin-top:12px;">Il servizio è stato marcato come <strong>Annullato</strong> nel sistema.</p>
-        </div>`
-      );
+        </div>`,
+      });
     }
 
-    auditLog({ event: "agency_booking_cancelled", tenantId: membership.tenant_id, userId: user.id, role, serviceId, outcome: "cancelled" });
+    auditLog({ event: "agency_booking_cancelled", tenantId: membership.tenant_id, userId: user.id, role, serviceId, outcome: "cancelled", details: { legs: cancelLegs } });
     return NextResponse.json({ ok: true, cancelled: true });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Errore interno." }, { status: 500 });

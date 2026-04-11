@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { buildServiceListEmailHtml } from "@/lib/server/service-list-email";
 import type { ServiceLine } from "@/lib/server/service-list-email";
+import { sendEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -30,16 +31,6 @@ function isMonday(iso: string): boolean {
   return new Date(`${iso}T12:00:00Z`).getUTCDay() === 1;
 }
 
-async function sendEmail(to: string, subject: string, html: string) {
-  const key = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransfer.it";
-  if (!key) return;
-  await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({ from: `Ischia Transfer Service <${from}>`, to: [to], subject, html })
-  });
-}
 
 export async function POST(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -125,11 +116,11 @@ export async function POST(request: NextRequest) {
       });
 
       try {
-        await sendEmail(
-          email as string,
-          `Linea bus domenica ${sundayFormatted} — ${agency.name}`,
-          html
-        );
+        await sendEmail({
+          to: email as string,
+          subject: `Linea bus domenica ${sundayFormatted} — ${agency.name}`,
+          html,
+        });
         sent++;
       } catch {
         errors++;

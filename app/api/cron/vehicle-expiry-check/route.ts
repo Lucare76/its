@@ -13,6 +13,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { sendEmail as sendEmailBase } from "@/lib/server/send-email";
 import { getLogoDataUri } from "@/lib/server/logo";
 
 export const runtime = "nodejs";
@@ -68,32 +69,11 @@ function getWarnWindowDays(docType: string): number {
 
 
 async function sendEmail(subject: string, html: string) {
-  const key = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransfer.it";
-  if (!key) {
-    return { ok: false, error: "RESEND_API_KEY mancante" } as const;
+  const result = await sendEmailBase({ to: NOTIFY_EMAILS, subject, html });
+  if (!result.ok && !result.skipped) {
+    return { ok: false, error: result.error ?? "Errore invio" } as const;
   }
-
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      from: `Ischia Transfer Service <${from}>`,
-      to: NOTIFY_EMAILS,
-      subject,
-      html,
-    }),
-  });
-
-  const responseText = await response.text().catch(() => "");
-  if (!response.ok) {
-    return {
-      ok: false,
-      error: `Resend ${response.status}${responseText ? `: ${responseText}` : ""}`,
-    } as const;
-  }
-
-  return { ok: true, responseText } as const;
+  return { ok: true } as const;
 }
 
 function buildStatusLabel(daysLeft: number) {

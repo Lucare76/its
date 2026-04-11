@@ -1,5 +1,6 @@
 import { emailHtml, emailDataTable, emailButton, fmtDate } from "@/lib/server/email-layout";
 import { buildServiceLabel, buildServiceLabelShort, type ServiceLabelContext } from "@/lib/service-label";
+import { sendEmail as sendEmailUtil } from "@/lib/server/send-email";
 
 interface EmailResult {
   status: "sent" | "failed" | "skipped";
@@ -7,20 +8,9 @@ interface EmailResult {
 }
 
 async function sendEmail(params: { to: string; subject: string; html: string; text: string }): Promise<EmailResult> {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL;
-  if (!apiKey || !from) return { status: "skipped", error: "Provider email non configurato." };
-
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from, to: [params.to], subject: params.subject, html: params.html, text: params.text })
-  });
-
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => "");
-    return { status: "failed", error: `Invio fallito (${response.status}). ${bodyText.slice(0, 240)}` };
-  }
+  const result = await sendEmailUtil({ to: params.to, subject: params.subject, html: params.html, text: params.text });
+  if (result.skipped) return { status: "skipped", error: "Provider email non configurato." };
+  if (!result.ok) return { status: "failed", error: result.error ?? "Invio fallito." };
   return { status: "sent", error: null };
 }
 

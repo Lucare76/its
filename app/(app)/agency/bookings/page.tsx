@@ -131,6 +131,8 @@ function AgencyBookingsPageInner() {
   const [editMessage, setEditMessage] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [cancelConfirm, setCancelConfirm] = useState(false);
+  const [cancelLeg, setCancelLeg] = useState<"arrival" | "departure" | "both">("both");
+  const [cancelNote, setCancelNote] = useState("");
 
   // Mesi collassabili: aperto di default solo il mese corrente e quelli futuri (max 2)
   const currentMonthKey = new Date().toISOString().slice(0, 7);
@@ -319,7 +321,8 @@ function AgencyBookingsPageInner() {
     setCancelConfirm(false);
     const res = await fetch(`/api/agency/bookings/${selectedBooking.id}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${accessToken}` }
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ cancel_legs: cancelLeg, cancel_note: cancelNote || undefined })
     });
     const data = await res.json().catch(() => null) as { ok?: boolean; already_cancelled?: boolean; error?: string } | null;
     setCancelling(false);
@@ -639,7 +642,7 @@ function AgencyBookingsPageInner() {
                   {selectedBooking.status !== "cancelled" && (
                     <button
                       type="button"
-                      onClick={() => { setEditDraft(toEditDraft(selectedBooking)); setIsEditing(true); setEditMessage(""); setCancelConfirm(false); }}
+                      onClick={() => { setEditDraft(toEditDraft(selectedBooking)); setIsEditing(true); setEditMessage(""); setCancelConfirm(false); setCancelLeg("both"); setCancelNote(""); }}
                       className="btn-primary text-sm"
                     >
                       Modifica
@@ -655,18 +658,54 @@ function AgencyBookingsPageInner() {
                     {!cancelConfirm ? (
                       <button
                         type="button"
-                        onClick={() => setCancelConfirm(true)}
+                        onClick={() => { setCancelConfirm(true); setCancelLeg("both"); setCancelNote(""); }}
                         className="text-sm font-semibold text-amber-700 hover:text-amber-900"
                       >
-                        Annulla questa tratta →
+                        Richiedi annullamento →
                       </button>
                     ) : (
-                      <div className="space-y-2">
+                      <div className="space-y-3">
                         <p className="text-sm font-semibold text-amber-900">
-                          Confermi l'annullamento di {selectedBooking.customer_name}?
+                          Annullamento — {selectedBooking.customer_name}
                         </p>
+
+                        {/* Selezione tratta */}
+                        <div>
+                          <p className="text-xs font-semibold text-amber-700 mb-1.5">Quale tratta vuoi annullare?</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {(["arrival", "departure", "both"] as const).map((leg) => {
+                              const label = leg === "arrival" ? "Solo andata" : leg === "departure" ? "Solo ritorno" : "Andata + Ritorno";
+                              return (
+                                <button
+                                  key={leg}
+                                  type="button"
+                                  onClick={() => setCancelLeg(leg)}
+                                  className={`rounded-lg border px-3 py-1 text-xs font-semibold transition ${
+                                    cancelLeg === leg
+                                      ? "border-amber-700 bg-amber-700 text-white"
+                                      : "border-amber-300 bg-white text-amber-700 hover:bg-amber-100"
+                                  }`}
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Motivo (opzionale) */}
+                        <div>
+                          <p className="text-xs text-amber-600 mb-1">Motivo (facoltativo)</p>
+                          <input
+                            className="input-saas w-full text-xs"
+                            placeholder="es. cambio programma, maltempo..."
+                            value={cancelNote}
+                            onChange={(e) => setCancelNote(e.target.value)}
+                          />
+                        </div>
+
                         <p className="text-xs text-amber-700">
-                          La tratta rimarrà registrata per l'estratto conto. L'operatore verrà avvisato e deciderà se applicare penali o sconti.
+                          La prenotazione rimarrà in archivio. L'operatore valuterà eventuali penali.
                         </p>
                         <div className="flex gap-2">
                           <button
@@ -675,14 +714,14 @@ function AgencyBookingsPageInner() {
                             disabled={cancelling}
                             className="rounded-lg bg-amber-700 px-4 py-2 text-xs font-bold text-white hover:bg-amber-800 disabled:opacity-60"
                           >
-                            {cancelling ? "Annullamento..." : "Sì, annulla tratta"}
+                            {cancelling ? "Invio richiesta..." : "Conferma annullamento"}
                           </button>
                           <button
                             type="button"
-                            onClick={() => setCancelConfirm(false)}
+                            onClick={() => { setCancelConfirm(false); setCancelNote(""); }}
                             className="rounded-lg border border-amber-300 px-4 py-2 text-xs font-medium text-amber-700 hover:bg-amber-100"
                           >
-                            No, torna indietro
+                            Indietro
                           </button>
                         </div>
                       </div>

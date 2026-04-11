@@ -1,4 +1,5 @@
 import { emailHtml, emailDataTable, fmtDate } from "@/lib/server/email-layout";
+import { sendEmail as sendEmailUtil } from "@/lib/server/send-email";
 
 export type AgencyBookingEmailStatus = "sent" | "failed" | "skipped";
 
@@ -77,34 +78,16 @@ export async function sendAgencyBookingConfirmationEmail(input: AgencyBookingEma
     return { status: "skipped", error: "Destinatario email non disponibile." };
   }
 
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL;
-  if (!apiKey || !from) {
-    return { status: "skipped", error: "Provider email non configurato (RESEND_API_KEY / AGENCY_BOOKING_FROM_EMAIL)." };
-  }
-
   const subject = `Conferma prenotazione Ischia Transfer - ${fmtDate(input.arrivalDate)}`;
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      from,
-      to: [input.to],
-      subject,
-      html: buildHtml(input),
-      text: buildPlainText(input)
-    })
+  const result = await sendEmailUtil({
+    to: input.to,
+    subject,
+    html: buildHtml(input),
+    text: buildPlainText(input),
   });
 
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => "");
-    return {
-      status: "failed",
-      error: `Invio email fallito (${response.status}). ${bodyText.slice(0, 240)}`
-    };
+  if (!result.ok && !result.skipped) {
+    return { status: "failed", error: result.error ?? "Invio email fallito." };
   }
 
   return { status: "sent", error: null };

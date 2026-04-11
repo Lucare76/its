@@ -987,17 +987,18 @@ export default function AgencyNewBookingPage() {
         {/* Prezzo concordato */}
         <label className="text-sm">
           Prezzo concordato (€)
-          <div className="relative mt-1">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">€</span>
+          <div className="mt-1 flex items-center gap-0 rounded-xl border border-slate-200 bg-white focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition-all min-h-[42px] overflow-hidden">
+            <span className="px-3 text-slate-500 font-semibold text-sm shrink-0 select-none">€</span>
             <input
-              type="number"
-              step="0.01"
-              min="0"
-              max="99999"
-              placeholder="0,00"
-              className="input-saas pl-7"
+              type="text"
+              inputMode="decimal"
+              placeholder="0.00"
+              className="flex-1 bg-transparent outline-none text-sm py-2 pr-3 min-w-0"
               value={form.quoted_price_eur}
-              onChange={(event) => setForm((prev) => ({ ...prev, quoted_price_eur: event.target.value }))}
+              onChange={(event) => {
+                const v = event.target.value.replace(",", ".").replace(/[^0-9.]/g, "");
+                setForm((prev) => ({ ...prev, quoted_price_eur: v }));
+              }}
             />
           </div>
           <span className="mt-1 block text-[11px] text-slate-400">Opzionale — serve per il controllo listino lato operatore.</span>

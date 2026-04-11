@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAgencyActionToken } from "@/lib/server/agency-action-token";
+import { sendEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -14,17 +15,6 @@ function adminClient() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("Supabase non configurato.");
   return createClient(url, key, { auth: { persistSession: false } });
-}
-
-async function sendEmail(to: string, subject: string, html: string) {
-  const key = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransferservice.it";
-  if (!key) return;
-  await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({ from: `Ischia Transfer Service <${from}>`, to: [to], subject, html })
-  });
 }
 
 export async function GET(request: NextRequest) {
@@ -122,10 +112,10 @@ export async function POST(request: NextRequest) {
       const dirLabel = service.direction === "arrival" ? "Arrivo" : "Partenza";
       const dateFormatted = (service.date as string)?.split("-").reverse().join("/") ?? service.date;
 
-      await sendEmail(
-        operatorEmail,
-        `⚠️ Annullamento richiesto — ${agencyName} — ${dateFormatted}`,
-        `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;">
+      await sendEmail({
+        to: operatorEmail,
+        subject: `⚠️ Annullamento richiesto — ${agencyName} — ${dateFormatted}`,
+        html: `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;">
           <h2 style="color:#991b1b;margin-bottom:8px;">Annullamento servizio</h2>
           <p style="color:#475569;">L'agenzia <strong>${agencyName}</strong> ha richiesto l'annullamento del seguente servizio:</p>
           <table style="width:100%;border-collapse:collapse;margin:20px 0;">
@@ -137,8 +127,8 @@ export async function POST(request: NextRequest) {
             ${reason ? `<tr><td style="padding:8px 12px;background:#fef9c3;font-weight:600;color:#854d0e;">Motivo</td><td style="padding:8px 12px;color:#854d0e;">${reason}</td></tr>` : ""}
           </table>
           <p style="color:#64748b;font-size:13px;">Il servizio è stato marcato come <strong>Annullato</strong> nel sistema. Verifica in dashboard.</p>
-        </div>`
-      );
+        </div>`,
+      });
     }
 
     return NextResponse.json({ ok: true, cancelled: true });
