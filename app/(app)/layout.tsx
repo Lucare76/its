@@ -95,6 +95,19 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     window.location.replace(target);
   };
 
+  // Listener globale: quando il refresh token scade o è invalido Supabase emette
+  // SIGNED_OUT — reindirizziamo subito al login senza aspettare runAuthCheck.
+  useEffect(() => {
+    if (!supabase) return;
+    const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") {
+        hardRedirect(`/login`);
+      }
+    });
+    return () => { authListener.subscription.unsubscribe(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     let active = true;
 
