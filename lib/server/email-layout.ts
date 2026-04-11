@@ -39,35 +39,41 @@ ${options?.title ? `<title>${options.title}</title>` : ""}
   img { border:0; height:auto; line-height:100%; outline:none; text-decoration:none; }
   table { border-collapse:collapse!important; }
 
-  /* Mobile responsive */
+  /* Mobile responsive — supportato da Apple Mail, Outlook iOS, Samsung Mail */
   @media only screen and (max-width:620px) {
-    .email-wrapper { padding:16px 8px!important; }
+    .email-wrapper { padding:12px 6px!important; }
     .email-container { width:100%!important; max-width:100%!important; }
-    .email-header { padding:20px 20px!important; border-radius:16px 16px 0 0!important; }
-    .email-body { padding:28px 20px!important; }
-    .email-footer { padding:20px!important; border-radius:0 0 16px 16px!important; }
-    .data-table td { display:block!important; width:100%!important; }
+    .email-header { padding:18px 16px!important; border-radius:14px 14px 0 0!important; }
+    .email-body { padding:24px 16px!important; }
+    .email-footer { padding:18px 16px!important; border-radius:0 0 14px 14px!important; }
+    .data-table td { display:block!important; width:100%!important; box-sizing:border-box!important; }
     .data-table tr .label-cell {
       border-bottom:none!important;
-      padding-bottom:4px!important;
-      padding-top:12px!important;
+      padding-bottom:2px!important;
+      padding-top:10px!important;
+      width:100%!important;
+      white-space:normal!important;
     }
     .data-table tr .value-cell {
       padding-top:4px!important;
       border-top:none!important;
+      width:100%!important;
     }
+    .email-button { width:100%!important; }
     .email-button a {
       display:block!important;
       width:100%!important;
       text-align:center!important;
       padding:16px 20px!important;
+      box-sizing:border-box!important;
     }
     .email-button td {
       width:100%!important;
       display:block!important;
     }
-    .service-box { padding:16px 18px!important; border-radius:12px!important; }
-    .service-box .service-title { font-size:18px!important; }
+    .service-box { padding:14px 16px!important; border-radius:10px!important; }
+    .service-box .service-title { font-size:17px!important; }
+    img { max-width:140px!important; width:140px!important; }
   }
 </style>
 </head>
@@ -75,27 +81,27 @@ ${options?.title ? `<title>${options.title}</title>` : ""}
 ${preheader}
 
 <!-- Wrapper -->
-<table class="email-wrapper" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="background:#eef2f7;padding:40px 16px;">
+<table class="email-wrapper" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="background:#eef2f7;padding:32px 12px;">
 <tr><td align="center">
 <table class="email-container" cellpadding="0" cellspacing="0" border="0" role="presentation" style="max-width:600px;width:100%;">
 
   <!-- HEADER -->
   <tr>
-    <td class="email-header" style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:24px 32px;text-align:center;">
+    <td class="email-header" style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:22px 24px;text-align:center;">
       ${logoBlock}
     </td>
   </tr>
 
   <!-- BODY -->
   <tr>
-    <td class="email-body" style="background:#ffffff;padding:40px 44px;font-size:15px;line-height:1.7;color:#1e293b;">
+    <td class="email-body" style="background:#ffffff;padding:32px 28px;font-size:15px;line-height:1.7;color:#1e293b;">
       ${body}
     </td>
   </tr>
 
   <!-- FOOTER -->
   <tr>
-    <td class="email-footer" style="background:#f8fafc;border-radius:0 0 20px 20px;border-top:1px solid #e2e8f0;padding:24px 40px;text-align:center;">
+    <td class="email-footer" style="background:#f8fafc;border-radius:0 0 20px 20px;border-top:1px solid #e2e8f0;padding:22px 24px;text-align:center;">
       <div style="font-size:13px;font-weight:600;color:#1e3a5f;margin-bottom:6px;">
         Ischia Transfer Service
       </div>
@@ -146,8 +152,8 @@ ${content}
 export function emailDataTable(rows: Array<[string, string]>): string {
   const trs = rows.map(([k, v]) => `
     <tr>
-      <td class="label-cell" style="padding:10px 16px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#64748b;width:160px;white-space:nowrap;vertical-align:top;">${k}</td>
-      <td class="value-cell" style="padding:10px 16px;border:1px solid #e2e8f0;font-size:14px;color:#1e293b;word-break:break-word;">${v}</td>
+      <td class="label-cell" style="padding:10px 16px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#64748b;width:38%;min-width:110px;vertical-align:top;">${k}</td>
+      <td class="value-cell" style="padding:10px 16px;border:1px solid #e2e8f0;font-size:14px;color:#1e293b;word-break:break-word;max-width:0;">${v}</td>
     </tr>`).join("");
   return `<table class="data-table" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="border-collapse:collapse;margin:20px 0;border-radius:12px;overflow:hidden;">${trs}</table>`;
 }
