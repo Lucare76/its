@@ -93,52 +93,56 @@ type PriceRowProps = {
   label: string;
   kindKey: string;
   lineCode?: string | null;
-  agencyId: string | null;
+  agencyIds: Array<string | null>; // una o più agenzie selezionate
   rates: Rate[];
   token: string;
   isAdmin: boolean;
-  preloadedCostCents?: number; // escursioni: costo pre-caricato
+  preloadedCostCents?: number;
   onSaved: () => void;
 };
 
-function PriceRow({ label, kindKey, lineCode = null, agencyId, rates, token, isAdmin, preloadedCostCents, onSaved }: PriceRowProps) {
-  const current = activeRate(rates, agencyId, kindKey, lineCode);
+function PriceRow({ label, kindKey, lineCode = null, agencyIds, rates, token, isAdmin, preloadedCostCents, onSaved }: PriceRowProps) {
+  // Per la visualizzazione usiamo la prima agenzia selezionata
+  const primaryId = agencyIds[0] ?? null;
+  const current = activeRate(rates, primaryId, kindKey, lineCode);
   const [priceStr, setPriceStr] = useState(centsToEur(current?.price_cents));
   const [costStr, setCostStr] = useState(centsToEur(current?.cost_cents ?? preloadedCostCents));
   const [validFrom, setValidFrom] = useState(today());
   const [saving, setSaving] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
-  // Aggiorna i campi quando cambiano i dati esterni
   useEffect(() => {
-    const c = activeRate(rates, agencyId, kindKey, lineCode);
+    const c = activeRate(rates, primaryId, kindKey, lineCode);
     setPriceStr(centsToEur(c?.price_cents));
     setCostStr(centsToEur(c?.cost_cents ?? preloadedCostCents));
-  }, [rates, agencyId, kindKey, lineCode, preloadedCostCents]);
+  }, [rates, primaryId, kindKey, lineCode, preloadedCostCents]);
 
   const save = async () => {
     const priceCents = eurToCents(priceStr);
     if (priceCents === null && priceStr.trim() !== "") return;
     if (priceCents === null) return;
     setSaving(true);
-    await fetch("/api/agency/rates", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        agency_id: agencyId,
-        booking_service_kind: kindKey,
-        line_code: lineCode,
-        price_cents: priceCents,
-        cost_cents: isAdmin ? (eurToCents(costStr) ?? null) : undefined,
-        valid_from: validFrom,
-      }),
-    });
+    // Salva su tutte le agenzie selezionate
+    await Promise.all(agencyIds.map((aid) =>
+      fetch("/api/agency/rates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          agency_id: aid,
+          booking_service_kind: kindKey,
+          line_code: lineCode,
+          price_cents: priceCents,
+          cost_cents: isAdmin ? (eurToCents(costStr) ?? null) : undefined,
+          valid_from: validFrom,
+        }),
+      })
+    ));
     setSaving(false);
     onSaved();
   };
 
   const history = rates
-    .filter((r) => r.agency_id === agencyId && r.booking_service_kind === kindKey && (lineCode !== undefined ? r.line_code === lineCode : true))
+    .filter((r) => r.agency_id === primaryId && r.booking_service_kind === kindKey && (lineCode !== undefined ? r.line_code === lineCode : true))
     .sort((a, b) => b.valid_from.localeCompare(a.valid_from));
 
   return (
@@ -189,7 +193,7 @@ function PriceRow({ label, kindKey, lineCode = null, agencyId, rates, token, isA
 
         {/* Stato */}
         {saving ? (
-          <span className="text-xs text-slate-400 w-8">...</span>
+          <span className="text-xs text-slate-400 w-16">{agencyIds.length > 1 ? `salvo ${agencyIds.length}...` : "..."}</span>
         ) : current ? (
           <span className="text-xs font-semibold text-emerald-600">✓</span>
         ) : (
@@ -263,7 +267,8 @@ export default function AgencyRatesPage() {
   const [busLines, setBusLines]     = useState<BusLine[]>([]);
   const [customKinds, setCustomKinds] = useState<CustomKind[]>([]);
   const [rates, setRates]           = useState<Rate[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string | null>>(new Set([null])); // null = default
+  const [multiMode, setMultiMode] = useState(false);
 
   // Nuova voce custom
   const [newKindKey, setNewKindKey] = useState("");
@@ -326,14 +331,28 @@ export default function AgencyRatesPage() {
   if (error)   return <div className="p-6 text-sm text-rose-600">{error}</div>;
   if (!token)  return null;
 
-  const agencyName = selectedId ? (agencies.find((a) => a.id === selectedId)?.name ?? "Agenzia") : "Default (tutte le agenzie)";
+  // Array di agency_id selezionati (null = default)
+  const selectedIdsArray = Array.from(selectedIds);
+  const selectionLabel = selectedIdsArray.length === 0
+    ? "Nessuna selezione"
+    : selectedIdsArray.length === 1
+      ? (selectedIdsArray[0] == null ? "Default (tutte)" : (agencies.find((a) => a.id === selectedIdsArray[0])?.name ?? "Agenzia"))
+      : `${selectedIdsArray.length} agenzie selezionate`;
 
   const rowProps = (kindKey: string, lineCode?: string | null) => ({
     kindKey, lineCode: lineCode ?? null,
-    agencyId: selectedId,
+    agencyIds: selectedIdsArray,
     rates, token, isAdmin,
     onSaved: () => void load(token),
   });
+
+  const toggleAgency = (id: string | null) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <section className="mx-auto max-w-4xl space-y-4 p-4">
@@ -343,21 +362,52 @@ export default function AgencyRatesPage() {
       </div>
 
       {/* Selettore agenzia */}
-      <div className="card flex flex-wrap items-center gap-4 p-4">
-        <div className="flex-1 min-w-48">
-          <label className="mb-1 block text-xs font-semibold text-slate-500">Agenzia</label>
-          <select
-            className="input-saas w-full"
-            value={selectedId ?? "__default__"}
-            onChange={(e) => setSelectedId(e.target.value === "__default__" ? null : e.target.value)}
+      <div className="card p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <span className="text-xs font-semibold text-slate-500">Seleziona agenzia/e</span>
+            {selectedIdsArray.length > 1 ? (
+              <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
+                {selectedIdsArray.length} selezionate — i prezzi verranno salvati per tutte
+              </span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="text-xs text-slate-500 underline"
+            onClick={() => {
+              if (selectedIds.size === agencies.length + 1) {
+                setSelectedIds(new Set([null]));
+              } else {
+                setSelectedIds(new Set([null, ...agencies.map((a) => a.id as string | null)]));
+              }
+            }}
           >
-            <option value="__default__">Default (tutte le agenzie)</option>
-            {agencies.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
+            {selectedIds.size === agencies.length + 1 ? "Deseleziona tutto" : "Seleziona tutte"}
+          </button>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-          Stai modificando: <span className="font-semibold text-slate-700">{agencyName}</span>
+        <div className="grid gap-1.5 sm:grid-cols-2 md:grid-cols-3">
+          <label className="flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 transition-colors"
+            style={{ borderColor: selectedIds.has(null) ? "#3b82f6" : undefined, background: selectedIds.has(null) ? "#eff6ff" : undefined }}>
+            <input type="checkbox" checked={selectedIds.has(null)} onChange={() => toggleAgency(null)} className="accent-blue-600" />
+            <span className="font-medium text-slate-700">Default (tutte)</span>
+          </label>
+          {agencies.map((a) => (
+            <label key={a.id}
+              className="flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 transition-colors"
+              style={{ borderColor: selectedIds.has(a.id) ? "#3b82f6" : undefined, background: selectedIds.has(a.id) ? "#eff6ff" : undefined }}>
+              <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleAgency(a.id)} className="accent-blue-600" />
+              <span className="truncate text-slate-700">{a.name}</span>
+            </label>
+          ))}
         </div>
+        {selectedIdsArray.length > 0 ? (
+          <p className="text-xs text-slate-400">
+            Stai modificando: <span className="font-medium text-slate-600">{selectionLabel}</span>
+          </p>
+        ) : (
+          <p className="text-xs text-rose-500">Seleziona almeno un&apos;agenzia.</p>
+        )}
       </div>
 
       {/* Header colonne */}
