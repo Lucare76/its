@@ -466,8 +466,8 @@ export async function POST(request: NextRequest) {
     const betaFallbackRecipient = process.env.AGENCY_BOOKING_BETA_RECIPIENT_EMAIL?.trim() || null;
     const emailRecipient = customerEmail || auth.user.email || betaFallbackRecipient;
     const agencyDisplayName = agencyRow?.name?.trim() || auth.membership.full_name?.trim() || null;
-    // Se l'email va al cliente (customerEmail fornita) saluta il cliente, altrimenti l'agenzia
-    const recipientName = customerEmail ? customerName : agencyDisplayName;
+    // Il saluto usa SEMPRE il nome dell'agenzia, mai il nome del passeggero
+    const recipientName = agencyDisplayName;
     const emailResult = await sendAgencyBookingConfirmationEmail({
       to: emailRecipient,
       customerName,

@@ -153,6 +153,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       ok: true,
       service: {
         id: service.id,
+        customer_first_name: service.customer_first_name ?? null,
+        customer_last_name: service.customer_last_name ?? null,
         customer_name: service.customer_first_name && service.customer_last_name
           ? `${service.customer_first_name} ${service.customer_last_name}`
           : service.customer_name,

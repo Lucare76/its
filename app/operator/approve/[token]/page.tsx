@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 
 type ServiceData = {
   id: string;
+  customer_first_name: string | null;
+  customer_last_name: string | null;
   customer_name: string;
   customer_email: string | null;
   phone: string | null;
@@ -139,8 +141,16 @@ export default function OperatorApproveBookingPage() {
 
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
             <div>
-              <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">Cliente</dt>
-              <dd className="font-semibold text-slate-800">{service.customer_name}</dd>
+              <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">Nome</dt>
+              <dd className="font-semibold text-slate-800">{service.customer_first_name || service.customer_name.split(" ")[0] || "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">Cognome</dt>
+              <dd className="font-semibold text-slate-800">{service.customer_last_name || service.customer_name.split(" ").slice(1).join(" ") || "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">Cellulare</dt>
+              <dd className="font-semibold text-slate-800">{service.phone || "—"}</dd>
             </div>
             <div>
               <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">Passeggeri</dt>
@@ -154,12 +164,6 @@ export default function OperatorApproveBookingPage() {
               <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">Rientro</dt>
               <dd className="font-semibold text-slate-800">{fmtDate(service.departure_date)} {service.departure_time}</dd>
             </div>
-            {service.phone && (
-              <div>
-                <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">Telefono</dt>
-                <dd className="font-semibold text-slate-800">{service.phone}</dd>
-              </div>
-            )}
             {service.customer_email && (
               <div className="col-span-2">
                 <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">Email cliente</dt>
