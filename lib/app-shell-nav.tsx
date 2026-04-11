@@ -238,6 +238,7 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/arrivals", label: "Arrivi", icon: "A" },
   { href: "/departures", label: "Partenze", icon: "P" },
   { href: "/inbox", label: "Prenotazioni", icon: "I" },
+  { href: "/agency-requests", label: "Richieste Agenzie", icon: "🏨" },
   { href: "/inbox/agency-reviews", label: "Revisioni agenzie", icon: "✏️" },
   { href: "/inbox/fleet-reports", label: "Segnalazioni veicoli", icon: "🚨" },
   { href: "/biglietti-medmar", label: "Biglietti MEDMAR", icon: "⚓" },

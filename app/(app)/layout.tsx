@@ -34,6 +34,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [pendingAccessRequestCount, setPendingAccessRequestCount] = useState(0);
   const [pendingAgencyReviewCount, setPendingAgencyReviewCount] = useState(0);
   const [pendingQrReportsCount,    setPendingQrReportsCount]    = useState(0);
+  const [pendingAgencyBookingsCount, setPendingAgencyBookingsCount] = useState(0);
   const [liveToastMessage, setLiveToastMessage] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authRole, setAuthRole] = useState<UserRole | null>(null);
@@ -351,6 +352,19 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       if (isActive) setPendingQrReportsCount(count ?? 0);
     };
 
+    const refreshPendingAgencyBookings = async (tenantId: string) => {
+      if (authRole !== "admin" && authRole !== "operator") {
+        setPendingAgencyBookingsCount(0);
+        return;
+      }
+      const { count } = await client
+        .from("services")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId)
+        .eq("approval_status", "pending_operator");
+      if (isActive) setPendingAgencyBookingsCount(count ?? 0);
+    };
+
     const refreshPendingAccessRequests = async (tenantId: string) => {
       if (authRole !== "admin") {
         setPendingAccessRequestCount(0);
@@ -371,6 +385,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       await refreshPendingAccessRequests(tenantId);
       await refreshAgencyReviewCount(tenantId);
       await refreshQrReportsCount(tenantId);
+      await refreshPendingAgencyBookings(tenantId);
 
       const channel = client
         .channel(`layout-inbox-${tenantId}`)
@@ -433,6 +448,27 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
           (payload) => {
             setLiveToastMessage(`🚨 Nuova segnalazione danno veicolo ricevuta.`);
             void refreshQrReportsCount(tenantId);
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "services", filter: `tenant_id=eq.${tenantId}` },
+          (payload) => {
+            const approvalStatus = typeof payload.new?.approval_status === "string" ? payload.new.approval_status : null;
+            if (approvalStatus === "pending_operator") {
+              const customerName = typeof payload.new?.customer_name === "string" ? payload.new.customer_name : null;
+              setLiveToastMessage(`🏨 Nuova prenotazione agenzia${customerName ? ` — ${customerName}` : ""} in attesa di approvazione.`);
+              void refreshPendingAgencyBookings(tenantId);
+            }
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "services", filter: `tenant_id=eq.${tenantId}` },
+          (payload) => {
+            const newStatus = typeof payload.new?.approval_status === "string" ? payload.new.approval_status : null;
+            const oldStatus = typeof payload.old?.approval_status === "string" ? payload.old.approval_status : null;
+            if (newStatus !== oldStatus) void refreshPendingAgencyBookings(tenantId);
           }
         );
 
@@ -553,11 +589,13 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
               const active = matchesPath(pathname, item.href);
               const badge = item.href === "/inbox" && inboxPendingCount > 0
                 ? inboxPendingCount
-                : item.href === "/inbox/agency-reviews" && pendingAgencyReviewCount > 0
-                  ? pendingAgencyReviewCount
-                  : item.href === "/inbox/fleet-reports" && pendingQrReportsCount > 0
-                    ? pendingQrReportsCount
-                    : 0;
+                : item.href === "/agency-requests" && pendingAgencyBookingsCount > 0
+                  ? pendingAgencyBookingsCount
+                  : item.href === "/inbox/agency-reviews" && pendingAgencyReviewCount > 0
+                    ? pendingAgencyReviewCount
+                    : item.href === "/inbox/fleet-reports" && pendingQrReportsCount > 0
+                      ? pendingQrReportsCount
+                      : 0;
               return (
                 <Link
                   key={item.href}
@@ -915,6 +953,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 >
                   {item.label}
                   {item.href === "/inbox" && inboxPendingCount > 0 ? ` (${inboxPendingCount > 99 ? "99+" : inboxPendingCount})` : ""}
+                  {item.href === "/agency-requests" && pendingAgencyBookingsCount > 0 ? ` (${pendingAgencyBookingsCount > 99 ? "99+" : pendingAgencyBookingsCount})` : ""}
                 </Link>
               );
             })}
