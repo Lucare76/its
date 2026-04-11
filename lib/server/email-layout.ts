@@ -4,20 +4,14 @@
  */
 
 export function emailHtml(body: string, options?: { title?: string; preheader?: string }): string {
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "https://app.ischiatransferservice.it").replace(/\/$/, "");
-  const isLocalhost = appUrl.includes("localhost") || appUrl.includes("127.0.0.1");
-
+  // Logo sempre embedded come base64 — indipendentemente dall'ambiente.
+  // Gli URL esterni nelle email dipendono dalla raggiungibilità pubblica del server
+  // (non garantita per Resend e proxy Gmail). Il base64 è autosufficiente.
   let logoSrc: string | null = null;
-  if (isLocalhost) {
-    // In locale: base64 embedded (URL non raggiungibile da Resend)
-    try {
-      const { getLogoDataUri } = require("@/lib/server/logo") as { getLogoDataUri: () => string | null };
-      logoSrc = getLogoDataUri();
-    } catch { /* ignora */ }
-  } else {
-    // In produzione: URL pubblico (Gmail e tutti i client lo mostrano)
-    logoSrc = `${appUrl}/brand/logo-ischia-transfer-email.png`;
-  }
+  try {
+    const { getLogoDataUri } = require("@/lib/server/logo") as { getLogoDataUri: () => string | null };
+    logoSrc = getLogoDataUri();
+  } catch { /* ignora, usa fallback testo */ }
 
   const logoBlock = logoSrc
     ? `<img src="${logoSrc}" alt="Ischia Transfer Service" width="180" style="width:180px;max-width:65%;height:auto;display:block;margin:0 auto;" />`
