@@ -11,7 +11,6 @@ type CardState = {
   result: { ok: boolean; message: string } | null;
 };
 
-const AGENCY_NAMES = ["Aleste Viaggi", "Sosandra", "Zigolo", "Angelino"];
 
 function AgencyCard({ agency, token }: { agency: Agency; token: string }) {
   const [state, setState] = useState<CardState>({ files: [], sending: false, result: null });
@@ -159,19 +158,11 @@ export default function BigliettiMultipliPage() {
         .select("id, name, email")
         .eq("tenant_id", tenantId)
         .eq("active", true)
-        .in("name", AGENCY_NAMES)
         .order("name");
 
       if (!active) return;
 
-      // Assicura che tutte e 4 le agenzie compaiano (anche se non trovate nel DB)
-      const found = (rows ?? []) as Agency[];
-      const result: Agency[] = AGENCY_NAMES.map((n) => {
-        const match = found.find((a) => a.name === n);
-        return match ?? { id: `missing-${n}`, name: n, email: null };
-      });
-
-      setAgencies(result);
+      setAgencies((rows ?? []) as Agency[]);
       setLoading(false);
     };
     void load();
