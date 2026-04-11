@@ -30,12 +30,6 @@ function greeting() {
   return "Buonasera";
 }
 
-function formatDate() {
-  return new Date().toLocaleDateString("it-IT", {
-    weekday: "long", day: "numeric", month: "long", year: "numeric",
-  });
-}
-
 function firstNameOnly(fullName?: string | null) {
   if (!fullName?.trim()) return null;
   return fullName.trim().split(" ")[0];
@@ -65,7 +59,8 @@ export function MotivationalModal({ storageIdentity, userName }: Props) {
     getMotivationalQuote()
       .then((q) => {
         setQuote(q);
-        setIsOpen(true);
+        // Piccolo ritardo per non apparire subito al caricamento
+        setTimeout(() => setIsOpen(true), 1200);
         if (!isDev) localStorage.setItem(key, JSON.stringify({ date: today, quote: q }));
       })
       .catch(() => undefined);
@@ -74,55 +69,41 @@ export function MotivationalModal({ storageIdentity, userName }: Props) {
   if (!isOpen || !quote) return null;
 
   const firstName = firstNameOnly(userName);
-  const dateStr = formatDate();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
-      <div className="w-full max-w-md rounded-3xl overflow-hidden shadow-2xl animate-fade-in">
+    <div
+      className="fixed bottom-5 right-5 z-50 w-72 rounded-2xl shadow-xl border border-slate-200 bg-white overflow-hidden"
+      style={{ animation: "slideUpFade 0.3s ease-out" }}
+    >
+      <style>{`
+        @keyframes slideUpFade {
+          from { opacity: 0; transform: translateY(12px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
 
-        {/* Gradient top */}
-        <div
-          className="relative px-9 pt-10 pb-9 text-white overflow-hidden"
-          style={{ background: "linear-gradient(135deg, #1e3a8a 0%, #4338ca 45%, #7c3aed 100%)" }}
-        >
-          {/* Cerchi decorativi */}
-          <div className="absolute -top-14 -right-14 w-52 h-52 rounded-full bg-white/5" />
-          <div className="absolute -bottom-10 -left-10 w-40 h-40 rounded-full bg-white/5" />
+      {/* Striscia colorata sottile in cima */}
+      <div className="h-1 w-full" style={{ background: "linear-gradient(90deg, #4338ca, #7c3aed)" }} />
 
-          {/* Icona traghetto */}
-          <div className="absolute top-7 right-8 text-5xl select-none" style={{ filter: "drop-shadow(0 4px 10px rgba(0,0,0,0.3))" }}>
-            ⛴
-          </div>
-
-          {/* Greeting */}
-          <p className="text-sm font-medium text-white/60 mb-1 relative z-10">{greeting()},</p>
-          <h2 className="text-3xl font-extrabold tracking-tight relative z-10 mb-1">
-            {firstName ? `${firstName} 👋` : "Benvenuto 👋"}
-          </h2>
-          <p className="text-xs text-white/50 relative z-10 mb-8 capitalize">{dateStr}</p>
-
-          {/* Quote card */}
-          <div
-            className="relative z-10 rounded-2xl px-5 py-4"
-            style={{ background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.18)", backdropFilter: "blur(8px)" }}
-          >
-            <span className="block text-2xl text-white/40 mb-2 leading-none">"</span>
-            <p className="text-sm font-medium text-white/90 leading-relaxed italic">{quote}</p>
-          </div>
-        </div>
-
-        {/* Footer bianco */}
-        <div className="bg-white px-9 py-5 flex items-center justify-between">
-          <p className="text-sm text-slate-400">Pronto per una grande giornata?</p>
+      <div className="px-4 pt-3 pb-4">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold text-slate-500">
+            {greeting()}{firstName ? `, ${firstName}` : ""} ⛴
+          </span>
           <button
             onClick={() => setIsOpen(false)}
-            className="rounded-xl px-6 py-2.5 text-sm font-bold text-white transition"
-            style={{ background: "linear-gradient(135deg, #4338ca, #7c3aed)", boxShadow: "0 4px 14px rgba(99,102,241,0.4)" }}
+            className="text-slate-300 hover:text-slate-500 transition text-lg leading-none"
+            aria-label="Chiudi"
           >
-            Inizia →
+            ×
           </button>
         </div>
 
+        {/* Frase */}
+        <p className="text-xs text-slate-600 leading-relaxed italic">
+          &ldquo;{quote}&rdquo;
+        </p>
       </div>
     </div>
   );
