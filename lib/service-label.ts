@@ -6,7 +6,9 @@
 export type AgencyBookingKind =
   | "transfer_port_hotel"
   | "transfer_airport_hotel"
+  | "transfer_airport_hotel_exclusive"
   | "transfer_train_hotel"
+  | "transfer_train_hotel_exclusive"
   | "bus_city_hotel"
   | "excursion"
   | "formula_snav"
@@ -27,9 +29,17 @@ export function buildServiceLabel(ctx: ServiceLabelContext): string {
       const flight = ctx.transportCode?.trim() ? ` · Volo ${ctx.transportCode.trim()}` : "";
       return `Transfer Aeroporto${hotel}${flight}`;
     }
+    case "transfer_airport_hotel_exclusive": {
+      const flight = ctx.transportCode?.trim() ? ` · Volo ${ctx.transportCode.trim()}` : "";
+      return `Transfer Aeroporto Esclusivo${hotel}${flight}`;
+    }
     case "transfer_train_hotel": {
-      const train = ctx.transportCode?.trim() ? ` · Treno ${ctx.transportCode.trim()}` : "";
+      const train = ctx.transportCode?.trim() ? ` · ${ctx.transportCode.trim()}` : "";
       return `Transfer Stazione${hotel}${train}`;
+    }
+    case "transfer_train_hotel_exclusive": {
+      const train = ctx.transportCode?.trim() ? ` · ${ctx.transportCode.trim()}` : "";
+      return `Transfer Stazione Esclusivo${hotel}${train}`;
     }
     case "transfer_port_hotel":
       return `Transfer Porto${hotel}`;

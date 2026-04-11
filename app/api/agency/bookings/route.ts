@@ -31,17 +31,20 @@ function kindLabel(kind: BookingKind) {
   if (kind === "formula_medmar") return "Formula MEDMAR";
   if (kind === "transfer_port_hotel") return "Transfer porto - hotel";
   if (kind === "transfer_airport_hotel") return "Transfer aeroporto - hotel";
+  if (kind === "transfer_airport_hotel_exclusive") return "Transfer aeroporto - hotel (esclusivo)";
   if (kind === "transfer_train_hotel") return "Transfer stazione - hotel";
+  if (kind === "transfer_train_hotel_exclusive") return "Transfer stazione - hotel (esclusivo)";
   if (kind === "bus_city_hotel") return "Bus da citta italiana - hotel";
   return "Escursione";
-  // Nota: buildServiceLabel() è usato per le email — kindLabel rimane per compatibilità interna
 }
 
 function vesselFromKind(kind: BookingKind, transportCode: string, busCityOrigin?: string) {
   if (kind === "formula_snav") return "SNAV";
   if (kind === "formula_medmar") return "MEDMAR";
   if (kind === "transfer_airport_hotel") return transportCode ? `Volo ${transportCode}` : "Transfer aeroporto";
-  if (kind === "transfer_train_hotel") return transportCode ? `Treno ${transportCode}` : "Transfer stazione";
+  if (kind === "transfer_airport_hotel_exclusive") return transportCode ? `Volo ${transportCode}` : "Transfer aeroporto esclusivo";
+  if (kind === "transfer_train_hotel") return transportCode ? `${transportCode}` : "Transfer stazione";
+  if (kind === "transfer_train_hotel_exclusive") return transportCode ? `${transportCode}` : "Transfer stazione esclusivo";
   if (kind === "transfer_port_hotel") return "Transfer porto";
   if (kind === "bus_city_hotel") return busCityOrigin?.trim() ? `Bus da ${busCityOrigin.trim()}` : "Bus";
   return "Escursione";

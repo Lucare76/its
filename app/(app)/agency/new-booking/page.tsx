@@ -29,14 +29,27 @@ interface BusCatalogStop {
   lineName: string;
 }
 
+type BusLineFamily = "ITALIA" | "CENTRO" | "ADRIATICA";
+
+function deriveBusLineFamily(lineCode: string): BusLineFamily {
+  const normalized = lineCode.toLowerCase();
+  const match = normalized.match(/linea[_\s-]*(\d{1,2})/);
+  const lineNumber = match ? Number(match[1]) : null;
+  if (lineNumber === 7) return "CENTRO";
+  if (lineNumber === 11 || normalized.includes("adriatica")) return "ADRIATICA";
+  return "ITALIA";
+}
+
 const kindOptions: Array<{ value: BookingKind; label: string }> = [
   { value: "formula_snav", label: "Formula SNAV" },
   { value: "formula_medmar", label: "Formula MEDMAR" },
   { value: "transfer_airport_hotel", label: "Transfer aeroporto - hotel" },
-  { value: "transfer_train_hotel", label: "Transfer stazione - hotel" },
+  { value: "transfer_airport_hotel_exclusive", label: "Transfer aeroporto - hotel (esclusivo 🔒)" },
+  { value: "transfer_train_hotel", label: "Transfer stazione / bus - hotel" },
+  { value: "transfer_train_hotel_exclusive", label: "Transfer stazione / bus - hotel (esclusivo 🔒)" },
   { value: "bus_city_hotel", label: "Linea bus - hotel" },
   { value: "excursion", label: "Escursione" },
-  { value: "transfer_port_hotel", label: "Transfer porto - hotel (generico)" }
+  { value: "transfer_port_hotel", label: "Transfer porto - hotel" }
 ];
 const defaultConfirmationEmail = process.env.NEXT_PUBLIC_AGENCY_DEFAULT_CONFIRMATION_EMAIL?.trim() ?? "";
 
@@ -80,7 +93,7 @@ function bookingContext(kind: BookingKind) {
       transportCodeReturnPlaceholder: undefined as string | undefined
     };
   }
-  if (kind === "transfer_airport_hotel") {
+  if (kind === "transfer_airport_hotel" || kind === "transfer_airport_hotel_exclusive") {
     return {
       arrivalDateLabel: "Data volo andata*",
       arrivalTimeLabel: "Ora arrivo volo andata*",
@@ -92,16 +105,16 @@ function bookingContext(kind: BookingKind) {
       transportCodeReturnPlaceholder: "Es. FR5678"
     };
   }
-  if (kind === "transfer_train_hotel") {
+  if (kind === "transfer_train_hotel" || kind === "transfer_train_hotel_exclusive") {
     return {
-      arrivalDateLabel: "Data treno andata*",
-      arrivalTimeLabel: "Ora arrivo treno andata*",
-      departureDateLabel: "Data treno ritorno*",
-      departureTimeLabel: "Ora partenza treno ritorno*",
-      transportCodeLabel: "Numero treno andata*",
-      transportCodePlaceholder: "Es. FRECCIAROSSA 9527",
-      transportCodeReturnLabel: "Numero treno ritorno*",
-      transportCodeReturnPlaceholder: "Es. FRECCIAROSSA 9530"
+      arrivalDateLabel: "Data arrivo*",
+      arrivalTimeLabel: "Ora arrivo*",
+      departureDateLabel: "Data ritorno*",
+      departureTimeLabel: "Ora partenza ritorno*",
+      transportCodeLabel: "Treno / Bus andata",
+      transportCodePlaceholder: "Es. FRECCIAROSSA 9527 o FlixBus",
+      transportCodeReturnLabel: "Treno / Bus ritorno",
+      transportCodeReturnPlaceholder: "Es. FRECCIAROSSA 9530 o FlixBus"
     };
   }
   if (kind === "bus_city_hotel") {
@@ -187,6 +200,9 @@ export default function AgencyNewBookingPage() {
   const [busSearchOpen, setBusSearchOpen] = useState(false);
   const [busLoading, setBusLoading] = useState(false);
   const [selectedBusStop, setSelectedBusStop] = useState<BusCatalogStop | null>(null);
+  const [busReturnTime, setBusReturnTime] = useState<string | null>(null);
+  const [busReturnTimeLoading, setBusReturnTimeLoading] = useState(false);
+  const [excursionLines, setExcursionLines] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
     let active = true;
@@ -253,6 +269,23 @@ export default function AgencyNewBookingPage() {
     };
   }, []);
 
+  // Carica escursioni dal DB quando il tipo è excursion
+  useEffect(() => {
+    if (form.booking_service_kind !== "excursion" || !supabase || !tenantId || excursionLines.length > 0) return;
+    supabase
+      .from("excursion_lines")
+      .select("id, name")
+      .eq("tenant_id", tenantId)
+      .eq("active", true)
+      .order("sort_order", { ascending: true })
+      .then(({ data }) => {
+        if (data && data.length > 0) {
+          setExcursionLines(data as Array<{ id: string; name: string }>);
+          setForm((prev) => ({ ...prev, excursion_title: prev.excursion_title || data[0]?.name || "" }));
+        }
+      });
+  }, [form.booking_service_kind, supabase, tenantId, excursionLines.length]);
+
   // Carica catalogo fermate bus quando il tipo è bus_city_hotel
   useEffect(() => {
     if (form.booking_service_kind !== "bus_city_hotel" || !accessToken || busStops.length > 0) return;
@@ -263,6 +296,30 @@ export default function AgencyNewBookingPage() {
       .catch(() => {})
       .finally(() => setBusLoading(false));
   }, [form.booking_service_kind, accessToken, busStops.length]);
+
+  // Carica orario pick-up ritorno quando cambia hotel o fermata bus selezionata
+  useEffect(() => {
+    if (form.booking_service_kind !== "bus_city_hotel" || !selectedBusStop || !form.hotel_id || !accessToken) {
+      setBusReturnTime(null);
+      return;
+    }
+    const lineFamily = deriveBusLineFamily(selectedBusStop.lineCode);
+    setBusReturnTimeLoading(true);
+    fetch(
+      `/api/agency/bus-return-time?hotel_id=${encodeURIComponent(form.hotel_id)}&line_family=${lineFamily}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    )
+      .then((r) => r.json())
+      .then((body: { pickup_time?: string | null }) => {
+        const t = body.pickup_time ?? null;
+        setBusReturnTime(t);
+        if (t) {
+          setForm((prev) => ({ ...prev, departure_time: t }));
+        }
+      })
+      .catch(() => { setBusReturnTime(null); })
+      .finally(() => setBusReturnTimeLoading(false));
+  }, [selectedBusStop, form.hotel_id, form.booking_service_kind, accessToken]);
 
   const createHotel = async () => {
     if (!supabase || !tenantId || !newHotelName.trim()) return;
@@ -432,6 +489,7 @@ export default function AgencyNewBookingPage() {
     setFieldErrors({});
     setBusSearch("");
     setSelectedBusStop(null);
+    setBusReturnTime(null);
   };
 
   const submit = async (force = false) => {
@@ -614,7 +672,7 @@ export default function AgencyNewBookingPage() {
           />
           {fieldErrors.pax ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.pax}</span> : null}
         </label>
-        <div className="text-sm">
+        <div className="text-sm md:col-span-2">
           <div className="flex items-center justify-between">
             <span>Hotel / Struttura*</span>
             <button
@@ -672,72 +730,79 @@ export default function AgencyNewBookingPage() {
             </>
           )}
         </div>
-        <label className="text-sm">
-          {contextLabels.arrivalDateLabel}
-          <input
-            type="date"
-            className="input-saas mt-1"
-            value={form.arrival_date}
-            onChange={(event) => setForm((prev) => ({ ...prev, arrival_date: event.target.value }))}
-          />
-          {selectedKind === "bus_city_hotel" && form.arrival_date && !isSunday(form.arrival_date) ? (
-            <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
-          ) : null}
-        </label>
-        <label className="text-sm">
-          {contextLabels.arrivalTimeLabel}
-          {(isSnavKind || selectedKind === "formula_medmar") ? (
-            <select
-              className="input-saas mt-1"
-              value={form.arrival_time}
-              onChange={(event) => setForm((prev) => ({ ...prev, arrival_time: event.target.value }))}
-            >
-              {(isSnavKind ? SNAV_ARRIVAL_TIMES : MEDMAR_ARRIVAL_TIMES).map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
-          ) : (
+        {/* Arrivo: data + ora sulla stessa riga */}
+        <div className="md:col-span-2 grid grid-cols-2 gap-3">
+          <label className="text-sm">
+            {contextLabels.arrivalDateLabel}
             <input
-              type="time"
+              type="date"
               className="input-saas mt-1"
-              value={form.arrival_time}
-              onChange={(event) => setForm((prev) => ({ ...prev, arrival_time: event.target.value }))}
+              value={form.arrival_date}
+              onChange={(event) => setForm((prev) => ({ ...prev, arrival_date: event.target.value }))}
             />
-          )}
-        </label>
-        <label className="text-sm">
-          {contextLabels.departureDateLabel}
-          <input
-            type="date"
-            className={`input-saas mt-1${selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
-            value={form.departure_date}
-            onChange={(event) => setForm((prev) => ({ ...prev, departure_date: event.target.value }))}
-          />
-          {selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? (
-            <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
-          ) : null}
-        </label>
-        <label className="text-sm">
-          {contextLabels.departureTimeLabel}
-          {(isSnavKind || selectedKind === "formula_medmar") ? (
-            <select
-              className="input-saas mt-1"
-              value={form.departure_time}
-              onChange={(event) => setForm((prev) => ({ ...prev, departure_time: event.target.value }))}
-            >
-              {(isSnavKind ? SNAV_DEPARTURE_TIMES : MEDMAR_DEPARTURE_TIMES).map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
-          ) : (
+            {selectedKind === "bus_city_hotel" && form.arrival_date && !isSunday(form.arrival_date) ? (
+              <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
+            ) : null}
+          </label>
+          <label className="text-sm">
+            {contextLabels.arrivalTimeLabel}
+            {(isSnavKind || selectedKind === "formula_medmar") ? (
+              <select
+                className="input-saas mt-1"
+                value={form.arrival_time}
+                onChange={(event) => setForm((prev) => ({ ...prev, arrival_time: event.target.value }))}
+              >
+                {(isSnavKind ? SNAV_ARRIVAL_TIMES : MEDMAR_ARRIVAL_TIMES).map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="time"
+                className="input-saas mt-1"
+                value={form.arrival_time}
+                onChange={(event) => setForm((prev) => ({ ...prev, arrival_time: event.target.value }))}
+              />
+            )}
+          </label>
+        </div>
+
+        {/* Ritorno: data + ora sulla stessa riga */}
+        <div className="md:col-span-2 grid grid-cols-2 gap-3">
+          <label className="text-sm">
+            {contextLabels.departureDateLabel}
             <input
-              type="time"
-              className="input-saas mt-1"
-              value={form.departure_time}
-              onChange={(event) => setForm((prev) => ({ ...prev, departure_time: event.target.value }))}
+              type="date"
+              className={`input-saas mt-1${selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
+              value={form.departure_date}
+              onChange={(event) => setForm((prev) => ({ ...prev, departure_date: event.target.value }))}
             />
-          )}
-        </label>
+            {selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? (
+              <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
+            ) : null}
+          </label>
+          <label className="text-sm">
+            {contextLabels.departureTimeLabel}
+            {(isSnavKind || selectedKind === "formula_medmar") ? (
+              <select
+                className="input-saas mt-1"
+                value={form.departure_time}
+                onChange={(event) => setForm((prev) => ({ ...prev, departure_time: event.target.value }))}
+              >
+                {(isSnavKind ? SNAV_DEPARTURE_TIMES : MEDMAR_DEPARTURE_TIMES).map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="time"
+                className="input-saas mt-1"
+                value={form.departure_time}
+                onChange={(event) => setForm((prev) => ({ ...prev, departure_time: event.target.value }))}
+              />
+            )}
+          </label>
+        </div>
 
         {showTransportCodeField ? (
           <>
@@ -835,9 +900,27 @@ export default function AgencyNewBookingPage() {
             {selectedBusStop ? (
               <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
                 <span className="font-semibold">{selectedBusStop.lineName}</span>
-                {" · "}Orario partenza:{" "}
+                {" · "}Orario pick-up andata:{" "}
                 <span className="font-semibold">{selectedBusStop.time}</span>
                 {selectedBusStop.pickupNote ? <span className="mt-0.5 block">📍 {selectedBusStop.pickupNote}</span> : null}
+              </div>
+            ) : null}
+            {selectedBusStop && (busReturnTime || busReturnTimeLoading) ? (
+              <div className="mt-1 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                {busReturnTimeLoading ? (
+                  <span>Ricerca orario pick-up ritorno...</span>
+                ) : busReturnTime ? (
+                  <>
+                    Orario pick-up ritorno:{" "}
+                    <span className="font-semibold">{busReturnTime}</span>
+                    <span className="ml-1 text-blue-600">(compilato automaticamente)</span>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+            {selectedBusStop && !busReturnTimeLoading && !busReturnTime && form.hotel_id ? (
+              <div className="mt-1 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Orario pick-up ritorno non trovato per questo hotel — inseriscilo manualmente.
               </div>
             ) : null}
             {fieldErrors.bus_city_origin ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.bus_city_origin}</span> : null}
@@ -846,11 +929,24 @@ export default function AgencyNewBookingPage() {
         {isExcursionTitleRequired ? (
           <label className="text-sm md:col-span-2">
             Escursione*
-            <input
-              className="input-saas mt-1"
-              value={form.excursion_title}
-              onChange={(event) => setForm((prev) => ({ ...prev, excursion_title: event.target.value }))}
-            />
+            {excursionLines.length > 0 ? (
+              <select
+                className="input-saas mt-1"
+                value={form.excursion_title}
+                onChange={(event) => setForm((prev) => ({ ...prev, excursion_title: event.target.value }))}
+              >
+                {excursionLines.map((ex) => (
+                  <option key={ex.id} value={ex.name}>{ex.name}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="input-saas mt-1"
+                placeholder="Nome escursione"
+                value={form.excursion_title}
+                onChange={(event) => setForm((prev) => ({ ...prev, excursion_title: event.target.value }))}
+              />
+            )}
             {fieldErrors.excursion_title ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.excursion_title}</span> : null}
           </label>
         ) : null}

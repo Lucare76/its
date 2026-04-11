@@ -37,9 +37,13 @@ type BookingRow = {
 const serviceKindLabels: Record<string, string> = {
   transfer_port_hotel: "Porto - Hotel",
   transfer_airport_hotel: "Aeroporto - Hotel",
+  transfer_airport_hotel_exclusive: "Aeroporto - Hotel 🔒",
   transfer_train_hotel: "Stazione - Hotel",
-  bus_city_hotel: "Bus citta - Hotel",
-  excursion: "Escursione"
+  transfer_train_hotel_exclusive: "Stazione - Hotel 🔒",
+  bus_city_hotel: "Bus città - Hotel",
+  excursion: "Escursione",
+  formula_snav: "Formula SNAV",
+  formula_medmar: "Formula MEDMAR"
 };
 
 function formatDateTime(date: string | null, time: string | null) {

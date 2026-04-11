@@ -7,7 +7,9 @@ export const serviceTypeSchema = z.enum(["transfer", "bus_tour"]);
 export const agencyBookingServiceKindSchema = z.enum([
   "transfer_port_hotel",
   "transfer_airport_hotel",
+  "transfer_airport_hotel_exclusive",
   "transfer_train_hotel",
+  "transfer_train_hotel_exclusive",
   "bus_city_hotel",
   "excursion",
   "formula_snav",
