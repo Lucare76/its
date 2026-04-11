@@ -245,6 +245,7 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/inbox/agency-reviews", label: "Revisioni agenzie", icon: "✏️" },
   { href: "/inbox/fleet-reports", label: "Segnalazioni veicoli", icon: "🚨" },
   { href: "/biglietti-medmar", label: "Biglietti MEDMAR", icon: "⚓" },
+  { href: "/biglietti-multipli", label: "Invio Multiplo Agenzie", icon: "📎" },
   { href: "/dispatch", label: "Assegnazioni", icon: "G" }
 ];
 

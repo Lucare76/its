@@ -231,6 +231,7 @@ export default function InboxPage() {
   const [pdfUploadPreview, setPdfUploadPreview] = useState<Record<string, unknown> | null>(null);
   const [pdfEditForm, setPdfEditForm] = useState<FormState>(EMPTY_FORM);
   const [pdfDuplicateWarning, setPdfDuplicateWarning] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const handleCopy = (text: string, field: string) => {
     void copyToClipboard(text).then(() => {
@@ -479,6 +480,16 @@ export default function InboxPage() {
 
   const canApprove = form.cliente_nome.trim() !== "" && form.hotel.trim() !== "" && form.data_arrivo.trim() !== "";
 
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (q.length < 2) return [];
+    return services.filter((s) => {
+      const name = (s.customer_name ?? "").toLowerCase();
+      const phone = (s.phone ?? "").replace(/\s/g, "");
+      return name.includes(q) || phone.includes(q.replace(/\s/g, ""));
+    }).slice(0, 20);
+  }, [searchQuery, services]);
+
   const refreshMailboxImports = async () => {
     if (!supabase || !tenantId) return;
     const token = await getToken();
@@ -612,7 +623,54 @@ export default function InboxPage() {
 
   return (
     <section className="space-y-4">
-      <h1 className="text-2xl font-semibold">Prenotazioni</h1>
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-2xl font-semibold flex-1">Prenotazioni</h1>
+        <Link href="/services/new" className="btn-primary px-4 py-2 text-sm">
+          + Nuova prenotazione
+        </Link>
+      </div>
+
+      {/* Barra di ricerca */}
+      <div className="card p-4 space-y-3">
+        <div className="flex gap-2">
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Cerca per nome, cognome o telefono..."
+            className="input-saas flex-1"
+          />
+          {searchQuery && (
+            <button type="button" onClick={() => setSearchQuery("")} className="btn-secondary px-3 py-2 text-xs">
+              ✕ Pulisci
+            </button>
+          )}
+        </div>
+        {searchQuery.trim().length >= 2 && (
+          searchResults.length === 0 ? (
+            <p className="text-sm text-slate-500">Nessuna prenotazione trovata per &ldquo;{searchQuery}&rdquo;</p>
+          ) : (
+            <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
+              {searchResults.map((s) => (
+                <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm hover:bg-slate-50">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-slate-900 truncate">{s.customer_name}</p>
+                    <p className="text-xs text-slate-500">{s.phone ?? "—"} · {s.date} {s.time}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      s.status === "completato" || s.status === "arrivato" ? "bg-emerald-100 text-emerald-700" :
+                      s.status === "cancelled" ? "bg-rose-100 text-rose-600" :
+                      "bg-amber-100 text-amber-700"
+                    }`}>{s.status}</span>
+                    <p className="text-xs text-slate-500 mt-0.5">{s.vessel ?? "—"}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </div>
 
       {blockingNotice && (
         <article className="card space-y-2 border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">

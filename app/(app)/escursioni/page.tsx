@@ -242,12 +242,17 @@ function UnitCard({
           <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
             <div
               className={`h-full rounded-full transition-all ${pctFull >= 100 ? "bg-rose-500" : pctFull >= 80 ? "bg-amber-400" : "bg-emerald-500"}`}
-              style={{ width: `${pctFull}%` }}
+              style={{ width: `${Math.min(pctFull, 100)}%` }}
             />
           </div>
           <span className="shrink-0 text-xs font-semibold text-slate-600">{totalPax}/{unit.capacity} pax</span>
           {remaining > 0 && <span className="shrink-0 text-xs text-slate-400">({remaining} liberi)</span>}
         </div>
+        {totalPax > unit.capacity && (
+          <div className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700">
+            ⚠️ OVERBOOKING: +{totalPax - unit.capacity} {totalPax - unit.capacity === 1 ? "posto" : "posti"} oltre la capienza
+          </div>
+        )}
 
         {/* Riga 2: autista + mezzo — sempre visibili */}
         <div className="grid grid-cols-2 gap-2">
@@ -278,7 +283,11 @@ function UnitCard({
             <select
               value={unit.vehicle_id ?? ""}
               disabled={saving}
-              onChange={(e) => onUpdate({ vehicle_id: e.target.value || null })}
+              onChange={(e) => {
+                const vid = e.target.value || null;
+                const veh = vehicles.find((v) => v.id === vid);
+                onUpdate({ vehicle_id: vid, ...(veh ? { capacity: veh.capacity } : {}) });
+              }}
               className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 disabled:opacity-50">
               <option value="">— Nessun mezzo —</option>
               {vehicles.map((v) => (

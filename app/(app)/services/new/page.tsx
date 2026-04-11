@@ -6,6 +6,7 @@ import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { AgencyBookingServiceKind, Hotel, OperationalServiceType, ServiceType } from "@/lib/types";
 import { serviceCreateSchema } from "@/lib/validation";
+import { detectFerryPort, ferryTimes } from "@/lib/ferry-schedule";
 
 const vessels = ["Nave Medmar", "Aliscafo Caremar", "NLG Jet"];
 
@@ -88,6 +89,9 @@ export default function NewServicePage() {
   const [presetKey, setPresetKey] = useState<ManualPresetKey>("generic_transfer");
   const selectedPreset = manualPresets.find((item) => item.key === presetKey) ?? manualPresets[0];
   const [serviceType, setServiceType] = useState<ServiceType>(selectedPreset.serviceType);
+  const [direction, setDirection] = useState<"arrival" | "departure">("arrival");
+  const [arrivalTime, setArrivalTime] = useState("14:30");
+  const [departureTime, setDepartureTime] = useState("");
   const [message, setMessage] = useState("Inserisci i dati e conferma.");
   const [isLoading, setIsLoading] = useState(true);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -292,7 +296,7 @@ export default function NewServicePage() {
         </label>
         <label className="text-sm">
           Direzione
-          <select name="direction" className="input-saas mt-1">
+          <select name="direction" value={direction} onChange={(e) => setDirection(e.target.value as "arrival" | "departure")} className="input-saas mt-1">
             <option value="arrival">arrival</option>
             <option value="departure">departure</option>
           </select>
@@ -365,7 +369,16 @@ export default function NewServicePage() {
         </label>
         <label className="text-sm">
           Ora andata operativa
-          <input name="arrival_time" type="time" defaultValue="14:30" className="input-saas mt-1" />
+          {(presetKey === "formula_snav" || presetKey === "formula_medmar") ? (
+            <select name="arrival_time" value={arrivalTime} onChange={(e) => setArrivalTime(e.target.value)} className="input-saas mt-1">
+              <option value="">— Seleziona orario —</option>
+              {ferryTimes(presetKey as "formula_snav" | "formula_medmar", "arrival").map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          ) : (
+            <input name="arrival_time" type="time" value={arrivalTime} onChange={(e) => setArrivalTime(e.target.value)} className="input-saas mt-1" />
+          )}
         </label>
         <label className="text-sm">
           Data ritorno
@@ -373,24 +386,48 @@ export default function NewServicePage() {
         </label>
         <label className="text-sm">
           Ora ritorno
-          <input name="departure_time" type="time" className="input-saas mt-1" />
+          {(presetKey === "formula_snav" || presetKey === "formula_medmar") ? (
+            <select name="departure_time" value={departureTime} onChange={(e) => setDepartureTime(e.target.value)} className="input-saas mt-1">
+              <option value="">— Seleziona orario —</option>
+              {ferryTimes(presetKey as "formula_snav" | "formula_medmar", "departure").map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          ) : (
+            <input name="departure_time" type="time" value={departureTime} onChange={(e) => setDepartureTime(e.target.value)} className="input-saas mt-1" />
+          )}
         </label>
-        <label className="text-sm">
-          Riferimento mezzo
-          <input
-            name="transport_code"
-            className="input-saas mt-1"
-            placeholder={
-              selectedPreset.key === "transfer_airport"
-                ? "Numero volo"
-                : selectedPreset.key === "transfer_station"
-                  ? "Numero treno"
-                  : selectedPreset.key === "linea_bus"
-                    ? "Linea / mezzo bus"
-                    : "Riferimento corsa"
-            }
-          />
-        </label>
+        {/* Porto automatico SNAV/MEDMAR */}
+        {(presetKey === "formula_snav" || presetKey === "formula_medmar") && (() => {
+          const porto = detectFerryPort(
+            presetKey as "formula_snav" | "formula_medmar",
+            direction,
+            direction === "arrival" ? arrivalTime : departureTime,
+          );
+          return (
+            <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm md:col-span-2">
+              <span className="font-semibold text-blue-800">Porto rilevato: </span>
+              {porto
+                ? <span className="font-bold text-blue-900">{porto}</span>
+                : <span className="text-blue-600 italic">seleziona orario per rilevare il porto</span>}
+              {presetKey === "formula_snav" && (
+                <span className="ml-2 text-xs text-blue-500">(SNAV: sempre Casamicciola)</span>
+              )}
+            </div>
+          );
+        })()}
+        {/* Campo riferimento mezzo: visibile solo per volo/treno/bus */}
+        {(presetKey === "transfer_airport" || presetKey === "transfer_station" || presetKey === "linea_bus") && (
+          <label className="text-sm">
+            {presetKey === "transfer_airport" ? "Numero volo" : presetKey === "transfer_station" ? "Numero treno" : "Linea / mezzo bus"}
+            <input
+              name="transport_code"
+              className="input-saas mt-1"
+              placeholder={presetKey === "transfer_airport" ? "es. FR1234" : presetKey === "transfer_station" ? "es. ICN 1234" : "es. FlixBus 123"}
+              required
+            />
+          </label>
+        )}
         {selectedPreset.key === "linea_bus" ? (
           <label className="text-sm">
             Origine linea bus
