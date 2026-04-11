@@ -164,6 +164,26 @@ const STANDARD_PRICE_GRID_ROWS = [
   { key: "bus", label: "LINEA BUS", routeName: "LINEA BUS", serviceType: "bus_tour", busLineCode: "LINEA_" }
 ] as const;
 
+const EXCURSION_CATALOG = [
+  { key: "exc_giro_motonave",   label: "Giro Isola Motonave",            routeName: "ESCURSIONE - GIRO ISOLA MOTONAVE",           defaultCostCents: 1500, defaultPublicCents: 2500 },
+  { key: "exc_giro_minibus",    label: "Giro Isola Minibus",             routeName: "ESCURSIONE - GIRO ISOLA MINIBUS",            defaultCostCents: 1000, defaultPublicCents: 1500 },
+  { key: "exc_capri_solo",      label: "Capri Solo Motonave",            routeName: "ESCURSIONE - CAPRI SOLO MOTONAVE",           defaultCostCents: 5000, defaultPublicCents: 5500 },
+  { key: "exc_capri_guida",     label: "Capri con Guida",                routeName: "ESCURSIONE - CAPRI CON GUIDA",               defaultCostCents: 7900, defaultPublicCents: 9000 },
+  { key: "exc_capri_giro",      label: "Capri con Giro Isola via Mare",  routeName: "ESCURSIONE - CAPRI CON GIRO ISOLA VIA MARE", defaultCostCents: 7500, defaultPublicCents: 8500 },
+  { key: "exc_castello",        label: "Castello Aragonese",             routeName: "ESCURSIONE - CASTELLO ARAGONESE",           defaultCostCents: 3000, defaultPublicCents: 3500 },
+  { key: "exc_procida_solo",    label: "Procida Solo Motonave",          routeName: "ESCURSIONE - PROCIDA SOLO MOTONAVE",        defaultCostCents: 1500, defaultPublicCents: 2500 },
+  { key: "exc_procida_guida",   label: "Procida con Guida",              routeName: "ESCURSIONE - PROCIDA CON GUIDA",            defaultCostCents: 3000, defaultPublicCents: 4000 },
+  { key: "exc_amalfi_positano", label: "Amalfi & Positano",              routeName: "ESCURSIONE - AMALFI E POSITANO",            defaultCostCents: 5500, defaultPublicCents: 6000 },
+  { key: "exc_sorrento",        label: "Sorrento",                       routeName: "ESCURSIONE - SORRENTO",                     defaultCostCents: 5500, defaultPublicCents: 6000 },
+  { key: "exc_mortella",        label: "La Mortella",                    routeName: "ESCURSIONE - LA MORTELLA",                  defaultCostCents: 2500, defaultPublicCents: 3000 },
+  { key: "exc_nitrodi",         label: "Nitrodi",                        routeName: "ESCURSIONE - NITRODI",                      defaultCostCents: 2200, defaultPublicCents: 2800 },
+  { key: "exc_cooking",         label: "Cooking Class Dolci Campani",    routeName: "ESCURSIONE - COOKING CLASS DOLCI CAMPANI",  defaultCostCents: 5300, defaultPublicCents: 6000 },
+  { key: "exc_crateri",         label: "Escursione Crateri",             routeName: "ESCURSIONE - CRATERI",                     defaultCostCents: 2000, defaultPublicCents: 2500 },
+  { key: "exc_napoli",          label: "Passeggiata a Napoli",           routeName: "ESCURSIONE - PASSEGGIATA A NAPOLI",         defaultCostCents: 4500, defaultPublicCents: 5500 },
+  { key: "exc_pompei",          label: "Pompei",                         routeName: "ESCURSIONE - POMPEI",                      defaultCostCents: 5000, defaultPublicCents: 6000 },
+  { key: "exc_caserta",         label: "Caserta",                        routeName: "ESCURSIONE - CASERTA",                     defaultCostCents: 5000, defaultPublicCents: 6000 },
+] as const;
+
 function detectMatchBadges(notes: string) {
   const lower = notes.toLowerCase();
   const badges: Array<{ label: string; className: string }> = [];
@@ -329,6 +349,8 @@ export default function PricingAdminPage() {
     agencyPrice: "",
     publicPrice: ""
   });
+  const [excursionRowDrafts, setExcursionRowDrafts] = useState<Record<string, { internalCost: string; agencyPrice: string; publicPrice: string }>>({});
+  const [savingAllExcursions, setSavingAllExcursions] = useState(false);
   const [bulkCopySourceListId, setBulkCopySourceListId] = useState("");
   const [bulkCopyTargetIds, setBulkCopyTargetIds] = useState<Set<string>>(new Set());
   const [bulkCopying, setBulkCopying] = useState(false);
@@ -1046,6 +1068,89 @@ export default function PricingAdminPage() {
     setMessage(`Salvate ${rowsToSave.length} righe standard.`);
   };
 
+  const saveExcursionRow = async (row: (typeof EXCURSION_CATALOG)[number]) => {
+    if (!tenantId || !ruleDraft.price_list_id) { setMessage("Seleziona prima un listino."); return; }
+    const draft = excursionRowDrafts[row.key];
+    const internalCostCents = parseEuroAmountToCents(draft?.internalCost ?? centsToEuroInput(row.defaultCostCents));
+    const agencyPriceCents = parseEuroAmountToCents(draft?.agencyPrice ?? "");
+    const publicPriceCents = parseEuroAmountToCents(draft?.publicPrice ?? centsToEuroInput(row.defaultPublicCents));
+    if (!Number.isFinite(internalCostCents) || internalCostCents === null) { setMessage(`Costo non valido per ${row.label}.`); return; }
+    if (!Number.isFinite(publicPriceCents) || publicPriceCents === null) { setMessage(`Prezzo non valido per ${row.label}.`); return; }
+    const routeId = await ensureRoutePreset(row.routeName) ?? null;
+    if (!routeId) {
+      // Crea la tratta escursione se non esiste tra i preset — creiamo direttamente
+      const t = await token();
+      if (!t) { setMessage("Sessione non valida."); return; }
+      const rRes = await fetch("/api/pricing/routes", {
+        method: "POST",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+        body: JSON.stringify({ name: row.routeName, origin_label: "Ischia", destination_label: row.label })
+      });
+      const rBody = (await rRes.json().catch(() => null)) as { route?: { id: string } } | null;
+      if (!rRes.ok || !rBody?.route?.id) { setMessage(`Tratta ${row.label} non creata.`); return; }
+      await loadBase();
+    }
+    // Rileggi dopo eventuale creazione tratta
+    const resolvedRouteId = routes.find((r) => r.name.toLowerCase() === row.routeName.toLowerCase())?.id
+      ?? (await (async () => {
+        const t = await token();
+        if (!t) return null;
+        const rRes = await fetch("/api/pricing/routes", {
+          method: "POST",
+          headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+          body: JSON.stringify({ name: row.routeName, origin_label: "Ischia", destination_label: row.label })
+        });
+        const rBody = (await rRes.json().catch(() => null)) as { route?: { id: string } } | null;
+        return rBody?.route?.id ?? null;
+      })());
+    if (!resolvedRouteId) { setMessage(`Tratta non trovata per ${row.label}.`); return; }
+    const existingRule = rules.find(
+      (r) => r.price_list_id === ruleDraft.price_list_id && r.agency_id === (ruleDraft.agency_id || null) && r.route_id === resolvedRouteId
+    );
+    const payload = {
+      tenant_id: tenantId,
+      price_list_id: ruleDraft.price_list_id,
+      route_id: resolvedRouteId,
+      agency_id: ruleDraft.agency_id || null,
+      bus_line_code: null,
+      service_type: "transfer",
+      direction: null,
+      pax_min: 1,
+      pax_max: null,
+      rule_kind: "fixed" as const,
+      internal_cost_cents: internalCostCents,
+      public_price_cents: publicPriceCents,
+      agency_price_cents: typeof agencyPriceCents === "number" && Number.isFinite(agencyPriceCents) ? agencyPriceCents : null,
+      priority: existingRule?.priority ?? 100,
+      vehicle_type: null,
+      time_from: null, time_to: null, season_from: null, season_to: null,
+      needs_manual_review: false,
+      active: true
+    };
+    const t = await token();
+    if (!t) { setMessage("Sessione non valida."); return; }
+    const res = await fetch("/api/pricing/rules", {
+      method: existingRule ? "PATCH" : "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+      body: JSON.stringify(existingRule ? { rule_id: existingRule.id, ...payload } : payload)
+    });
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    if (!res.ok) { setMessage(body?.error ?? `Errore salvataggio ${row.label}.`); return; }
+    setMessage(`${row.label} salvata.`);
+    await loadBase();
+  };
+
+  const saveAllExcursionRows = async () => {
+    if (!ruleDraft.price_list_id) { setMessage("Seleziona prima un listino."); return; }
+    setSavingAllExcursions(true);
+    setMessage(`Salvataggio ${EXCURSION_CATALOG.length} escursioni in corso...`);
+    for (const row of EXCURSION_CATALOG) {
+      await saveExcursionRow(row);
+    }
+    setSavingAllExcursions(false);
+    setMessage(`Salvate ${EXCURSION_CATALOG.length} escursioni.`);
+  };
+
   const copyPriceListToAgencies = async () => {
     if (!tenantId) return;
     if (!bulkCopySourceListId) { setMessage("Seleziona il listino da copiare."); return; }
@@ -1455,6 +1560,13 @@ export default function PricingAdminPage() {
     };
   });
   const standardRuleIds = new Set(standardGridRows.flatMap((row) => (row.existingRule ? [row.existingRule.id] : [])));
+  const excursionGridRows = EXCURSION_CATALOG.map((row) => {
+    const route = routes.find((r) => r.name.toLowerCase() === row.routeName.toLowerCase());
+    const existingRule = route
+      ? rules.find((r) => r.price_list_id === ruleDraft.price_list_id && r.agency_id === (ruleDraft.agency_id || null) && r.route_id === route.id)
+      : undefined;
+    return { ...row, routeId: route?.id ?? null, existingRule: existingRule ?? null };
+  });
   const busLineListRules = rules.filter(
     (rule) =>
       rule.price_list_id === ruleDraft.price_list_id &&
@@ -1888,6 +2000,89 @@ export default function PricingAdminPage() {
               </div>
             ) : null}
             {ruleDraft.price_list_id ? (
+              <>
+              <div className="rounded-xl border border-slate-200 px-3 py-3 md:col-span-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Escursioni 2026</p>
+                  <div className="flex items-center gap-3">
+                    <p className="text-xs text-slate-500">Prezzi pre-compilati dal programma escursioni. Modifica se necessario, poi salva tutte.</p>
+                    <button className="rounded-lg border border-sky-300 px-3 py-1 text-xs font-medium text-sky-700" type="button" onClick={() => void saveAllExcursionRows()}>
+                      {savingAllExcursions ? "Salvataggio..." : "Salva tutte le escursioni"}
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 overflow-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left">
+                        <th className="px-2 py-2">Escursione</th>
+                        <th className="px-2 py-2">Stato</th>
+                        <th className="px-2 py-2">Netto agenzia</th>
+                        <th className="px-2 py-2">Prezzo agenzia</th>
+                        <th className="px-2 py-2">Prezzo privati</th>
+                        <th className="px-2 py-2">Azione</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {excursionGridRows.map((row) => (
+                        <tr key={row.key} className="border-b border-slate-100">
+                          <td className="px-2 py-2 font-medium">{row.label}</td>
+                          <td className="px-2 py-2">
+                            {row.existingRule ? (
+                              <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">Configurata</span>
+                            ) : (
+                              <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">Da salvare</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-2">
+                            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                              <span className="text-xs text-slate-500">EUR</span>
+                              <input
+                                value={excursionRowDrafts[row.key]?.internalCost ?? centsToEuroInput(row.existingRule?.internal_cost_cents ?? row.defaultCostCents)}
+                                onChange={(event) => setExcursionRowDrafts((cur) => ({ ...cur, [row.key]: { ...cur[row.key], internalCost: event.target.value } }))}
+                                inputMode="decimal" placeholder="0,00" className="min-w-0 w-20 bg-transparent outline-none"
+                              />
+                            </label>
+                          </td>
+                          <td className="px-2 py-2">
+                            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                              <span className="text-xs text-slate-500">EUR</span>
+                              <input
+                                value={excursionRowDrafts[row.key]?.agencyPrice ?? centsToEuroInput(row.existingRule?.agency_price_cents ?? null)}
+                                onChange={(event) => setExcursionRowDrafts((cur) => ({ ...cur, [row.key]: { ...cur[row.key], agencyPrice: event.target.value } }))}
+                                inputMode="decimal" placeholder="0,00" className="min-w-0 w-20 bg-transparent outline-none"
+                              />
+                            </label>
+                          </td>
+                          <td className="px-2 py-2">
+                            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                              <span className="text-xs text-slate-500">EUR</span>
+                              <input
+                                value={excursionRowDrafts[row.key]?.publicPrice ?? centsToEuroInput(row.existingRule?.public_price_cents ?? row.defaultPublicCents)}
+                                onChange={(event) => setExcursionRowDrafts((cur) => ({ ...cur, [row.key]: { ...cur[row.key], publicPrice: event.target.value } }))}
+                                inputMode="decimal" placeholder="0,00" className="min-w-0 w-20 bg-transparent outline-none"
+                              />
+                            </label>
+                          </td>
+                          <td className="px-2 py-2">
+                            <div className="flex flex-col gap-1">
+                              <button className="text-xs font-semibold text-sky-700 underline" type="button" onClick={() => void saveExcursionRow(row)}>
+                                {row.existingRule ? "Aggiorna" : "Salva"}
+                              </button>
+                              {row.existingRule ? (
+                                <button className="text-xs text-rose-700 underline" type="button" onClick={() => void deletePricingRuleRow(row.existingRule!.id)}>
+                                  Elimina
+                                </button>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
               <div className="rounded-xl border border-slate-200 px-3 py-3 md:col-span-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Voci custom del listino</p>
@@ -1995,6 +2190,7 @@ export default function PricingAdminPage() {
                   </table>
                 </div>
               </div>
+              </>
             ) : null}
             {ruleDraft.price_list_id ? (
               <div className="rounded-xl border border-slate-200 px-3 py-3 md:col-span-4">
