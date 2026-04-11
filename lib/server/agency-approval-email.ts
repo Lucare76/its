@@ -47,6 +47,8 @@ export interface OperatorNotifyInput {
   pax: number;
   notes: string;
   approvalUrl: string;
+  quotedPriceCents?: number | null;
+  catalogPriceCents?: number | null;
 }
 
 export async function sendOperatorNotifyEmail(input: OperatorNotifyInput): Promise<EmailResult> {
@@ -69,14 +71,31 @@ export async function sendOperatorNotifyEmail(input: OperatorNotifyInput): Promi
       </td></tr>
     </table>
 
-    ${emailDataTable([
-      ["📅 Arrivo", `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
-      ["📅 Rientro", `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
-      ["👥 Passeggeri", `${input.pax} persone`],
-      ["📞 Telefono", input.customerPhone],
-      ["✉️ Email cliente", input.customerEmail ?? "—"],
-      ["📝 Note", input.notes || "—"],
-    ])}
+    ${(() => {
+      const rows: [string, string][] = [
+        ["📅 Arrivo", `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
+        ["📅 Rientro", `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
+        ["👥 Passeggeri", `${input.pax} persone`],
+        ["📞 Telefono", input.customerPhone],
+        ["✉️ Email cliente", input.customerEmail ?? "—"],
+        ["📝 Note", input.notes || "—"],
+      ];
+      if (input.quotedPriceCents != null) {
+        const quoted = formatPrice(input.quotedPriceCents);
+        if (input.catalogPriceCents != null) {
+          const catalog = formatPrice(input.catalogPriceCents);
+          const diff = input.quotedPriceCents - input.catalogPriceCents;
+          const match = Math.abs(diff) <= 50; // tolleranza 0,50€
+          const priceLabel = match
+            ? `${quoted} ✅ (listino ${catalog})`
+            : `${quoted} ⚠️ MISMATCH — listino: ${catalog} (diff: ${diff > 0 ? "+" : ""}${formatPrice(Math.abs(diff))})`;
+          rows.push(["💰 Prezzo dichiarato", priceLabel]);
+        } else {
+          rows.push(["💰 Prezzo dichiarato", `${quoted} (listino non configurato)`]);
+        }
+      }
+      return emailDataTable(rows);
+    })()}
 
     <p style="color:#475569;margin-top:20px;font-size:14px;">Clicca per confermare o rifiutare la prenotazione e impostare il prezzo.</p>
 

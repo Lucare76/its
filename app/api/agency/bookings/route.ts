@@ -333,6 +333,31 @@ export async function POST(request: NextRequest) {
       ? { ...baseInsert, created_by_user_id: auth.user.id }
       : baseInsert;
 
+    // Lookup prezzo da listino agenzia
+    const quotedPriceCents = parsed.data.agency_quoted_price_cents ?? null;
+    let catalogPriceCents: number | null = null;
+    if (agencyIdResult.agencyId) {
+      // Cerca prima per agenzia specifica + hotel, poi agenzia + tutti, poi default + hotel, poi default globale
+      const { data: rateRows } = await auth.admin
+        .from("agency_rates")
+        .select("price_cents, agency_id, hotel_id")
+        .eq("tenant_id", auth.membership.tenant_id)
+        .eq("booking_service_kind", bookingKind)
+        .eq("active", true)
+        .or(`agency_id.eq.${agencyIdResult.agencyId},agency_id.is.null`);
+      if (rateRows?.length) {
+        // Priorità: agenzia+hotel > agenzia+null > null+hotel > null+null
+        const priority = [
+          rateRows.find((r) => r.agency_id === agencyIdResult.agencyId && r.hotel_id === parsed.data.hotel_id),
+          rateRows.find((r) => r.agency_id === agencyIdResult.agencyId && r.hotel_id === null),
+          rateRows.find((r) => r.agency_id === null && r.hotel_id === parsed.data.hotel_id),
+          rateRows.find((r) => r.agency_id === null && r.hotel_id === null),
+        ];
+        const best = priority.find((r) => r != null);
+        if (best) catalogPriceCents = best.price_cents;
+      }
+    }
+
     const extendedInsert = {
       ...insertPayloadBase,
       booking_service_kind: bookingKind,
@@ -358,7 +383,8 @@ export async function POST(request: NextRequest) {
           ? {
               title: excursionTitle
             }
-          : {}
+          : {},
+      agency_quoted_price_cents: quotedPriceCents ?? null
     };
 
     // Nessuna finestra temporale — rileva duplicati a prescindere da quando sono stati inseriti
@@ -498,7 +524,9 @@ export async function POST(request: NextRequest) {
       hotelName: hotelData.name,
       pax: parsed.data.pax,
       notes,
-      approvalUrl
+      approvalUrl,
+      quotedPriceCents,
+      catalogPriceCents
     });
 
     await auth.admin

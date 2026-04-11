@@ -145,7 +145,8 @@ export const agencyBookingCreateSchema = z
     ferry_return_code: z.string().max(80).optional().or(z.literal("")),
     excursion_title: z.string().max(160).optional().or(z.literal("")),
     notes: z.string().max(2000),
-    agency_id: z.string().uuid().optional().or(z.literal(""))
+    agency_id: z.string().uuid().optional().or(z.literal("")),
+    agency_quoted_price_cents: z.number().int().min(0).max(9999900).optional().nullable()
   })
   .superRefine((value, ctx) => {
     if (value.booking_service_kind !== "formula_snav") {

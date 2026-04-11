@@ -295,6 +295,7 @@ export const SETTINGS_GROUPS: NavGroup[] = [
     items: [
       { href: "/pricing", label: "Tariffe", icon: "T" },
       { href: "/pricing/margins", label: "Margini", icon: "M" },
+      { href: "/settings/agency-rates", label: "Listini agenzie", icon: "€" },
       { href: "/ops-rules", label: "Regole operative", icon: "R" },
       { href: "/settings/whatsapp", label: "WhatsApp", icon: "W" }
     ]

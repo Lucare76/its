@@ -179,7 +179,8 @@ export default function AgencyNewBookingPage() {
     bus_city_origin: "",
     excursion_title: "",
     notes: "",
-    agency_id: ""
+    agency_id: "",
+    quoted_price_eur: ""
   });
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [addingHotel, setAddingHotel] = useState(false);
@@ -364,7 +365,10 @@ export default function AgencyNewBookingPage() {
       ...form,
       pax: Number(form.pax || "0"),
       notes: form.notes.trim(),
-      transport_code_return: form.transport_code_return.trim()
+      transport_code_return: form.transport_code_return.trim(),
+      agency_quoted_price_cents: form.quoted_price_eur
+        ? Math.round(Number(form.quoted_price_eur.replace(",", ".")) * 100)
+        : null
     }),
     [form]
   );
@@ -978,6 +982,25 @@ export default function AgencyNewBookingPage() {
         ) : (
           <p className="text-xs text-slate-600 md:col-span-2">Agenzia associata automaticamente al tuo account.</p>
         )}
+
+        {/* Prezzo concordato */}
+        <label className="text-sm">
+          Prezzo concordato (€)
+          <div className="relative mt-1">
+            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">€</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              max="99999"
+              placeholder="0,00"
+              className="input-saas pl-7"
+              value={form.quoted_price_eur}
+              onChange={(event) => setForm((prev) => ({ ...prev, quoted_price_eur: event.target.value }))}
+            />
+          </div>
+          <span className="mt-1 block text-[11px] text-slate-400">Opzionale — serve per il controllo listino lato operatore.</span>
+        </label>
 
         <label className="text-sm md:col-span-2">
           Note*
