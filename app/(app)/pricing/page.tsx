@@ -131,11 +131,13 @@ const PRICE_LIST_NAME_PRESETS = ["FORMULA SNAV", "FORMULA MEDMAR", "GIRO ISOLA B
 const ROUTE_PRESETS = [
   { name: "FORMULA SNAV", origin_label: "Formula SNAV", destination_label: "Servizio formula" },
   { name: "FORMULA MEDMAR", origin_label: "Formula MEDMAR", destination_label: "Servizio formula" },
+  { name: "TRASFERIMENTO PORTO / HOTEL", origin_label: "Porto Ischia", destination_label: "Hotel Ischia" },
   { name: "TRASFERIMENTO STAZIONE / HOTEL", origin_label: "Stazione Napoli", destination_label: "Hotel Ischia" },
   { name: "TRASFERIMENTO AEROPORTO / HOTEL", origin_label: "Aeroporto Napoli", destination_label: "Hotel Ischia" },
   { name: "TRASFERIMENTO STAZIONE / HOTEL PRIVATO", origin_label: "Stazione Napoli", destination_label: "Hotel / Indirizzo privato Ischia" },
   { name: "TRASFERIMENTO AEROPORTO / HOTEL PRIVATO", origin_label: "Aeroporto Napoli", destination_label: "Hotel / Indirizzo privato Ischia" },
   { name: "GIRO ISOLA BUS", origin_label: "Ischia", destination_label: "Giro Isola" },
+  { name: "ESCURSIONE", origin_label: "Ischia", destination_label: "Escursione" },
   { name: "LINEA BUS", origin_label: "Linea bus da PDF", destination_label: "Prezzo per linea" }
 ];
 const RULE_PRESETS = [
@@ -154,8 +156,11 @@ type RulePreset = {
 const STANDARD_PRICE_GRID_ROWS = [
   { key: "snav", label: "FORMULA SNAV", routeName: "FORMULA SNAV", serviceType: "transfer", busLineCode: "" },
   { key: "medmar", label: "FORMULA MEDMAR", routeName: "FORMULA MEDMAR", serviceType: "transfer", busLineCode: "" },
+  { key: "port", label: "TRANSFER PORTO / HOTEL", routeName: "TRASFERIMENTO PORTO / HOTEL", serviceType: "transfer", busLineCode: "" },
   { key: "airport", label: "TRANSFER AEROPORTO / HOTEL", routeName: "TRASFERIMENTO AEROPORTO / HOTEL", serviceType: "transfer", busLineCode: "" },
   { key: "station", label: "TRANSFER STAZIONE / HOTEL", routeName: "TRASFERIMENTO STAZIONE / HOTEL", serviceType: "transfer", busLineCode: "" },
+  { key: "giro_isola", label: "GIRO ISOLA BUS", routeName: "GIRO ISOLA BUS", serviceType: "bus_tour", busLineCode: "" },
+  { key: "excursion", label: "ESCURSIONE", routeName: "ESCURSIONE", serviceType: "transfer", busLineCode: "" },
   { key: "bus", label: "LINEA BUS", routeName: "LINEA BUS", serviceType: "bus_tour", busLineCode: "LINEA_" }
 ] as const;
 
@@ -324,6 +329,10 @@ export default function PricingAdminPage() {
     agencyPrice: "",
     publicPrice: ""
   });
+  const [bulkCopySourceListId, setBulkCopySourceListId] = useState("");
+  const [bulkCopyTargetIds, setBulkCopyTargetIds] = useState<Set<string>>(new Set());
+  const [bulkCopying, setBulkCopying] = useState(false);
+  const [bulkCopyExpanded, setBulkCopyExpanded] = useState(false);
 
   const token = async () => {
     if (!supabase) return null;
@@ -1037,6 +1046,77 @@ export default function PricingAdminPage() {
     setMessage(`Salvate ${rowsToSave.length} righe standard.`);
   };
 
+  const copyPriceListToAgencies = async () => {
+    if (!tenantId) return;
+    if (!bulkCopySourceListId) { setMessage("Seleziona il listino da copiare."); return; }
+    if (bulkCopyTargetIds.size === 0) { setMessage("Seleziona almeno un'agenzia."); return; }
+    const sourceList = priceLists.find((l) => l.id === bulkCopySourceListId);
+    if (!sourceList) { setMessage("Listino sorgente non trovato."); return; }
+    const sourceRules = rules.filter((r) => r.price_list_id === bulkCopySourceListId);
+    const t = await token();
+    if (!t) { setMessage("Sessione non valida."); return; }
+    setBulkCopying(true);
+    let created = 0;
+    for (const agencyId of bulkCopyTargetIds) {
+      const agencyName = agencies.find((a) => a.id === agencyId)?.name ?? agencyId;
+      // Crea nuovo listino per l'agenzia
+      const listRes = await fetch("/api/pricing/price-lists", {
+        method: "POST",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+        body: JSON.stringify({
+          name: sourceList.name,
+          currency: sourceList.currency,
+          valid_from: sourceList.valid_from,
+          valid_to: sourceList.valid_to ?? null,
+          agency_id: agencyId,
+          is_default: sourceList.is_default
+        })
+      });
+      const listBody = (await listRes.json().catch(() => null)) as { price_list?: { id: string } } | null;
+      if (!listRes.ok || !listBody?.price_list?.id) {
+        setMessage(`Errore creazione listino per ${agencyName}.`);
+        continue;
+      }
+      const newListId = listBody.price_list.id;
+      // Copia le regole
+      for (const rule of sourceRules) {
+        await fetch("/api/pricing/rules", {
+          method: "POST",
+          headers: { "content-type": "application/json", Authorization: `Bearer ${t}` },
+          body: JSON.stringify({
+            tenant_id: tenantId,
+            price_list_id: newListId,
+            route_id: rule.route_id,
+            agency_id: agencyId,
+            bus_line_code: rule.bus_line_code ?? null,
+            service_type: rule.service_type ?? null,
+            direction: rule.direction ?? null,
+            pax_min: rule.pax_min,
+            pax_max: rule.pax_max ?? null,
+            rule_kind: rule.rule_kind,
+            internal_cost_cents: rule.internal_cost_cents,
+            public_price_cents: rule.public_price_cents,
+            agency_price_cents: rule.agency_price_cents ?? null,
+            priority: rule.priority,
+            vehicle_type: rule.vehicle_type ?? null,
+            time_from: rule.time_from ?? null,
+            time_to: rule.time_to ?? null,
+            season_from: rule.season_from ?? null,
+            season_to: rule.season_to ?? null,
+            needs_manual_review: rule.needs_manual_review,
+            active: rule.active
+          })
+        });
+      }
+      created++;
+    }
+    setBulkCopying(false);
+    setBulkCopyTargetIds(new Set());
+    setBulkCopySourceListId("");
+    setMessage(`Listino copiato per ${created} agenzie (${sourceRules.length} regole ciascuna).`);
+    await loadBase();
+  };
+
   const deletePricingRuleRow = async (ruleId: string) => {
     if (!supabase || !tenantId) return;
     const confirmed = window.confirm("Vuoi eliminare questa riga del listino?");
@@ -1504,6 +1584,67 @@ export default function PricingAdminPage() {
               ) : null}
             </div>
           </form>
+
+          <div className="rounded-xl border border-slate-200 px-3 py-3">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-2 text-sm font-semibold text-slate-700"
+              onClick={() => setBulkCopyExpanded((v) => !v)}
+            >
+              <span>Copia listino a più agenzie</span>
+              <span className="text-slate-400">{bulkCopyExpanded ? "▲" : "▼"}</span>
+            </button>
+            {bulkCopyExpanded ? (
+              <div className="mt-3 space-y-3">
+                <p className="text-xs text-slate-500">Seleziona un listino esistente come modello e le agenzie destinatarie. Verrà creata una copia del listino (con tutte le regole) per ogni agenzia selezionata.</p>
+                <select
+                  className="input-saas w-full"
+                  value={bulkCopySourceListId}
+                  onChange={(event) => setBulkCopySourceListId(event.target.value)}
+                >
+                  <option value="">Seleziona listino da copiare...</option>
+                  {priceLists.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name} — {l.agency_id ? (agencies.find((a) => a.id === l.agency_id)?.name ?? "agenzia") : "privati"} ({l.valid_from})
+                    </option>
+                  ))}
+                </select>
+                <div className="grid gap-1 sm:grid-cols-2 md:grid-cols-3">
+                  {agencies.filter((a) => a.active).map((a) => (
+                    <label key={a.id} className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs hover:bg-slate-50">
+                      <input
+                        type="checkbox"
+                        checked={bulkCopyTargetIds.has(a.id)}
+                        onChange={(event) => {
+                          setBulkCopyTargetIds((prev) => {
+                            const next = new Set(prev);
+                            if (event.target.checked) next.add(a.id); else next.delete(a.id);
+                            return next;
+                          });
+                        }}
+                      />
+                      {a.name}
+                    </label>
+                  ))}
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    className="btn-primary px-4 py-2 text-sm"
+                    disabled={bulkCopying || !bulkCopySourceListId || bulkCopyTargetIds.size === 0}
+                    onClick={() => void copyPriceListToAgencies()}
+                  >
+                    {bulkCopying ? "Copia in corso..." : `Copia per ${bulkCopyTargetIds.size} agenzie`}
+                  </button>
+                  {bulkCopyTargetIds.size > 0 ? (
+                    <button type="button" className="text-xs text-slate-500 underline" onClick={() => setBulkCopyTargetIds(new Set())}>
+                      Deseleziona tutto
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
 
           <div className="space-y-4 text-sm">
             <div className="space-y-2">
