@@ -7,6 +7,7 @@ export type NavItem = {
   icon: string;
   requiresQuotesAccess?: boolean;
   adminOnly?: boolean;
+  supervisorOnly?: boolean;
 };
 
 export type NavGroup = {
@@ -297,6 +298,7 @@ export const SETTINGS_GROUPS: NavGroup[] = [
     items: [
       { href: "/settings/agency-rates", label: "Prezzi agenzie", icon: "€" },
       { href: "/settings/agency-margins", label: "Margini", icon: "M", adminOnly: true },
+      { href: "/pricing", label: "Tariffe", icon: "T", supervisorOnly: true },
       { href: "/ops-rules", label: "Regole operative", icon: "R" },
       { href: "/settings/whatsapp", label: "WhatsApp", icon: "W" }
     ]
@@ -344,6 +346,7 @@ export function canSeeNavItem(item: NavItem, role: UserRole | null, quotesAccess
   if (!role) return false;
   if (!isAllowedWithOverrides(item.href, role, overrides)) return false;
   if (item.adminOnly && role !== "admin") return false;
+  if (item.supervisorOnly && role !== "admin" && role !== "supervisor") return false;
   if (role !== "admin" && role !== "supervisor" && item.requiresQuotesAccess && !quotesAccess) return false;
   return true;
 }
