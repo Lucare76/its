@@ -488,7 +488,8 @@ export default function AgencyNewBookingPage() {
       bus_city_origin: "",
       excursion_title: "",
       notes: "",
-      agency_id: firstAgencyId
+      agency_id: firstAgencyId,
+      quoted_price_eur: ""
     });
     setFieldErrors({});
     setBusSearch("");
