@@ -56,8 +56,6 @@ function invoiceScheduleLabel(agency: AgencyRow) {
 
 type ModalForm = {
   name: string;
-  legal_name: string;
-  billing_name: string;
   booking_email: string;
   contact_email: string;
   phone: string;
@@ -65,9 +63,7 @@ type ModalForm = {
   pec_email: string;
   sdi_code: string;
   sender_domains: string;
-  default_enabled_booking_kinds: string;
   parser_key_hint: string;
-  default_pricing_notes: string;
   notes: string;
   invoice_enabled: boolean;
   invoice_email: string;
@@ -75,10 +71,20 @@ type ModalForm = {
   invoice_send_day: number;
 };
 
+const ALL_BOOKING_KINDS = [
+  "transfer_port_hotel",
+  "transfer_airport_hotel",
+  "transfer_airport_hotel_exclusive",
+  "transfer_train_hotel",
+  "transfer_train_hotel_exclusive",
+  "bus_city_hotel",
+  "excursion",
+  "formula_snav",
+  "formula_medmar",
+];
+
 const EMPTY_FORM: ModalForm = {
   name: "",
-  legal_name: "",
-  billing_name: "",
   booking_email: "",
   contact_email: "",
   phone: "",
@@ -86,9 +92,7 @@ const EMPTY_FORM: ModalForm = {
   pec_email: "",
   sdi_code: "",
   sender_domains: "",
-  default_enabled_booking_kinds: "",
   parser_key_hint: "",
-  default_pricing_notes: "",
   notes: "",
   invoice_enabled: false,
   invoice_email: "",
@@ -99,8 +103,6 @@ const EMPTY_FORM: ModalForm = {
 function agencyToForm(agency: AgencyRow): ModalForm {
   return {
     name: agency.name,
-    legal_name: agency.legal_name ?? "",
-    billing_name: agency.billing_name ?? "",
     booking_email: agency.booking_email ?? "",
     contact_email: agency.contact_email ?? "",
     phone: agency.phone ?? "",
@@ -108,9 +110,7 @@ function agencyToForm(agency: AgencyRow): ModalForm {
     pec_email: agency.pec_email ?? "",
     sdi_code: agency.sdi_code ?? "",
     sender_domains: (agency.sender_domains ?? []).join("\n"),
-    default_enabled_booking_kinds: (agency.default_enabled_booking_kinds ?? []).join("\n"),
     parser_key_hint: agency.parser_key_hint ?? "",
-    default_pricing_notes: agency.default_pricing_notes ?? "",
     notes: agency.notes ?? "",
     invoice_enabled: agency.invoice_enabled ?? false,
     invoice_email: agency.invoice_email ?? "",
@@ -164,10 +164,11 @@ function AgencyModal({
       return;
     }
 
+    const agencyName = form.name.trim();
     const payload = {
-      name: form.name.trim(),
-      legal_name: form.legal_name.trim() || null,
-      billing_name: form.billing_name.trim() || null,
+      name: agencyName,
+      legal_name: agencyName,
+      billing_name: agencyName,
       booking_email: form.booking_email.trim() || null,
       contact_email: form.contact_email.trim() || null,
       phone: form.phone.trim() || null,
@@ -178,12 +179,9 @@ function AgencyModal({
         .split(/\n|,/)
         .map((s) => s.trim().toLowerCase())
         .filter(Boolean),
-      default_enabled_booking_kinds: form.default_enabled_booking_kinds
-        .split(/\n|,/)
-        .map((s) => s.trim())
-        .filter(Boolean),
+      default_enabled_booking_kinds: ALL_BOOKING_KINDS,
       parser_key_hint: form.parser_key_hint.trim() || null,
-      default_pricing_notes: form.default_pricing_notes.trim(),
+      default_pricing_notes: "",
       notes: form.notes.trim(),
       invoice_enabled: form.invoice_enabled,
       invoice_email: form.invoice_email.trim() || null,
@@ -293,46 +291,20 @@ function AgencyModal({
                   placeholder="es. Aleste Viaggi"
                 />
               </label>
-              <label className="text-xs font-semibold text-slate-500">
-                Nome legale
-                <input
-                  className="input-saas mt-1 w-full"
-                  value={form.legal_name}
-                  onChange={set("legal_name")}
-                  placeholder="Ragione sociale"
-                />
-              </label>
-              <label className="text-xs font-semibold text-slate-500">
-                Nome fatturazione
-                <input
-                  className="input-saas mt-1 w-full"
-                  value={form.billing_name}
-                  onChange={set("billing_name")}
-                  placeholder="Come appare in fattura"
-                />
-              </label>
               <label className="text-xs font-semibold text-slate-500 sm:col-span-2">
-                Domini email mittente (uno per riga)
+                Domini email mittente
+                <span className="ml-1 font-normal text-slate-400">(uno per riga — usati dal parser email)</span>
                 <textarea
                   rows={2}
-                  className="input-saas mt-1 w-full resize-none"
+                  className="input-saas mt-1 w-full resize-none font-mono text-xs"
                   value={form.sender_domains}
                   onChange={set("sender_domains")}
                   placeholder={"alesteviaggi.it\naleste.it"}
                 />
               </label>
               <label className="text-xs font-semibold text-slate-500 sm:col-span-2">
-                Tipo servizi abilitati (uno per riga)
-                <textarea
-                  rows={2}
-                  className="input-saas mt-1 w-full resize-none"
-                  value={form.default_enabled_booking_kinds}
-                  onChange={set("default_enabled_booking_kinds")}
-                  placeholder={"transfer_port_hotel\nbus_line"}
-                />
-              </label>
-              <label className="text-xs font-semibold text-slate-500 sm:col-span-2">
                 Codice parser email
+                <span className="ml-1 font-normal text-slate-400">(facoltativo — keyword per identificare mail da Gmail/provider esterni)</span>
                 <input
                   className="input-saas mt-1 w-full font-mono"
                   value={form.parser_key_hint}
@@ -341,21 +313,13 @@ function AgencyModal({
                 />
               </label>
               <label className="text-xs font-semibold text-slate-500 sm:col-span-2">
-                Note pricing
-                <textarea
-                  rows={2}
-                  className="input-saas mt-1 w-full resize-none"
-                  value={form.default_pricing_notes}
-                  onChange={set("default_pricing_notes")}
-                />
-              </label>
-              <label className="text-xs font-semibold text-slate-500 sm:col-span-2">
                 Note CRM
                 <textarea
-                  rows={2}
+                  rows={3}
                   className="input-saas mt-1 w-full resize-none"
                   value={form.notes}
                   onChange={set("notes")}
+                  placeholder="Note operative, accordi, riferimenti utili..."
                 />
               </label>
             </div>
