@@ -216,7 +216,7 @@ export async function GET(request: NextRequest) {
 
     const url = new URL(request.url);
     const limitRaw = Number(url.searchParams.get("limit") ?? 200);
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 1000)) : 200;
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 5000)) : 500;
 
     let query = auth.admin
       .from("services")

@@ -132,6 +132,16 @@ function AgencyBookingsPageInner() {
   const [cancelling, setCancelling] = useState(false);
   const [cancelConfirm, setCancelConfirm] = useState(false);
 
+  // Mesi collassabili: aperto di default solo il mese corrente e quelli futuri (max 2)
+  const currentMonthKey = new Date().toISOString().slice(0, 7);
+  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(() => new Set([currentMonthKey]));
+  const toggleMonth = (key: string) =>
+    setExpandedMonths((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+
   useEffect(() => {
     let active = true;
 
@@ -162,7 +172,7 @@ function AgencyBookingsPageInner() {
       }
       setAccessToken(token);
 
-      const response = await fetch("/api/agency/bookings?limit=1000", {
+      const response = await fetch("/api/agency/bookings?limit=2000", {
         headers: { Authorization: `Bearer ${token}` }
       });
       const body = (await response.json().catch(() => null)) as { rows?: BookingRow[]; error?: string } | null;
@@ -214,6 +224,7 @@ function AgencyBookingsPageInner() {
   const selectedBooking = filtered.find((row) => row.id === selectedBookingId) ?? filtered[0] ?? null;
 
   // Raggruppa per mese (YYYY-MM) basato su arrival_date
+  // Futuro → mese più vicino prima (ascendente); passato/tutto → più recente prima (discendente)
   const groupedByMonth = useMemo(() => {
     const groups: { monthKey: string; label: string; rows: BookingRow[] }[] = [];
     const map = new Map<string, BookingRow[]>();
@@ -223,8 +234,10 @@ function AgencyBookingsPageInner() {
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(row);
     }
-    // Ordina mesi decrescente (più recente prima)
-    const sorted = [...map.entries()].sort(([a], [b]) => b.localeCompare(a));
+    const ascending = windowFilter === "future";
+    const sorted = [...map.entries()].sort(([a], [b]) =>
+      ascending ? a.localeCompare(b) : b.localeCompare(a)
+    );
     for (const [key, rows] of sorted) {
       let label = "Senza data";
       if (key !== "senza-data") {
@@ -235,7 +248,20 @@ function AgencyBookingsPageInner() {
       groups.push({ monthKey: key, label, rows });
     }
     return groups;
-  }, [filtered]);
+  }, [filtered, windowFilter]);
+
+  // Espande tutti i mesi durante la ricerca; ripristina il mese corrente quando si cancella
+  useEffect(() => {
+    if (search.trim()) {
+      setExpandedMonths(new Set(filtered.map((row) => {
+        const pivot = row.arrival_date ?? row.departure_date ?? row.date;
+        return pivot ? pivot.slice(0, 7) : "senza-data";
+      })));
+    } else {
+      setExpandedMonths(new Set([currentMonthKey]));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
   const saveEdit = async () => {
     if (!editDraft || !selectedBooking || !accessToken) return;
@@ -387,16 +413,28 @@ function AgencyBookingsPageInner() {
         <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
           <SectionCard title="Lista prenotazioni" subtitle={`${filtered.length} prenotazion${filtered.length === 1 ? "e" : "i"} trovate`}>
             <div className="space-y-5">
-              {groupedByMonth.map(({ monthKey, label, rows: monthRows }) => (
+              {groupedByMonth.map(({ monthKey, label, rows: monthRows }) => {
+                const isOpen = expandedMonths.has(monthKey);
+                return (
                 <div key={monthKey}>
-                  {/* Intestazione mese */}
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="text-xs font-bold uppercase tracking-widest text-slate-500">{label}</span>
+                  {/* Intestazione mese — cliccabile */}
+                  <button
+                    type="button"
+                    onClick={() => toggleMonth(monthKey)}
+                    className="flex w-full items-center gap-3 mb-2 group"
+                  >
+                    <span className="text-xs font-bold uppercase tracking-widest text-slate-500 group-hover:text-slate-700 transition-colors">{label}</span>
                     <span className="text-[10px] rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">{monthRows.length}</span>
                     <div className="flex-1 h-px bg-slate-100" />
-                  </div>
+                    <svg
+                      viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"
+                      className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+                    >
+                      <path d="M4 6l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
 
-                  <div className="space-y-2">
+                  {isOpen && <div className="space-y-2">
                     {monthRows.map((row) => (
                       <button
                         key={row.id}
@@ -428,9 +466,10 @@ function AgencyBookingsPageInner() {
                         </div>
                       </button>
                     ))}
-                  </div>
+                  </div>}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </SectionCard>
 
@@ -503,64 +542,111 @@ function AgencyBookingsPageInner() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-4">
-                <article className="rounded-2xl border border-border bg-surface/80 p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <p className="text-lg font-semibold text-text">{selectedBooking.customer_name}</p>
-                      <p className="text-sm text-muted">{serviceKindLabels[selectedBooking.booking_service_kind ?? ""] ?? "Transfer"}</p>
+              <div className="space-y-3">
+
+                {/* ── Header cliente ── */}
+                <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+                  <div className="min-w-0">
+                    <p className="text-xl font-bold text-slate-900 leading-tight truncate">{selectedBooking.customer_name}</p>
+                    <p className="mt-0.5 text-xs text-slate-500 font-medium uppercase tracking-wide">
+                      {serviceKindLabels[selectedBooking.booking_service_kind ?? ""] ?? "Transfer"}
+                    </p>
+                  </div>
+                  <div className="flex flex-col items-end gap-1.5 shrink-0">
+                    <ApprovalBadge status={selectedBooking.approval_status} />
+                    {selectedBooking.status === "cancelled" && (
+                      <span className="rounded-full bg-slate-200 px-2.5 py-0.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Annullata</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* ── Date in evidenza ── */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Arrivo</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-800">
+                      {formatDateTime(selectedBooking.arrival_date ?? selectedBooking.date, selectedBooking.arrival_time ?? selectedBooking.time)}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Rientro</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-800">
+                      {selectedBooking.departure_date ? formatDateTime(selectedBooking.departure_date, selectedBooking.departure_time) : "—"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* ── Info principali ── */}
+                <div className="rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
+                  {[
+                    { label: "Hotel", value: selectedBooking.hotel_name },
+                    { label: "Zona", value: selectedBooking.hotel_zone ?? "—" },
+                    { label: "Pax", value: String(selectedBooking.pax) },
+                    { label: "Operativo", value: serviceOperationalDetail(selectedBooking) || "—" },
+                    { label: "Creata il", value: selectedBooking.created_at ? formatIsoDateTimeShort(selectedBooking.created_at) : "—" },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="flex items-baseline justify-between gap-3 px-3 py-2 text-sm">
+                      <span className="text-slate-400 font-medium shrink-0">{label}</span>
+                      <span className="text-slate-800 text-right truncate">{value}</span>
                     </div>
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-slate-700">
-                      {selectedBooking.status}
-                    </span>
-                  </div>
-                  <div className="mt-4 grid gap-2 text-sm text-text md:grid-cols-2">
-                    <p><span className="text-muted">Arrivo:</span> {formatDateTime(selectedBooking.arrival_date ?? selectedBooking.date, selectedBooking.arrival_time ?? selectedBooking.time)}</p>
-                    <p><span className="text-muted">Partenza:</span> {formatDateTime(selectedBooking.departure_date, selectedBooking.departure_time)}</p>
-                    <p><span className="text-muted">Hotel:</span> {selectedBooking.hotel_name}</p>
-                    <p><span className="text-muted">Zona:</span> {selectedBooking.hotel_zone ?? "-"}</p>
-                    <p><span className="text-muted">Pax:</span> {selectedBooking.pax}</p>
-                    <p><span className="text-muted">Operativo:</span> {serviceOperationalDetail(selectedBooking)}</p>
-                    <p><span className="text-muted">Biglietti nave:</span> {selectedBooking.include_ferry_tickets ? "Si" : "No"}</p>
-                    <p><span className="text-muted">Creata il:</span> {selectedBooking.created_at ? formatIsoDateTimeShort(selectedBooking.created_at) : "-"}</p>
-                  </div>
-                </article>
+                  ))}
+                  {selectedBooking.agency_quoted_price_cents != null && (
+                    <div className="flex items-baseline justify-between gap-3 px-3 py-2 text-sm">
+                      <span className="text-slate-400 font-medium shrink-0">Importo</span>
+                      <span className={`font-semibold ${selectedBooking.agency_payment_status === "paid" ? "text-emerald-600" : "text-slate-700"}`}>
+                        €{(selectedBooking.agency_quoted_price_cents / 100).toFixed(2).replace(".", ",")}
+                        {selectedBooking.agency_payment_status === "paid" ? " ✓ Saldato" : ""}
+                      </span>
+                    </div>
+                  )}
+                </div>
 
-                <article className="rounded-2xl border border-border bg-surface/80 p-4">
-                  <p className="text-sm font-semibold text-text">Conferma email</p>
-                  <div className="mt-3 grid gap-2 text-sm text-text">
-                    <p><span className="text-muted">Stato:</span> {formatEmailConfirmationStatus(selectedBooking.email_confirmation_status)}</p>
-                    <p><span className="text-muted">Destinatario:</span> {selectedBooking.email_confirmation_to ?? "-"}</p>
-                    <p><span className="text-muted">Ultimo invio:</span> {selectedBooking.email_confirmation_sent_at ? formatIsoDateTimeShort(selectedBooking.email_confirmation_sent_at) : "-"}</p>
+                {/* ── Conferma email ── */}
+                {selectedBooking.email_confirmation_status && selectedBooking.email_confirmation_status !== "skipped" && (
+                  <div className="rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
+                    <div className="flex items-baseline justify-between gap-3 px-3 py-2 text-sm">
+                      <span className="text-slate-400 font-medium">Email conferma</span>
+                      <span className={`font-semibold ${selectedBooking.email_confirmation_status === "sent" ? "text-emerald-600" : selectedBooking.email_confirmation_status === "failed" ? "text-rose-600" : "text-slate-600"}`}>
+                        {formatEmailConfirmationStatus(selectedBooking.email_confirmation_status)}
+                      </span>
+                    </div>
+                    {selectedBooking.email_confirmation_to && (
+                      <div className="flex items-baseline justify-between gap-3 px-3 py-2 text-sm">
+                        <span className="text-slate-400 font-medium">Inviata a</span>
+                        <span className="text-slate-700 truncate">{selectedBooking.email_confirmation_to}</span>
+                      </div>
+                    )}
                   </div>
-                </article>
+                )}
 
-                <article className="rounded-2xl border border-border bg-surface/80 p-4">
-                  <p className="text-sm font-semibold text-text">Note prenotazione</p>
-                  <p className="mt-2 text-sm text-muted whitespace-pre-wrap">{selectedBooking.notes?.trim() || "Nessuna nota disponibile."}</p>
-                </article>
+                {/* ── Note ── */}
+                {selectedBooking.notes?.trim() ? (
+                  <div className="rounded-xl border border-slate-200 bg-amber-50/40 px-3 py-2.5">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Note operative</p>
+                    <p className="text-sm text-slate-700 whitespace-pre-wrap">{selectedBooking.notes.trim()}</p>
+                  </div>
+                ) : null}
 
+                {/* ── Feedback azione ── */}
                 {editMessage && (
-                  <p className={`text-xs font-medium ${editMessage.includes("annullat") ? "text-amber-700" : editMessage === "Salvato." ? "text-green-600" : "text-rose-600"}`}>
+                  <p className={`text-xs font-semibold px-1 ${editMessage.includes("annullat") ? "text-amber-700" : editMessage === "Salvato." ? "text-emerald-600" : "text-rose-600"}`}>
                     {editMessage}
                   </p>
                 )}
 
-                <div className="flex flex-wrap gap-2">
+                {/* ── Azioni principali ── */}
+                <div className="flex flex-wrap gap-2 pt-1">
                   {selectedBooking.status !== "cancelled" && (
                     <button
                       type="button"
                       onClick={() => { setEditDraft(toEditDraft(selectedBooking)); setIsEditing(true); setEditMessage(""); setCancelConfirm(false); }}
-                      className="btn-primary"
+                      className="btn-primary text-sm"
                     >
                       Modifica
                     </button>
                   )}
-                  <Link href="/agency/new-booking" className="btn-secondary">
-                    Nuova prenotazione
-                  </Link>
-                  <Link href={`/dispatch?serviceId=${selectedBooking.id}`} className="btn-secondary">
-                    Apri in dispatch
+                  <Link href="/agency/new-booking" className="btn-secondary text-sm">
+                    + Nuova prenotazione
                   </Link>
                 </div>
 
