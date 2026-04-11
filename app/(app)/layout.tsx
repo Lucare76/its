@@ -20,7 +20,6 @@ import {
 import { getE2ETestSessionOverride } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { needsInboxReview } from "@/lib/inbox-review";
-import { MotivationalModal } from "@/components/motivational-modal";
 import type { UserRole } from "@/lib/types";
 
 export default function AppShellLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -960,7 +959,6 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
           {liveToastMessage}
         </div>
       ) : null}
-      {authRole ? <MotivationalModal storageIdentity={authEmail ?? authTenantId ?? authRole} userName={authName} /> : null}
       </section>
     </>
   );
