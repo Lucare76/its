@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { EmptyState, FilterBar, PageHeader, SectionCard } from "@/components/ui";
 import { formatIsoDateShort, formatIsoDateTimeShort } from "@/lib/service-display";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
@@ -32,6 +33,8 @@ type BookingRow = {
   hotel_zone: string | null;
   notes: string | null;
   created_at: string | null;
+  agency_quoted_price_cents: number | null;
+  agency_payment_status: string | null;
 };
 
 const serviceKindLabels: Record<string, string> = {
@@ -110,10 +113,11 @@ function toEditDraft(row: BookingRow): EditDraft {
   };
 }
 
-export default function AgencyBookingsPage() {
+function AgencyBookingsPageInner() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
-  const [search, setSearch] = useState("");
+  const searchParams = useSearchParams();
+  const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
   const [kindFilter, setKindFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [confirmationFilter, setConfirmationFilter] = useState("all");
@@ -412,9 +416,15 @@ export default function AgencyBookingsPage() {
                             )}
                           </div>
                         </div>
-                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted">
+                        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted">
                           <span>Arrivo: {formatDateTime(row.arrival_date ?? row.date, row.arrival_time ?? row.time)}</span>
                           {row.departure_date && <span>Rientro: {formatDateTime(row.departure_date, row.departure_time)}</span>}
+                          {row.agency_quoted_price_cents != null && (
+                            <span className={`ml-auto font-semibold ${row.agency_payment_status === "paid" ? "text-emerald-600" : "text-slate-600"}`}>
+                              €{(row.agency_quoted_price_cents / 100).toFixed(2).replace(".", ",")}
+                              {row.agency_payment_status === "paid" ? " ✓" : ""}
+                            </span>
+                          )}
                         </div>
                       </button>
                     ))}
@@ -604,5 +614,13 @@ export default function AgencyBookingsPage() {
         </div>
       )}
     </section>
+  );
+}
+
+export default function AgencyBookingsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-slate-500">Caricamento...</div>}>
+      <AgencyBookingsPageInner />
+    </Suspense>
   );
 }

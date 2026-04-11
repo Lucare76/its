@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
@@ -16,9 +17,11 @@ type BookingRow = {
   arrival_date: string | null;
   arrival_time: string | null;
   departure_date: string | null;
-  departure_time: string | null;
   booking_service_kind: string | null;
   hotel_name: string;
+  agency_quoted_price_cents: number | null;
+  agency_payment_status: string | null;
+  created_at: string | null;
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -39,21 +42,28 @@ function fmtDate(iso?: string | null) {
   return `${d}/${m}/${y}`;
 }
 
+function fmtEur(cents: number | null | undefined) {
+  if (cents == null) return "—";
+  return `€${(cents / 100).toFixed(2).replace(".", ",")}`;
+}
+
 function ApprovalChip({ status }: { status: string | null }) {
   if (status === "confirmed")
-    return <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">✅ Confermata</span>;
+    return <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">✅ Confermata</span>;
   if (status === "rejected")
-    return <span className="rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-semibold text-rose-800">❌ Rifiutata</span>;
+    return <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-800">❌ Rifiutata</span>;
   if (status === "pending_operator")
-    return <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800">⏳ In attesa</span>;
-  return <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">—</span>;
+    return <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">⏳ In attesa</span>;
+  return null;
 }
 
 export default function AgencyPage() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [agencyName, setAgencyName] = useState<string | null>(null);
   const [rows, setRows] = useState<BookingRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -76,7 +86,6 @@ export default function AgencyPage() {
       const token = sessionData.session?.access_token;
       if (!token) { setError("Sessione non valida."); setLoading(false); return; }
 
-      // Carica prenotazioni
       const res = await fetch("/api/agency/bookings?limit=500", {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -84,7 +93,6 @@ export default function AgencyPage() {
       if (!active) return;
       if (!res.ok) { setError(body?.error ?? "Errore caricamento."); setLoading(false); return; }
 
-      // Carica nome agenzia
       if (session.tenantId) {
         const { data: mem } = await supabase
           .from("memberships")
@@ -108,32 +116,49 @@ export default function AgencyPage() {
   const today = new Date().toISOString().slice(0, 10);
 
   const kpi = useMemo(() => {
-    const pending = rows.filter((r) => r.approval_status === "pending_operator" && r.status !== "cancelled");
-    const confirmed = rows.filter((r) => r.approval_status === "confirmed" && r.status !== "cancelled");
-    const upcoming = rows.filter((r) => {
+    const active = rows.filter((r) => r.status !== "cancelled");
+    const pending = active.filter((r) => r.approval_status === "pending_operator");
+    const confirmed = active.filter((r) => r.approval_status === "confirmed");
+    const upcoming = active.filter((r) => {
       const d = r.arrival_date ?? r.departure_date;
-      return d && d >= today && r.status !== "cancelled";
+      return d && d >= today;
     });
-    const cancelled = rows.filter((r) => r.status === "cancelled");
-    return { pending: pending.length, confirmed: confirmed.length, upcoming: upcoming.length, cancelled: cancelled.length, total: rows.length };
+    return {
+      pending: pending.length,
+      confirmed: confirmed.length,
+      upcoming: upcoming.length,
+      total: rows.length
+    };
   }, [rows, today]);
 
-  const recentUpcoming = useMemo(
-    () =>
-      rows
-        .filter((r) => {
-          const d = r.arrival_date ?? r.departure_date;
-          return d && d >= today && r.status !== "cancelled";
-        })
-        .sort((a, b) => (a.arrival_date ?? "") > (b.arrival_date ?? "") ? 1 : -1)
-        .slice(0, 6),
-    [rows, today]
-  );
+  // Contabilità
+  const accounting = useMemo(() => {
+    const billable = rows.filter((r) => r.status !== "cancelled" && r.agency_quoted_price_cents != null);
+    const toPay = billable
+      .filter((r) => r.agency_payment_status !== "paid" && r.agency_payment_status !== "waived")
+      .reduce((sum, r) => sum + (r.agency_quoted_price_cents ?? 0), 0);
+    const paid = rows
+      .filter((r) => r.agency_payment_status === "paid" && r.agency_quoted_price_cents != null)
+      .reduce((sum, r) => sum + (r.agency_quoted_price_cents ?? 0), 0);
+    const total = billable.reduce((sum, r) => sum + (r.agency_quoted_price_cents ?? 0), 0);
+    return { toPay, paid, total };
+  }, [rows]);
 
-  const pendingRows = useMemo(
-    () => rows.filter((r) => r.approval_status === "pending_operator" && r.status !== "cancelled").slice(0, 4),
+  // Ultime 5 prenotazioni (ordine cronologico inverso di created_at)
+  const lastFive = useMemo(
+    () =>
+      [...rows]
+        .sort((a, b) => (b.created_at ?? "") > (a.created_at ?? "") ? 1 : -1)
+        .slice(0, 5),
     [rows]
   );
+
+  const doSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (search.trim()) {
+      router.push(`/agency/bookings?q=${encodeURIComponent(search.trim())}`);
+    }
+  };
 
   return (
     <section className="mx-auto max-w-5xl page-section">
@@ -152,9 +177,30 @@ export default function AgencyPage() {
 
       {error && <p className="text-sm text-rose-600 mb-4">{error}</p>}
 
+      {/* Ricerca rapida */}
+      <form onSubmit={doSearch} className="flex items-center gap-2 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4 shrink-0 text-indigo-500">
+          <circle cx="6.5" cy="6.5" r="4" /><path d="M10.5 10.5 14 14" />
+        </svg>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Cerca prenotazione per nome o cognome cliente..."
+          className="flex-1 bg-transparent text-sm text-slate-700 placeholder:text-slate-400 outline-none"
+        />
+        {search && (
+          <button type="button" onClick={() => setSearch("")} className="text-slate-400 hover:text-slate-600 text-lg leading-none">×</button>
+        )}
+        <button
+          type="submit"
+          className="rounded-xl bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 transition shrink-0"
+        >
+          Cerca
+        </button>
+      </form>
+
       {/* KPI */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {/* In attesa */}
         <div className={`card p-4 flex flex-col gap-1 ${kpi.pending > 0 ? "border-amber-200 bg-amber-50" : ""}`}>
           <p className="text-xs font-semibold uppercase tracking-wide text-amber-600">In attesa</p>
           <p className={`text-3xl font-bold ${kpi.pending > 0 ? "text-amber-700" : "text-slate-700"}`}>
@@ -162,19 +208,16 @@ export default function AgencyPage() {
           </p>
           <p className="text-xs text-slate-400">Risposta operatore</p>
         </div>
-        {/* Confermate */}
         <div className="card p-4 flex flex-col gap-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">Confermate</p>
           <p className="text-3xl font-bold text-emerald-700">{loading ? "—" : kpi.confirmed}</p>
           <p className="text-xs text-slate-400">Approvate dall'operatore</p>
         </div>
-        {/* Prossimi servizi */}
         <div className="card p-4 flex flex-col gap-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Prossimi</p>
           <p className="text-3xl font-bold text-indigo-700">{loading ? "—" : kpi.upcoming}</p>
           <p className="text-xs text-slate-400">Servizi futuri</p>
         </div>
-        {/* Totale */}
         <div className="card p-4 flex flex-col gap-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Totale</p>
           <p className="text-3xl font-bold text-slate-700">{loading ? "—" : kpi.total}</p>
@@ -182,80 +225,97 @@ export default function AgencyPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* In attesa di approvazione */}
-        <div className="card p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-800">In attesa di risposta</h2>
-            <Link href="/agency/bookings" className="text-xs text-indigo-600 hover:underline">Vedi tutte →</Link>
-          </div>
-          {loading ? (
-            <p className="text-xs text-slate-400">Caricamento...</p>
-          ) : pendingRows.length === 0 ? (
-            <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-5 text-center">
-              <p className="text-sm font-medium text-slate-600">Nessuna prenotazione in attesa</p>
-              <p className="text-xs text-slate-400 mt-1">Tutte le richieste sono state elaborate.</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {pendingRows.map((row) => {
-                const name = row.customer_first_name && row.customer_last_name
-                  ? `${row.customer_first_name} ${row.customer_last_name}`
-                  : row.customer_name;
-                return (
-                  <div key={row.id} className="rounded-xl border border-amber-100 bg-amber-50 p-3 flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-800 truncate">{name}</p>
-                      <p className="text-xs text-slate-500">{KIND_LABELS[row.booking_service_kind ?? ""] ?? row.booking_service_kind}</p>
-                      <p className="text-xs text-slate-400">{row.hotel_name} · {fmtDate(row.arrival_date)}</p>
-                    </div>
-                    <span className="shrink-0 text-lg">⏳</span>
-                  </div>
-                );
-              })}
-              {kpi.pending > 4 && (
-                <p className="text-xs text-center text-slate-400">+ altri {kpi.pending - 4} in attesa</p>
-              )}
-            </div>
-          )}
+      {/* Contabilità */}
+      <div className="card p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-bold text-slate-800">Contabilità</h2>
+          <Link href="/agency/bookings" className="text-xs text-indigo-600 hover:underline">Vedi dettaglio →</Link>
         </div>
+        <div className="grid grid-cols-3 gap-4">
+          {/* Da pagare */}
+          <div className="rounded-xl bg-rose-50 border border-rose-100 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-rose-600 mb-1">Da pagare</p>
+            <p className="text-2xl font-bold text-rose-700">
+              {loading ? "—" : fmtEur(accounting.toPay)}
+            </p>
+            <p className="text-xs text-slate-400 mt-1">Servizi confermati non ancora saldati</p>
+          </div>
+          {/* Pagato */}
+          <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600 mb-1">Pagato</p>
+            <p className="text-2xl font-bold text-emerald-700">
+              {loading ? "—" : fmtEur(accounting.paid)}
+            </p>
+            <p className="text-xs text-slate-400 mt-1">Saldato all'operatore</p>
+          </div>
+          {/* Totale impegnato */}
+          <div className="rounded-xl bg-slate-50 border border-slate-200 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Totale impegnato</p>
+            <p className="text-2xl font-bold text-slate-700">
+              {loading ? "—" : fmtEur(accounting.total)}
+            </p>
+            <p className="text-xs text-slate-400 mt-1">Somma prezzi dichiarati</p>
+          </div>
+        </div>
+        {accounting.total === 0 && !loading && (
+          <p className="mt-3 text-xs text-slate-400 text-center">
+            I totali si aggiornano inserendo il prezzo concordato nella prenotazione.
+          </p>
+        )}
+      </div>
 
-        {/* Prossimi servizi */}
-        <div className="card p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-800">Prossimi servizi</h2>
-            <Link href="/agency/bookings" className="text-xs text-indigo-600 hover:underline">Vedi tutti →</Link>
-          </div>
-          {loading ? (
-            <p className="text-xs text-slate-400">Caricamento...</p>
-          ) : recentUpcoming.length === 0 ? (
-            <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-5 text-center">
-              <p className="text-sm font-medium text-slate-600">Nessun servizio in programma</p>
-              <p className="text-xs text-slate-400 mt-1">Crea una nuova prenotazione per iniziare.</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {recentUpcoming.map((row) => {
-                const name = row.customer_first_name && row.customer_last_name
-                  ? `${row.customer_first_name} ${row.customer_last_name}`
-                  : row.customer_name;
-                return (
-                  <div key={row.id} className="rounded-xl border border-slate-100 bg-slate-50 p-3 flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-800 truncate">{name}</p>
-                      <p className="text-xs text-slate-500">{row.hotel_name}</p>
-                      <p className="text-xs text-slate-400">
-                        {fmtDate(row.arrival_date)} {row.arrival_time?.slice(0,5) ?? ""}
-                        {row.departure_date && ` → ${fmtDate(row.departure_date)}`}
-                      </p>
-                    </div>
-                    <ApprovalChip status={row.approval_status} />
-                  </div>
-                );
-              })}
-            </div>
-          )}
+      {/* Ultime 5 prenotazioni */}
+      <div className="card p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-bold text-slate-800">Ultime prenotazioni</h2>
+          <Link href="/agency/bookings" className="text-xs text-indigo-600 hover:underline">Vedi tutte →</Link>
         </div>
+        {loading ? (
+          <p className="text-xs text-slate-400">Caricamento...</p>
+        ) : lastFive.length === 0 ? (
+          <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-5 text-center">
+            <p className="text-sm font-medium text-slate-600">Nessuna prenotazione</p>
+            <p className="text-xs text-slate-400 mt-1">Crea la tua prima prenotazione.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {lastFive.map((row) => {
+              const name = row.customer_first_name && row.customer_last_name
+                ? `${row.customer_first_name} ${row.customer_last_name}`
+                : row.customer_name;
+              const isPaid = row.agency_payment_status === "paid";
+              return (
+                <div
+                  key={row.id}
+                  className="rounded-xl border border-slate-100 bg-slate-50 p-3 flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-semibold text-slate-800 truncate">{name}</p>
+                      <ApprovalChip status={row.approval_status} />
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      {KIND_LABELS[row.booking_service_kind ?? ""] ?? row.booking_service_kind} · {row.hotel_name}
+                    </p>
+                    <p className="text-xs text-slate-400">{fmtDate(row.arrival_date)} {row.pax} pax</p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    {row.agency_quoted_price_cents != null && (
+                      <p className={`text-sm font-bold ${isPaid ? "text-emerald-600" : "text-slate-700"}`}>
+                        {fmtEur(row.agency_quoted_price_cents)}
+                      </p>
+                    )}
+                    {isPaid ? (
+                      <span className="text-[10px] font-semibold text-emerald-600">✓ Pagato</span>
+                    ) : row.agency_quoted_price_cents != null ? (
+                      <span className="text-[10px] text-rose-500">Da pagare</span>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Azioni rapide */}
@@ -281,7 +341,7 @@ export default function AgencyPage() {
           </div>
           <div>
             <p className="font-bold text-slate-800">Le mie prenotazioni</p>
-            <p className="text-xs text-slate-500 mt-0.5">Storico completo con filtri e dettaglio operativo.</p>
+            <p className="text-xs text-slate-500 mt-0.5">Storico completo per mese, con ricerca e filtri.</p>
           </div>
         </Link>
       </div>

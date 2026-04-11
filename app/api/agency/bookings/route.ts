@@ -221,7 +221,7 @@ export async function GET(request: NextRequest) {
     let query = auth.admin
       .from("services")
       .select(
-        "id,date,time,status,pax,customer_name,service_type,vessel,booking_service_kind,arrival_date,arrival_time,departure_date,departure_time,transport_code,bus_city_origin,include_ferry_tickets,email_confirmation_status,email_confirmation_sent_at,email_confirmation_to,approval_status,notes,created_at,hotels(name,zone)"
+        "id,date,time,status,pax,customer_name,customer_first_name,customer_last_name,service_type,vessel,booking_service_kind,arrival_date,arrival_time,departure_date,departure_time,transport_code,bus_city_origin,include_ferry_tickets,email_confirmation_status,email_confirmation_sent_at,email_confirmation_to,approval_status,notes,created_at,agency_quoted_price_cents,agency_payment_status,hotels(name,zone)"
       )
       .eq("tenant_id", auth.membership.tenant_id)
       .order("date", { ascending: false })
