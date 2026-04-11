@@ -47,12 +47,16 @@ export async function POST(request: NextRequest) {
   // Fetch agenzia
   const { data: agency } = await ctx.admin
     .from("agencies")
-    .select("id, name, email")
+    .select("id, name, booking_email, contact_email")
     .eq("tenant_id", ctx.tenantId)
     .eq("id", agencyId)
     .maybeSingle();
 
-  if (!agency?.email) return NextResponse.json({ error: "Email agenzia non trovata o non configurata." }, { status: 400 });
+  const agencyEmail = (agency as { booking_email?: string | null; contact_email?: string | null } | null)?.booking_email
+    || (agency as { booking_email?: string | null; contact_email?: string | null } | null)?.contact_email
+    || null;
+
+  if (!agencyEmail) return NextResponse.json({ error: "Email agenzia non trovata o non configurata." }, { status: 400 });
 
   // Raccoglie tutti i file PDF
   const files = formData.getAll("files") as File[];
@@ -70,10 +74,10 @@ export async function POST(request: NextRequest) {
 
   const payload = {
     from: `Ischia Transfer Service <${fromEmail}>`,
-    to: [agency.email],
-    subject: `Biglietti — ${agency.name}`,
-    html: `<p>In allegato trovi ${attachments.length === 1 ? "il biglietto" : `i ${attachments.length} biglietti`} per <strong>${agency.name}</strong>.</p><p>Cordiali saluti,<br>Ischia Transfer Service</p>`,
-    text: `Biglietti per ${agency.name} — ${attachments.length} allegato/i.\n\nCordiali saluti,\nIschia Transfer Service`,
+    to: [agencyEmail],
+    subject: `Biglietti — ${agency?.name ?? "Agenzia"}`,
+    html: `<p>In allegato trovi ${attachments.length === 1 ? "il biglietto" : `i ${attachments.length} biglietti`} per <strong>${agency?.name ?? "la vostra agenzia"}</strong>.</p><p>Cordiali saluti,<br>Ischia Transfer Service</p>`,
+    text: `Biglietti per ${agency?.name ?? "Agenzia"} — ${attachments.length} allegato/i.\n\nCordiali saluti,\nIschia Transfer Service`,
     attachments,
   };
 
@@ -91,7 +95,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Resend ${res.status}: ${body.slice(0, 200)}` }, { status: 500 });
     }
     const result = await res.json().catch(() => null) as { id?: string } | null;
-    return NextResponse.json({ ok: true, message_id: result?.id, sent_to: agency.email, files: attachments.length });
+    return NextResponse.json({ ok: true, message_id: result?.id, sent_to: agencyEmail, files: attachments.length });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Errore di rete." }, { status: 500 });
   }

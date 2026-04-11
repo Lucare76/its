@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
+const TARGET_AGENCIES = ["Aleste Viaggi", "Sosandra", "Zigolo", "Angelino"];
+
 type Agency = { id: string; name: string; email: string | null };
 
 type CardState = {
@@ -155,14 +157,25 @@ export default function BigliettiMultipliPage() {
 
       const { data: rows } = await supabase
         .from("agencies")
-        .select("id, name, email")
+        .select("id, name, booking_email, contact_email")
         .eq("tenant_id", tenantId)
         .eq("active", true)
         .order("name");
 
       if (!active) return;
 
-      setAgencies((rows ?? []) as Agency[]);
+      // Filtra le 4 agenzie target (case-insensitive) e usa booking_email o contact_email
+      const allRows = (rows ?? []) as Array<{ id: string; name: string; booking_email: string | null; contact_email: string | null }>;
+      const result: Agency[] = TARGET_AGENCIES.map((target) => {
+        const match = allRows.find((r) => r.name.toLowerCase().includes(target.toLowerCase()) || target.toLowerCase().includes(r.name.toLowerCase()));
+        return {
+          id: match?.id ?? `missing-${target}`,
+          name: target,
+          email: match?.booking_email || match?.contact_email || null,
+        };
+      });
+
+      setAgencies(result);
       setLoading(false);
     };
     void load();
