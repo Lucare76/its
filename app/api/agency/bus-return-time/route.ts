@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
     .from("hotels")
     .select("name")
     .eq("id", hotelId)
-    .eq("tenant_id", auth.tenantId)
+    .eq("tenant_id", auth.membership.tenant_id)
     .single();
 
   if (hotelErr || !hotel?.name) {
