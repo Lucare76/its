@@ -651,22 +651,37 @@ export default function InboxPage() {
             <p className="text-sm text-slate-500">Nessuna prenotazione trovata per &ldquo;{searchQuery}&rdquo;</p>
           ) : (
             <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
-              {searchResults.map((s) => (
-                <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm hover:bg-slate-50">
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-slate-900 truncate">{s.customer_name}</p>
-                    <p className="text-xs text-slate-500">{s.phone ?? "—"} · {s.date} {s.time}</p>
+              {searchResults.map((s) => {
+                const fmtDate = (iso: string | null | undefined) => {
+                  if (!iso) return null;
+                  const [y, m, d] = iso.split("-");
+                  return `${d}/${m}/${y}`;
+                };
+                const arrivo = s.arrival_date ? `${fmtDate(s.arrival_date)} ${s.arrival_time ?? ""}`.trim() : null;
+                const partenza = s.departure_date ? `${fmtDate(s.departure_date)} ${s.departure_time ?? ""}`.trim() : null;
+                return (
+                  <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm hover:bg-slate-50">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-slate-900 truncate">{s.customer_name}</p>
+                      <p className="text-xs text-slate-500">{s.phone ?? "—"}</p>
+                      <p className="text-xs text-slate-500">
+                        {arrivo && <span>✈️ Arr: {arrivo}</span>}
+                        {arrivo && partenza && <span className="mx-1">·</span>}
+                        {partenza && <span>🏠 Par: {partenza}</span>}
+                        {!arrivo && !partenza && fmtDate(s.date) && <span>{fmtDate(s.date)} {s.time}</span>}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                        s.status === "completato" || s.status === "arrivato" ? "bg-emerald-100 text-emerald-700" :
+                        s.status === "cancelled" ? "bg-rose-100 text-rose-600" :
+                        "bg-amber-100 text-amber-700"
+                      }`}>{s.status}</span>
+                      <p className="text-xs text-slate-500 mt-0.5">{s.vessel ?? "—"}</p>
+                    </div>
                   </div>
-                  <div className="text-right shrink-0">
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                      s.status === "completato" || s.status === "arrivato" ? "bg-emerald-100 text-emerald-700" :
-                      s.status === "cancelled" ? "bg-rose-100 text-rose-600" :
-                      "bg-amber-100 text-amber-700"
-                    }`}>{s.status}</span>
-                    <p className="text-xs text-slate-500 mt-0.5">{s.vessel ?? "—"}</p>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )
         )}

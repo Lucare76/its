@@ -143,7 +143,14 @@ export default function BigliettiMultipliPage() {
       if (active) setToken(tok);
 
       // Fetch agenzie per nome
-      const { data: tenantData } = await supabase.from("memberships").select("tenant_id").maybeSingle();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { setError("Sessione non valida."); setLoading(false); return; }
+
+      const { data: tenantData } = await supabase
+        .from("memberships")
+        .select("tenant_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
       const tenantId = tenantData?.tenant_id;
       if (!tenantId) { setError("Tenant non trovato."); setLoading(false); return; }
 
