@@ -233,6 +233,7 @@ export default function InboxPage() {
   const [pdfDuplicateWarning, setPdfDuplicateWarning] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [agencyFilter, setAgencyFilter] = useState<string>("");
+  const [agenciesMap, setAgenciesMap] = useState<Map<string, string>>(new Map());
 
   const handleCopy = (text: string, field: string) => {
     void copyToClipboard(text).then(() => {
@@ -293,6 +294,14 @@ export default function InboxPage() {
     void boot();
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!supabase || !tenantId) return;
+    supabase.from("agencies").select("id, name").eq("tenant_id", tenantId).eq("active", true)
+      .then(({ data: rows }) => {
+        if (rows) setAgenciesMap(new Map((rows as Array<{ id: string; name: string }>).map((a) => [a.id, a.name])));
+      });
+  }, [tenantId]);
 
   const loadPdfAdvancedDetail = async (inboundEmailId: string) => {
     if (!supabase) throw new Error("Supabase non configurato.");
@@ -489,10 +498,11 @@ export default function InboxPage() {
     if (!hasQuery && !hasAgency) return [];
     return services.filter((s) => {
       const matchQuery = !hasQuery || (s.customer_name ?? "").toLowerCase().includes(q) || (s.phone ?? "").replace(/\s/g, "").includes(q.replace(/\s/g, ""));
-      const matchAgency = !hasAgency || (s.billing_party_name ?? "").toLowerCase().includes(ag);
+      const agencyName = s.billing_party_name ?? (s.agency_id ? agenciesMap.get(s.agency_id) : null) ?? "";
+      const matchAgency = !hasAgency || agencyName.toLowerCase().includes(ag);
       return matchQuery && matchAgency;
     }).slice(0, 20);
-  }, [searchQuery, agencyFilter, services]);
+  }, [searchQuery, agencyFilter, agenciesMap, services]);
 
   const refreshMailboxImports = async () => {
     if (!supabase || !tenantId) return;
@@ -674,7 +684,10 @@ export default function InboxPage() {
                   <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm hover:bg-slate-50">
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold text-slate-900 truncate">{s.customer_name}</p>
-                      <p className="text-xs text-slate-500">{s.phone ?? "—"}{s.billing_party_name ? <span className="ml-2 font-medium text-indigo-600">{s.billing_party_name}</span> : null}</p>
+                      <p className="text-xs text-slate-500">
+                        {s.phone ?? "—"}
+                        {(() => { const ag = s.billing_party_name ?? (s.agency_id ? agenciesMap.get(s.agency_id) : null) ?? null; return ag ? <span className="ml-2 font-medium text-indigo-600">{ag}</span> : null; })()}
+                      </p>
                       <p className="text-xs text-slate-500">
                         {arrivo && <span>✈️ Arr: {arrivo}</span>}
                         {arrivo && partenza && <span className="mx-1">·</span>}
