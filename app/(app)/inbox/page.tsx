@@ -232,6 +232,8 @@ export default function InboxPage() {
   const [pdfEditForm, setPdfEditForm] = useState<FormState>(EMPTY_FORM);
   const [pdfDuplicateWarning, setPdfDuplicateWarning] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [agencyFilter, setAgencyFilter] = useState<string>("all");
+  const [agenciesList, setAgenciesList] = useState<Array<{ id: string; name: string }>>([]);
 
   const handleCopy = (text: string, field: string) => {
     void copyToClipboard(text).then(() => {
@@ -292,6 +294,19 @@ export default function InboxPage() {
     void boot();
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!supabase || !tenantId) return;
+    supabase
+      .from("agencies")
+      .select("id, name")
+      .eq("tenant_id", tenantId)
+      .eq("active", true)
+      .order("name")
+      .then(({ data: rows }) => {
+        if (rows) setAgenciesList(rows as Array<{ id: string; name: string }>);
+      });
+  }, [tenantId]);
 
   const loadPdfAdvancedDetail = async (inboundEmailId: string) => {
     if (!supabase) throw new Error("Supabase non configurato.");
@@ -482,13 +497,19 @@ export default function InboxPage() {
 
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (q.length < 2) return [];
+    const selectedAgencyName = agencyFilter !== "all"
+      ? agenciesList.find((a) => a.id === agencyFilter)?.name?.toLowerCase()
+      : null;
+    const hasQuery = q.length >= 2;
+    if (!hasQuery && agencyFilter === "all") return [];
     return services.filter((s) => {
-      const name = (s.customer_name ?? "").toLowerCase();
-      const phone = (s.phone ?? "").replace(/\s/g, "");
-      return name.includes(q) || phone.includes(q.replace(/\s/g, ""));
+      const matchQuery = !hasQuery || (s.customer_name ?? "").toLowerCase().includes(q) || (s.phone ?? "").replace(/\s/g, "").includes(q.replace(/\s/g, ""));
+      const matchAgency = agencyFilter === "all"
+        || s.agency_id === agencyFilter
+        || (selectedAgencyName != null && (s.billing_party_name ?? "").toLowerCase().includes(selectedAgencyName));
+      return matchQuery && matchAgency;
     }).slice(0, 20);
-  }, [searchQuery, services]);
+  }, [searchQuery, agencyFilter, agenciesList, services]);
 
   const refreshMailboxImports = async () => {
     if (!supabase || !tenantId) return;
@@ -640,15 +661,27 @@ export default function InboxPage() {
             placeholder="Cerca per nome, cognome o telefono..."
             className="input-saas flex-1"
           />
-          {searchQuery && (
-            <button type="button" onClick={() => setSearchQuery("")} className="btn-secondary px-3 py-2 text-xs">
+          {agenciesList.length > 0 && (
+            <select
+              value={agencyFilter}
+              onChange={(e) => setAgencyFilter(e.target.value)}
+              className="input-saas min-w-44"
+            >
+              <option value="all">Tutte le agenzie</option>
+              {agenciesList.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+          )}
+          {(searchQuery || agencyFilter !== "all") && (
+            <button type="button" onClick={() => { setSearchQuery(""); setAgencyFilter("all"); }} className="btn-secondary px-3 py-2 text-xs">
               ✕ Pulisci
             </button>
           )}
         </div>
-        {searchQuery.trim().length >= 2 && (
+        {(searchQuery.trim().length >= 2 || agencyFilter !== "all") && (
           searchResults.length === 0 ? (
-            <p className="text-sm text-slate-500">Nessuna prenotazione trovata per &ldquo;{searchQuery}&rdquo;</p>
+            <p className="text-sm text-slate-500">Nessuna prenotazione trovata{searchQuery ? ` per "${searchQuery}"` : ""}{agencyFilter !== "all" ? ` per ${agenciesList.find((a) => a.id === agencyFilter)?.name ?? "agenzia selezionata"}` : ""}.</p>
           ) : (
             <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
               {searchResults.map((s) => {
