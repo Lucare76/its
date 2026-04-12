@@ -1,0 +1,35 @@
+{
+  "name": "ITS Driver",
+  "short_name": "ITS Driver",
+  "description": "Ischia Transfer Service — app autisti",
+  "start_url": "/driver",
+  "scope": "/driver",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "it",
+  "icons": [
+    {
+      "src": "/brand/logo-ischia-transfer-email.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/logo-ischia-transfer-email.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["transportation", "productivity"],
+  "shortcuts": [
+    {
+      "name": "I miei servizi",
+      "short_name": "Servizi",
+      "url": "/driver",
+      "description": "Visualizza i servizi assegnati oggi"
+    }
+  ]
+}

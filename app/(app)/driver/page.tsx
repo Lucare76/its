@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { ServiceStatus } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
-import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
+import { usePwa } from "@/components/driver/PwaInit";
+
+/* ------------------------------------------------------------------ offline queue */
 
 const OFFLINE_QUEUE_KEY = "it-driver-status-queue-v1";
 
@@ -29,6 +31,28 @@ function writeQueue(queue: QueuedStatusAction[]) {
   window.localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
 }
 
+/* ------------------------------------------------------------------ types */
+
+type DriverService = {
+  id: string; tenant_id: string; date: string; time: string;
+  service_type: string; direction: string; vessel: string; pax: number;
+  hotel_id: string | null; customer_name: string; phone: string | null;
+  phone_e164: string | null; notes: string | null; status: ServiceStatus;
+  meeting_point: string | null;
+};
+type DriverAssignment = { id: string; service_id: string; driver_user_id: string; vehicle_label: string };
+type DriverHotel = { id: string; name: string; zone: string | null; lat: number | null; lng: number | null };
+type DriverStatusEvent = { id: string; service_id: string; status: string; at: string };
+
+type DriverData = {
+  services: DriverService[];
+  assignments: DriverAssignment[];
+  hotels: DriverHotel[];
+  status_events: DriverStatusEvent[];
+};
+
+/* ------------------------------------------------------------------ helpers */
+
 function formatDateLabel(dateIso: string) {
   const [year, month, day] = dateIso.split("-");
   const months = ["gen","feb","mar","apr","mag","giu","lug","ago","set","ott","nov","dic"];
@@ -46,10 +70,26 @@ function statusColor(status: ServiceStatus) {
   }
 }
 
+async function getToken(): Promise<string | null> {
+  if (!supabase) return null;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
+}
+
 type Tab = "oggi" | "prossimi" | "storico";
 
-export default function DriverPage() {
-  const { loading, tenantId, userId, role, errorMessage, data, refresh } = useTenantOperationalData();
+/* ================================================================ INNER PAGE */
+
+function DriverPageInner() {
+  const { pushState, installPromptAvailable, triggerInstall, subscribePush, unsubscribePush } = usePwa();
+
+  const [tenantId, setTenantId] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [driverName, setDriverName] = useState("");
+  const [data, setData] = useState<DriverData>({ services: [], assignments: [], hotels: [], status_events: [] });
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   const [focusServiceId, setFocusServiceId] = useState<string | null>(null);
   const [pendingQueueCount, setPendingQueueCount] = useState(() => readQueue().length);
   const [savingStatus, setSavingStatus] = useState<ServiceStatus | null>(null);
@@ -58,10 +98,35 @@ export default function DriverPage() {
   const [savingNote, setSavingNote] = useState(false);
   const [isOnline, setIsOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [tab, setTab] = useState<Tab>("oggi");
-  const [driverName, setDriverName] = useState<string>("");
+  const channelRef = useRef<ReturnType<NonNullable<typeof supabase>["channel"]> | null>(null);
 
-  const driverUserId = role === "driver" ? userId : null;
+  /* ---- carica dati driver */
+  const refresh = useCallback(async () => {
+    const token = await getToken();
+    if (!token) { setErrorMessage("Sessione non valida."); setLoading(false); return; }
+    const res = await fetch("/api/ops/driver-data", { headers: { Authorization: `Bearer ${token}` } });
+    const body = await res.json() as {
+      ok?: boolean; error?: string;
+      tenant_id?: string; user_id?: string;
+      services?: DriverService[]; assignments?: DriverAssignment[];
+      hotels?: DriverHotel[]; status_events?: DriverStatusEvent[];
+    };
+    if (!body.ok) { setErrorMessage(body.error ?? "Errore caricamento."); setLoading(false); return; }
+    setTenantId(body.tenant_id ?? null);
+    setUserId(body.user_id ?? null);
+    setData({
+      services: body.services ?? [],
+      assignments: body.assignments ?? [],
+      hotels: body.hotels ?? [],
+      status_events: body.status_events ?? [],
+    });
+    setErrorMessage(null);
+    setLoading(false);
+  }, []);
 
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  /* ---- nome driver */
   useEffect(() => {
     if (!supabase) return;
     supabase.auth.getUser().then(({ data: authData }) => {
@@ -71,40 +136,39 @@ export default function DriverPage() {
     });
   }, []);
 
-  const persistStatus = useCallback(
-    async (serviceId: string, status: ServiceStatus, currentTenantId: string | null = tenantId) => {
-      if (!supabase || !currentTenantId || !isOnline || !userId) return false;
-      const { error: serviceError } = await supabase.from("services").update({ status }).eq("id", serviceId).eq("tenant_id", currentTenantId);
-      if (serviceError) return false;
-      await supabase.from("status_events").insert({ tenant_id: currentTenantId, service_id: serviceId, status, by_user_id: userId });
-      await refresh();
-      return true;
-    },
-    [isOnline, refresh, tenantId, userId]
-  );
-
-  const flushQueue = useCallback(async (currentTenantId: string) => {
-    if (!supabase || !currentTenantId || !isOnline) return;
-    const queue = readQueue();
-    if (queue.length === 0) return;
-    const remaining: QueuedStatusAction[] = [];
-    for (const item of queue) {
-      const ok = await persistStatus(item.serviceId, item.status, currentTenantId);
-      if (!ok) remaining.push(item);
-    }
-    writeQueue(remaining);
-    setPendingQueueCount(remaining.length);
-    if (remaining.length === 0) setMessage("Azioni offline sincronizzate.");
-  }, [isOnline, persistStatus]);
-
+  /* ---- realtime */
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const onOnline = () => { setIsOnline(true); if (tenantId) void flushQueue(tenantId); };
+    if (!supabase || !tenantId || !userId) return;
+    let timeout: number | null = null;
+    const scheduleRefresh = () => {
+      if (timeout) window.clearTimeout(timeout);
+      timeout = window.setTimeout(() => void refresh(), 500);
+    };
+    const ch = supabase
+      .channel(`driver-live-${userId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assignments", filter: `tenant_id=eq.${tenantId}` }, scheduleRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "services", filter: `tenant_id=eq.${tenantId}` }, scheduleRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "status_events", filter: `tenant_id=eq.${tenantId}` }, scheduleRefresh)
+      .subscribe();
+    channelRef.current = ch;
+    return () => {
+      if (timeout) window.clearTimeout(timeout);
+      if (supabase) void supabase.removeChannel(ch);
+    };
+  }, [tenantId, userId, refresh]);
+
+  /* ---- online/offline */
+  useEffect(() => {
+    const onOnline = () => {
+      setIsOnline(true);
+      if (tenantId) void flushQueue(tenantId);
+    };
     const onOffline = () => setIsOnline(false);
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     return () => { window.removeEventListener("online", onOnline); window.removeEventListener("offline", onOffline); };
-  }, [tenantId, flushQueue]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId]);
 
   useEffect(() => {
     if (!message) return;
@@ -112,31 +176,29 @@ export default function DriverPage() {
     return () => window.clearTimeout(t);
   }, [message]);
 
-  const mine = useMemo(() => {
-    if (!driverUserId) return [];
-    return data.assignments
-      .filter((a) => a.driver_user_id === driverUserId)
-      .map((a) => {
-        const service = data.services.find((s) => s.id === a.service_id);
-        return service ? { service, assignment: a } : null;
-      })
-      .filter((x): x is NonNullable<typeof x> => x !== null)
-      .sort((a, b) => a.service.date !== b.service.date ? a.service.date.localeCompare(b.service.date) : a.service.time.localeCompare(b.service.time));
-  }, [data, driverUserId]);
+  /* ---- persist status */
+  const persistStatus = useCallback(async (serviceId: string, status: ServiceStatus, tid = tenantId): Promise<boolean> => {
+    if (!supabase || !tid || !isOnline || !userId) return false;
+    const { error } = await supabase.from("services").update({ status }).eq("id", serviceId).eq("tenant_id", tid);
+    if (error) return false;
+    await supabase.from("status_events").insert({ tenant_id: tid, service_id: serviceId, status, by_user_id: userId });
+    await refresh();
+    return true;
+  }, [isOnline, refresh, tenantId, userId]);
 
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const todayServices    = useMemo(() => mine.filter((x) => x.service.date === todayIso), [mine, todayIso]);
-  const nextServices     = useMemo(() => mine.filter((x) => x.service.date > todayIso), [mine, todayIso]);
-  const completedServices = useMemo(() => [...mine].filter((x) => x.service.status === "completato" || x.service.status === "cancelled").sort((a, b) => b.service.date.localeCompare(a.service.date)).slice(0, 20), [mine]);
-  const totalPax         = useMemo(() => mine.filter((x) => x.service.status === "completato").reduce((s, x) => s + x.service.pax, 0), [mine]);
-
-  const defaultFocusId = mine.find((x) => x.service.status !== "completato" && x.service.status !== "cancelled")?.service.id ?? mine[0]?.service.id ?? null;
-  const effectiveFocusId = focusServiceId && mine.some((x) => x.service.id === focusServiceId) ? focusServiceId : defaultFocusId;
-  const focused = mine.find((x) => x.service.id === effectiveFocusId) ?? null;
-  const focusedHotel = focused ? data.hotels.find((h) => h.id === focused.service.hotel_id) : null;
-  const navigationUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${focusedHotel?.lat ?? 40.74},${focusedHotel?.lng ?? 13.9}`)}&travelmode=driving`;
-  const customerPhone = focused?.service.phone_e164?.trim() || focused?.service.phone?.trim() || "";
-  const focusedEvents = focused ? [...data.statusEvents].filter((e) => e.service_id === focused.service.id).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5) : [];
+  const flushQueue = useCallback(async (tid: string) => {
+    if (!isOnline) return;
+    const queue = readQueue();
+    if (!queue.length) return;
+    const remaining: QueuedStatusAction[] = [];
+    for (const item of queue) {
+      const ok = await persistStatus(item.serviceId, item.status, tid);
+      if (!ok) remaining.push(item);
+    }
+    writeQueue(remaining);
+    setPendingQueueCount(remaining.length);
+    if (!remaining.length) setMessage("Azioni offline sincronizzate.");
+  }, [isOnline, persistStatus]);
 
   const enqueueStatus = (serviceId: string, status: ServiceStatus) => {
     const queue = readQueue();
@@ -145,16 +207,49 @@ export default function DriverPage() {
     setPendingQueueCount(queue.length);
   };
 
+  /* ---- dati derivati */
+  const mine = useMemo(() => {
+    if (!userId) return [];
+    return data.assignments
+      .filter((a) => a.driver_user_id === userId)
+      .map((a) => {
+        const service = data.services.find((s) => s.id === a.service_id);
+        return service ? { service, assignment: a } : null;
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .sort((a, b) => a.service.date !== b.service.date
+        ? a.service.date.localeCompare(b.service.date)
+        : a.service.time.localeCompare(b.service.time));
+  }, [data, userId]);
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayServices    = useMemo(() => mine.filter((x) => x.service.date === todayIso), [mine, todayIso]);
+  const nextServices     = useMemo(() => mine.filter((x) => x.service.date > todayIso), [mine, todayIso]);
+  const completedServices = useMemo(() =>
+    [...mine].filter((x) => x.service.status === "completato" || x.service.status === "cancelled")
+      .sort((a, b) => b.service.date.localeCompare(a.service.date)).slice(0, 20),
+    [mine]);
+  const totalPax = useMemo(() =>
+    mine.filter((x) => x.service.status === "completato").reduce((s, x) => s + x.service.pax, 0),
+    [mine]);
+
+  const defaultFocusId = mine.find((x) => x.service.status !== "completato" && x.service.status !== "cancelled")?.service.id ?? mine[0]?.service.id ?? null;
+  const effectiveFocusId = focusServiceId && mine.some((x) => x.service.id === focusServiceId) ? focusServiceId : defaultFocusId;
+  const focused = mine.find((x) => x.service.id === effectiveFocusId) ?? null;
+  const focusedHotel = focused ? data.hotels.find((h) => h.id === focused.service.hotel_id) : null;
+  const navigationUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${focusedHotel?.lat ?? 40.74},${focusedHotel?.lng ?? 13.9}`)}&travelmode=driving`;
+  const customerPhone = focused?.service.phone_e164?.trim() || focused?.service.phone?.trim() || "";
+  const focusedEvents = focused
+    ? [...data.status_events].filter((e) => e.service_id === focused.service.id)
+        .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5)
+    : [];
+
   const handleStatusAction = async (status: ServiceStatus) => {
     if (!focused) return;
     setSavingStatus(status);
-    const persisted = await persistStatus(focused.service.id, status);
-    if (!persisted) {
-      enqueueStatus(focused.service.id, status);
-      setMessage("Azione salvata offline — sarà sincronizzata appena online.");
-    } else {
-      setMessage(`Stato: ${status.toUpperCase()}`);
-    }
+    const ok = await persistStatus(focused.service.id, status);
+    if (!ok) { enqueueStatus(focused.service.id, status); setMessage("Salvato offline — sincronizzo appena online."); }
+    else setMessage(`Stato: ${status.toUpperCase()}`);
     setSavingStatus(null);
   };
 
@@ -167,12 +262,21 @@ export default function DriverPage() {
     setSavingNote(false);
   };
 
+  /* ---- iOS install hint */
+  const isIos = useMemo(() => {
+    if (typeof navigator === "undefined") return false;
+    return /iphone|ipad|ipod/.test(navigator.userAgent.toLowerCase());
+  }, []);
+  const isStandalone = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(display-mode: standalone)").matches;
+  }, []);
+
   if (loading) return <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">Caricamento...</div>;
   if (errorMessage) return <div className="p-4 text-sm text-rose-600">{errorMessage}</div>;
-  if (!driverUserId) return <div className="p-4 text-sm text-slate-500">Utente driver non disponibile.</div>;
 
   return (
-    <div className="mx-auto max-w-lg space-y-4 px-2 pb-10">
+    <div className="mx-auto max-w-lg space-y-4 px-2 pb-10 pt-4">
 
       {/* Header profilo */}
       <div className="rounded-2xl bg-slate-900 px-5 py-4 text-white">
@@ -181,11 +285,10 @@ export default function DriverPage() {
             <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Autista</p>
             <p className="mt-0.5 text-lg font-bold">{driverName || "Driver"}</p>
           </div>
-          <span className={`rounded-full px-3 py-1 text-xs font-bold ${isOnline ? "bg-emerald-500 text-white" : "bg-rose-500 text-white"}`}>
+          <span className={`rounded-full px-3 py-1 text-xs font-bold ${isOnline ? "bg-emerald-500" : "bg-rose-500"}`}>
             {isOnline ? "● Online" : "● Offline"}
           </span>
         </div>
-        {/* Stats rapide */}
         <div className="mt-4 grid grid-cols-3 gap-3">
           {[
             { label: "Oggi", value: todayServices.length },
@@ -203,17 +306,49 @@ export default function DriverPage() {
             ⚠ {pendingQueueCount} azioni in attesa di sincronizzazione
           </p>
         )}
+
+        {/* Bottoni PWA */}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {installPromptAvailable && (
+            <button onClick={triggerInstall}
+              className="rounded-xl bg-white/15 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/25 active:scale-95 transition">
+              📲 Installa app
+            </button>
+          )}
+          {pushState === "unsubscribed" && (
+            <button onClick={() => void subscribePush()}
+              className="rounded-xl bg-blue-500/80 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 active:scale-95 transition">
+              🔔 Attiva notifiche
+            </button>
+          )}
+          {pushState === "subscribed" && (
+            <button onClick={() => void unsubscribePush()}
+              className="rounded-xl bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-white/15 active:scale-95 transition">
+              🔕 Disattiva notifiche
+            </button>
+          )}
+          {pushState === "blocked" && (
+            <span className="rounded-xl bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-300">
+              ⚠ Notifiche bloccate dal browser
+            </span>
+          )}
+        </div>
+
+        {/* Hint installazione iOS (solo se non già installata e siamo su Safari iOS) */}
+        {isIos && !isStandalone && (
+          <p className="mt-3 rounded-xl bg-white/10 px-3 py-2 text-xs text-slate-300">
+            📱 Per installare su iPhone: tocca <strong>Condividi</strong> → <strong>Aggiungi a schermata Home</strong>
+          </p>
+        )}
       </div>
 
       {/* Servizio in focus */}
       {focused ? (
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          {/* Status bar */}
           <div className={`px-5 py-2 text-xs font-bold uppercase tracking-wider ${statusColor(focused.service.status)}`}>
             {focused.service.status}
           </div>
           <div className="p-5 space-y-4">
-            {/* Cliente + orario */}
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-2xl font-bold text-slate-900">{focused.service.customer_name}</p>
@@ -224,8 +359,6 @@ export default function DriverPage() {
                 Dettagli
               </Link>
             </div>
-
-            {/* Hotel + mezzo */}
             <div className="rounded-xl bg-slate-50 px-4 py-3 space-y-1">
               <p className="font-semibold text-slate-800">{focusedHotel?.name ?? focused.service.meeting_point ?? "Destinazione N/D"}</p>
               <p className="text-sm text-slate-500">{focusedHotel?.zone ?? ""}</p>
@@ -233,36 +366,23 @@ export default function DriverPage() {
                 <p className="text-xs font-mono text-slate-400">{focused.assignment.vehicle_label}</p>
               )}
             </div>
-
-            {/* Note */}
             {focused.service.notes && (
               <div className="rounded-xl bg-amber-50 border border-amber-100 px-4 py-3 text-sm text-amber-800">
                 {focused.service.notes}
               </div>
             )}
-
-            {/* Pulsanti stato — grandi per mobile */}
             <div className="grid grid-cols-2 gap-3">
               {(["partito", "arrivato", "completato", "problema"] as ServiceStatus[]).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  disabled={savingStatus !== null}
-                  onClick={() => void handleStatusAction(s)}
+                <button key={s} type="button" disabled={savingStatus !== null} onClick={() => void handleStatusAction(s)}
                   className={`rounded-2xl py-4 text-sm font-bold uppercase tracking-wide transition active:scale-95 disabled:opacity-50 ${
-                    s === "problema"
-                      ? "border-2 border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
-                      : s === "completato"
-                      ? "border-2 border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                      : "border-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                  }`}
-                >
+                    s === "problema" ? "border-2 border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                    : s === "completato" ? "border-2 border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                    : "border-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                  }`}>
                   {savingStatus === s ? "..." : s}
                 </button>
               ))}
             </div>
-
-            {/* Azioni rapide */}
             <div className="flex gap-3">
               {customerPhone && (
                 <a href={`tel:${customerPhone}`} className="flex-1 rounded-2xl border-2 border-slate-200 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">
@@ -273,27 +393,15 @@ export default function DriverPage() {
                 🗺 Naviga
               </a>
             </div>
-
-            {/* Nota autista */}
             <div>
-              <textarea
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
-                rows={2}
-                value={driverNote}
-                onChange={(e) => setDriverNote(e.target.value)}
-                placeholder="Nota rapida (bagagli, ritardo, variazioni...)"
-              />
-              <button
-                type="button"
-                disabled={savingNote || !driverNote.trim()}
-                onClick={() => void handleDriverNote()}
-                className="mt-2 w-full rounded-xl bg-slate-800 py-3 text-sm font-semibold text-white disabled:opacity-40 hover:bg-slate-700"
-              >
+              <textarea className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                rows={2} value={driverNote} onChange={(e) => setDriverNote(e.target.value)}
+                placeholder="Nota rapida (bagagli, ritardo, variazioni...)" />
+              <button type="button" disabled={savingNote || !driverNote.trim()} onClick={() => void handleDriverNote()}
+                className="mt-2 w-full rounded-xl bg-slate-800 py-3 text-sm font-semibold text-white disabled:opacity-40 hover:bg-slate-700">
                 {savingNote ? "Salvataggio..." : "Salva nota"}
               </button>
             </div>
-
-            {/* Storico eventi servizio */}
             {focusedEvents.length > 0 && (
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Storico stati</p>
@@ -323,17 +431,12 @@ export default function DriverPage() {
             { key: "prossimi" as Tab, label: `Prossimi (${nextServices.length})` },
             { key: "storico" as Tab,  label: `Storico (${completedServices.length})` },
           ]).map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              className={`flex-1 py-3 text-xs font-semibold transition ${tab === t.key ? "border-b-2 border-blue-500 text-blue-700" : "text-slate-500 hover:text-slate-700"}`}
-            >
+            <button key={t.key} type="button" onClick={() => setTab(t.key)}
+              className={`flex-1 py-3 text-xs font-semibold transition ${tab === t.key ? "border-b-2 border-blue-500 text-blue-700" : "text-slate-500 hover:text-slate-700"}`}>
               {t.label}
             </button>
           ))}
         </div>
-
         <div className="divide-y divide-slate-50">
           {tab === "oggi" && (
             todayServices.length === 0
@@ -341,7 +444,8 @@ export default function DriverPage() {
               : todayServices.map((entry) => {
                   const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
                   return (
-                    <button key={entry.service.id} type="button" onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                    <button key={entry.service.id} type="button"
+                      onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                       className={`w-full px-4 py-3 text-left transition hover:bg-slate-50 ${focused?.service.id === entry.service.id ? "bg-blue-50/60" : ""}`}>
                       <div className="flex items-center justify-between">
                         <p className="font-semibold text-slate-800">{entry.service.customer_name}</p>
@@ -355,14 +459,14 @@ export default function DriverPage() {
                   );
                 })
           )}
-
           {tab === "prossimi" && (
             nextServices.length === 0
               ? <p className="p-4 text-center text-sm text-slate-400">Nessun servizio futuro.</p>
               : nextServices.map((entry) => {
                   const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
                   return (
-                    <button key={entry.service.id} type="button" onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                    <button key={entry.service.id} type="button"
+                      onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                       className="w-full px-4 py-3 text-left transition hover:bg-slate-50">
                       <div className="flex items-center justify-between">
                         <p className="font-semibold text-slate-800">{entry.service.customer_name}</p>
@@ -373,7 +477,6 @@ export default function DriverPage() {
                   );
                 })
           )}
-
           {tab === "storico" && (
             completedServices.length === 0
               ? <p className="p-4 text-center text-sm text-slate-400">Nessuna corsa completata.</p>
@@ -398,10 +501,16 @@ export default function DriverPage() {
 
       {/* Toast */}
       {message && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-xl">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-xl z-50">
           {message}
         </div>
       )}
     </div>
   );
+}
+
+/* ================================================================ EXPORT */
+
+export default function DriverPage() {
+  return <DriverPageInner />;
 }

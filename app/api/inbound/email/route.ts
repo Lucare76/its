@@ -7,6 +7,7 @@ import { extractPdfTextFromBase64, isPdfAttachment } from "@/lib/server/pdf-text
 import { tryMatchAndApplyPricing } from "@/lib/server/pricing-matching";
 import { selectAgencyPdfParser } from "@/lib/server/agency-pdf-parser-registry";
 import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
+import { sendPushToTenantRoles } from "@/lib/server/web-push";
 
 export const runtime = "nodejs";
 
@@ -464,6 +465,14 @@ export async function POST(request: NextRequest) {
     date: draftDate,
     time: draftTime,
     pax: draftPax
+  });
+
+  // Notifica push agli admin/operator: nuovo booking da processare
+  void sendPushToTenantRoles(tenantId, ["admin", "operator"], {
+    title: "📧 Nuova email inbound",
+    body: `${parsed.data.subject} — da ${parsed.data.from}`,
+    url: "/inbox",
+    tag: "inbound-booking",
   });
 
   return NextResponse.json({
