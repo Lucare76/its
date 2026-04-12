@@ -232,8 +232,7 @@ export default function InboxPage() {
   const [pdfEditForm, setPdfEditForm] = useState<FormState>(EMPTY_FORM);
   const [pdfDuplicateWarning, setPdfDuplicateWarning] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [agencyFilter, setAgencyFilter] = useState<string>("all");
-  const [agenciesList, setAgenciesList] = useState<Array<{ id: string; name: string }>>([]);
+  const [agencyFilter, setAgencyFilter] = useState<string>("");
 
   const handleCopy = (text: string, field: string) => {
     void copyToClipboard(text).then(() => {
@@ -294,19 +293,6 @@ export default function InboxPage() {
     void boot();
     return () => { active = false; };
   }, []);
-
-  useEffect(() => {
-    if (!supabase || !tenantId) return;
-    supabase
-      .from("agencies")
-      .select("id, name")
-      .eq("tenant_id", tenantId)
-      .eq("active", true)
-      .order("name")
-      .then(({ data: rows }) => {
-        if (rows) setAgenciesList(rows as Array<{ id: string; name: string }>);
-      });
-  }, [tenantId]);
 
   const loadPdfAdvancedDetail = async (inboundEmailId: string) => {
     if (!supabase) throw new Error("Supabase non configurato.");
@@ -497,19 +483,16 @@ export default function InboxPage() {
 
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    const selectedAgencyName = agencyFilter !== "all"
-      ? agenciesList.find((a) => a.id === agencyFilter)?.name?.toLowerCase()
-      : null;
+    const ag = agencyFilter.trim().toLowerCase();
     const hasQuery = q.length >= 2;
-    if (!hasQuery && agencyFilter === "all") return [];
+    const hasAgency = ag.length >= 2;
+    if (!hasQuery && !hasAgency) return [];
     return services.filter((s) => {
       const matchQuery = !hasQuery || (s.customer_name ?? "").toLowerCase().includes(q) || (s.phone ?? "").replace(/\s/g, "").includes(q.replace(/\s/g, ""));
-      const matchAgency = agencyFilter === "all"
-        || s.agency_id === agencyFilter
-        || (selectedAgencyName != null && (s.billing_party_name ?? "").toLowerCase().includes(selectedAgencyName));
+      const matchAgency = !hasAgency || (s.billing_party_name ?? "").toLowerCase().includes(ag);
       return matchQuery && matchAgency;
     }).slice(0, 20);
-  }, [searchQuery, agencyFilter, agenciesList, services]);
+  }, [searchQuery, agencyFilter, services]);
 
   const refreshMailboxImports = async () => {
     if (!supabase || !tenantId) return;
@@ -661,27 +644,22 @@ export default function InboxPage() {
             placeholder="Cerca per nome, cognome o telefono..."
             className="input-saas flex-1"
           />
-          {agenciesList.length > 0 && (
-            <select
-              value={agencyFilter}
-              onChange={(e) => setAgencyFilter(e.target.value)}
-              className="input-saas min-w-44"
-            >
-              <option value="all">Tutte le agenzie</option>
-              {agenciesList.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-          )}
-          {(searchQuery || agencyFilter !== "all") && (
-            <button type="button" onClick={() => { setSearchQuery(""); setAgencyFilter("all"); }} className="btn-secondary px-3 py-2 text-xs">
+          <input
+            type="search"
+            value={agencyFilter}
+            onChange={(e) => setAgencyFilter(e.target.value)}
+            placeholder="Cerca per agenzia..."
+            className="input-saas flex-1"
+          />
+          {(searchQuery || agencyFilter) && (
+            <button type="button" onClick={() => { setSearchQuery(""); setAgencyFilter(""); }} className="btn-secondary px-3 py-2 text-xs">
               ✕ Pulisci
             </button>
           )}
         </div>
-        {(searchQuery.trim().length >= 2 || agencyFilter !== "all") && (
+        {(searchQuery.trim().length >= 2 || agencyFilter.trim().length >= 2) && (
           searchResults.length === 0 ? (
-            <p className="text-sm text-slate-500">Nessuna prenotazione trovata{searchQuery ? ` per "${searchQuery}"` : ""}{agencyFilter !== "all" ? ` per ${agenciesList.find((a) => a.id === agencyFilter)?.name ?? "agenzia selezionata"}` : ""}.</p>
+            <p className="text-sm text-slate-500">Nessuna prenotazione trovata{searchQuery ? ` per "${searchQuery}"` : ""}{agencyFilter ? ` · agenzia "${agencyFilter}"` : ""}.</p>
           ) : (
             <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
               {searchResults.map((s) => {
