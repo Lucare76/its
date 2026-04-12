@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { EmptyState, PageHeader, SectionCard, StatCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { formatIsoDateShort, getCustomerFullName, getTransportReferenceOutward } from "@/lib/service-display";
@@ -236,17 +236,34 @@ function EditServiceModal({
 
 // ─── Pagina ──────────────────────────────────────────────────────────────────
 
+type AgencyOption = { id: string; name: string };
+
 export default function ArrivalsPage() {
-  const { loading, errorMessage, data, refresh } = useTenantOperationalData();
+  const { loading, errorMessage, data, refresh, tenantId: tenantIdFromHook } = useTenantOperationalData();
   const todayIso = new Date().toISOString().slice(0, 10);
   const [selectedDate, setSelectedDate] = useState(todayIso);
   const [showAllDates, setShowAllDates] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const [agenciesList, setAgenciesList] = useState<AgencyOption[]>([]);
+
+  // Carica agenzie reali dal DB
+  useEffect(() => {
+    if (!supabase || !tenantIdFromHook) return;
+    supabase
+      .from("agencies")
+      .select("id, name")
+      .eq("tenant_id", tenantIdFromHook)
+      .eq("active", true)
+      .order("name")
+      .then(({ data: rows }) => {
+        if (rows) setAgenciesList(rows as AgencyOption[]);
+      });
+  }, [tenantIdFromHook]);
 
   const hotelsById = useMemo(() => new Map(data.hotels.map((hotel) => [hotel.id, hotel])), [data.hotels]);
-  const tenantId = data.services[0]?.tenant_id ?? "";
+  const tenantId = tenantIdFromHook ?? data.services[0]?.tenant_id ?? "";
 
   function resolveHotelName(service: Service): string {
     const byId = hotelsById.get(service.hotel_id)?.name;
@@ -262,19 +279,11 @@ export default function ArrivalsPage() {
     return "N/D";
   }
 
-  const agencyNames = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const s of data.services) {
-      const name = s.billing_party_name?.trim();
-      if (!name) continue;
-      const key = name.toLowerCase();
-      const existing = seen.get(key);
-      if (!existing || (existing === existing.toUpperCase() && name !== name.toUpperCase())) {
-        seen.set(key, name);
-      }
-    }
-    return ["all", ...Array.from(seen.values()).sort((a, b) => a.localeCompare(b, "it"))];
-  }, [data.services]);
+  // Agenzie che hanno almeno un servizio in arrivo (filtra per agency_id)
+  const agencyOptions = useMemo(() => {
+    const usedIds = new Set(data.services.map((s) => s.agency_id).filter(Boolean));
+    return agenciesList.filter((a) => usedIds.has(a.id));
+  }, [agenciesList, data.services]);
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -366,7 +375,7 @@ export default function ArrivalsPage() {
     return allArrivalInstances
       .filter((instance) =>
         (showAllDates || !q ? (showAllDates || instance.date === selectedDate) : true) &&
-        (agencyFilter === "all" || instance.service.billing_party_name?.trim().toLowerCase() === agencyFilter.toLowerCase()) &&
+        (agencyFilter === "all" || instance.service.agency_id === agencyFilter) &&
         (!q || (instance.service.customer_name ?? "").toLowerCase().includes(q) || (instance.service.phone ?? "").toLowerCase().includes(q))
       )
       .sort((left, right) => left.date !== right.date ? left.date.localeCompare(right.date) : left.time.localeCompare(right.time));
@@ -408,8 +417,9 @@ export default function ArrivalsPage() {
             <label className="text-sm">
               <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Agenzia</span>
               <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)} className="input-saas mt-1 min-w-44">
-                {agencyNames.map((name) => (
-                  <option key={name} value={name}>{name === "all" ? "Tutte le agenzie" : name}</option>
+                <option value="all">Tutte le agenzie</option>
+                {agencyOptions.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
                 ))}
               </select>
             </label>
@@ -426,7 +436,7 @@ export default function ArrivalsPage() {
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
               <span className="font-semibold text-slate-700">{formatIsoDateShort(selectedDate)}</span>
               <span className="mx-1.5 text-slate-300">•</span>
-              <span>{agencyFilter === "all" ? "Tutte le agenzie" : agencyFilter}</span>
+              <span>{agencyFilter === "all" ? "Tutte le agenzie" : (agencyOptions.find((a) => a.id === agencyFilter)?.name ?? agencyFilter)}</span>
             </div>
           </div>
         }
