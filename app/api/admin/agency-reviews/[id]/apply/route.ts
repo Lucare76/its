@@ -18,15 +18,18 @@ function adminClient() {
 
 // Mappa campo revisione → colonna DB services
 const FIELD_MAP: Record<string, string> = {
-  date:            "date",
-  time:            "time",
-  direction:       "direction",
-  pax:             "pax",
-  customer_name:   "customer_name",
-  phone:           "phone",
-  transport_type:  "transport_mode",   // train|hydrofoil|ferry|road_transfer|bus|unknown
-  transport_time:  "outbound_time",    // orario mezzo
+  date:                 "date",
+  time:                 "time",
+  direction:            "direction",
+  pax:                  "pax",
+  customer_name:        "customer_name",
+  phone:                "phone",
+  transport_type:       "transport_mode",
+  transport_time:       "outbound_time",
+  hotel_or_destination: "meeting_point",
 };
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Converti transport_type agenzia → TransportMode DB
 function normalizeTransportMode(value: string): string {
@@ -60,10 +63,10 @@ export async function POST(
     return NextResponse.json({ error: "Non autorizzato." }, { status: 403 });
   }
 
-  // Legge la sessione
+  // Legge la sessione (incluse le snapshot dei servizi per risolvere i fallback service_id)
   const { data: session, error: sessionErr } = await admin
     .from("agency_review_sessions")
-    .select("id, tenant_id, status, modifications")
+    .select("id, tenant_id, status, modifications, services")
     .eq("id", id)
     .eq("tenant_id", membership.tenant_id)
     .maybeSingle();
@@ -78,9 +81,30 @@ export async function POST(
     modified: string;
   }>;
 
+  // Snapshot servizi: usata per risolvere service_id fallback (row-N) → UUID reale
+  const snapshots = (session.services ?? []) as Array<{
+    service_id?: string;
+    date?: string;
+    time?: string;
+    customer_name?: string;
+  }>;
+
+  // Risolve un service_id che potrebbe essere UUID o fallback "row-N"
+  const resolveServiceId = (rawId: string): string | null => {
+    if (UUID_RE.test(rawId)) return rawId; // già UUID valido
+    // Prova a interpretare come indice row-N
+    const m = rawId.match(/^row-(\d+)$/);
+    if (!m) return null;
+    const idx = parseInt(m[1], 10);
+    const snap = snapshots[idx];
+    if (!snap?.service_id || !UUID_RE.test(snap.service_id)) return null;
+    return snap.service_id;
+  };
+
   // Raggruppa per service_id per fare un update per servizio
   const byServiceId = new Map<string, Record<string, unknown>>();
   const skippedFields: string[] = [];
+  const skippedNoId: string[] = [];
 
   for (const mod of modifications) {
     const dbField = FIELD_MAP[mod.field];
@@ -88,8 +112,13 @@ export async function POST(
       skippedFields.push(mod.field);
       continue;
     }
-    if (!byServiceId.has(mod.service_id)) byServiceId.set(mod.service_id, {});
-    const patch = byServiceId.get(mod.service_id)!;
+    const resolvedId = resolveServiceId(mod.service_id);
+    if (!resolvedId) {
+      skippedNoId.push(mod.field);
+      continue;
+    }
+    if (!byServiceId.has(resolvedId)) byServiceId.set(resolvedId, {});
+    const patch = byServiceId.get(resolvedId)!;
     if (dbField === "pax") {
       const n = parseInt(mod.modified, 10);
       if (!isNaN(n) && n > 0) patch[dbField] = n;
@@ -116,15 +145,23 @@ export async function POST(
     return NextResponse.json({ error: "Errori in aggiornamento servizi.", details: errors }, { status: 500 });
   }
 
+  // Se nessun servizio è stato aggiornato ma ci sono campi skippati per mancanza di ID
+  if (byServiceId.size === 0 && skippedNoId.length > 0) {
+    // Marca comunque come applied per non lasciare bloccata la sessione
+    await admin.from("agency_review_sessions").update({ status: "applied" } as never).eq("id", session.id);
+    return NextResponse.json({ ok: true, applied: 0, skipped_fields: [...new Set([...skippedFields, ...skippedNoId])], warning: "I servizi non avevano un ID tracciabile: aggiornamento manuale necessario." });
+  }
+
   // Marca la sessione come "applied"
   await admin
     .from("agency_review_sessions")
     .update({ status: "applied" } as never)
     .eq("id", session.id);
 
+  const allSkipped = [...new Set([...skippedFields, ...skippedNoId])];
   return NextResponse.json({
     ok: true,
     applied: byServiceId.size,
-    skipped_fields: skippedFields.length > 0 ? [...new Set(skippedFields)] : undefined,
+    skipped_fields: allSkipped.length > 0 ? allSkipped : undefined,
   });
 }
