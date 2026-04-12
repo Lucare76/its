@@ -72,7 +72,7 @@ export interface WhatsAppEventInsert {
 }
 
 function mustEnv(name: string) {
-  const value = process.env[name];
+  const value = process.env[name]?.trim().replace(/^["']|["']$/g, "");
   if (!value) throw new Error(`Missing env var ${name}`);
   return value;
 }

@@ -31,8 +31,8 @@ async function hasColumn(admin: any, table: string, column: string) {
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
     const authHeader = request.headers.get("authorization");
     if (!supabaseUrl || !serviceRoleKey) {
       return NextResponse.json({ error: "Configurazione server mancante." }, { status: 500 });
@@ -196,8 +196,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
  */
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
     const authHeader = request.headers.get("authorization");
     if (!supabaseUrl || !serviceRoleKey) return NextResponse.json({ error: "Configurazione server mancante." }, { status: 500 });
     if (!authHeader?.startsWith("Bearer ")) return NextResponse.json({ error: "Sessione non valida." }, { status: 401 });

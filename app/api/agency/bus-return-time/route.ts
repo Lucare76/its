@@ -25,8 +25,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ pickup_time: null, error: "hotel_id e line_family richiesti" }, { status: 400 });
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "")!;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "")!;
   const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
   // 1. Recupera il nome hotel

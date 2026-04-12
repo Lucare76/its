@@ -7,9 +7,9 @@ if (isDev) {
   if (!globalScope[marker]) {
     globalScope[marker] = true;
     console.info("[env] presence", {
-      NEXT_PUBLIC_SUPABASE_URL: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL),
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
-      SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+      NEXT_PUBLIC_SUPABASE_URL: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "")),
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim().replace(/^["']|["']$/g, "")),
+      SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "")),
       EMAIL_INBOUND_TOKEN: Boolean(process.env.EMAIL_INBOUND_TOKEN),
       RESEND_API_KEY: Boolean(process.env.RESEND_API_KEY),
       AGENCY_BOOKING_FROM_EMAIL: Boolean(process.env.AGENCY_BOOKING_FROM_EMAIL),

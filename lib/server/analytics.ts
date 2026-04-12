@@ -192,8 +192,8 @@ function asCountItems(map: Map<string, number>) {
 }
 
 async function resolveContext(request: NextRequest): Promise<AnalyticsContext | NextResponse> {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
   const authHeader = request.headers.get("authorization");
 
   if (!supabaseUrl || !serviceRoleKey) {

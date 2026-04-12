@@ -15,8 +15,8 @@ export interface PublicSharedService {
 }
 
 function createAdminClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
+  const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
   if (!supabaseUrl || !serviceRole) return null;
   return createClient(supabaseUrl, serviceRole, {
     auth: { persistSession: false, autoRefreshToken: false }

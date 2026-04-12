@@ -28,8 +28,8 @@ export async function authorizeServiceRoleRequest<TRole extends string, TExtra e
   request: NextRequest,
   options: AuthorizeRequestOptions<TRole, TExtra>
 ): Promise<AuthorizedRequestContext<TRole, TExtra> | NextResponse> {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
   const authHeader = request.headers.get("authorization");
   const auditPrefix = options.auditPrefix ?? "auth";
   if (!supabaseUrl || !serviceRoleKey) {

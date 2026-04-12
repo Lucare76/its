@@ -5,9 +5,9 @@ import path from "node:path";
 import { getEnvStatus } from "@/lib/server/env-requirements";
 
 export async function GET() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim().replace(/^["']|["']$/g, "");
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
   const inboundToken = process.env.EMAIL_INBOUND_TOKEN;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   const resendApiKey = process.env.RESEND_API_KEY;

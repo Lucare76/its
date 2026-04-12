@@ -1,22 +1,12 @@
-import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { parseRole, type AppCapability } from "@/lib/rbac";
 import { resolvePreferredMembership } from "@/lib/tenant-preference";
 import { onboardingTenantSchema } from "@/lib/validation";
+import { createAdminClient } from "@/lib/server/supabase-admin";
 
 export const runtime = "nodejs";
 
-function createAdminClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !serviceRoleKey) return null;
-  return createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false }
-  });
-}
-
 async function getUserFromAuthHeader(admin: ReturnType<typeof createAdminClient>, request: NextRequest) {
-  if (!admin) return { error: NextResponse.json({ error: "Configurazione server mancante." }, { status: 500 }) };
   const authHeader = request.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) {
     return { error: NextResponse.json({ error: "Sessione non valida." }, { status: 401 }) };
