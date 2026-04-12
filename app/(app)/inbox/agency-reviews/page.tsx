@@ -66,6 +66,7 @@ export default function AgencyReviewsPage() {
   const [expanded, setExpanded]   = useState<string | null>(null);
   const [applying, setApplying]   = useState<string | null>(null);
   const [applyResult, setApplyResult] = useState<Record<string, { ok: boolean; msg: string }>>({});
+  const [deleting, setDeleting]   = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -86,6 +87,19 @@ export default function AgencyReviewsPage() {
     }, 0);
     return () => window.clearTimeout(timeout);
   }, [filter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function deleteSession(sessionId: string) {
+    if (!confirm("Eliminare questa sessione? L'operazione non è reversibile.")) return;
+    setDeleting(sessionId);
+    const { data: { session } } = await supabase!.auth.getSession();
+    const token = session?.access_token;
+    await fetch(`/api/admin/agency-reviews/${sessionId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    setDeleting(null);
+  }
 
   async function applyModifications(sessionId: string) {
     setApplying(sessionId);
@@ -210,6 +224,13 @@ export default function AgencyReviewsPage() {
                         {s.reviewed_at ? ` · Risposto il ${new Date(s.reviewed_at).toLocaleDateString("it-IT")}` : ""}
                       </div>
                     </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); void deleteSession(s.id); }}
+                      disabled={deleting === s.id}
+                      className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-100 disabled:opacity-50 transition shrink-0"
+                    >
+                      {deleting === s.id ? "..." : "Elimina"}
+                    </button>
                     <div className="text-slate-400 text-lg select-none">{isExpanded ? "▲" : "▼"}</div>
                   </div>
 
