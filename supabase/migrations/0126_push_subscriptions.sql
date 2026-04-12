@@ -30,6 +30,10 @@ create index if not exists idx_push_log_service on public.push_notification_log(
 -- RLS: il service role bypassa tutto; l'utente autenticato gestisce solo le proprie
 alter table public.push_subscriptions enable row level security;
 
+drop policy if exists "push_subs_own_select" on public.push_subscriptions;
+drop policy if exists "push_subs_own_insert" on public.push_subscriptions;
+drop policy if exists "push_subs_own_delete" on public.push_subscriptions;
+
 create policy "push_subs_own_select" on public.push_subscriptions
   for select using (user_id = auth.uid());
 
