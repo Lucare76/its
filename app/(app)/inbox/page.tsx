@@ -674,7 +674,7 @@ export default function InboxPage() {
                   <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm hover:bg-slate-50">
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold text-slate-900 truncate">{s.customer_name}</p>
-                      <p className="text-xs text-slate-500">{s.phone ?? "—"}</p>
+                      <p className="text-xs text-slate-500">{s.phone ?? "—"}{s.billing_party_name ? <span className="ml-2 font-medium text-indigo-600">{s.billing_party_name}</span> : null}</p>
                       <p className="text-xs text-slate-500">
                         {arrivo && <span>✈️ Arr: {arrivo}</span>}
                         {arrivo && partenza && <span className="mx-1">·</span>}
