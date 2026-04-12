@@ -1,12 +1,40 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { formatIsoDateShort, getCustomerFullName, getTransportReferenceReturn } from "@/lib/service-display";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import { supabase } from "@/lib/supabase/client";
 import type { Service } from "@/lib/types";
+
+// ─── Export helpers ──────────────────────────────────────────────────────────
+type ExportRow = { Ora: string; Cliente: string; Pax: number; "Origine/Hotel": string; "Meeting point": string; Riferimento: string; Tipo: string; Agenzia: string };
+
+async function exportToExcel(rows: ExportRow[], filename: string) {
+  const XLSX = await import("xlsx");
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Partenze");
+  XLSX.writeFile(wb, filename);
+}
+
+function printTable(rows: ExportRow[], date: string) {
+  const cols = Object.keys(rows[0] ?? {});
+  const thead = cols.map((c) => `<th style="padding:6px 10px;background:#1e293b;color:#fff;font-size:11px;text-align:left">${c}</th>`).join("");
+  const tbody = rows.map((r) =>
+    `<tr>${cols.map((c, i) => `<td style="padding:5px 10px;font-size:12px;border-bottom:1px solid #e2e8f0;${i === 0 ? "white-space:nowrap" : ""}">${(r as Record<string, unknown>)[c] ?? ""}</td>`).join("")}</tr>`
+  ).join("");
+  const html = `<!DOCTYPE html><html><head><title>Lista Partenze</title>
+<style>body{font-family:Arial,sans-serif;margin:20px}h2{font-size:16px;margin-bottom:4px}p{font-size:12px;color:#64748b;margin:0 0 12px}table{border-collapse:collapse;width:100%}@media print{@page{size:landscape}}</style>
+</head><body>
+<h2>Lista Partenze</h2><p>${date} · ${rows.length} servizi</p>
+<table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>
+<script>window.onload=()=>{window.print();window.close()}<\/script></body></html>`;
+  const w = window.open("", "_blank", "width=1100,height=700");
+  w?.document.write(html);
+  w?.document.close();
+}
 
 function AgencyKindBadge({ service }: { service: Service }) {
   const kind = service.booking_service_kind;
@@ -150,6 +178,22 @@ export default function DeparturesPage() {
     }
   };
 
+  const buildRows = useCallback((): ExportRow[] =>
+    departures.map((item) => ({
+      Ora: item.time,
+      Cliente: getCustomerFullName(item.service),
+      Pax: item.service.pax,
+      "Origine/Hotel": resolveHotelName(item.service),
+      "Meeting point": item.service.meeting_point ?? item.service.vessel ?? "",
+      Riferimento: getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? "",
+      Tipo: item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "",
+      Agenzia: item.service.billing_party_name ?? "",
+    }))
+  , [departures]);
+
+  const handleExcel = () => void exportToExcel(buildRows(), `partenze-${selectedDate}.xlsx`);
+  const handlePrint = () => printTable(buildRows(), formatIsoDateShort(selectedDate));
+
   return (
     <section className="page-section">
       <PageHeader
@@ -204,10 +248,16 @@ export default function DeparturesPage() {
         loading={loading}
         loadingLines={6}
         actions={
-          <button type="button" onClick={() => { setAddForm((f) => ({ ...f, date: selectedDate })); setAddModal(true); setAddError(null); }}
-            className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100">
-            + Aggiungi partenza
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => { setAddForm((f) => ({ ...f, date: selectedDate })); setAddModal(true); setAddError(null); }}
+              className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 transition">
+              + Aggiungi partenza
+            </button>
+            {departures.length > 0 && (<>
+              <button type="button" onClick={handlePrint} className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 transition">🖨 Stampa</button>
+              <button type="button" onClick={handleExcel} className="rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-100 transition">📥 Excel</button>
+            </>)}
+          </div>
         }
       >
         {deleteError && (

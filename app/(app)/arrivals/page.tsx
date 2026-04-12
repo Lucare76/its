@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmptyState, PageHeader, SectionCard, StatCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { formatIsoDateShort, getCustomerFullName, getTransportReferenceOutward } from "@/lib/service-display";
@@ -234,6 +234,35 @@ function EditServiceModal({
   );
 }
 
+// ─── Export helpers ──────────────────────────────────────────────────────────
+
+type ExportRow = { Ora: string; Cliente: string; Pax: number; Hotel: string; "Meeting point": string; Riferimento: string; Tipo: string; Agenzia: string; Data?: string };
+
+async function exportToExcel(rows: ExportRow[], filename: string) {
+  const XLSX = await import("xlsx");
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Arrivi");
+  XLSX.writeFile(wb, filename);
+}
+
+function printTable(rows: ExportRow[], title: string, date: string) {
+  const cols = Object.keys(rows[0] ?? {});
+  const thead = cols.map((c) => `<th style="padding:6px 10px;background:#1e293b;color:#fff;font-size:11px;text-align:left">${c}</th>`).join("");
+  const tbody = rows.map((r) =>
+    `<tr>${cols.map((c, i) => `<td style="padding:5px 10px;font-size:12px;border-bottom:1px solid #e2e8f0;${i === 0 ? "white-space:nowrap" : ""}">${(r as Record<string, unknown>)[c] ?? ""}</td>`).join("")}</tr>`
+  ).join("");
+  const html = `<!DOCTYPE html><html><head><title>${title}</title>
+<style>body{font-family:Arial,sans-serif;margin:20px}h2{font-size:16px;margin-bottom:4px}p{font-size:12px;color:#64748b;margin:0 0 12px}table{border-collapse:collapse;width:100%}@media print{@page{size:landscape}}</style>
+</head><body>
+<h2>${title}</h2><p>${date} · ${rows.length} servizi</p>
+<table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>
+<script>window.onload=()=>{window.print();window.close()}<\/script></body></html>`;
+  const w = window.open("", "_blank", "width=1100,height=700");
+  w?.document.write(html);
+  w?.document.close();
+}
+
 // ─── Pagina ──────────────────────────────────────────────────────────────────
 
 type AgencyOption = { id: string; name: string };
@@ -397,6 +426,32 @@ export default function ArrivalsPage() {
   ).length;
   const privateTransfers = Math.max(arrivals.length - busCount, 0);
 
+  const buildRows = useCallback((): ExportRow[] =>
+    arrivals.map((item) => ({
+      ...(showAllDates ? { Data: item.date.slice(5).replace("-", "/") } : {}),
+      Ora: item.time,
+      Cliente: getCustomerFullName(item.service),
+      Pax: item.service.pax,
+      Hotel: resolveHotelName(item.service),
+      "Meeting point": item.service.meeting_point ?? item.service.vessel ?? "",
+      Riferimento: getTransportReferenceOutward(item.service) ?? item.service.transport_code ?? item.service.vessel ?? "",
+      Tipo: formatArrivalServiceTypeLabel(item.service),
+      Agenzia: item.service.billing_party_name ?? agencyById.get(item.service.agency_id ?? "")?.name ?? "",
+    }))
+  , [arrivals, showAllDates, agencyById]);
+
+  const handleExcel = () => {
+    const rows = buildRows();
+    const label = showAllDates ? "tutte-date" : selectedDate;
+    void exportToExcel(rows, `arrivi-${label}.xlsx`);
+  };
+
+  const handlePrint = () => {
+    const rows = buildRows();
+    const label = showAllDates ? "Tutte le date" : formatIsoDateShort(selectedDate);
+    printTable(rows, "Lista Arrivi", label);
+  };
+
   return (
     <section className="page-section">
       <PageHeader
@@ -475,6 +530,10 @@ export default function ArrivalsPage() {
             >
               + Aggiungi arrivo
             </button>
+            {arrivals.length > 0 && (<>
+              <button type="button" onClick={handlePrint} className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 transition">🖨 Stampa</button>
+              <button type="button" onClick={handleExcel} className="rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-100 transition">📥 Excel</button>
+            </>)}
             {arrivals.length > 0 && (
               <button
                 type="button"
