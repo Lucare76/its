@@ -9,8 +9,8 @@ import path from "node:path";
 let _cached: string | null | undefined;
 
 const LOGO_CANDIDATES = [
+  "brand/logo-ischia-transfer-email.png",  // 15 KB — ottimizzato per email
   "Logo its.png",
-  "brand/logo-ischia-transfer-email.png",
   "brand/logo-ischia-transfer.png",
 ];
 
