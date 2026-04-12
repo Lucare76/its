@@ -279,11 +279,9 @@ export default function ArrivalsPage() {
     return "N/D";
   }
 
-  // Agenzie che hanno almeno un servizio in arrivo (filtra per agency_id)
-  const agencyOptions = useMemo(() => {
-    const usedIds = new Set(data.services.map((s) => s.agency_id).filter(Boolean));
-    return agenciesList.filter((a) => usedIds.has(a.id));
-  }, [agenciesList, data.services]);
+  const agencyOptions = agenciesList;
+
+  const agencyById = useMemo(() => new Map(agenciesList.map((a) => [a.id, a])), [agenciesList]);
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -372,14 +370,21 @@ export default function ArrivalsPage() {
 
   const arrivals = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const selectedAgencyName = agencyFilter !== "all" ? agencyById.get(agencyFilter)?.name?.toLowerCase() : null;
     return allArrivalInstances
-      .filter((instance) =>
-        (showAllDates || !q ? (showAllDates || instance.date === selectedDate) : true) &&
-        (agencyFilter === "all" || instance.service.agency_id === agencyFilter) &&
-        (!q || (instance.service.customer_name ?? "").toLowerCase().includes(q) || (instance.service.phone ?? "").toLowerCase().includes(q))
-      )
+      .filter((instance) => {
+        const svc = instance.service;
+        const matchAgency = agencyFilter === "all"
+          || svc.agency_id === agencyFilter
+          || (selectedAgencyName != null && (svc.billing_party_name ?? "").toLowerCase().includes(selectedAgencyName));
+        return (
+          (showAllDates || !q ? (showAllDates || instance.date === selectedDate) : true) &&
+          matchAgency &&
+          (!q || (svc.customer_name ?? "").toLowerCase().includes(q) || (svc.phone ?? "").toLowerCase().includes(q))
+        );
+      })
       .sort((left, right) => left.date !== right.date ? left.date.localeCompare(right.date) : left.time.localeCompare(right.time));
-  }, [allArrivalInstances, selectedDate, showAllDates, agencyFilter, search]);
+  }, [allArrivalInstances, selectedDate, showAllDates, agencyFilter, agencyById, search]);
 
   // Quanti arrivi ci sono in date diverse da quella selezionata (utile per suggerimento)
   const otherDatesCount = useMemo(() =>
