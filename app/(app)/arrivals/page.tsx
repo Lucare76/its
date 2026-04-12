@@ -238,6 +238,16 @@ function EditServiceModal({
 
 type ExportRow = { Ora: string; Cliente: string; Pax: number; Hotel: string; "Meeting point": string; Riferimento: string; Tipo: string; Agenzia: string; Data?: string };
 
+function buildTable(rows: ExportRow[]): string {
+  if (rows.length === 0) return "<p style='color:#94a3b8;font-size:12px'>Nessun servizio.</p>";
+  const cols = Object.keys(rows[0]);
+  const thead = cols.map((c) => `<th style="padding:6px 10px;background:#1e293b;color:#fff;font-size:11px;text-align:left">${c}</th>`).join("");
+  const tbody = rows.map((r) =>
+    `<tr>${cols.map((c, i) => `<td style="padding:5px 10px;font-size:12px;border-bottom:1px solid #e2e8f0;${i === 0 ? "white-space:nowrap" : ""}">${(r as Record<string, unknown>)[c] ?? ""}</td>`).join("")}</tr>`
+  ).join("");
+  return `<table style="border-collapse:collapse;width:100%"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
+}
+
 async function exportToExcel(rows: ExportRow[], filename: string) {
   const XLSX = await import("xlsx");
   const ws = XLSX.utils.json_to_sheet(rows);
@@ -246,19 +256,38 @@ async function exportToExcel(rows: ExportRow[], filename: string) {
   XLSX.writeFile(wb, filename);
 }
 
+async function exportCombinedExcel(arrivals: ExportRow[], departures: ExportRow[], date: string) {
+  const XLSX = await import("xlsx");
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(arrivals.length ? arrivals : [{ Nota: "Nessun arrivo" }]), "Arrivi");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(departures.length ? departures : [{ Nota: "Nessuna partenza" }]), "Partenze");
+  XLSX.writeFile(wb, `giornata-${date}.xlsx`);
+}
+
 function printTable(rows: ExportRow[], title: string, date: string) {
-  const cols = Object.keys(rows[0] ?? {});
-  const thead = cols.map((c) => `<th style="padding:6px 10px;background:#1e293b;color:#fff;font-size:11px;text-align:left">${c}</th>`).join("");
-  const tbody = rows.map((r) =>
-    `<tr>${cols.map((c, i) => `<td style="padding:5px 10px;font-size:12px;border-bottom:1px solid #e2e8f0;${i === 0 ? "white-space:nowrap" : ""}">${(r as Record<string, unknown>)[c] ?? ""}</td>`).join("")}</tr>`
-  ).join("");
   const html = `<!DOCTYPE html><html><head><title>${title}</title>
-<style>body{font-family:Arial,sans-serif;margin:20px}h2{font-size:16px;margin-bottom:4px}p{font-size:12px;color:#64748b;margin:0 0 12px}table{border-collapse:collapse;width:100%}@media print{@page{size:landscape}}</style>
+<style>body{font-family:Arial,sans-serif;margin:20px}h2{font-size:16px;margin-bottom:4px}p{font-size:12px;color:#64748b;margin:0 0 12px}@media print{@page{size:landscape}}</style>
 </head><body>
 <h2>${title}</h2><p>${date} · ${rows.length} servizi</p>
-<table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>
+${buildTable(rows)}
 <script>window.onload=()=>{window.print();window.close()}<\/script></body></html>`;
   const w = window.open("", "_blank", "width=1100,height=700");
+  w?.document.write(html);
+  w?.document.close();
+}
+
+function printCombined(arrivals: ExportRow[], departures: ExportRow[], date: string) {
+  const html = `<!DOCTYPE html><html><head><title>Giornata ${date}</title>
+<style>body{font-family:Arial,sans-serif;margin:20px}h2{font-size:15px;margin:0 0 4px}h3{font-size:13px;margin:24px 0 4px;color:#1e293b;border-bottom:2px solid #1e293b;padding-bottom:4px}p{font-size:12px;color:#64748b;margin:0 0 10px}@media print{@page{size:landscape}.pb{page-break-before:always}}</style>
+</head><body>
+<h2>Ischia Transfer Service — Giornata ${date}</h2>
+<h3>▼ ARRIVI (${arrivals.length})</h3>
+${buildTable(arrivals)}
+<div class="pb"></div>
+<h3>▲ PARTENZE (${departures.length})</h3>
+${buildTable(departures)}
+<script>window.onload=()=>{window.print();window.close()}<\/script></body></html>`;
+  const w = window.open("", "_blank", "width=1100,height=800");
   w?.document.write(html);
   w?.document.close();
 }
@@ -452,6 +481,32 @@ export default function ArrivalsPage() {
     printTable(rows, "Lista Arrivi", label);
   };
 
+  // Partenze della stessa data per export combinato
+  const buildDepartureRows = useCallback((): ExportRow[] => {
+    const allInstances = buildOperationalInstances(data.services);
+    return allInstances
+      .filter((i) => i.direction === "departure" && i.date === selectedDate)
+      .sort((a, b) => a.time.localeCompare(b.time))
+      .map((item) => ({
+        Ora: item.time,
+        Cliente: getCustomerFullName(item.service),
+        Pax: item.service.pax,
+        Hotel: hotelsById.get(item.service.hotel_id)?.name ?? item.service.meeting_point ?? "N/D",
+        "Meeting point": item.service.meeting_point ?? item.service.vessel ?? "",
+        Riferimento: item.service.transport_code ?? item.service.vessel ?? "",
+        Tipo: item.service.service_type_code ?? item.service.booking_service_kind ?? "",
+        Agenzia: item.service.billing_party_name ?? agencyById.get(item.service.agency_id ?? "")?.name ?? "",
+      }));
+  }, [data.services, selectedDate, hotelsById, agencyById]);
+
+  const handleCombinedExcel = () => {
+    void exportCombinedExcel(buildRows(), buildDepartureRows(), selectedDate);
+  };
+
+  const handleCombinedPrint = () => {
+    printCombined(buildRows(), buildDepartureRows(), formatIsoDateShort(selectedDate));
+  };
+
   return (
     <section className="page-section">
       <PageHeader
@@ -533,6 +588,10 @@ export default function ArrivalsPage() {
             {arrivals.length > 0 && (<>
               <button type="button" onClick={handlePrint} className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 transition">🖨 Stampa</button>
               <button type="button" onClick={handleExcel} className="rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-100 transition">📥 Excel</button>
+            </>)}
+            {!showAllDates && (<>
+              <button type="button" onClick={handleCombinedPrint} className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700 hover:bg-violet-100 transition">🖨 Stampa giornata</button>
+              <button type="button" onClick={handleCombinedExcel} className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700 hover:bg-violet-100 transition">📄 Excel giornata</button>
             </>)}
             {arrivals.length > 0 && (
               <button
