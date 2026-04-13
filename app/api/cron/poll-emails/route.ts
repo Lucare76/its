@@ -1,7 +1,7 @@
 /**
  * GET /api/cron/poll-emails
  * Polling IMAP ogni 15 minuti — scarica nuove email inbound e le processa.
- * Vercel Cron: schedule "*/15 * * * *"
+ * Vercel Cron: schedule ogni-15-minuti (via cron-job.org su Hobby plan)
  *
  * Riusa la logica esistente in runEmailOperationalImport (lib/server/email-test-import.ts).
  * Dopo ogni import manda push notification agli admin/operator se ci sono nuovi booking.

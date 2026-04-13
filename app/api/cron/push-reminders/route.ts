@@ -1,7 +1,7 @@
 /**
  * GET /api/cron/push-reminders
  * Invia notifiche push 2 ore prima di ogni servizio assegnato a un driver.
- * Vercel Cron: ogni 15 minuti  → schedule "*/15 * * * *"
+ * Vercel Cron: ogni 15 minuti (via cron-job.org su Hobby plan)
  *
  * Chiamato da Vercel con header  Authorization: Bearer CRON_SECRET
  */
