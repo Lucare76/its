@@ -33,7 +33,20 @@ function today() {
 
 // ── PDF stampa ────────────────────────────────────────────────────────────────
 
-function printStatements(statements: AgencyStatement[], from: string, to: string, logoUrl = `${window.location.origin}/brand/logo-ischia-transfer-email.png`) {
+async function printStatements(statements: AgencyStatement[], from: string, to: string) {
+  let logoSrc = "";
+  try {
+    const res = await fetch(`${window.location.origin}/brand/logo-ischia-transfer-email.png`);
+    const blob = await res.blob();
+    logoSrc = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => resolve("");
+      reader.readAsDataURL(blob);
+    });
+  } catch { logoSrc = ""; }
+  const logoHtml = logoSrc ? `<img src="${logoSrc}" alt="Ischia Transfer Service" style="height:48px;width:auto">` : "";
+
   const rows = statements.map((st) => {
     const bkRows = st.bookings.map((b: EscursioneBooking) => `
       <tr>
@@ -77,14 +90,14 @@ function printStatements(statements: AgencyStatement[], from: string, to: string
       @media print { body { padding:10px } }
     </style></head><body>
     <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #e2e8f0">
-      <img src="${logoUrl}" alt="Ischia Transfer Service" style="height:48px;width:auto">
+      ${logoHtml}
       <div>
         <h1 style="margin:0;font-size:18px;color:#0f172a">Estratto Escursioni — ${fmtDate(from)} / ${fmtDate(to)}</h1>
         <p style="margin:4px 0 0;font-size:12px;color:#475569">${grandPax} pax totali · ${fmtEur(grandTotal)}</p>
       </div>
     </div>
     ${rows || "<p style='color:#94a3b8'>Nessuna prenotazione nel periodo.</p>"}
-    <script>window.onload=()=>{window.print();window.close()}<\/script>
+    <script>window.print()<\/script>
   </body></html>`;
 
   const win = window.open("", "_blank", "width=900,height=700");
@@ -167,7 +180,7 @@ export default function EstrattoCursioniPage() {
                 {grandPax} pax · <span className="text-indigo-600">{fmtEur(grandTotal)}</span>
               </span>
               <button
-                onClick={() => printStatements(statements, from, to)}
+                onClick={() => void printStatements(statements, from, to)}
                 className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
                 🖨️ Stampa PDF
               </button>

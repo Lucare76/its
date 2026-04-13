@@ -264,32 +264,47 @@ async function exportCombinedExcel(arrivals: ExportRow[], departures: ExportRow[
   XLSX.writeFile(wb, `giornata-${date}.xlsx`);
 }
 
-function printTable(rows: ExportRow[], title: string, date: string) {
-  const logoUrl = `${window.location.origin}/brand/logo-ischia-transfer-email.png`;
+async function fetchLogoSrc(): Promise<string> {
+  try {
+    const res = await fetch(`${window.location.origin}/brand/logo-ischia-transfer-email.png`);
+    const blob = await res.blob();
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => resolve("");
+      reader.readAsDataURL(blob);
+    });
+  } catch { return ""; }
+}
+
+async function printTable(rows: ExportRow[], title: string, date: string) {
+  const logoSrc = await fetchLogoSrc();
+  const logoHtml = logoSrc ? `<img src="${logoSrc}" alt="Ischia Transfer Service" style="height:44px;width:auto">` : "";
   const html = `<!DOCTYPE html><html><head><title>${title}</title>
-<style>body{font-family:Arial,sans-serif;margin:20px}h2{font-size:16px;margin-bottom:4px}p{font-size:12px;color:#64748b;margin:0 0 12px}@media print{@page{size:landscape}}</style>
+<style>body{font-family:Arial,sans-serif;margin:20px}@media print{@page{size:landscape}}</style>
 </head><body>
 <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #e2e8f0">
-  <img src="${logoUrl}" alt="Ischia Transfer Service" style="height:44px;width:auto">
+  ${logoHtml}
   <div>
     <div style="font-weight:700;font-size:16px;color:#0f172a">${title}</div>
     <div style="font-size:12px;color:#64748b">${date} · ${rows.length} servizi</div>
   </div>
 </div>
 ${buildTable(rows)}
-<script>window.onload=()=>{window.print();window.close()}<\/script></body></html>`;
+<script>window.print()<\/script></body></html>`;
   const w = window.open("", "_blank", "width=1100,height=700");
   w?.document.write(html);
   w?.document.close();
 }
 
-function printCombined(arrivals: ExportRow[], departures: ExportRow[], date: string) {
-  const logoUrl = `${window.location.origin}/brand/logo-ischia-transfer-email.png`;
+async function printCombined(arrivals: ExportRow[], departures: ExportRow[], date: string) {
+  const logoSrc = await fetchLogoSrc();
+  const logoHtml = logoSrc ? `<img src="${logoSrc}" alt="Ischia Transfer Service" style="height:44px;width:auto">` : "";
   const html = `<!DOCTYPE html><html><head><title>Giornata ${date}</title>
-<style>body{font-family:Arial,sans-serif;margin:20px}h2{font-size:15px;margin:0 0 4px}h3{font-size:13px;margin:24px 0 4px;color:#1e293b;border-bottom:2px solid #1e293b;padding-bottom:4px}p{font-size:12px;color:#64748b;margin:0 0 10px}@media print{@page{size:landscape}.pb{page-break-before:always}}</style>
+<style>body{font-family:Arial,sans-serif;margin:20px}h3{font-size:13px;margin:24px 0 4px;color:#1e293b;border-bottom:2px solid #1e293b;padding-bottom:4px}@media print{@page{size:landscape}.pb{page-break-before:always}}</style>
 </head><body>
 <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #e2e8f0">
-  <img src="${logoUrl}" alt="Ischia Transfer Service" style="height:44px;width:auto">
+  ${logoHtml}
   <div style="font-weight:700;font-size:16px;color:#0f172a">Ischia Transfer Service — Giornata ${date}</div>
 </div>
 <h3>▼ ARRIVI (${arrivals.length})</h3>
@@ -297,7 +312,7 @@ ${buildTable(arrivals)}
 <div class="pb"></div>
 <h3>▲ PARTENZE (${departures.length})</h3>
 ${buildTable(departures)}
-<script>window.onload=()=>{window.print();window.close()}<\/script></body></html>`;
+<script>window.print()<\/script></body></html>`;
   const w = window.open("", "_blank", "width=1100,height=800");
   w?.document.write(html);
   w?.document.close();
@@ -489,7 +504,7 @@ export default function ArrivalsPage() {
   const handlePrint = () => {
     const rows = buildRows();
     const label = showAllDates ? "Tutte le date" : formatIsoDateShort(selectedDate);
-    printTable(rows, "Lista Arrivi", label);
+    void printTable(rows, "Lista Arrivi", label);
   };
 
   // Partenze della stessa data per export combinato
@@ -515,7 +530,7 @@ export default function ArrivalsPage() {
   };
 
   const handleCombinedPrint = () => {
-    printCombined(buildRows(), buildDepartureRows(), formatIsoDateShort(selectedDate));
+    void printCombined(buildRows(), buildDepartureRows(), formatIsoDateShort(selectedDate));
   };
 
   return (
