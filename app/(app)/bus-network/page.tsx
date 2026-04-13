@@ -1167,7 +1167,7 @@ export default function BusNetworkPage() {
               })()}
 
               {/* Bus cards */}
-              {activeTab === "bus" && <div className="flex flex-wrap gap-4 pb-2">
+              {activeTab === "bus" && <div className="flex flex-nowrap gap-4 overflow-x-auto pb-2">
                 {busCards.map(({ unit, allocations: cardAllocs }) => {
                   const paxTotal = cardAllocs.reduce((sum, a) => sum + a.pax_assigned, 0);
                   const remainingSeats = Math.max(0, unit.capacity - paxTotal);
