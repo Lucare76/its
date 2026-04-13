@@ -136,7 +136,7 @@ export function PwaInit({ children }: { children?: React.ReactNode }) {
       }
       const sub = await swReg.current.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidKey),
+        applicationServerKey: urlBase64ToUint8Array(vapidKey) as BufferSource,
       });
       const token = await getToken();
       if (!token) { setPushState("unsubscribed"); return; }
