@@ -7,7 +7,7 @@ export function emailHtml(body: string, options?: { title?: string; preheader?: 
   // Logo come URL pubblico — Gmail e la maggior parte dei client email bloccano le immagini base64.
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "https://ischia-transfer.vercel.app";
   const logoUrl = `${appUrl}/brand/logo-ischia-transfer-email.png`;
-  const logoBlock = `<img src="${logoUrl}" alt="Ischia Transfer Service" width="220" style="width:220px;max-width:75%;height:auto;display:block;margin:-30px auto -30px auto;" />`;
+  const logoBlock = `<img src="${logoUrl}" alt="Ischia Transfer Service" width="220" style="width:220px;max-width:75%;height:auto;display:block;margin:-88px auto -88px auto;" />`;
 
   const preheader = options?.preheader
     ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${options.preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>`
@@ -35,7 +35,7 @@ ${options?.title ? `<title>${options.title}</title>` : ""}
   @media only screen and (max-width:620px) {
     .email-wrapper { padding:12px 6px!important; }
     .email-container { width:100%!important; max-width:100%!important; }
-    .email-header { padding:0!important; overflow:hidden!important; height:70px!important; border-radius:14px 14px 0 0!important; }
+    .email-header { padding:0!important; overflow:hidden!important; height:45px!important; border-radius:14px 14px 0 0!important; }
     .email-body { padding:24px 16px!important; }
     .email-footer { padding:18px 16px!important; border-radius:0 0 14px 14px!important; }
     .data-table td { display:block!important; width:100%!important; box-sizing:border-box!important; }
@@ -79,7 +79,7 @@ ${preheader}
 
   <!-- HEADER -->
   <tr>
-    <td class="email-header" style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:0;overflow:hidden;height:70px;line-height:0;font-size:0;text-align:center;">
+    <td class="email-header" style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:0;overflow:hidden;height:45px;line-height:0;font-size:0;text-align:center;">
       ${logoBlock}
     </td>
   </tr>
