@@ -505,14 +505,21 @@ function StopSearchSelect({
 
   const hasCatalogMatches = catalogMatches.length > 0;
 
+  const inputRef = useRef<HTMLInputElement>(null);
+
   return (
     <div className="relative">
       <input
+        ref={inputRef}
         type="text"
         placeholder="Scrivi città..."
         value={search}
         onChange={(e) => handleChange(e.target.value)}
-        onFocus={() => setOpen(true)}
+        onFocus={() => {
+          setOpen(true);
+          // Porta l'input in vista così il dropdown non finisce fuori schermo
+          setTimeout(() => inputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+        }}
         onBlur={() => setTimeout(() => setOpen(false), 200)}
         className="w-full rounded border border-rose-200 bg-white px-2 py-1 text-xs text-slate-700 placeholder-slate-300 focus:outline-none focus:ring-1 focus:ring-rose-300"
       />
@@ -861,11 +868,12 @@ export default function BusImportModal({
         "orario", "città", "citta", "city", "fermata", "agenzia"];
 
       let headerRowIdx = 0;
-      let bestScore = 0;
-      for (let ri = 0; ri < Math.min(4, raw.length); ri++) {
+      // Usa la PRIMA riga (entro le prime 3) che contiene almeno 2 parole chiave —
+      // così non si saltano dati nelle righe precedenti all'intestazione trovata
+      for (let ri = 0; ri < Math.min(3, raw.length); ri++) {
         const r = Array.from(raw[ri] as ArrayLike<unknown>, (v) => String(v ?? "").toLowerCase().trim());
         const score = r.filter((h) => KNOWN.some((k) => h.includes(k))).length;
-        if (score > bestScore) { bestScore = score; headerRowIdx = ri; }
+        if (score >= 2) { headerRowIdx = ri; break; }
       }
 
       const headerRow = Array.from(raw[headerRowIdx] as ArrayLike<unknown>, (v) => String(v ?? "").toLowerCase().trim());
