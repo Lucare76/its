@@ -330,6 +330,7 @@ export default function ArrivalsPage() {
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<"time" | "name" | "agency">("time");
   const [agenciesList, setAgenciesList] = useState<AgencyOption[]>([]);
 
   // Carica agenzie reali dal DB
@@ -467,8 +468,23 @@ export default function ArrivalsPage() {
           (!q || (svc.customer_name ?? "").toLowerCase().includes(q) || (svc.phone ?? "").toLowerCase().includes(q))
         );
       })
-      .sort((left, right) => left.date !== right.date ? left.date.localeCompare(right.date) : left.time.localeCompare(right.time));
-  }, [allArrivalInstances, selectedDate, showAllDates, agencyFilter, agencyById, search]);
+      .sort((left, right) => {
+        if (sortBy === "name") {
+          const ln = (s: typeof left.service) => {
+            if (s.customer_last_name) return s.customer_last_name.toLowerCase();
+            const parts = (s.customer_name ?? "").trim().split(/\s+/);
+            return (parts[parts.length - 1] ?? "").toLowerCase();
+          };
+          return ln(left.service).localeCompare(ln(right.service), "it");
+        }
+        if (sortBy === "agency") {
+          const aL = (left.service.billing_party_name ?? agencyById.get(left.service.agency_id ?? "")?.name ?? "").toLowerCase();
+          const aR = (right.service.billing_party_name ?? agencyById.get(right.service.agency_id ?? "")?.name ?? "").toLowerCase();
+          return aL.localeCompare(aR, "it");
+        }
+        return left.date !== right.date ? left.date.localeCompare(right.date) : left.time.localeCompare(right.time);
+      });
+  }, [allArrivalInstances, selectedDate, showAllDates, agencyFilter, agencyById, search, sortBy]);
 
   // Quanti arrivi ci sono in date diverse da quella selezionata (utile per suggerimento)
   const otherDatesCount = useMemo(() =>
@@ -512,7 +528,15 @@ export default function ArrivalsPage() {
     const allInstances = buildOperationalInstances(data.services);
     return allInstances
       .filter((i) => i.direction === "departure" && i.date === selectedDate)
-      .sort((a, b) => a.time.localeCompare(b.time))
+      .sort((a, b) => {
+        if (sortBy === "name") return (a.service.customer_name ?? "").localeCompare(b.service.customer_name ?? "", "it");
+        if (sortBy === "agency") {
+          const aA = (a.service.billing_party_name ?? agencyById.get(a.service.agency_id ?? "")?.name ?? "").toLowerCase();
+          const aB = (b.service.billing_party_name ?? agencyById.get(b.service.agency_id ?? "")?.name ?? "").toLowerCase();
+          return aA.localeCompare(aB, "it");
+        }
+        return a.time.localeCompare(b.time);
+      })
       .map((item) => ({
         Ora: item.time,
         Cliente: getCustomerFullName(item.service),
@@ -523,7 +547,7 @@ export default function ArrivalsPage() {
         Tipo: item.service.service_type_code ?? item.service.booking_service_kind ?? "",
         Agenzia: item.service.billing_party_name ?? agencyById.get(item.service.agency_id ?? "")?.name ?? "",
       }));
-  }, [data.services, selectedDate, hotelsById, agencyById]);
+  }, [data.services, selectedDate, hotelsById, agencyById, sortBy]);
 
   const handleCombinedExcel = () => {
     void exportCombinedExcel(buildRows(), buildDepartureRows(), selectedDate);
@@ -573,6 +597,14 @@ export default function ArrivalsPage() {
                 onChange={(e) => setSearch(e.target.value)}
                 className="input-saas mt-1 min-w-52"
               />
+            </label>
+            <label className="text-sm">
+              <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Ordina per</span>
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as "time" | "name" | "agency")} className="input-saas mt-1">
+                <option value="time">Orario</option>
+                <option value="name">Alfabetico</option>
+                <option value="agency">Agenzia</option>
+              </select>
             </label>
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
               <span className="font-semibold text-slate-700">{formatIsoDateShort(selectedDate)}</span>
