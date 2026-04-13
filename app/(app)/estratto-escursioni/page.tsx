@@ -76,12 +76,15 @@ function printStatements(statements: AgencyStatement[], from: string, to: string
       table td, table th { border-bottom:1px solid #e2e8f0; padding:5px 8px }
       @media print { body { padding:10px } }
     </style></head><body>
-    <div style="margin-bottom:20px">
-      <p style="margin:0;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.1em">Ischia Transfer Service</p>
-      <h1 style="margin:4px 0;font-size:20px">Estratto Escursioni — ${fmtDate(from)} / ${fmtDate(to)}</h1>
-      <p style="margin:4px 0;font-size:13px;color:#475569">${grandPax} pax totali · ${fmtEur(grandTotal)}</p>
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #e2e8f0">
+      <img src="/brand/logo-ischia-transfer-email.png" alt="Ischia Transfer Service" style="height:48px;width:auto">
+      <div>
+        <h1 style="margin:0;font-size:18px;color:#0f172a">Estratto Escursioni — ${fmtDate(from)} / ${fmtDate(to)}</h1>
+        <p style="margin:4px 0 0;font-size:12px;color:#475569">${grandPax} pax totali · ${fmtEur(grandTotal)}</p>
+      </div>
     </div>
     ${rows || "<p style='color:#94a3b8'>Nessuna prenotazione nel periodo.</p>"}
+    <script>window.onload=()=>{window.print();window.close()}<\/script>
   </body></html>`;
 
   const win = window.open("", "_blank", "width=900,height=700");
@@ -89,7 +92,6 @@ function printStatements(statements: AgencyStatement[], from: string, to: string
   win.document.write(html);
   win.document.close();
   win.focus();
-  setTimeout(() => win.print(), 400);
 }
 
 // ── Pagina ────────────────────────────────────────────────────────────────────
