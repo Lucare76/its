@@ -29,7 +29,7 @@ function FerryIcon({ size = 20, className = "" }: { size?: number; className?: s
 
 type BusLine = { id: string; code: string; name: string; family_code: string; family_name: string; variant_label?: string | null };
 type BusStop = { id: string; bus_line_id: string; direction: "arrival" | "departure"; stop_name: string; city: string; pickup_note?: string | null; pickup_time?: string | null; stop_order: number; is_manual: boolean; lat?: number | null; lng?: number | null };
-type BusUnit = { id: string; bus_line_id: string; label: string; capacity: number; low_seat_threshold: number; minimum_passengers?: number | null; status: "open" | "low" | "closed" | "completed"; manual_close: boolean; close_reason?: string | null; driver_name_outbound?: string | null; driver_phone_outbound?: string | null; driver_name_return?: string | null; driver_phone_return?: string | null; tag?: "gruppi" | "esclusivo" | null };
+type BusUnit = { id: string; bus_line_id: string; label: string; capacity: number; low_seat_threshold: number; minimum_passengers?: number | null; status: "open" | "low" | "closed" | "completed"; manual_close: boolean; close_reason?: string | null; driver_name_outbound?: string | null; driver_phone_outbound?: string | null; driver_name_return?: string | null; driver_phone_return?: string | null; tag?: "gruppi" | "esclusivo" | null; group_name?: string | null };
 type BusAllocation = { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; stop_id?: string | null; stop_name: string; direction: "arrival" | "departure"; pax_assigned: number };
 type BusMove = { id: string; service_id: string; from_bus_unit_id?: string | null; to_bus_unit_id?: string | null; stop_name?: string | null; pax_moved: number; reason?: string | null; created_at: string; customer_name?: string | null; customer_phone?: string | null; hotel_name?: string | null; source_bus_label?: string | null; target_bus_label?: string | null; moved_full_allocation?: boolean };
 type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; stop_pickup_note?: string | null; stop_pickup_time?: string | null; hotel_pickup_time?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_id?: string | null; hotel_name?: string | null; agency_name?: string | null; notes?: string | null; created_at?: string };
@@ -143,6 +143,8 @@ export default function BusNetworkPage() {
   const [editLabelValue, setEditLabelValue] = useState("");
   const [editCapUnitId, setEditCapUnitId] = useState<string | null>(null);
   const [editCapValue, setEditCapValue] = useState("");
+  const [editGroupNameUnitId, setEditGroupNameUnitId] = useState<string | null>(null);
+  const [editGroupNameValue, setEditGroupNameValue] = useState("");
 
   // Editable pax per allocation
   const [editPaxAllocId, setEditPaxAllocId] = useState<string | null>(null);
@@ -1165,7 +1167,7 @@ export default function BusNetworkPage() {
               })()}
 
               {/* Bus cards */}
-              {activeTab === "bus" && <div className="flex gap-4 overflow-auto pb-2" style={{ maxHeight: "calc(100vh - 260px)" }}>
+              {activeTab === "bus" && <div className="flex flex-wrap gap-4 pb-2">
                 {busCards.map(({ unit, allocations: cardAllocs }) => {
                   const paxTotal = cardAllocs.reduce((sum, a) => sum + a.pax_assigned, 0);
                   const remainingSeats = Math.max(0, unit.capacity - paxTotal);
@@ -1328,6 +1330,37 @@ export default function BusNetworkPage() {
                             </button>
                           );
                         })()}
+                        {/* Campo nome gruppo/cliente — visibile solo se tag gruppi o esclusivo */}
+                        {(unit.tag === "gruppi" || unit.tag === "esclusivo") && (
+                          <div className="mt-2">
+                            {editGroupNameUnitId === unit.id ? (
+                              <input
+                                autoFocus
+                                value={editGroupNameValue}
+                                onChange={(e) => setEditGroupNameValue(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                placeholder="Nome gruppo / cliente..."
+                                onBlur={async () => {
+                                  if (editGroupNameValue !== (unit.group_name ?? "")) {
+                                    await post("update_group_name", { unit_id: unit.id, group_name: editGroupNameValue.trim() || null });
+                                  }
+                                  setEditGroupNameUnitId(null);
+                                }}
+                                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditGroupNameUnitId(null); }}
+                                className={`w-full rounded border px-2 py-1 text-xs focus:outline-none focus:ring-1 ${selectedLineFerryConfig ? "border-white/40 bg-white/20 text-white placeholder-white/50 focus:ring-white/60" : "border-slate-200 bg-slate-50 text-slate-800 placeholder-slate-300 focus:ring-indigo-300"}`}
+                              />
+                            ) : (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setEditGroupNameUnitId(unit.id); setEditGroupNameValue(unit.group_name ?? ""); }}
+                                className={`w-full text-left text-xs ${selectedLineFerryConfig ? "text-white/80 hover:text-white" : "text-slate-500 hover:text-indigo-600"}`}
+                              >
+                                {unit.group_name
+                                  ? <span className={`font-semibold ${selectedLineFerryConfig ? "text-white" : "text-slate-700"}`}>👤 {unit.group_name}</span>
+                                  : <span className="italic opacity-60">👤 {unit.tag === "esclusivo" ? "Nome cliente esclusivo..." : "Nome gruppo..."}</span>}
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Passenger list grouped by stop */}

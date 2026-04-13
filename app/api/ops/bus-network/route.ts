@@ -561,6 +561,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    if (action === "update_group_name") {
+      const parsed = z.object({
+        unit_id: z.string().uuid(),
+        group_name: z.string().max(120).nullable(),
+      }).parse(body);
+      const { error } = await auth.admin.from("tenant_bus_units")
+        .update({ group_name: parsed.group_name, updated_at: new Date().toISOString() })
+        .eq("tenant_id", tenantId).eq("id", parsed.unit_id);
+      if (error) throw new Error(error.message);
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
     if (action === "allocate_service") {
       const parsed = allocateSchema.parse(body);
       if (!parsed.stop_id) {
