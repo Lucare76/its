@@ -24,14 +24,15 @@ const ENV_VARS = [
   { key: "SUPABASE_SERVICE_ROLE_KEY",      label: "Supabase Service Role",   group: "Supabase" },
   { key: "CRON_SECRET",                    label: "Cron Secret",             group: "Sicurezza" },
   { key: "RESEND_API_KEY",                 label: "Resend API Key",          group: "Email" },
-  { key: "GMAIL_USER",                     label: "Gmail User (IMAP)",       group: "Email" },
-  { key: "GMAIL_APP_PASSWORD",             label: "Gmail App Password",      group: "Email" },
+  { key: "IMAP_HOST",                      label: "IMAP Host",               group: "Email" },
+  { key: "IMAP_USER",                      label: "IMAP User",               group: "Email" },
+  { key: "IMAP_PASS",                      label: "IMAP Password",           group: "Email" },
   { key: "ANTHROPIC_API_KEY",              label: "Anthropic API Key",       group: "AI" },
   { key: "WHATSAPP_TOKEN",                 label: "WhatsApp Token",          group: "WhatsApp" },
   { key: "WHATSAPP_PHONE_NUMBER_ID",       label: "WhatsApp Phone Number ID",group: "WhatsApp" },
   { key: "WHATSAPP_VERIFY_TOKEN",          label: "WhatsApp Verify Token",   group: "WhatsApp" },
-  { key: "RADIUS_API_URL",                 label: "Radius API URL",          group: "GPS" },
-  { key: "RADIUS_API_KEY",                 label: "Radius API Key",          group: "GPS" },
+  { key: "RADIUS_REFRESH_TOKEN",           label: "Radius Refresh Token",    group: "GPS" },
+  { key: "RADIUS_CUSTOMER_ID",            label: "Radius Customer ID",      group: "GPS" },
 ];
 
 function createAdminClient() {
