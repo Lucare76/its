@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/server/whatsapp";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 export interface DirectInviteEmailInput {
   to: string;
@@ -41,7 +42,7 @@ function buildInviteEmailHtml(input: DirectInviteEmailInput): string {
 
 export async function sendDirectInviteEmail(input: DirectInviteEmailInput): Promise<DirectInviteEmailResult> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL;
+  const from = getVerifiedFromEmail();
   if (!apiKey || !from) {
     return { status: 'skipped', error: 'Provider email non configurato.' };
   }

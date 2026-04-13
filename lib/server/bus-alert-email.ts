@@ -1,3 +1,5 @@
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
+
 const ALERT_TO = "info@ischiatransferservice.it";
 
 export interface BusLowSeatAlertInput {
@@ -10,7 +12,7 @@ export interface BusLowSeatAlertInput {
 
 export async function sendBusLowSeatAlertEmail(input: BusLowSeatAlertInput): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL;
+  const from = getVerifiedFromEmail();
   if (!apiKey || !from) return;
 
   const subject = `Attenzione: bus quasi pieno — ${input.busLabel} (${input.remainingSeats} posti rimasti)`;

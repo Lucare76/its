@@ -1,4 +1,5 @@
 import { emailHtml, emailDataTable } from "@/lib/server/email-layout";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 export type AccessApprovalEmailStatus = "sent" | "failed" | "skipped";
 
@@ -72,7 +73,7 @@ export async function sendAccessApprovalEmail(input: AccessApprovalEmailInput): 
   }
 
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL;
+  const from = getVerifiedFromEmail();
   if (!apiKey || !from) {
     return { status: "skipped", error: "Provider email non configurato (RESEND_API_KEY / AGENCY_BOOKING_FROM_EMAIL)." };
   }

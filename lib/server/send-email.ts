@@ -39,12 +39,21 @@ function isFreeDomain(email: string): boolean {
   return FREE_EMAIL_DOMAINS.some((d) => domain === d);
 }
 
+/**
+ * Ritorna l'indirizzo mittente verificato.
+ * Se AGENCY_BOOKING_FROM_EMAIL è un dominio libero (gmail ecc.) usa il fallback.
+ * Usare questa funzione in tutti i file che chiamano Resend direttamente.
+ */
+export function getVerifiedFromEmail(): string {
+  const fromEnv = process.env.AGENCY_BOOKING_FROM_EMAIL?.trim() ?? "";
+  return (fromEnv && !isFreeDomain(fromEnv)) ? fromEnv : "noreply@ischiatransferservice.it";
+}
+
 export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return { ok: true, skipped: true };
 
-  const fromEnv = process.env.AGENCY_BOOKING_FROM_EMAIL?.trim() ?? "";
-  const fromDefault = (fromEnv && !isFreeDomain(fromEnv)) ? fromEnv : "noreply@ischiatransferservice.it";
+  const fromDefault = getVerifiedFromEmail();
   const from = opts.from ?? `Ischia Transfer Service <${fromDefault}>`;
 
   // BCC automatico per notifiche sviluppatore / test

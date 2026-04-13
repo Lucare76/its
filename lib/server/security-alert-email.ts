@@ -1,3 +1,5 @@
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
+
 interface SecurityAlertInput {
   type: 'rate_limit_exceeded' | 'multiple_failed_logins' | 'suspicious_activity';
   email?: string;
@@ -88,7 +90,7 @@ ${input.details?.description || 'Dettagli non disponibili'}
 
 export async function sendSecurityAlert(input: SecurityAlertInput): Promise<SecurityAlertResult> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL;
+  const from = getVerifiedFromEmail();
   if (!apiKey || !from) {
     return { status: 'skipped', error: 'Provider email non configurato.' };
   }

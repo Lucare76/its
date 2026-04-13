@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { generateInvoiceHtml, type InvoiceLineItem } from "@/lib/server/invoice-pdf";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -131,7 +132,7 @@ export async function POST(request: NextRequest) {
 
   // Invia via Resend se richiesto
   if (send && invoiceEmail && process.env.RESEND_API_KEY) {
-    const fromEmail = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransfer.it";
+    const fromEmail = getVerifiedFromEmail();
     const months = ["gen","feb","mar","apr","mag","giu","lug","ago","set","ott","nov","dic"];
     const [fy, fm] = period_from.split("-");
     const [ty, tm] = period_to.split("-");

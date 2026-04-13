@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { parseRole } from "@/lib/rbac";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -34,7 +35,7 @@ export async function POST(request: NextRequest) {
   if (!ctx) return NextResponse.json({ error: "Non autorizzato." }, { status: 403 });
 
   const apiKey = process.env.RESEND_API_KEY;
-  const fromEmail = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransferservice.it";
+  const fromEmail = getVerifiedFromEmail();
   if (!apiKey) return NextResponse.json({ error: "RESEND_API_KEY non configurata." }, { status: 500 });
 
   let formData: FormData;

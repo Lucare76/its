@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendAgencyBookingConfirmationEmail } from "@/lib/server/agency-booking-email";
 import { sendOperatorNotifyEmail } from "@/lib/server/agency-approval-email";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -15,7 +16,7 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://app.ischiatransferse
 
 export async function GET(request: NextRequest) {
   const apiKey   = process.env.RESEND_API_KEY;
-  const fromEmail = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransferservice.it";
+  const fromEmail = getVerifiedFromEmail();
   const opsEmail  = process.env.OPS_NOTIFY_EMAIL;
   const bccEmail  = process.env.NOTIFY_BCC_EMAIL;
 

@@ -1,3 +1,5 @@
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
+
 // Email "Liste Bruno" — inviata da Karmen Peach a Bruno
 // Contiene la lista arrivi (stazione/aeroporto) e partenze (per traghetto)
 // del giorno selezionato.
@@ -152,7 +154,7 @@ function buildDeparturesHtml(departures: BrunoDeparture[]): string {
 
 export async function sendListeBrunoEmail(input: BrunoEmailInput): Promise<{ ok: boolean; error?: string }> {
   const apiKey = process.env.RESEND_API_KEY?.trim();
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL?.trim() || "noreply@ischiatransferservice.it";
+  const from = getVerifiedFromEmail();
   if (!apiKey) return { ok: false, error: "RESEND_API_KEY non configurata" };
 
   const dateLabel = fmtDate(input.date);

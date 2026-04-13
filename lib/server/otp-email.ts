@@ -1,4 +1,5 @@
 import { emailHtml, emailHighlightBox } from "@/lib/server/email-layout";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 export interface OtpEmailInput {
   to: string;
@@ -43,7 +44,7 @@ function buildOtpHtml(input: OtpEmailInput): string {
 
 export async function sendOtpEmail(input: OtpEmailInput): Promise<OtpEmailResult> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL;
+  const from = getVerifiedFromEmail();
   if (!apiKey || !from) {
     return { status: 'skipped', error: 'Provider email non configurato (RESEND_API_KEY / AGENCY_BOOKING_FROM_EMAIL).' };
   }

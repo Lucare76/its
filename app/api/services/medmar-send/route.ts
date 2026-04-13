@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -169,7 +170,7 @@ export async function POST(request: NextRequest) {
 
   // Invia email se c'è un indirizzo
   if (agencyEmail && process.env.RESEND_API_KEY) {
-    const fromEmail = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransferservice.it";
+    const fromEmail = getVerifiedFromEmail();
     const html = generateMedmarEmailHtml({
       agencyName: billingParty || "Agenzia",
       agencyEmail,

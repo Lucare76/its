@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { buildServiceListEmailHtml, buildServiceListPlainText, type ServiceListEmailType } from "@/lib/server/service-list-email";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -33,7 +34,7 @@ export async function POST(request: NextRequest) {
   }
 
   const apiKey = process.env.RESEND_API_KEY;
-  const from   = process.env.AGENCY_BOOKING_FROM_EMAIL;
+  const from   = getVerifiedFromEmail();
   if (!apiKey || !from) return NextResponse.json({ error: "Email provider non configurato." }, { status: 500 });
 
   // Risolvi email destinatario

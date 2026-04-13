@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildServiceListEmailHtml, buildServiceListPlainText, type ServiceListEmailType } from "@/lib/server/service-list-email";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 type SummaryLine = {
   date: string;
@@ -144,7 +145,7 @@ export async function sendOperationalReportEmail(params: {
   }
 
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL;
+  const from = getVerifiedFromEmail();
   if (!apiKey || !from) {
     return {
       status: "failed",

@@ -5,6 +5,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -151,7 +152,7 @@ async function sendDiffEmailToOperator(params: {
   agencyNotes: string | null;
 }) {
   const apiKey = process.env.RESEND_API_KEY;
-  const from   = process.env.AGENCY_BOOKING_FROM_EMAIL;
+  const from   = getVerifiedFromEmail();
   if (!apiKey || !from) return;
 
   // Trova contact_email dal profilo tenant
@@ -263,7 +264,7 @@ async function sendConfirmationEmailToAgency(params: {
   modCount: number;
 }) {
   const apiKey = process.env.RESEND_API_KEY;
-  const from   = process.env.AGENCY_BOOKING_FROM_EMAIL;
+  const from   = getVerifiedFromEmail();
   if (!apiKey || !from) return;
 
   // Cerca email booking dell'agenzia

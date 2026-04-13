@@ -1,4 +1,5 @@
 import { emailHtml, emailButton } from "@/lib/server/email-layout";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 export type PasswordResetEmailStatus = "sent" | "failed" | "skipped";
 
@@ -53,7 +54,7 @@ export async function sendPasswordResetEmail(input: PasswordResetEmailInput): Pr
   }
 
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL;
+  const from = getVerifiedFromEmail();
   if (!apiKey || !from) {
     return { status: "skipped", error: "Provider email non configurato (RESEND_API_KEY / AGENCY_BOOKING_FROM_EMAIL)." };
   }
@@ -116,7 +117,7 @@ function buildTemporaryPasswordHtml(input: { fullName: string; tempPassword: str
 
 export async function sendTemporaryPasswordEmail(input: { to: string; fullName: string; tempPassword: string }) {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.AGENCY_BOOKING_FROM_EMAIL;
+  const from = getVerifiedFromEmail();
   if (!apiKey || !from) {
     return { status: "skipped" as const, error: "Provider email non configurato (RESEND_API_KEY / AGENCY_BOOKING_FROM_EMAIL)." };
   }

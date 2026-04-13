@@ -4,6 +4,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import type { PricingAuthContext } from "@/lib/server/pricing-auth";
 import { requireQuotesAccess } from "@/lib/server/quotes-access";
 import { emailHtml } from "@/lib/server/email-layout";
+import { getVerifiedFromEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -146,7 +147,7 @@ export async function POST(request: NextRequest) {
       const html = buildQuoteEmail(quote as Record<string, unknown>, waypointLabels, responseUrl);
 
       const apiKey = process.env.RESEND_API_KEY;
-      const fromEmail = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransferservice.it";
+      const fromEmail = getVerifiedFromEmail();
       if (apiKey) {
         const res = await fetch("https://api.resend.com/emails", {
           method: "POST",
