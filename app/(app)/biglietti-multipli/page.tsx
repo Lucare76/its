@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
-const TARGET_AGENCIES = ["Aleste Viaggi", "Sosandra", "Zigolo", "Angelino"];
+const TARGET_AGENCIES = ["Aleste Viaggi", "Ischia Stars", "Zigolo", "Angelino"];
 
 type Agency = { id: string; name: string; email: string | null };
 
