@@ -33,11 +33,18 @@ function normalize(v: string | string[] | undefined): string[] {
   return Array.isArray(v) ? v.filter(Boolean) : [v];
 }
 
+const FREE_EMAIL_DOMAINS = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "libero.it", "virgilio.it", "icloud.com"];
+function isFreeDomain(email: string): boolean {
+  const domain = email.split("@")[1]?.toLowerCase() ?? "";
+  return FREE_EMAIL_DOMAINS.some((d) => domain === d);
+}
+
 export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return { ok: true, skipped: true };
 
-  const fromDefault = process.env.AGENCY_BOOKING_FROM_EMAIL ?? "noreply@ischiatransferservice.it";
+  const fromEnv = process.env.AGENCY_BOOKING_FROM_EMAIL?.trim() ?? "";
+  const fromDefault = (fromEnv && !isFreeDomain(fromEnv)) ? fromEnv : "noreply@ischiatransferservice.it";
   const from = opts.from ?? `Ischia Transfer Service <${fromDefault}>`;
 
   // BCC automatico per notifiche sviluppatore / test
