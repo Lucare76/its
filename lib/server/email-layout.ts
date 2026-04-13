@@ -4,18 +4,10 @@
  */
 
 export function emailHtml(body: string, options?: { title?: string; preheader?: string }): string {
-  // Logo sempre embedded come base64 — indipendentemente dall'ambiente.
-  // Gli URL esterni nelle email dipendono dalla raggiungibilità pubblica del server
-  // (non garantita per Resend e proxy Gmail). Il base64 è autosufficiente.
-  let logoSrc: string | null = null;
-  try {
-    const { getLogoDataUri } = require("@/lib/server/logo") as { getLogoDataUri: () => string | null };
-    logoSrc = getLogoDataUri();
-  } catch { /* ignora, usa fallback testo */ }
-
-  const logoBlock = logoSrc
-    ? `<img src="${logoSrc}" alt="Ischia Transfer Service" width="180" style="width:180px;max-width:65%;height:auto;display:block;margin:0 auto;" />`
-    : `<div style="font-size:20px;font-weight:800;color:#ffffff;letter-spacing:-0.3px;text-align:center;">Ischia Transfer Service</div>`;
+  // Logo come URL pubblico — Gmail e la maggior parte dei client email bloccano le immagini base64.
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "https://ischia-transfer.vercel.app";
+  const logoUrl = `${appUrl}/brand/logo-ischia-transfer-email.png`;
+  const logoBlock = `<img src="${logoUrl}" alt="Ischia Transfer Service" width="180" style="width:180px;max-width:65%;height:auto;display:block;margin:0 auto;" />`;
 
   const preheader = options?.preheader
     ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${options.preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>`
