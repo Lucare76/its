@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
   let sent = 0;
 
   for (const asgn of assignments) {
-    const svc = asgn.services as Record<string, unknown>;
+    const svc = asgn.services as unknown as Record<string, unknown>;
     const status = svc.status as string;
 
     // Salta servizi già completati/cancellati
