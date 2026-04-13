@@ -33,7 +33,7 @@ function today() {
 
 // ── PDF stampa ────────────────────────────────────────────────────────────────
 
-function printStatements(statements: AgencyStatement[], from: string, to: string) {
+function printStatements(statements: AgencyStatement[], from: string, to: string, logoUrl = `${window.location.origin}/brand/logo-ischia-transfer-email.png`) {
   const rows = statements.map((st) => {
     const bkRows = st.bookings.map((b: EscursioneBooking) => `
       <tr>
@@ -77,7 +77,7 @@ function printStatements(statements: AgencyStatement[], from: string, to: string
       @media print { body { padding:10px } }
     </style></head><body>
     <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #e2e8f0">
-      <img src="/brand/logo-ischia-transfer-email.png" alt="Ischia Transfer Service" style="height:48px;width:auto">
+      <img src="${logoUrl}" alt="Ischia Transfer Service" style="height:48px;width:auto">
       <div>
         <h1 style="margin:0;font-size:18px;color:#0f172a">Estratto Escursioni — ${fmtDate(from)} / ${fmtDate(to)}</h1>
         <p style="margin:4px 0 0;font-size:12px;color:#475569">${grandPax} pax totali · ${fmtEur(grandTotal)}</p>
