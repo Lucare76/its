@@ -4,8 +4,8 @@
     { "path": "/api/cron/agency-invoices",   "schedule": "0 8 * * *"    },
     { "path": "/api/cron/vehicle-expiry-check", "schedule": "0 8 * * *" },
     { "path": "/api/cron/backup",            "schedule": "0 2 * * *"    },
-    { "path": "/api/cron/push-reminders",    "schedule": "*/15 * * * *" },
-    { "path": "/api/cron/poll-emails",       "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/push-reminders",    "schedule": "0 6 * * *"    },
+    { "path": "/api/cron/poll-emails",       "schedule": "0 6 * * *"    },
     { "path": "/api/cron/expire-quotes",     "schedule": "0 2 * * *"    }
   ]
 }
