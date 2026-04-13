@@ -346,6 +346,7 @@ export default function ExcelImportPage() {
   const [result, setResult] = useState<ImportResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [inferredFileDate, setInferredFileDate] = useState("");
+  const [rowDecisions, setRowDecisions] = useState<Map<number, "approved" | "skipped" | "pending">>(new Map());
 
   useEffect(() => {
     let active = true;
@@ -731,6 +732,65 @@ export default function ExcelImportPage() {
     [candidateRows]
   );
 
+  // Ogni volta che cambiano le righe candidate, reset delle decisioni:
+  // righe senza warning → auto-approvate, righe con warning → pending
+  useEffect(() => {
+    setRowDecisions((prev) => {
+      if (candidateRows.length === 0) return new Map();
+      const next = new Map<number, "approved" | "skipped" | "pending">();
+      for (const row of candidateRows) {
+        const existing = prev.get(row.row_index);
+        next.set(row.row_index, existing ?? (row.localIssues.length === 0 ? "approved" : "pending"));
+      }
+      return next;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidateRows]);
+
+  const approvedCandidates = useMemo(
+    () => candidateRows.filter((row) => rowDecisions.get(row.row_index) === "approved"),
+    [candidateRows, rowDecisions]
+  );
+
+  const decisionCounts = useMemo(
+    () => ({
+      approved: candidateRows.filter((row) => rowDecisions.get(row.row_index) === "approved").length,
+      skipped: candidateRows.filter((row) => rowDecisions.get(row.row_index) === "skipped").length,
+      pending: candidateRows.filter((row) => rowDecisions.get(row.row_index) === "pending").length
+    }),
+    [candidateRows, rowDecisions]
+  );
+
+  const setDecision = (rowIndex: number, decision: "approved" | "skipped" | "pending") => {
+    setRowDecisions((prev) => new Map(prev).set(rowIndex, decision));
+  };
+
+  const approveAllValid = () => {
+    setRowDecisions((prev) => {
+      const next = new Map(prev);
+      for (const row of candidateRows) {
+        if (row.localIssues.length === 0) next.set(row.row_index, "approved");
+      }
+      return next;
+    });
+  };
+
+  const skipAll = () => {
+    setRowDecisions((prev) => {
+      const next = new Map(prev);
+      for (const row of candidateRows) next.set(row.row_index, "skipped");
+      return next;
+    });
+  };
+
+  const approveAll = () => {
+    setRowDecisions((prev) => {
+      const next = new Map(prev);
+      for (const row of candidateRows) next.set(row.row_index, "approved");
+      return next;
+    });
+  };
+
   const handleFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -770,8 +830,9 @@ export default function ExcelImportPage() {
       setMessage("Supabase non configurato.");
       return;
     }
-    if (candidateRows.length === 0) {
-      setMessage("Nessuna riga disponibile da importare.");
+    const rowsToImport = dryRun ? candidateRows : approvedCandidates;
+    if (rowsToImport.length === 0) {
+      setMessage(dryRun ? "Nessuna riga disponibile da importare." : "Nessuna riga approvata da importare.");
       return;
     }
 
@@ -797,7 +858,7 @@ export default function ExcelImportPage() {
           default_direction: defaultDirection,
           default_billing_party_name: defaultBillingPartyName,
           default_hotel_id: defaultHotelId || null,
-          rows: candidateRows.map(({ localIssues, ...row }) => row)
+          rows: rowsToImport.map(({ localIssues, ...row }) => row)
         })
       });
 
@@ -839,7 +900,7 @@ export default function ExcelImportPage() {
         <SectionCard title="Righe candidate">
           <p className="text-3xl font-semibold text-text">{candidateRows.length}</p>
           <p className="mt-1 text-xs text-muted">
-            {candidateStats.valid} valide / {candidateStats.invalid} con warning
+            {decisionCounts.approved} approvate / {decisionCounts.pending} da decidere
           </p>
         </SectionCard>
       </div>
@@ -962,14 +1023,19 @@ export default function ExcelImportPage() {
         )}
       </SectionCard>
 
-      <SectionCard title="Azioni import" subtitle="Prima dry run server, poi import delle sole righe valide.">
-        <div className="flex flex-wrap gap-3">
+      <SectionCard title="Azioni import" subtitle="Approva le righe nella sezione sotto, poi importa quelle approvate.">
+        <div className="flex flex-wrap gap-3 items-center">
           <button type="button" className="btn-secondary" disabled={submitting || candidateRows.length === 0} onClick={() => void runImport(true)}>
-            {submitting ? "Elaborazione..." : "Dry run server"}
+            {submitting ? "Elaborazione..." : "Dry run server (tutte)"}
           </button>
-          <button type="button" className="btn-primary" disabled={submitting || candidateRows.length === 0} onClick={() => void runImport(false)}>
-            {submitting ? "Import in corso..." : "Importa righe valide"}
+          <button type="button" className="btn-primary" disabled={submitting || approvedCandidates.length === 0} onClick={() => void runImport(false)}>
+            {submitting ? "Import in corso..." : `Importa approvate (${approvedCandidates.length})`}
           </button>
+          {decisionCounts.pending > 0 ? (
+            <span className="rounded-full bg-amber-50 px-3 py-1 text-xs text-amber-700">
+              {decisionCounts.pending} righe da decidere
+            </span>
+          ) : null}
         </div>
         {result ? (
           <div className="mt-4 grid gap-3 md:grid-cols-3">
@@ -1023,38 +1089,102 @@ export default function ExcelImportPage() {
         )}
       </SectionCard>
 
-      <SectionCard title="Righe candidate" subtitle="Anteprima normalizzata delle prime righe che il sistema prova a trasformare in servizi.">
+      <SectionCard title="Righe candidate" subtitle="Approva o salta ogni riga. Solo le approvate verranno importate.">
         {candidateRows.length === 0 ? (
           <EmptyState title="Nessuna riga candidata" description="Carica un file e completa il mapping per generare una preview importabile." compact />
         ) : (
-          <div className="space-y-3">
-            {candidateRows.slice(0, 12).map((row) => (
-              <article key={row.row_index} className="rounded-2xl border border-border bg-surface/80 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-semibold text-text">
-                      Riga {row.row_index} - {row.customer_name || "cliente non letto"}
-                    </p>
-                    <p className="text-xs text-muted">
-                      {row.date || "data?"} {row.time || "ora?"} - {row.destination || "hotel?"}
-                    </p>
-                  </div>
-                  <span className={row.localIssues.length === 0 ? "rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-emerald-700" : "rounded-full bg-amber-50 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-amber-700"}>
-                    {row.localIssues.length === 0 ? "pronta" : "da verificare"}
-                  </span>
-                </div>
-                <div className="mt-3 grid gap-2 text-sm text-text md:grid-cols-2 xl:grid-cols-4">
-                  <p><span className="text-muted">Pickup:</span> {row.pickup || "vuoto"}</p>
-                  <p><span className="text-muted">Pax:</span> {row.pax || 0}</p>
-                  <p><span className="text-muted">Rif. mezzo:</span> {row.transport_code || "vuoto"}</p>
-                  <p><span className="text-muted">Telefono:</span> {row.phone || "vuoto"}</p>
-                </div>
-                {row.localIssues.length > 0 ? (
-                  <p className="mt-3 text-xs text-amber-700">Warning: {row.localIssues.join(", ")}</p>
+          <>
+            <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-surface/80 p-3">
+              <div className="flex gap-4 text-sm">
+                <span className="text-emerald-700 font-semibold">{decisionCounts.approved} approvate</span>
+                <span className="text-slate-500">{decisionCounts.skipped} saltate</span>
+                {decisionCounts.pending > 0 ? (
+                  <span className="text-amber-700 font-semibold">{decisionCounts.pending} da decidere</span>
                 ) : null}
-              </article>
-            ))}
-          </div>
+              </div>
+              <div className="ml-auto flex gap-2">
+                <button type="button" className="btn-secondary text-xs py-1 px-3" onClick={approveAllValid}>
+                  Approva valide
+                </button>
+                <button type="button" className="btn-secondary text-xs py-1 px-3" onClick={approveAll}>
+                  Approva tutte
+                </button>
+                <button type="button" className="btn-secondary text-xs py-1 px-3" onClick={skipAll}>
+                  Salta tutte
+                </button>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {candidateRows.map((row) => {
+                const decision = rowDecisions.get(row.row_index) ?? "pending";
+                return (
+                  <article
+                    key={row.row_index}
+                    className={
+                      decision === "approved"
+                        ? "rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4"
+                        : decision === "skipped"
+                          ? "rounded-2xl border border-slate-200 bg-slate-50/60 p-4 opacity-50"
+                          : "rounded-2xl border border-amber-200 bg-amber-50/30 p-4"
+                    }
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-text">
+                          Riga {row.row_index} — {row.customer_name || "cliente non letto"}
+                        </p>
+                        <p className="text-xs text-muted">
+                          {row.date || "data?"} {row.time || "ora?"} — {row.destination || "hotel?"}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={
+                            row.localIssues.length === 0
+                              ? "rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-emerald-700"
+                              : "rounded-full bg-amber-50 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-amber-700"
+                          }
+                        >
+                          {row.localIssues.length === 0 ? "ok" : "warning"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setDecision(row.row_index, decision === "approved" ? "pending" : "approved")}
+                          className={
+                            decision === "approved"
+                              ? "rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white"
+                              : "rounded-full border border-emerald-300 bg-white px-3 py-1 text-xs text-emerald-700 hover:bg-emerald-50"
+                          }
+                        >
+                          Approva
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDecision(row.row_index, decision === "skipped" ? "pending" : "skipped")}
+                          className={
+                            decision === "skipped"
+                              ? "rounded-full bg-slate-500 px-3 py-1 text-xs font-semibold text-white"
+                              : "rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                          }
+                        >
+                          Salta
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-2 text-sm text-text md:grid-cols-2 xl:grid-cols-4">
+                      <p><span className="text-muted">Pickup:</span> {row.pickup || "vuoto"}</p>
+                      <p><span className="text-muted">Pax:</span> {row.pax || 0}</p>
+                      <p><span className="text-muted">Rif. mezzo:</span> {row.transport_code || "vuoto"}</p>
+                      <p><span className="text-muted">Telefono:</span> {row.phone || "vuoto"}</p>
+                    </div>
+                    {row.localIssues.length > 0 ? (
+                      <p className="mt-3 text-xs text-amber-700">Warning: {row.localIssues.join(", ")}</p>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          </>
         )}
       </SectionCard>
 
