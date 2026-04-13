@@ -18,6 +18,9 @@ interface HotelListItem {
   source_osm_type: "node" | "way" | "relation" | null;
   source_osm_id: number | null;
   is_active: boolean;
+  email: string | null;
+  phone: string | null;
+  contact_name: string | null;
 }
 
 interface HotelAlias {
@@ -52,6 +55,9 @@ type HotelEditDraft = {
   small_vehicle_only: boolean;
   small_vehicle_max_pax: string;
   is_active: boolean;
+  email: string;
+  phone: string;
+  contact_name: string;
 };
 
 const PAGE_SIZE = 20;
@@ -66,7 +72,10 @@ function toEditDraft(hotel: HotelListItem): HotelEditDraft {
     lng: hotel.lng == null ? "" : String(hotel.lng),
     small_vehicle_only: hotel.small_vehicle_only ?? false,
     small_vehicle_max_pax: hotel.small_vehicle_max_pax == null ? "" : String(hotel.small_vehicle_max_pax),
-    is_active: hotel.is_active
+    is_active: hotel.is_active,
+    email: hotel.email ?? "",
+    phone: hotel.phone ?? "",
+    contact_name: hotel.contact_name ?? "",
   };
 }
 
@@ -130,7 +139,7 @@ export default function HotelsPage() {
   const [aliasValue, setAliasValue] = useState("");
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createDraft, setCreateDraft] = useState<HotelEditDraft>({
-    name: "", address: "", city: "Ischia", zone: "Ischia Porto", lat: "", lng: "", small_vehicle_only: false, small_vehicle_max_pax: "", is_active: true
+    name: "", address: "", city: "Ischia", zone: "Ischia Porto", lat: "", lng: "", small_vehicle_only: false, small_vehicle_max_pax: "", is_active: true, email: "", phone: "", contact_name: ""
   });
 
   const loadHotels = useCallback(
@@ -144,7 +153,7 @@ export default function HotelsPage() {
 
       let query = supabase
         .from("hotels")
-        .select("id,name,zone,address,city,lat,lng,small_vehicle_only,small_vehicle_max_pax,source,source_osm_type,source_osm_id,is_active", { count: "exact" })
+        .select("id,name,zone,address,city,lat,lng,small_vehicle_only,small_vehicle_max_pax,source,source_osm_type,source_osm_id,is_active,email,phone,contact_name", { count: "exact" })
         .eq("tenant_id", currentTenantId)
         .order("name", { ascending: true })
         .range(offset, nextLimit);
@@ -188,7 +197,7 @@ export default function HotelsPage() {
     const [{ data: allHotels, error: hotelsError }, { data: services, error: servicesError }] = await Promise.all([
       supabase
         .from("hotels")
-        .select("id,name,zone,address,city,lat,lng,small_vehicle_only,small_vehicle_max_pax,source,source_osm_type,source_osm_id,is_active")
+        .select("id,name,zone,address,city,lat,lng,small_vehicle_only,small_vehicle_max_pax,source,source_osm_type,source_osm_id,is_active,email,phone,contact_name")
         .eq("tenant_id", currentTenantId)
         .order("name", { ascending: true }),
       supabase
@@ -738,6 +747,9 @@ export default function HotelsPage() {
       small_vehicle_only: editDraft.small_vehicle_only,
       small_vehicle_max_pax: editDraft.small_vehicle_only ? parsedSmallVehicleMaxPax : null,
       is_active: editDraft.is_active,
+      email: editDraft.email.trim() || null,
+      phone: editDraft.phone.trim() || null,
+      contact_name: editDraft.contact_name.trim() || null,
       updated_at: new Date().toISOString()
     };
 
@@ -792,12 +804,15 @@ export default function HotelsPage() {
       small_vehicle_only: createDraft.small_vehicle_only,
       small_vehicle_max_pax: createDraft.small_vehicle_only ? parsedSmallVehicleMaxPax : null,
       is_active: createDraft.is_active,
+      email: createDraft.email.trim() || null,
+      phone: createDraft.phone.trim() || null,
+      contact_name: createDraft.contact_name.trim() || null,
       source: "manual"
     });
     setSaving(false);
     if (insertError) { setError(insertError.message); return; }
     setShowCreateForm(false);
-    setCreateDraft({ name: "", address: "", city: "Ischia", zone: "Ischia Porto", lat: "", lng: "", small_vehicle_only: false, small_vehicle_max_pax: "", is_active: true });
+    setCreateDraft({ name: "", address: "", city: "Ischia", zone: "Ischia Porto", lat: "", lng: "", small_vehicle_only: false, small_vehicle_max_pax: "", is_active: true, email: "", phone: "", contact_name: "" });
     setMessage(`Hotel "${createDraft.name.trim()}" creato.`);
     await Promise.all([loadHotels(tenantId, search, 0, false), loadMergeContext(tenantId)]);
   };
@@ -979,6 +994,14 @@ export default function HotelsPage() {
                       </div>
                       <p className="mt-2 text-xs text-slate-500">Per gli hotel dove, in assegnazione Ischia, può entrare solo un mezzo piccolo. Il veicolo specifico verrà scelto più avanti nella flotta.</p>
                     </label>
+                  <label className="space-y-1 rounded-xl border border-slate-200 bg-white px-3 py-3 md:col-span-2">
+                    <span className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Contatti ricettivo</span>
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                      <input value={createDraft.email} onChange={(e) => setCreateDraft({ ...createDraft, email: e.target.value })} placeholder="Email ricettivo" type="email" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                      <input value={createDraft.phone} onChange={(e) => setCreateDraft({ ...createDraft, phone: e.target.value })} placeholder="Telefono / WhatsApp" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                      <input value={createDraft.contact_name} onChange={(e) => setCreateDraft({ ...createDraft, contact_name: e.target.value })} placeholder="Referente (es. Ricevimento)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </div>
+                  </label>
                   </div>
                   <button type="button" onClick={() => void createHotel()} disabled={saving} className="mt-3 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
                     {saving ? "Creazione..." : "Crea hotel"}
@@ -1101,6 +1124,7 @@ export default function HotelsPage() {
                     <th className="px-3 py-2 font-medium">Hotel</th>
                     <th className="px-3 py-2 font-medium">Localizzazione</th>
                     <th className="px-3 py-2 font-medium">Assegnazione Ischia</th>
+                    <th className="px-3 py-2 font-medium">Contatti</th>
                     <th className="px-3 py-2 font-medium">Alias</th>
                     <th className="px-3 py-2 font-medium">Stato</th>
                     <th className="px-3 py-2 font-medium">Azioni</th>
@@ -1218,6 +1242,38 @@ export default function HotelsPage() {
                             </div>
                           ) : (
                             <span className="text-sm text-slate-500">Accesso standard</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 min-w-[180px]">
+                          {isEditing ? (
+                            <div className="space-y-1.5">
+                              <input
+                                value={editDraft.email}
+                                onChange={(e) => setEditDraft({ ...editDraft, email: e.target.value })}
+                                placeholder="Email ricettivo"
+                                type="email"
+                                className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
+                              />
+                              <input
+                                value={editDraft.phone}
+                                onChange={(e) => setEditDraft({ ...editDraft, phone: e.target.value })}
+                                placeholder="Telefono / WhatsApp"
+                                className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
+                              />
+                              <input
+                                value={editDraft.contact_name}
+                                onChange={(e) => setEditDraft({ ...editDraft, contact_name: e.target.value })}
+                                placeholder="Referente (es. Ricevimento)"
+                                className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
+                              />
+                            </div>
+                          ) : (
+                            <div className="space-y-0.5 text-xs text-slate-600">
+                              {hotel.email && <div title="Email">✉️ {hotel.email}</div>}
+                              {hotel.phone && <div title="Telefono">📞 {hotel.phone}</div>}
+                              {hotel.contact_name && <div title="Referente" className="text-slate-400">{hotel.contact_name}</div>}
+                              {!hotel.email && !hotel.phone && <span className="text-slate-300 italic">Nessun contatto</span>}
+                            </div>
                           )}
                         </td>
                         <td className="px-3 py-2">
