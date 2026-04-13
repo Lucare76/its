@@ -7,7 +7,7 @@ export function emailHtml(body: string, options?: { title?: string; preheader?: 
   // Logo come URL pubblico — Gmail e la maggior parte dei client email bloccano le immagini base64.
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "https://ischia-transfer.vercel.app";
   const logoUrl = `${appUrl}/brand/logo-ischia-transfer-email.png`;
-  const logoBlock = `<img src="${logoUrl}" alt="Ischia Transfer Service" width="220" style="width:220px;max-width:75%;height:auto;display:block;margin:-88px auto -88px auto;" />`;
+  const logoBlock = `<img src="${logoUrl}" alt="Ischia Transfer Service" width="220" style="width:220px;max-width:75%;height:auto;display:block;margin:-78px auto -98px auto;" />`;
 
   const preheader = options?.preheader
     ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${options.preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>`
