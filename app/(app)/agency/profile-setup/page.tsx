@@ -19,6 +19,15 @@ type AgencyProfile = {
   setup_required?: boolean;
 };
 
+type PendingChange = {
+  id: string;
+  status: "pending" | "rejected";
+  changes: Record<string, unknown>;
+  rejection_note: string | null;
+  acknowledged_at: string | null;
+  created_at: string;
+};
+
 type FormState = {
   name: string;
   legal_name: string;
@@ -45,12 +54,28 @@ const emptyForm: FormState = {
   notes: ""
 };
 
+const FIELD_LABELS: Record<string, string> = {
+  name: "Nome agenzia",
+  legal_name: "Ragione sociale",
+  billing_name: "Intestazione fattura",
+  contact_email: "Email contatto",
+  booking_email: "Email prenotazioni",
+  phone: "Telefono",
+  vat_number: "Partita IVA",
+  pec_email: "PEC",
+  sdi_code: "Codice SDI",
+  notes: "Note"
+};
+
 export default function AgencyProfileSetupPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [acknowledging, setAcknowledging] = useState(false);
   const [message, setMessage] = useState("Carichiamo la tua anagrafica agenzia.");
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [pendingChange, setPendingChange] = useState<PendingChange | null>(null);
+  const [isFirstSetup, setIsFirstSetup] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -75,7 +100,11 @@ export default function AgencyProfileSetupPage() {
       const response = await fetch("/api/agency/profile", {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const body = (await response.json().catch(() => null)) as { agency?: AgencyProfile; error?: string } | null;
+      const body = (await response.json().catch(() => null)) as {
+        agency?: AgencyProfile;
+        pending_change?: PendingChange | null;
+        error?: string;
+      } | null;
       if (!active) return;
       if (!response.ok || !body?.agency) {
         setLoading(false);
@@ -84,6 +113,8 @@ export default function AgencyProfileSetupPage() {
       }
 
       const agency = body.agency;
+      setIsFirstSetup(agency.setup_required ?? false);
+      setPendingChange(body.pending_change ?? null);
       setForm({
         name: agency.name ?? "",
         legal_name: agency.legal_name ?? agency.name ?? "",
@@ -115,7 +146,7 @@ export default function AgencyProfileSetupPage() {
     if (!hasSupabaseEnv || !supabase || saving) return;
 
     setSaving(true);
-    setMessage("Salvataggio anagrafica agenzia...");
+    setMessage(isFirstSetup ? "Salvataggio anagrafica agenzia..." : "Invio richiesta di modifica...");
 
     const session = await supabase.auth.getSession();
     const token = session.data.session?.access_token;
@@ -133,7 +164,12 @@ export default function AgencyProfileSetupPage() {
       },
       body: JSON.stringify(form)
     });
-    const body = (await response.json().catch(() => null)) as { error?: string } | null;
+    const body = (await response.json().catch(() => null)) as {
+      first_setup?: boolean;
+      pending_approval?: boolean;
+      error?: string;
+    } | null;
+
     if (!response.ok) {
       setSaving(false);
       setMessage(body?.error ?? "Salvataggio profilo non riuscito.");
@@ -141,24 +177,112 @@ export default function AgencyProfileSetupPage() {
     }
 
     setSaving(false);
-    setMessage("Profilo agenzia completato. Ti portiamo nell'area operativa.");
-    router.replace("/agency");
-    router.refresh();
+
+    if (body?.first_setup) {
+      setMessage("Profilo agenzia completato. Ti portiamo nell'area operativa.");
+      router.replace("/agency");
+      router.refresh();
+      return;
+    }
+
+    if (body?.pending_approval) {
+      setMessage("Modifica inviata. L'operatore la verificherà a breve.");
+      setPendingChange({
+        id: "",
+        status: "pending",
+        changes: form as unknown as Record<string, unknown>,
+        rejection_note: null,
+        acknowledged_at: null,
+        created_at: new Date().toISOString()
+      });
+      return;
+    }
   };
+
+  const handleAcknowledge = async () => {
+    if (!hasSupabaseEnv || !supabase || !pendingChange?.id || acknowledging) return;
+    setAcknowledging(true);
+
+    const session = await supabase.auth.getSession();
+    const token = session.data.session?.access_token;
+    if (!token) { setAcknowledging(false); return; }
+
+    await fetch("/api/ops/agency-profile-changes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "acknowledge", change_id: pendingChange.id })
+    });
+
+    setAcknowledging(false);
+    setPendingChange(null);
+    setMessage("Presa visione registrata. Puoi inviare una nuova modifica.");
+  };
+
+  // Blocca il form se c'è una modifica pending non ancora risolta
+  const isBlocked = !isFirstSetup && pendingChange?.status === "pending";
+  // Mostra il banner rifiuto se c'è un rifiuto non ancora acknowledged
+  const isRejected = !isFirstSetup && pendingChange?.status === "rejected" && !pendingChange.acknowledged_at;
 
   return (
     <section className="page-section">
       <div className="mx-auto max-w-4xl space-y-4">
         <header className="card p-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Primo accesso agenzia</p>
-          <h1 className="mt-2 text-2xl font-semibold text-text">Completa la tua anagrafica</h1>
-          <p className="mt-2 text-sm text-muted">
-            Prima di usare l&apos;area agenzia chiediamo i dati minimi amministrativi e operativi. Ti basta compilarli una sola volta.
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+            {isFirstSetup ? "Primo accesso agenzia" : "Profilo agenzia"}
           </p>
+          <h1 className="mt-2 text-2xl font-semibold text-text">
+            {isFirstSetup ? "Completa la tua anagrafica" : "Modifica profilo"}
+          </h1>
+          {isFirstSetup ? (
+            <p className="mt-2 text-sm text-muted">
+              Prima di usare l&apos;area agenzia chiediamo i dati minimi amministrativi e operativi. Ti basta compilarli una sola volta.
+            </p>
+          ) : null}
           <p className="mt-3 text-sm text-slate-600">{message}</p>
         </header>
 
-        <form onSubmit={handleSubmit} className="card grid gap-4 p-5 md:grid-cols-2">
+        {/* Banner: modifica in attesa di approvazione */}
+        {isBlocked ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <p className="text-sm font-semibold text-amber-900">Modifica in attesa di approvazione</p>
+            <p className="mt-1 text-xs text-amber-700">
+              Hai inviato una richiesta di modifica il {pendingChange?.created_at ? new Date(pendingChange.created_at).toLocaleDateString("it-IT") : "—"}.
+              L&apos;operatore la verificherà a breve. Non puoi inviare un&apos;altra modifica fino all&apos;esito.
+            </p>
+            <div className="mt-3 grid gap-1">
+              {Object.entries(pendingChange?.changes ?? {}).map(([key, value]) => (
+                <p key={key} className="text-xs text-amber-800">
+                  <span className="font-semibold">{FIELD_LABELS[key] ?? key}:</span> {String(value ?? "—")}
+                </p>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Banner: modifica rifiutata — presa visione */}
+        {isRejected ? (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 space-y-3">
+            <p className="text-sm font-semibold text-rose-900">Modifica rifiutata dall&apos;operatore</p>
+            {pendingChange?.rejection_note ? (
+              <p className="text-sm text-rose-800">
+                <span className="font-semibold">Motivazione:</span> {pendingChange.rejection_note}
+              </p>
+            ) : null}
+            <p className="text-xs text-rose-700">
+              Clicca &quot;Presa visione&quot; per confermare di aver letto la motivazione. Potrai poi inviare una nuova modifica.
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleAcknowledge()}
+              disabled={acknowledging || !pendingChange?.id}
+              className="rounded-xl bg-rose-700 px-5 py-2 text-sm font-semibold text-white hover:bg-rose-800 disabled:opacity-60"
+            >
+              {acknowledging ? "Registrazione..." : "Presa visione"}
+            </button>
+          </div>
+        ) : null}
+
+        <form onSubmit={(e) => void handleSubmit(e)} className="card grid gap-4 p-5 md:grid-cols-2">
           <label className="grid gap-1">
             <span className="text-sm font-medium text-text">Nome agenzia</span>
             <input
@@ -167,7 +291,7 @@ export default function AgencyProfileSetupPage() {
               onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
               placeholder="Agenzia Ischia Travel"
               required
-              disabled={loading || saving}
+              disabled={loading || saving || isBlocked}
             />
           </label>
 
@@ -179,7 +303,7 @@ export default function AgencyProfileSetupPage() {
               onChange={(event) => setForm((prev) => ({ ...prev, legal_name: event.target.value }))}
               placeholder="Ischia Travel S.r.l."
               required
-              disabled={loading || saving}
+              disabled={loading || saving || isBlocked}
             />
           </label>
 
@@ -191,7 +315,7 @@ export default function AgencyProfileSetupPage() {
               onChange={(event) => setForm((prev) => ({ ...prev, billing_name: event.target.value }))}
               placeholder="Ischia Travel S.r.l."
               required
-              disabled={loading || saving}
+              disabled={loading || saving || isBlocked}
             />
           </label>
 
@@ -203,7 +327,7 @@ export default function AgencyProfileSetupPage() {
               onChange={(event) => setForm((prev) => ({ ...prev, phone: event.target.value }))}
               placeholder="+39 081 ..."
               required
-              disabled={loading || saving}
+              disabled={loading || saving || isBlocked}
             />
           </label>
 
@@ -216,7 +340,7 @@ export default function AgencyProfileSetupPage() {
               onChange={(event) => setForm((prev) => ({ ...prev, contact_email: event.target.value }))}
               placeholder="info@agenzia.it"
               required
-              disabled={loading || saving}
+              disabled={loading || saving || isBlocked}
             />
           </label>
 
@@ -229,7 +353,7 @@ export default function AgencyProfileSetupPage() {
               onChange={(event) => setForm((prev) => ({ ...prev, booking_email: event.target.value }))}
               placeholder="booking@agenzia.it"
               required
-              disabled={loading || saving}
+              disabled={loading || saving || isBlocked}
             />
           </label>
 
@@ -241,7 +365,7 @@ export default function AgencyProfileSetupPage() {
               onChange={(event) => setForm((prev) => ({ ...prev, vat_number: event.target.value }))}
               placeholder="IT12345678901"
               required
-              disabled={loading || saving}
+              disabled={loading || saving || isBlocked}
             />
           </label>
 
@@ -253,7 +377,7 @@ export default function AgencyProfileSetupPage() {
               value={form.pec_email}
               onChange={(event) => setForm((prev) => ({ ...prev, pec_email: event.target.value }))}
               placeholder="pec@pec.it"
-              disabled={loading || saving}
+              disabled={loading || saving || isBlocked}
             />
           </label>
 
@@ -264,7 +388,7 @@ export default function AgencyProfileSetupPage() {
               value={form.sdi_code}
               onChange={(event) => setForm((prev) => ({ ...prev, sdi_code: event.target.value }))}
               placeholder="XXXXXXX"
-              disabled={loading || saving}
+              disabled={loading || saving || isBlocked}
             />
           </label>
 
@@ -275,14 +399,20 @@ export default function AgencyProfileSetupPage() {
               value={form.notes}
               onChange={(event) => setForm((prev) => ({ ...prev, notes: event.target.value }))}
               placeholder="Preferenze operative, orari, riferimenti amministrativi..."
-              disabled={loading || saving}
+              disabled={loading || saving || isBlocked}
             />
           </label>
 
           <div className="md:col-span-2">
-            <button type="submit" className="btn-primary" disabled={loading || saving}>
-              {saving ? "Salvataggio..." : "Attiva area agenzia"}
-            </button>
+            {isBlocked ? (
+              <p className="text-xs text-amber-700">Il form è bloccato in attesa di approvazione operatore.</p>
+            ) : (
+              <button type="submit" className="btn-primary" disabled={loading || saving}>
+                {saving
+                  ? (isFirstSetup ? "Salvataggio..." : "Invio richiesta...")
+                  : (isFirstSetup ? "Attiva area agenzia" : "Invia richiesta di modifica")}
+              </button>
+            )}
           </div>
         </form>
       </div>

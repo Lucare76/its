@@ -173,12 +173,25 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Anagrafica agenzia non trovata." }, { status: 404 });
     }
 
+    // Recupera l'eventuale modifica pendente o rifiutata non ancora presa in visione
+    const { data: pendingChange } = await auth.admin
+      .from("agency_profile_changes")
+      .select("id, status, changes, rejection_note, acknowledged_at, created_at")
+      .eq("tenant_id", auth.membership.tenant_id)
+      .eq("agency_id", resolved.agency.id)
+      .in("status", ["pending", "rejected"])
+      .is("acknowledged_at", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
     return NextResponse.json({
       ok: true,
       agency: {
         ...resolved.agency,
         setup_required: resolved.supportsSetupRequired ? resolved.agency.setup_required ?? false : false
-      }
+      },
+      pending_change: pendingChange ?? null
     });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
@@ -218,42 +231,70 @@ export async function PATCH(request: NextRequest) {
   if (resolved.supportsNotes) updatePayload.notes = parsed.data.notes?.trim() || null;
   if (resolved.supportsSetupRequired) updatePayload.setup_required = false;
 
-  const update = await auth.admin
-    .from("agencies")
-    .update(updatePayload)
-    .eq("tenant_id", auth.membership.tenant_id)
-    .eq("id", resolved.agency.id)
-    .select(
-      [
-        "id",
-        "name",
-        resolved.supportsLegalName ? "legal_name" : null,
-        resolved.supportsBillingName ? "billing_name" : null,
-        "contact_email",
-        "booking_email",
-        "phone",
-        resolved.supportsVatNumber ? "vat_number" : null,
-        resolved.supportsPecEmail ? "pec_email" : null,
-        resolved.supportsSdiCode ? "sdi_code" : null,
-        resolved.supportsNotes ? "notes" : null,
-        "active",
-        resolved.supportsSetupRequired ? "setup_required" : null
-      ]
-        .filter(Boolean)
-        .join(", ")
-    )
-    .maybeSingle();
-  const updatedAgency = update.data as AgencyRow | null;
+  // Se è il primo setup (setup_required = true) aggiorna direttamente senza flusso approvazione
+  const isFirstSetup = resolved.supportsSetupRequired && (resolved.agency.setup_required ?? false);
 
-  if (update.error || !updatedAgency?.id) {
-    return NextResponse.json({ error: update.error?.message ?? "Salvataggio profilo agenzia fallito." }, { status: 500 });
+  if (isFirstSetup) {
+    const update = await auth.admin
+      .from("agencies")
+      .update(updatePayload)
+      .eq("tenant_id", auth.membership.tenant_id)
+      .eq("id", resolved.agency.id)
+      .select(
+        [
+          "id", "name",
+          resolved.supportsLegalName ? "legal_name" : null,
+          resolved.supportsBillingName ? "billing_name" : null,
+          "contact_email", "booking_email", "phone",
+          resolved.supportsVatNumber ? "vat_number" : null,
+          resolved.supportsPecEmail ? "pec_email" : null,
+          resolved.supportsSdiCode ? "sdi_code" : null,
+          resolved.supportsNotes ? "notes" : null,
+          "active",
+          resolved.supportsSetupRequired ? "setup_required" : null
+        ].filter(Boolean).join(", ")
+      )
+      .maybeSingle();
+    const updatedAgency = update.data as AgencyRow | null;
+    if (update.error || !updatedAgency?.id) {
+      return NextResponse.json({ error: update.error?.message ?? "Salvataggio profilo non riuscito." }, { status: 500 });
+    }
+    return NextResponse.json({
+      ok: true,
+      first_setup: true,
+      agency: { ...updatedAgency, setup_required: false }
+    });
+  }
+
+  // Aggiornamento profilo esistente → crea record pending per approvazione operatore.
+  // Prima invalida eventuali richieste pending precedenti della stessa agenzia.
+  await auth.admin
+    .from("agency_profile_changes")
+    .update({ status: "superseded", updated_at: new Date().toISOString() })
+    .eq("tenant_id", auth.membership.tenant_id)
+    .eq("agency_id", resolved.agency.id)
+    .eq("status", "pending");
+
+  const { error: insertError } = await auth.admin
+    .from("agency_profile_changes")
+    .insert({
+      tenant_id: auth.membership.tenant_id,
+      agency_id: resolved.agency.id,
+      proposed_by_user_id: auth.user.id,
+      status: "pending",
+      changes: updatePayload
+    });
+
+  if (insertError) {
+    return NextResponse.json({ error: insertError.message ?? "Invio richiesta modifica non riuscito." }, { status: 500 });
   }
 
   return NextResponse.json({
     ok: true,
+    pending_approval: true,
     agency: {
-      ...updatedAgency,
-      setup_required: resolved.supportsSetupRequired ? updatedAgency.setup_required ?? false : false
+      ...resolved.agency,
+      setup_required: resolved.supportsSetupRequired ? resolved.agency.setup_required ?? false : false
     }
   });
   } catch (err) {

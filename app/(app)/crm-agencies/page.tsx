@@ -475,6 +475,30 @@ function AgencyModal({
   );
 }
 
+type ProfileChangeRow = {
+  id: string;
+  agency_id: string;
+  agency_name: string | null;
+  status: "pending" | "rejected";
+  changes: Record<string, unknown>;
+  rejection_note: string | null;
+  acknowledged_at: string | null;
+  created_at: string;
+};
+
+const PROFILE_FIELD_LABELS: Record<string, string> = {
+  name: "Nome agenzia",
+  legal_name: "Ragione sociale",
+  billing_name: "Intestazione fattura",
+  contact_email: "Email contatto",
+  booking_email: "Email prenotazioni",
+  phone: "Telefono",
+  vat_number: "Partita IVA",
+  pec_email: "PEC",
+  sdi_code: "Codice SDI",
+  notes: "Note"
+};
+
 // ── Pagina principale ─────────────────────────────────────────────────────────
 
 export default function CrmAgenciesPage() {
@@ -495,6 +519,12 @@ export default function CrmAgenciesPage() {
   const [sendReportModal, setSendReportModal] = useState<AgencyRow | null>(null);
   const [sendReportDate, setSendReportDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [sendReportType, setSendReportType] = useState<"arrivals_48h" | "departures_48h" | "bus_monday">("arrivals_48h");
+
+  // Modifiche profilo agenzia in attesa di approvazione
+  const [profileChanges, setProfileChanges] = useState<ProfileChangeRow[]>([]);
+  const [rejectingChangeId, setRejectingChangeId] = useState<string | null>(null);
+  const [rejectNote, setRejectNote] = useState("");
+  const [profileChangeSaving, setProfileChangeSaving] = useState(false);
 
   const getToken = useCallback(async () => {
     if (!hasSupabaseEnv || !supabase) return null;
@@ -527,6 +557,15 @@ export default function CrmAgenciesPage() {
     setPriceLists(body?.price_lists ?? []);
     setRules(body?.pricing_rules ?? []);
     setLoading(false);
+
+    // Carica modifiche profilo pendenti
+    const changesRes = await fetch("/api/ops/agency-profile-changes", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (changesRes.ok) {
+      const changesBody = (await changesRes.json().catch(() => null)) as { rows?: ProfileChangeRow[] } | null;
+      setProfileChanges(changesBody?.rows ?? []);
+    }
   }, [getToken]);
 
   useEffect(() => {
@@ -540,6 +579,46 @@ export default function CrmAgenciesPage() {
     setToast({ text, ok });
     setTimeout(() => setToast(null), 3000);
   }
+
+  const handleApproveChange = async (changeId: string) => {
+    const token = await getToken();
+    if (!token) return;
+    setProfileChangeSaving(true);
+    const res = await fetch("/api/ops/agency-profile-changes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "approve", change_id: changeId })
+    });
+    setProfileChangeSaving(false);
+    if (res.ok) {
+      setProfileChanges((prev) => prev.filter((r) => r.id !== changeId));
+      showToast("Modifica approvata e applicata.", true);
+      void load();
+    } else {
+      showToast("Errore durante l'approvazione.", false);
+    }
+  };
+
+  const handleRejectChange = async (changeId: string) => {
+    if (!rejectNote.trim()) return;
+    const token = await getToken();
+    if (!token) return;
+    setProfileChangeSaving(true);
+    const res = await fetch("/api/ops/agency-profile-changes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "reject", change_id: changeId, rejection_note: rejectNote.trim() })
+    });
+    setProfileChangeSaving(false);
+    if (res.ok) {
+      setProfileChanges((prev) => prev.map((r) => r.id === changeId ? { ...r, status: "rejected" as const, rejection_note: rejectNote.trim() } : r));
+      setRejectingChangeId(null);
+      setRejectNote("");
+      showToast("Modifica rifiutata. L'agenzia vedrà la nota.", true);
+    } else {
+      showToast("Errore durante il rifiuto.", false);
+    }
+  };
 
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
@@ -778,6 +857,82 @@ export default function CrmAgenciesPage() {
           </div>
         ))}
       </div>
+
+      {/* Modifiche profilo pendenti */}
+      {profileChanges.filter((r) => r.status === "pending").length > 0 ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+          <p className="text-sm font-semibold text-amber-900">
+            Modifiche profilo in attesa ({profileChanges.filter((r) => r.status === "pending").length})
+          </p>
+          {profileChanges.filter((r) => r.status === "pending").map((change) => (
+            <article key={change.id} className="rounded-xl border border-amber-200 bg-white/80 p-4 space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-text">{change.agency_name ?? "Agenzia sconosciuta"}</p>
+                  <p className="text-xs text-muted">{new Date(change.created_at).toLocaleString("it-IT")}</p>
+                </div>
+                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                  In attesa
+                </span>
+              </div>
+              <div className="grid gap-1">
+                {Object.entries(change.changes).map(([key, value]) => (
+                  <p key={key} className="text-xs text-slate-700">
+                    <span className="font-semibold">{PROFILE_FIELD_LABELS[key] ?? key}:</span>{" "}
+                    {String(value ?? "—")}
+                  </p>
+                ))}
+              </div>
+              {rejectingChangeId === change.id ? (
+                <div className="space-y-2">
+                  <textarea
+                    className="input-saas w-full text-sm"
+                    placeholder="Motivo del rifiuto (obbligatorio)"
+                    value={rejectNote}
+                    onChange={(e) => setRejectNote(e.target.value)}
+                    rows={2}
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={!rejectNote.trim() || profileChangeSaving}
+                      onClick={() => void handleRejectChange(change.id)}
+                      className="rounded-xl bg-rose-700 px-4 py-1.5 text-xs font-semibold text-white hover:bg-rose-800 disabled:opacity-60"
+                    >
+                      {profileChangeSaving ? "..." : "Conferma rifiuto"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setRejectingChangeId(null); setRejectNote(""); }}
+                      className="rounded-xl border border-slate-200 px-4 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                    >
+                      Annulla
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={profileChangeSaving}
+                    onClick={() => void handleApproveChange(change.id)}
+                    className="rounded-xl bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    Approva
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setRejectingChangeId(change.id); setRejectNote(""); }}
+                    className="rounded-xl border border-rose-200 px-4 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                  >
+                    Rifiuta
+                  </button>
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+      ) : null}
 
       {/* Filtri */}
       <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 shadow-sm">
