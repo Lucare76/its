@@ -53,7 +53,7 @@ async function fetchLogoSrc(): Promise<string> {
 
 async function printTable(rows: ExportRow[], date: string) {
   const logoSrc = await fetchLogoSrc();
-  const logoHtml = logoSrc ? `<img src="${logoSrc}" alt="Ischia Transfer Service" style="height:44px;width:auto">` : "";
+  const logoHtml = logoSrc ? `<img src="${logoSrc}" alt="Ischia Transfer Service" style="height:120px;width:auto">` : "";
   const html = `<!DOCTYPE html><html><head><title>Lista Partenze</title>
 <style>body{font-family:Arial,sans-serif;margin:20px}@media print{@page{size:landscape}}</style>
 </head><body>
@@ -73,7 +73,7 @@ ${buildTableHtml(rows)}
 
 async function printCombined(arrivals: ExportRow[], departures: ExportRow[], date: string) {
   const logoSrc = await fetchLogoSrc();
-  const logoHtml = logoSrc ? `<img src="${logoSrc}" alt="Ischia Transfer Service" style="height:44px;width:auto">` : "";
+  const logoHtml = logoSrc ? `<img src="${logoSrc}" alt="Ischia Transfer Service" style="height:120px;width:auto">` : "";
   const html = `<!DOCTYPE html><html><head><title>Giornata ${date}</title>
 <style>body{font-family:Arial,sans-serif;margin:20px}h3{font-size:13px;margin:24px 0 4px;color:#1e293b;border-bottom:2px solid #1e293b;padding-bottom:4px}@media print{@page{size:landscape}.pb{page-break-before:always}}</style>
 </head><body>

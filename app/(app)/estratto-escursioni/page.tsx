@@ -45,7 +45,7 @@ async function printStatements(statements: AgencyStatement[], from: string, to: 
       reader.readAsDataURL(blob);
     });
   } catch { logoSrc = ""; }
-  const logoHtml = logoSrc ? `<img src="${logoSrc}" alt="Ischia Transfer Service" style="height:48px;width:auto">` : "";
+  const logoHtml = logoSrc ? `<img src="${logoSrc}" alt="Ischia Transfer Service" style="height:120px;width:auto">` : "";
 
   const rows = statements.map((st) => {
     const bkRows = st.bookings.map((b: EscursioneBooking) => `
