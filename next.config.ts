@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname)
   },
-  allowedDevOrigins: ["http://127.0.0.1:3010"]
+  allowedDevOrigins: ["http://127.0.0.1:3010", "http://localhost:3010"]
 };
 
 export default nextConfig;
