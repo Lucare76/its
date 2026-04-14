@@ -432,6 +432,20 @@ export default function ExcelImportPage() {
         bus_city_origin: ""
       });
       setPresetKey("generic_transfer");
+      // Auto-detect direzione: se la colonna "a" contiene prevalentemente stazione/aeroporto → partenze
+      if (selectedSheet) {
+        const allRows = selectedSheet.allRows;
+        const headerRow = allRows[0]?.map((c) => normalize(c)) ?? [];
+        const aIdx = headerRow.findIndex((h) => h === "a");
+        if (aIdx >= 0) {
+          const dataRows = allRows.slice(1).filter((r) => String(r[aIdx] ?? "").trim());
+          const departureKeywords = /\bstz\b|stazione|aeroporto|airport|naples|napoli\b/i;
+          const departureCount = dataRows.filter((r) => departureKeywords.test(String(r[aIdx] ?? ""))).length;
+          if (dataRows.length > 0 && departureCount / dataRows.length > 0.5) {
+            setDefaultDirection("departure");
+          }
+        }
+      }
       return;
     }
     setMappings(suggestMappings(selectedSheet));
@@ -533,6 +547,7 @@ export default function ExcelImportPage() {
       const paxIdx = col("pax");
       const clienteIdx = col("cliente");
       const daIdx = col("da");
+      const nominativoIdx = col("nominativo");
 
       // Ricava anno di default: prima cerca nella colonna aa, poi dal nome file, poi anno corrente
       let defaultYear = new Date().getFullYear().toString();
@@ -570,6 +585,17 @@ export default function ExcelImportPage() {
         const cliente = clienteIdx >= 0 ? String(row[clienteIdx] ?? "").trim() : "";
         const da = daIdx >= 0 ? String(row[daIdx] ?? "").trim() : "";
         const inizio = inizioIdx >= 0 ? parseTimeCell(String(row[inizioIdx] ?? "").trim()) : "";
+
+        // Leggi nominativo-note: "COGNOME NOME 3401234567 TRF TRAGHETTO"
+        const nominativoRaw = nominativoIdx >= 0 ? String(row[nominativoIdx] ?? "").trim() : "";
+        const phoneMatch = nominativoRaw.match(/(\d{8,13})/);
+        const customerName = phoneMatch
+          ? nominativoRaw.slice(0, phoneMatch.index).trim()
+          : nominativoRaw.replace(/\s*(TRF|TRAGHETTO|trf|traghetto)\b.*/i, "").trim();
+        const extractedPhone = phoneMatch ? phoneMatch[1] : "";
+        const extractedNotes = phoneMatch
+          ? nominativoRaw.slice((phoneMatch.index ?? 0) + phoneMatch[1].length).trim()
+          : "";
 
         // Salta righe vuote
         if (!gg && !flightRaw && !paxRaw && !cliente && !da) continue;
@@ -609,15 +635,15 @@ export default function ExcelImportPage() {
 
         const base: Omit<CandidateRow, "localIssues"> = {
           row_index: i + 1,
-          customer_name: "",
+          customer_name: customerName,
           date,
           time: inizio,
           pickup,
           destination,
           pax,
           transport_code: transport.transportCode,
-          phone: "",
-          notes: [flightRaw, terminalLabel].filter(Boolean).join(" → "),
+          phone: extractedPhone,
+          notes: [extractedNotes, terminalLabel].filter(Boolean).join(" · "),
           departure_date: departureDate,
           departure_time: currentDirection === "departure" ? (inizio || transport.ferryTime) : transport.ferryTime,
           direction: currentDirection,
@@ -936,10 +962,10 @@ export default function ExcelImportPage() {
               </select>
             </label>
             <label className="text-sm">
-              Direzione di default
+              <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Direzione</span>
               <select className="input-saas mt-1" value={defaultDirection} onChange={(event) => setDefaultDirection(event.target.value as "arrival" | "departure")}>
-                <option value="arrival">arrival</option>
-                <option value="departure">departure</option>
+                <option value="arrival">📥 Arrivi</option>
+                <option value="departure">📤 Partenze</option>
               </select>
             </label>
             <label className="text-sm">
