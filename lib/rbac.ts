@@ -128,6 +128,7 @@ export const routeCapabilityMap: Array<{ prefix: string; capability: AppCapabili
   { prefix: "/notifications", capability: "notifications:view" },
   { prefix: "/services/new", capability: "services:create" },
   { prefix: "/crm-agencies", capability: "crm_agencies:view" },
+  { prefix: "/agency-requests", capability: "crm_agencies:view" },
   { prefix: "/agency/bookings", capability: "agency_bookings:self" },
   { prefix: "/agency/new-booking", capability: "agency_bookings:self" },
   { prefix: "/agency", capability: "agency_bookings:self" },
