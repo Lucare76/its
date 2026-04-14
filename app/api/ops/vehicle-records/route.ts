@@ -7,13 +7,14 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
 
-type RecordType = "maintenance" | "fuel" | "spare_parts" | "qr_reports";
+type RecordType = "maintenance" | "fuel" | "spare_parts" | "qr_reports" | "commitments";
 
 const TABLE_MAP: Record<RecordType, string> = {
   maintenance:  "vehicle_maintenance",
   fuel:         "vehicle_fuel",
   spare_parts:  "vehicle_spare_parts",
   qr_reports:   "vehicle_qr_reports",
+  commitments:  "vehicle_commitments",
 };
 
 const ORDER_MAP: Record<RecordType, string> = {
@@ -21,6 +22,7 @@ const ORDER_MAP: Record<RecordType, string> = {
   fuel:        "fuel_date",
   spare_parts: "order_date",
   qr_reports:  "created_at",
+  commitments: "commitment_date",
 };
 
 export async function GET(request: NextRequest) {

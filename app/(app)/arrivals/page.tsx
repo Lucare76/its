@@ -368,6 +368,9 @@ export default function ArrivalsPage() {
 
   const agencyById = useMemo(() => new Map(agenciesList.map((a) => [a.id, a])), [agenciesList]);
 
+  const [appOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
+  const [qrServiceId, setQrServiceId] = useState<string | null>(null);
+
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const deleteService = async (service: Service) => {
@@ -745,6 +748,14 @@ export default function ArrivalsPage() {
                   <div className="flex justify-end gap-1.5">
                     <button
                       type="button"
+                      onClick={() => setQrServiceId(item.service.id)}
+                      className="whitespace-nowrap rounded-xl border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-100"
+                      title="Mostra QR smarcamento"
+                    >
+                      📱 QR
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setEditingService(item.service)}
                       className="whitespace-nowrap rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
                     >
@@ -774,6 +785,37 @@ export default function ArrivalsPage() {
           onClose={() => setEditingService(null)}
           onSaved={() => { void refresh?.(); }}
         />
+      )}
+
+      {qrServiceId && appOrigin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setQrServiceId(null)}>
+          <div className="w-full max-w-xs rounded-2xl bg-white p-6 shadow-xl text-center space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-sm font-semibold text-slate-700">Scansiona per smarcamento</h2>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`${appOrigin}/scan/${qrServiceId}`)}`}
+              alt="QR smarcamento"
+              width={200}
+              height={200}
+              className="mx-auto rounded-xl border border-slate-200"
+            />
+            <a
+              href={`/scan/${qrServiceId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block text-xs font-medium text-indigo-600 hover:underline"
+            >
+              Apri pagina smarcamento →
+            </a>
+            <button
+              type="button"
+              onClick={() => setQrServiceId(null)}
+              className="w-full rounded-xl border border-slate-200 py-2 text-sm text-slate-500 hover:bg-slate-50"
+            >
+              Chiudi
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Modale aggiungi arrivo */}

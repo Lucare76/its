@@ -43,20 +43,27 @@ export async function GET(request: NextRequest) {
     if (auth instanceof NextResponse) return auth;
     const tenantId = auth.membership.tenant_id;
 
-    const [vehiclesResult, anomaliesResult, driversResult] = await Promise.all([
+    const today = new Date().toISOString().slice(0, 10);
+    const [vehiclesResult, anomaliesResult, driversResult, commitmentsResult] = await Promise.all([
       auth.admin.from("vehicles").select("*").eq("tenant_id", tenantId).order("label"),
       auth.admin.from("vehicle_anomalies").select("*").eq("tenant_id", tenantId).order("reported_at", { ascending: false }),
-      auth.admin.from("driver_profiles").select("id, full_name, phone, active").eq("tenant_id", tenantId).eq("active", true).order("full_name")
+      auth.admin.from("driver_profiles").select("id, full_name, phone, active").eq("tenant_id", tenantId).eq("active", true).order("full_name"),
+      auth.admin.from("vehicle_commitments")
+        .select("id, vehicle_id, commitment_date, commitment_type, notes, created_at")
+        .eq("tenant_id", tenantId)
+        .gte("commitment_date", today)
+        .order("commitment_date", { ascending: true })
     ]);
 
-    const error = vehiclesResult.error || anomaliesResult.error || driversResult.error;
+    const error = vehiclesResult.error || anomaliesResult.error || driversResult.error || commitmentsResult.error;
     if (error) throw new Error(error.message);
 
     return NextResponse.json({
       ok: true,
       vehicles: vehiclesResult.data ?? [],
       anomalies: anomaliesResult.data ?? [],
-      drivers: driversResult.data ?? []
+      drivers: driversResult.data ?? [],
+      commitments: commitmentsResult.data ?? []
     });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
@@ -180,19 +187,26 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const [vehiclesResult, anomaliesResult, driversResult] = await Promise.all([
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const [vehiclesResult, anomaliesResult, driversResult, commitmentsResult] = await Promise.all([
       auth.admin.from("vehicles").select("*").eq("tenant_id", tenantId).order("label"),
       auth.admin.from("vehicle_anomalies").select("*").eq("tenant_id", tenantId).order("reported_at", { ascending: false }),
-      auth.admin.from("driver_profiles").select("id, full_name, phone, active").eq("tenant_id", tenantId).eq("active", true).order("full_name")
+      auth.admin.from("driver_profiles").select("id, full_name, phone, active").eq("tenant_id", tenantId).eq("active", true).order("full_name"),
+      auth.admin.from("vehicle_commitments")
+        .select("id, vehicle_id, commitment_date, commitment_type, notes, created_at")
+        .eq("tenant_id", tenantId)
+        .gte("commitment_date", todayStr)
+        .order("commitment_date", { ascending: true })
     ]);
-    const error = vehiclesResult.error || anomaliesResult.error || driversResult.error;
+    const error = vehiclesResult.error || anomaliesResult.error || driversResult.error || commitmentsResult.error;
     if (error) throw new Error(error.message);
 
     return NextResponse.json({
       ok: true,
       vehicles: vehiclesResult.data ?? [],
       anomalies: anomaliesResult.data ?? [],
-      drivers: driversResult.data ?? []
+      drivers: driversResult.data ?? [],
+      commitments: commitmentsResult.data ?? []
     });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });

@@ -40,6 +40,29 @@ type Anomaly = {
   reported_at: string;
 };
 
+type Commitment = {
+  id: string;
+  vehicle_id: string;
+  commitment_date: string;
+  commitment_type: "collaudo" | "officina" | "fermo_amministrativo" | "altro";
+  notes: string | null;
+  created_at: string;
+};
+
+const COMMITMENT_LABELS: Record<string, string> = {
+  collaudo:              "Collaudo",
+  officina:              "Officina / Manutenzione",
+  fermo_amministrativo:  "Fermo amministrativo",
+  altro:                 "Altro",
+};
+
+const COMMITMENT_BADGE: Record<string, string> = {
+  collaudo:              "bg-blue-50 text-blue-700 border-blue-200",
+  officina:              "bg-amber-50 text-amber-700 border-amber-200",
+  fermo_amministrativo:  "bg-rose-50 text-rose-700 border-rose-200",
+  altro:                 "bg-slate-50 text-slate-600 border-slate-200",
+};
+
 async function accessToken() {
   if (!hasSupabaseEnv || !supabase) return null;
   const { data } = await supabase.auth.getSession();
@@ -120,6 +143,7 @@ export default function FleetOpsPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
+  const [commitments, setCommitments] = useState<Commitment[]>([]);
   const [appOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -171,12 +195,13 @@ export default function FleetOpsPage() {
     const token = await accessToken();
     if (!token) { setLoading(false); return; }
     const response = await fetch("/api/ops/vehicles", { headers: { Authorization: `Bearer ${token}` } });
-    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; vehicles?: Vehicle[]; drivers?: Driver[]; anomalies?: Anomaly[] } | null;
+    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; vehicles?: Vehicle[]; drivers?: Driver[]; anomalies?: Anomaly[]; commitments?: Commitment[] } | null;
     if (!response.ok || !body?.ok) { setLoading(false); showToast(body?.error ?? "Errore caricamento flotta.", false); return; }
     const nextVehicles = body.vehicles ?? [];
     setVehicles(nextVehicles);
     setDrivers(body.drivers ?? []);
     setAnomalies(body.anomalies ?? []);
+    setCommitments(body.commitments ?? []);
     setSelectedVehicleId((current) => {
       if (current) return current;
       const firstVehicle = nextVehicles[0] ?? null;
@@ -210,12 +235,13 @@ export default function FleetOpsPage() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
     });
-    const json = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; vehicles?: Vehicle[]; anomalies?: Anomaly[]; drivers?: Driver[] } | null;
+    const json = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; vehicles?: Vehicle[]; anomalies?: Anomaly[]; drivers?: Driver[]; commitments?: Commitment[] } | null;
     setSaving(false);
     if (!response.ok || !json?.ok) { showToast(json?.error ?? "Operazione non riuscita.", false); return false; }
     setVehicles(json.vehicles ?? []);
     setDrivers(json.drivers ?? []);
     setAnomalies(json.anomalies ?? []);
+    if (json.commitments) setCommitments(json.commitments);
     showToast("Salvato.", true);
     return true;
   };
@@ -301,6 +327,7 @@ export default function FleetOpsPage() {
                   <th className="px-3 py-2.5">Autista abituale</th>
                   <th className="px-3 py-2.5">GPS</th>
                   <th className="px-3 py-2.5">Documenti</th>
+                  <th className="px-3 py-2.5">Impegni</th>
                   <th className="px-3 py-2.5">Stato</th>
                 </tr>
               </thead>
@@ -309,11 +336,13 @@ export default function FleetOpsPage() {
                   const isSelected = vehicle.id === selectedVehicleId;
                   const isBlocked = Boolean(vehicle.is_blocked_manual || vehicle.blocked_until);
                   const hasGps = Boolean(vehicle.radius_vehicle_id);
+                  const today = new Date().toISOString().slice(0, 10);
+                  const todayCommitment = commitments.find((c) => c.vehicle_id === vehicle.id && c.commitment_date === today);
                   return (
                     <tr
                       key={vehicle.id}
                       onClick={() => { setSelectedVehicleId(vehicle.id); setIsNewVehicle(false); populateVehicleEditor(vehicle); }}
-                      className={`cursor-pointer transition ${isSelected ? "bg-blue-50/70" : "hover:bg-slate-50/80"}`}
+                      className={`cursor-pointer transition ${isSelected ? "bg-blue-50/70" : todayCommitment ? "bg-amber-50/40" : "hover:bg-slate-50/80"}`}
                     >
                       <td className="px-3 py-2.5">
                         <span className={`font-medium ${isSelected ? "text-blue-800" : "text-slate-800"}`}>{vehicle.label}</span>
@@ -355,6 +384,18 @@ export default function FleetOpsPage() {
                             </span>
                           );
                         })()}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {todayCommitment ? (
+                          <span
+                            className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${COMMITMENT_BADGE[todayCommitment.commitment_type] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}
+                            title={todayCommitment.notes ?? undefined}
+                          >
+                            {COMMITMENT_LABELS[todayCommitment.commitment_type] ?? todayCommitment.commitment_type}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300 text-xs">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                         <button
@@ -636,6 +677,15 @@ export default function FleetOpsPage() {
                       </details>
                     )}
 
+                    {/* Impegni non operativi */}
+                    <CommitmentsPanel
+                      vehicleId={selectedVehicle.id}
+                      vehicleLabel={selectedVehicle.label}
+                      commitments={commitments.filter((c) => c.vehicle_id === selectedVehicle.id)}
+                      showToast={showToast}
+                      onRefresh={() => void load()}
+                    />
+
                     {/* QR Reports in attesa */}
                     <QrReportsPanel vehicleId={selectedVehicle.id} showToast={showToast} />
 
@@ -896,6 +946,157 @@ function QrReportsPanel({ vehicleId, showToast }: { vehicleId: string; showToast
             </div>
           ))
         )}
+      </div>
+    </details>
+  );
+}
+
+/* ─── CommitmentsPanel ────────────────────────────────────────────────────── */
+
+const EMPTY_COMMITMENT = { commitment_date: "", commitment_type: "collaudo", notes: "" };
+
+function CommitmentsPanel({
+  vehicleId,
+  commitments,
+  showToast,
+  onRefresh,
+}: {
+  vehicleId: string;
+  vehicleLabel: string;
+  commitments: Commitment[];
+  showToast: (t: string, ok: boolean) => void;
+  onRefresh: () => void;
+}) {
+  const [form, setForm] = useState(EMPTY_COMMITMENT);
+  const [saving, setSaving] = useState(false);
+
+  async function addCommitment() {
+    if (!form.commitment_date) { showToast("Seleziona una data.", false); return; }
+    setSaving(true);
+    const token = await accessToken();
+    if (!token) { setSaving(false); return; }
+    const res = await fetch("/api/ops/vehicle-records", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        action: "insert",
+        type: "commitments",
+        vehicle_id: vehicleId,
+        data: {
+          commitment_date: form.commitment_date,
+          commitment_type: form.commitment_type,
+          notes: form.notes || null,
+        },
+      }),
+    });
+    setSaving(false);
+    if (res.ok) {
+      setForm(EMPTY_COMMITMENT);
+      showToast("Impegno aggiunto.", true);
+      onRefresh();
+    } else {
+      showToast("Errore durante il salvataggio.", false);
+    }
+  }
+
+  async function deleteCommitment(id: string) {
+    const token = await accessToken();
+    if (!token) return;
+    const res = await fetch("/api/ops/vehicle-records", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "delete", type: "commitments", id }),
+    });
+    if (res.ok) {
+      showToast("Impegno rimosso.", true);
+      onRefresh();
+    } else {
+      showToast("Errore durante la rimozione.", false);
+    }
+  }
+
+  const sorted = [...commitments].sort((a, b) => a.commitment_date.localeCompare(b.commitment_date));
+
+  return (
+    <details className="rounded-xl border border-amber-200 bg-amber-50/30">
+      <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-amber-800 flex items-center justify-between">
+        <span>
+          📅 Impegni non operativi
+          {commitments.length > 0 && (
+            <span className="ml-2 inline-block rounded-full bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5">{commitments.length}</span>
+          )}
+        </span>
+      </summary>
+      <div className="border-t border-amber-100 px-4 py-3 space-y-3">
+        {sorted.length === 0 ? (
+          <p className="text-xs text-slate-400">Nessun impegno pianificato.</p>
+        ) : (
+          <div className="space-y-2">
+            {sorted.map((c) => (
+              <div key={c.id} className="flex items-start justify-between gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-700">
+                      {new Date(`${c.commitment_date}T00:00:00`).toLocaleDateString("it-IT", { weekday: "short", day: "numeric", month: "short" })}
+                    </span>
+                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${COMMITMENT_BADGE[c.commitment_type] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
+                      {COMMITMENT_LABELS[c.commitment_type] ?? c.commitment_type}
+                    </span>
+                  </div>
+                  {c.notes && <p className="mt-0.5 text-xs text-slate-500">{c.notes}</p>}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void deleteCommitment(c.id)}
+                  className="shrink-0 rounded-lg border border-slate-200 px-2 py-0.5 text-[10px] text-slate-400 hover:border-rose-200 hover:text-rose-600"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="border-t border-amber-100 pt-3 grid grid-cols-2 gap-2">
+          <label className="col-span-2 text-xs font-semibold text-slate-500">
+            Data impegno
+            <input
+              type="date"
+              className="input-saas mt-1 w-full"
+              value={form.commitment_date}
+              onChange={(e) => setForm((f) => ({ ...f, commitment_date: e.target.value }))}
+            />
+          </label>
+          <label className="col-span-2 text-xs font-semibold text-slate-500">
+            Tipo
+            <select
+              className="input-saas mt-1 w-full"
+              value={form.commitment_type}
+              onChange={(e) => setForm((f) => ({ ...f, commitment_type: e.target.value }))}
+            >
+              {Object.entries(COMMITMENT_LABELS).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+          </label>
+          <label className="col-span-2 text-xs font-semibold text-slate-500">
+            Note (opzionale)
+            <input
+              className="input-saas mt-1 w-full"
+              value={form.notes}
+              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+              placeholder="es. Officina Rossi, via Roma 12"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={saving || !form.commitment_date}
+            className="col-span-2 btn-secondary py-1.5 text-xs disabled:opacity-50"
+            onClick={() => void addCommitment()}
+          >
+            {saving ? "Salvataggio..." : "+ Aggiungi impegno"}
+          </button>
+        </div>
       </div>
     </details>
   );

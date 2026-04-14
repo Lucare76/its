@@ -166,6 +166,9 @@ export default function DeparturesPage() {
     (item) => item.service.service_type_code === "bus_line" || item.service.booking_service_kind === "bus_city_hotel"
   ).length;
 
+  const [appOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
+  const [qrServiceId, setQrServiceId] = useState<string | null>(null);
+
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const deleteService = async (service: Service) => {
@@ -372,11 +375,21 @@ export default function DeparturesPage() {
                     <td className="px-3 py-2">{getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel}</td>
                     <td className="px-3 py-2">{item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D"}</td>
                     <td className="px-3 py-2">
-                      <button type="button" onClick={() => void deleteService(item.service)}
-                        disabled={deletingId === item.service.id}
-                        className="rounded-lg border border-rose-200 px-2 py-1 text-xs text-rose-500 hover:bg-rose-50 disabled:opacity-50">
-                        {deletingId === item.service.id ? "..." : (item.service.arrival_date ? "Solo ritorno" : "Elimina")}
-                      </button>
+                      <div className="flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setQrServiceId(item.service.id)}
+                          className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-100"
+                          title="Mostra QR smarcamento"
+                        >
+                          📱 QR
+                        </button>
+                        <button type="button" onClick={() => void deleteService(item.service)}
+                          disabled={deletingId === item.service.id}
+                          className="rounded-lg border border-rose-200 px-2 py-1 text-xs text-rose-500 hover:bg-rose-50 disabled:opacity-50">
+                          {deletingId === item.service.id ? "..." : (item.service.arrival_date ? "Solo ritorno" : "Elimina")}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -385,6 +398,37 @@ export default function DeparturesPage() {
           </div>
         )}
       </SectionCard>
+
+      {qrServiceId && appOrigin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setQrServiceId(null)}>
+          <div className="w-full max-w-xs rounded-2xl bg-white p-6 shadow-xl text-center space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-sm font-semibold text-slate-700">Scansiona per smarcamento</h2>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`${appOrigin}/scan/${qrServiceId}`)}`}
+              alt="QR smarcamento"
+              width={200}
+              height={200}
+              className="mx-auto rounded-xl border border-slate-200"
+            />
+            <a
+              href={`/scan/${qrServiceId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block text-xs font-medium text-indigo-600 hover:underline"
+            >
+              Apri pagina smarcamento →
+            </a>
+            <button
+              type="button"
+              onClick={() => setQrServiceId(null)}
+              className="w-full rounded-xl border border-slate-200 py-2 text-sm text-slate-500 hover:bg-slate-50"
+            >
+              Chiudi
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Modale aggiungi partenza */}
       {addModal && (
