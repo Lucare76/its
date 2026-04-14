@@ -5,10 +5,12 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { isAllowed, isAllowedWithOverrides, type CapabilityOverrides, parseRole } from "@/lib/rbac";
 import {
+  AGENZIE_GROUP,
   HeaderBellIcon,
   KARMEN_PEACH_GROUP,
   MAIN_NAV_BY_ROLE,
   MARIO_BOSS_GROUP,
+  OPERATIVO_GROUP,
   SETTINGS_GROUPS,
   canSeeNavItem,
   iconWrapClass,
@@ -28,6 +30,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [agenzieOpen, setAgenzieOpen] = useState(false);
+  const [operativoOpen, setOperativoOpen] = useState(false);
   const [marioBossOpen, setMarioBossOpen] = useState(false);
   const [karmenPeachOpen, setKarmenPeachOpen] = useState(false);
   const [inboxPendingCount, setInboxPendingCount] = useState(0);
@@ -600,15 +604,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             ) : null}
             {mainNav.map((item) => {
               const active = matchesPath(pathname, item.href);
-              const badge = item.href === "/inbox" && inboxPendingCount > 0
-                ? inboxPendingCount
-                : item.href === "/agency-requests" && pendingAgencyBookingsCount > 0
-                  ? pendingAgencyBookingsCount
-                  : item.href === "/inbox/agency-reviews" && pendingAgencyReviewCount > 0
-                    ? pendingAgencyReviewCount
-                    : item.href === "/inbox/fleet-reports" && pendingQrReportsCount > 0
-                      ? pendingQrReportsCount
-                      : 0;
+              const badge = item.href === "/inbox" && inboxPendingCount > 0 ? inboxPendingCount : 0;
               return (
                 <Link
                   key={item.href}
@@ -641,6 +637,145 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 </Link>
               );
             })}
+
+            {/* Agenzie — gruppo collassabile */}
+            {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
+              const groupActive = AGENZIE_GROUP.items.some((i) => matchesPath(pathname, i.href));
+              const isExpanded = groupActive || agenzieOpen;
+              const groupBadge = (pendingAgencyBookingsCount > 0 ? pendingAgencyBookingsCount : 0) + (pendingAgencyReviewCount > 0 ? pendingAgencyReviewCount : 0);
+              return (
+                <div className="mt-0.5">
+                  <button
+                    type="button"
+                    title={collapsed ? AGENZIE_GROUP.label : undefined}
+                    onClick={() => { if (!collapsed) setAgenzieOpen((v) => !v); }}
+                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
+                      groupActive
+                        ? "border-indigo-100 bg-white text-indigo-900 shadow-[0_4px_16px_rgba(99,102,241,0.10)]"
+                        : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                    } ${collapsed ? "justify-center" : ""}`}
+                  >
+                    {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-indigo-500" /> : null}
+                    <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${groupActive ? "bg-slate-900 text-white shadow-sm" : "bg-white text-slate-600 ring-1 ring-slate-200"}`}>
+                      {renderNavIcon("C")}
+                    </span>
+                    {!collapsed ? (
+                      <span className="flex min-w-0 flex-1 items-center justify-between gap-1">
+                        <span className="truncate text-sm font-medium">{AGENZIE_GROUP.label}</span>
+                        <span className="flex items-center gap-1.5">
+                          {groupBadge > 0 && !isExpanded ? (
+                            <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                              {groupBadge > 99 ? "99+" : groupBadge}
+                            </span>
+                          ) : null}
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className={`h-3 w-3 shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} aria-hidden="true">
+                            <path d="M6 3.5l4 4.5-4 4.5" />
+                          </svg>
+                        </span>
+                      </span>
+                    ) : groupBadge > 0 ? (
+                      <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[9px] font-semibold text-white">
+                        {groupBadge > 9 ? "9+" : groupBadge}
+                      </span>
+                    ) : null}
+                  </button>
+                  {!collapsed && isExpanded && (
+                    <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-indigo-100 pl-2">
+                      {AGENZIE_GROUP.items.map((item) => {
+                        const active = matchesPath(pathname, item.href);
+                        const itemBadge = item.href === "/agency-requests" && pendingAgencyBookingsCount > 0
+                          ? pendingAgencyBookingsCount
+                          : item.href === "/inbox/agency-reviews" && pendingAgencyReviewCount > 0
+                            ? pendingAgencyReviewCount : 0;
+                        return (
+                          <Link key={item.href} href={item.href}
+                            className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
+                              active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                            }`}
+                          >
+                            <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                              {renderNavIcon(item.icon)}
+                            </span>
+                            <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                              <span className="truncate">{item.label}</span>
+                              {itemBadge > 0 ? <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">{itemBadge > 99 ? "99+" : itemBadge}</span> : null}
+                            </span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Operativo — gruppo collassabile */}
+            {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
+              const groupActive = OPERATIVO_GROUP.items.some((i) => matchesPath(pathname, i.href));
+              const isExpanded = groupActive || operativoOpen;
+              const groupBadge = pendingQrReportsCount > 0 ? pendingQrReportsCount : 0;
+              return (
+                <div className="mt-0.5">
+                  <button
+                    type="button"
+                    title={collapsed ? OPERATIVO_GROUP.label : undefined}
+                    onClick={() => { if (!collapsed) setOperativoOpen((v) => !v); }}
+                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
+                      groupActive
+                        ? "border-amber-100 bg-white text-amber-900 shadow-[0_4px_16px_rgba(245,158,11,0.10)]"
+                        : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                    } ${collapsed ? "justify-center" : ""}`}
+                  >
+                    {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-amber-500" /> : null}
+                    <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${groupActive ? "bg-slate-900 text-white shadow-sm" : "bg-white text-slate-600 ring-1 ring-slate-200"}`}>
+                      {renderNavIcon("O")}
+                    </span>
+                    {!collapsed ? (
+                      <span className="flex min-w-0 flex-1 items-center justify-between gap-1">
+                        <span className="truncate text-sm font-medium">{OPERATIVO_GROUP.label}</span>
+                        <span className="flex items-center gap-1.5">
+                          {groupBadge > 0 && !isExpanded ? (
+                            <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                              {groupBadge > 99 ? "99+" : groupBadge}
+                            </span>
+                          ) : null}
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className={`h-3 w-3 shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} aria-hidden="true">
+                            <path d="M6 3.5l4 4.5-4 4.5" />
+                          </svg>
+                        </span>
+                      </span>
+                    ) : groupBadge > 0 ? (
+                      <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[9px] font-semibold text-white">
+                        {groupBadge > 9 ? "9+" : groupBadge}
+                      </span>
+                    ) : null}
+                  </button>
+                  {!collapsed && isExpanded && (
+                    <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-amber-100 pl-2">
+                      {OPERATIVO_GROUP.items.map((item) => {
+                        const active = matchesPath(pathname, item.href);
+                        const itemBadge = item.href === "/inbox/fleet-reports" && pendingQrReportsCount > 0 ? pendingQrReportsCount : 0;
+                        return (
+                          <Link key={item.href} href={item.href}
+                            className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
+                              active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                            }`}
+                          >
+                            <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                              {renderNavIcon(item.icon)}
+                            </span>
+                            <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                              <span className="truncate">{item.label}</span>
+                              {itemBadge > 0 ? <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">{itemBadge}</span> : null}
+                            </span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Mario Boss — gruppo collassabile */}
             {(authRole === "admin" || authRole === "supervisor") && (() => {

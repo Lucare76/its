@@ -240,14 +240,32 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/arrivals", label: "Arrivi", icon: "A" },
   { href: "/departures", label: "Partenze", icon: "P" },
   { href: "/inbox", label: "Prenotazioni", icon: "I" },
-  { href: "/agency-requests", label: "Richieste Agenzie", icon: "🏨" },
-  { href: "/agency-statement", label: "Estratto conto agenzie", icon: "€" },
-  { href: "/inbox/agency-reviews", label: "Revisioni agenzie", icon: "✏️" },
-  { href: "/inbox/fleet-reports", label: "Segnalazioni veicoli", icon: "🚨" },
-  { href: "/biglietti-medmar", label: "Biglietti MEDMAR", icon: "⚓" },
-  { href: "/biglietti-multipli", label: "Invio Multiplo Agenzie", icon: "📎" },
-  { href: "/dispatch", label: "Assegnazioni", icon: "G" }
+  { href: "/dispatch", label: "Assegnazioni", icon: "G" },
 ];
+
+export const AGENZIE_GROUP: NavMainGroup = {
+  type: "group",
+  key: "agenzie",
+  label: "Agenzie",
+  icon: "C",
+  items: [
+    { href: "/agency-requests", label: "Richieste agenzie", icon: "🏨" },
+    { href: "/agency-statement", label: "Estratto conto", icon: "€" },
+    { href: "/inbox/agency-reviews", label: "Revisioni agenzie", icon: "✏️" },
+  ]
+};
+
+export const OPERATIVO_GROUP: NavMainGroup = {
+  type: "group",
+  key: "operativo",
+  label: "Operativo",
+  icon: "O",
+  items: [
+    { href: "/biglietti-medmar", label: "Biglietti MEDMAR", icon: "⚓" },
+    { href: "/inbox/fleet-reports", label: "Segnalazioni veicoli", icon: "🚨" },
+    { href: "/biglietti-multipli", label: "Invio Multiplo Agenzie", icon: "📎" },
+  ]
+};
 
 export const MARIO_BOSS_GROUP: NavMainGroup = {
   type: "group",
@@ -280,54 +298,48 @@ MAIN_NAV_BY_ROLE.supervisor = OPERATIONS_MAIN_NAV;
 
 export const SETTINGS_GROUPS: NavGroup[] = [
   {
-    title: "Gestione utenti",
-    items: [{ href: "/settings/users", label: "Utenti", icon: "U" }]
-  },
-  {
-    title: "Flotta e mezzi",
-    items: [{ href: "/fleet-ops", label: "Flotta e mezzi", icon: "F" }]
-  },
-  {
-    title: "Strutture e anagrafiche",
+    title: "Anagrafica",
     items: [
+      { href: "/settings/users", label: "Utenti", icon: "R" },
       { href: "/crm-agencies", label: "Agenzie", icon: "C" },
-      { href: "/hotels", label: "Hotel", icon: "H" }
+      { href: "/hotels", label: "Hotel", icon: "H" },
+      { href: "/fleet-ops", label: "Flotta e mezzi", icon: "F" },
+      { href: "/settings/tenant", label: "Profilo azienda", icon: "🏢" },
     ]
   },
   {
-    title: "Business e regole",
+    title: "Commerciale",
     items: [
       { href: "/settings/agency-rates", label: "Prezzi agenzie", icon: "€" },
-      { href: "/settings/agency-margins", label: "Margini", icon: "M", adminOnly: true },
+      { href: "/settings/agency-margins", label: "Margini", icon: "%", adminOnly: true },
       { href: "/pricing", label: "Tariffe", icon: "T", supervisorOnly: true },
-      { href: "/ops-rules", label: "Regole operative", icon: "R" },
-      { href: "/settings/whatsapp", label: "WhatsApp", icon: "W" }
+      { href: "/ops-rules", label: "Regole operative", icon: "S" },
     ]
   },
   {
-    title: "Strumenti operativi avanzati",
+    title: "Strumenti",
     items: [
       { href: "/planning", label: "Pianificazione", icon: "L" },
+      { href: "/excel-import", label: "Import Excel", icon: "E" },
+      { href: "/excel-workspace", label: "Excel workspace", icon: "X" },
       { href: "/ops-summary", label: "Riepiloghi", icon: "S" },
       { href: "/arrivals-clock", label: "Arrivi a orario", icon: "@" },
-      { href: "/report-center", label: "Centro report", icon: "R" },
-      { href: "/bus-tours", label: "Servizi bus", icon: "B" }
+      { href: "/report-center", label: "Centro report", icon: "Y" },
+      { href: "/bus-tours", label: "Servizi bus", icon: "B" },
     ]
   },
   {
-    title: "Tecnico e sistema",
+    title: "Sistema",
     items: [
-      { href: "/services/new", label: "Nuovo servizio", icon: "N" },
+      { href: "/settings/whatsapp", label: "WhatsApp", icon: "W" },
       { href: "/notifications", label: "Notifiche", icon: "!" },
-      { href: "/analytics", label: "Analisi", icon: "Y" },
-      { href: "/excel-workspace", label: "Excel workspace", icon: "X" },
-      { href: "/excel-import", label: "Import Excel", icon: "E" },
+      { href: "/services/new", label: "Nuovo servizio", icon: "N" },
       { href: "/scheduler", label: "Scheduler", icon: "J" },
       { href: "/service-workflow", label: "Workflow servizi", icon: "K" },
+      { href: "/analytics", label: "Analisi", icon: "Y" },
       { href: "/audit", label: "Audit", icon: "Q" },
-      { href: "/settings/tenant", label: "Profilo azienda", icon: "🏢" },
       { href: "/settings/system", label: "Stato sistema", icon: "⚙" },
-      { href: "/settings/email-preview", label: "Anteprima email", icon: "✉" }
+      { href: "/settings/email-preview", label: "Anteprima email", icon: "✉" },
     ]
   }
 ];
