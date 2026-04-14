@@ -393,17 +393,17 @@ export default function OperatorDashboardPage() {
       {/* ── KPI grid ────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6">
         {[
-          { icon: "⚡", label: "Operativo oggi", value: todayInstances.length, color: "#4338ca", bg: "#eef2ff" },
-          { icon: "✈️", label: "Arrivi oggi",     value: todayArrivals,         color: "#0369a1", bg: "#e0f2fe" },
-          { icon: "🚀", label: "Partenze oggi",   value: todayDepartures,       color: "#7c3aed", bg: "#f5f3ff" },
-          { icon: "👥", label: "Passeggeri",      value: totalPax,              color: "#0f766e", bg: "#f0fdfa" },
-          { icon: "🚌", label: "Bus attivi GPS",   value: activeBusGps ?? "—",   color: activeBusGps !== null ? "#b45309" : "#94a3b8", bg: "#fffbeb" },
-          { icon: "⚠️", label: "Non assegnati",   value: pending,               color: pending > 0 ? "#dc2626" : "#64748b", bg: pending > 0 ? "#fef2f2" : "#f8fafc" },
+          { icon: "⚡", label: "Operativo oggi", value: todayInstances.length, color: "#4338ca", bg: "#eef2ff", href: "/arrivals" },
+          { icon: "✈️", label: "Arrivi oggi",     value: todayArrivals,         color: "#0369a1", bg: "#e0f2fe", href: "/arrivals" },
+          { icon: "🚀", label: "Partenze oggi",   value: todayDepartures,       color: "#7c3aed", bg: "#f5f3ff", href: "/departures" },
+          { icon: "👥", label: "Passeggeri",      value: totalPax,              color: "#0f766e", bg: "#f0fdfa", href: "/arrivals" },
+          { icon: "🚌", label: "Bus attivi GPS",   value: activeBusGps ?? "—",   color: activeBusGps !== null ? "#b45309" : "#94a3b8", bg: "#fffbeb", href: "/mappa-live" },
+          { icon: "⚠️", label: "Non assegnati",   value: pending,               color: pending > 0 ? "#dc2626" : "#64748b", bg: pending > 0 ? "#fef2f2" : "#f8fafc", href: "/dispatch" },
           { icon: "📄", label: "PDF da verificare", value: todayPdfNeedsAttention.length, color: todayPdfNeedsAttention.length > 0 ? "#d97706" : "#64748b", bg: todayPdfNeedsAttention.length > 0 ? "#fffbeb" : "#f8fafc" },
           { icon: "📧", label: "Inbox",           value: inboxToReview.length,  color: inboxToReview.length > 0 ? "#dc2626" : "#64748b", bg: inboxToReview.length > 0 ? "#fef2f2" : "#f8fafc", href: "/inbox" },
         ].map(({ icon, label, value, color, bg, href }) => {
           const inner = (
-            <div className="flex flex-col gap-3 rounded-2xl border border-slate-100 p-4 shadow-sm transition hover:shadow-md" style={{ backgroundColor: bg }}>
+            <div className={`flex flex-col gap-3 rounded-2xl border border-slate-100 p-4 shadow-sm transition hover:shadow-md ${href ? "cursor-pointer hover:border-slate-300" : ""}`} style={{ backgroundColor: bg }}>
               <div className="flex items-center justify-between">
                 <span className="text-2xl">{icon}</span>
                 <span className="text-3xl font-extrabold tracking-tight" style={{ color }}>{value}</span>
