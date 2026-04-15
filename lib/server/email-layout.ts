@@ -7,7 +7,7 @@ export function emailHtml(body: string, options?: { title?: string; preheader?: 
   // Logo come URL pubblico — Gmail e la maggior parte dei client email bloccano le immagini base64.
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "https://ischia-transfer.vercel.app";
   const logoUrl = `${appUrl}/brand/logo-ischia-transfer-email.png`;
-  const logoBlock = `<img src="${logoUrl}" alt="Ischia Transfer Service" width="220" style="width:220px;max-width:75%;height:auto;display:block;margin:-78px auto -98px auto;" />`;
+  const logoBlock = `<img class="email-logo" src="${logoUrl}" alt="Ischia Transfer Service" width="200" style="width:200px;max-width:200px;height:auto;display:block;margin:0 auto;" />`;
 
   const preheader = options?.preheader
     ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${options.preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>`
@@ -33,11 +33,13 @@ ${options?.title ? `<title>${options.title}</title>` : ""}
 
   /* Mobile responsive — supportato da Apple Mail, Outlook iOS, Samsung Mail */
   @media only screen and (max-width:620px) {
-    .email-wrapper { padding:12px 6px!important; }
-    .email-container { width:100%!important; max-width:100%!important; }
-    .email-header { padding:0!important; overflow:hidden!important; height:45px!important; border-radius:14px 14px 0 0!important; }
-    .email-body { padding:24px 16px!important; }
-    .email-footer { padding:18px 16px!important; border-radius:0 0 14px 14px!important; }
+    .email-wrapper { padding:0!important; }
+    .email-container { width:100%!important; max-width:100%!important; border-radius:0!important; }
+    .email-header { padding:20px 16px!important; border-radius:0!important; }
+    .email-body { padding:20px 16px!important; font-size:15px!important; }
+    .email-footer { padding:18px 16px!important; border-radius:0!important; }
+
+    /* Data table — stacked verticalmente su mobile */
     .data-table td { display:block!important; width:100%!important; box-sizing:border-box!important; }
     .data-table tr .label-cell {
       border-bottom:none!important;
@@ -51,7 +53,10 @@ ${options?.title ? `<title>${options.title}</title>` : ""}
       border-top:none!important;
       width:100%!important;
     }
+
+    /* Bottone CTA full-width */
     .email-button { width:100%!important; }
+    .email-button td { width:100%!important; display:block!important; border-radius:12px!important; }
     .email-button a {
       display:block!important;
       width:100%!important;
@@ -59,13 +64,13 @@ ${options?.title ? `<title>${options.title}</title>` : ""}
       padding:16px 20px!important;
       box-sizing:border-box!important;
     }
-    .email-button td {
-      width:100%!important;
-      display:block!important;
-    }
+
+    /* Service box */
     .service-box { padding:14px 16px!important; border-radius:10px!important; }
-    .service-box .service-title { font-size:17px!important; }
-    img { max-width:140px!important; width:140px!important; }
+    .service-title { font-size:17px!important; }
+
+    /* Logo */
+    img.email-logo { width:160px!important; max-width:160px!important; }
   }
 </style>
 </head>
@@ -79,7 +84,7 @@ ${preheader}
 
   <!-- HEADER -->
   <tr>
-    <td class="email-header" style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:0;overflow:hidden;height:45px;line-height:0;font-size:0;text-align:center;">
+    <td class="email-header" style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:26px 24px;text-align:center;line-height:0;">
       ${logoBlock}
     </td>
   </tr>
@@ -145,7 +150,7 @@ export function emailDataTable(rows: Array<[string, string]>): string {
   const trs = rows.map(([k, v]) => `
     <tr>
       <td class="label-cell" style="padding:10px 16px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#64748b;width:38%;min-width:110px;vertical-align:top;">${k}</td>
-      <td class="value-cell" style="padding:10px 16px;border:1px solid #e2e8f0;font-size:14px;color:#1e293b;word-break:break-word;max-width:0;">${v}</td>
+      <td class="value-cell" style="padding:10px 16px;border:1px solid #e2e8f0;font-size:14px;color:#1e293b;word-break:break-word;">${v}</td>
     </tr>`).join("");
   return `<table class="data-table" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="border-collapse:collapse;margin:20px 0;border-radius:12px;overflow:hidden;">${trs}</table>`;
 }

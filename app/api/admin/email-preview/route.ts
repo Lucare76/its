@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { emailHtml, emailButton, emailHighlightBox, emailDataTable } from "@/lib/server/email-layout";
 import { generateInvoiceHtml, generateReminderEmailHtml } from "@/lib/server/invoice-pdf";
 import { buildServiceListEmailHtml } from "@/lib/server/service-list-email";
+import { sendEmail } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -195,4 +196,46 @@ export async function GET(request: NextRequest) {
   return new NextResponse(html, {
     headers: { "Content-Type": "text/html; charset=utf-8" },
   });
+}
+
+// POST /api/admin/email-preview
+// Body: { to: string, templates?: string[] }
+// Invia tutti i template (o quelli specificati) all'indirizzo indicato
+export async function POST(request: NextRequest) {
+  let body: { to?: string; templates?: string[] };
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ ok: false, error: "Body JSON non valido" }, { status: 400 });
+  }
+
+  const to = body.to?.trim();
+  if (!to) return NextResponse.json({ ok: false, error: "Campo 'to' obbligatorio" }, { status: 400 });
+
+  const templateKeys = (body.templates?.length ? body.templates : Object.keys(SAMPLES)).filter(k => k in SAMPLES);
+
+  const LABELS: Record<string, string> = {
+    otp:      "Codice OTP",
+    booking:  "Conferma prenotazione (agenzia)",
+    reset:    "Reset password",
+    approval: "Accesso approvato",
+    report:   "Riepilogo servizi",
+    invoice:  "Fattura",
+    reminder: "Reminder +48h",
+  };
+
+  const results: Array<{ template: string; status: string; error?: string }> = [];
+
+  for (const key of templateKeys) {
+    const html = SAMPLES[key]();
+    const label = LABELS[key] ?? key;
+    const result = await sendEmail({
+      to,
+      subject: `[TEST] ${label} — Ischia Transfer`,
+      html,
+    });
+    results.push({ template: key, status: result.ok ? (result.skipped ? "skipped" : "sent") : "failed", error: result.error });
+  }
+
+  return NextResponse.json({ ok: true, to, results });
 }

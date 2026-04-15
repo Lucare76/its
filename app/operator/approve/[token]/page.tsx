@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 type ServiceData = {
   id: string;
@@ -37,6 +37,7 @@ function fmtDate(iso: string) {
 
 export default function OperatorApproveBookingPage() {
   const params = useParams();
+  const router = useRouter();
   const token = typeof params.token === "string" ? params.token : Array.isArray(params.token) ? params.token[0] : "";
 
   const [state, setState] = useState<PageState>({ kind: "loading" });
@@ -66,6 +67,7 @@ export default function OperatorApproveBookingPage() {
     if (action === "confirmed") {
       const v = parseFloat(priceInput.replace(",", "."));
       if (isNaN(v) || v < 0) { alert("Inserisci un prezzo valido."); return; }
+      if (Math.round(v * 100) % 50 !== 0) { alert("Il prezzo deve essere un multiplo di €0,50 (es. 10,00 · 10,50 · 11,00)"); return; }
     }
     setSubmitting(true);
     const priceCents = action === "confirmed" ? Math.round(parseFloat(priceInput.replace(",", ".")) * 100) : undefined;
@@ -79,6 +81,7 @@ export default function OperatorApproveBookingPage() {
     if (!res.ok || !body?.ok) { alert(body?.error ?? "Errore."); return; }
     setState({ kind: "done", action, emailStatus: body.email_status });
     setConfirmStep(null);
+    setTimeout(() => router.push("/agency-requests"), 1500);
   };
 
   if (state.kind === "loading") {
@@ -197,14 +200,14 @@ export default function OperatorApproveBookingPage() {
             <div className="mt-1 flex items-center gap-2">
               <span className="text-slate-500 font-semibold">€</span>
               <input
-                type="number" min={0} step={0.01}
+                type="number" min={0} step={0.5}
                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400"
                 placeholder="es. 120.00"
                 value={priceInput}
                 onChange={e => setPriceInput(e.target.value)}
               />
             </div>
-            <span className="text-xs text-slate-400 mt-1 block">Obbligatorio per la conferma. Comunicato all'agenzia via email.</span>
+            <span className="text-xs text-slate-400 mt-1 block">Obbligatorio per la conferma. Solo multipli di €0,50 (es. 10,00 · 10,50 · 11,00).</span>
           </label>
         </div>
 
