@@ -261,6 +261,7 @@ export const OPERATIVO_GROUP: NavMainGroup = {
   label: "Operativo",
   icon: "O",
   items: [
+    { href: "/foglio-viaggio", label: "Foglio di viaggio", icon: "📋" },
     { href: "/biglietti-medmar", label: "Biglietti MEDMAR", icon: "⚓" },
     { href: "/inbox/fleet-reports", label: "Segnalazioni veicoli", icon: "🚨" },
     { href: "/biglietti-multipli", label: "Invio Multiplo Agenzie", icon: "📎" },
