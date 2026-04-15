@@ -8,26 +8,31 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
   // @ts-expect-error auth type resolved at runtime
   const tenantId = auth.membership.tenant_id;
 
+  // Tipi di servizio aeroporto/stazione — usati come fallback quando place_type non è esplicitato
+  const AIRPORT_KINDS = ["transfer_airport_hotel"];
+  const STATION_KINDS = ["transfer_station_hotel", "transfer_train_hotel"];
+  const STATION_AIRPORT_KINDS = [...AIRPORT_KINDS, ...STATION_KINDS];
+
   const [arrivalsRes, departuresRes, settingsRes] = await Promise.all([
     // @ts-expect-error auth type resolved at runtime
     auth.admin
       .from("services")
-      .select("id, customer_name, pax, time, vessel, place_type, meeting_point, phone, notes, hotels(name)")
+      .select("id, customer_name, pax, time, vessel, place_type, meeting_point, phone, notes, service_type_code, booking_service_kind, hotels(name)")
       .eq("tenant_id", tenantId)
       .eq("date", date)
       .eq("direction", "arrival")
       .eq("is_draft", false)
-      .in("place_type", ["station", "airport"])
+      .or(`place_type.in.(station,airport),service_type_code.in.(${STATION_AIRPORT_KINDS.join(",")}),booking_service_kind.in.(${STATION_AIRPORT_KINDS.join(",")})`)
       .order("time"),
     // @ts-expect-error auth type resolved at runtime
     auth.admin
       .from("services")
-      .select("id, customer_name, pax, time, vessel, place_type, meeting_point, phone, notes, porto_bruno, hotels(name)")
+      .select("id, customer_name, pax, time, vessel, place_type, meeting_point, phone, notes, porto_bruno, service_type_code, booking_service_kind, hotels(name)")
       .eq("tenant_id", tenantId)
       .eq("date", date)
       .eq("direction", "departure")
       .eq("is_draft", false)
-      .in("place_type", ["station", "airport"])
+      .or(`place_type.in.(station,airport),service_type_code.in.(${STATION_AIRPORT_KINDS.join(",")}),booking_service_kind.in.(${STATION_AIRPORT_KINDS.join(",")})`)
       .order("vessel")
       .order("time"),
     // @ts-expect-error auth type resolved at runtime
@@ -45,8 +50,18 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
     id: string; customer_name: string; pax: number; time: string;
     vessel: string; place_type: string; meeting_point: string | null;
     phone: string; notes: string; porto_bruno?: string | null;
+    service_type_code?: string | null; booking_service_kind?: string | null;
     hotels: { name: string } | null;
   };
+
+  // Deriva place_type effettivo: usa il campo esplicito se è station/airport,
+  // altrimenti lo inferisce dal service_type_code / booking_service_kind
+  function resolvePlaceType(r: Row): "station" | "airport" {
+    if (r.place_type === "station" || r.place_type === "airport") return r.place_type;
+    const kind = r.service_type_code ?? r.booking_service_kind ?? "";
+    if (AIRPORT_KINDS.includes(kind)) return "airport";
+    return "station"; // tutti gli altri STATION_KINDS
+  }
 
   const mapArrival = (r: Row): BrunoArrival => ({
     id: r.id,
@@ -54,7 +69,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
     pax: r.pax,
     time: r.time,
     vessel: r.vessel,
-    place_type: r.place_type as "station" | "airport",
+    place_type: resolvePlaceType(r),
     meeting_point: r.meeting_point,
     phone: r.phone,
     hotel_name: r.hotels?.name ?? null,
@@ -67,7 +82,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
     pax: r.pax,
     time: r.time,
     vessel: r.vessel,
-    place_type: r.place_type as "station" | "airport",
+    place_type: resolvePlaceType(r),
     meeting_point: r.meeting_point,
     phone: r.phone,
     porto_bruno: r.porto_bruno ?? null,
