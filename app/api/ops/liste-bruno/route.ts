@@ -162,14 +162,16 @@ export async function POST(req: NextRequest) {
 
     // ── set_place_type: aggiorna place_type di un servizio ────────────────
     if (action === "set_place_type") {
-      const { service_id, place_type, meeting_point } = body as {
+      const { service_id, place_type, meeting_point, porto_bruno } = body as {
         service_id: string;
         place_type: "hotel" | "station" | "airport";
         meeting_point?: string;
+        porto_bruno?: string;
       };
 
       const patch: Record<string, unknown> = { place_type };
       if (meeting_point !== undefined) patch.meeting_point = meeting_point?.trim() || null;
+      if (porto_bruno !== undefined) patch.porto_bruno = porto_bruno?.trim() || null;
 
       const { error } = await auth.admin
         .from("services")
