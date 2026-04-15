@@ -7,6 +7,9 @@ import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { AgencyBookingServiceKind, Hotel, OperationalServiceType, ServiceType } from "@/lib/types";
 import { serviceCreateSchema } from "@/lib/validation";
 import { detectFerryPort, ferryTimes } from "@/lib/ferry-schedule";
+import { getPickupRule } from "@/lib/departure-pickup-rules";
+import { getBusLinePickup, getBusLinePickupByZone } from "@/lib/bus-line-pickup-rules";
+import type { BusLine } from "@/lib/bus-line-pickup-rules";
 
 const vessels = ["Nave Medmar", "Aliscafo Caremar", "NLG Jet"];
 
@@ -97,6 +100,12 @@ export default function NewServicePage() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [actorUserId, setActorUserId] = useState<string | null>(null);
   const [hotels, setHotels] = useState<Hotel[]>([]);
+  const [selectedHotelId, setSelectedHotelId] = useState("");
+  const [billingParty, setBillingParty] = useState("");
+  const [transportKind, setTransportKind] = useState<"traghetto" | "aliscafo">("traghetto");
+  const [busLine, setBusLine] = useState<BusLine>("italia");
+  const [timeValue, setTimeValue] = useState("14:30");
+  const [arrivalDate, setArrivalDate] = useState(new Date().toISOString().slice(0, 10));
 
   useEffect(() => {
     let active = true;
@@ -126,7 +135,9 @@ export default function NewServicePage() {
         return;
       }
 
-      setHotels((hotelsRows ?? []) as Hotel[]);
+      const hotelList = (hotelsRows ?? []) as Hotel[];
+      setHotels(hotelList);
+      if (hotelList.length > 0) setSelectedHotelId((prev) => prev || hotelList[0].id);
       setIsLoading(false);
     };
 
@@ -140,6 +151,41 @@ export default function NewServicePage() {
     if (!query.trim()) return hotels.slice(0, 60);
     return hotels.filter((hotel) => hotel.name.toLowerCase().includes(query.toLowerCase()));
   }, [hotels, query]);
+
+  type PickupSuggestion = { pickup: string; boat_co: string; boat_t: string; porto_p: string; porto_a: string; exc?: string; notes?: string };
+
+  const pickupSuggestion = useMemo((): PickupSuggestion | null => {
+    if (direction !== "departure") return null;
+    const hotel = hotels.find((h) => h.id === selectedHotelId);
+    const zona = hotel?.zone?.toLowerCase() ?? "";
+    if (!zona) return null;
+
+    if (presetKey === "linea_bus") {
+      const res = hotel?.name ? getBusLinePickup(hotel.name, busLine) : null;
+      const final = res ?? getBusLinePickupByZone(zona, busLine);
+      if (!final) return null;
+      return { pickup: final.pickup, boat_co: "MEDMAR", boat_t: final.nave_time, porto_p: final.porto, porto_a: final.porto };
+    }
+
+    const tFrom = departureTime?.trim() ?? "";
+    if (!tFrom) return null;
+
+    if (presetKey === "formula_snav") {
+      return getPickupRule(billingParty, "snav", tFrom, zona);
+    }
+    if (presetKey === "formula_medmar") {
+      return getPickupRule(billingParty, "medmar", tFrom, zona);
+    }
+    if (presetKey === "transfer_station") {
+      return getPickupRule(billingParty, `treno_${transportKind}`, tFrom, zona)
+        ?? getPickupRule("", `treno_${transportKind}`, tFrom, zona);
+    }
+    if (presetKey === "transfer_airport") {
+      return getPickupRule(billingParty, `volo_${transportKind}`, tFrom, zona)
+        ?? getPickupRule("", `volo_${transportKind}`, tFrom, zona);
+    }
+    return null;
+  }, [direction, presetKey, selectedHotelId, hotels, departureTime, billingParty, transportKind, busLine]);
 
   const submit = async (formData: FormData) => {
     const rawStops = String(formData.get("stops") ?? "");
@@ -280,7 +326,7 @@ export default function NewServicePage() {
         </label>
         <label className="text-sm">
           Ora
-          <input name="time" type="time" defaultValue="14:30" className="input-saas mt-1" required />
+          <input name="time" type="time" value={timeValue} onChange={(e) => setTimeValue(e.target.value)} className="input-saas mt-1" required />
         </label>
         <label className="text-sm">
           Tipo servizio
@@ -347,7 +393,7 @@ export default function NewServicePage() {
         </label>
         <label className="text-sm md:col-span-2">
           Hotel
-          <select name="hotel_id" className="input-saas mt-1" required>
+          <select name="hotel_id" value={selectedHotelId} onChange={(e) => setSelectedHotelId(e.target.value)} className="input-saas mt-1" required>
             {filteredHotels.map((hotel) => (
               <option key={hotel.id} value={hotel.id}>
                 {hotel.name} - {hotel.zone}
@@ -357,7 +403,7 @@ export default function NewServicePage() {
         </label>
         <label className="text-sm">
           Agenzia di fatturazione
-          <input name="billing_party_name" defaultValue="" className="input-saas mt-1" placeholder="Privato / nome agenzia" />
+          <input name="billing_party_name" value={billingParty} onChange={(e) => setBillingParty(e.target.value)} className="input-saas mt-1" placeholder="Privato / nome agenzia" />
         </label>
         <label className="text-sm">
           Meeting point
@@ -365,7 +411,7 @@ export default function NewServicePage() {
         </label>
         <label className="text-sm">
           Data andata operativa
-          <input name="arrival_date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} className="input-saas mt-1" />
+          <input name="arrival_date" type="date" value={arrivalDate} onChange={(e) => setArrivalDate(e.target.value)} className="input-saas mt-1" />
         </label>
         <label className="text-sm">
           Ora andata operativa
@@ -382,7 +428,7 @@ export default function NewServicePage() {
         </label>
         <label className="text-sm">
           Data ritorno
-          <input name="departure_date" type="date" className="input-saas mt-1" />
+          <input name="departure_date" type="date" min={arrivalDate} className="input-saas mt-1" />
         </label>
         <label className="text-sm">
           Ora ritorno
@@ -416,6 +462,59 @@ export default function NewServicePage() {
             </div>
           );
         })()}
+        {/* Selettore tipo imbarco per stazione/aeroporto in uscita */}
+        {direction === "departure" && (presetKey === "transfer_station" || presetKey === "transfer_airport") && (
+          <label className="text-sm md:col-span-2">
+            Tipo imbarco (per calcolo pickup)
+            <select value={transportKind} onChange={(e) => setTransportKind(e.target.value as "traghetto" | "aliscafo")} className="input-saas mt-1">
+              <option value="traghetto">Traghetto (MEDMAR)</option>
+              <option value="aliscafo">Aliscafo (Caremar/NLG)</option>
+            </select>
+          </label>
+        )}
+
+        {/* Selettore linea bus in uscita */}
+        {direction === "departure" && presetKey === "linea_bus" && (
+          <label className="text-sm md:col-span-2">
+            Linea bus (per calcolo pickup)
+            <select value={busLine} onChange={(e) => setBusLine(e.target.value as BusLine)} className="input-saas mt-1">
+              <option value="italia">Linea Italia — Porto Casamicciola 06:20</option>
+              <option value="centro">Linea Centro — Porto Ischia 11:10</option>
+              <option value="adriatica">Linea Adriatica — Porto Ischia 11:10</option>
+            </select>
+          </label>
+        )}
+
+        {/* Banner calcolo orario prelevamento */}
+        {direction === "departure" && pickupSuggestion && (
+          <div className="flex flex-col gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2.5 md:col-span-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <span className="text-xs font-semibold text-teal-800">Orario prelevamento suggerito: </span>
+                <span className="text-sm font-bold text-teal-900">{pickupSuggestion.pickup}</span>
+                <span className="ml-2 text-xs text-teal-600">
+                  {pickupSuggestion.boat_co} {pickupSuggestion.boat_t} · {pickupSuggestion.porto_p}
+                  {pickupSuggestion.porto_a && pickupSuggestion.porto_a !== pickupSuggestion.porto_p
+                    ? ` → ${pickupSuggestion.porto_a}` : ""}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTimeValue(pickupSuggestion.pickup)}
+                className="shrink-0 rounded-lg border border-teal-300 bg-white px-2.5 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-50 transition"
+              >
+                Usa questo orario
+              </button>
+            </div>
+            {pickupSuggestion.exc && (
+              <p className="text-xs text-teal-600 italic">Stagionalità: {pickupSuggestion.exc}</p>
+            )}
+            {pickupSuggestion.notes && (
+              <p className="text-xs text-teal-600">Note punti carico: {pickupSuggestion.notes}</p>
+            )}
+          </div>
+        )}
+
         {/* Campo riferimento mezzo: visibile solo per volo/treno/bus */}
         {(presetKey === "transfer_airport" || presetKey === "transfer_station" || presetKey === "linea_bus") && (
           <label className="text-sm">

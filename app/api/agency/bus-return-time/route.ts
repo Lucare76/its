@@ -51,11 +51,23 @@ export async function GET(request: NextRequest) {
         ? "pickup_time_linea_adriatica"
         : "pickup_time_linea_italia";
 
-  const { data: pickupRow } = await admin
+  // Prima prova match esatto (case-insensitive)
+  let { data: pickupRow } = await admin
     .from("hotel_pickup_times")
-    .select(`${timeCol}`)
+    .select(`hotel_name,${timeCol}`)
     .ilike("hotel_name", hotelName)
     .maybeSingle();
+
+  // Se non trovato, prova match parziale: il nome corto è contenuto nel nome completo o viceversa
+  if (!pickupRow) {
+    const { data: allRows } = await admin
+      .from("hotel_pickup_times")
+      .select(`hotel_name,${timeCol}`);
+    pickupRow = allRows?.find((r) => {
+      const short = r.hotel_name.trim().toUpperCase();
+      return hotelName.includes(short) || short.includes(hotelName);
+    }) ?? null;
+  }
 
   if (!pickupRow) {
     return NextResponse.json({ pickup_time: null });

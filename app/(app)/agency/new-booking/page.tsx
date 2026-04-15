@@ -748,8 +748,11 @@ export default function AgencyNewBookingPage() {
                 setForm((prev) => ({
                   ...prev,
                   arrival_date: newDate,
-                  // Per le escursioni la data di fine coincide con quella di inizio
-                  departure_date: prev.booking_service_kind === "excursion" ? newDate : prev.departure_date
+                  // Per le escursioni la data di fine coincide con quella di inizio;
+                  // per tutti gli altri: se la data di ritorno è antecedente alla nuova data di arrivo, allineala
+                  departure_date: prev.booking_service_kind === "excursion" || prev.departure_date < newDate
+                    ? newDate
+                    : prev.departure_date
                 }));
               }}
             />
@@ -788,6 +791,7 @@ export default function AgencyNewBookingPage() {
               type="date"
               className={`input-saas mt-1${selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
               value={form.departure_date}
+              min={form.arrival_date}
               onChange={(event) => setForm((prev) => ({ ...prev, departure_date: event.target.value }))}
             />
             {selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? (

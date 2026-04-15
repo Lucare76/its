@@ -8,6 +8,9 @@ import { formatIsoDateShort, getCustomerFullName, getTransportReferenceReturn } 
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import { supabase } from "@/lib/supabase/client";
 import type { Service } from "@/lib/types";
+import { getPickupRule } from "@/lib/departure-pickup-rules";
+import { getBusLinePickup, getBusLinePickupByZone } from "@/lib/bus-line-pickup-rules";
+import type { BusLine } from "@/lib/bus-line-pickup-rules";
 
 // ─── Export helpers ──────────────────────────────────────────────────────────
 type ExportRow = { Ora: string; Cliente: string; Pax: number; "Origine/Hotel": string; "Meeting point": string; Riferimento: string; Tipo: string; Agenzia: string };
@@ -165,6 +168,50 @@ export default function DeparturesPage() {
   const busCount = departures.filter(
     (item) => item.service.service_type_code === "bus_line" || item.service.booking_service_kind === "bus_city_hotel"
   ).length;
+
+  const pickupHints = useMemo(() => {
+    const hints = new Map<string, { pickup: string; label: string } | null>();
+    for (const item of departures) {
+      const svc = item.service;
+      const hotel = hotelsById.get(svc.hotel_id);
+      const zona = hotel?.zone?.toLowerCase() ?? "";
+      const kind = svc.booking_service_kind;
+      const tFrom = svc.departure_time?.trim() ?? "";
+      const agency = svc.billing_party_name?.trim() ?? "";
+
+      let hint: { pickup: string; label: string } | null = null;
+
+      if (kind === "bus_city_hotel" && zona) {
+        const tc = (svc.transport_code ?? "").toLowerCase();
+        const busLine: BusLine | null = tc.includes("italia") ? "italia"
+          : tc.includes("adriatica") ? "adriatica"
+          : tc.includes("centro") ? "centro"
+          : null;
+        if (busLine) {
+          const res = hotel?.name ? getBusLinePickup(hotel.name, busLine) : null;
+          const final = res ?? getBusLinePickupByZone(zona, busLine);
+          if (final) hint = { pickup: final.pickup, label: `MEDMAR ${final.nave_time} · ${final.porto}` };
+        }
+      } else if (tFrom && zona) {
+        let rule = null;
+        if (kind === "transfer_port_hotel") {
+          const v = svc.vessel?.toLowerCase() ?? "";
+          if (v.includes("snav")) rule = getPickupRule(agency, "snav", tFrom, zona);
+          else if (v.includes("medmar")) rule = getPickupRule(agency, "medmar", tFrom, zona);
+        } else if (kind === "transfer_train_hotel") {
+          rule = getPickupRule(agency, "treno_traghetto", tFrom, zona)
+            ?? getPickupRule(agency, "treno_aliscafo", tFrom, zona);
+        } else if (kind === "transfer_airport_hotel") {
+          rule = getPickupRule(agency, "volo_traghetto", tFrom, zona)
+            ?? getPickupRule(agency, "volo_aliscafo", tFrom, zona);
+        }
+        if (rule) hint = { pickup: rule.pickup, label: `${rule.boat_co} ${rule.boat_t} · ${rule.porto_p}` };
+      }
+
+      hints.set(svc.id, hint);
+    }
+    return hints;
+  }, [departures, hotelsById]);
 
   const [appOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
   const [qrServiceId, setQrServiceId] = useState<string | null>(null);
@@ -364,7 +411,21 @@ export default function DeparturesPage() {
               <tbody>
                 {departures.map((item) => (
                   <tr key={item.instanceId} className="border-t border-slate-100 hover:bg-slate-50">
-                    <td className="px-3 py-2 font-medium">{item.time}</td>
+                    <td className="px-3 py-2 font-medium whitespace-nowrap">
+                      {item.time}
+                      {(() => {
+                        const hint = pickupHints.get(item.service.id);
+                        if (!hint) return null;
+                        if (hint.pickup === item.time) return (
+                          <span className="ml-1.5 text-[10px] text-emerald-500" title="Orario conforme alle regole">✓</span>
+                        );
+                        return (
+                          <span className="ml-1.5 cursor-help text-[10px] font-semibold text-amber-600" title={`Regole: ${hint.pickup} · ${hint.label}`}>
+                            ⏰ {hint.pickup}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="px-3 py-2 uppercase">
                       {getCustomerFullName(item.service)}
                       <AgencyKindBadge service={item.service} />

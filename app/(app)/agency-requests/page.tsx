@@ -215,6 +215,9 @@ export default function AgencyRequestsPage() {
   const [cancelling, setCancelling]         = useState(false);
   const [cancelMessage, setCancelMessage]   = useState("");
 
+  // Stato rigenera token
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+
   useEffect(() => {
     let active = true;
     const load = async () => {
@@ -329,6 +332,22 @@ export default function AgencyRequestsPage() {
     setTimeout(() => { setCancelDraft(null); setCancelMessage(""); }, 2200);
   };
 
+  const doRegenerateToken = async (serviceId: string) => {
+    if (!accessToken) return;
+    setRegeneratingId(serviceId);
+    const res = await fetch("/api/ops/regenerate-approval-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ service_id: serviceId }),
+    });
+    const body = await res.json().catch(() => null) as { ok?: boolean; token?: string; error?: string } | null;
+    setRegeneratingId(null);
+    if (!res.ok || !body?.token) return;
+    setRows((prev) =>
+      prev.map((r) => r.id === serviceId ? { ...r, approval_token: body.token! } : r)
+    );
+  };
+
   return (
     <section className="mx-auto max-w-5xl page-section">
       <div className="section-head">
@@ -426,7 +445,14 @@ export default function AgencyRequestsPage() {
                       </Link>
                     )}
                     {isPending && !row.approval_token && (
-                      <span className="text-xs text-slate-400 italic">Link approvazione scaduto</span>
+                      <button
+                        type="button"
+                        disabled={regeneratingId === row.id}
+                        onClick={() => void doRegenerateToken(row.id)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60 transition"
+                      >
+                        {regeneratingId === row.id ? "Invio..." : "↺ Rigenera link"}
+                      </button>
                     )}
                     {/* Bottone cancella — visibile solo se non già cancellato */}
                     {!isCancelled && (
