@@ -4,7 +4,6 @@
  * oppure viene inviato come email HTML via Resend.
  */
 
-import { getLogoDataUri } from "@/lib/server/logo";
 import { buildServiceListEmailHtml, buildServiceListPlainText } from "@/lib/server/service-list-email";
 
 export type InvoiceLineItem = {
@@ -36,17 +35,15 @@ function formatCents(cents: number): string {
 }
 
 export function generateInvoiceHtml(data: InvoiceData): string {
-  const logoUri = getLogoDataUri();
-  const logoHtml = logoUri
-    ? `<img src="${logoUri}" alt="Ischia Transfer Service" style="width:280px;height:auto;display:block;" />`
-    : `<div style="font-size:22px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">Ischia Transfer Service</div>`;
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "https://ischia-transfer.vercel.app";
+  const logoUrl = `${appUrl}/brand/logo-ischia-transfer-email.png`;
 
   const rows = data.items.map((item, i) => `
     <tr>
-      <td style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${item.numero_pratica || "—"}</td>
+      <td class="td-pratica" style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${item.numero_pratica || "—"}</td>
       <td style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${item.cliente_nome}</td>
-      <td style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${formatDate(item.data_servizio)}</td>
-      <td style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${item.tipo_servizio}</td>
+      <td class="td-data" style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${formatDate(item.data_servizio)}</td>
+      <td class="td-servizio" style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${item.tipo_servizio}</td>
       <td style="padding:11px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:#0f2744;background:${i % 2 === 0 ? "#ffffff" : "#f8fafc"};">${formatCents(item.importo_cents)}</td>
     </tr>
   `).join("");
@@ -60,26 +57,57 @@ export function generateInvoiceHtml(data: InvoiceData): string {
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 13px; color: #1a1a1a; background: #f1f5f9; }
+
+  .page { max-width: 860px; margin: 32px auto; background: #fff; border-radius: 20px; overflow: hidden; box-shadow: 0 4px 40px rgba(0,0,0,0.10); }
+  .header { background: linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%); padding: 36px 40px; }
+  .header-logo { vertical-align: middle; width: 50%; }
+  .header-info { vertical-align: top; text-align: right; width: 50%; }
+  .kpi-section { padding: 28px 40px 0; }
+  .kpi-table { width: 100%; }
+  .table-section { padding: 28px 40px; }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .footer-section { margin: 0 40px 32px; padding: 18px 24px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; text-align: center; }
+
   @media print {
     body { background: #fff; }
     .no-print { display: none !important; }
     .page { box-shadow: none !important; margin: 0 !important; border-radius: 0 !important; }
   }
+
+  @media only screen and (max-width: 620px) {
+    .page { margin: 0; border-radius: 0; box-shadow: none; }
+    .header { padding: 24px 20px; }
+    .header-logo { display: block; width: 100%; text-align: center; padding-bottom: 16px; }
+    .header-info { display: block; width: 100%; text-align: center; }
+    .header-table { width: 100%; }
+    .header-table tr { display: block; }
+    .header-table td { display: block !important; width: 100% !important; text-align: center !important; }
+    .kpi-section { padding: 20px 16px 0; }
+    .kpi-table tr { display: block; }
+    .kpi-table td { display: block !important; width: 100% !important; padding: 0 0 10px 0 !important; }
+    .table-section { padding: 20px 16px; }
+    .footer-section { margin: 0 16px 24px; }
+    .td-pratica { display: none !important; }
+    .td-servizio { display: none !important; }
+    th.th-pratica { display: none !important; }
+    th.th-servizio { display: none !important; }
+    img.invoice-logo { width: 160px !important; max-width: 160px !important; }
+  }
 </style>
 </head>
 <body>
-  <div class="page" style="max-width:860px;margin:32px auto;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 4px 40px rgba(0,0,0,0.10);">
+  <div class="page">
 
     <!-- HEADER GRADIENT -->
-    <div style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);padding:36px 40px;">
-      <table width="100%" cellpadding="0" cellspacing="0" border="0">
+    <div class="header">
+      <table class="header-table" width="100%" cellpadding="0" cellspacing="0" border="0">
         <tr>
-          <td style="vertical-align:middle;">
-            ${logoHtml}
+          <td class="header-logo">
+            <img class="invoice-logo" src="${logoUrl}" alt="Ischia Transfer Service" width="220" style="width:220px;max-width:220px;height:auto;display:block;" />
           </td>
-          <td style="vertical-align:top;text-align:right;">
+          <td class="header-info">
             <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Estratto conto</div>
-            <div style="font-size:28px;font-weight:900;color:#ffffff;line-height:1.1;">${data.agencyName}</div>
+            <div style="font-size:24px;font-weight:900;color:#ffffff;line-height:1.1;">${data.agencyName}</div>
             ${data.agencyEmail ? `<div style="font-size:13px;color:rgba(255,255,255,0.6);margin-top:6px;">${data.agencyEmail}</div>` : ""}
             <div style="margin-top:12px;display:inline-block;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:6px 14px;font-size:12px;color:rgba(255,255,255,0.8);">
               Rif. <strong style="color:#ffffff;">${data.invoiceId.slice(0, 8).toUpperCase()}</strong> &nbsp;·&nbsp; Emesso il ${formatDate(data.createdAt.slice(0, 10))}
@@ -90,13 +118,13 @@ export function generateInvoiceHtml(data: InvoiceData): string {
     </div>
 
     <!-- KPI BOXES -->
-    <div style="padding:28px 40px 0;">
-      <table width="100%" cellpadding="0" cellspacing="0" border="0">
+    <div class="kpi-section">
+      <table class="kpi-table" cellpadding="0" cellspacing="0" border="0">
         <tr>
           <td style="width:33%;padding-right:10px;">
             <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:18px 20px;">
               <div style="font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;">Periodo</div>
-              <div style="font-size:15px;font-weight:700;color:#0f2744;">${formatDate(data.periodFrom)} — ${formatDate(data.periodTo)}</div>
+              <div style="font-size:14px;font-weight:700;color:#0f2744;">${formatDate(data.periodFrom)} — ${formatDate(data.periodTo)}</div>
             </div>
           </td>
           <td style="width:33%;padding:0 5px;">
@@ -108,7 +136,7 @@ export function generateInvoiceHtml(data: InvoiceData): string {
           <td style="width:33%;padding-left:10px;">
             <div style="background:linear-gradient(135deg,#0f2744,#1e3a5f);border-radius:14px;padding:18px 20px;text-align:right;">
               <div style="font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Totale</div>
-              <div style="font-size:26px;font-weight:900;color:#ffffff;">${formatCents(data.totalCents)}</div>
+              <div style="font-size:24px;font-weight:900;color:#ffffff;">${formatCents(data.totalCents)}</div>
             </div>
           </td>
         </tr>
@@ -116,29 +144,32 @@ export function generateInvoiceHtml(data: InvoiceData): string {
     </div>
 
     <!-- TABLE -->
-    <div style="padding:28px 40px;">
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
-        <thead>
-          <tr style="background:linear-gradient(135deg,#0f2744,#1e3a5f);">
-            <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:120px;">N. Pratica</th>
-            <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);">Cliente</th>
-            <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:90px;">Data</th>
-            <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:150px;">Servizio</th>
-            <th style="padding:12px 14px;text-align:right;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:100px;">Importo</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-          <tr>
-            <td colspan="4" style="padding:14px 14px;border-top:2px solid #1e3a5f;font-size:13px;font-weight:800;color:#0f2744;text-transform:uppercase;letter-spacing:0.06em;background:#f0f6ff;">Totale complessivo</td>
-            <td style="padding:14px 14px;border-top:2px solid #1e3a5f;font-size:16px;font-weight:900;text-align:right;color:#0f2744;background:#f0f6ff;">${formatCents(data.totalCents)}</td>
-          </tr>
-        </tbody>
-      </table>
+    <div class="table-section">
+      <div class="table-scroll">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;min-width:400px;">
+          <thead>
+            <tr style="background:linear-gradient(135deg,#0f2744,#1e3a5f);">
+              <th class="th-pratica" style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:110px;">N. Pratica</th>
+              <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);">Cliente</th>
+              <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:90px;">Data</th>
+              <th class="th-servizio" style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:150px;">Servizio</th>
+              <th style="padding:12px 14px;text-align:right;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.65);width:100px;">Importo</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+            <tr>
+              <td colspan="5" style="padding:14px 14px;border-top:2px solid #1e3a5f;font-size:13px;font-weight:800;color:#0f2744;text-align:right;background:#f0f6ff;">
+                Totale &nbsp;<span style="font-size:16px;font-weight:900;">${formatCents(data.totalCents)}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <!-- FOOTER -->
-    <div style="margin:0 40px 32px;padding:18px 24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;text-align:center;">
+    <div class="footer-section">
       <div style="font-size:11px;color:#94a3b8;line-height:1.8;">
         <strong style="color:#475569;">Ischia Transfer Service S.r.l.</strong><br/>
         Via Cilento 14/C, 80077 Ischia (NA) &nbsp;·&nbsp; P.IVA IT 05931311210<br/>

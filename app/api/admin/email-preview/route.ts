@@ -220,7 +220,7 @@ export async function POST(request: NextRequest) {
     reset:    "Reset password",
     approval: "Accesso approvato",
     report:   "Riepilogo servizi",
-    invoice:  "Fattura",
+    invoice:  "Estratto conto",
     reminder: "Reminder +48h",
   };
 
