@@ -114,6 +114,101 @@ export function generateInvoiceHtml(data: InvoiceData): string {
 }
 
 /**
+ * Genera HTML print-friendly per stampa/PDF dal browser (A4 portrait).
+ * Diverso da generateInvoiceHtml che è ottimizzato per email.
+ */
+export function generateInvoicePrintHtml(data: InvoiceData): string {
+  const rows = data.items.map((item, i) => {
+    const bg = i % 2 === 0 ? "#fff" : "#f8fafc";
+    return `<tr style="background:${bg}">
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:12px;color:#64748b">${item.numero_pratica || "—"}</td>
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;text-transform:uppercase">${item.cliente_nome}</td>
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569;white-space:nowrap">${formatDate(item.data_servizio)}</td>
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569">${item.tipo_servizio}</td>
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:#0f2744;white-space:nowrap">${formatCents(item.importo_cents)}</td>
+    </tr>`;
+  }).join("");
+
+  return `<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Estratto conto — ${data.agencyName}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 13px; color: #1a1a1a; padding: 32px; background: #fff; }
+  @media print {
+    body { padding: 0; }
+    .no-print { display: none !important; }
+    @page { margin: 1.5cm; size: A4 portrait; }
+  }
+</style>
+</head>
+<body>
+  <!-- Intestazione -->
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;padding-bottom:16px;border-bottom:3px solid #0f172a">
+    <div>
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.15em;color:#64748b;margin-bottom:6px">Ischia Transfer Service</div>
+      <h1 style="font-size:24px;font-weight:800;color:#0f172a">Estratto conto</h1>
+      <div style="font-size:16px;font-weight:600;color:#475569;margin-top:4px">${data.agencyName}</div>
+      ${data.agencyEmail ? `<div style="font-size:12px;color:#94a3b8;margin-top:2px">${data.agencyEmail}</div>` : ""}
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:4px">Periodo</div>
+      <div style="font-size:14px;font-weight:700;color:#0f172a">${formatDate(data.periodFrom)} — ${formatDate(data.periodTo)}</div>
+      <div style="margin-top:8px;font-size:11px;color:#94a3b8">Rif. ${data.invoiceId.slice(0, 8).toUpperCase()}</div>
+      <div style="font-size:11px;color:#94a3b8">Emesso il ${formatDate(data.createdAt.slice(0, 10))}</div>
+    </div>
+  </div>
+
+  <!-- KPI -->
+  <div style="display:flex;gap:16px;margin-bottom:24px">
+    <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px 18px">
+      <div style="font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#94a3b8;margin-bottom:4px">Pratiche</div>
+      <div style="font-size:28px;font-weight:900;color:#0e7490">${data.items.length}</div>
+    </div>
+    <div style="flex:2;background:#0f172a;border-radius:10px;padding:14px 18px;text-align:right">
+      <div style="font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:4px">Totale da pagare</div>
+      <div style="font-size:28px;font-weight:900;color:#fff">${formatCents(data.totalCents)}</div>
+    </div>
+  </div>
+
+  <!-- Tabella servizi -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:20px">
+    <thead>
+      <tr style="background:#0f172a">
+        <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.65);border:1px solid #1e293b">N. Pratica</th>
+        <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.65);border:1px solid #1e293b">Cliente</th>
+        <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.65);border:1px solid #1e293b">Data</th>
+        <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.65);border:1px solid #1e293b">Servizio</th>
+        <th style="padding:10px 12px;text-align:right;font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.65);border:1px solid #1e293b">Importo</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows}
+      <tr style="background:#f0f6ff">
+        <td colspan="4" style="padding:12px;border:1px solid #e2e8f0;font-size:13px;font-weight:800;color:#0f2744;text-transform:uppercase;letter-spacing:0.06em">Totale complessivo</td>
+        <td style="padding:12px;border:1px solid #e2e8f0;font-size:16px;font-weight:900;text-align:right;color:#0f2744;white-space:nowrap">${formatCents(data.totalCents)}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Footer -->
+  <div style="margin-top:24px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;text-align:center;line-height:1.8">
+    <strong style="color:#475569">Ischia Transfer Service S.r.l.</strong><br/>
+    Via Cilento 14/C, 80077 Ischia (NA) &nbsp;·&nbsp; P.IVA IT 05931311210<br/>
+    Documento generato automaticamente il ${formatDate(data.createdAt.slice(0, 10))}
+  </div>
+
+  <div class="no-print" style="margin-top:28px;text-align:center">
+    <button onclick="window.print()" style="background:#0f172a;color:white;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">🖨️ Stampa / Salva PDF</button>
+  </div>
+</body>
+</html>`;
+}
+
+/**
  * Genera il testo email di accompagnamento (plain text + HTML summary).
  */
 export function generateReminderEmailHtml(

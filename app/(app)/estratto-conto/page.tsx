@@ -95,6 +95,8 @@ export default function EstrattoContoPage() {
   // Mark paid
   const [payingId, setPayingId] = useState<string | null>(null);
   const [payNote, setPayNote] = useState("");
+  const [resendingId, setResendingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadData = async (tok: string) => {
     const [agRes, invRes] = await Promise.all([
@@ -163,6 +165,108 @@ export default function EstrattoContoPage() {
         await loadData(token);
       }
     } finally { setGenerating(false); }
+  };
+
+  const resendInvoice = async (invoiceId: string) => {
+    if (!token) return;
+    setResendingId(invoiceId);
+    const res = await fetch(`/api/invoices/${invoiceId}/resend`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const body = (await res.json().catch(() => null)) as { ok?: boolean; sent_to?: string; error?: string } | null;
+    setResendingId(null);
+    if (body?.ok) {
+      setMessage(`Email inviata a ${body.sent_to ?? "agenzia"}`);
+      await loadData(token);
+    } else {
+      setMessage(`Errore: ${body?.error ?? "Invio fallito"}`);
+    }
+  };
+
+  const deleteInvoice = async (invoiceId: string) => {
+    if (!token || !confirm("Eliminare questa bozza?")) return;
+    setDeletingId(invoiceId);
+    const res = await fetch(`/api/invoices/${invoiceId}/delete`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    setDeletingId(null);
+    if (body?.ok) {
+      setMessage("Bozza eliminata.");
+      await loadData(token);
+    } else {
+      setMessage(`Errore: ${body?.error ?? "Eliminazione fallita"}`);
+    }
+  };
+
+  const openPrint = (inv: InvoiceRow) => {
+    // Genera HTML print-friendly client-side partendo dai dati già caricati
+    const printHtml = `<!DOCTYPE html>
+<html lang="it">
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Estratto conto — ${inv.agency_name}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;font-size:13px;color:#1a1a1a;padding:32px;background:#fff}
+  @media print{body{padding:0}.no-print{display:none!important}@page{margin:1.5cm;size:A4 portrait}}
+</style></head>
+<body>
+<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;padding-bottom:16px;border-bottom:3px solid #0f172a">
+  <div>
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.15em;color:#64748b;margin-bottom:6px">Ischia Transfer Service</div>
+    <h1 style="font-size:24px;font-weight:800;color:#0f172a">Estratto conto</h1>
+    <div style="font-size:16px;font-weight:600;color:#475569;margin-top:4px">${inv.agency_name}</div>
+  </div>
+  <div style="text-align:right">
+    <div style="font-size:14px;font-weight:700;color:#0f172a">${formatDate(inv.period_from)} — ${formatDate(inv.period_to)}</div>
+    <div style="font-size:11px;color:#94a3b8;margin-top:4px">Emesso il ${formatDate(inv.created_at.slice(0,10))}</div>
+  </div>
+</div>
+<div style="display:flex;gap:16px;margin-bottom:24px">
+  <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px 18px">
+    <div style="font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#94a3b8;margin-bottom:4px">Pratiche</div>
+    <div style="font-size:28px;font-weight:900;color:#0e7490">${inv.services_count}</div>
+  </div>
+  <div style="flex:2;background:#0f172a;border-radius:10px;padding:14px 18px;text-align:right">
+    <div style="font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:4px">Totale</div>
+    <div style="font-size:28px;font-weight:900;color:#fff">${formatCents(inv.total_cents)}</div>
+  </div>
+</div>
+<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:20px">
+  <thead><tr style="background:#0f172a">
+    <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;color:rgba(255,255,255,0.65);border:1px solid #1e293b">N. Pratica</th>
+    <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;color:rgba(255,255,255,0.65);border:1px solid #1e293b">Cliente</th>
+    <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;color:rgba(255,255,255,0.65);border:1px solid #1e293b">Data</th>
+    <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;color:rgba(255,255,255,0.65);border:1px solid #1e293b">Servizio</th>
+    <th style="padding:10px 12px;text-align:right;font-size:10px;font-weight:700;text-transform:uppercase;color:rgba(255,255,255,0.65);border:1px solid #1e293b">Importo</th>
+  </tr></thead>
+  <tbody>
+    ${(inv.invoice_data ?? []).map((item, i) => `
+    <tr style="background:${i % 2 === 0 ? "#fff" : "#f8fafc"}">
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:12px;color:#64748b">${item.numero_pratica || "—"}</td>
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;text-transform:uppercase">${item.cliente_nome}</td>
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569;white-space:nowrap">${formatDate(item.data_servizio)}</td>
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569">${item.tipo_servizio}</td>
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:#0f2744;white-space:nowrap">${formatCents(item.importo_cents)}</td>
+    </tr>`).join("")}
+    <tr style="background:#f0f6ff">
+      <td colspan="4" style="padding:12px;border:1px solid #e2e8f0;font-size:13px;font-weight:800;color:#0f2744;text-transform:uppercase">Totale complessivo</td>
+      <td style="padding:12px;border:1px solid #e2e8f0;font-size:16px;font-weight:900;text-align:right;color:#0f2744;white-space:nowrap">${formatCents(inv.total_cents)}</td>
+    </tr>
+  </tbody>
+</table>
+<div style="margin-top:24px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;text-align:center;line-height:1.8">
+  <strong style="color:#475569">Ischia Transfer Service S.r.l.</strong><br/>
+  Via Cilento 14/C, 80077 Ischia (NA) · P.IVA IT 05931311210
+</div>
+<div class="no-print" style="margin-top:28px;text-align:center">
+  <button onclick="window.print()" style="background:#0f172a;color:white;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">🖨️ Stampa / Salva PDF</button>
+</div>
+</body></html>`;
+    const w = window.open("", "_blank");
+    if (w) { w.document.write(printHtml); w.document.close(); w.focus(); }
   };
 
   const markPaid = async (invoiceId: string) => {
@@ -334,15 +438,33 @@ export default function EstrattoContoPage() {
                         {inv.payment_note && <span className="ml-1 text-slate-400">({inv.payment_note})</span>}
                       </td>
                       <td className="px-3 py-2">
-                        <div className="flex gap-1.5">
+                        <div className="flex gap-1.5 flex-wrap">
+                          <button type="button" onClick={() => openPrint(inv)}
+                            className="rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100">
+                            🖨️ Stampa
+                          </button>
                           <button type="button" onClick={() => setPreviewInvoice(previewInvoice?.id === inv.id ? null : inv)}
                             className="rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-100">
                             Dettaglio
                           </button>
                           {inv.status !== "paid" && (
+                            <button type="button" onClick={() => void resendInvoice(inv.id)}
+                              disabled={resendingId === inv.id}
+                              className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
+                              {resendingId === inv.id ? "..." : "📧 Re-invia"}
+                            </button>
+                          )}
+                          {inv.status !== "paid" && (
                             <button type="button" onClick={() => { setPayingId(inv.id); setPayNote(""); }}
                               className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100">
                               Segna pagato
+                            </button>
+                          )}
+                          {inv.status === "draft" && (
+                            <button type="button" onClick={() => void deleteInvoice(inv.id)}
+                              disabled={deletingId === inv.id}
+                              className="rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-600 hover:bg-rose-100 disabled:opacity-50">
+                              {deletingId === inv.id ? "..." : "🗑️ Elimina"}
                             </button>
                           )}
                         </div>
