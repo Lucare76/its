@@ -27,14 +27,15 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
     // @ts-expect-error auth type resolved at runtime
     auth.admin
       .from("services")
-      .select("id, customer_name, pax, time, vessel, place_type, meeting_point, phone, notes, porto_bruno, service_type_code, booking_service_kind, hotels(name)")
+      .select("id, customer_name, pax, time, departure_time, vessel, place_type, meeting_point, phone, notes, porto_bruno, service_type_code, booking_service_kind, hotels(name)")
       .eq("tenant_id", tenantId)
-      .eq("date", date)
-      .eq("direction", "departure")
       .eq("is_draft", false)
+      // Partenze round-trip: la data rilevante è departure_date (≠ date del servizio principale)
+      // Partenze pure: direction=departure e date = data richiesta (senza departure_date separato)
+      .or(`departure_date.eq.${date},and(date.eq.${date},direction.eq.departure,departure_date.is.null)`)
       .or(`place_type.in.(station,airport),service_type_code.in.(${STATION_AIRPORT_KINDS.join(",")}),booking_service_kind.in.(${STATION_AIRPORT_KINDS.join(",")})`)
       .order("vessel")
-      .order("time"),
+      .order("departure_time"),
     // @ts-expect-error auth type resolved at runtime
     auth.admin
       .from("tenant_operational_settings")
@@ -48,6 +49,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
 
   type Row = {
     id: string; customer_name: string; pax: number; time: string;
+    departure_time?: string | null;
     vessel: string; place_type: string; meeting_point: string | null;
     phone: string; notes: string; porto_bruno?: string | null;
     service_type_code?: string | null; booking_service_kind?: string | null;
@@ -80,7 +82,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
     id: r.id,
     customer_name: r.customer_name,
     pax: r.pax,
-    time: r.time,
+    time: r.departure_time ?? r.time,
     vessel: r.vessel,
     place_type: resolvePlaceType(r),
     meeting_point: r.meeting_point,
