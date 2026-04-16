@@ -418,7 +418,7 @@ export default function EscursioniPage() {
 
   // Form nuovo bus
   const [showAddUnit, setShowAddUnit] = useState(false);
-  const [unitForm, setUnitForm] = useState({ label: "Bus 1", capacity: 50, departure_time: "" });
+  const [unitForm, setUnitForm] = useState({ label: "Bus 1", capacity: 50, departure_time: "", vehicle_id: "" });
   const [exportingExcel, setExportingExcel] = useState(false);
 
   // Import da email
@@ -694,6 +694,22 @@ export default function EscursioniPage() {
                 placeholder="es. Bus 1, Bus Giallo"
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
             </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600">Mezzo (opzionale)</label>
+              <select
+                value={unitForm.vehicle_id}
+                onChange={(e) => {
+                  const vid = e.target.value;
+                  const veh = vehicles.find((v) => v.id === vid);
+                  setUnitForm((f) => ({ ...f, vehicle_id: vid, ...(veh ? { capacity: veh.capacity } : {}) }));
+                }}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                <option value="">— Nessun mezzo —</option>
+                {vehicles.map((v) => (
+                  <option key={v.id} value={v.id}>{v.label} ({v.capacity}p) · {v.plate}</option>
+                ))}
+              </select>
+            </div>
             <div className="flex gap-3">
               <div className="flex-1">
                 <label className="mb-1 block text-xs font-medium text-slate-600">Capienza</label>
@@ -709,7 +725,7 @@ export default function EscursioniPage() {
               </div>
             </div>
             <div className="flex gap-3 pt-1">
-              <button onClick={() => setShowAddUnit(false)}
+              <button onClick={() => { setShowAddUnit(false); setUnitForm({ label: "Bus 1", capacity: 50, departure_time: "", vehicle_id: "" }); }}
                 className="flex-1 rounded-lg border border-slate-200 py-2 text-sm text-slate-600 hover:bg-slate-50">
                 Annulla
               </button>
@@ -721,7 +737,8 @@ export default function EscursioniPage() {
                     label: unitForm.label,
                     capacity: unitForm.capacity,
                     departure_time: unitForm.departure_time || null,
-                  }).then(() => setShowAddUnit(false));
+                    vehicle_id: unitForm.vehicle_id || null,
+                  }).then(() => { setShowAddUnit(false); setUnitForm({ label: "Bus 1", capacity: 50, departure_time: "", vehicle_id: "" }); });
                 }}
                 className="flex-1 rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40">
                 {saving ? "..." : "Crea bus"}

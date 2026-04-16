@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
+import { QrCode } from "@/components/QrCode";
 
 type ServiceInfo = {
   id: string;
@@ -202,6 +203,22 @@ export default function ScanPage() {
             <p className="text-sm text-slate-700 whitespace-pre-line">{service.notes}</p>
           </div>
         )}
+
+        {/* QR code — per voucher/stampa */}
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-center print:border-0">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-3">QR Servizio</p>
+          <div className="flex justify-center">
+            <QrCode value={typeof window !== "undefined" ? `${window.location.origin}/scan/${serviceId}` : `/scan/${serviceId}`} size={160} />
+          </div>
+          <p className="mt-2 text-xs text-slate-400 font-mono break-all">{serviceId}</p>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 print:hidden"
+          >
+            🖨 Stampa voucher
+          </button>
+        </div>
 
         {/* Confirm button */}
         {!completedAt && !alreadyCompleted && service.status !== "completato" && service.status !== "cancelled" && (

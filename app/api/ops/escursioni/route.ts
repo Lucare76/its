@@ -189,13 +189,14 @@ export async function POST(req: NextRequest) {
 
     // ── add_unit: aggiungi bus a un'escursione ────────────────────────────
     if (action === "add_unit") {
-      const { excursion_line_id, label, capacity, departure_time } = body as {
-        excursion_line_id: string; label: string; capacity: number; departure_time?: string;
+      const { excursion_line_id, label, capacity, departure_time, vehicle_id } = body as {
+        excursion_line_id: string; label: string; capacity: number; departure_time?: string; vehicle_id?: string | null;
       };
       const { error } = await auth.admin.from("excursion_units").insert({
         tenant_id: tenantId, excursion_line_id, excursion_date: date,
         label, capacity: capacity ?? 50,
         departure_time: departure_time || null,
+        vehicle_id: vehicle_id || null,
       });
       if (error) throw new Error(error.message);
       return NextResponse.json({ ok: true, ...(await loadData(auth, date)) });

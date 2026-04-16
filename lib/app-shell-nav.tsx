@@ -241,6 +241,7 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/departures", label: "Partenze", icon: "P" },
   { href: "/inbox", label: "Prenotazioni", icon: "I" },
   { href: "/dispatch", label: "Assegnazioni", icon: "G" },
+  { href: "/ricerca", label: "Ricerca", icon: "🔍" },
 ];
 
 export const AGENZIE_GROUP: NavMainGroup = {

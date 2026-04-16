@@ -53,10 +53,12 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
   // @ts-expect-error auth type resolved at runtime
   const tenantId = auth.membership.tenant_id;
 
-  // Tipi di servizio aeroporto/stazione — usati come fallback quando place_type non è esplicitato
+  // Arrivi Bruno: solo aeroporto (non stazione — la stazione è gestita da altri vettori)
   const AIRPORT_KINDS = ["transfer_airport_hotel", "transfer_airport_hotel_exclusive"];
-  const STATION_KINDS = ["transfer_station_hotel", "transfer_train_hotel", "transfer_train_hotel_exclusive"];
-  const STATION_AIRPORT_KINDS = [...AIRPORT_KINDS, ...STATION_KINDS];
+
+  // Partenze Bruno: solo servizi esclusivi Sosandra aliscafo (volo o treno)
+  // I trasferimenti standard (non _exclusive) sono gestiti dal Piano del Giorno con i vettori
+  const EXCLUSIVE_KINDS = ["transfer_airport_hotel_exclusive", "transfer_train_hotel_exclusive"];
 
   const [arrivalsRes, departuresRes, settingsRes] = await Promise.all([
     // @ts-expect-error auth type resolved at runtime
@@ -67,7 +69,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
       .eq("date", date)
       .eq("direction", "arrival")
       .eq("is_draft", false)
-      .or(`place_type.in.(station,airport),service_type_code.in.(${STATION_AIRPORT_KINDS.join(",")}),booking_service_kind.in.(${STATION_AIRPORT_KINDS.join(",")})`)
+      .or(`place_type.eq.airport,service_type_code.in.(${AIRPORT_KINDS.join(",")}),booking_service_kind.in.(${AIRPORT_KINDS.join(",")})`)
       .order("time"),
     // @ts-expect-error auth type resolved at runtime
     auth.admin
@@ -78,7 +80,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
       // Partenze round-trip: la data rilevante è departure_date (≠ date del servizio principale)
       // Partenze pure: direction=departure e date = data richiesta (senza departure_date separato)
       .or(`departure_date.eq.${date},and(date.eq.${date},direction.eq.departure,departure_date.is.null)`)
-      .or(`place_type.in.(station,airport),service_type_code.in.(${STATION_AIRPORT_KINDS.join(",")}),booking_service_kind.in.(${STATION_AIRPORT_KINDS.join(",")})`)
+      .or(`service_type_code.in.(${EXCLUSIVE_KINDS.join(",")}),booking_service_kind.in.(${EXCLUSIVE_KINDS.join(",")})`)
       .order("vessel")
       .order("departure_time"),
     // @ts-expect-error auth type resolved at runtime
