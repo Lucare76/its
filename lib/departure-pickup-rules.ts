@@ -394,6 +394,56 @@ export function getPickupRuleByTransportDeparture(
 }
 
 // ---------------------------------------------------------------------------
+// Lookup per fascia: dato l'orario effettivo della connessione (treno/volo/bus)
+// trova lo slot in cui quell'orario cade (t_from ≤ connectionTime ≤ t_to).
+// Usato per FlixBus e qualsiasi connessione con orario non coincidente con
+// il t_from esatto della regola.
+// ---------------------------------------------------------------------------
+function toMinutes(hhmm: string): number {
+  const [h, m] = hhmm.trim().split(":").map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+export function getPickupRuleByRange(
+  agencyName: string,
+  transportType: string,
+  connectionTime: string,  // orario reale di partenza del mezzo (HH:MM)
+  zona: string
+): PickupRule | null {
+  const key = normalizeAgencyKey(agencyName);
+  const sosandra = isSosandra(key);
+  const z = zona.toLowerCase().trim();
+  const connMin = toMinutes(connectionTime);
+
+  return ALL_PICKUP_RULES.find((r) => {
+    if (r.not_sosandra && sosandra) return false;
+    if (r.transport_type !== transportType) return false;
+    if (r.zona !== z) return false;
+    if (r.t_to === null) return false; // SNAV/MEDMAR diretti usano t_from esatto
+    return connMin >= toMinutes(r.t_from) && connMin <= toMinutes(r.t_to);
+  }) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Lookup inverso: dato l'orario di prelevamento hotel (pickup), trova la regola.
+// Usato quando nel DB è memorizzato solo il pickup sull'isola (non l'orario volo/treno).
+// Non filtra per agenzia perché usato esclusivamente per le liste Bruno.
+// ---------------------------------------------------------------------------
+export function getPickupRuleByIslandPickup(
+  transportType: string,
+  pickupTime: string,
+  zona: string
+): PickupRule | null {
+  const z = zona.toLowerCase().trim();
+  const pt = pickupTime.trim();
+  return ALL_PICKUP_RULES.find((r) => {
+    if (r.transport_type !== transportType) return false;
+    if (r.zona !== z) return false;
+    return r.pickup === pt;
+  }) ?? null;
+}
+
+// ---------------------------------------------------------------------------
 // Elenca tutte le opzioni disponibili per tipo di trasporto + zona
 // (utile per mostrare un selettore di orari nell'UI)
 // ---------------------------------------------------------------------------

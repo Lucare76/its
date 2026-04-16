@@ -10,6 +10,7 @@ export type BrunoArrival = {
   pax: number;
   time: string;
   vessel: string;
+  arrival_at_ischia: string | null;  // orario arrivo traghetto a Ischia (per autisti sull'isola)
   place_type: "station" | "airport";
   meeting_point: string | null;
   phone: string;
@@ -21,13 +22,16 @@ export type BrunoDeparture = {
   id: string;
   customer_name: string;
   pax: number;
-  time: string;
-  vessel: string;
+  time: string;              // orario prelievo hotel (sull'isola, non rilevante per Bruno)
+  vessel: string;                  // nome traghetto, es. "MEDMAR 08:10"
+  boat_t: string | null;           // orario traghetto da ischia
+  arrival_at_porto: string | null; // orario arrivo traghetto al porto continentale (Bruno si fa trovare qui)
+  connection_time: string | null;  // orario volo/treno/bus del cliente
   place_type: "station" | "airport";
   meeting_point: string | null;
   phone: string;
-  porto_bruno: string | null;   // porto dove Bruno ritira il cliente (Napoli Beverello / Pozzuoli)
-  hotel_name: string | null;
+  porto_bruno: string | null;   // porto dove Bruno ritira il cliente (Pozzuoli / Napoli Beverello)
+  hotel_name: string | null;    // hotel sull'isola (utile per identificare il cliente)
   notes: string;
 };
 
@@ -114,11 +118,15 @@ function buildDeparturesHtml(departures: BrunoDeparture[]): string {
         .sort((a, b) => a.customer_name.localeCompare(b.customer_name))
         .map((d) => {
           const portoBrunoLabel = d.porto_bruno ?? portoDaVessel(d.vessel);
+          const connLabel = d.connection_time
+            ? `<strong style="color:#c2410c">${d.place_type === "airport" ? "✈️" : "🚂"} ${d.connection_time.slice(0, 5)}</strong>`
+            : "—";
           return `
           <tr>
             <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-weight:600">${d.customer_name}</td>
             <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;text-align:center">${d.pax}</td>
             <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">⚓ ${portoBrunoLabel}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">${connLabel}</td>
             <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">${placeLabel(d.place_type, d.meeting_point)}</td>
             <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:12px">${d.phone}${d.notes ? ` · ${d.notes}` : ""}</td>
           </tr>`;
@@ -126,12 +134,16 @@ function buildDeparturesHtml(departures: BrunoDeparture[]): string {
         .join("");
 
       const groupPorto = group[0] ? (group[0].porto_bruno ?? portoDaVessel(group[0].vessel)) : "—";
+      const groupConnTime = group.find(d => d.connection_time)?.connection_time ?? null;
+      const groupConnIcon = group[0]?.place_type === "airport" ? "✈️" : "🚂";
+      const groupArrival = group.find(d => d.arrival_at_porto)?.arrival_at_porto ?? null;
 
       return `
         <div style="margin-bottom:24px">
           <div style="background:#1e293b;color:white;padding:10px 14px;border-radius:8px 8px 0 0;font-weight:700;font-size:15px">
-            ⛴ ${vessel} &mdash; Bruno ritira a ${groupPorto} &mdash; orario barca ${firstTime} &nbsp;
-            <span style="font-size:12px;font-weight:400;opacity:0.75">${totalPax} pax totali</span>
+            ⛴ ${vessel} &mdash; Porto: ${groupPorto} &mdash; parte ${firstTime}${groupConnTime ? ` &mdash; <span style="color:#fdba74">${groupConnIcon} ${groupConnTime.slice(0, 5)}</span>` : ""}
+            <span style="font-size:12px;font-weight:400;opacity:0.75">&nbsp;${totalPax} pax totali</span>
+            ${groupArrival ? `<div style="margin-top:8px;background:rgba(16,185,129,0.25);border-radius:6px;padding:6px 12px;font-size:14px;color:#6ee7b7">🕐 Bruno si fa trovare alle <strong>${groupArrival}</strong> a ${groupPorto}</div>` : ""}
           </div>
           <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;border:1px solid #e2e8f0;border-top:none">
             <thead>
@@ -139,6 +151,7 @@ function buildDeparturesHtml(departures: BrunoDeparture[]): string {
                 <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Cliente</th>
                 <th style="padding:7px 12px;text-align:center;font-size:11px;text-transform:uppercase;color:#64748b">Pax</th>
                 <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Porto ritiro Bruno</th>
+                <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Volo / Treno</th>
                 <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Verso</th>
                 <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Telefono / Note</th>
               </tr>
@@ -160,6 +173,9 @@ export async function sendListeBrunoEmail(input: BrunoEmailInput): Promise<{ ok:
   const dateLabel = fmtDate(input.date);
   const subject = `Liste Bruno — ${dateLabel}`;
 
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "https://ischia-transfer.vercel.app";
+  const logoUrl = `${appUrl}/brand/logo-ischia-transfer-email.png`;
+
   const html = `
 <!DOCTYPE html>
 <html lang="it">
@@ -169,8 +185,10 @@ export async function sendListeBrunoEmail(input: BrunoEmailInput): Promise<{ ok:
 
     <!-- Header -->
     <div style="background:#0f172a;padding:24px 28px">
-      <p style="margin:0;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.15em">Ischia Transfer Service</p>
-      <h1 style="margin:4px 0 0;color:white;font-size:22px;font-weight:700">Liste Bruno</h1>
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
+        <img src="${logoUrl}" alt="Ischia Transfer Service" style="height:64px;width:auto;display:block" />
+      </div>
+      <h1 style="margin:0;color:white;font-size:22px;font-weight:700">Liste Bruno</h1>
       <p style="margin:6px 0 0;color:#cbd5e1;font-size:14px">${dateLabel}</p>
     </div>
 
@@ -216,7 +234,7 @@ export async function sendListeBrunoEmail(input: BrunoEmailInput): Promise<{ ok:
     `── PARTENZE VERSO STAZIONE/AEROPORTO (${input.departures.length}) ──`,
     ...input.departures
       .sort((a, b) => a.vessel.localeCompare(b.vessel))
-      .map((d) => `${d.vessel} | ${d.customer_name} | ${d.pax} pax | Porto ritiro: ${d.porto_bruno ?? portoDaVessel(d.vessel)} | ${d.meeting_point ?? d.place_type} | ${d.phone}`),
+      .map((d) => `${d.vessel} | ${d.customer_name} | ${d.pax} pax | Porto ritiro: ${d.porto_bruno ?? portoDaVessel(d.vessel)}${d.connection_time ? ` | ${d.place_type === "airport" ? "Volo" : "Treno"}: ${d.connection_time.slice(0, 5)}` : ""} | ${d.meeting_point ?? d.place_type} | ${d.phone}`),
   ].join("\n");
 
   try {

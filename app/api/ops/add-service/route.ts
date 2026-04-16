@@ -18,7 +18,14 @@ const bodySchema = z.object({
   vessel: z.string().max(80).optional().or(z.literal("")),
   meeting_point: z.string().max(120).optional().or(z.literal("")),
   phone: z.string().max(30).optional().or(z.literal("")),
-  notes: z.string().max(2000).optional().or(z.literal(""))
+  notes: z.string().max(2000).optional().or(z.literal("")),
+  // Campi calcolo pickup automatico
+  place_type: z.enum(["station", "airport", "snav", "medmar"]).optional(),
+  booking_service_kind: z.string().max(60).optional().or(z.literal("")),
+  pickup_hotel: z.string().regex(/^\d{2}:\d{2}$/).optional().or(z.literal("")),
+  barca_compagnia: z.string().max(40).optional().or(z.literal("")),
+  orario_barca: z.string().regex(/^\d{2}:\d{2}$/).optional().or(z.literal("")),
+  porto_bruno: z.string().max(60).optional().or(z.literal("")),
 });
 
 export async function POST(request: NextRequest) {
@@ -46,7 +53,14 @@ export async function POST(request: NextRequest) {
     phone: d.phone?.trim() || null,
     notes: d.notes?.trim() || null,
     hotel_id: d.hotel_id || null,
-    billing_party_name: null
+    billing_party_name: null,
+    // Campi pickup calcolati automaticamente (opzionali)
+    ...(d.place_type          ? { place_type: d.place_type }                         : {}),
+    ...(d.booking_service_kind ? { booking_service_kind: d.booking_service_kind }    : {}),
+    ...(d.pickup_hotel         ? { pickup_hotel: d.pickup_hotel }                    : {}),
+    ...(d.barca_compagnia      ? { barca_compagnia: d.barca_compagnia }              : {}),
+    ...(d.orario_barca         ? { orario_barca: d.orario_barca }                    : {}),
+    ...(d.porto_bruno          ? { porto_bruno: d.porto_bruno }                      : {}),
   };
 
   // Per gli arrivi: arrival_date/arrival_time; per le partenze: departure_date/departure_time

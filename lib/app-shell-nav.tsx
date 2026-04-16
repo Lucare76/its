@@ -380,3 +380,39 @@ export function pageTitle(pathname: string) {
     .find((item) => matchesPath(pathname, item.href));
   return match?.label ?? "Area di lavoro";
 }
+
+// ── Preferiti utente ────────────────────────────────────────────────────────
+
+const FAV_ALL_ITEMS: NavItem[] = [
+  ...Object.values(MAIN_NAV_BY_ROLE).flat(),
+  ...AGENZIE_GROUP.items,
+  ...OPERATIVO_GROUP.items,
+  ...MARIO_BOSS_GROUP.items,
+  ...KARMEN_PEACH_GROUP.items,
+  ...SETTINGS_GROUPS.flatMap((g) => g.items)
+];
+
+export function findNavItemByHref(href: string): NavItem | undefined {
+  return FAV_ALL_ITEMS.find((item) => item.href === href);
+}
+
+export function loadFavorites(userId: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(`it-nav-fav-${userId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveFavorites(userId: string, hrefs: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(`it-nav-fav-${userId}`, JSON.stringify(hrefs));
+  } catch {
+    // ignore
+  }
+}

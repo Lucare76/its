@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 
@@ -8,9 +8,18 @@ import { formatIsoDateShort, getCustomerFullName, getTransportReferenceReturn } 
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import { supabase } from "@/lib/supabase/client";
 import type { Service } from "@/lib/types";
-import { getPickupRule } from "@/lib/departure-pickup-rules";
+import { getPickupRule, getPickupRuleByRange } from "@/lib/departure-pickup-rules";
 import { getBusLinePickup, getBusLinePickupByZone } from "@/lib/bus-line-pickup-rules";
 import type { BusLine } from "@/lib/bus-line-pickup-rules";
+
+function normalizeZona(raw: string): string {
+  const z = raw.toLowerCase().trim();
+  if (z.includes("forio"))        return "forio";
+  if (z.includes("lacco"))        return "lacco";
+  if (z.includes("casamicciola")) return "casamicciola";
+  if (z.includes("barano"))       return "barano";
+  return "ischia";
+}
 
 // ─── Export helpers ──────────────────────────────────────────────────────────
 type ExportRow = { Ora: string; Cliente: string; Pax: number; "Origine/Hotel": string; "Meeting point": string; Riferimento: string; Tipo: string; Agenzia: string };
@@ -174,9 +183,9 @@ export default function DeparturesPage() {
     for (const item of departures) {
       const svc = item.service;
       const hotel = hotelsById.get(svc.hotel_id);
-      const zona = hotel?.zone?.toLowerCase() ?? "";
+      const zona = normalizeZona(hotel?.zone ?? "");
       const kind = svc.booking_service_kind;
-      const tFrom = svc.departure_time?.trim() ?? "";
+      const tFrom = (svc.departure_time ?? svc.time ?? "").trim();
       const agency = svc.billing_party_name?.trim() ?? "";
 
       let hint: { pickup: string; label: string } | null = null;
@@ -200,10 +209,14 @@ export default function DeparturesPage() {
           else if (v.includes("medmar")) rule = getPickupRule(agency, "medmar", tFrom, zona);
         } else if (kind === "transfer_train_hotel") {
           rule = getPickupRule(agency, "treno_traghetto", tFrom, zona)
-            ?? getPickupRule(agency, "treno_aliscafo", tFrom, zona);
+            ?? getPickupRuleByRange(agency, "treno_traghetto", tFrom, zona)
+            ?? getPickupRule(agency, "treno_aliscafo", tFrom, zona)
+            ?? getPickupRuleByRange(agency, "treno_aliscafo", tFrom, zona);
         } else if (kind === "transfer_airport_hotel") {
-          rule = getPickupRule(agency, "volo_traghetto", tFrom, zona)
-            ?? getPickupRule(agency, "volo_aliscafo", tFrom, zona);
+          rule = getPickupRule("", "volo_traghetto", tFrom, zona)
+            ?? getPickupRuleByRange("", "volo_traghetto", tFrom, zona)
+            ?? getPickupRule("", "volo_aliscafo", tFrom, zona)
+            ?? getPickupRuleByRange("", "volo_aliscafo", tFrom, zona);
         }
         if (rule) hint = { pickup: rule.pickup, label: `${rule.boat_co} ${rule.boat_t} · ${rule.porto_p}` };
       }
@@ -258,9 +271,79 @@ export default function DeparturesPage() {
   };
 
   const [addModal, setAddModal] = useState(false);
-  const [addForm, setAddForm] = useState({ date: selectedDate, time: "12:00", customer_name: "", pax: "2", hotel_id: "", vessel: "", notes: "" });
+
+  type AddForm = {
+    date: string; time: string; customer_name: string; pax: string;
+    hotel_id: string; vessel: string; notes: string;
+    place_type: "station" | "airport" | "snav" | "medmar" | "";
+    pickup_hotel: string;   // calcolato/override
+    barca_label: string;    // es. "MEDMAR 06:20 · Pozzuoli" — solo display
+    barca_compagnia: string;
+    orario_barca: string;
+    porto_bruno: string;
+  };
+  const emptyForm = (): AddForm => ({
+    date: selectedDate, time: "12:00", customer_name: "", pax: "2",
+    hotel_id: "", vessel: "", notes: "",
+    place_type: "", pickup_hotel: "", barca_label: "",
+    barca_compagnia: "", orario_barca: "", porto_bruno: "",
+  });
+  const [addForm, setAddForm] = useState<AddForm>(emptyForm);
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [calcLoading, setCalcLoading] = useState(false);
+  const calcAbort = useRef<AbortController | null>(null);
+
+  // Auto-calcola pickup quando cambiano ora + place_type + hotel
+  useEffect(() => {
+    const { time, place_type, hotel_id } = addForm;
+    if (!time || !place_type || !hotel_id) return;
+    const hotel = data.hotels.find((h) => h.id === hotel_id);
+    if (!hotel) return;
+    const zona = normalizeZona(hotel.zone ?? "");
+    const transport_type =
+      place_type === "airport" ? "volo_traghetto"
+      : place_type === "snav"  ? "snav"
+      : place_type === "medmar"? "medmar"
+      : "treno_traghetto";
+
+    calcAbort.current?.abort();
+    const ctrl = new AbortController();
+    calcAbort.current = ctrl;
+    setCalcLoading(true);
+
+    supabase?.auth.getSession().then(({ data: s }) => {
+      const token = s.session?.access_token;
+      if (!token || ctrl.signal.aborted) { setCalcLoading(false); return; }
+      fetch("/api/ops/departure-pickup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ mode: "transfer", agency_name: "", transport_type, transport_from: time, zona }),
+        signal: ctrl.signal,
+      })
+        .then((r) => r.json())
+        .then((res: { ok?: boolean; pickup_time?: string; boat_co?: string; boat_time?: string; porto_p?: string }) => {
+          if (ctrl.signal.aborted) return;
+          if (res.ok && res.pickup_time) {
+            setAddForm((f) => ({
+              ...f,
+              pickup_hotel: res.pickup_time ?? "",
+              barca_compagnia: res.boat_co ?? "",
+              orario_barca: res.boat_time ?? "",
+              porto_bruno: res.porto_p ?? "",
+              barca_label: [res.boat_co, res.boat_time, res.porto_p].filter(Boolean).join(" · "),
+              vessel: f.vessel || `${res.boat_co ?? ""} ${res.boat_time ?? ""}`.trim(),
+            }));
+          } else {
+            setAddForm((f) => ({ ...f, pickup_hotel: "", barca_label: "", barca_compagnia: "", orario_barca: "", porto_bruno: "" }));
+          }
+        })
+        .catch(() => { /* abortato o errore silenzioso */ })
+        .finally(() => { if (!ctrl.signal.aborted) setCalcLoading(false); });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addForm.time, addForm.place_type, addForm.hotel_id]);
+
   const addService = async () => {
     if (!supabase) return;
     setAddSaving(true);
@@ -272,12 +355,32 @@ export default function DeparturesPage() {
       const res = await fetch("/api/ops/add-service", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ ...addForm, direction: "departure", pax: Number(addForm.pax) || 1, hotel_id: addForm.hotel_id || undefined })
+        body: JSON.stringify({
+          direction: "departure",
+          date: addForm.date,
+          time: addForm.time,
+          customer_name: addForm.customer_name,
+          pax: Number(addForm.pax) || 1,
+          hotel_id: addForm.hotel_id || undefined,
+          vessel: addForm.vessel || undefined,
+          notes: addForm.notes || undefined,
+          place_type: addForm.place_type || undefined,
+          booking_service_kind:
+            addForm.place_type === "airport" ? "transfer_airport_hotel"
+            : addForm.place_type === "station" ? "transfer_train_hotel"
+            : addForm.place_type === "snav"   ? "formula_snav"
+            : addForm.place_type === "medmar" ? "formula_medmar"
+            : undefined,
+          pickup_hotel: addForm.pickup_hotel || undefined,
+          barca_compagnia: addForm.barca_compagnia || undefined,
+          orario_barca: addForm.orario_barca || undefined,
+          porto_bruno: addForm.porto_bruno || undefined,
+        })
       });
       const body = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
       if (!res.ok) { setAddError(body?.error ?? "Inserimento fallito."); return; }
       setAddModal(false);
-      setAddForm({ date: selectedDate, time: "12:00", customer_name: "", pax: "2", hotel_id: "", vessel: "", notes: "" });
+      setAddForm(emptyForm());
       void refresh?.();
     } finally {
       setAddSaving(false);
@@ -510,22 +613,81 @@ export default function DeparturesPage() {
                 <input type="date" className="input-saas mt-1" value={addForm.date} onChange={(e) => setAddForm((f) => ({ ...f, date: e.target.value }))} />
               </label>
               <label className="text-xs text-slate-600 font-medium">
-                Ora*
+                {addForm.place_type === "snav" || addForm.place_type === "medmar" ? "Ora barca*" : "Ora volo/treno*"}
                 <input type="time" className="input-saas mt-1" value={addForm.time} onChange={(e) => setAddForm((f) => ({ ...f, time: e.target.value }))} />
+              </label>
+              <label className="text-xs text-slate-600 font-medium">
+                Tipo*
+                <select className="input-saas mt-1" value={addForm.place_type} onChange={(e) => setAddForm((f) => ({ ...f, place_type: e.target.value as AddForm["place_type"] }))}>
+                  <option value="">— seleziona —</option>
+                  <option value="station">🚂 Stazione / Treno</option>
+                  <option value="airport">✈️ Aeroporto / Volo</option>
+                  <option value="snav">⛴ Formula SNAV</option>
+                  <option value="medmar">⛴ Formula MEDMAR</option>
+                </select>
+              </label>
+              <label className="text-xs text-slate-600 font-medium">
+                Hotel
+                <select className="input-saas mt-1" value={addForm.hotel_id} onChange={(e) => setAddForm((f) => ({ ...f, hotel_id: e.target.value }))}>
+                  <option value="">— seleziona hotel —</option>
+                  {[...data.hotels].sort((a, b) => a.name.localeCompare(b.name, "it")).map((h) => (
+                    <option key={h.id} value={h.id}>{h.name}</option>
+                  ))}
+                </select>
               </label>
               <label className="text-xs text-slate-600 font-medium">
                 Pax*
                 <input type="number" min={1} max={50} className="input-saas mt-1" value={addForm.pax} onChange={(e) => setAddForm((f) => ({ ...f, pax: e.target.value }))} />
               </label>
               <label className="text-xs text-slate-600 font-medium">
-                Mezzo / Riferimento
-                <input className="input-saas mt-1" placeholder="Es. SNAV, FR1234..." value={addForm.vessel} onChange={(e) => setAddForm((f) => ({ ...f, vessel: e.target.value }))} />
+                Volo / Riferimento
+                <input className="input-saas mt-1" placeholder="Es. FR1234, IC722..." value={addForm.vessel} onChange={(e) => setAddForm((f) => ({ ...f, vessel: e.target.value }))} />
               </label>
               <label className="col-span-2 text-xs text-slate-600 font-medium">
                 Note
                 <input className="input-saas mt-1" value={addForm.notes} onChange={(e) => setAddForm((f) => ({ ...f, notes: e.target.value }))} />
               </label>
             </div>
+
+            {/* Sezione pickup calcolato automaticamente */}
+            {(addForm.place_type && addForm.hotel_id && addForm.time) && (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 space-y-2">
+                <p className="text-xs font-semibold text-emerald-700 flex items-center gap-1.5">
+                  {calcLoading ? "⏳ Calcolo in corso..." : "🤖 Pickup calcolato automaticamente"}
+                </p>
+                {!calcLoading && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs text-slate-600 font-medium">
+                      Prelevamento hotel
+                      <input
+                        className="input-saas mt-1"
+                        value={addForm.pickup_hotel}
+                        onChange={(e) => setAddForm((f) => ({ ...f, pickup_hotel: e.target.value }))}
+                        placeholder="HH:MM"
+                      />
+                    </label>
+                    <label className="text-xs text-slate-600 font-medium">
+                      Traghetto / Aliscafo
+                      <input
+                        className="input-saas mt-1"
+                        value={addForm.vessel}
+                        onChange={(e) => setAddForm((f) => ({ ...f, vessel: e.target.value }))}
+                        placeholder="es. MEDMAR 06:20"
+                      />
+                    </label>
+                    {addForm.barca_label && (
+                      <p className="col-span-2 text-xs text-emerald-600">
+                        ⚓ {addForm.barca_label}
+                      </p>
+                    )}
+                    {!addForm.pickup_hotel && !calcLoading && (
+                      <p className="col-span-2 text-xs text-amber-600">Nessuna regola trovata — inserisci manualmente</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex gap-2 pt-1">
               <button type="button" onClick={() => setAddModal(false)} className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Annulla</button>
               <button type="button" onClick={() => void addService()} disabled={addSaving || !addForm.customer_name.trim() || !addForm.date || !addForm.time}

@@ -32,7 +32,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { getPickupRule } from "@/lib/departure-pickup-rules";
+import { getPickupRule, getPickupRuleByRange } from "@/lib/departure-pickup-rules";
 import { getBusLinePickup, getBusLinePickupByZone } from "@/lib/bus-line-pickup-rules";
 import type { BusLine } from "@/lib/bus-line-pickup-rules";
 
@@ -93,7 +93,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Campi obbligatori: agency_name, transport_type, transport_from, zona." }, { status: 400 });
   }
 
-  const rule = getPickupRule(agencyName, transportType, transportFrom, zona);
+  const rule = getPickupRule(agencyName, transportType, transportFrom, zona)
+    ?? getPickupRuleByRange(agencyName, transportType, transportFrom, zona);
 
   if (!rule) {
     return NextResponse.json({ ok: false, error: "Nessuna regola trovata per questa combinazione." }, { status: 404 });

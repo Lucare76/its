@@ -13,10 +13,13 @@ import {
   OPERATIVO_GROUP,
   SETTINGS_GROUPS,
   canSeeNavItem,
+  findNavItemByHref,
   iconWrapClass,
+  loadFavorites,
   matchesPath,
   pageTitle,
   renderNavIcon,
+  saveFavorites,
   uniqueNavItems
 } from "@/lib/app-shell-nav";
 import { getE2ETestSessionOverride } from "@/lib/supabase/client-session";
@@ -58,6 +61,9 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     if (typeof window === "undefined") return false;
     return localStorage.getItem("it-theme") === "dark";
   });
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
+  const [favorites, setFavorites] = useState<string[]>([]);
+  const [favoritesEditMode, setFavoritesEditMode] = useState(false);
   const title = useMemo(() => pageTitle(pathname), [pathname]);
   const mainNav = useMemo(
     () =>
@@ -227,6 +233,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
       setNeedsOnboarding(false);
       setAuthRole(resolvedRole);
+      setAuthUserId(userData.user.id);
       setAuthGender(typeof userData.user.user_metadata?.gender === "string" ? userData.user.user_metadata.gender : null);
       setAuthName(typeof userData.user.user_metadata?.full_name === "string" ? userData.user.user_metadata.full_name : null);
       setAuthEmail(typeof userData.user.email === "string" ? userData.user.email : null);
@@ -544,6 +551,21 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     return <div className="card p-4 text-sm text-muted">Reindirizzamento in corso...</div>;
   }
 
+  // Carica preferiti quando userId è disponibile
+  useEffect(() => {
+    if (!authUserId) return;
+    setFavorites(loadFavorites(authUserId));
+  }, [authUserId]);
+
+  const toggleFavorite = (href: string) => {
+    if (!authUserId) return;
+    setFavorites((prev) => {
+      const next = prev.includes(href) ? prev.filter((h) => h !== href) : [...prev, href];
+      saveFavorites(authUserId, next);
+      return next;
+    });
+  };
+
   const toggleTheme = () => {
     const nextDark = !isDark;
     setIsDark(nextDark);
@@ -599,23 +621,64 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
           {/* Main nav */}
           <nav className="app-sidebar-scroll space-y-0.5 pr-0.5">
+
+            {/* ── Preferiti ─────────────────────────────────────────── */}
+            {!collapsed && favorites.length > 0 ? (
+              <>
+                <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-500">Preferiti</p>
+                {favorites.map((href) => {
+                  const item = findNavItemByHref(href);
+                  if (!item || !canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides)) return null;
+                  const active = matchesPath(pathname, href);
+                  return (
+                    <div key={href} className="group/fav relative">
+                      <Link
+                        href={href}
+                        className={`flex min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 pr-8 transition ${
+                          active
+                            ? "border-amber-100 bg-white text-amber-900 shadow-[0_4px_16px_rgba(245,158,11,0.10)]"
+                            : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                        }`}
+                      >
+                        {active ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-amber-400" /> : null}
+                        <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${iconWrapClass(active)}`}>
+                          {renderNavIcon(item.icon)}
+                        </span>
+                        <span className="truncate text-sm font-medium">{item.label}</span>
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => toggleFavorite(href)}
+                        title="Rimuovi dai preferiti"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 z-10 text-amber-400 hover:text-rose-500 transition-colors opacity-0 group-hover/fav:opacity-100"
+                      >
+                        ★
+                      </button>
+                    </div>
+                  );
+                })}
+                <div className="my-1.5 border-t border-amber-100" />
+              </>
+            ) : null}
+
             {!collapsed ? (
               <p className="px-3 pb-1.5 pt-0.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Operativo</p>
             ) : null}
             {mainNav.map((item) => {
               const active = matchesPath(pathname, item.href);
               const badge = item.href === "/inbox" && inboxPendingCount > 0 ? inboxPendingCount : 0;
+              const isFav = favorites.includes(item.href);
               return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  title={collapsed ? item.label : undefined}
-                  className={`group relative flex min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 transition ${
-                    active
-                      ? "border-indigo-100 bg-white text-indigo-900 shadow-[0_4px_16px_rgba(99,102,241,0.10)]"
-                      : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
-                  } ${collapsed ? "justify-center" : ""}`}
-                >
+                <div key={item.href} className="group/fav relative">
+                  <Link
+                    href={item.href}
+                    title={collapsed ? item.label : undefined}
+                    className={`relative flex min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 transition ${
+                      active
+                        ? "border-indigo-100 bg-white text-indigo-900 shadow-[0_4px_16px_rgba(99,102,241,0.10)]"
+                        : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                    } ${collapsed ? "justify-center" : !collapsed && (isFav || favoritesEditMode) ? "pr-8" : ""}`}
+                  >
                   {active ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-indigo-500" /> : null}
                   <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${iconWrapClass(active)}`}>
                     {renderNavIcon(item.icon)}
@@ -634,7 +697,22 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                       {badge > 9 ? "9+" : badge}
                     </span>
                   ) : null}
-                </Link>
+                  </Link>
+                  {!collapsed && (isFav || favoritesEditMode) ? (
+                    <button
+                      type="button"
+                      onClick={() => toggleFavorite(item.href)}
+                      title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
+                      className={`absolute right-2 top-1/2 -translate-y-1/2 z-10 transition-all ${
+                        isFav
+                          ? "text-amber-400 hover:text-rose-500 opacity-100"
+                          : "text-slate-300 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"
+                      }`}
+                    >
+                      {isFav ? "★" : "☆"}
+                    </button>
+                  ) : null}
+                </div>
               );
             })}
 
@@ -683,24 +761,33 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-indigo-100 pl-2">
                       {AGENZIE_GROUP.items.map((item) => {
                         const active = matchesPath(pathname, item.href);
+                        const isFav = favorites.includes(item.href);
                         const itemBadge = item.href === "/agency-requests" && pendingAgencyBookingsCount > 0
                           ? pendingAgencyBookingsCount
                           : item.href === "/inbox/agency-reviews" && pendingAgencyReviewCount > 0
                             ? pendingAgencyReviewCount : 0;
                         return (
-                          <Link key={item.href} href={item.href}
-                            className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                              active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
-                            }`}
-                          >
-                            <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
-                              {renderNavIcon(item.icon)}
-                            </span>
-                            <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                              <span className="truncate">{item.label}</span>
-                              {itemBadge > 0 ? <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">{itemBadge > 99 ? "99+" : itemBadge}</span> : null}
-                            </span>
-                          </Link>
+                          <div key={item.href} className="group/fav relative">
+                            <Link href={item.href}
+                              className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
+                                active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                              } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
+                            >
+                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                                {renderNavIcon(item.icon)}
+                              </span>
+                              <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                                <span className="truncate">{item.label}</span>
+                                {itemBadge > 0 ? <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">{itemBadge > 99 ? "99+" : itemBadge}</span> : null}
+                              </span>
+                            </Link>
+                            {isFav || favoritesEditMode ? (
+                              <button type="button" onClick={() => toggleFavorite(item.href)}
+                                title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
+                                className={`absolute right-1.5 top-1/2 -translate-y-1/2 z-10 text-xs transition-all ${isFav ? "text-amber-400 hover:text-rose-500 opacity-100" : "text-slate-300 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"}`}
+                              >{isFav ? "★" : "☆"}</button>
+                            ) : null}
+                          </div>
                         );
                       })}
                     </div>
@@ -754,21 +841,30 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-amber-100 pl-2">
                       {OPERATIVO_GROUP.items.map((item) => {
                         const active = matchesPath(pathname, item.href);
+                        const isFav = favorites.includes(item.href);
                         const itemBadge = item.href === "/inbox/fleet-reports" && pendingQrReportsCount > 0 ? pendingQrReportsCount : 0;
                         return (
-                          <Link key={item.href} href={item.href}
-                            className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                              active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
-                            }`}
-                          >
-                            <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
-                              {renderNavIcon(item.icon)}
-                            </span>
-                            <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                              <span className="truncate">{item.label}</span>
-                              {itemBadge > 0 ? <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">{itemBadge}</span> : null}
-                            </span>
-                          </Link>
+                          <div key={item.href} className="group/fav relative">
+                            <Link href={item.href}
+                              className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
+                                active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                              } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
+                            >
+                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                                {renderNavIcon(item.icon)}
+                              </span>
+                              <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                                <span className="truncate">{item.label}</span>
+                                {itemBadge > 0 ? <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">{itemBadge}</span> : null}
+                              </span>
+                            </Link>
+                            {isFav || favoritesEditMode ? (
+                              <button type="button" onClick={() => toggleFavorite(item.href)}
+                                title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
+                                className={`absolute right-1.5 top-1/2 -translate-y-1/2 z-10 text-xs transition-all ${isFav ? "text-amber-400 hover:text-rose-500 opacity-100" : "text-slate-300 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"}`}
+                              >{isFav ? "★" : "☆"}</button>
+                            ) : null}
+                          </div>
                         );
                       })}
                     </div>
@@ -809,21 +905,26 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-red-100 pl-2">
                       {MARIO_BOSS_GROUP.items.map((item) => {
                         const active = matchesPath(pathname, item.href);
+                        const isFav = favorites.includes(item.href);
                         return (
-                          <Link
-                            key={item.href}
-                            href={item.href}
-                            className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                              active
-                                ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm"
-                                : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
-                            }`}
-                          >
-                            <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
-                              {renderNavIcon(item.icon)}
-                            </span>
-                            <span className="truncate">{item.label}</span>
-                          </Link>
+                          <div key={item.href} className="group/fav relative">
+                            <Link href={item.href}
+                              className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
+                                active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                              } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
+                            >
+                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                                {renderNavIcon(item.icon)}
+                              </span>
+                              <span className="truncate">{item.label}</span>
+                            </Link>
+                            {isFav || favoritesEditMode ? (
+                              <button type="button" onClick={() => toggleFavorite(item.href)}
+                                title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
+                                className={`absolute right-1.5 top-1/2 -translate-y-1/2 z-10 text-xs transition-all ${isFav ? "text-amber-400 hover:text-rose-500 opacity-100" : "text-slate-300 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"}`}
+                              >{isFav ? "★" : "☆"}</button>
+                            ) : null}
+                          </div>
                         );
                       })}
                     </div>
@@ -864,21 +965,26 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-pink-100 pl-2">
                       {KARMEN_PEACH_GROUP.items.map((item) => {
                         const active = matchesPath(pathname, item.href);
+                        const isFav = favorites.includes(item.href);
                         return (
-                          <Link
-                            key={item.href}
-                            href={item.href}
-                            className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                              active
-                                ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm"
-                                : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
-                            }`}
-                          >
-                            <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
-                              {renderNavIcon(item.icon)}
-                            </span>
-                            <span className="truncate">{item.label}</span>
-                          </Link>
+                          <div key={item.href} className="group/fav relative">
+                            <Link href={item.href}
+                              className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
+                                active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                              } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
+                            >
+                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                                {renderNavIcon(item.icon)}
+                              </span>
+                              <span className="truncate">{item.label}</span>
+                            </Link>
+                            {isFav || favoritesEditMode ? (
+                              <button type="button" onClick={() => toggleFavorite(item.href)}
+                                title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
+                                className={`absolute right-1.5 top-1/2 -translate-y-1/2 z-10 text-xs transition-all ${isFav ? "text-amber-400 hover:text-rose-500 opacity-100" : "text-slate-300 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"}`}
+                              >{isFav ? "★" : "☆"}</button>
+                            ) : null}
+                          </div>
                         );
                       })}
                     </div>
@@ -927,42 +1033,68 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                         <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">{group.title}</p>
                         {group.items.map((item) => {
                           const active = matchesPath(pathname, item.href);
+                          const isFav = favorites.includes(item.href);
                           return (
-                            <Link
-                              key={item.href}
-                              href={item.href}
-                              className={`flex items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-sm transition ${
-                                active ? "bg-slate-900 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
-                              }`}
-                            >
-                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${iconWrapClass(active)}`}>
-                                {renderNavIcon(item.icon)}
-                              </span>
-                              <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                                <span className="truncate">{item.label}</span>
-                                {item.href === "/settings/users" && pendingAccessRequestCount > 0 ? (
-                                  <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                                    {pendingAccessRequestCount > 99 ? "99+" : pendingAccessRequestCount}
-                                  </span>
-                                ) : null}
-                                {item.href === "/inbox/agency-reviews" && pendingAgencyReviewCount > 0 ? (
-                                  <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                                    {pendingAgencyReviewCount > 99 ? "99+" : pendingAgencyReviewCount}
-                                  </span>
-                                ) : null}
-                                {(item.href === "/fleet-ops" || item.href === "/inbox/fleet-reports") && pendingQrReportsCount > 0 ? (
-                                  <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                                    {pendingQrReportsCount > 99 ? "99+" : pendingQrReportsCount}
-                                  </span>
-                                ) : null}
-                              </span>
-                            </Link>
+                            <div key={item.href} className="group/fav relative">
+                              <Link
+                                href={item.href}
+                                className={`flex items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-sm transition ${
+                                  active ? "bg-slate-900 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                                } ${isFav || favoritesEditMode ? "pr-8" : ""}`}
+                              >
+                                <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${iconWrapClass(active)}`}>
+                                  {renderNavIcon(item.icon)}
+                                </span>
+                                <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                                  <span className="truncate">{item.label}</span>
+                                  {item.href === "/settings/users" && pendingAccessRequestCount > 0 ? (
+                                    <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                                      {pendingAccessRequestCount > 99 ? "99+" : pendingAccessRequestCount}
+                                    </span>
+                                  ) : null}
+                                  {item.href === "/inbox/agency-reviews" && pendingAgencyReviewCount > 0 ? (
+                                    <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                                      {pendingAgencyReviewCount > 99 ? "99+" : pendingAgencyReviewCount}
+                                    </span>
+                                  ) : null}
+                                  {(item.href === "/fleet-ops" || item.href === "/inbox/fleet-reports") && pendingQrReportsCount > 0 ? (
+                                    <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                                      {pendingQrReportsCount > 99 ? "99+" : pendingQrReportsCount}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </Link>
+                              {isFav || favoritesEditMode ? (
+                                <button type="button" onClick={() => toggleFavorite(item.href)}
+                                  title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
+                                  className={`absolute right-2 top-1/2 -translate-y-1/2 z-10 text-xs transition-all ${isFav ? "text-amber-400 hover:text-rose-500 opacity-100" : "text-slate-300 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"}`}
+                                >{isFav ? "★" : "☆"}</button>
+                              ) : null}
+                            </div>
                           );
                         })}
                       </div>
                     ))}
                   </div>
                 ) : null}
+              </div>
+            ) : null}
+
+            {/* ── Pulsante Personalizza preferiti ─────────────────── */}
+            {!collapsed && authUserId ? (
+              <div className="mt-3 border-t border-slate-100 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setFavoritesEditMode((v) => !v)}
+                  className={`flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs transition ${
+                    favoritesEditMode
+                      ? "bg-amber-50 text-amber-700 font-semibold"
+                      : "text-slate-400 hover:text-slate-600"
+                  }`}
+                >
+                  <span>{favoritesEditMode ? "★" : "☆"}</span>
+                  <span>{favoritesEditMode ? "Fine personalizzazione" : "Personalizza preferiti"}</span>
+                </button>
               </div>
             ) : null}
           </nav>

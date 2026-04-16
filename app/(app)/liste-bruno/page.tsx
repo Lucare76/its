@@ -14,6 +14,10 @@ type BrunoService = {
   pax: number;
   time: string;
   vessel: string;
+  boat_t?: string | null;              // orario traghetto da ischia (partenze)
+  arrival_at_porto?: string | null;    // orario arrivo al porto continentale (partenze — quando Bruno si fa trovare)
+  arrival_at_ischia?: string | null;   // orario arrivo traghetto a Ischia (arrivi — per autisti sull'isola)
+  connection_time?: string | null;     // orario volo/treno/bus del cliente
   place_type: PlaceType;
   meeting_point: string | null;
   phone: string;
@@ -44,10 +48,10 @@ function fmtDateShort(iso: string) {
 
 function portoDaVessel(vessel: string): string {
   const v = vessel.toLowerCase();
-  if (v.includes("snav")) return "Pozzuoli";
+  if (v.includes("medmar")) return "Pozzuoli";
+  if (v.includes("snav")) return "Napoli Beverello";
   if (v.includes("alilauro")) return "Napoli Beverello";
-  if (v.includes("medmar")) return "Napoli Beverello";
-  return vessel;
+  return "";
 }
 
 function PlaceBadge({ type, point }: { type: PlaceType; point: string | null }) {
@@ -93,18 +97,23 @@ function buildPrintHtml(date: string, arrivals: BrunoService[], departures: Brun
     })
     .map(([vessel, group]) => {
       const totalPax = group.reduce((s, d) => s + d.pax, 0);
-      const earliestTime = [...group].sort((a, b) => a.time.localeCompare(b.time))[0]?.time ?? "";
-      const porto = group[0]?.porto_bruno ?? portoDaVessel(vessel);
+      const boatT = group.find(d => d.boat_t)?.boat_t ?? null;
+      const porto = group[0]?.porto_bruno || portoDaVessel(vessel) || "—";
+      const connTime = group.find(d => d.connection_time)?.connection_time ?? null;
+      const arrivalAtPorto = group.find(d => d.arrival_at_porto)?.arrival_at_porto ?? null;
       const rows = [...group]
         .sort((a, b) => a.customer_name.localeCompare(b.customer_name))
         .map((d, i) => {
           const dest = d.meeting_point?.trim() || (d.place_type === "station" ? "Stazione" : "Aeroporto");
           const icon = d.place_type === "station" ? "🚂" : "✈️";
           const bg = i % 2 === 0 ? "#fff" : "#f8fafc";
+          const porto_row = d.porto_bruno || portoDaVessel(d.vessel) || "—";
+          const connRow = d.connection_time ? `${icon} ${d.connection_time.slice(0, 5)}` : "";
           return `<tr style="background:${bg}">
             <td style="padding:7px 10px;border:1px solid #e2e8f0;font-weight:600;text-transform:uppercase">${d.customer_name}</td>
             <td style="padding:7px 10px;border:1px solid #e2e8f0;text-align:center">${d.pax}</td>
-            <td style="padding:7px 10px;border:1px solid #e2e8f0;white-space:nowrap">⚓ ${d.porto_bruno ?? portoDaVessel(d.vessel)}</td>
+            <td style="padding:7px 10px;border:1px solid #e2e8f0;white-space:nowrap">⚓ ${porto_row}</td>
+            <td style="padding:7px 10px;border:1px solid #e2e8f0;white-space:nowrap;color:#c2410c;font-weight:600">${connRow}</td>
             <td style="padding:7px 10px;border:1px solid #e2e8f0;white-space:nowrap">${icon} ${dest}</td>
             <td style="padding:7px 10px;border:1px solid #e2e8f0;color:#475569;font-size:11px">${d.phone}${d.notes ? ` · ${d.notes}` : ""}</td>
           </tr>`;
@@ -113,8 +122,9 @@ function buildPrintHtml(date: string, arrivals: BrunoService[], departures: Brun
       return `
         <div style="margin-bottom:20px">
           <div style="background:#1e293b;color:white;padding:9px 14px;border-radius:6px 6px 0 0;font-weight:700;font-size:13px">
-            ⛴ ${vessel} &nbsp;·&nbsp; Porto ritiro: ${porto} &nbsp;·&nbsp; Orario: ${earliestTime.slice(0, 5)}
+            ⛴ ${vessel}${porto !== "—" ? ` &nbsp;·&nbsp; Porto: ${porto}` : ""}${boatT ? ` &nbsp;·&nbsp; parte ${boatT.slice(0, 5)}` : ""}${connTime ? ` &nbsp;·&nbsp; <span style="color:#fdba74">${group[0]?.place_type === "airport" ? "✈️" : "🚂"} ${connTime.slice(0, 5)}</span>` : ""}
             <span style="font-weight:400;opacity:0.7;font-size:12px">&nbsp;— ${totalPax} pax</span>
+            ${arrivalAtPorto && porto !== "—" ? `<div style="margin-top:5px;background:rgba(16,185,129,0.2);border-radius:4px;padding:4px 10px;font-size:12px;color:#6ee7b7;font-weight:700">🕐 Bruno si fa trovare alle ${arrivalAtPorto} a ${porto}</div>` : ""}
           </div>
           <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px">
             <thead>
@@ -122,6 +132,7 @@ function buildPrintHtml(date: string, arrivals: BrunoService[], departures: Brun
                 <th style="padding:6px 10px;text-align:left;font-size:10px;text-transform:uppercase;color:#64748b;border:1px solid #e2e8f0">Cliente</th>
                 <th style="padding:6px 10px;text-align:center;font-size:10px;text-transform:uppercase;color:#64748b;border:1px solid #e2e8f0">Pax</th>
                 <th style="padding:6px 10px;text-align:left;font-size:10px;text-transform:uppercase;color:#64748b;border:1px solid #e2e8f0">Porto ritiro</th>
+                <th style="padding:6px 10px;text-align:left;font-size:10px;text-transform:uppercase;color:#64748b;border:1px solid #e2e8f0">Volo / Treno</th>
                 <th style="padding:6px 10px;text-align:left;font-size:10px;text-transform:uppercase;color:#64748b;border:1px solid #e2e8f0">Destinazione</th>
                 <th style="padding:6px 10px;text-align:left;font-size:10px;text-transform:uppercase;color:#64748b;border:1px solid #e2e8f0">Telefono / Note</th>
               </tr>
@@ -148,10 +159,12 @@ function buildPrintHtml(date: string, arrivals: BrunoService[], departures: Brun
 </head>
 <body>
   <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px;padding-bottom:12px;border-bottom:3px solid #0f172a">
-    <div>
-      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.15em;color:#64748b;margin-bottom:4px">Ischia Transfer Service</div>
-      <h1 style="font-size:22px;font-weight:800;color:#0f172a">Liste Bruno</h1>
-      <div style="font-size:14px;color:#475569;margin-top:2px">${dateLabel}</div>
+    <div style="display:flex;align-items:center;gap:16px">
+      <img src="/brand/logo-ischia-transfer.png" alt="Ischia Transfer" style="height:72px;width:auto" />
+      <div>
+        <h1 style="font-size:22px;font-weight:800;color:#0f172a;margin:0">Liste Bruno</h1>
+        <div style="font-size:14px;color:#475569;margin-top:2px">${dateLabel}</div>
+      </div>
     </div>
     <div style="text-align:right;font-size:12px;color:#64748b">
       <div>${arrivals.length} arrivi · ${departures.length} partenze</div>
@@ -201,6 +214,7 @@ type EditState = {
   place_type: PlaceType;
   meeting_point: string;
   porto_bruno: string;
+  vessel: string;
 };
 
 function ServiceCard({
@@ -226,7 +240,7 @@ function ServiceCard({
   onEditCancel: () => void;
   saving: boolean;
 }) {
-  const portoBruno = svc.porto_bruno ?? portoDaVessel(svc.vessel);
+  const portoBruno = svc.porto_bruno || portoDaVessel(svc.vessel) || null;
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
@@ -243,11 +257,21 @@ function ServiceCard({
             <PlaceBadge type={svc.place_type} point={svc.meeting_point} />
           </div>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-slate-600">
-            {isDeparture
-              ? <span className="font-medium text-slate-700">⚓ Ritiro: {portoBruno}</span>
-              : svc.hotel_name && <span>🏨 {svc.hotel_name}</span>
-            }
-            {!showTime && <span>⏰ {svc.time.slice(0, 5)}</span>}
+            {isDeparture ? (
+              <>
+                {svc.connection_time && (
+                  <span className="font-semibold text-orange-700">
+                    {svc.place_type === "airport" ? "✈️" : "🚂"} {svc.connection_time.slice(0, 5)}
+                  </span>
+                )}
+                {svc.hotel_name && <span>🏨 {svc.hotel_name}</span>}
+                {portoBruno && <span className="font-medium text-slate-700">⚓ {portoBruno}</span>}
+                {svc.boat_t && <span className="font-medium text-emerald-700">⛴ {svc.boat_t.slice(0, 5)}</span>}
+              </>
+            ) : (
+              svc.hotel_name && <span>🏨 {svc.hotel_name}</span>
+            )}
+            {!showTime && !isDeparture && <span>⏰ {svc.time.slice(0, 5)}</span>}
             <span>📞 {svc.phone}</span>
             {svc.notes && <span className="text-slate-400">{svc.notes}</span>}
           </div>
@@ -287,15 +311,26 @@ function ServiceCard({
             </label>
           </div>
           {isDeparture && (
-            <label className="text-xs font-medium text-slate-600">
-              Porto ritiro Bruno
-              <input
-                value={editState.porto_bruno}
-                onChange={(e) => onEditChange({ porto_bruno: e.target.value })}
-                placeholder="es. Napoli Beverello / Pozzuoli"
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
-              />
-            </label>
+            <>
+              <label className="text-xs font-medium text-slate-600">
+                Traghetto (es. MEDMAR 08:10)
+                <input
+                  value={editState.vessel}
+                  onChange={(e) => onEditChange({ vessel: e.target.value })}
+                  placeholder="es. MEDMAR 08:10 · SNAV 07:10"
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="text-xs font-medium text-slate-600">
+                Porto ritiro Bruno
+                <input
+                  value={editState.porto_bruno}
+                  onChange={(e) => onEditChange({ porto_bruno: e.target.value })}
+                  placeholder="es. Pozzuoli / Napoli Beverello"
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
+                />
+              </label>
+            </>
           )}
           <div className="flex gap-2">
             <button onClick={onEditCancel} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100">
@@ -327,9 +362,7 @@ function TabArrivi({
   onEditSave: (id: string) => void;
   onEditCancel: () => void;
 }) {
-  const sorted = [...arrivals].sort((a, b) => a.time.localeCompare(b.time));
-
-  if (sorted.length === 0) {
+  if (arrivals.length === 0) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400">
         <p className="text-lg font-semibold">Nessun arrivo da stazione/aeroporto</p>
@@ -338,26 +371,56 @@ function TabArrivi({
     );
   }
 
+  // Raggruppa per vessel (traghetto/volo)
+  const byVessel = [...arrivals]
+    .sort((a, b) => a.time.localeCompare(b.time))
+    .reduce<Record<string, BrunoService[]>>((acc, a) => {
+      (acc[a.vessel] ??= []).push(a);
+      return acc;
+    }, {});
+
   return (
-    <div className="space-y-2">
+    <div className="space-y-5">
       <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-        {sorted.length} servizi · Bruno ritira da stazione/aeroporto e porta al porto per l&apos;imbarco
+        {arrivals.length} servizi · Bruno ritira da stazione/aeroporto e porta al porto per l&apos;imbarco
       </p>
-      {sorted.map((svc) => (
-        <ServiceCard
-          key={svc.id}
-          svc={svc}
-          showTime
-          isDeparture={false}
-          isEditing={editingId === svc.id}
-          editState={editState}
-          saving={saving}
-          onEditStart={() => onEditStart(svc)}
-          onEditChange={onEditChange}
-          onEditSave={() => onEditSave(svc.id)}
-          onEditCancel={onEditCancel}
-        />
-      ))}
+      {Object.entries(byVessel).map(([vessel, group]) => {
+        const totalPax = group.reduce((s, a) => s + a.pax, 0);
+        const arrivalIschia = group[0]?.arrival_at_ischia ?? null;
+        return (
+          <div key={vessel}>
+            <div className="mb-2 rounded-xl bg-slate-700 px-4 py-2.5">
+              <div className="flex items-center gap-3">
+                <span className="text-lg">⛴</span>
+                <span className="font-bold text-white flex-1">{vessel}</span>
+                <span className="rounded-full bg-slate-600 px-2.5 py-0.5 text-xs font-semibold text-slate-200">{totalPax} pax</span>
+              </div>
+              {arrivalIschia && (
+                <div className="mt-1.5 flex items-center gap-2 rounded-lg bg-blue-500/20 px-3 py-1.5">
+                  <span className="text-blue-200 text-sm font-bold">🕐 Arriva a Ischia alle {arrivalIschia} · autista al porto per le {arrivalIschia}</span>
+                </div>
+              )}
+            </div>
+            <div className="space-y-2 pl-2">
+              {group.map((svc) => (
+                <ServiceCard
+                  key={svc.id}
+                  svc={svc}
+                  showTime
+                  isDeparture={false}
+                  isEditing={editingId === svc.id}
+                  editState={editState}
+                  saving={saving}
+                  onEditStart={() => onEditStart(svc)}
+                  onEditChange={onEditChange}
+                  onEditSave={() => onEditSave(svc.id)}
+                  onEditCancel={onEditCancel}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -404,21 +467,37 @@ function TabPartenze({
         })
         .map(([vessel, group]) => {
           const totalPax = group.reduce((s, d) => s + d.pax, 0);
-          const earliestPickup = [...group].sort((a, b) => a.time.localeCompare(b.time))[0].time;
+          const portoBrunoGroup = group[0]?.porto_bruno || portoDaVessel(vessel) || null;
+          const boatTGroup = group.find(d => d.boat_t)?.boat_t ?? null;
+          const arrivalGroup = group.find(d => d.arrival_at_porto)?.arrival_at_porto ?? null;
+          const connTimeGroup = group.find(d => d.connection_time)?.connection_time ?? null;
+          const connIcon = group[0]?.place_type === "airport" ? "✈️" : "🚂";
           return (
             <div key={vessel}>
-              <div className="mb-2 flex items-center gap-3 rounded-xl bg-slate-800 px-4 py-2.5">
-                <span className="text-lg">⛴</span>
-                <div className="min-w-0 flex-1">
-                  <span className="font-bold text-white">{vessel}</span>
-                  <span className="ml-2 text-sm text-slate-300">
-                    ⚓ {group[0]?.porto_bruno ?? portoDaVessel(vessel)}
+              <div className="mb-2 rounded-xl bg-slate-800 px-4 py-2.5">
+                <div className="flex items-center gap-3">
+                  <span className="text-lg">⛴</span>
+                  <div className="min-w-0 flex-1">
+                    <span className="font-bold text-white">{vessel}</span>
+                    {portoBrunoGroup && (
+                      <span className="ml-2 text-sm text-slate-300">⚓ {portoBrunoGroup}</span>
+                    )}
+                    {boatTGroup && (
+                      <span className="ml-2 text-sm text-slate-400">· parte {boatTGroup.slice(0, 5)}</span>
+                    )}
+                    {connTimeGroup && (
+                      <span className="ml-2 text-sm font-semibold text-orange-300">· {connIcon} {connTimeGroup.slice(0, 5)}</span>
+                    )}
+                  </div>
+                  <span className="rounded-full bg-slate-700 px-2.5 py-0.5 text-xs font-semibold text-slate-200">
+                    {totalPax} pax
                   </span>
-                  <span className="ml-2 text-sm text-slate-400">· orario barca {earliestPickup.slice(0, 5)}</span>
                 </div>
-                <span className="rounded-full bg-slate-700 px-2.5 py-0.5 text-xs font-semibold text-slate-200">
-                  {totalPax} pax
-                </span>
+                {arrivalGroup && portoBrunoGroup && (
+                  <div className="mt-1.5 flex items-center gap-2 rounded-lg bg-emerald-600/20 px-3 py-1.5">
+                    <span className="text-emerald-300 text-sm font-bold">🕐 Bruno si fa trovare alle {arrivalGroup} a {portoBrunoGroup}</span>
+                  </div>
+                )}
               </div>
               <div className="space-y-2 pl-2">
                 {group
@@ -466,7 +545,7 @@ export default function ListeBrunoPage() {
 
   // Modifica inline
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editState, setEditState] = useState<EditState>({ place_type: "station", meeting_point: "", porto_bruno: "" });
+  const [editState, setEditState] = useState<EditState>({ place_type: "station", meeting_point: "", porto_bruno: "", vessel: "" });
   const [savingEdit, setSavingEdit] = useState(false);
 
   const load = useCallback(async (d: string) => {
@@ -536,6 +615,7 @@ export default function ListeBrunoPage() {
       place_type: svc.place_type,
       meeting_point: svc.meeting_point ?? "",
       porto_bruno: svc.porto_bruno ?? "",
+      vessel: svc.vessel ?? "",
     });
   };
 
@@ -546,6 +626,7 @@ export default function ListeBrunoPage() {
       place_type: editState.place_type,
       meeting_point: editState.meeting_point || null,
       porto_bruno: editState.porto_bruno || null,
+      vessel: editState.vessel || null,
     });
     setSavingEdit(false);
     if (body?.ok) {
@@ -572,7 +653,11 @@ export default function ListeBrunoPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <PageHeader title="Liste Bruno" subtitle="Arrivi e partenze da stazione / aeroporto" />
+      <PageHeader
+        title="Liste Bruno"
+        subtitle="Arrivi e partenze da stazione / aeroporto"
+        actions={<img src="/brand/logo-ischia-transfer.png" alt="Ischia Transfer" className="h-16 w-auto" />}
+      />
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-6 py-3">
