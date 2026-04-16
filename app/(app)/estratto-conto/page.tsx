@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 
@@ -425,8 +425,8 @@ export default function EstrattoContoPage() {
               </thead>
               <tbody>
                 {filteredInvoices.map((inv) => (
-                  <>
-                    <tr key={inv.id} className="border-t border-slate-100 hover:bg-slate-50">
+                  <Fragment key={inv.id}>
+                    <tr className="border-t border-slate-100 hover:bg-slate-50">
                       <td className="px-3 py-2 font-medium">{inv.agency_name}</td>
                       <td className="px-3 py-2 text-xs">{formatDate(inv.period_from)} — {formatDate(inv.period_to)}</td>
                       <td className="px-3 py-2">{inv.services_count}</td>
@@ -472,7 +472,7 @@ export default function EstrattoContoPage() {
                     </tr>
                     {/* Dettaglio pratiche */}
                     {previewInvoice?.id === inv.id && (
-                      <tr key={`detail-${inv.id}`} className="bg-slate-50">
+                      <tr className="bg-slate-50">
                         <td colSpan={8} className="px-4 py-3">
                           <table className="w-full text-xs border-collapse">
                             <thead>
@@ -499,7 +499,7 @@ export default function EstrattoContoPage() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))}
               </tbody>
             </table>
