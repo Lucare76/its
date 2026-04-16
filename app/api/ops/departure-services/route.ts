@@ -99,7 +99,19 @@ export async function GET(req: NextRequest) {
       return a.customer_name.localeCompare(b.customer_name);
     });
 
-    return NextResponse.json({ ok: true, services: merged });
+    // Carica assignments per i servizi trovati
+    const serviceIds = merged.map((s) => s.id);
+    const assignmentsRes = serviceIds.length
+      ? await auth.admin
+          .from("assignments")
+          .select("service_id,driver_user_id,vehicle_label")
+          .in("service_id", serviceIds)
+          .eq("tenant_id", tenantId)
+      : { data: [], error: null };
+
+    if (assignmentsRes.error) throw new Error(assignmentsRes.error.message);
+
+    return NextResponse.json({ ok: true, services: merged, assignments: assignmentsRes.data ?? [] });
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : "Errore" },

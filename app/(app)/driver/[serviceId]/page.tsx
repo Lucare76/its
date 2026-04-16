@@ -68,10 +68,64 @@ export default function DriverDetailPage() {
     setMessage(ok ? `Stato aggiornato: ${nextStatus}` : "Aggiornamento stato non riuscito.");
   };
 
+  // Boarding check: se il servizio non è mio, chiedo i dettagli via scan API
+  const [scanData, setScanData] = useState<{ customer_name?: string; hotel_name?: string | null; vehicle_label?: string; driver_name?: string | null } | null>(null);
+  useEffect(() => {
+    if (!serviceId || loading || isMine) return;
+    supabase?.auth.getSession().then(({ data: s }) => {
+      const token = s.session?.access_token;
+      if (!token) return;
+      fetch(`/api/scan/${serviceId}`, { headers: { Authorization: `Bearer ${token}` } })
+        .then((r) => r.json())
+        .then((body: { ok?: boolean; service?: { customer_name?: string; hotel_name?: string | null }; assignment?: { vehicle_label?: string; driver_name?: string | null } }) => {
+          if (body.ok) {
+            setScanData({
+              customer_name: body.service?.customer_name,
+              hotel_name: body.service?.hotel_name,
+              vehicle_label: body.assignment?.vehicle_label ?? undefined,
+              driver_name: body.assignment?.driver_name ?? undefined,
+            });
+          }
+        })
+        .catch(() => null);
+    });
+  }, [serviceId, loading, isMine]);
+
   if (loading) return <div className="card p-4 text-sm text-muted">Caricamento dettaglio...</div>;
   if (errorMessage) return <div className="card p-4 text-sm text-muted">{errorMessage}</div>;
+  if (!service && !scanData && !loading) return <div className="card p-4 text-sm text-muted">Servizio non trovato.</div>;
+  if (!isMine) {
+    return (
+      <section className="mx-auto max-w-lg space-y-4 p-4">
+        <div className="rounded-2xl border-2 border-rose-500 bg-rose-50 p-6 text-center shadow-lg">
+          <div className="mb-3 text-5xl">🚫</div>
+          <h1 className="text-2xl font-black text-rose-700">IMBARCO VIETATO</h1>
+          <p className="mt-2 text-base font-semibold text-rose-800">
+            {scanData?.customer_name ?? "Questo ospite"} non appartiene al tuo bus.
+          </p>
+          {scanData?.hotel_name && (
+            <p className="mt-1 text-sm text-rose-700">🏨 {scanData.hotel_name}</p>
+          )}
+          {scanData?.vehicle_label ? (
+            <div className="mt-4 rounded-xl bg-white px-4 py-3 text-sm text-slate-700 shadow">
+              <p className="font-semibold text-slate-500 text-xs uppercase tracking-wider mb-1">Bus corretto</p>
+              <p className="font-bold text-slate-900">{scanData.vehicle_label}</p>
+              {scanData.driver_name && <p className="text-slate-600 mt-0.5">Autista: {scanData.driver_name}</p>}
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-rose-600">Nessun bus assegnato per questo ospite.</p>
+          )}
+          <button
+            onClick={() => window.history.back()}
+            className="mt-5 w-full rounded-xl bg-rose-600 py-3 text-base font-bold text-white hover:bg-rose-700">
+            ← Torna indietro
+          </button>
+        </div>
+      </section>
+    );
+  }
+
   if (!service) return <div className="card p-4 text-sm text-muted">Servizio non trovato.</div>;
-  if (!isMine) return <div className="card p-4 text-sm text-muted">Servizio non assegnato al driver corrente.</div>;
 
   const destination = `${hotel?.lat ?? 40.74},${hotel?.lng ?? 13.9}`;
   const navigationUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=driving`;

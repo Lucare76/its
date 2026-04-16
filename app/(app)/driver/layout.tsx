@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { PwaInit } from "@/components/driver/PwaInit";
+import { PasswordGuard } from "@/components/driver/PasswordGuard";
 
 export const metadata: Metadata = {
   title: "ITS Driver",
@@ -26,7 +27,9 @@ export const viewport: Viewport = {
 export default function DriverLayout({ children }: { children: React.ReactNode }) {
   return (
     <PwaInit>
-      {children}
+      <PasswordGuard>
+        {children}
+      </PasswordGuard>
     </PwaInit>
   );
 }

@@ -511,6 +511,16 @@ type DepBusGroup = {
   porto_p: string;
   total_pax: number;
   services: Array<DepartureService & { computed_pickup: string }>;
+  assigned_driver_user_id: string | null;
+  vehicle_label: string | null;
+};
+
+type DepDriver = {
+  profile_id: string;
+  full_name: string;
+  phone: string | null;
+  user_id: string | null;
+  has_account: boolean;
 };
 
 function normalizeZonaIschia(raw: string | null): string {
@@ -578,6 +588,13 @@ function TabCorsePorto() {
 
   // Stato partenze
   const [depServices, setDepServices] = useState<DepartureService[]>([]);
+  const [depAssignments, setDepAssignments] = useState<Map<string, { driver_user_id: string; vehicle_label: string }>>(new Map());
+  const [depDrivers, setDepDrivers] = useState<DepDriver[]>([]);
+  const [activatingDriver, setActivatingDriver] = useState<DepDriver | null>(null);
+  const [activateEmail, setActivateEmail] = useState("");
+  const [activateError, setActivateError] = useState("");
+  const [activateSaving, setActivateSaving] = useState(false);
+  const [assignSaving, setAssignSaving] = useState<string | null>(null); // group key being saved
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -592,12 +609,21 @@ function TabCorsePorto() {
     setLoading(true);
 
     if (dir === "departure") {
-      // Carica servizi di partenza dalla tabella services
-      const res = await fetch(`/api/ops/departure-services?date=${d}`, { headers: { Authorization: `Bearer ${token}` } });
-      const body = await res.json().catch(() => null);
-      if (body?.ok) {
-        setDepServices(body.services ?? []);
+      const [svcRes, drvRes] = await Promise.all([
+        fetch(`/api/ops/departure-services?date=${d}`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch("/api/ops/departure-bus-assign", { headers: { Authorization: `Bearer ${token}` } }),
+      ]);
+      const svcBody = await svcRes.json().catch(() => null);
+      const drvBody = await drvRes.json().catch(() => null);
+      if (svcBody?.ok) {
+        setDepServices(svcBody.services ?? []);
+        const amap = new Map<string, { driver_user_id: string; vehicle_label: string }>();
+        for (const a of (svcBody.assignments ?? []) as Array<{ service_id: string; driver_user_id: string; vehicle_label: string }>) {
+          amap.set(a.service_id, { driver_user_id: a.driver_user_id, vehicle_label: a.vehicle_label });
+        }
+        setDepAssignments(amap);
       }
+      if (drvBody?.ok) setDepDrivers(drvBody.drivers ?? []);
     } else {
       // Carica blocchi arrivi da pickup_runs
       const res = await fetch(`/api/ops/pickup-runs?date=${d}&direction=${dir}`, { headers: { Authorization: `Bearer ${token}` } });
@@ -638,6 +664,104 @@ function TabCorsePorto() {
     setAlertsByRun(body.alerts_by_run ?? {});
   }, []);
 
+  // ── Stampa lista giro bus ───────────────────────────────────────────────────
+  const printBusGroup = (group: DepBusGroup) => {
+    const driverInfo = depDrivers.find((d) => d.user_id === group.assigned_driver_user_id);
+    const title = group.key === "__no_pickup__"
+      ? "Servizi senza orario calcolato"
+      : `Bus ${group.pickup_time} · ${group.boat_co} ${group.boat_t} → ${group.porto_p}`;
+    const rows = group.services.map((s) => ({
+      "Prelevamento": s.computed_pickup || "--:--",
+      "Cliente": s.customer_name,
+      "Hotel": s.hotel_name ?? "N/D",
+      "Zona": normalizeZonaIschia(s.hotel_zone),
+      "Pax": s.pax,
+      "Telefono": s.phone ?? "",
+      "Traghetto ore": s.departure_time ?? s.return_time ?? s.time ?? "",
+    }));
+    const cols = Object.keys(rows[0] ?? {});
+    const thead = cols.map((c) => `<th style="padding:6px 10px;background:#1e293b;color:#fff;font-size:11px;text-align:left">${c}</th>`).join("");
+    const tbody = rows.map((r) =>
+      `<tr>${cols.map((c) => `<td style="padding:5px 10px;font-size:12px;border-bottom:1px solid #e2e8f0">${(r as Record<string, unknown>)[c] ?? ""}</td>`).join("")}</tr>`
+    ).join("");
+    const html = `<!DOCTYPE html><html><head><title>${title}</title>
+<style>body{font-family:Arial,sans-serif;margin:20px}@media print{@page{size:A4 landscape}}</style>
+</head><body>
+<h2 style="font-size:15px;margin-bottom:4px">${title}</h2>
+${driverInfo ? `<p style="font-size:12px;margin:0 0 12px;color:#475569">Autista: ${driverInfo.full_name}${driverInfo.phone ? ` · ${driverInfo.phone}` : ""}</p>` : ""}
+<p style="font-size:11px;color:#94a3b8;margin-bottom:12px">${fmtDate(date)} · ${group.total_pax} pax · ${group.services.length} clienti</p>
+<table style="border-collapse:collapse;width:100%"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>
+<script>window.print()<\/script></body></html>`;
+    const w = window.open("", "_blank", "width=1000,height=600");
+    w?.document.write(html);
+    w?.document.close();
+  };
+
+  // ── Assegna/rimuovi autista a gruppo bus ────────────────────────────────────
+  const assignDriver = async (group: DepBusGroup, driverUserId: string) => {
+    const token = await getToken();
+    if (!token) return;
+    setAssignSaving(group.key);
+    const vehicleLabel = group.key === "__no_pickup__"
+      ? "Bus senza orario calcolato"
+      : `Bus ${group.pickup_time} · ${group.boat_co} ${group.boat_t} → ${group.porto_p}`;
+    const res = await fetch("/api/ops/departure-bus-assign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        action: "assign_driver",
+        service_ids: group.services.map((s) => s.id),
+        driver_user_id: driverUserId,
+        vehicle_label: vehicleLabel,
+      }),
+    });
+    const body = await res.json().catch(() => null);
+    setAssignSaving(null);
+    if (body?.ok) void load(date, direction);
+    else setMessage(body?.error ?? "Errore assegnazione.");
+  };
+
+  const removeDriver = async (group: DepBusGroup) => {
+    const token = await getToken();
+    if (!token) return;
+    setAssignSaving(group.key);
+    await fetch("/api/ops/departure-bus-assign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "remove_driver", service_ids: group.services.map((s) => s.id) }),
+    });
+    setAssignSaving(null);
+    void load(date, direction);
+  };
+
+  // ── Attiva account driver ───────────────────────────────────────────────────
+  const activateAccount = async () => {
+    if (!activatingDriver || !activateEmail.trim()) return;
+    setActivateError("");
+    setActivateSaving(true);
+    const token = await getToken();
+    if (!token) { setActivateSaving(false); return; }
+    const res = await fetch("/api/ops/departure-bus-assign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        action: "create_driver_account",
+        driver_profile_id: activatingDriver.profile_id,
+        email: activateEmail.trim(),
+        phone: activatingDriver.phone ?? "",
+      }),
+    });
+    const body = await res.json().catch(() => null);
+    setActivateSaving(false);
+    if (body?.ok) {
+      setActivatingDriver(null);
+      setActivateEmail("");
+      void load(date, direction);
+    } else {
+      setActivateError(body?.error ?? "Errore creazione account.");
+    }
+  };
+
   const availablePorts = [...new Set(routing.map((r) => r.port))];
 
   // Raggruppa run per porto (arrivi)
@@ -672,14 +796,23 @@ function TabCorsePorto() {
           porto_p: hint.porto_p,
           total_pax: svc.pax,
           services: [entry],
+          assigned_driver_user_id: null,
+          vehicle_label: null,
         });
       }
     }
 
+    // Leggi gli assignments per ogni gruppo (dal primo servizio)
+    for (const group of map.values()) {
+      const asgn = group.services[0] ? depAssignments.get(group.services[0].id) : undefined;
+      group.assigned_driver_user_id = asgn?.driver_user_id ?? null;
+      group.vehicle_label = asgn?.vehicle_label ?? null;
+    }
+
     const groups = Array.from(map.values()).sort((a, b) => a.pickup_time.localeCompare(b.pickup_time));
 
-    // Servizi senza regola → gruppo "Senza prelevamento calcolato"
     if (noPickup.length > 0) {
+      const noPickupAsgn = noPickup[0] ? depAssignments.get(noPickup[0].id) : undefined;
       groups.push({
         key: "__no_pickup__",
         pickup_time: "99:99",
@@ -688,11 +821,13 @@ function TabCorsePorto() {
         porto_p: "",
         total_pax: noPickup.reduce((s, x) => s + x.pax, 0),
         services: noPickup,
+        assigned_driver_user_id: noPickupAsgn?.driver_user_id ?? null,
+        vehicle_label: noPickupAsgn?.vehicle_label ?? null,
       });
     }
 
     return groups;
-  }, [depServices]);
+  }, [depServices, depAssignments]);
 
   return (
     <div className="flex flex-col h-full">
@@ -763,30 +898,97 @@ function TabCorsePorto() {
             )}
             {depBusGroups.map((group) => {
               const isNoPickup = group.key === "__no_pickup__";
+              const assignedDriver = depDrivers.find((d) => d.user_id === group.assigned_driver_user_id);
+              const isSaving = assignSaving === group.key;
               return (
                 <div key={group.key}
-                  className={`rounded-xl border shadow-sm ${isNoPickup ? "border-slate-200 bg-slate-50" : "border-l-4 border-amber-300 border-y-slate-200 border-r-slate-200 bg-white"}`}>
+                  className={`rounded-xl border shadow-sm overflow-hidden ${isNoPickup ? "border-slate-200 bg-slate-50" : "border-l-4 border-amber-400 border-y-slate-200 border-r-slate-200 bg-white"}`}>
+
                   {/* Header gruppo bus */}
-                  <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-slate-100">
-                    {isNoPickup ? (
-                      <span className="font-semibold text-slate-500 text-sm">Senza orario prelevamento calcolato</span>
-                    ) : (
-                      <>
-                        <span className="text-lg font-bold text-amber-600">🕐 {group.pickup_time}</span>
-                        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">
-                          {group.boat_co} {group.boat_t}
+                  <div className="px-4 py-3 border-b border-slate-100">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {isNoPickup ? (
+                        <span className="font-semibold text-slate-500 text-sm">Senza orario prelevamento calcolato</span>
+                      ) : (
+                        <>
+                          <span className="text-base font-black text-amber-600">🕐 {group.pickup_time}</span>
+                          <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">
+                            {group.boat_co} {group.boat_t}
+                          </span>
+                          <span className="text-sm font-medium text-slate-600">→ {group.porto_p}</span>
+                        </>
+                      )}
+                      <div className="ml-auto flex items-center gap-2">
+                        <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                          👥 {group.total_pax}
                         </span>
-                        <span className="text-sm font-medium text-slate-700">→ {group.porto_p}</span>
-                      </>
-                    )}
-                    <div className="ml-auto flex items-center gap-2">
-                      <span className="rounded-full bg-slate-200 px-2.5 py-0.5 text-xs font-semibold text-slate-700">
-                        👥 {group.total_pax} pax
-                      </span>
-                      <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-semibold text-indigo-700">
-                        {group.services.length} clienti
-                      </span>
+                        <button
+                          onClick={() => printBusGroup(group)}
+                          className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                          🖨️ Lista
+                        </button>
+                      </div>
                     </div>
+
+                    {/* Selettore autista */}
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {assignedDriver ? (
+                        <>
+                          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2">
+                            <span className="text-emerald-600 text-sm">🧑‍✈️</span>
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold text-emerald-800 truncate">{assignedDriver.full_name}</p>
+                              {assignedDriver.phone && (
+                                <a href={`tel:${assignedDriver.phone}`}
+                                  className="text-xs text-emerald-600 hover:underline">
+                                  📞 {assignedDriver.phone}
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => void removeDriver(group)}
+                            disabled={isSaving}
+                            className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-400 hover:border-rose-300 hover:text-rose-500 disabled:opacity-40">
+                            {isSaving ? "..." : "✕"}
+                          </button>
+                        </>
+                      ) : (
+                        <select
+                          defaultValue=""
+                          disabled={isSaving}
+                          onChange={(e) => { if (e.target.value) void assignDriver(group, e.target.value); }}
+                          className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 disabled:opacity-50">
+                          <option value="">— Assegna autista —</option>
+                          {depDrivers.filter((d) => d.has_account).map((d) => (
+                            <option key={d.user_id} value={d.user_id!}>
+                              {d.full_name}{d.phone ? ` · ${d.phone}` : ""}
+                            </option>
+                          ))}
+                          {depDrivers.some((d) => !d.has_account) && (
+                            <option disabled>── Non attivati ──</option>
+                          )}
+                          {depDrivers.filter((d) => !d.has_account).map((d) => (
+                            <option key={d.profile_id} value="" disabled>
+                              {d.full_name} (no account)
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    {/* Autisti senza account → pulsante attivazione */}
+                    {!assignedDriver && depDrivers.some((d) => !d.has_account) && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {depDrivers.filter((d) => !d.has_account).map((d) => (
+                          <button key={d.profile_id}
+                            onClick={() => { setActivatingDriver(d); setActivateEmail(""); setActivateError(""); }}
+                            className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600 hover:bg-indigo-100 hover:text-indigo-700">
+                            Attiva app: {d.full_name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Lista clienti del bus */}
@@ -795,30 +997,28 @@ function TabCorsePorto() {
                       const depTime = svc.departure_time ?? svc.return_time ?? svc.time;
                       const zona = normalizeZonaIschia(svc.hotel_zone);
                       return (
-                        <div key={svc.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-bold uppercase text-slate-900">{svc.customer_name}</span>
-                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
-                                👥 {svc.pax}
-                              </span>
-                              {depTime && (
-                                <span className="text-xs text-slate-400">traghetto {fmtTime(depTime)}</span>
-                              )}
-                            </div>
-                            <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
-                              {svc.hotel_name && (
-                                <span>🏨 {svc.hotel_name}</span>
-                              )}
-                              {svc.hotel_zone && (
-                                <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600 capitalize">
-                                  {zona}
-                                </span>
-                              )}
-                              {svc.phone && <span>📞 {svc.phone}</span>}
-                            </div>
-                            {svc.notes && <p className="mt-0.5 text-xs text-slate-400">{svc.notes}</p>}
+                        <div key={svc.id} className="px-4 py-2.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-bold text-slate-900">{svc.customer_name}</span>
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                              👥 {svc.pax}
+                            </span>
+                            {depTime && (
+                              <span className="text-xs text-slate-400">⛴ {fmtTime(depTime)}</span>
+                            )}
                           </div>
+                          <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
+                            {svc.hotel_name && <span>🏨 {svc.hotel_name}</span>}
+                            {svc.hotel_zone && (
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600 capitalize">
+                                {zona}
+                              </span>
+                            )}
+                            {svc.phone && (
+                              <a href={`tel:${svc.phone}`} className="text-indigo-600 hover:underline">📞 {svc.phone}</a>
+                            )}
+                          </div>
+                          {svc.notes && <p className="mt-0.5 text-xs text-slate-400">{svc.notes}</p>}
                         </div>
                       );
                     })}
@@ -869,6 +1069,50 @@ function TabCorsePorto() {
           </>
         )}
       </div>
+
+      {/* Modal attivazione account driver */}
+      {activatingDriver && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-slate-900">Attiva app — {activatingDriver.full_name}</h2>
+            <p className="text-sm text-slate-500">
+              Crea l'account per permettere all'autista di accedere all'app driver.
+              La password iniziale sarà il numero di telefono.
+            </p>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">Email autista</label>
+              <input
+                type="email"
+                value={activateEmail}
+                onChange={(e) => setActivateEmail(e.target.value)}
+                placeholder="mario@esempio.com"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+            <div className="rounded-xl bg-slate-50 px-3 py-2.5 text-sm text-slate-600">
+              <span className="font-medium">Password iniziale: </span>
+              <span className="font-mono">{activatingDriver.phone ?? "Ischia2025!"}</span>
+              <p className="mt-1 text-xs text-slate-400">L&apos;autista dovrà cambiarla al primo accesso.</p>
+            </div>
+            {activateError && (
+              <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{activateError}</p>
+            )}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setActivatingDriver(null)}
+                className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600 hover:bg-slate-50">
+                Annulla
+              </button>
+              <button
+                onClick={() => void activateAccount()}
+                disabled={activateSaving || !activateEmail.trim()}
+                className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40">
+                {activateSaving ? "Creazione..." : "Attiva account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal nuovo blocco manuale */}
       {showNewRun && (
