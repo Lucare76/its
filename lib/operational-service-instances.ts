@@ -30,7 +30,8 @@ export function buildOperationalInstances(services: Service[]) {
   for (const service of services) {
     if (!isOperationallyVisible(service)) continue;
 
-    const arrivalDate = service.arrival_date ?? service.date;
+    // Arrivi: usa arrival_date se esplicito, altrimenti service.date per servizi direction=arrival
+    const arrivalDate = service.arrival_date ?? (service.direction === "arrival" ? service.date : null);
     const arrivalTime = service.arrival_time ?? service.outbound_time ?? service.time;
     if (arrivalDate) {
       instances.push({
@@ -43,8 +44,9 @@ export function buildOperationalInstances(services: Service[]) {
       });
     }
 
-    const departureDate = service.departure_date;
-    const departureTime = service.departure_time ?? service.return_time;
+    // Partenze: usa departure_date se esplicito, altrimenti service.date per servizi direction=departure
+    const departureDate = service.departure_date ?? (service.direction === "departure" ? service.date : null);
+    const departureTime = service.departure_time ?? service.return_time ?? service.time;
     if (departureDate) {
       instances.push({
         instanceId: `${service.id}:departure`,
