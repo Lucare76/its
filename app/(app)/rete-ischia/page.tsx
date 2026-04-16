@@ -481,6 +481,24 @@ function PickupRunCard({
   );
 }
 
+// ── Tipi partenze ─────────────────────────────────────────────────────────────
+
+type DepartureService = {
+  id: string;
+  customer_name: string;
+  customer_phone: string | null;
+  vessel: string | null;
+  pax: number;
+  departure_time: string | null;
+  time: string | null;
+  return_time: string | null;
+  hotel_id: string | null;
+  hotel_name: string | null;
+  hotel_zone: string | null;
+  notes: string | null;
+  status: string;
+};
+
 // ── Tab Corse Porto ───────────────────────────────────────────────────────────
 
 function TabCorsePorto() {
@@ -492,6 +510,8 @@ function TabCorsePorto() {
     return d.toISOString().slice(0, 10);
   });
   const [direction, setDirection] = useState<"arrival" | "departure">("arrival");
+
+  // Stato arrivi (pickup_runs)
   const [runs, setRuns] = useState<PickupRun[]>([]);
   const [arrivals, setArrivals] = useState<PickupRunArrival[]>([]);
   const [buses, setBuses] = useState<PickupRunBus[]>([]);
@@ -500,6 +520,10 @@ function TabCorsePorto() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [drivers, setDrivers] = useState<DriverProfile[]>([]);
   const [routing, setRouting] = useState<RoutingRule[]>([]);
+
+  // Stato partenze
+  const [depServices, setDepServices] = useState<DepartureService[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -511,17 +535,28 @@ function TabCorsePorto() {
     const token = await getToken();
     if (!token) { setLoading(false); return; }
     setLoading(true);
-    const res = await fetch(`/api/ops/pickup-runs?date=${d}&direction=${dir}`, { headers: { Authorization: `Bearer ${token}` } });
-    const body = await res.json().catch(() => null);
-    if (body?.ok) {
-      setRuns(body.runs ?? []);
-      setArrivals(body.arrivals ?? []);
-      setBuses(body.buses ?? []);
-      setPassengers(body.passengers ?? []);
-      setAlertsByRun(body.alerts_by_run ?? {});
-      setVehicles(body.vehicles ?? []);
-      setDrivers(body.drivers ?? []);
-      setRouting(body.routing ?? []);
+
+    if (dir === "departure") {
+      // Carica servizi di partenza dalla tabella services
+      const res = await fetch(`/api/ops/departure-services?date=${d}`, { headers: { Authorization: `Bearer ${token}` } });
+      const body = await res.json().catch(() => null);
+      if (body?.ok) {
+        setDepServices(body.services ?? []);
+      }
+    } else {
+      // Carica blocchi arrivi da pickup_runs
+      const res = await fetch(`/api/ops/pickup-runs?date=${d}&direction=${dir}`, { headers: { Authorization: `Bearer ${token}` } });
+      const body = await res.json().catch(() => null);
+      if (body?.ok) {
+        setRuns(body.runs ?? []);
+        setArrivals(body.arrivals ?? []);
+        setBuses(body.buses ?? []);
+        setPassengers(body.passengers ?? []);
+        setAlertsByRun(body.alerts_by_run ?? {});
+        setVehicles(body.vehicles ?? []);
+        setDrivers(body.drivers ?? []);
+        setRouting(body.routing ?? []);
+      }
     }
     setLoading(false);
   }, []);
@@ -577,75 +612,154 @@ function TabCorsePorto() {
           </button>
         </div>
 
-        {/* Auto-group */}
-        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5">
-          <span className="text-xs text-slate-500">Auto:</span>
-          <select value={autoPort} onChange={(e) => setAutoPort(e.target.value)}
-            className="rounded border-0 bg-transparent text-xs text-slate-700">
-            {availablePorts.map((p) => (
-              <option key={p} value={p}>{PORT_LABELS[p] ?? p}</option>
-            ))}
-          </select>
-          <button
-            onClick={() => void post("auto_group", { port: autoPort })}
-            disabled={saving}
-            className="rounded bg-violet-600 px-2 py-1 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-40">
-            ⚡ Auto
-          </button>
-        </div>
+        {/* Auto-group: solo per arrivi */}
+        {direction === "arrival" && (
+          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5">
+            <span className="text-xs text-slate-500">Auto:</span>
+            <select value={autoPort} onChange={(e) => setAutoPort(e.target.value)}
+              className="rounded border-0 bg-transparent text-xs text-slate-700">
+              {availablePorts.map((p) => (
+                <option key={p} value={p}>{PORT_LABELS[p] ?? p}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => void post("auto_group", { port: autoPort })}
+              disabled={saving}
+              className="rounded bg-violet-600 px-2 py-1 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-40">
+              ⚡ Auto
+            </button>
+          </div>
+        )}
 
-        <div className="ml-auto flex gap-2">
-          <button onClick={() => setShowNewRun(true)}
-            className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-indigo-700">
-            + Blocco manuale
-          </button>
-        </div>
+        {direction === "arrival" && (
+          <div className="ml-auto flex gap-2">
+            <button onClick={() => setShowNewRun(true)}
+              className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-indigo-700">
+              + Blocco manuale
+            </button>
+          </div>
+        )}
       </div>
 
       {message && (
         <div className="mx-6 mt-2 rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-700">{message}</div>
       )}
 
-      {/* Lista run */}
+      {/* Lista run / partenze */}
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
         {loading && <p className="text-sm text-slate-500">Caricamento...</p>}
-        {!loading && runs.length === 0 && (
-          <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400">
-            <p className="text-lg font-semibold">
-              Nessun blocco {direction === "arrival" ? "arrivi" : "partenze"} per {fmtDate(date)}
-            </p>
-            <p className="mt-1 text-sm">
-              I blocchi vengono creati automaticamente quando arrivano le prenotazioni,
-              oppure usa <strong>+ Blocco manuale</strong>.
-            </p>
-          </div>
-        )}
 
-        {Object.entries(runsByPort).map(([port, portRuns]) => (
-          <div key={port}>
-            <h3 className="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500">
-              {PORT_LABELS[port] ?? port} — {portRuns.length} blocc{portRuns.length === 1 ? "o" : "hi"}
-            </h3>
-            <div className="space-y-4">
-              {portRuns.map((run) => (
-                <PickupRunCard
-                  key={run.id}
-                  run={run}
-                  arrivals={arrivals}
-                  buses={buses}
-                  passengers={passengers.filter((p) => p.run_id === run.id)}
-                  alerts={alertsByRun[run.id] ?? []}
-                  vehicles={vehicles}
-                  drivers={drivers}
-                  routingRules={routing}
-                  saving={saving}
-                  onPost={post}
-                  date={date}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
+        {/* Vista PARTENZE */}
+        {!loading && direction === "departure" && (() => {
+          if (depServices.length === 0) {
+            return (
+              <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400">
+                <p className="text-lg font-semibold">Nessuna partenza per {fmtDate(date)}</p>
+                <p className="mt-1 text-sm">Le partenze compaiono automaticamente dai servizi inseriti.</p>
+              </div>
+            );
+          }
+
+          // Raggruppa per traghetto/nave
+          const byVessel = depServices.reduce<Record<string, DepartureService[]>>((acc, s) => {
+            const key = s.vessel?.trim() || "— Traghetto non specificato —";
+            (acc[key] ??= []).push(s);
+            return acc;
+          }, {});
+
+          return Object.entries(byVessel).map(([vessel, svcs]) => {
+            const totalPax = svcs.reduce((sum, s) => sum + (s.pax ?? 0), 0);
+            // Orario della prima partenza del gruppo
+            const firstTime = svcs[0]?.departure_time ?? svcs[0]?.return_time ?? svcs[0]?.time;
+            return (
+              <div key={vessel}>
+                <div className="mb-3 flex items-center gap-3">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-slate-500">
+                    ⛴ {vessel}
+                  </h3>
+                  {firstTime && (
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                      {fmtTime(firstTime)}
+                    </span>
+                  )}
+                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                    {totalPax} pax · {svcs.length} clienti
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {svcs.map((svc) => {
+                    const depTime = svc.departure_time ?? svc.return_time ?? svc.time;
+                    return (
+                      <div key={svc.id}
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm flex items-start gap-4">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-bold uppercase text-slate-900">{svc.customer_name}</span>
+                            {depTime && (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                                {fmtTime(depTime)}
+                              </span>
+                            )}
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                              👥 {svc.pax} pax
+                            </span>
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-slate-500">
+                            {svc.hotel_name && (
+                              <span>🏨 {svc.hotel_name}{svc.hotel_zone ? ` (${svc.hotel_zone})` : ""}</span>
+                            )}
+                            {svc.customer_phone && <span>📞 {svc.customer_phone}</span>}
+                          </div>
+                          {svc.notes && <p className="mt-0.5 text-xs text-slate-400">{svc.notes}</p>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          });
+        })()}
+
+        {/* Vista ARRIVI (pickup_runs) */}
+        {!loading && direction === "arrival" && (
+          <>
+            {runs.length === 0 && (
+              <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400">
+                <p className="text-lg font-semibold">Nessun blocco arrivi per {fmtDate(date)}</p>
+                <p className="mt-1 text-sm">
+                  I blocchi vengono creati automaticamente quando arrivano le prenotazioni,
+                  oppure usa <strong>+ Blocco manuale</strong>.
+                </p>
+              </div>
+            )}
+            {Object.entries(runsByPort).map(([port, portRuns]) => (
+              <div key={port}>
+                <h3 className="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500">
+                  {PORT_LABELS[port] ?? port} — {portRuns.length} blocc{portRuns.length === 1 ? "o" : "hi"}
+                </h3>
+                <div className="space-y-4">
+                  {portRuns.map((run) => (
+                    <PickupRunCard
+                      key={run.id}
+                      run={run}
+                      arrivals={arrivals}
+                      buses={buses}
+                      passengers={passengers.filter((p) => p.run_id === run.id)}
+                      alerts={alertsByRun[run.id] ?? []}
+                      vehicles={vehicles}
+                      drivers={drivers}
+                      routingRules={routing}
+                      saving={saving}
+                      onPost={post}
+                      date={date}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
       {/* Modal nuovo blocco manuale */}
