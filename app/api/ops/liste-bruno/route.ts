@@ -54,8 +54,8 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
   const tenantId = auth.membership.tenant_id;
 
   // Tipi di servizio aeroporto/stazione — usati come fallback quando place_type non è esplicitato
-  const AIRPORT_KINDS = ["transfer_airport_hotel"];
-  const STATION_KINDS = ["transfer_station_hotel", "transfer_train_hotel"];
+  const AIRPORT_KINDS = ["transfer_airport_hotel", "transfer_airport_hotel_exclusive"];
+  const STATION_KINDS = ["transfer_station_hotel", "transfer_train_hotel", "transfer_train_hotel_exclusive"];
   const STATION_AIRPORT_KINDS = [...AIRPORT_KINDS, ...STATION_KINDS];
 
   const [arrivalsRes, departuresRes, settingsRes] = await Promise.all([
