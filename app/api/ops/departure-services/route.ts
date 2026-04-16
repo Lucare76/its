@@ -99,7 +99,7 @@ export async function GET(req: NextRequest) {
       return a.customer_name.localeCompare(b.customer_name);
     });
 
-    // Carica assignments per i servizi trovati
+    // Carica solo gli assignments creati da questa vista (prefisso DEP_BUS:)
     const serviceIds = merged.map((s) => s.id);
     const assignmentsRes = serviceIds.length
       ? await auth.admin
@@ -107,6 +107,7 @@ export async function GET(req: NextRequest) {
           .select("service_id,driver_user_id,vehicle_label")
           .in("service_id", serviceIds)
           .eq("tenant_id", tenantId)
+          .like("vehicle_label", "DEP_BUS:%")
       : { data: [], error: null };
 
     if (assignmentsRes.error) throw new Error(assignmentsRes.error.message);

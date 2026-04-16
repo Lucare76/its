@@ -670,6 +670,7 @@ function TabCorsePorto() {
     const title = group.key === "__no_pickup__"
       ? "Servizi senza orario calcolato"
       : `Bus ${group.pickup_time} · ${group.boat_co} ${group.boat_t} → ${group.porto_p}`;
+    const readableVehicleLabel = (group.vehicle_label ?? "").replace(/^DEP_BUS:/, "");
     const rows = group.services.map((s) => ({
       "Prelevamento": s.computed_pickup || "--:--",
       "Cliente": s.customer_name,
@@ -688,7 +689,7 @@ function TabCorsePorto() {
 <style>body{font-family:Arial,sans-serif;margin:20px}@media print{@page{size:A4 landscape}}</style>
 </head><body>
 <h2 style="font-size:15px;margin-bottom:4px">${title}</h2>
-${driverInfo ? `<p style="font-size:12px;margin:0 0 12px;color:#475569">Autista: ${driverInfo.full_name}${driverInfo.phone ? ` · ${driverInfo.phone}` : ""}</p>` : ""}
+${driverInfo ? `<p style="font-size:12px;margin:0 0 12px;color:#475569">Autista: ${driverInfo.full_name}${driverInfo.phone ? ` · ${driverInfo.phone}` : ""} · ${readableVehicleLabel}</p>` : ""}
 <p style="font-size:11px;color:#94a3b8;margin-bottom:12px">${fmtDate(date)} · ${group.total_pax} pax · ${group.services.length} clienti</p>
 <table style="border-collapse:collapse;width:100%"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>
 <script>window.print()<\/script></body></html>`;
@@ -703,8 +704,8 @@ ${driverInfo ? `<p style="font-size:12px;margin:0 0 12px;color:#475569">Autista:
     if (!token) return;
     setAssignSaving(group.key);
     const vehicleLabel = group.key === "__no_pickup__"
-      ? "Bus senza orario calcolato"
-      : `Bus ${group.pickup_time} · ${group.boat_co} ${group.boat_t} → ${group.porto_p}`;
+      ? "DEP_BUS:senza orario calcolato"
+      : `DEP_BUS:${group.pickup_time} · ${group.boat_co} ${group.boat_t} → ${group.porto_p}`;
     const res = await fetch("/api/ops/departure-bus-assign", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },

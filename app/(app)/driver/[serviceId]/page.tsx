@@ -109,7 +109,7 @@ export default function DriverDetailPage() {
           {scanData?.vehicle_label ? (
             <div className="mt-4 rounded-xl bg-white px-4 py-3 text-sm text-slate-700 shadow">
               <p className="font-semibold text-slate-500 text-xs uppercase tracking-wider mb-1">Bus corretto</p>
-              <p className="font-bold text-slate-900">{scanData.vehicle_label}</p>
+              <p className="font-bold text-slate-900">{scanData.vehicle_label.replace(/^DEP_BUS:/, "")}</p>
               {scanData.driver_name && <p className="text-slate-600 mt-0.5">Autista: {scanData.driver_name}</p>}
             </div>
           ) : (
