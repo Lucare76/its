@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { getPickupRule, getPickupRuleByRange } from "@/lib/departure-pickup-rules";
 
 // ── Tipi ─────────────────────────────────────────────────────────────────────
 
@@ -497,7 +498,61 @@ type DepartureService = {
   hotel_zone: string | null;
   notes: string | null;
   status: string;
+  booking_service_kind: string | null;
+  billing_party_name: string | null;
+  transport_code: string | null;
 };
+
+type DepBusGroup = {
+  key: string;
+  pickup_time: string;
+  boat_co: string;
+  boat_t: string;
+  porto_p: string;
+  total_pax: number;
+  services: Array<DepartureService & { computed_pickup: string }>;
+};
+
+function normalizeZonaIschia(raw: string | null): string {
+  const z = (raw ?? "").toLowerCase().trim();
+  if (z.includes("forio"))        return "forio";
+  if (z.includes("lacco"))        return "lacco";
+  if (z.includes("casamicciola")) return "casamicciola";
+  if (z.includes("barano"))       return "barano";
+  return "ischia";
+}
+
+function computePickupHint(svc: DepartureService): { pickup: string; boat_co: string; boat_t: string; porto_p: string } | null {
+  const kind = svc.booking_service_kind;
+  // Escludi bus linea — non incluso per ora
+  if (!kind || kind === "bus_city_hotel" || kind === "excursion") return null;
+
+  const zona = normalizeZonaIschia(svc.hotel_zone);
+  const agency = svc.billing_party_name?.trim() ?? "";
+  const tFrom = (svc.departure_time ?? svc.return_time ?? svc.time ?? "").trim();
+  if (!tFrom) return null;
+
+  let rule = null;
+
+  if (kind === "formula_snav" || (kind === "transfer_port_hotel" && svc.vessel?.toLowerCase().includes("snav"))) {
+    rule = getPickupRule(agency, "snav", tFrom, zona);
+  } else if (kind === "formula_medmar" || (kind === "transfer_port_hotel" && svc.vessel?.toLowerCase().includes("medmar"))) {
+    rule = getPickupRule(agency, "medmar", tFrom, zona);
+  } else if (kind === "transfer_train_hotel") {
+    rule = getPickupRule(agency, "treno_traghetto", tFrom, zona)
+      ?? getPickupRuleByRange(agency, "treno_traghetto", tFrom, zona)
+      ?? getPickupRule(agency, "treno_aliscafo", tFrom, zona)
+      ?? getPickupRuleByRange(agency, "treno_aliscafo", tFrom, zona);
+  } else if (kind === "transfer_airport_hotel") {
+    rule = getPickupRule("", "volo_traghetto", tFrom, zona)
+      ?? getPickupRuleByRange("", "volo_traghetto", tFrom, zona)
+      ?? getPickupRule("", "volo_aliscafo", tFrom, zona)
+      ?? getPickupRuleByRange("", "volo_aliscafo", tFrom, zona);
+  }
+
+  if (!rule) return null;
+  return { pickup: rule.pickup, boat_co: rule.boat_co, boat_t: rule.boat_t, porto_p: rule.porto_p };
+}
 
 // ── Tab Corse Porto ───────────────────────────────────────────────────────────
 
@@ -585,11 +640,59 @@ function TabCorsePorto() {
 
   const availablePorts = [...new Set(routing.map((r) => r.port))];
 
-  // Raggruppa run per porto
+  // Raggruppa run per porto (arrivi)
   const runsByPort = runs.reduce<Record<string, PickupRun[]>>((acc, r) => {
     (acc[r.port] ??= []).push(r);
     return acc;
   }, {});
+
+  // Raggruppa servizi partenza in bus per (pickup_time + boat_co + boat_t + porto_p)
+  const depBusGroups = useMemo((): DepBusGroup[] => {
+    const map = new Map<string, DepBusGroup>();
+    const noPickup: Array<DepartureService & { computed_pickup: string }> = [];
+
+    for (const svc of depServices) {
+      const hint = computePickupHint(svc);
+      if (!hint) {
+        noPickup.push({ ...svc, computed_pickup: "" });
+        continue;
+      }
+      const key = `${hint.pickup}|${hint.boat_co}|${hint.boat_t}|${hint.porto_p}`;
+      const existing = map.get(key);
+      const entry = { ...svc, computed_pickup: hint.pickup };
+      if (existing) {
+        existing.services.push(entry);
+        existing.total_pax += svc.pax;
+      } else {
+        map.set(key, {
+          key,
+          pickup_time: hint.pickup,
+          boat_co: hint.boat_co,
+          boat_t: hint.boat_t,
+          porto_p: hint.porto_p,
+          total_pax: svc.pax,
+          services: [entry],
+        });
+      }
+    }
+
+    const groups = Array.from(map.values()).sort((a, b) => a.pickup_time.localeCompare(b.pickup_time));
+
+    // Servizi senza regola → gruppo "Senza prelevamento calcolato"
+    if (noPickup.length > 0) {
+      groups.push({
+        key: "__no_pickup__",
+        pickup_time: "99:99",
+        boat_co: "",
+        boat_t: "",
+        porto_p: "",
+        total_pax: noPickup.reduce((s, x) => s + x.pax, 0),
+        services: noPickup,
+      });
+    }
+
+    return groups;
+  }, [depServices]);
 
   return (
     <div className="flex flex-col h-full">
@@ -649,77 +752,82 @@ function TabCorsePorto() {
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
         {loading && <p className="text-sm text-slate-500">Caricamento...</p>}
 
-        {/* Vista PARTENZE */}
-        {!loading && direction === "departure" && (() => {
-          if (depServices.length === 0) {
-            return (
+        {/* Vista PARTENZE — gruppi bus per orario prelevamento */}
+        {!loading && direction === "departure" && (
+          <>
+            {depServices.length === 0 && (
               <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400">
                 <p className="text-lg font-semibold">Nessuna partenza per {fmtDate(date)}</p>
                 <p className="mt-1 text-sm">Le partenze compaiono automaticamente dai servizi inseriti.</p>
               </div>
-            );
-          }
+            )}
+            {depBusGroups.map((group) => {
+              const isNoPickup = group.key === "__no_pickup__";
+              return (
+                <div key={group.key}
+                  className={`rounded-xl border shadow-sm ${isNoPickup ? "border-slate-200 bg-slate-50" : "border-l-4 border-amber-300 border-y-slate-200 border-r-slate-200 bg-white"}`}>
+                  {/* Header gruppo bus */}
+                  <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-slate-100">
+                    {isNoPickup ? (
+                      <span className="font-semibold text-slate-500 text-sm">Senza orario prelevamento calcolato</span>
+                    ) : (
+                      <>
+                        <span className="text-lg font-bold text-amber-600">🕐 {group.pickup_time}</span>
+                        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">
+                          {group.boat_co} {group.boat_t}
+                        </span>
+                        <span className="text-sm font-medium text-slate-700">→ {group.porto_p}</span>
+                      </>
+                    )}
+                    <div className="ml-auto flex items-center gap-2">
+                      <span className="rounded-full bg-slate-200 px-2.5 py-0.5 text-xs font-semibold text-slate-700">
+                        👥 {group.total_pax} pax
+                      </span>
+                      <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-semibold text-indigo-700">
+                        {group.services.length} clienti
+                      </span>
+                    </div>
+                  </div>
 
-          // Raggruppa per traghetto/nave
-          const byVessel = depServices.reduce<Record<string, DepartureService[]>>((acc, s) => {
-            const key = s.vessel?.trim() || "— Traghetto non specificato —";
-            (acc[key] ??= []).push(s);
-            return acc;
-          }, {});
-
-          return Object.entries(byVessel).map(([vessel, svcs]) => {
-            const totalPax = svcs.reduce((sum, s) => sum + (s.pax ?? 0), 0);
-            // Orario della prima partenza del gruppo
-            const firstTime = svcs[0]?.departure_time ?? svcs[0]?.return_time ?? svcs[0]?.time;
-            return (
-              <div key={vessel}>
-                <div className="mb-3 flex items-center gap-3">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-slate-500">
-                    ⛴ {vessel}
-                  </h3>
-                  {firstTime && (
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
-                      {fmtTime(firstTime)}
-                    </span>
-                  )}
-                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                    {totalPax} pax · {svcs.length} clienti
-                  </span>
-                </div>
-                <div className="space-y-2">
-                  {svcs.map((svc) => {
-                    const depTime = svc.departure_time ?? svc.return_time ?? svc.time;
-                    return (
-                      <div key={svc.id}
-                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm flex items-start gap-4">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-bold uppercase text-slate-900">{svc.customer_name}</span>
-                            {depTime && (
-                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
-                                {fmtTime(depTime)}
+                  {/* Lista clienti del bus */}
+                  <div className="divide-y divide-slate-100">
+                    {group.services.map((svc) => {
+                      const depTime = svc.departure_time ?? svc.return_time ?? svc.time;
+                      const zona = normalizeZonaIschia(svc.hotel_zone);
+                      return (
+                        <div key={svc.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-bold uppercase text-slate-900">{svc.customer_name}</span>
+                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                                👥 {svc.pax}
                               </span>
-                            )}
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
-                              👥 {svc.pax} pax
-                            </span>
+                              {depTime && (
+                                <span className="text-xs text-slate-400">traghetto {fmtTime(depTime)}</span>
+                              )}
+                            </div>
+                            <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
+                              {svc.hotel_name && (
+                                <span>🏨 {svc.hotel_name}</span>
+                              )}
+                              {svc.hotel_zone && (
+                                <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600 capitalize">
+                                  {zona}
+                                </span>
+                              )}
+                              {svc.phone && <span>📞 {svc.phone}</span>}
+                            </div>
+                            {svc.notes && <p className="mt-0.5 text-xs text-slate-400">{svc.notes}</p>}
                           </div>
-                          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-slate-500">
-                            {svc.hotel_name && (
-                              <span>🏨 {svc.hotel_name}{svc.hotel_zone ? ` (${svc.hotel_zone})` : ""}</span>
-                            )}
-                            {svc.phone && <span>📞 {svc.phone}</span>}
-                          </div>
-                          {svc.notes && <p className="mt-0.5 text-xs text-slate-400">{svc.notes}</p>}
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            );
-          });
-        })()}
+              );
+            })}
+          </>
+        )}
 
         {/* Vista ARRIVI (pickup_runs) */}
         {!loading && direction === "arrival" && (

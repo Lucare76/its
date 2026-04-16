@@ -17,6 +17,9 @@ export type DepartureServiceRow = {
   hotel_zone: string | null;
   notes: string | null;
   status: string;
+  booking_service_kind: string | null;
+  billing_party_name: string | null;
+  transport_code: string | null;
 };
 
 export async function GET(req: NextRequest) {
@@ -40,7 +43,7 @@ export async function GET(req: NextRequest) {
     const [q1Res, q2Res] = await Promise.all([
       auth.admin
         .from("services")
-        .select("id,customer_name,phone,vessel,pax,departure_time,time,return_time,hotel_id,notes,status")
+        .select("id,customer_name,phone,vessel,pax,departure_time,time,return_time,hotel_id,notes,status,booking_service_kind,billing_party_name,transport_code")
         .eq("tenant_id", tenantId)
         .eq("departure_date", date)
         .eq("is_draft", false)
@@ -49,7 +52,7 @@ export async function GET(req: NextRequest) {
       // Query 2: servizi direction=departure con solo date (senza departure_date esplicita)
       auth.admin
         .from("services")
-        .select("id,customer_name,phone,vessel,pax,departure_time,time,return_time,hotel_id,notes,status")
+        .select("id,customer_name,phone,vessel,pax,departure_time,time,return_time,hotel_id,notes,status,booking_service_kind,billing_party_name,transport_code")
         .eq("tenant_id", tenantId)
         .is("departure_date", null)
         .eq("date", date)
@@ -82,6 +85,9 @@ export async function GET(req: NextRequest) {
         hotel_zone: hotel?.zone ?? null,
         notes: row.notes ?? null,
         status: row.status,
+        booking_service_kind: row.booking_service_kind ?? null,
+        billing_party_name: row.billing_party_name ?? null,
+        transport_code: row.transport_code ?? null,
       });
     }
 
