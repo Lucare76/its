@@ -486,7 +486,7 @@ function PickupRunCard({
 type DepartureService = {
   id: string;
   customer_name: string;
-  customer_phone: string | null;
+  phone: string | null;
   vessel: string | null;
   pax: number;
   departure_time: string | null;
@@ -708,7 +708,7 @@ function TabCorsePorto() {
                             {svc.hotel_name && (
                               <span>🏨 {svc.hotel_name}{svc.hotel_zone ? ` (${svc.hotel_zone})` : ""}</span>
                             )}
-                            {svc.customer_phone && <span>📞 {svc.customer_phone}</span>}
+                            {svc.phone && <span>📞 {svc.phone}</span>}
                           </div>
                           {svc.notes && <p className="mt-0.5 text-xs text-slate-400">{svc.notes}</p>}
                         </div>

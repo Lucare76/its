@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 export type DepartureServiceRow = {
   id: string;
   customer_name: string;
-  customer_phone: string | null;
+  phone: string | null;
   vessel: string | null;
   pax: number;
   departure_time: string | null;
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
     const [q1Res, q2Res] = await Promise.all([
       auth.admin
         .from("services")
-        .select("id,customer_name,customer_phone,vessel,pax,departure_time,time,return_time,hotel_id,notes,status")
+        .select("id,customer_name,phone,vessel,pax,departure_time,time,return_time,hotel_id,notes,status")
         .eq("tenant_id", tenantId)
         .eq("departure_date", date)
         .eq("is_draft", false)
@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
       // Query 2: servizi direction=departure con solo date (senza departure_date esplicita)
       auth.admin
         .from("services")
-        .select("id,customer_name,customer_phone,vessel,pax,departure_time,time,return_time,hotel_id,notes,status")
+        .select("id,customer_name,phone,vessel,pax,departure_time,time,return_time,hotel_id,notes,status")
         .eq("tenant_id", tenantId)
         .is("departure_date", null)
         .eq("date", date)
@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
       merged.push({
         id: row.id,
         customer_name: row.customer_name,
-        customer_phone: row.customer_phone ?? null,
+        phone: row.phone ?? null,
         vessel: row.vessel ?? null,
         pax: row.pax ?? 1,
         departure_time: row.departure_time ?? null,
