@@ -535,6 +535,13 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     return () => clearInterval(interval);
   }, [authTenantId, authRole]);
 
+  // Carica preferiti quando userId è disponibile
+  // NOTA: deve stare qui, prima dei return condizionali, per rispettare le regole degli hook
+  useEffect(() => {
+    if (!authUserId) return;
+    setFavorites(loadFavorites(authUserId));
+  }, [authUserId]);
+
   if (authLoading) {
     return <div className="card p-4 text-sm text-muted">Verifica sessione...</div>;
   }
@@ -550,12 +557,6 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   if (!needsOnboarding && !isAllowedWithOverrides(pathname, authRole, capabilityOverrides)) {
     return <div className="card p-4 text-sm text-muted">Reindirizzamento in corso...</div>;
   }
-
-  // Carica preferiti quando userId è disponibile
-  useEffect(() => {
-    if (!authUserId) return;
-    setFavorites(loadFavorites(authUserId));
-  }, [authUserId]);
 
   const toggleFavorite = (href: string) => {
     if (!authUserId) return;
