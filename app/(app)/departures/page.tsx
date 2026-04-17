@@ -34,7 +34,7 @@ function EditDepartureModal({
   const [hotelId, setHotelId]         = useState(service.hotel_id ?? "");
   const [customerName, setCustomerName] = useState(service.customer_name ?? "");
   const [pax, setPax]                 = useState(String(service.pax ?? 1));
-  const [time, setTime]               = useState(service.time ?? "");
+  const [time, setTime]               = useState((service.time ?? "").slice(0, 5));
   const [phone, setPhone]             = useState(service.phone ?? "");
   const [notes, setNotes]             = useState(service.notes ?? "");
   const [saving, setSaving]           = useState(false);
