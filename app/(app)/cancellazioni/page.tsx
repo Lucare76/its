@@ -58,6 +58,7 @@ export default function CancellazioniPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState<string | null>(null);
 
   // Modale penale
   const [modal, setModal] = useState<CancellationRequest | null>(null);
@@ -85,6 +86,22 @@ export default function CancellazioniPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  const restoreRequest = async (reqId: string) => {
+    setRestoring(reqId);
+    try {
+      const session = await supabase?.auth.getSession();
+      const token = session?.data.session?.access_token;
+      if (!token) return;
+      await fetch(`/api/ops/cancellation-requests/${reqId}/restore`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      void load();
+    } finally {
+      setRestoring(null);
+    }
+  };
 
   const openModal = (req: CancellationRequest) => {
     setModal(req);
@@ -200,6 +217,13 @@ export default function CancellazioniPage() {
                         {req.status === "pending_review" ? "Gestisci" : "Rivedi risposta"}
                       </button>
                     )}
+                    <button
+                      onClick={() => void restoreRequest(req.id)}
+                      disabled={restoring === req.id}
+                      className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 transition disabled:opacity-50"
+                    >
+                      {restoring === req.id ? "..." : "Ripristina"}
+                    </button>
                   </div>
                 </div>
 
