@@ -111,7 +111,11 @@ function AgencyKindBadge({ service }: { service: Service }) {
     formula_snav: { label: "SNAV", className: "border-indigo-200 bg-indigo-50 text-indigo-700" },
     formula_medmar: { label: "MEDMAR", className: "border-sky-200 bg-sky-50 text-sky-700" },
     transfer_airport_hotel: { label: "Agenzia · Aeroporto", className: "border-amber-200 bg-amber-50 text-amber-700" },
+    transfer_airport_hotel_exclusive: { label: "Agenzia · Aeroporto 🔒", className: "border-amber-300 bg-amber-100 text-amber-800" },
+    transfer_airport_hotel_aliscafo: { label: "Agenzia · Aeroporto 🚤", className: "border-cyan-200 bg-cyan-50 text-cyan-700" },
     transfer_train_hotel: { label: "Agenzia · Stazione", className: "border-orange-200 bg-orange-50 text-orange-700" },
+    transfer_train_hotel_exclusive: { label: "Agenzia · Stazione 🔒", className: "border-orange-300 bg-orange-100 text-orange-800" },
+    transfer_train_hotel_aliscafo: { label: "Agenzia · Stazione 🚤", className: "border-teal-200 bg-teal-50 text-teal-700" },
     bus_city_hotel: { label: "Agenzia · Bus", className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
     excursion: { label: "Agenzia · Escursione", className: "border-purple-200 bg-purple-50 text-purple-700" },
     transfer_port_hotel: { label: "Agenzia · Porto", className: "border-slate-200 bg-slate-50 text-slate-600" }
@@ -229,44 +233,38 @@ export default function DeparturesPage() {
   const [appOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
   const [qrServiceId, setQrServiceId] = useState<string | null>(null);
 
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const deleteService = async (service: Service) => {
-    if (!supabase) return;
+  const [cancelModal, setCancelModal] = useState<Service | null>(null);
+  const [cancelLegs, setCancelLegs] = useState<"arrival" | "departure" | "both">("both");
+  const [cancelSubmitting, setCancelSubmitting] = useState(false);
+  const [cancelSuccess, setCancelSuccess] = useState<string | null>(null);
+
+  const openCancelModal = (service: Service) => {
     const hasArrival = !!(service.arrival_date ?? service.date);
-    const hasDepartureOnly = !hasArrival;
-    const label = hasArrival && !hasDepartureOnly
-      ? `Rimuovere solo il ritorno di ${service.customer_name}? L'arrivo rimarrà.`
-      : `Eliminare il servizio di ${service.customer_name}? L'operazione non è reversibile.`;
-    if (!confirm(label)) return;
-    setDeletingId(service.id);
-    setDeleteError(null);
+    const hasDeparture = !!service.departure_date;
+    const defaultLegs = hasArrival && hasDeparture ? "both" : hasDeparture ? "departure" : "both";
+    setCancelLegs(defaultLegs as "arrival" | "departure" | "both");
+    setCancelSuccess(null);
+    setCancelModal(service);
+  };
+
+  const submitCancelRequest = async () => {
+    if (!cancelModal || !supabase) return;
+    setCancelSubmitting(true);
     try {
       const session = await supabase.auth.getSession();
       const token = session.data.session?.access_token;
-      if (!token) { setDeleteError("Sessione scaduta. Rifai login."); return; }
-      // Se ha anche l'arrivo → azzera solo departure_date/departure_time
-      if (hasArrival) {
-        const res = await fetch("/api/ops/clear-service-departure", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ id: service.id })
-        });
-        const body = await res.json().catch(() => null) as { error?: string } | null;
-        if (!res.ok) { setDeleteError(body?.error ?? "Operazione fallita."); return; }
-      } else {
-        // Solo partenza → elimina il record intero
-        const res = await fetch("/api/ops/bulk-delete-services", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ ids: [service.id] })
-        });
-        const body = await res.json().catch(() => null) as { error?: string } | null;
-        if (!res.ok) { setDeleteError(body?.error ?? "Eliminazione fallita."); return; }
-      }
+      if (!token) return;
+      const res = await fetch("/api/ops/cancellation-requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ service_id: cancelModal.id, cancel_legs: cancelLegs }),
+      });
+      const body = await res.json().catch(() => null) as { ok?: boolean; error?: string; id?: string } | null;
+      if (!res.ok) { setCancelSuccess(`Errore: ${body?.error ?? "operazione fallita"}`); return; }
+      setCancelSuccess("Richiesta inviata. Vai su Cancellazioni per gestirla.");
       void refresh?.();
     } finally {
-      setDeletingId(null);
+      setCancelSubmitting(false);
     }
   };
 
@@ -491,74 +489,101 @@ export default function DeparturesPage() {
           </div>
         }
       >
-        {deleteError && (
-          <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{deleteError}</div>
-        )}
         {departures.length === 0 ? (
           <p className="text-sm text-muted">Nessuna partenza operativa per la data selezionata.</p>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">Ora</th>
-                  <th className="px-3 py-2">Cliente</th>
-                  <th className="px-3 py-2">Pax</th>
-                  <th className="px-3 py-2">Origine / hotel</th>
-                  <th className="px-3 py-2">Meeting point</th>
-                  <th className="px-3 py-2">Riferimento</th>
-                  <th className="px-3 py-2">Tipo</th>
-                  <th className="px-3 py-2"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {departures.map((item) => (
-                  <tr key={item.instanceId} className="border-t border-slate-100 hover:bg-slate-50">
-                    <td className="px-3 py-2 font-medium whitespace-nowrap">
-                      {item.time}
-                      {(() => {
-                        const hint = pickupHints.get(item.service.id);
-                        if (!hint) return null;
-                        if (hint.pickup === item.time) return (
-                          <span className="ml-1.5 text-[10px] text-emerald-500" title="Orario conforme alle regole">✓</span>
-                        );
-                        return (
-                          <span className="ml-1.5 cursor-help text-[10px] font-semibold text-amber-600" title={`Regole: ${hint.pickup} · ${hint.label}`}>
-                            ⏰ {hint.pickup}
-                          </span>
-                        );
-                      })()}
-                    </td>
-                    <td className="px-3 py-2 uppercase">
-                      {getCustomerFullName(item.service)}
-                      <AgencyKindBadge service={item.service} />
-                    </td>
-                    <td className="px-3 py-2">{item.service.pax}</td>
-                    <td className="px-3 py-2 uppercase">{resolveHotelName(item.service)}</td>
-                    <td className="px-3 py-2 uppercase">{item.service.meeting_point ?? "N/D"}</td>
-                    <td className="px-3 py-2">{getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel}</td>
-                    <td className="px-3 py-2">{item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D"}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setQrServiceId(item.service.id)}
-                          className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-100"
-                          title="Mostra QR smarcamento"
-                        >
-                          📱 QR
-                        </button>
-                        <button type="button" onClick={() => void deleteService(item.service)}
-                          disabled={deletingId === item.service.id}
-                          className="rounded-lg border border-rose-200 px-2 py-1 text-xs text-rose-500 hover:bg-rose-50 disabled:opacity-50">
-                          {deletingId === item.service.id ? "..." : (item.service.arrival_date ? "Solo ritorno" : "Elimina")}
-                        </button>
+          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+            {/* Header */}
+            <div className="grid items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500 grid-cols-[60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]">
+              <div>Ora</div>
+              <div>Cliente</div>
+              <div>Pax</div>
+              <div>Hotel · Meeting point</div>
+              <div>Rif. · Tipo</div>
+              <div className="text-right">Azioni</div>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {departures.map((item) => {
+                const hotelName = resolveHotelName(item.service);
+                const meetingPoint = item.service.meeting_point ?? null;
+                const riferimento = getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
+                const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
+                const hint = pickupHints.get(item.service.id);
+                return (
+                  <div
+                    key={item.instanceId}
+                    className="grid items-center gap-3 px-4 py-3 transition hover:bg-slate-50/60 grid-cols-[60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]"
+                  >
+                    {/* ORA + hint pickup */}
+                    <div className="space-y-0.5">
+                      <span className="inline-flex min-w-[48px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-bold text-slate-800">
+                        {item.time}
+                      </span>
+                      {hint && hint.pickup !== item.time && (
+                        <p className="text-[10px] font-semibold text-amber-600 cursor-help" title={`Regole: ${hint.pickup} · ${hint.label}`}>
+                          ⏰ {hint.pickup}
+                        </p>
+                      )}
+                      {hint && hint.pickup === item.time && (
+                        <p className="text-[10px] text-emerald-500" title="Orario conforme alle regole">✓</p>
+                      )}
+                    </div>
+                    {/* CLIENTE */}
+                    <div className="min-w-0 space-y-0.5">
+                      <p className="truncate text-sm font-semibold uppercase tracking-[0.01em] text-slate-800" title={getCustomerFullName(item.service)}>
+                        {getCustomerFullName(item.service)}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <AgencyKindBadge service={item.service} />
+                        {item.service.billing_party_name ? (
+                          <span className="truncate text-[11px] text-slate-400" title={item.service.billing_party_name}>{item.service.billing_party_name}</span>
+                        ) : null}
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </div>
+                    {/* PAX */}
+                    <div>
+                      <span className="inline-flex min-w-[32px] items-center justify-center rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-sm font-semibold text-slate-700">
+                        {item.service.pax}
+                      </span>
+                    </div>
+                    {/* HOTEL + MEETING POINT */}
+                    <div className="min-w-0 space-y-0.5">
+                      <p className="truncate text-sm font-medium uppercase text-slate-700" title={hotelName}>{hotelName}</p>
+                      {meetingPoint ? (
+                        <p className="truncate text-[11px] uppercase text-slate-400" title={meetingPoint}>{meetingPoint}</p>
+                      ) : null}
+                    </div>
+                    {/* RIFERIMENTO + TIPO */}
+                    <div className="min-w-0 space-y-0.5">
+                      {riferimento ? (
+                        <p className="truncate text-sm text-slate-600" title={riferimento}>{riferimento}</p>
+                      ) : null}
+                      <span className="inline-flex rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-blue-700">
+                        {tipoLabel}
+                      </span>
+                    </div>
+                    {/* AZIONI */}
+                    <div className="flex justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setQrServiceId(item.service.id)}
+                        className="rounded-xl border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-100"
+                        title="Mostra QR smarcamento"
+                      >
+                        QR
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openCancelModal(item.service)}
+                        className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-100"
+                      >
+                        Cancella
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </SectionCard>
@@ -590,6 +615,64 @@ export default function DeparturesPage() {
             >
               Chiudi
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modale cancellazione */}
+      {cancelModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!cancelSubmitting) setCancelModal(null); }}>
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold text-slate-800">Richiesta cancellazione</h2>
+              {!cancelSubmitting && (
+                <button type="button" onClick={() => setCancelModal(null)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+              )}
+            </div>
+            <p className="text-sm text-slate-600">
+              <span className="font-semibold">{cancelModal.customer_name}</span> — {cancelModal.pax} pax
+            </p>
+            {cancelSuccess ? (
+              <div className="space-y-3">
+                <p className={`text-sm ${cancelSuccess.startsWith("Errore") ? "text-rose-600" : "text-emerald-600"}`}>{cancelSuccess}</p>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setCancelModal(null)} className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Chiudi</button>
+                  {!cancelSuccess.startsWith("Errore") && (
+                    <a href="/cancellazioni" className="flex-1 rounded-xl bg-slate-800 px-4 py-2.5 text-center text-sm font-semibold text-white hover:bg-slate-700">Vai a Cancellazioni →</a>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cosa cancellare?</p>
+                  {cancelModal.arrival_date && (
+                    <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-slate-200 px-3 py-2.5 hover:bg-slate-50">
+                      <input type="radio" name="cancel_legs" value="both" checked={cancelLegs === "both"} onChange={() => setCancelLegs("both")} className="accent-rose-500" />
+                      <span className="text-sm text-slate-700">Arrivo e partenza (intero servizio)</span>
+                    </label>
+                  )}
+                  <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-slate-200 px-3 py-2.5 hover:bg-slate-50">
+                    <input type="radio" name="cancel_legs" value="departure" checked={cancelLegs === "departure"} onChange={() => setCancelLegs("departure")} className="accent-rose-500" />
+                    <span className="text-sm text-slate-700">Solo partenza</span>
+                  </label>
+                  {cancelModal.arrival_date && (
+                    <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-slate-200 px-3 py-2.5 hover:bg-slate-50">
+                      <input type="radio" name="cancel_legs" value="arrival" checked={cancelLegs === "arrival"} onChange={() => setCancelLegs("arrival")} className="accent-rose-500" />
+                      <span className="text-sm text-slate-700">Solo arrivo</span>
+                    </label>
+                  )}
+                </div>
+                <p className="text-xs text-slate-400">La richiesta sarà inviata all&apos;admin/operatore per decidere l&apos;eventuale penale.</p>
+                <div className="flex gap-2 pt-1">
+                  <button type="button" onClick={() => setCancelModal(null)} className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Annulla</button>
+                  <button type="button" onClick={() => void submitCancelRequest()} disabled={cancelSubmitting}
+                    className="flex-1 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-40">
+                    {cancelSubmitting ? "Invio..." : "Invia richiesta"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -1,4 +1,4 @@
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 const ALERT_TO = "info@ischiatransferservice.it";
 
@@ -35,11 +35,7 @@ export async function sendBusLowSeatAlertEmail(input: BusLowSeatAlertInput): Pro
     `<p>Accedi alla gestione bus per verificare le allocazioni o redistribuire i passeggeri.</p>`
   ].join("");
 
-  await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from, to: [ALERT_TO], subject, html, text })
-  }).catch(() => {
+  await resendFetch(apiKey, { from, to: [ALERT_TO], subject, html, text }).catch(() => {
     // Non-blocking: email failure should not break the allocation
   });
 }

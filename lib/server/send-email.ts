@@ -49,6 +49,31 @@ export function getVerifiedFromEmail(): string {
   return (fromEnv && !isFreeDomain(fromEnv)) ? fromEnv : "noreply@ischiatransferservice.it";
 }
 
+/**
+ * Wrapper per la chiamata diretta a Resend che applica il redirect di test.
+ * Usare questa funzione al posto di fetch("https://api.resend.com/emails", ...)
+ * in tutti i file che non passano per sendEmail.
+ */
+export async function resendFetch(apiKey: string, payload: Record<string, unknown>): Promise<Response> {
+  const testRedirect = process.env.EMAIL_TEST_REDIRECT?.trim();
+  let finalPayload = payload;
+  if (testRedirect) {
+    const originalTo = Array.isArray(payload.to) ? (payload.to as string[]) : [payload.to as string];
+    finalPayload = {
+      ...payload,
+      to: [testRedirect],
+      subject: `[TEST → ${originalTo.join(", ")}] ${payload.subject as string}`,
+      cc: undefined,
+      bcc: undefined,
+    };
+  }
+  return fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(finalPayload),
+  });
+}
+
 export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return { ok: true, skipped: true };
@@ -56,7 +81,7 @@ export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult
   const fromDefault = getVerifiedFromEmail();
   const from = opts.from ?? `Ischia Transfer Service <${fromDefault}>`;
 
-  // BCC automatico per notifiche sviluppatore / test
+  // BCC automatico (ignorato in modalità test — resendFetch azzera cc/bcc)
   const autoBcc = process.env.NOTIFY_BCC_EMAIL ? [process.env.NOTIFY_BCC_EMAIL] : [];
   const bcc = [...autoBcc, ...normalize(opts.bcc)];
 
@@ -71,11 +96,7 @@ export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult
   if (bcc.length > 0) payload.bcc = bcc;
 
   try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(payload),
-    });
+    const res = await resendFetch(apiKey, payload);
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       return { ok: false, error: `Resend HTTP ${res.status}: ${body}` };

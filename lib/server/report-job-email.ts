@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildServiceListEmailHtml, buildServiceListPlainText, type ServiceListEmailType } from "@/lib/server/service-list-email";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 type SummaryLine = {
   date: string;
@@ -184,19 +184,12 @@ export async function sendOperationalReportEmail(params: {
 
   const agencyName = matchedAgency ?? params.ownerName ?? "Agenzia";
 
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      from,
-      to: [recipient],
-      subject: buildSubject(params.jobType, matchedAgency ?? params.ownerName, params.targetDate),
-      html: buildServiceListEmailHtml({ agencyName, type: emailType, targetDate: params.targetDate, lines: params.lines, reviewToken }),
-      text: buildServiceListPlainText({ agencyName, type: emailType, targetDate: params.targetDate, lines: params.lines })
-    })
+  const response = await resendFetch(apiKey, {
+    from,
+    to: [recipient],
+    subject: buildSubject(params.jobType, matchedAgency ?? params.ownerName, params.targetDate),
+    html: buildServiceListEmailHtml({ agencyName, type: emailType, targetDate: params.targetDate, lines: params.lines, reviewToken }),
+    text: buildServiceListPlainText({ agencyName, type: emailType, targetDate: params.targetDate, lines: params.lines })
   });
 
   if (!response.ok) {

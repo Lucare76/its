@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { buildServiceListEmailHtml, buildServiceListPlainText, type ServiceListEmailType } from "@/lib/server/service-list-email";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -80,16 +80,12 @@ export async function POST(request: NextRequest) {
     lines,
   });
 
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from,
-      to: [toEmail],
-      subject: `${label} — ${body.agency_name} — ${body.target_date}`,
-      html,
-      text,
-    }),
+  const res = await resendFetch(apiKey, {
+    from,
+    to: [toEmail],
+    subject: `${label} — ${body.agency_name} — ${body.target_date}`,
+    html,
+    text,
   });
 
   if (!res.ok) {

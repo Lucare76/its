@@ -41,8 +41,10 @@ const serviceKindLabels: Record<string, string> = {
   transfer_port_hotel: "Porto - Hotel",
   transfer_airport_hotel: "Aeroporto - Hotel",
   transfer_airport_hotel_exclusive: "Aeroporto - Hotel 🔒",
+  transfer_airport_hotel_aliscafo: "Aeroporto - Hotel 🚤",
   transfer_train_hotel: "Stazione - Hotel",
   transfer_train_hotel_exclusive: "Stazione - Hotel 🔒",
+  transfer_train_hotel_aliscafo: "Stazione - Hotel 🚤",
   bus_city_hotel: "Bus città - Hotel",
   excursion: "Escursione",
   formula_snav: "Formula SNAV",
@@ -319,21 +321,16 @@ function AgencyBookingsPageInner() {
     if (!selectedBooking || !accessToken) return;
     setCancelling(true);
     setCancelConfirm(false);
-    const res = await fetch(`/api/agency/bookings/${selectedBooking.id}`, {
-      method: "DELETE",
+    const res = await fetch("/api/ops/cancellation-requests", {
+      method: "POST",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ cancel_legs: cancelLeg, cancel_note: cancelNote || undefined })
+      body: JSON.stringify({ service_id: selectedBooking.id, cancel_legs: cancelLeg })
     });
-    const data = await res.json().catch(() => null) as { ok?: boolean; already_cancelled?: boolean; error?: string } | null;
+    const data = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
     setCancelling(false);
-    if (data?.already_cancelled) {
-      setBookings((prev) => prev.map((row) => row.id === selectedBooking.id ? { ...row, status: "cancelled" } : row));
-      setEditMessage("Tratta già annullata.");
-      return;
-    }
-    if (!res.ok) { setEditMessage(data?.error ?? "Annullamento fallito."); return; }
-    setBookings((prev) => prev.map((row) => row.id === selectedBooking.id ? { ...row, status: "cancelled" } : row));
-    setEditMessage("Tratta annullata. L'operatore è stato notificato.");
+    if (!res.ok) { setEditMessage(data?.error ?? "Richiesta fallita."); return; }
+    setBookings((prev) => prev.map((row) => row.id === selectedBooking.id ? { ...row, status: "pending_cancellation" } : row));
+    setEditMessage("Richiesta inviata. L'operatore la gestirà e ti contatterà per eventuali penali.");
   };
 
   if (loading) {
@@ -396,6 +393,7 @@ function AgencyBookingsPageInner() {
           <option value="assigned">Presi in carico</option>
           <option value="completato">Chiusi</option>
           <option value="cancelled">Annullati</option>
+          <option value="pending_cancellation">Cancellazione in attesa</option>
         </select>
         <select value={windowFilter} onChange={(event) => setWindowFilter(event.target.value as "all" | "future" | "past")} className="input-saas">
           <option value="all">Tutti i periodi</option>
@@ -454,6 +452,9 @@ function AgencyBookingsPageInner() {
                             <ApprovalBadge status={row.approval_status} />
                             {row.status === "cancelled" && (
                               <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] text-slate-500">Annullata</span>
+                            )}
+                            {row.status === "pending_cancellation" && (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">Cancellazione in attesa</span>
                             )}
                           </div>
                         </div>
@@ -560,6 +561,9 @@ function AgencyBookingsPageInner() {
                     {selectedBooking.status === "cancelled" && (
                       <span className="rounded-full bg-slate-200 px-2.5 py-0.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Annullata</span>
                     )}
+                    {selectedBooking.status === "pending_cancellation" && (
+                      <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-semibold text-amber-700 uppercase tracking-wide">Canc. in attesa</span>
+                    )}
                   </div>
                 </div>
 
@@ -653,7 +657,7 @@ function AgencyBookingsPageInner() {
                   </Link>
                 </div>
 
-                {selectedBooking.status !== "cancelled" && (
+                {selectedBooking.status !== "cancelled" && selectedBooking.status !== "pending_cancellation" && (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
                     {!cancelConfirm ? (
                       <button
@@ -730,7 +734,12 @@ function AgencyBookingsPageInner() {
                 )}
                 {selectedBooking.status === "cancelled" && (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                    Tratta annullata — in attesa di verifica operatore per penali/sconti.
+                    Tratta annullata.
+                  </div>
+                )}
+                {selectedBooking.status === "pending_cancellation" && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                    Richiesta di cancellazione in attesa — l&apos;operatore la gestirà a breve.
                   </div>
                 )}
               </div>

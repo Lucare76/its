@@ -6,6 +6,11 @@ import { z } from "zod";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { agencyBookingCreateSchema } from "@/lib/validation";
+import {
+  SNAV_ARRIVAL_TIMES, MEDMAR_ARRIVAL_TIMES,
+  SNAV_DEPARTURE_TIMES, MEDMAR_DEPARTURE_TIMES,
+  getArrivalPorto, getDepartureRule, normalizeZonaToPickup,
+} from "@/lib/snav-medmar-lookup";
 
 type BookingKind = z.infer<typeof agencyBookingCreateSchema>["booking_service_kind"];
 type OpsRole = "admin" | "operator";
@@ -45,18 +50,16 @@ const kindOptions: Array<{ value: BookingKind; label: string }> = [
   { value: "formula_medmar", label: "Formula MEDMAR" },
   { value: "transfer_airport_hotel", label: "Transfer aeroporto → hotel" },
   { value: "transfer_airport_hotel_exclusive", label: "Transfer aeroporto → hotel (esclusivo)" },
+  { value: "transfer_airport_hotel_aliscafo", label: "Transfer aeroporto → hotel (aliscafo 🚤)" },
   { value: "transfer_train_hotel", label: "Transfer stazione / bus → hotel" },
   { value: "transfer_train_hotel_exclusive", label: "Transfer stazione / bus → hotel (esclusivo)" },
+  { value: "transfer_train_hotel_aliscafo", label: "Transfer stazione / bus → hotel (aliscafo 🚤)" },
   { value: "bus_city_hotel", label: "Linea bus → hotel" },
   { value: "excursion", label: "Escursione" },
   { value: "transfer_port_hotel", label: "Transfer porto → hotel" }
 ];
 
-// Orari traghetti fissi
-const SNAV_ARRIVAL_TIMES = ["08:25", "12:30", "16:20", "19:00"];
-const SNAV_DEPARTURE_TIMES = ["07:10", "09:45", "14:00", "17:40"];
-const MEDMAR_ARRIVAL_TIMES = ["08:15", "08:40", "09:40", "12:00", "13:30", "14:20", "15:00", "16:30", "18:30", "19:00"];
-const MEDMAR_DEPARTURE_TIMES = ["06:20", "08:10", "10:10", "10:35", "11:10", "13:35", "15:00", "16:50", "17:00"];
+// Orari traghetti: ora derivati da snav-medmar-lookup.ts
 
 function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
@@ -91,7 +94,7 @@ function bookingContext(kind: BookingKind) {
       transportCodeReturnPlaceholder: undefined as string | undefined
     };
   }
-  if (kind === "transfer_airport_hotel" || kind === "transfer_airport_hotel_exclusive") {
+  if (kind === "transfer_airport_hotel" || kind === "transfer_airport_hotel_exclusive" || kind === "transfer_airport_hotel_aliscafo") {
     return {
       arrivalDateLabel: "Data volo andata*",
       arrivalTimeLabel: "Ora arrivo volo andata*",
@@ -103,7 +106,7 @@ function bookingContext(kind: BookingKind) {
       transportCodeReturnPlaceholder: "Es. FR5678"
     };
   }
-  if (kind === "transfer_train_hotel" || kind === "transfer_train_hotel_exclusive") {
+  if (kind === "transfer_train_hotel" || kind === "transfer_train_hotel_exclusive" || kind === "transfer_train_hotel_aliscafo") {
     return {
       arrivalDateLabel: "Data arrivo*",
       arrivalTimeLabel: "Ora arrivo*",
@@ -181,6 +184,9 @@ export default function OpsNewBookingPage() {
   });
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
+  // SNAV/MEDMAR: orario traghetto partenza (UI only — departure_time = prelievo hotel auto-calcolato)
+  const [ferryDepTime, setFerryDepTime] = useState<string>(() => SNAV_DEPARTURE_TIMES[0] ?? "07:10");
+
   // Hotel inline creation
   const [addingHotel, setAddingHotel] = useState(false);
   const [newHotelName, setNewHotelName] = useState("");
@@ -257,6 +263,25 @@ export default function OpsNewBookingPage() {
     void boot();
     return () => { active = false; };
   }, []);
+
+  // Auto-fill prelievo hotel per SNAV/MEDMAR (calcolato inline per evitare forward-reference)
+  useEffect(() => {
+    const kind = form.booking_service_kind;
+    if (kind !== "formula_snav" && kind !== "formula_medmar") return;
+    const company = kind === "formula_snav" ? "snav" as const : "medmar" as const;
+    const hotel = hotels.find((h) => h.id === form.hotel_id);
+    const zona = normalizeZonaToPickup(hotel?.zone ?? null);
+    const rule = getDepartureRule(company, ferryDepTime);
+    const pickup = rule?.pickup_by_zona[zona] ?? null;
+    if (pickup) setForm((prev) => ({ ...prev, departure_time: pickup }));
+  }, [form.booking_service_kind, ferryDepTime, form.hotel_id, hotels]);
+
+  // Reset ferry dep time quando cambia il tipo servizio
+  useEffect(() => {
+    const kind = form.booking_service_kind;
+    if (kind === "formula_snav") setFerryDepTime(SNAV_DEPARTURE_TIMES[0] ?? "07:10");
+    else if (kind === "formula_medmar") setFerryDepTime(MEDMAR_DEPARTURE_TIMES[0] ?? "06:20");
+  }, [form.booking_service_kind]);
 
   // Escursioni
   useEffect(() => {
@@ -336,7 +361,33 @@ export default function OpsNewBookingPage() {
 
   const selectedKind = form.booking_service_kind;
   const isSnavKind = selectedKind === "formula_snav";
-  const isTransportCodeRequired = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_train_hotel";
+  const isMedmarKind = selectedKind === "formula_medmar";
+  const isSnavMedmar = isSnavKind || isMedmarKind;
+  const snavMedmarCompany = isSnavKind ? "snav" : isMedmarKind ? "medmar" : null;
+
+  // Porto arrivo (da orario traghetto arrivo)
+  const portoArrivo = useMemo(() => {
+    if (!snavMedmarCompany) return null;
+    return getArrivalPorto(snavMedmarCompany, form.arrival_time) ?? (isSnavKind ? "CASAMICCIOLA" : null);
+  }, [snavMedmarCompany, form.arrival_time, isSnavKind]);
+
+  // Porto e prelievo partenza (da orario traghetto partenza + zona hotel)
+  const hotelZona = useMemo(() => {
+    const h = hotels.find((h) => h.id === form.hotel_id);
+    return normalizeZonaToPickup(h?.zone ?? null);
+  }, [hotels, form.hotel_id]);
+
+  const depRuleInfo = useMemo(() => {
+    if (!snavMedmarCompany) return null;
+    const rule = getDepartureRule(snavMedmarCompany, ferryDepTime);
+    if (!rule) return null;
+    return {
+      porto: rule.porto_ischia,
+      pickup: rule.pickup_by_zona[hotelZona] ?? null,
+    };
+  }, [snavMedmarCompany, ferryDepTime, hotelZona]);
+
+  const isTransportCodeRequired = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_airport_hotel_aliscafo" || selectedKind === "transfer_train_hotel" || selectedKind === "transfer_train_hotel_aliscafo";
   const showTransportCodeField = isTransportCodeRequired || selectedKind === "bus_city_hotel" || selectedKind === "excursion" || selectedKind === "formula_snav" || selectedKind === "formula_medmar";
   const isBusOriginRequired = selectedKind === "bus_city_hotel";
   const isExcursionTitleRequired = selectedKind === "excursion";
@@ -391,10 +442,17 @@ export default function OpsNewBookingPage() {
     setFieldErrors({});
     setSubmitting(true);
 
+    // Per SNAV/MEDMAR passa porto arrivo come meeting_point e ferry_dep_time
+    const extraFields = isSnavMedmar ? {
+      meeting_point: portoArrivo ?? undefined,
+      ferry_dep_time: ferryDepTime,
+      porto_partenza: depRuleInfo?.porto ?? undefined,
+    } : {};
+
     const response = await fetch("/api/ops/new-booking", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify(parsed.data)
+      body: JSON.stringify({ ...parsed.data, ...extraFields })
     });
     const body = (await response.json().catch(() => null)) as { ok?: boolean; id?: string; error?: string } | null;
     setSubmitting(false);
@@ -594,8 +652,8 @@ export default function OpsNewBookingPage() {
             ) : null}
           </label>
           <label className="text-sm">
-            {contextLabels.arrivalTimeLabel}
-            {(isSnavKind || selectedKind === "formula_medmar") ? (
+            {isSnavMedmar ? "Orario traghetto arrivo*" : contextLabels.arrivalTimeLabel}
+            {isSnavMedmar ? (
               <select className="input-saas mt-1" value={form.arrival_time} onChange={(e) => setForm((prev) => ({ ...prev, arrival_time: e.target.value }))}>
                 {(isSnavKind ? SNAV_ARRIVAL_TIMES : MEDMAR_ARRIVAL_TIMES).map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
@@ -618,16 +676,47 @@ export default function OpsNewBookingPage() {
             ) : null}
           </label>
           <label className="text-sm">
-            {contextLabels.departureTimeLabel}
-            {(isSnavKind || selectedKind === "formula_medmar") ? (
-              <select className="input-saas mt-1" value={form.departure_time} onChange={(e) => setForm((prev) => ({ ...prev, departure_time: e.target.value }))}>
-                {(isSnavKind ? SNAV_DEPARTURE_TIMES : MEDMAR_DEPARTURE_TIMES).map((t) => <option key={t} value={t}>{t}</option>)}
+            {isSnavMedmar ? "Orario traghetto partenza*" : contextLabels.departureTimeLabel}
+            {isSnavMedmar ? (
+              <select
+                className="input-saas mt-1"
+                value={ferryDepTime}
+                onChange={(e) => setFerryDepTime(e.target.value)}
+              >
+                {(isSnavKind ? SNAV_DEPARTURE_TIMES : MEDMAR_DEPARTURE_TIMES).map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
               </select>
             ) : (
               <input type="time" className="input-saas mt-1" value={form.departure_time} onChange={(e) => setForm((prev) => ({ ...prev, departure_time: e.target.value }))} />
             )}
           </label>
         </div>
+
+        {/* Porto e prelievo auto-calcolati per SNAV/MEDMAR */}
+        {isSnavMedmar && (
+          <div className="md:col-span-2 grid grid-cols-2 gap-3">
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs">
+              <p className="font-semibold text-indigo-700 mb-0.5">Porto arrivo a Ischia</p>
+              <p className="text-indigo-900 font-bold text-sm">{portoArrivo ?? "—"}</p>
+              <p className="text-indigo-500 mt-0.5">Orario traghetto: {form.arrival_time}</p>
+            </div>
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs">
+              <p className="font-semibold text-emerald-700 mb-0.5">Porto partenza / Prelievo</p>
+              {depRuleInfo ? (
+                <>
+                  <p className="text-emerald-900 font-bold text-sm">{depRuleInfo.porto}</p>
+                  <p className="text-emerald-600 mt-0.5">
+                    Prelievo hotel: <span className="font-bold">{depRuleInfo.pickup ?? "—"}</span>
+                    <span className="ml-1 text-emerald-400">(zona {hotelZona})</span>
+                  </p>
+                </>
+              ) : (
+                <p className="text-emerald-500">Seleziona orario traghetto</p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Codice trasporto */}
         {showTransportCodeField ? (

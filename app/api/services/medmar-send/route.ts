@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -193,11 +193,7 @@ export async function POST(request: NextRequest) {
     if (pdf_base64) {
       emailPayload.attachments = [{ filename: pdf_filename, content: pdf_base64 }];
     }
-    await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${process.env.RESEND_API_KEY}` },
-      body: JSON.stringify(emailPayload)
-    });
+    await resendFetch(process.env.RESEND_API_KEY!, emailPayload);
   }
 
   return NextResponse.json({ ok: true, sent_to: agencyEmail, pratica, marked: service_ids.length });

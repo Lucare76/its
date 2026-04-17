@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendAgencyBookingConfirmationEmail } from "@/lib/server/agency-booking-email";
 import { sendOperatorNotifyEmail } from "@/lib/server/agency-approval-email";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -99,11 +99,7 @@ export async function GET(request: NextRequest) {
   if (bccEmail) payload.bcc = [bccEmail];
 
   try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(payload),
-    });
+    const res = await resendFetch(apiKey, payload);
     const resendStatus = res.status;
     const resendBody   = await res.text().catch(() => "");
     if (!res.ok) return NextResponse.json({ ok: false, resend_status: resendStatus, resend_error: resendBody });

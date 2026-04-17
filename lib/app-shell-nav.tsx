@@ -242,6 +242,7 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/inbox", label: "Prenotazioni", icon: "I" },
   { href: "/dispatch", label: "Assegnazioni", icon: "G" },
   { href: "/ricerca", label: "Ricerca", icon: "🔍" },
+  { href: "/cancellazioni", label: "Cancellazioni", icon: "✕" },
 ];
 
 export const AGENZIE_GROUP: NavMainGroup = {

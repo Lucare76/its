@@ -5,7 +5,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -241,15 +241,11 @@ async function sendDiffEmailToOperator(params: {
 </div>
 </body></html>`;
 
-  await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from,
-      to: [toEmail],
-      subject: `✏️ Modifiche da ${params.agencyName} — ${params.targetDate}`,
-      html,
-    }),
+  await resendFetch(apiKey, {
+    from,
+    to: [toEmail],
+    subject: `✏️ Modifiche da ${params.agencyName} — ${params.targetDate}`,
+    html,
   });
 }
 
@@ -299,16 +295,12 @@ async function sendConfirmationEmailToAgency(params: {
 </div>
 </body></html>`;
 
-  await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from,
-      to: [toEmail],
-      subject: isApproved
-        ? `✅ Riepilogo approvato — ${params.targetDate}`
-        : `✏️ Modifiche ricevute — ${params.targetDate}`,
-      html,
-    }),
+  await resendFetch(apiKey, {
+    from,
+    to: [toEmail],
+    subject: isApproved
+      ? `✅ Riepilogo approvato — ${params.targetDate}`
+      : `✏️ Modifiche ricevute — ${params.targetDate}`,
+    html,
   }).catch(() => null); // non bloccare se fallisce
 }

@@ -1,5 +1,5 @@
 import { emailHtml, emailHighlightBox } from "@/lib/server/email-layout";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export interface OtpEmailInput {
   to: string;
@@ -50,19 +50,12 @@ export async function sendOtpEmail(input: OtpEmailInput): Promise<OtpEmailResult
   }
 
   const subject = "Codice di verifica - accesso Ischia Transfer";
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      from,
-      to: [input.to],
-      subject,
-      html: buildOtpHtml(input),
-      text: buildOtpPlainText(input)
-    })
+  const response = await resendFetch(apiKey, {
+    from,
+    to: [input.to],
+    subject,
+    html: buildOtpHtml(input),
+    text: buildOtpPlainText(input)
   });
 
   if (!response.ok) {

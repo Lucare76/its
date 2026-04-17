@@ -45,8 +45,10 @@ const kindOptions: Array<{ value: BookingKind; label: string }> = [
   { value: "formula_medmar", label: "Formula MEDMAR" },
   { value: "transfer_airport_hotel", label: "Transfer aeroporto - hotel" },
   { value: "transfer_airport_hotel_exclusive", label: "Transfer aeroporto - hotel (esclusivo 🔒)" },
+  { value: "transfer_airport_hotel_aliscafo", label: "Transfer aeroporto - hotel (aliscafo 🚤)" },
   { value: "transfer_train_hotel", label: "Transfer stazione / bus - hotel" },
   { value: "transfer_train_hotel_exclusive", label: "Transfer stazione / bus - hotel (esclusivo 🔒)" },
+  { value: "transfer_train_hotel_aliscafo", label: "Transfer stazione / bus - hotel (aliscafo 🚤)" },
   { value: "bus_city_hotel", label: "Linea bus - hotel" },
   { value: "excursion", label: "Escursione" },
   { value: "transfer_port_hotel", label: "Transfer porto - hotel" }
@@ -93,7 +95,7 @@ function bookingContext(kind: BookingKind) {
       transportCodeReturnPlaceholder: undefined as string | undefined
     };
   }
-  if (kind === "transfer_airport_hotel" || kind === "transfer_airport_hotel_exclusive") {
+  if (kind === "transfer_airport_hotel" || kind === "transfer_airport_hotel_exclusive" || kind === "transfer_airport_hotel_aliscafo") {
     return {
       arrivalDateLabel: "Data volo andata*",
       arrivalTimeLabel: "Ora arrivo volo andata*",
@@ -105,7 +107,7 @@ function bookingContext(kind: BookingKind) {
       transportCodeReturnPlaceholder: "Es. FR5678"
     };
   }
-  if (kind === "transfer_train_hotel" || kind === "transfer_train_hotel_exclusive") {
+  if (kind === "transfer_train_hotel" || kind === "transfer_train_hotel_exclusive" || kind === "transfer_train_hotel_aliscafo") {
     return {
       arrivalDateLabel: "Data arrivo*",
       arrivalTimeLabel: "Ora arrivo*",
@@ -354,7 +356,7 @@ export default function AgencyNewBookingPage() {
 
   const selectedKind = form.booking_service_kind;
   const isSnavKind = selectedKind === "formula_snav";
-  const isTransportCodeRequired = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_train_hotel";
+  const isTransportCodeRequired = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_airport_hotel_aliscafo" || selectedKind === "transfer_train_hotel" || selectedKind === "transfer_train_hotel_aliscafo";
   const showTransportCodeField = isTransportCodeRequired || selectedKind === "bus_city_hotel" || selectedKind === "excursion" || selectedKind === "formula_snav" || selectedKind === "formula_medmar";
   const isBusOriginRequired = selectedKind === "bus_city_hotel";
   const isExcursionTitleRequired = selectedKind === "excursion";

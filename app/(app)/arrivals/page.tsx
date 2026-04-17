@@ -32,7 +32,11 @@ function AgencyKindBadge({ service }: { service: Service }) {
     formula_snav: { label: "SNAV", className: "border-indigo-200 bg-indigo-50 text-indigo-700" },
     formula_medmar: { label: "MEDMAR", className: "border-sky-200 bg-sky-50 text-sky-700" },
     transfer_airport_hotel: { label: "Agenzia · Aeroporto", className: "border-amber-200 bg-amber-50 text-amber-700" },
+    transfer_airport_hotel_exclusive: { label: "Agenzia · Aeroporto 🔒", className: "border-amber-300 bg-amber-100 text-amber-800" },
+    transfer_airport_hotel_aliscafo: { label: "Agenzia · Aeroporto 🚤", className: "border-cyan-200 bg-cyan-50 text-cyan-700" },
     transfer_train_hotel: { label: "Agenzia · Stazione", className: "border-orange-200 bg-orange-50 text-orange-700" },
+    transfer_train_hotel_exclusive: { label: "Agenzia · Stazione 🔒", className: "border-orange-300 bg-orange-100 text-orange-800" },
+    transfer_train_hotel_aliscafo: { label: "Agenzia · Stazione 🚤", className: "border-teal-200 bg-teal-50 text-teal-700" },
     bus_city_hotel: { label: "Agenzia · Bus", className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
     excursion: { label: "Agenzia · Escursione", className: "border-purple-200 bg-purple-50 text-purple-700" },
     transfer_port_hotel: { label: "Agenzia · Porto", className: "border-slate-200 bg-slate-50 text-slate-600" }
@@ -371,27 +375,40 @@ export default function ArrivalsPage() {
   const [appOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
   const [qrServiceId, setQrServiceId] = useState<string | null>(null);
 
-  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const deleteService = async (service: Service) => {
-    if (!supabase) return;
-    if (!confirm(`Eliminare il servizio di ${service.customer_name}? L'operazione non è reversibile.`)) return;
-    setDeletingId(service.id);
+
+  // Modale cancellazione con scelta tratta
+  const [cancelModal, setCancelModal] = useState<Service | null>(null);
+  const [cancelLegs, setCancelLegs] = useState<"arrival" | "departure" | "both">("both");
+  const [cancelSubmitting, setCancelSubmitting] = useState(false);
+  const [cancelSuccess, setCancelSuccess] = useState<string | null>(null);
+
+  const openCancelModal = (service: Service) => {
+    setCancelModal(service);
+    setCancelLegs("both");
+    setCancelSuccess(null);
+    setDeleteError(null);
+  };
+
+  const submitCancelRequest = async () => {
+    if (!cancelModal || !supabase) return;
+    setCancelSubmitting(true);
     setDeleteError(null);
     try {
       const session = await supabase.auth.getSession();
       const token = session.data.session?.access_token;
-      if (!token) { setDeleteError("Sessione scaduta. Rifai login."); return; }
-      const res = await fetch("/api/ops/bulk-delete-services", {
+      if (!token) { setDeleteError("Sessione scaduta."); return; }
+      const res = await fetch("/api/ops/cancellation-requests", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ ids: [service.id] })
+        body: JSON.stringify({ service_id: cancelModal.id, cancel_legs: cancelLegs }),
       });
-      const body = await res.json().catch(() => null) as { error?: string } | null;
-      if (!res.ok) { setDeleteError(body?.error ?? "Eliminazione fallita."); return; }
+      const body = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !body?.ok) { setDeleteError(body?.error ?? "Richiesta fallita."); return; }
+      setCancelSuccess("Richiesta inviata. Gestisci penale dalla pagina Cancellazioni.");
       void refresh?.();
     } finally {
-      setDeletingId(null);
+      setCancelSubmitting(false);
     }
   };
 
@@ -690,22 +707,26 @@ export default function ArrivalsPage() {
           </div>
         ) : (
           <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className={`grid gap-4 border-b border-slate-100 bg-slate-50/90 px-4 py-3 text-[11px] uppercase tracking-wide text-slate-500 ${showAllDates ? "grid-cols-[90px_80px_1.6fr_64px_1fr_1fr_1fr_140px_136px]" : "grid-cols-[80px_1.6fr_64px_1fr_1fr_1fr_140px_136px]"}`}>
+            {/* Header */}
+            <div className={`grid items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500 ${showAllDates ? "grid-cols-[68px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]" : "grid-cols-[60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]"}`}>
               {showAllDates && <div>Data</div>}
               <div>Ora</div>
               <div>Cliente</div>
               <div>Pax</div>
-              <div>Hotel</div>
-              <div>Meeting point</div>
-              <div>Riferimento</div>
-              <div>Tipo</div>
+              <div>Hotel · Meeting point</div>
+              <div>Rif. · Tipo</div>
               <div className="text-right">Azioni</div>
             </div>
             <div className="divide-y divide-slate-100">
-              {arrivals.map((item) => (
+              {arrivals.map((item) => {
+                const hotelName = resolveHotelName(item.service);
+                const meetingPoint = item.service.meeting_point ?? item.service.vessel ?? null;
+                const riferimento = getTransportReferenceOutward(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
+                const tipoLabel = formatArrivalServiceTypeLabel(item.service);
+                return (
                 <div
                   key={item.instanceId}
-                  className={`grid gap-4 px-4 py-4 transition hover:bg-slate-50/80 ${showAllDates ? "grid-cols-[90px_80px_1.6fr_64px_1fr_1fr_1fr_140px_136px]" : "grid-cols-[80px_1.6fr_64px_1fr_1fr_1fr_140px_136px]"}`}
+                  className={`grid items-center gap-3 px-4 py-3 transition hover:bg-slate-50/60 ${showAllDates ? "grid-cols-[68px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]" : "grid-cols-[60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]"}`}
                 >
                   {showAllDates && (
                     <div>
@@ -714,64 +735,74 @@ export default function ArrivalsPage() {
                       </span>
                     </div>
                   )}
+                  {/* ORA */}
                   <div>
-                    <span className="inline-flex min-w-[56px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-semibold text-slate-800">
+                    <span className="inline-flex min-w-[48px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-bold text-slate-800">
                       {item.time}
                     </span>
                   </div>
-                  <div className="min-w-0 space-y-1">
-                    <p className="truncate font-semibold uppercase tracking-[0.01em] text-slate-800">{getCustomerFullName(item.service)}</p>
-                    {item.service.billing_party_name ? (
-                      <p className="truncate text-xs text-slate-500">{item.service.billing_party_name}</p>
-                    ) : null}
-                    <AgencyKindBadge service={item.service} />
+                  {/* CLIENTE */}
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="truncate text-sm font-semibold uppercase tracking-[0.01em] text-slate-800" title={getCustomerFullName(item.service)}>
+                      {getCustomerFullName(item.service)}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <AgencyKindBadge service={item.service} />
+                      {item.service.billing_party_name ? (
+                        <span className="truncate text-[11px] text-slate-400" title={item.service.billing_party_name}>{item.service.billing_party_name}</span>
+                      ) : null}
+                    </div>
                   </div>
+                  {/* PAX */}
                   <div>
-                    <span className="inline-flex min-w-[40px] items-center justify-center rounded-full border border-slate-200 bg-white px-2 py-1 text-sm font-semibold text-slate-700">
+                    <span className="inline-flex min-w-[32px] items-center justify-center rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-sm font-semibold text-slate-700">
                       {item.service.pax}
                     </span>
                   </div>
-                  <div className="min-w-0">
-                    <p className="truncate font-medium uppercase text-slate-700">{resolveHotelName(item.service)}</p>
+                  {/* HOTEL + MEETING POINT */}
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="truncate text-sm font-medium uppercase text-slate-700" title={hotelName}>{hotelName}</p>
+                    {meetingPoint ? (
+                      <p className="truncate text-[11px] uppercase text-slate-400" title={meetingPoint}>{meetingPoint}</p>
+                    ) : null}
                   </div>
-                  <div className="min-w-0">
-                    <p className="truncate uppercase text-slate-600">{item.service.meeting_point ?? item.service.vessel ?? "N/D"}</p>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate text-slate-600">{getTransportReferenceOutward(item.service) ?? item.service.transport_code ?? item.service.vessel}</p>
-                  </div>
-                  <div className="min-w-0">
-                    <span className="inline-flex max-w-full truncate rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-700">
-                      {formatArrivalServiceTypeLabel(item.service)}
+                  {/* RIFERIMENTO + TIPO */}
+                  <div className="min-w-0 space-y-0.5">
+                    {riferimento ? (
+                      <p className="truncate text-sm text-slate-600" title={riferimento}>{riferimento}</p>
+                    ) : null}
+                    <span className="inline-flex rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-blue-700">
+                      {tipoLabel}
                     </span>
                   </div>
-                  <div className="flex justify-end gap-1.5">
+                  {/* AZIONI */}
+                  <div className="flex justify-end gap-1">
                     <button
                       type="button"
                       onClick={() => setQrServiceId(item.service.id)}
-                      className="whitespace-nowrap rounded-xl border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-100"
+                      className="rounded-xl border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-100"
                       title="Mostra QR smarcamento"
                     >
-                      📱 QR
+                      QR
                     </button>
                     <button
                       type="button"
                       onClick={() => setEditingService(item.service)}
-                      className="whitespace-nowrap rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                      className="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
                     >
                       Modifica
                     </button>
                     <button
                       type="button"
-                      onClick={() => void deleteService(item.service)}
-                      disabled={deletingId === item.service.id}
-                      className="whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-100 disabled:opacity-50"
+                      onClick={() => openCancelModal(item.service)}
+                      className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-100"
                     >
-                      {deletingId === item.service.id ? "..." : "Elimina"}
+                      Elimina
                     </button>
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
           </div>
         )}
@@ -814,6 +845,65 @@ export default function ArrivalsPage() {
             >
               Chiudi
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modale cancellazione */}
+      {cancelModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setCancelModal(null)}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold text-slate-800">Richiesta cancellazione</h2>
+              <button type="button" onClick={() => setCancelModal(null)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+            </div>
+
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm space-y-1">
+              <p className="font-semibold uppercase text-slate-800">{cancelModal.customer_name}</p>
+              <p className="text-slate-500 text-xs">
+                {cancelModal.arrival_date ?? cancelModal.date}
+                {cancelModal.departure_date ? ` → ${cancelModal.departure_date}` : ""}
+              </p>
+            </div>
+
+            {cancelSuccess ? (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 space-y-3">
+                <p>{cancelSuccess}</p>
+                <a href="/cancellazioni" className="block text-center rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700">
+                  Vai a Cancellazioni →
+                </a>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-slate-700">Cosa vuoi cancellare?</p>
+                  {[
+                    { value: "both", label: "Intero servizio (andata + ritorno)" },
+                    ...(cancelModal.arrival_date ? [{ value: "arrival" as const, label: "Solo andata" }] : []),
+                    ...(cancelModal.departure_date ? [{ value: "departure" as const, label: "Solo ritorno" }] : []),
+                  ].map((opt) => (
+                    <label key={opt.value} className={`flex items-center gap-3 rounded-xl border px-4 py-3 cursor-pointer transition ${cancelLegs === opt.value ? "border-slate-400 bg-slate-50" : "border-slate-200 hover:bg-slate-50"}`}>
+                      <input type="radio" name="cancel_legs" value={opt.value} checked={cancelLegs === opt.value} onChange={() => setCancelLegs(opt.value as typeof cancelLegs)} className="shrink-0" />
+                      <span className="text-sm font-medium text-slate-700">{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                  La richiesta verrà inviata alla pagina <strong>Cancellazioni</strong> dove potrai decidere se applicare una penale prima di confermare.
+                </div>
+
+                {deleteError && <p className="text-sm text-rose-600">{deleteError}</p>}
+
+                <div className="flex gap-2 pt-1">
+                  <button type="button" onClick={() => setCancelModal(null)} className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50">Annulla</button>
+                  <button type="button" onClick={() => void submitCancelRequest()} disabled={cancelSubmitting}
+                    className="flex-1 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50">
+                    {cancelSubmitting ? "Invio..." : "Richiedi cancellazione"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

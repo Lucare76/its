@@ -7,8 +7,8 @@ export async function GET(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
-    // @ts-expect-error auth type resolved at runtime
-    const tenantId = auth.membership.tenant_id;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tenantId = (auth as any).membership.tenant_id as string;
 
     const q = (req.nextUrl.searchParams.get("q") ?? "").trim();
     if (q.length < 2) return NextResponse.json({ ok: true, results: [] });
@@ -16,8 +16,8 @@ export async function GET(req: NextRequest) {
     const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? "30"), 100);
 
     // Cerca per nome cliente o telefono su tutti i servizi non cancellati
-    // @ts-expect-error auth type resolved at runtime
-    const { data, error } = await auth.admin
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (auth as any).admin
       .from("services")
       .select(`
         id, date, time, status, direction, pax, customer_name, phone,
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
       hotels: { name: string } | null;
     };
 
-    const results = ((data ?? []) as Row[]).map((r) => ({
+    const results = ((data ?? []) as unknown as Row[]).map((r) => ({
       id: r.id,
       customer_name: r.customer_name,
       phone: r.phone,

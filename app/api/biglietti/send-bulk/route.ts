@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { parseRole } from "@/lib/rbac";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -86,11 +86,7 @@ export async function POST(request: NextRequest) {
   if (bccEmail) Object.assign(payload, { bcc: [bccEmail] });
 
   try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(payload),
-    });
+    const res = await resendFetch(apiKey, payload);
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       return NextResponse.json({ error: `Resend ${res.status}: ${body.slice(0, 200)}` }, { status: 500 });

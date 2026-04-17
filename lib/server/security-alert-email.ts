@@ -1,4 +1,4 @@
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 interface SecurityAlertInput {
   type: 'rate_limit_exceeded' | 'multiple_failed_logins' | 'suspicious_activity';
@@ -105,19 +105,12 @@ export async function sendSecurityAlert(input: SecurityAlertInput): Promise<Secu
 
   const subject = `[SECURITY ALERT] ${input.type.replace(/_/g, ' ').toUpperCase()}`;
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      from,
-      to: adminEmails,
-      subject,
-      html: buildSecurityAlertHtml(input),
-      text: buildSecurityAlertText(input)
-    })
+  const response = await resendFetch(apiKey, {
+    from,
+    to: adminEmails,
+    subject,
+    html: buildSecurityAlertHtml(input),
+    text: buildSecurityAlertText(input)
   });
 
   if (!response.ok) {

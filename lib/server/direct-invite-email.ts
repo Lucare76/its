@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/server/whatsapp";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export interface DirectInviteEmailInput {
   to: string;
@@ -48,19 +48,12 @@ export async function sendDirectInviteEmail(input: DirectInviteEmailInput): Prom
   }
 
   const subject = "Invito - Ischia Transfer Service";
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      from,
-      to: [input.to],
-      subject,
-      html: buildInviteEmailHtml(input),
-      text: buildInviteEmailPlainText(input)
-    })
+  const response = await resendFetch(apiKey, {
+    from,
+    to: [input.to],
+    subject,
+    html: buildInviteEmailHtml(input),
+    text: buildInviteEmailPlainText(input)
   });
 
   if (!response.ok) {

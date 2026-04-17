@@ -42,6 +42,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [pendingAgencyReviewCount, setPendingAgencyReviewCount] = useState(0);
   const [pendingQrReportsCount,    setPendingQrReportsCount]    = useState(0);
   const [pendingAgencyBookingsCount, setPendingAgencyBookingsCount] = useState(0);
+  const [pendingCancellationsCount, setPendingCancellationsCount] = useState(0);
   const [liveToastMessage, setLiveToastMessage] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authRole, setAuthRole] = useState<UserRole | null>(null);
@@ -389,6 +390,19 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       if (isActive) setPendingAgencyBookingsCount(count ?? 0);
     };
 
+    const refreshPendingCancellations = async (tenantId: string) => {
+      if (authRole !== "admin" && authRole !== "operator") {
+        setPendingCancellationsCount(0);
+        return;
+      }
+      const { count } = await client
+        .from("cancellation_requests")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId)
+        .in("status", ["pending_review", "pending_agency_approval"]);
+      if (isActive) setPendingCancellationsCount(count ?? 0);
+    };
+
     const refreshPendingAccessRequests = async (tenantId: string) => {
       if (authRole !== "admin") {
         setPendingAccessRequestCount(0);
@@ -410,6 +424,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       await refreshAgencyReviewCount(tenantId);
       await refreshQrReportsCount(tenantId);
       await refreshPendingAgencyBookings(tenantId);
+      await refreshPendingCancellations(tenantId);
 
       const channel = client
         .channel(`layout-inbox-${tenantId}`)
@@ -493,6 +508,21 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             const newStatus = typeof payload.new?.approval_status === "string" ? payload.new.approval_status : null;
             const oldStatus = typeof payload.old?.approval_status === "string" ? payload.old.approval_status : null;
             if (newStatus !== oldStatus) void refreshPendingAgencyBookings(tenantId);
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "cancellation_requests", filter: `tenant_id=eq.${tenantId}` },
+          () => {
+            setLiveToastMessage("✕ Nuova richiesta di cancellazione ricevuta.");
+            void refreshPendingCancellations(tenantId);
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "cancellation_requests", filter: `tenant_id=eq.${tenantId}` },
+          () => {
+            void refreshPendingCancellations(tenantId);
           }
         );
 
@@ -667,7 +697,11 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             ) : null}
             {mainNav.map((item) => {
               const active = matchesPath(pathname, item.href);
-              const badge = item.href === "/inbox" && inboxPendingCount > 0 ? inboxPendingCount : 0;
+              const badge = item.href === "/inbox" && inboxPendingCount > 0
+                ? inboxPendingCount
+                : item.href === "/cancellazioni" && pendingCancellationsCount > 0
+                ? pendingCancellationsCount
+                : 0;
               const isFav = favorites.includes(item.href);
               return (
                 <div key={item.href} className="group/fav relative">

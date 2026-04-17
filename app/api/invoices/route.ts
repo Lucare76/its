@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { generateInvoiceHtml, type InvoiceLineItem } from "@/lib/server/invoice-pdf";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -138,15 +138,11 @@ export async function POST(request: NextRequest) {
     const [ty, tm] = period_to.split("-");
     const periodLabel = fm === tm ? `${months[Number(fm)-1]} ${fy}` : `${months[Number(fm)-1]}-${months[Number(tm)-1]} ${fy}`;
 
-    await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${process.env.RESEND_API_KEY}` },
-      body: JSON.stringify({
-        from: `Ischia Transfer Service <${fromEmail}>`,
-        to: [invoiceEmail],
-        subject: `Estratto conto ${periodLabel} — ${agency_name}`,
-        html
-      })
+    await resendFetch(process.env.RESEND_API_KEY!, {
+      from: `Ischia Transfer Service <${fromEmail}>`,
+      to: [invoiceEmail],
+      subject: `Estratto conto ${periodLabel} — ${agency_name}`,
+      html
     });
 
     await (auth.admin as any)

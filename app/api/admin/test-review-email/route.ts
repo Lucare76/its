@@ -6,7 +6,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { buildServiceListEmailHtml, buildServiceListPlainText } from "@/lib/server/service-list-email";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -79,16 +79,12 @@ export async function POST(request: NextRequest) {
     lines:       TEST_SERVICES,
   });
 
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from,
-      to: [TEST_EMAIL],
-      subject: `[TEST] Riepilogo arrivi +48h — ${TEST_AGENCY} — ${TEST_DATE}`,
-      html,
-      text,
-    }),
+  const res = await resendFetch(apiKey, {
+    from,
+    to: [TEST_EMAIL],
+    subject: `[TEST] Riepilogo arrivi +48h — ${TEST_AGENCY} — ${TEST_DATE}`,
+    html,
+    text,
   });
 
   if (!res.ok) {

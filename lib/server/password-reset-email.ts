@@ -1,5 +1,5 @@
 import { emailHtml, emailButton } from "@/lib/server/email-layout";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export type PasswordResetEmailStatus = "sent" | "failed" | "skipped";
 
@@ -60,19 +60,12 @@ export async function sendPasswordResetEmail(input: PasswordResetEmailInput): Pr
   }
 
   const subject = "Reset password - accesso Ischia Transfer";
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      from,
-      to: [input.to],
-      subject,
-      html: buildHtml(input),
-      text: buildPlainText(input)
-    })
+  const response = await resendFetch(apiKey, {
+    from,
+    to: [input.to],
+    subject,
+    html: buildHtml(input),
+    text: buildPlainText(input)
   });
 
   if (!response.ok) {
@@ -123,19 +116,12 @@ export async function sendTemporaryPasswordEmail(input: { to: string; fullName: 
   }
 
   const subject = "Password temporanea - accesso Ischia Transfer";
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      from,
-      to: [input.to],
-      subject,
-      html: buildTemporaryPasswordHtml(input),
-      text: buildTemporaryPasswordPlainText(input)
-    })
+  const response = await resendFetch(apiKey, {
+    from,
+    to: [input.to],
+    subject,
+    html: buildTemporaryPasswordHtml(input),
+    text: buildTemporaryPasswordPlainText(input)
   });
 
   if (!response.ok) {

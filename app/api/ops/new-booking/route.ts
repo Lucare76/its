@@ -22,8 +22,12 @@ function vesselFromKind(kind: BookingKind, transportCode: string, busCityOrigin?
   if (kind === "formula_medmar") return "MEDMAR";
   if (kind === "transfer_airport_hotel" || kind === "transfer_airport_hotel_exclusive")
     return transportCode ? `Volo ${transportCode}` : "Transfer aeroporto";
+  if (kind === "transfer_airport_hotel_aliscafo")
+    return transportCode ? `Volo ${transportCode}` : "Transfer aeroporto (aliscafo)";
   if (kind === "transfer_train_hotel" || kind === "transfer_train_hotel_exclusive")
     return transportCode ? transportCode : "Transfer stazione";
+  if (kind === "transfer_train_hotel_aliscafo")
+    return transportCode ? transportCode : "Transfer stazione (aliscafo)";
   if (kind === "transfer_port_hotel") return "Transfer porto";
   if (kind === "bus_city_hotel") return busCityOrigin?.trim() ? `Bus da ${busCityOrigin.trim()}` : "Bus";
   return "Escursione";
@@ -36,6 +40,7 @@ export async function POST(request: NextRequest) {
     const tenantId = auth.membership.tenant_id;
 
     const payload = await request.json().catch(() => null);
+    const bodyRaw = (payload ?? {}) as Record<string, unknown>;
     const parsed = agencyBookingCreateSchema.safeParse(payload);
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Payload non valido." }, { status: 400 });
@@ -52,6 +57,10 @@ export async function POST(request: NextRequest) {
     const excursionTitle = (d.excursion_title ?? "").trim();
     const customerName = `${(d.customer_first_name ?? "").trim()} ${d.customer_last_name.trim()}`.trim();
     const notes = d.notes.trim();
+    // Porto e dati extra per SNAV/MEDMAR
+    const meetingPoint = typeof bodyRaw.meeting_point === "string" ? bodyRaw.meeting_point.trim() || null : null;
+    const ferryDepTime = typeof bodyRaw.ferry_dep_time === "string" ? bodyRaw.ferry_dep_time.trim() || null : null;
+    const portoPartenza = typeof bodyRaw.porto_partenza === "string" ? bodyRaw.porto_partenza.trim() || null : null;
 
     // Valida hotel
     const { data: hotelData } = await auth.admin
@@ -97,7 +106,14 @@ export async function POST(request: NextRequest) {
       time: d.arrival_time,
       service_type: bookingKind === "excursion" ? "bus_tour" : "transfer",
       direction: "arrival",
-      vessel: vesselFromKind(bookingKind, transportCode, busCityOrigin),
+      vessel: (() => {
+        const base = vesselFromKind(bookingKind, transportCode, busCityOrigin);
+        // Per SNAV/MEDMAR arricchisce il vessel con porto e orario traghetto arrivo
+        if ((bookingKind === "formula_snav" || bookingKind === "formula_medmar") && d.arrival_time) {
+          return `${base} ${d.arrival_time}`;
+        }
+        return base;
+      })(),
       pax: d.pax,
       hotel_id: d.hotel_id,
       customer_name: customerName,
@@ -115,7 +131,10 @@ export async function POST(request: NextRequest) {
       bus_city_origin: busCityOrigin || null,
       meeting_point: bookingKind === "bus_city_hotel"
         ? buildServiceLabelShort({ kind: "bus_city_hotel", busCityOrigin: busCityOrigin || null })
-        : null,
+        : meetingPoint,
+      // Per SNAV/MEDMAR: orario barca partenza e porto partenza nei campi calcolati
+      ...(ferryDepTime ? { orario_barca: ferryDepTime } : {}),
+      ...(portoPartenza ? { barca_compagnia: portoPartenza } : {}),
       include_ferry_tickets: d.include_ferry_tickets ?? false,
       ferry_details: {
         outbound_code: (d.ferry_outbound_code ?? "").trim() || null,

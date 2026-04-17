@@ -1,4 +1,4 @@
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 // Email "Liste Bruno" — inviata da Karmen Peach a Bruno
 // Contiene la lista arrivi (stazione/aeroporto) e partenze (per traghetto)
@@ -238,11 +238,7 @@ export async function sendListeBrunoEmail(input: BrunoEmailInput): Promise<{ ok:
   ].join("\n");
 
   try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [input.brunoEmail], subject, html, text }),
-    });
+    const res = await resendFetch(apiKey, { from, to: [input.brunoEmail], subject, html, text });
     if (!res.ok) {
       const err = await res.text().catch(() => "");
       return { ok: false, error: `Resend error: ${err}` };

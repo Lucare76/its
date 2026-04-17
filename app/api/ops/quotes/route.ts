@@ -4,7 +4,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import type { PricingAuthContext } from "@/lib/server/pricing-auth";
 import { requireQuotesAccess } from "@/lib/server/quotes-access";
 import { emailHtml } from "@/lib/server/email-layout";
-import { getVerifiedFromEmail } from "@/lib/server/send-email";
+import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
@@ -149,15 +149,11 @@ export async function POST(request: NextRequest) {
       const apiKey = process.env.RESEND_API_KEY;
       const fromEmail = getVerifiedFromEmail();
       if (apiKey) {
-        const res = await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            from: `Ischia Transfer Service <${fromEmail}>`,
-            to: [String(quote.client_email)],
-            subject: `Preventivo — ${String(quote.route_label)} · ${String(quote.currency)} ${((quote.price_cents as number) / 100).toFixed(2)}`,
-            html,
-          }),
+        const res = await resendFetch(apiKey, {
+          from: `Ischia Transfer Service <${fromEmail}>`,
+          to: [String(quote.client_email)],
+          subject: `Preventivo — ${String(quote.route_label)} · ${String(quote.currency)} ${((quote.price_cents as number) / 100).toFixed(2)}`,
+          html,
         });
         if (!res.ok) {
           const err = await res.text().catch(() => "");
