@@ -7,10 +7,108 @@ import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { formatIsoDateShort, getCustomerFullName, getTransportReferenceReturn } from "@/lib/service-display";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import { supabase } from "@/lib/supabase/client";
-import type { Service } from "@/lib/types";
+import type { Service, Hotel } from "@/lib/types";
 import { getPickupRule, getPickupRuleByRange } from "@/lib/departure-pickup-rules";
 import { getBusLinePickup, getBusLinePickupByZone } from "@/lib/bus-line-pickup-rules";
 import type { BusLine } from "@/lib/bus-line-pickup-rules";
+
+type AgencyOption = { id: string; name: string };
+
+function isValidClockTime(value: string) {
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
+}
+
+// ─── Modal modifica partenza ──────────────────────────────────────────────────
+
+function EditDepartureModal({
+  service,
+  hotels,
+  tenantId,
+  onClose,
+  onSaved,
+}: {
+  service: Service;
+  hotels: Hotel[];
+  tenantId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [hotelId, setHotelId]         = useState(service.hotel_id ?? "");
+  const [customerName, setCustomerName] = useState(service.customer_name ?? "");
+  const [pax, setPax]                 = useState(String(service.pax ?? 1));
+  const [time, setTime]               = useState(service.time ?? "");
+  const [phone, setPhone]             = useState(service.phone ?? "");
+  const [notes, setNotes]             = useState(service.notes ?? "");
+  const [saving, setSaving]           = useState(false);
+  const [error, setError]             = useState<string | null>(null);
+
+  const save = async () => {
+    if (!supabase) return;
+    const trimmedTime = time.trim();
+    if (!isValidClockTime(trimmedTime)) { setError("Inserisci un orario valido HH:MM."); return; }
+    setSaving(true);
+    setError(null);
+    const { error: err } = await supabase
+      .from("services")
+      .update({ hotel_id: hotelId || null, customer_name: customerName, pax: Number(pax) || 1, time: trimmedTime, phone, notes })
+      .eq("id", service.id)
+      .eq("tenant_id", tenantId);
+    setSaving(false);
+    if (err) { setError(err.message); return; }
+    onSaved();
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-slate-800">Modifica partenza</h2>
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+        </div>
+
+        {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>}
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <p className="mb-1 text-xs font-medium text-slate-600">Hotel</p>
+            <select value={hotelId} onChange={(e) => setHotelId(e.target.value)} className="input-saas w-full">
+              <option value="">— Nessun hotel —</option>
+              {hotels.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+            </select>
+          </div>
+          <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+            Nome cliente
+            <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="mt-1 input-saas w-full" />
+          </label>
+          <label className="text-xs font-medium text-slate-600">
+            Pax
+            <input type="number" min="1" max="99" value={pax} onChange={(e) => setPax(e.target.value)} className="mt-1 input-saas w-full" />
+          </label>
+          <label className="text-xs font-medium text-slate-600">
+            Orario
+            <input type="time" step="300" value={time} onChange={(e) => setTime(e.target.value)} className="mt-1 input-saas w-full" />
+          </label>
+          <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+            Telefono
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} className="mt-1 input-saas w-full" />
+          </label>
+          <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+            Note
+            <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} className="mt-1 input-saas w-full resize-none" />
+          </label>
+        </div>
+
+        <div className="flex gap-2 justify-end">
+          <button type="button" onClick={onClose} className="btn-secondary px-4 py-2 text-sm">Annulla</button>
+          <button type="button" onClick={() => void save()} disabled={saving} className="btn-primary px-5 py-2 text-sm disabled:opacity-50">
+            {saving ? "Salvataggio..." : "Salva"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function normalizeZona(raw: string): string {
   const z = raw.toLowerCase().trim();
@@ -308,6 +406,7 @@ export default function DeparturesPage() {
     }
   };
 
+  const [editingService, setEditingService] = useState<Service | null>(null);
   const [addModal, setAddModal] = useState(false);
 
   type AddForm = {
@@ -635,6 +734,13 @@ export default function DeparturesPage() {
                       </button>
                       <button
                         type="button"
+                        onClick={() => setEditingService(item.service)}
+                        className="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                      >
+                        Modifica
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => openCancelModal(item.service)}
                         className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-100"
                       >
@@ -684,6 +790,16 @@ export default function DeparturesPage() {
           </div>
         )}
       </SectionCard>
+
+      {editingService && (
+        <EditDepartureModal
+          service={editingService}
+          hotels={data.hotels}
+          tenantId={tenantId}
+          onClose={() => setEditingService(null)}
+          onSaved={() => { void refresh?.(); }}
+        />
+      )}
 
       {qrServiceId && appOrigin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setQrServiceId(null)}>

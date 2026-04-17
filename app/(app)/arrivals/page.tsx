@@ -55,12 +55,14 @@ function AgencyKindBadge({ service }: { service: Service }) {
 function EditServiceModal({
   service,
   hotels,
+  agencies,
   tenantId,
   onClose,
   onSaved,
 }: {
   service: Service;
   hotels: Hotel[];
+  agencies: AgencyOption[];
   tenantId: string;
   onClose: () => void;
   onSaved: () => void;
@@ -71,6 +73,7 @@ function EditServiceModal({
   const [time, setTime] = useState(service.time ?? "");
   const [phone, setPhone] = useState(service.phone ?? "");
   const [notes, setNotes] = useState(service.notes ?? "");
+  const [agencyId, setAgencyId] = useState(service.agency_id ?? "");
   const [placeType, setPlaceType] = useState<"hotel" | "station" | "airport">((service as { place_type?: string }).place_type as "hotel" | "station" | "airport" ?? "hotel");
   const [meetingPoint, setMeetingPoint] = useState<string>((service as { meeting_point?: string }).meeting_point ?? "");
   const [saving, setSaving] = useState(false);
@@ -106,6 +109,7 @@ function EditServiceModal({
     }
     setSaving(true);
     setError(null);
+    const selectedAgency = agencies.find((a) => a.id === agencyId);
     const { error: err } = await supabase
       .from("services")
       .update({
@@ -115,6 +119,8 @@ function EditServiceModal({
         time: trimmedTime,
         phone,
         notes,
+        agency_id: agencyId || null,
+        billing_party_name: selectedAgency?.name ?? null,
         place_type: placeType,
         meeting_point: placeType !== "hotel" ? meetingPoint.trim() || null : null,
       })
@@ -197,6 +203,15 @@ function EditServiceModal({
           <label className="text-xs font-medium text-slate-600 sm:col-span-2">
             Telefono
             <input value={phone} onChange={(e) => setPhone(e.target.value)} className="mt-1 input-saas w-full" />
+          </label>
+          <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+            Agenzia
+            <select value={agencyId} onChange={(e) => setAgencyId(e.target.value)} className="mt-1 input-saas w-full">
+              <option value="">— Nessuna agenzia —</option>
+              {agencies.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
           </label>
           <label className="text-xs font-medium text-slate-600 sm:col-span-2">
             Note
@@ -914,6 +929,7 @@ export default function ArrivalsPage() {
         <EditServiceModal
           service={editingService}
           hotels={data.hotels}
+          agencies={agenciesList}
           tenantId={tenantId}
           onClose={() => setEditingService(null)}
           onSaved={() => { void refresh?.(); }}
