@@ -40,6 +40,7 @@ const fieldLabels: Record<string, string> = {
   pax:                  "Passeggeri",
   hotel_id:             "Hotel",
   booking_service_kind: "Tipologia servizio",
+  phone:                "Telefono cliente",
   notes:                "Note",
 };
 

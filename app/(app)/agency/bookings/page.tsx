@@ -30,6 +30,7 @@ type BookingRow = {
   email_confirmation_to: string | null;
   approval_status: string | null;
   hotel_id: string | null;
+  phone: string | null;
   hotel_name: string;
   hotel_zone: string | null;
   notes: string | null;
@@ -57,6 +58,7 @@ type ModDraft = {
   pax: string;
   hotel_id: string;
   booking_service_kind: string;
+  phone: string;
   notes: string;
 };
 
@@ -118,6 +120,7 @@ function toModDraft(row: BookingRow): ModDraft {
     pax:                  String(row.pax),
     hotel_id:             row.hotel_id ?? "",
     booking_service_kind: row.booking_service_kind ?? "transfer_port_hotel",
+    phone:                row.phone ?? "",
     notes:                row.notes ?? "",
   };
 }
@@ -188,7 +191,7 @@ function AgencyBookingsPageInner() {
 
       const [bookingsRes, hotelsRes, modRes] = await Promise.all([
         fetch("/api/agency/bookings?limit=2000", { headers: { Authorization: `Bearer ${token}` } }),
-        supabase.from("hotels").select("id, name, zone").eq("tenant_id", session.tenantId ?? "").order("name").limit(500),
+        supabase.from("hotels").select("id, name, zone").order("name").limit(500),
         supabase.from("modification_requests")
           .select("id, service_id, status, changes, operator_notes, created_at")
           .order("created_at", { ascending: false }),
@@ -297,6 +300,7 @@ function AgencyBookingsPageInner() {
     if (modDraft.pax !== orig.pax)                                 changes.pax                  = Number(modDraft.pax);
     if (modDraft.hotel_id !== orig.hotel_id)                       changes.hotel_id             = modDraft.hotel_id || null;
     if (modDraft.booking_service_kind !== orig.booking_service_kind) changes.booking_service_kind = modDraft.booking_service_kind;
+    if (modDraft.phone !== orig.phone)                             changes.phone                = modDraft.phone || null;
     if (modDraft.notes !== orig.notes)                             changes.notes                = modDraft.notes || null;
 
     if (Object.keys(changes).length === 0) {
@@ -519,6 +523,11 @@ function AgencyBookingsPageInner() {
                       <label className="text-xs text-muted">Passeggeri</label>
                       <input className="input-saas mt-1" type="number" min="1" max="100" value={modDraft.pax}
                         onChange={(e) => setModDraft((d) => d && ({ ...d, pax: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted">Telefono cliente</label>
+                      <input className="input-saas mt-1" type="tel" value={modDraft.phone}
+                        onChange={(e) => setModDraft((d) => d && ({ ...d, phone: e.target.value }))} />
                     </div>
                     <div>
                       <label className="text-xs text-muted">Tipologia servizio</label>

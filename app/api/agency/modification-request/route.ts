@@ -23,6 +23,7 @@ const schema = z.object({
     pax:                 z.number().int().min(1).max(100).optional(),
     hotel_id:            z.string().uuid().optional(),
     booking_service_kind: z.string().optional(),
+    phone:               z.string().optional(),
     notes:               z.string().optional(),
   }).refine((c) => Object.keys(c).length > 0, { message: "Nessuna modifica specificata." }),
 });
