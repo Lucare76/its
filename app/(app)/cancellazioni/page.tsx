@@ -184,7 +184,7 @@ export default function CancellazioniPage() {
             const agency = Array.isArray(svc?.agencies) ? svc.agencies[0] : svc?.agencies;
             const hotel = Array.isArray(svc?.hotels) ? svc.hotels[0] : svc?.hotels;
             const st = statusLabel(req.status, req.agency_response);
-            const needsAction = req.status === "pending_review" || hasAgencyResponse(req);
+            const needsAction = req.status === "pending_review" || req.status === "pending_agency_approval";
 
             return (
               <div key={req.id} className={`card p-4 space-y-3 ${needsAction ? "border-amber-200" : "border-slate-200"}`}>
@@ -214,7 +214,11 @@ export default function CancellazioniPage() {
                         onClick={() => openModal(req)}
                         className="rounded-xl bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 transition"
                       >
-                        {req.status === "pending_review" ? "Gestisci" : "Rivedi risposta"}
+                        {req.status === "pending_review"
+                          ? "Gestisci"
+                          : req.agency_response
+                          ? "Rivedi risposta"
+                          : "Forza chiusura"}
                       </button>
                     )}
                     <button
