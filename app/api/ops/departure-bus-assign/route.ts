@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { sendPushToUser } from "@/lib/server/web-push";
 
 export const runtime = "nodejs";
 
@@ -158,6 +159,16 @@ export async function POST(req: NextRequest) {
       );
 
       if (insertErr) throw new Error(insertErr.message);
+
+      // Notifica push all'autista
+      const readableLabel = vehicleLabel.replace(/^DEP_BUS:/, "");
+      void sendPushToUser(tenantId, driverUserId, {
+        title: "Nuovo bus assegnato",
+        body: `Sei stato assegnato a: ${readableLabel}`,
+        url: "/driver",
+        tag: "dep-bus-assign",
+      });
+
       return NextResponse.json({ ok: true });
     }
 

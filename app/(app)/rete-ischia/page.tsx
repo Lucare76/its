@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
-import { getPickupRule, getPickupRuleByRange } from "@/lib/departure-pickup-rules";
+import { getPickupRule, getPickupRuleByRange, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 
 // ── Tipi ─────────────────────────────────────────────────────────────────────
 
@@ -523,16 +523,7 @@ type DepDriver = {
   has_account: boolean;
 };
 
-function normalizeZonaIschia(raw: string | null): string {
-  const z = (raw ?? "").toLowerCase().trim();
-  if (z.includes("forio"))        return "forio";
-  if (z.includes("lacco"))        return "lacco";
-  if (z.includes("casamicciola")) return "casamicciola";
-  if (z.includes("barano"))       return "barano";
-  return "ischia";
-}
-
-function computePickupHint(svc: DepartureService): { pickup: string; boat_co: string; boat_t: string; porto_p: string } | null {
+function computePickupHint(svc: DepartureService): { pickup: string; boat_co: string; boat_t: string; porto_p: string; notes?: string } | null {
   const kind = svc.booking_service_kind;
   // Escludi bus linea — non incluso per ora
   if (!kind || kind === "bus_city_hotel" || kind === "excursion") return null;
@@ -561,7 +552,7 @@ function computePickupHint(svc: DepartureService): { pickup: string; boat_co: st
   }
 
   if (!rule) return null;
-  return { pickup: rule.pickup, boat_co: rule.boat_co, boat_t: rule.boat_t, porto_p: rule.porto_p };
+  return { pickup: rule.pickup, boat_co: rule.boat_co, boat_t: rule.boat_t, porto_p: rule.porto_p, notes: rule.notes };
 }
 
 // ── Tab Corse Porto ───────────────────────────────────────────────────────────

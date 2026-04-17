@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
+import { getPickupRule, getPickupRuleByRange, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import type { ServiceStatus } from "@/lib/types";
 
 function statusBadgeClass(status: ServiceStatus) {
@@ -22,6 +23,33 @@ export default function DriverDetailPage() {
   const hotel = useMemo(() => (service ? data.hotels.find((item) => item.id === service.hotel_id) : null), [data.hotels, service]);
   const assignment = useMemo(() => (service ? data.assignments.find((item) => item.service_id === service.id) : null), [data.assignments, service]);
   const isMine = role === "driver" ? assignment?.driver_user_id === userId : true;
+
+  const pickupNotes = useMemo(() => {
+    if (!service || !hotel) return null;
+    const kind = service.booking_service_kind;
+    if (!kind || kind === "bus_city_hotel" || kind === "excursion") return null;
+    const zona = normalizeZonaIschia(hotel.zone);
+    const agency = service.billing_party_name?.trim() ?? "";
+    const tFrom = (service.departure_time ?? service.return_time ?? service.time).trim();
+    if (!tFrom) return null;
+    let rule = null;
+    if (kind === "formula_snav" || (kind === "transfer_port_hotel" && service.vessel?.toLowerCase().includes("snav"))) {
+      rule = getPickupRule(agency, "snav", tFrom, zona);
+    } else if (kind === "formula_medmar" || (kind === "transfer_port_hotel" && service.vessel?.toLowerCase().includes("medmar"))) {
+      rule = getPickupRule(agency, "medmar", tFrom, zona);
+    } else if (kind === "transfer_train_hotel") {
+      rule = getPickupRule(agency, "treno_traghetto", tFrom, zona)
+        ?? getPickupRuleByRange(agency, "treno_traghetto", tFrom, zona)
+        ?? getPickupRule(agency, "treno_aliscafo", tFrom, zona)
+        ?? getPickupRuleByRange(agency, "treno_aliscafo", tFrom, zona);
+    } else if (kind === "transfer_airport_hotel") {
+      rule = getPickupRule("", "volo_traghetto", tFrom, zona)
+        ?? getPickupRuleByRange("", "volo_traghetto", tFrom, zona)
+        ?? getPickupRule("", "volo_aliscafo", tFrom, zona)
+        ?? getPickupRuleByRange("", "volo_aliscafo", tFrom, zona);
+    }
+    return rule?.notes ?? null;
+  }, [service, hotel]);
   const recentEvents = useMemo(
     () =>
       service
@@ -153,6 +181,12 @@ export default function DriverDetailPage() {
           <p className="font-medium">Note operative</p>
           <p className="mt-1 whitespace-pre-wrap text-muted">{service.notes || "Nessuna nota"}</p>
         </div>
+        {pickupNotes && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm">
+            <p className="font-medium text-amber-800">Punto di carico</p>
+            <p className="mt-1 whitespace-pre-wrap text-amber-900">{pickupNotes}</p>
+          </div>
+        )}
         <div className="rounded-xl border border-border bg-surface-2 p-3 text-sm">
           <p className="font-medium">Storico rapido</p>
           {recentEvents.length === 0 ? (

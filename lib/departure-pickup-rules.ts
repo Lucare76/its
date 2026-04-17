@@ -342,6 +342,18 @@ export const ALL_PICKUP_RULES: PickupRule[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Normalizzazione zona Ischia → chiave regola
+// ---------------------------------------------------------------------------
+export function normalizeZonaIschia(raw: string | null | undefined): string {
+  const z = (raw ?? "").toLowerCase().trim();
+  if (z.includes("forio"))        return "forio";
+  if (z.includes("lacco"))        return "lacco";
+  if (z.includes("casamicciola")) return "casamicciola";
+  if (z.includes("barano"))       return "barano";
+  return "ischia";
+}
+
+// ---------------------------------------------------------------------------
 // Normalizzazione nome agenzia → chiave
 // ---------------------------------------------------------------------------
 export function normalizeAgencyKey(name: string): string {
