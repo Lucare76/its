@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "operator" | "driver" | "agency" | "supervisor";
+export type UserRole = "admin" | "operator" | "driver" | "agency" | "supervisor" | "assistenza";
 export type VehicleSize = "small" | "medium" | "large" | "bus";
 
 export type ServiceDirection = "arrival" | "departure";

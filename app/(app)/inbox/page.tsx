@@ -204,7 +204,7 @@ export default function InboxPage() {
   const [approveError, setApproveError] = useState<string | null>(null);
   const [approvedServiceId, setApprovedServiceId] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [authRole, setAuthRole] = useState<"admin" | "operator" | "driver" | "agency" | "supervisor" | null>(null);
+  const [authRole, setAuthRole] = useState<import("@/lib/types").UserRole | null>(null);
   const [pdfAdvancedOpen, setPdfAdvancedOpen] = useState(false);
   const [pdfAdvancedLoading, setPdfAdvancedLoading] = useState(false);
   const [pdfAdvancedError, setPdfAdvancedError] = useState<string | null>(null);

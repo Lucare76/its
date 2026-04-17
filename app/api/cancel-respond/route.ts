@@ -82,7 +82,8 @@ export async function POST(req: NextRequest) {
     const penaltyCents = cr.penalty_cents as number ?? 0;
 
     // ── Aggiorna richiesta ────────────────────────────────────────────────────
-    const newStatus = action === "accept" ? "approved" : "rejected";
+    // accept → approved, reject/counter → rimane pending_agency_approval per gestione operatore
+    const newStatus = action === "accept" ? "approved" : "pending_agency_approval";
 
     await admin
       .from("cancellation_requests")

@@ -32,7 +32,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/hotels", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/driver", roles: ["admin", "driver", "supervisor"] },
   { prefix: "/fleet-ops", roles: ["admin", "operator", "driver", "supervisor"] },
-  { prefix: "/scan", roles: ["admin", "operator", "driver", "supervisor"] },
+  { prefix: "/scan", roles: ["admin", "operator", "driver", "supervisor", "assistenza"] },
   { prefix: "/mappa-live", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/preventivo-ops", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/map", roles: ["admin", "operator", "supervisor"] },
@@ -180,7 +180,7 @@ export function isAllowedWithOverrides(pathname: string, role: UserRole | null, 
 export function parseRole(raw: string | undefined): UserRole | null {
   if (!raw) return null;
   const normalized = raw.trim().toLowerCase();
-  if (normalized === "admin" || normalized === "operator" || normalized === "driver" || normalized === "agency" || normalized === "supervisor") {
+  if (normalized === "admin" || normalized === "operator" || normalized === "driver" || normalized === "agency" || normalized === "supervisor" || normalized === "assistenza") {
     return normalized;
   }
   return null;

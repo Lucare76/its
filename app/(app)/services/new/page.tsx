@@ -201,10 +201,14 @@ export default function OpsNewBookingPage() {
 
   // Duplicate detection modal
   const [duplicateWarning, setDuplicateWarning] = useState<{
+    match_type: "exact" | "name_only";
     customer_name: string;
     date: string;
     direction: string;
     hotel_name: string;
+    agency_name: string | null;
+    pax: number | null;
+    phone: string | null;
     arrival_date: string | null;
     departure_date: string | null;
   } | null>(null);
@@ -489,7 +493,7 @@ export default function OpsNewBookingPage() {
         ? form.customer_last_name.trim()
         : `${form.customer_first_name.trim()} ${form.customer_last_name.trim()}`.trim();
       const phone = form.customer_phone.trim();
-      if (customerName.length >= 2 && phone.length >= 4) {
+      if (customerName.length >= 2) {
         try {
           const res = await fetch(
             `/api/agency/check-duplicate?name=${encodeURIComponent(customerName)}&phone=${encodeURIComponent(phone)}`,
@@ -497,13 +501,18 @@ export default function OpsNewBookingPage() {
           );
           const dupBody = await res.json() as {
             found: boolean;
-            service?: { date: string; direction: string; hotel_name: string; arrival_date: string | null; departure_date: string | null; };
+            match_type?: "exact" | "name_only";
+            service?: { date: string; direction: string; hotel_name: string; agency_name: string | null; pax: number | null; phone: string | null; arrival_date: string | null; departure_date: string | null; };
           };
           if (dupBody.found && dupBody.service) {
             setDuplicateWarning({
+              match_type: dupBody.match_type ?? "exact",
               customer_name: customerName, date: dupBody.service.date,
               direction: dupBody.service.direction === "arrival" ? "Arrivo" : "Partenza",
               hotel_name: dupBody.service.hotel_name,
+              agency_name: dupBody.service.agency_name ?? null,
+              pax: dupBody.service.pax ?? null,
+              phone: dupBody.service.phone ?? null,
               arrival_date: dupBody.service.arrival_date, departure_date: dupBody.service.departure_date,
             });
             return;
@@ -885,37 +894,43 @@ export default function OpsNewBookingPage() {
 
       {/* Modal duplicato */}
       {duplicateWarning ? (
-        <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
-          onClick={() => setDuplicateWarning(null)}>
-          <div style={{ background: "#fff", borderRadius: 16, padding: 28, maxWidth: 440, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
-            onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontSize: 36, textAlign: "center", marginBottom: 12 }}>⚠️</div>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: "#0f2744", textAlign: "center", marginBottom: 8 }}>Pratica già esistente</h2>
-            <p style={{ color: "#475569", fontSize: 14, textAlign: "center", marginBottom: 20 }}>Esiste già una pratica attiva con questo nome e telefono:</p>
-            <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "12px 16px", marginBottom: 24, fontSize: 14 }}>
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/45 p-4" onClick={() => setDuplicateWarning(null)}>
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="text-center text-4xl">{duplicateWarning.match_type === "exact" ? "⚠️" : "🔎"}</div>
+            <h2 className="text-center text-lg font-bold text-slate-800">
+              {duplicateWarning.match_type === "exact" ? "Prenotazione già esistente" : "Possibile duplicato"}
+            </h2>
+            <p className="text-center text-sm text-slate-500">
+              {duplicateWarning.match_type === "exact"
+                ? "Esiste già una pratica attiva con stesso nome e telefono:"
+                : "Stesso nome ma telefono diverso — potrebbe essere un duplicato:"}
+            </p>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 divide-y divide-slate-100 text-sm">
               {[
                 ["Cliente", duplicateWarning.customer_name],
-                ["Data", duplicateWarning.date],
                 ["Tipo", duplicateWarning.direction],
                 ...(duplicateWarning.arrival_date ? [["Arrivo", duplicateWarning.arrival_date]] : []),
                 ...(duplicateWarning.departure_date ? [["Partenza", duplicateWarning.departure_date]] : []),
                 ["Hotel", duplicateWarning.hotel_name],
+                ...(duplicateWarning.pax ? [["Pax", String(duplicateWarning.pax)]] : []),
+                ...(duplicateWarning.phone ? [["Telefono", duplicateWarning.phone]] : []),
+                ...(duplicateWarning.agency_name ? [["Agenzia", duplicateWarning.agency_name]] : []),
               ].map(([label, value]) => (
-                <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid #e2e8f0" }}>
-                  <span style={{ color: "#64748b", fontWeight: 600 }}>{label}</span>
-                  <span style={{ color: "#1e293b" }}>{value}</span>
+                <div key={label} className="flex justify-between px-3 py-2">
+                  <span className="font-semibold text-slate-500">{label}</span>
+                  <span className="text-slate-800">{value}</span>
                 </div>
               ))}
             </div>
-            <p style={{ color: "#475569", fontSize: 13, textAlign: "center", marginBottom: 20 }}>Vuoi continuare comunque con l'inserimento?</p>
-            <div style={{ display: "flex", gap: 10 }}>
+            <p className="text-center text-xs text-slate-400">Vuoi continuare comunque con l&apos;inserimento?</p>
+            <div className="flex gap-2">
               <button type="button" onClick={() => setDuplicateWarning(null)}
-                style={{ flex: 1, padding: "11px 0", border: "1px solid #d1d5db", borderRadius: 10, background: "#fff", color: "#475569", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+                className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50">
                 Annulla
               </button>
               <button type="button" onClick={() => void submit(true)}
-                style={{ flex: 1, padding: "11px 0", border: "none", borderRadius: 10, background: "#0f2744", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-                Continua comunque
+                className="flex-1 rounded-xl bg-slate-800 py-2.5 text-sm font-bold text-white hover:bg-slate-700">
+                Inserisci comunque
               </button>
             </div>
           </div>

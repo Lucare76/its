@@ -231,7 +231,8 @@ export const MAIN_NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/agency", label: "Area Agenzia", icon: "A" },
     { href: "/map", label: "Mappa", icon: "M" }
   ],
-  driver: [{ href: "/driver", label: "Area Autista", icon: "R" }]
+  driver: [{ href: "/driver", label: "Area Autista", icon: "R" }],
+  assistenza: [{ href: "/scan", label: "Smarcamento", icon: "Q" }],
 };
 
 const OPERATIONS_MAIN_NAV: NavItem[] = [

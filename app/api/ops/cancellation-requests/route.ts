@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
       .from("cancellation_requests")
       .select(`
         id, cancel_legs, status, penalty_cents, penalty_note,
-        requested_by_role, created_at, updated_at,
+        requested_by_role, requested_by_user_id, created_at, updated_at,
         agency_response, agency_response_note, agency_counter_cents, agency_responded_at,
         services(
           id, customer_name, pax, date, time, direction,
@@ -44,8 +44,34 @@ export async function GET(req: NextRequest) {
       .in("status", ["pending_review", "pending_agency_approval"])
       .order("created_at", { ascending: false });
 
+    // Risolvi nome di chi ha richiesto la cancellazione
+    const userIds = [...new Set((data ?? []).map((r: Record<string, unknown>) => r.requested_by_user_id).filter(Boolean))] as string[];
+    const nameById: Record<string, string> = {};
+    if (userIds.length) {
+      const { data: members } = await admin
+        .from("memberships")
+        .select("user_id, full_name")
+        .eq("tenant_id", tenantId)
+        .in("user_id", userIds);
+      for (const m of members ?? []) nameById[m.user_id] = m.full_name ?? "";
+      // fallback: auth.users per chi non ha membership (es. agenzia esterna)
+      const missing = userIds.filter((id) => !nameById[id]);
+      if (missing.length) {
+        const { data: { users } } = await admin.auth.admin.listUsers();
+        for (const u of users ?? []) {
+          if (missing.includes(u.id)) {
+            nameById[u.id] = u.user_metadata?.full_name ?? u.email ?? u.id;
+          }
+        }
+      }
+    }
+
     if (error) throw new Error(error.message);
-    return NextResponse.json({ ok: true, requests: data ?? [] });
+    const requests = (data ?? []).map((r: Record<string, unknown>) => ({
+      ...r,
+      requested_by_name: r.requested_by_user_id ? (nameById[r.requested_by_user_id as string] ?? null) : null,
+    }));
+    return NextResponse.json({ ok: true, requests });
   } catch (err) {
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore" }, { status: 500 });
   }

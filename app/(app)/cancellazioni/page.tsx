@@ -10,6 +10,7 @@ type CancellationRequest = {
   penalty_cents: number | null;
   penalty_note: string | null;
   requested_by_role: string;
+  requested_by_name: string | null;
   created_at: string;
   agency_response: "accepted" | "rejected" | "counter" | null;
   agency_response_note: string | null;
@@ -53,6 +54,7 @@ function statusLabel(status: string, agencyResponse: string | null): { label: st
 
 export default function CancellazioniPage() {
   const [requests, setRequests] = useState<CancellationRequest[]>([]);
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
@@ -117,15 +119,35 @@ export default function CancellazioniPage() {
     }
   };
 
-  const pending = requests.filter((r) => r.status === "pending_review" || r.status === "pending_agency_approval");
+  const pending = requests
+    .filter((r) => r.status === "pending_review" || r.status === "pending_agency_approval")
+    .filter((r) => {
+      if (!search.trim()) return true;
+      const q = search.trim().toLowerCase();
+      return (
+        r.services?.customer_name?.toLowerCase().includes(q) ||
+        (Array.isArray(r.services?.agencies) ? r.services.agencies[0] : r.services?.agencies)?.name?.toLowerCase().includes(q) ||
+        (Array.isArray(r.services?.hotels) ? r.services.hotels[0] : r.services?.hotels)?.name?.toLowerCase().includes(q) ||
+        r.requested_by_name?.toLowerCase().includes(q)
+      );
+    });
   const hasAgencyResponse = (r: CancellationRequest) =>
     r.status === "pending_agency_approval" && r.agency_response !== null;
 
   return (
     <section className="page-section">
       <div className="section-head">
-        <h1 className="section-title">Cancellazioni</h1>
-        <p className="section-subtitle">Richieste di cancellazione in attesa di gestione.</p>
+        <div>
+          <h1 className="section-title">Cancellazioni</h1>
+          <p className="section-subtitle">Richieste di cancellazione in attesa di gestione.</p>
+        </div>
+        <input
+          type="search"
+          placeholder="Cerca cliente, agenzia, hotel..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="input-saas w-64"
+        />
       </div>
 
       {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
@@ -161,7 +183,11 @@ export default function CancellazioniPage() {
                       {svc?.arrival_date && <span>📅 {formatDate(svc.arrival_date)}</span>}
                       {svc?.pax && <span>👥 {svc.pax} pax</span>}
                       {agency?.name && <span>🏢 {agency.name}</span>}
-                      <span className="text-slate-400">Richiesta da: {req.requested_by_role}</span>
+                      <span className="text-slate-400">
+                        Richiesta da: {req.requested_by_name ?? req.requested_by_role}
+                        {req.requested_by_name && <span className="ml-1 text-slate-300">({req.requested_by_role})</span>}
+                        {" · "}{new Date(req.created_at).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                      </span>
                     </div>
                   </div>
 

@@ -73,7 +73,7 @@ export async function POST(
       .maybeSingle();
 
     if (!cr) return NextResponse.json({ error: "Richiesta non trovata." }, { status: 404 });
-    if (cr.status !== "pending_review" && cr.status !== "rejected") {
+    if (!["pending_review", "rejected", "pending_agency_approval"].includes(cr.status as string)) {
       return NextResponse.json({ error: "Richiesta non in stato modificabile." }, { status: 409 });
     }
 
@@ -123,7 +123,15 @@ export async function POST(
     // ── Caso B: agenzia collegata → invia per approvazione ──────────────────
     await admin
       .from("cancellation_requests")
-      .update({ status: "pending_agency_approval", penalty_cents, penalty_note: penalty_note ?? null })
+      .update({
+        status: "pending_agency_approval",
+        penalty_cents,
+        penalty_note: penalty_note ?? null,
+        agency_response: null,
+        agency_response_note: null,
+        agency_counter_cents: null,
+        agency_responded_at: null,
+      })
       .eq("id", id);
 
     const dateFormatted = formatDate(svc?.arrival_date as string ?? svc?.date as string ?? "");

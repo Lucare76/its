@@ -12,7 +12,7 @@ export async function GET(
   { params }: { params: Promise<{ serviceId: string }> }
 ) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor", "assistenza"]);
     if (auth instanceof NextResponse) return auth;
 
     const { serviceId } = await params;
@@ -93,7 +93,7 @@ export async function POST(
   { params }: { params: Promise<{ serviceId: string }> }
 ) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor", "assistenza"]);
     if (auth instanceof NextResponse) return auth;
 
     const { serviceId } = await params;
