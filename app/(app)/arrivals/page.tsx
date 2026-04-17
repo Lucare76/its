@@ -73,11 +73,49 @@ function EditServiceModal({
   const [time, setTime] = useState(service.time ?? "");
   const [phone, setPhone] = useState(service.phone ?? "");
   const [notes, setNotes] = useState(service.notes ?? "");
+  const [localAgencies, setLocalAgencies] = useState<AgencyOption[]>(agencies);
   const [agencyId, setAgencyId] = useState(() => {
     if (service.agency_id) return service.agency_id;
     const match = agencies.find((a) => a.name.toLowerCase() === (service.billing_party_name ?? "").toLowerCase());
     return match?.id ?? "";
   });
+
+  // Sub-form nuova agenzia
+  const [addingAgency, setAddingAgency]       = useState(false);
+  const [newAgency, setNewAgency]             = useState({ name: "", booking_email: "", contact_email: "", phone: "", vat_number: "", pec_email: "", sdi_code: "", notes: "" });
+  const [savingAgency, setSavingAgency]       = useState(false);
+  const [agencyError, setAgencyError]         = useState<string | null>(null);
+
+  const createAgency = async () => {
+    if (!supabase || !newAgency.name.trim()) return;
+    setSavingAgency(true);
+    setAgencyError(null);
+    const { data: row, error: err } = await supabase
+      .from("agencies")
+      .insert({
+        tenant_id: tenantId,
+        name: newAgency.name.trim(),
+        booking_email: newAgency.booking_email.trim() || null,
+        contact_email: newAgency.contact_email.trim() || null,
+        phone: newAgency.phone.trim() || null,
+        vat_number: newAgency.vat_number.trim() || null,
+        pec_email: newAgency.pec_email.trim() || null,
+        sdi_code: newAgency.sdi_code.trim() || null,
+        notes: newAgency.notes.trim() || null,
+        active: true,
+      })
+      .select("id, name")
+      .single();
+    setSavingAgency(false);
+    if (err) { setAgencyError(err.message); return; }
+    if (row) {
+      const created = row as AgencyOption;
+      setLocalAgencies((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, "it")));
+      setAgencyId(created.id);
+    }
+    setAddingAgency(false);
+    setNewAgency({ name: "", booking_email: "", contact_email: "", phone: "", vat_number: "", pec_email: "", sdi_code: "", notes: "" });
+  };
   const [placeType, setPlaceType] = useState<"hotel" | "station" | "airport">((service as { place_type?: string }).place_type as "hotel" | "station" | "airport" ?? "hotel");
   const [meetingPoint, setMeetingPoint] = useState<string>((service as { meeting_point?: string }).meeting_point ?? "");
   const [saving, setSaving] = useState(false);
@@ -208,15 +246,70 @@ function EditServiceModal({
             Telefono
             <input value={phone} onChange={(e) => setPhone(e.target.value)} className="mt-1 input-saas w-full" />
           </label>
-          <label className="text-xs font-medium text-slate-600 sm:col-span-2">
-            Agenzia
-            <select value={agencyId} onChange={(e) => setAgencyId(e.target.value)} className="mt-1 input-saas w-full">
-              <option value="">— Nessuna agenzia —</option>
-              {agencies.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-          </label>
+          <div className="sm:col-span-2">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-medium text-slate-600">Agenzia</span>
+              <button
+                type="button"
+                onClick={() => { setAddingAgency((v) => !v); setAgencyError(null); }}
+                className="text-xs text-indigo-600 hover:text-indigo-800"
+              >
+                {addingAgency ? "Annulla" : "+ Nuova agenzia"}
+              </button>
+            </div>
+            {addingAgency ? (
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 space-y-2">
+                {agencyError && <p className="text-xs text-rose-600">{agencyError}</p>}
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+                    Nome agenzia *
+                    <input autoFocus value={newAgency.name} onChange={(e) => setNewAgency((f) => ({ ...f, name: e.target.value }))} className="mt-1 input-saas w-full" placeholder="Es. Agenzia Rossi" />
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">
+                    Email booking
+                    <input type="email" value={newAgency.booking_email} onChange={(e) => setNewAgency((f) => ({ ...f, booking_email: e.target.value }))} className="mt-1 input-saas w-full" placeholder="booking@agenzia.it" />
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">
+                    Email contatto
+                    <input type="email" value={newAgency.contact_email} onChange={(e) => setNewAgency((f) => ({ ...f, contact_email: e.target.value }))} className="mt-1 input-saas w-full" placeholder="info@agenzia.it" />
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">
+                    Telefono
+                    <input value={newAgency.phone} onChange={(e) => setNewAgency((f) => ({ ...f, phone: e.target.value }))} className="mt-1 input-saas w-full" placeholder="+39 081..." />
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">
+                    P.IVA
+                    <input value={newAgency.vat_number} onChange={(e) => setNewAgency((f) => ({ ...f, vat_number: e.target.value }))} className="mt-1 input-saas w-full" placeholder="IT12345678901" />
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">
+                    PEC
+                    <input type="email" value={newAgency.pec_email} onChange={(e) => setNewAgency((f) => ({ ...f, pec_email: e.target.value }))} className="mt-1 input-saas w-full" placeholder="pec@agenziarossi.it" />
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">
+                    Codice SDI
+                    <input value={newAgency.sdi_code} onChange={(e) => setNewAgency((f) => ({ ...f, sdi_code: e.target.value }))} className="mt-1 input-saas w-full" placeholder="0000000" />
+                  </label>
+                  <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+                    Note
+                    <input value={newAgency.notes} onChange={(e) => setNewAgency((f) => ({ ...f, notes: e.target.value }))} className="mt-1 input-saas w-full" />
+                  </label>
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  <button type="button" onClick={() => setAddingAgency(false)} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">Annulla</button>
+                  <button type="button" onClick={() => void createAgency()} disabled={savingAgency || !newAgency.name.trim()} className="btn-primary px-4 py-1.5 text-xs disabled:opacity-50">
+                    {savingAgency ? "Salvataggio..." : "Crea e seleziona"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <select value={agencyId} onChange={(e) => setAgencyId(e.target.value)} className="input-saas w-full">
+                <option value="">— Nessuna agenzia —</option>
+                {localAgencies.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
           <label className="text-xs font-medium text-slate-600 sm:col-span-2">
             Note
             <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} className="mt-1 input-saas w-full resize-none" />
