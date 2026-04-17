@@ -59,12 +59,16 @@ self.addEventListener('push', (event) => {
   }
 
   const title = payload.title || 'ITS Driver';
+  const isSlaAlert = String(payload.tag || '').startsWith('sla-');
+
   const options = {
     body: payload.body || '',
     icon: '/brand/logo-ischia-transfer-email.png',
     badge: '/brand/logo-ischia-transfer-email.png',
-    data: { url: payload.url || '/driver' },
-    vibrate: [200, 100, 200, 100, 200],
+    data: { url: payload.url || '/driver', isSlaAlert },
+    vibrate: isSlaAlert
+      ? [500, 100, 500, 100, 500, 100, 500]
+      : [200, 100, 200, 100, 200],
     requireInteraction: true,
     tag: payload.tag || 'its-driver-notification',
     renotify: true,
@@ -73,7 +77,16 @@ self.addEventListener('push', (event) => {
       : []
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil((async () => {
+    await self.registration.showNotification(title, options);
+    if (isSlaAlert) {
+      try {
+        const bc = new BroadcastChannel('its-sla');
+        bc.postMessage({ type: 'sla_alert', title, body: payload.body || '' });
+        bc.close();
+      } catch (_) { /* BroadcastChannel non disponibile */ }
+    }
+  })());
 });
 
 // ---------------------------------------------------------------- notificationclick

@@ -377,6 +377,54 @@ export default function ArrivalsPage() {
 
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Selezione bulk + assegnazione autista
+  const [selectedIds, setSelectedIds]       = useState<Set<string>>(new Set());
+  const [bulkDriverId, setBulkDriverId]     = useState("");
+  const [bulkAssigning, setBulkAssigning]   = useState(false);
+  const [bulkAssignError, setBulkAssignError] = useState<string | null>(null);
+
+  const drivers = data.memberships.filter((m) => m.role === "driver");
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === arrivals.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(arrivals.map((i) => i.service.id)));
+    }
+  };
+
+  const assignBulk = async () => {
+    if (!bulkDriverId || selectedIds.size === 0 || !supabase) return;
+    setBulkAssigning(true);
+    setBulkAssignError(null);
+    try {
+      const existingMap = new Map(data.assignments.map((a) => [a.service_id, a]));
+      for (const serviceId of selectedIds) {
+        const existing = existingMap.get(serviceId);
+        if (existing) {
+          await supabase.from("assignments").update({ driver_user_id: bulkDriverId }).eq("id", existing.id).eq("tenant_id", tenantId);
+        } else {
+          await supabase.from("assignments").insert({ tenant_id: tenantId, service_id: serviceId, driver_user_id: bulkDriverId, vehicle_label: "" });
+        }
+        await supabase.from("services").update({ status: "assigned" }).eq("id", serviceId).eq("tenant_id", tenantId).neq("status", "assigned");
+      }
+      setSelectedIds(new Set());
+      setBulkDriverId("");
+      void refresh?.();
+    } catch {
+      setBulkAssignError("Errore durante l'assegnazione.");
+    } finally {
+      setBulkAssigning(false);
+    }
+  };
+
   // Modale cancellazione con scelta tratta
   const [cancelModal, setCancelModal] = useState<Service | null>(null);
   const [cancelLegs, setCancelLegs] = useState<"arrival" | "departure" | "both">("both");
@@ -708,7 +756,16 @@ export default function ArrivalsPage() {
         ) : (
           <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
             {/* Header */}
-            <div className={`grid items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500 ${showAllDates ? "grid-cols-[68px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]" : "grid-cols-[60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]"}`}>
+            <div className={`grid items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500 ${showAllDates ? "grid-cols-[28px_68px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]" : "grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]"}`}>
+              <div>
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600"
+                  checked={arrivals.length > 0 && selectedIds.size === arrivals.length}
+                  onChange={toggleSelectAll}
+                  title="Seleziona tutti"
+                />
+              </div>
               {showAllDates && <div>Data</div>}
               <div>Ora</div>
               <div>Cliente</div>
@@ -726,8 +783,17 @@ export default function ArrivalsPage() {
                 return (
                 <div
                   key={item.instanceId}
-                  className={`grid items-center gap-3 px-4 py-3 transition hover:bg-slate-50/60 ${showAllDates ? "grid-cols-[68px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]" : "grid-cols-[60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]"}`}
+                  className={`grid items-center gap-3 px-4 py-3 transition hover:bg-slate-50/60 ${selectedIds.has(item.service.id) ? "bg-indigo-50/60" : ""} ${showAllDates ? "grid-cols-[28px_68px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]" : "grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]"}`}
                 >
+                  {/* CHECKBOX */}
+                  <div>
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600"
+                      checked={selectedIds.has(item.service.id)}
+                      onChange={() => toggleSelect(item.service.id)}
+                    />
+                  </div>
                   {showAllDates && (
                     <div>
                       <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600">
@@ -804,6 +870,42 @@ export default function ArrivalsPage() {
               );
               })}
             </div>
+          </div>
+        )}
+        {/* Toolbar assegnazione bulk */}
+        {selectedIds.size > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+            <span className="text-sm font-semibold text-indigo-700">
+              {selectedIds.size} servizi selezionati
+            </span>
+            <select
+              value={bulkDriverId}
+              onChange={(e) => setBulkDriverId(e.target.value)}
+              className="input-saas min-w-44"
+            >
+              <option value="">Scegli autista…</option>
+              {drivers.map((d) => (
+                <option key={d.user_id} value={d.user_id}>{d.full_name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => void assignBulk()}
+              disabled={!bulkDriverId || bulkAssigning}
+              className="rounded-xl border border-indigo-300 bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-50 transition"
+            >
+              {bulkAssigning ? "Assegnando…" : "Assegna"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSelectedIds(new Set()); setBulkAssignError(null); }}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
+            >
+              Deseleziona
+            </button>
+            {bulkAssignError && (
+              <span className="text-xs text-rose-600">{bulkAssignError}</span>
+            )}
           </div>
         )}
       </SectionCard>

@@ -307,6 +307,7 @@ export const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/crm-agencies", label: "Agenzie", icon: "C" },
       { href: "/hotels", label: "Hotel", icon: "H" },
       { href: "/fleet-ops", label: "Flotta e mezzi", icon: "F" },
+      { href: "/fleet-ops/drivers", label: "KPI Autisti", icon: "📊" },
       { href: "/settings/tenant", label: "Profilo azienda", icon: "🏢" },
     ]
   },

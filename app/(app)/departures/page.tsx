@@ -238,6 +238,46 @@ export default function DeparturesPage() {
   const [cancelSubmitting, setCancelSubmitting] = useState(false);
   const [cancelSuccess, setCancelSuccess] = useState<string | null>(null);
 
+  // Selezione bulk + assegnazione autista
+  const [selectedDepIds, setSelectedDepIds]       = useState<Set<string>>(new Set());
+  const [bulkDepDriverId, setBulkDepDriverId]     = useState("");
+  const [bulkDepAssigning, setBulkDepAssigning]   = useState(false);
+  const [bulkDepAssignError, setBulkDepAssignError] = useState<string | null>(null);
+
+  const depDrivers = data.memberships.filter((m) => m.role === "driver");
+
+  const toggleDepSelect = (id: string) =>
+    setSelectedDepIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const assignDepBulk = async () => {
+    if (!bulkDepDriverId || selectedDepIds.size === 0 || !supabase) return;
+    setBulkDepAssigning(true);
+    setBulkDepAssignError(null);
+    try {
+      const existingMap = new Map(data.assignments.map((a) => [a.service_id, a]));
+      for (const serviceId of selectedDepIds) {
+        const existing = existingMap.get(serviceId);
+        if (existing) {
+          await supabase.from("assignments").update({ driver_user_id: bulkDepDriverId }).eq("id", existing.id).eq("tenant_id", tenantId);
+        } else {
+          await supabase.from("assignments").insert({ tenant_id: tenantId, service_id: serviceId, driver_user_id: bulkDepDriverId, vehicle_label: "" });
+        }
+        await supabase.from("services").update({ status: "assigned" }).eq("id", serviceId).eq("tenant_id", tenantId).neq("status", "assigned");
+      }
+      setSelectedDepIds(new Set());
+      setBulkDepDriverId("");
+      void refresh?.();
+    } catch {
+      setBulkDepAssignError("Errore durante l'assegnazione.");
+    } finally {
+      setBulkDepAssigning(false);
+    }
+  };
+
   const openCancelModal = (service: Service) => {
     const hasArrival = !!(service.arrival_date ?? service.date);
     const hasDeparture = !!service.departure_date;
@@ -494,7 +534,19 @@ export default function DeparturesPage() {
         ) : (
           <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
             {/* Header */}
-            <div className="grid items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500 grid-cols-[60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]">
+            <div className="grid items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500 grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]">
+              <div>
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600"
+                  checked={departures.length > 0 && selectedDepIds.size === departures.length}
+                  onChange={() => {
+                    if (selectedDepIds.size === departures.length) setSelectedDepIds(new Set());
+                    else setSelectedDepIds(new Set(departures.map((i) => i.service.id)));
+                  }}
+                  title="Seleziona tutti"
+                />
+              </div>
               <div>Ora</div>
               <div>Cliente</div>
               <div>Pax</div>
@@ -512,8 +564,17 @@ export default function DeparturesPage() {
                 return (
                   <div
                     key={item.instanceId}
-                    className="grid items-center gap-3 px-4 py-3 transition hover:bg-slate-50/60 grid-cols-[60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]"
+                    className={`grid items-center gap-3 px-4 py-3 transition hover:bg-slate-50/60 grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px] ${selectedDepIds.has(item.service.id) ? "bg-indigo-50/60" : ""}`}
                   >
+                    {/* CHECKBOX */}
+                    <div>
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600"
+                        checked={selectedDepIds.has(item.service.id)}
+                        onChange={() => toggleDepSelect(item.service.id)}
+                      />
+                    </div>
                     {/* ORA + hint pickup */}
                     <div className="space-y-0.5">
                       <span className="inline-flex min-w-[48px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-bold text-slate-800">
@@ -584,6 +645,42 @@ export default function DeparturesPage() {
                 );
               })}
             </div>
+          </div>
+        )}
+        {/* Toolbar assegnazione bulk */}
+        {selectedDepIds.size > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+            <span className="text-sm font-semibold text-indigo-700">
+              {selectedDepIds.size} servizi selezionati
+            </span>
+            <select
+              value={bulkDepDriverId}
+              onChange={(e) => setBulkDepDriverId(e.target.value)}
+              className="input-saas min-w-44"
+            >
+              <option value="">Scegli autista…</option>
+              {depDrivers.map((d) => (
+                <option key={d.user_id} value={d.user_id}>{d.full_name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => void assignDepBulk()}
+              disabled={!bulkDepDriverId || bulkDepAssigning}
+              className="rounded-xl border border-indigo-300 bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-50 transition"
+            >
+              {bulkDepAssigning ? "Assegnando…" : "Assegna"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSelectedDepIds(new Set()); setBulkDepAssignError(null); }}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
+            >
+              Deseleziona
+            </button>
+            {bulkDepAssignError && (
+              <span className="text-xs text-rose-600">{bulkDepAssignError}</span>
+            )}
           </div>
         )}
       </SectionCard>

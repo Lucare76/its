@@ -44,6 +44,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [pendingAgencyBookingsCount, setPendingAgencyBookingsCount] = useState(0);
   const [pendingCancellationsCount, setPendingCancellationsCount] = useState(0);
   const [liveToastMessage, setLiveToastMessage] = useState<string | null>(null);
+  const [slaAlertMessage, setSlaAlertMessage]   = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authRole, setAuthRole] = useState<UserRole | null>(null);
   const [authGender, setAuthGender] = useState<string | null>(null);
@@ -326,6 +327,12 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     return () => window.clearTimeout(timeout);
   }, [liveToastMessage]);
 
+  useEffect(() => {
+    if (!slaAlertMessage) return;
+    const timeout = window.setTimeout(() => setSlaAlertMessage(null), 30_000);
+    return () => window.clearTimeout(timeout);
+  }, [slaAlertMessage]);
+
   const playInboxSound = () => {
     if (typeof window === "undefined") return;
     const audio = new Audio("/mario.mp3");
@@ -334,6 +341,47 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       window.setTimeout(() => { audio.pause(); audio.currentTime = 0; }, 2200);
     }).catch(() => { /* autoplay bloccato */ });
   };
+
+  const playSlaAlarm = () => {
+    if (typeof window === "undefined") return;
+    try {
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "square";
+      // Pattern sirena: alto → basso × 3
+      const t = ctx.currentTime;
+      osc.frequency.setValueAtTime(880, t);
+      osc.frequency.setValueAtTime(440, t + 0.25);
+      osc.frequency.setValueAtTime(880, t + 0.5);
+      osc.frequency.setValueAtTime(440, t + 0.75);
+      osc.frequency.setValueAtTime(880, t + 1.0);
+      osc.frequency.setValueAtTime(440, t + 1.25);
+      gain.gain.setValueAtTime(0.25, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 1.6);
+      osc.start(t);
+      osc.stop(t + 1.6);
+    } catch { /* AudioContext non disponibile */ }
+  };
+
+  // Ascolta alert SLA dal service worker via BroadcastChannel
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!["admin", "operator", "supervisor"].includes(authRole ?? "")) return;
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel("its-sla");
+      bc.onmessage = (event) => {
+        if (event.data?.type === "sla_alert") {
+          setSlaAlertMessage(event.data.body || "Servizio senza autista nelle prossime 12 ore!");
+          playSlaAlarm();
+        }
+      };
+    } catch { /* BroadcastChannel non supportato */ }
+    return () => { bc?.close(); };
+  }, [authRole]);
 
   useEffect(() => {
     const client = supabase;
@@ -1311,6 +1359,34 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         </header>
         {children}
       </div>
+      {slaAlertMessage ? (
+        <div className="fixed left-0 right-0 top-0 z-[100] flex items-center justify-between gap-3 bg-red-600 px-4 py-3 shadow-lg">
+          <div className="flex items-center gap-3">
+            <span className="text-xl" aria-hidden="true">🚨</span>
+            <div>
+              <p className="text-sm font-bold text-white">Servizio senza autista</p>
+              <p className="text-xs text-red-100">{slaAlertMessage}</p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Link
+              href="/dispatch"
+              onClick={() => setSlaAlertMessage(null)}
+              className="rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-50"
+            >
+              Vai al dispatch
+            </Link>
+            <button
+              type="button"
+              onClick={() => setSlaAlertMessage(null)}
+              className="text-lg font-bold text-red-100 hover:text-white"
+              aria-label="Chiudi"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      ) : null}
       {liveToastMessage ? (
         <div className="fixed bottom-4 right-4 z-[70] rounded-lg bg-slate-900 px-4 py-2 text-sm text-white shadow-lg">
           {liveToastMessage}
