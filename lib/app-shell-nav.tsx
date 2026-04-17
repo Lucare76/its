@@ -244,6 +244,7 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/dispatch", label: "Assegnazioni", icon: "G" },
   { href: "/ricerca", label: "Ricerca", icon: "🔍" },
   { href: "/cancellazioni", label: "Cancellazioni", icon: "✕" },
+  { href: "/richieste-modifica", label: "Richieste modifica", icon: "✏️" },
 ];
 
 export const AGENZIE_GROUP: NavMainGroup = {
