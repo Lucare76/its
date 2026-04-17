@@ -73,7 +73,11 @@ function EditServiceModal({
   const [time, setTime] = useState(service.time ?? "");
   const [phone, setPhone] = useState(service.phone ?? "");
   const [notes, setNotes] = useState(service.notes ?? "");
-  const [agencyId, setAgencyId] = useState(service.agency_id ?? "");
+  const [agencyId, setAgencyId] = useState(() => {
+    if (service.agency_id) return service.agency_id;
+    const match = agencies.find((a) => a.name.toLowerCase() === (service.billing_party_name ?? "").toLowerCase());
+    return match?.id ?? "";
+  });
   const [placeType, setPlaceType] = useState<"hotel" | "station" | "airport">((service as { place_type?: string }).place_type as "hotel" | "station" | "airport" ?? "hotel");
   const [meetingPoint, setMeetingPoint] = useState<string>((service as { meeting_point?: string }).meeting_point ?? "");
   const [saving, setSaving] = useState(false);
@@ -134,7 +138,7 @@ function EditServiceModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl space-y-4">
+      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl space-y-4 overflow-y-auto max-h-[90vh]">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-slate-800">Modifica servizio</h2>
           <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>

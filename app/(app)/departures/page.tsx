@@ -12,8 +12,6 @@ import { getPickupRule, getPickupRuleByRange } from "@/lib/departure-pickup-rule
 import { getBusLinePickup, getBusLinePickupByZone } from "@/lib/bus-line-pickup-rules";
 import type { BusLine } from "@/lib/bus-line-pickup-rules";
 
-type AgencyOption = { id: string; name: string };
-
 function isValidClockTime(value: string) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
 }
@@ -61,7 +59,7 @@ function EditDepartureModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl space-y-4">
+      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl space-y-4 overflow-y-auto max-h-[90vh]">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-slate-800">Modifica partenza</h2>
           <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
