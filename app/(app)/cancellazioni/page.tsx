@@ -269,10 +269,16 @@ export default function CancellazioniPage() {
                   <input
                     type="number"
                     min="0"
-                    step="0.01"
+                    step="0.5"
                     placeholder="Es. 50.00"
                     value={penaltyEur}
                     onChange={(e) => setPenaltyEur(e.target.value)}
+                    onBlur={(e) => {
+                      const v = parseFloat(e.target.value);
+                      if (!isNaN(v) && v > 0) {
+                        setPenaltyEur(String(Math.round(v * 2) / 2));
+                      }
+                    }}
                     className="mt-1 block w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
                   />
                 </label>

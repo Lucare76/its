@@ -136,7 +136,9 @@ function CancelPanel({
             onBlur={() => {
               const v = parseFloat(penaltyStr.replace(",", "."));
               if (!isNaN(v) && v > 0) {
-                setPenaltyStr(v.toFixed(2));
+                const rounded = Math.round(v * 2) / 2;
+                setPenaltyStr(rounded.toFixed(2));
+                onChangeDraft({ penaltyCents: Math.round(rounded * 100) });
               } else {
                 setPenaltyStr("");
                 onChangeDraft({ penaltyCents: 0 });
