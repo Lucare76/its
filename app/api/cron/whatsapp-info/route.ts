@@ -40,12 +40,21 @@ async function sendInfoTemplate(
   templateName: string,
   customerName: string,
   extraParams: string[],
-  languageCode: string
+  languageCode: string,
+  qrImageUrl?: string | null
 ) {
-  const parameters = [
+  const bodyParams = [
     { type: "text" as const, text: customerName.slice(0, 60) },
     ...extraParams.map((p) => ({ type: "text" as const, text: p })),
   ];
+
+  const components: object[] = [{ type: "body", parameters: bodyParams }];
+  if (qrImageUrl) {
+    components.unshift({
+      type: "header",
+      parameters: [{ type: "image", image: { link: qrImageUrl } }],
+    });
+  }
 
   const res = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberId}/messages`, {
     method: "POST",
@@ -60,7 +69,7 @@ async function sendInfoTemplate(
       template: {
         name: templateName,
         language: { code: languageCode },
-        components: [{ type: "body", parameters }],
+        components,
       },
     }),
   });
@@ -110,6 +119,7 @@ async function runCron(request: NextRequest) {
     "formula_medmar_napoli",
     "formula_medmar_pozzuoli",
     "formula_snav",
+    "bus_city_hotel",
   ];
 
   const { data: candidates, error: candidatesError } = await admin
@@ -162,7 +172,12 @@ async function runCron(request: NextRequest) {
     const info     = selectInfoTemplate(svc.booking_service_kind, lang);
     if (!info) { skipped++; continue; }
 
-    const nowIso = new Date().toISOString();
+    const nowIso  = new Date().toISOString();
+    const appUrl  = process.env.NEXT_PUBLIC_APP_URL ?? "";
+    const qrUrl   = (info as { hasQrHeader?: boolean }).hasQrHeader && appUrl
+      ? `${appUrl}/api/public/qr/${svc.id as string}`
+      : null;
+
     const result = await sendInfoTemplate(
       phoneNumberId,
       accessToken,
@@ -170,7 +185,8 @@ async function runCron(request: NextRequest) {
       info.templateName,
       (svc.customer_name as string) ?? "",
       info.parameters,
-      lang
+      lang,
+      qrUrl
     );
 
     await logWhatsAppEvent(admin, {

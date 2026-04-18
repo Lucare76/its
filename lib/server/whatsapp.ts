@@ -364,7 +364,7 @@ export async function sendWhatsAppReminder(
 export function selectInfoTemplate(
   bookingKind: string | null | undefined,
   lang: string = "it"
-): { templateName: string; parameters: string[] } | null {
+): { templateName: string; parameters: string[]; hasQrHeader?: boolean } | null {
   const suffix     = lang === "en" ? "_en" : "";
   const aeroporto  = (process.env.WHATSAPP_TEMPLATE_INFO_AEROPORTO ?? "its_info_aeroporto") + suffix;
   const stazione   = (process.env.WHATSAPP_TEMPLATE_INFO_STAZIONE  ?? "its_info_stazione")  + suffix;
@@ -383,6 +383,10 @@ export function selectInfoTemplate(
       return { templateName: medmar, parameters: ["Pozzuoli"] };
     case "formula_snav":
       return { templateName: snav, parameters: [] };
+    case "bus_city_hotel": {
+      const busName = (process.env.WHATSAPP_TEMPLATE_INFO_BUS ?? "its_qr_bus") + suffix;
+      return { templateName: busName, parameters: [], hasQrHeader: true };
+    }
     default:
       return null;
   }

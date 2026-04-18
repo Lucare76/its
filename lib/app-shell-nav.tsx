@@ -344,7 +344,8 @@ export const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/analytics", label: "Analisi", icon: "Y" },
       { href: "/audit", label: "Audit", icon: "Q" },
       { href: "/settings/system", label: "Stato sistema", icon: "⚙" },
-      { href: "/settings/email-preview", label: "Anteprima email", icon: "✉" },
+      { href: "/settings/email-preview",     label: "Anteprima email",     icon: "✉" },
+      { href: "/settings/whatsapp-preview", label: "Anteprima WhatsApp", icon: "💬" },
     ]
   }
 ];
