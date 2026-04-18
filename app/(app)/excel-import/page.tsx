@@ -69,7 +69,7 @@ type ImportResponse = {
   errors: Array<{ row_index: number; message: string }>;
 };
 
-type PresetKey = "generic_transfer" | "formula_snav" | "formula_medmar" | "transfer_airport" | "transfer_station" | "linea_bus";
+type PresetKey = "generic_transfer" | "formula_snav" | "formula_medmar_napoli" | "formula_medmar_pozzuoli" | "transfer_airport" | "transfer_station" | "linea_bus";
 type SheetTemplate = "lista_operativa" | "dispatch_cliente" | "prenotazioni" | "linea_bus_arrivi_cliente" | "linea_bus_partenze_cliente" | "foglio_servizio" | "non_riconosciuto";
 type SimulatedBusLoad = {
   label: string;
@@ -111,7 +111,8 @@ const presets: Array<{
 }> = [
   { key: "generic_transfer", label: "Transfer generico", description: "Import base senza formula dedicata." },
   { key: "formula_snav", label: "Formula SNAV", description: "Pacchetti porto/hotel associati a SNAV." },
-  { key: "formula_medmar", label: "Formula MEDMAR", description: "Pacchetti porto/hotel associati a Medmar." },
+  { key: "formula_medmar_napoli", label: "Formula MEDMAR — Napoli", description: "Pacchetti MEDMAR da Napoli Beverello." },
+  { key: "formula_medmar_pozzuoli", label: "Formula MEDMAR — Pozzuoli", description: "Pacchetti MEDMAR da Pozzuoli." },
   { key: "transfer_airport", label: "Transfer aeroporto", description: "Airport/hotel o hotel/airport." },
   { key: "transfer_station", label: "Transfer stazione", description: "Stazione/hotel o hotel/stazione." },
   { key: "linea_bus", label: "Linea bus", description: "Servizi linea bus / citta-hotel." }

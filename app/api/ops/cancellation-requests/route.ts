@@ -26,6 +26,8 @@ export async function GET(req: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const admin = (auth as any).admin;
 
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
     const { data, error } = await admin
       .from("cancellation_requests")
       .select(`
@@ -41,7 +43,7 @@ export async function GET(req: NextRequest) {
         )
       `)
       .eq("tenant_id", tenantId)
-      .in("status", ["pending_review", "pending_agency_approval"])
+      .or(`status.in.(pending_review,pending_agency_approval),and(status.in.(closed,approved),created_at.gte.${thirtyDaysAgo})`)
       .order("created_at", { ascending: false });
 
     // Risolvi nome di chi ha richiesto la cancellazione
@@ -71,7 +73,40 @@ export async function GET(req: NextRequest) {
       ...r,
       requested_by_name: r.requested_by_user_id ? (nameById[r.requested_by_user_id as string] ?? null) : null,
     }));
-    return NextResponse.json({ ok: true, requests });
+
+    // Servizi cancellati direttamente (senza cancellation_request) — ultimi 30 giorni
+    const serviceIds = new Set((data ?? []).map((r: Record<string, unknown>) => {
+      const svc = r.services as Record<string, unknown> | null;
+      return svc?.id as string | undefined;
+    }).filter(Boolean));
+
+    const { data: directlyCancelled } = await admin
+      .from("services")
+      .select("id, customer_name, pax, date, time, arrival_date, arrival_time, departure_date, departure_time, booking_service_kind, hotels(name), agencies(name, booking_email)")
+      .eq("tenant_id", tenantId)
+      .eq("status", "cancelled")
+      .gte("updated_at", thirtyDaysAgo);
+
+    const directRequests = ((directlyCancelled ?? []) as Record<string, unknown>[])
+      .filter((s) => !serviceIds.has(s.id as string))
+      .map((s) => ({
+        id: `direct_${s.id as string}`,
+        cancel_legs: "both" as const,
+        status: "closed" as const,
+        penalty_cents: null,
+        penalty_note: null,
+        requested_by_role: "operator",
+        requested_by_name: null,
+        created_at: s.updated_at as string ?? new Date().toISOString(),
+        updated_at: s.updated_at as string ?? null,
+        agency_response: null,
+        agency_response_note: null,
+        agency_counter_cents: null,
+        agency_responded_at: null,
+        services: s,
+      }));
+
+    return NextResponse.json({ ok: true, requests: [...requests, ...directRequests] });
   } catch (err) {
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore" }, { status: 500 });
   }

@@ -80,7 +80,8 @@ const ALL_BOOKING_KINDS = [
   "bus_city_hotel",
   "excursion",
   "formula_snav",
-  "formula_medmar",
+  "formula_medmar_napoli",
+  "formula_medmar_pozzuoli",
 ];
 
 const EMPTY_FORM: ModalForm = {

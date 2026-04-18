@@ -10,7 +10,8 @@ export type AgencyBookingServiceKind =
   | "bus_city_hotel"
   | "excursion"
   | "formula_snav"
-  | "formula_medmar";
+  | "formula_medmar_napoli"
+  | "formula_medmar_pozzuoli";
 export type OperationalServiceType =
   | "transfer_station_hotel"
   | "transfer_airport_hotel"

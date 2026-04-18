@@ -136,18 +136,22 @@ export default function CancellazioniPage() {
     }
   };
 
+  const matchesSearch = (r: CancellationRequest) => {
+    if (!search.trim()) return true;
+    const q = search.trim().toLowerCase();
+    return (
+      r.services?.customer_name?.toLowerCase().includes(q) ||
+      (Array.isArray(r.services?.agencies) ? r.services.agencies[0] : r.services?.agencies)?.name?.toLowerCase().includes(q) ||
+      (Array.isArray(r.services?.hotels) ? r.services.hotels[0] : r.services?.hotels)?.name?.toLowerCase().includes(q) ||
+      r.requested_by_name?.toLowerCase().includes(q)
+    );
+  };
   const pending = requests
     .filter((r) => r.status === "pending_review" || r.status === "pending_agency_approval")
-    .filter((r) => {
-      if (!search.trim()) return true;
-      const q = search.trim().toLowerCase();
-      return (
-        r.services?.customer_name?.toLowerCase().includes(q) ||
-        (Array.isArray(r.services?.agencies) ? r.services.agencies[0] : r.services?.agencies)?.name?.toLowerCase().includes(q) ||
-        (Array.isArray(r.services?.hotels) ? r.services.hotels[0] : r.services?.hotels)?.name?.toLowerCase().includes(q) ||
-        r.requested_by_name?.toLowerCase().includes(q)
-      );
-    });
+    .filter(matchesSearch);
+  const archived = requests
+    .filter((r) => r.status === "closed" || r.status === "approved")
+    .filter(matchesSearch);
   const hasAgencyResponse = (r: CancellationRequest) =>
     r.status === "pending_agency_approval" && r.agency_response !== null;
 
@@ -260,6 +264,45 @@ export default function CancellazioniPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Archivio cancellazioni (ultimi 30 giorni) */}
+      {archived.length > 0 && (
+        <div className="mt-6">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-400">
+            Archivio — ultimi 30 giorni ({archived.length})
+          </h2>
+          <div className="space-y-2">
+            {archived.map((req) => {
+              const svc = req.services;
+              const hotel = Array.isArray(svc?.hotels) ? svc.hotels[0] : svc?.hotels;
+              const agency = Array.isArray(svc?.agencies) ? svc.agencies[0] : svc?.agencies;
+              return (
+                <div key={req.id} className="card flex flex-wrap items-center gap-3 p-4 text-sm opacity-80">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold uppercase text-slate-800">{svc?.customer_name ?? "—"}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {hotel?.name && <span>🏨 {hotel.name} · </span>}
+                      {svc?.arrival_date && <span>📅 {formatDate(svc.arrival_date)} · </span>}
+                      {agency?.name && <span>🏢 {agency.name} · </span>}
+                      <span>{legLabel(req.cancel_legs)}</span>
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {req.penalty_cents != null && req.penalty_cents > 0 && (
+                      <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700">
+                        Penale {formatEur(req.penalty_cents)}
+                      </span>
+                    )}
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-500">
+                      {req.id.startsWith("direct_") ? "Cancellata direttamente" : "Chiusa"} · {new Date(req.created_at).toLocaleDateString("it-IT")}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

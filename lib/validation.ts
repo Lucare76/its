@@ -15,7 +15,8 @@ export const agencyBookingServiceKindSchema = z.enum([
   "bus_city_hotel",
   "excursion",
   "formula_snav",
-  "formula_medmar"
+  "formula_medmar_napoli",
+  "formula_medmar_pozzuoli"
 ]);
 
 export const serviceCreateSchema = z.object({
@@ -204,14 +205,29 @@ export const agencyBookingCreateSchema = z
       });
     }
 
-    const arrivalDateTime = new Date(`${value.arrival_date}T${value.arrival_time}:00`);
-    const departureDateTime = new Date(`${value.departure_date}T${value.departure_time}:00`);
-    if (!Number.isNaN(arrivalDateTime.getTime()) && !Number.isNaN(departureDateTime.getTime()) && departureDateTime < arrivalDateTime) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Partenza non puo essere precedente all'arrivo.",
-        path: ["departure_date"]
-      });
+    // Per SNAV/MEDMAR departure_time è il prelievo hotel (prima del traghetto):
+    // confronta solo le date, non l'ora
+    const isFerryKind = value.booking_service_kind === "formula_snav"
+      || value.booking_service_kind === "formula_medmar_napoli"
+      || value.booking_service_kind === "formula_medmar_pozzuoli";
+    if (isFerryKind) {
+      if (value.departure_date < value.arrival_date) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "La data di partenza non può essere precedente alla data di arrivo.",
+          path: ["departure_date"]
+        });
+      }
+    } else {
+      const arrivalDateTime = new Date(`${value.arrival_date}T${value.arrival_time}:00`);
+      const departureDateTime = new Date(`${value.departure_date}T${value.departure_time}:00`);
+      if (!Number.isNaN(arrivalDateTime.getTime()) && !Number.isNaN(departureDateTime.getTime()) && departureDateTime < arrivalDateTime) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Partenza non puo essere precedente all'arrivo.",
+          path: ["departure_date"]
+        });
+      }
     }
   });
 

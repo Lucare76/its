@@ -33,7 +33,8 @@ const KIND_LABELS: Record<string, string> = {
   bus_city_hotel: "Bus da città",
   excursion: "Escursione",
   formula_snav: "Formula SNAV",
-  formula_medmar: "Formula MEDMAR",
+  formula_medmar_napoli: "Formula MEDMAR Napoli",
+  formula_medmar_pozzuoli: "Formula MEDMAR Pozzuoli",
 };
 
 function fmtDate(iso?: string | null) {

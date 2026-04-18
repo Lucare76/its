@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
   const auth = await authorizeServiceRoleRequest(request, {
-    roles: ["agency", "admin"],
+    roles: ["agency", "admin", "operator", "supervisor"],
     membershipFields: [],
     auditPrefix: "agency_check_duplicate"
   });
@@ -45,11 +45,10 @@ export async function GET(request: NextRequest) {
       .eq("phone", phone)
       .neq("status", "cancelled")
       .order("date", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(5);
 
-    if (exact) {
-      return NextResponse.json({ found: true, match_type: "exact", service: buildService(exact as unknown as Record<string, unknown>, hasArrivalDate) });
+    if (exact && exact.length > 0) {
+      return NextResponse.json({ found: true, match_type: "exact", services: exact.map((s) => buildService(s as unknown as Record<string, unknown>, hasArrivalDate)) });
     }
   }
 
@@ -61,15 +60,14 @@ export async function GET(request: NextRequest) {
     .ilike("customer_name", `%${name}%`)
     .neq("status", "cancelled")
     .order("date", { ascending: false })
-    .limit(1);
+    .limit(5);
 
-  // Escludi il match esatto già trovato (se phone era presente)
   const { data: nameOnly } = phone.length >= 4
-    ? await nameQuery.neq("phone", phone).maybeSingle()
-    : await nameQuery.maybeSingle();
+    ? await nameQuery.neq("phone", phone)
+    : await nameQuery;
 
-  if (nameOnly) {
-    return NextResponse.json({ found: true, match_type: "name_only", service: buildService(nameOnly as unknown as Record<string, unknown>, hasArrivalDate) });
+  if (nameOnly && nameOnly.length > 0) {
+    return NextResponse.json({ found: true, match_type: "name_only", services: nameOnly.map((s) => buildService(s as unknown as Record<string, unknown>, hasArrivalDate)) });
   }
 
   return NextResponse.json({ found: false });
@@ -88,6 +86,7 @@ function buildService(row: Record<string, unknown>, hasArrivalDate: boolean) {
     : (agencyRaw as { name?: string } | null)?.name ?? null;
 
   return {
+    id: row.id,
     date: fmt(row.date) ?? row.date,
     direction: row.direction,
     hotel_name: hotelName,

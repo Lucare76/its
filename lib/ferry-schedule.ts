@@ -42,25 +42,32 @@ export const MEDMAR_DEPARTURES: Record<string, FerryPort> = {
   "16:50": "Casamicciola",
 };
 
+type FerryPreset = "formula_snav" | "formula_medmar_napoli" | "formula_medmar_pozzuoli";
+
 /** Rileva il porto dal tipo di formula, direzione e orario. */
 export function detectFerryPort(
-  preset: "formula_snav" | "formula_medmar",
+  preset: FerryPreset,
   direction: "arrival" | "departure",
   time: string, // "HH:MM"
 ): FerryPort | null {
   if (preset === "formula_snav") return SNAV_PORT;
+  if (preset === "formula_medmar_napoli") return "Ischia Porto";
   const table = direction === "arrival" ? MEDMAR_ARRIVALS : MEDMAR_DEPARTURES;
   return table[time] ?? null;
 }
 
 /** Elenco orari disponibili per un dato preset + direzione. */
 export function ferryTimes(
-  preset: "formula_snav" | "formula_medmar",
+  preset: FerryPreset,
   direction: "arrival" | "departure",
 ): string[] {
   if (preset === "formula_snav") {
     return direction === "arrival" ? SNAV_ARRIVALS : SNAV_DEPARTURES;
   }
+  if (preset === "formula_medmar_napoli") {
+    return direction === "arrival" ? ["08:40","14:20","19:00"] : ["06:25","10:35","17:00"];
+  }
+  // formula_medmar_pozzuoli
   const table = direction === "arrival" ? MEDMAR_ARRIVALS : MEDMAR_DEPARTURES;
   return Object.keys(table).sort();
 }

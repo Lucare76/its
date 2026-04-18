@@ -51,7 +51,8 @@ function kindLabel(kind: string | null) {
     bus_city_hotel:                 "Bus da città",
     excursion:                      "Escursione",
     formula_snav:                   "Formula SNAV",
-    formula_medmar:                 "Formula MEDMAR",
+    formula_medmar_napoli:          "Formula MEDMAR Napoli",
+    formula_medmar_pozzuoli:        "Formula MEDMAR Pozzuoli",
   };
   return kind ? (map[kind] ?? kind) : "—";
 }

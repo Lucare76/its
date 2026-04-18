@@ -6,6 +6,13 @@ import { z } from "zod";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { agencyBookingCreateSchema } from "@/lib/validation";
+import {
+  SNAV_ARRIVAL_TIMES as SNAV_ARR, SNAV_DEPARTURE_TIMES as SNAV_DEP,
+  MEDMAR_NAPOLI_ARRIVALS_WITH_PORTO, MEDMAR_POZZUOLI_ARRIVALS_WITH_PORTO,
+  MEDMAR_NAPOLI_DEPARTURES_WITH_PORTO, MEDMAR_POZZUOLI_DEPARTURES_WITH_PORTO,
+  MEDMAR_NAPOLI_ARRIVAL_TIMES, MEDMAR_POZZUOLI_ARRIVAL_TIMES,
+  MEDMAR_NAPOLI_DEPARTURE_TIMES, MEDMAR_POZZUOLI_DEPARTURE_TIMES,
+} from "@/lib/snav-medmar-lookup";
 
 type BookingKind = z.infer<typeof agencyBookingCreateSchema>["booking_service_kind"];
 type AgencyRole = "admin" | "agency";
@@ -42,7 +49,8 @@ function deriveBusLineFamily(lineCode: string): BusLineFamily {
 
 const kindOptions: Array<{ value: BookingKind; label: string }> = [
   { value: "formula_snav", label: "Formula SNAV" },
-  { value: "formula_medmar", label: "Formula MEDMAR" },
+  { value: "formula_medmar_napoli", label: "Formula MEDMAR — Napoli" },
+  { value: "formula_medmar_pozzuoli", label: "Formula MEDMAR — Pozzuoli" },
   { value: "transfer_airport_hotel", label: "Transfer aeroporto - hotel" },
   { value: "transfer_airport_hotel_exclusive", label: "Transfer aeroporto - hotel (esclusivo 🔒)" },
   { value: "transfer_airport_hotel_aliscafo", label: "Transfer aeroporto - hotel (aliscafo 🚤)" },
@@ -55,11 +63,8 @@ const kindOptions: Array<{ value: BookingKind; label: string }> = [
 ];
 const defaultConfirmationEmail = process.env.NEXT_PUBLIC_AGENCY_DEFAULT_CONFIRMATION_EMAIL?.trim() ?? "";
 
-// Orari traghetti da schedule fisso
-const SNAV_ARRIVAL_TIMES = ["08:25", "12:30", "16:20", "19:00"]; // Napoli → Casamicciola
-const SNAV_DEPARTURE_TIMES = ["07:10", "09:45", "14:00", "17:40"]; // Casamicciola → Napoli
-const MEDMAR_ARRIVAL_TIMES = ["08:15", "08:40", "09:40", "12:00", "13:30", "14:20", "15:00", "16:30", "18:30", "19:00"];
-const MEDMAR_DEPARTURE_TIMES = ["06:20", "08:10", "10:10", "10:35", "11:10", "13:35", "15:00", "16:50", "17:00"];
+const SNAV_ARRIVAL_TIMES = SNAV_ARR;
+const SNAV_DEPARTURE_TIMES = SNAV_DEP;
 
 function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
@@ -82,8 +87,8 @@ function nextSunday(fromDate: string, skipSame = false): string {
 }
 
 function bookingContext(kind: BookingKind) {
-  if (kind === "formula_snav" || kind === "formula_medmar") {
-    const label = kind === "formula_snav" ? "SNAV" : "MEDMAR";
+  if (kind === "formula_snav" || kind === "formula_medmar_napoli" || kind === "formula_medmar_pozzuoli") {
+    const label = kind === "formula_snav" ? "SNAV" : kind === "formula_medmar_napoli" ? "MEDMAR Napoli" : "MEDMAR Pozzuoli";
     return {
       arrivalDateLabel: `Data arrivo ${label}*`,
       arrivalTimeLabel: `Ora arrivo ${label}*`,
@@ -361,7 +366,7 @@ export default function AgencyNewBookingPage() {
   const selectedKind = form.booking_service_kind;
   const isSnavKind = selectedKind === "formula_snav";
   const isTransportCodeRequired = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_airport_hotel_aliscafo" || selectedKind === "transfer_train_hotel" || selectedKind === "transfer_train_hotel_aliscafo";
-  const showTransportCodeField = isTransportCodeRequired || selectedKind === "bus_city_hotel" || selectedKind === "excursion" || selectedKind === "formula_snav" || selectedKind === "formula_medmar";
+  const showTransportCodeField = isTransportCodeRequired || selectedKind === "bus_city_hotel" || selectedKind === "excursion" || selectedKind === "formula_snav" || selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli";
   const isBusOriginRequired = selectedKind === "bus_city_hotel";
   const isExcursionTitleRequired = selectedKind === "excursion";
   const hasHotels = hotels.length > 0;
@@ -618,8 +623,8 @@ export default function AgencyNewBookingPage() {
                   booking_service_kind: kind,
                   arrival_date: arrivalDate,
                   departure_date: departureDate,
-                  arrival_time: kind === "formula_snav" ? SNAV_ARRIVAL_TIMES[0] : kind === "formula_medmar" ? MEDMAR_ARRIVAL_TIMES[0] : prev.arrival_time,
-                  departure_time: kind === "formula_snav" ? SNAV_DEPARTURE_TIMES[0] : kind === "formula_medmar" ? MEDMAR_DEPARTURE_TIMES[0] : prev.departure_time
+                  arrival_time: kind === "formula_snav" ? SNAV_ARRIVAL_TIMES[0]! : kind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_ARRIVAL_TIMES[0]! : kind === "formula_medmar_pozzuoli" ? MEDMAR_POZZUOLI_ARRIVAL_TIMES[0]! : prev.arrival_time,
+                  departure_time: kind === "formula_snav" ? SNAV_DEPARTURE_TIMES[0]! : kind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_DEPARTURE_TIMES[0]! : kind === "formula_medmar_pozzuoli" ? MEDMAR_POZZUOLI_DEPARTURE_TIMES[0]! : prev.departure_time
                 };
               });
               if (kind !== "bus_city_hotel") {
@@ -774,15 +779,18 @@ export default function AgencyNewBookingPage() {
           </label>
           <label className="text-sm">
             {contextLabels.arrivalTimeLabel}
-            {(isSnavKind || selectedKind === "formula_medmar") ? (
+            {(isSnavKind || selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli") ? (
               <select
                 className="input-saas mt-1"
                 value={form.arrival_time}
                 onChange={(event) => setForm((prev) => ({ ...prev, arrival_time: event.target.value }))}
               >
-                {(isSnavKind ? SNAV_ARRIVAL_TIMES : MEDMAR_ARRIVAL_TIMES).map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
+                {isSnavKind
+                  ? SNAV_ARRIVAL_TIMES.map((t) => <option key={t} value={t}>{t}</option>)
+                  : (selectedKind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_ARRIVALS_WITH_PORTO : MEDMAR_POZZUOLI_ARRIVALS_WITH_PORTO).map(({ time, porto }) => (
+                    <option key={time} value={time}>{time} — {porto === "ISCHIA PORTO" ? "Ischia Porto" : "Casamicciola"}</option>
+                  ))
+                }
               </select>
             ) : (
               <input
@@ -812,15 +820,18 @@ export default function AgencyNewBookingPage() {
           </label>
           <label className="text-sm">
             {contextLabels.departureTimeLabel}
-            {(isSnavKind || selectedKind === "formula_medmar") ? (
+            {(isSnavKind || selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli") ? (
               <select
                 className="input-saas mt-1"
                 value={form.departure_time}
                 onChange={(event) => setForm((prev) => ({ ...prev, departure_time: event.target.value }))}
               >
-                {(isSnavKind ? SNAV_DEPARTURE_TIMES : MEDMAR_DEPARTURE_TIMES).map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
+                {isSnavKind
+                  ? SNAV_DEPARTURE_TIMES.map((t) => <option key={t} value={t}>{t}</option>)
+                  : (selectedKind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_DEPARTURES_WITH_PORTO : MEDMAR_POZZUOLI_DEPARTURES_WITH_PORTO).map(({ time, porto }) => (
+                    <option key={time} value={time}>{time} — {porto === "ISCHIA PORTO" ? "Ischia Porto" : "Casamicciola"}</option>
+                  ))
+                }
               </select>
             ) : (
               <input

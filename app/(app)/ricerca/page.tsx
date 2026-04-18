@@ -39,7 +39,8 @@ const STATUS_COLOR: Record<string, string> = {
 };
 const KIND_LABEL: Record<string, string> = {
   formula_snav: "Formula SNAV",
-  formula_medmar: "Formula MEDMAR",
+  formula_medmar_napoli: "Formula MEDMAR Napoli",
+  formula_medmar_pozzuoli: "Formula MEDMAR Pozzuoli",
   transfer_airport_hotel: "Transfer aeroporto",
   transfer_airport_hotel_exclusive: "Transfer aeroporto (esclusivo)",
   transfer_train_hotel: "Transfer stazione",

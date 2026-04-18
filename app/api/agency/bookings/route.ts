@@ -28,7 +28,8 @@ async function hasColumn(admin: SupabaseClient, table: string, column: string) {
 
 function kindLabel(kind: BookingKind) {
   if (kind === "formula_snav") return "Formula SNAV";
-  if (kind === "formula_medmar") return "Formula MEDMAR";
+  if (kind === "formula_medmar_napoli") return "Formula MEDMAR Napoli";
+  if (kind === "formula_medmar_pozzuoli") return "Formula MEDMAR Pozzuoli";
   if (kind === "transfer_port_hotel") return "Transfer porto - hotel";
   if (kind === "transfer_airport_hotel") return "Transfer aeroporto - hotel";
   if (kind === "transfer_airport_hotel_exclusive") return "Transfer aeroporto - hotel (esclusivo)";
@@ -42,7 +43,8 @@ function kindLabel(kind: BookingKind) {
 
 function vesselFromKind(kind: BookingKind, transportCode: string, busCityOrigin?: string) {
   if (kind === "formula_snav") return "SNAV";
-  if (kind === "formula_medmar") return "MEDMAR";
+  if (kind === "formula_medmar_napoli") return "MEDMAR Napoli";
+  if (kind === "formula_medmar_pozzuoli") return "MEDMAR Pozzuoli";
   if (kind === "transfer_airport_hotel") return transportCode ? `Volo ${transportCode}` : "Transfer aeroporto";
   if (kind === "transfer_airport_hotel_exclusive") return transportCode ? `Volo ${transportCode}` : "Transfer aeroporto esclusivo";
   if (kind === "transfer_airport_hotel_aliscafo") return transportCode ? `Volo ${transportCode}` : "Transfer aeroporto (aliscafo)";

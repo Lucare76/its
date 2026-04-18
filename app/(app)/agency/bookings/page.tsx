@@ -73,7 +73,8 @@ const serviceKindLabels: Record<string, string> = {
   bus_city_hotel: "Bus città - Hotel",
   excursion: "Escursione",
   formula_snav: "Formula SNAV",
-  formula_medmar: "Formula MEDMAR"
+  formula_medmar_napoli: "Formula MEDMAR Napoli",
+  formula_medmar_pozzuoli: "Formula MEDMAR Pozzuoli"
 };
 
 function formatDateTime(date: string | null, time: string | null) {

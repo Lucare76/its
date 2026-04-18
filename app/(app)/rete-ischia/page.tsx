@@ -537,7 +537,7 @@ function computePickupHint(svc: DepartureService): { pickup: string; boat_co: st
 
   if (kind === "formula_snav" || (kind === "transfer_port_hotel" && svc.vessel?.toLowerCase().includes("snav"))) {
     rule = getPickupRule(agency, "snav", tFrom, zona);
-  } else if (kind === "formula_medmar" || (kind === "transfer_port_hotel" && svc.vessel?.toLowerCase().includes("medmar"))) {
+  } else if (kind === "formula_medmar_napoli" || kind === "formula_medmar_pozzuoli" || (kind === "transfer_port_hotel" && svc.vessel?.toLowerCase().includes("medmar"))) {
     rule = getPickupRule(agency, "medmar", tFrom, zona);
   } else if (kind === "transfer_train_hotel") {
     rule = getPickupRule(agency, "treno_traghetto", tFrom, zona)

@@ -16,7 +16,7 @@ import { autoLinkImportedServices } from "@/lib/server/transfer-ischia-blocks";
 
 export const runtime = "nodejs";
 
-const presetSchema = z.enum(["generic_transfer", "formula_snav", "formula_medmar", "transfer_airport", "transfer_station", "linea_bus"]);
+const presetSchema = z.enum(["generic_transfer", "formula_snav", "formula_medmar_napoli", "formula_medmar_pozzuoli", "transfer_airport", "transfer_station", "linea_bus"]);
 
 const rowSchema = z.object({
   row_index: z.number().int().min(1),
@@ -65,10 +65,16 @@ const presetConfig = {
     bookingKind: "transfer_port_hotel",
     serviceTypeCode: "transfer_port_hotel"
   },
-  formula_medmar: {
-    vessel: "MEDMAR",
+  formula_medmar_napoli: {
+    vessel: "MEDMAR Napoli",
+    meetingPoint: "Porto Napoli",
+    bookingKind: "formula_medmar_napoli",
+    serviceTypeCode: "transfer_port_hotel"
+  },
+  formula_medmar_pozzuoli: {
+    vessel: "MEDMAR Pozzuoli",
     meetingPoint: "Porto Pozzuoli",
-    bookingKind: "transfer_port_hotel",
+    bookingKind: "formula_medmar_pozzuoli",
     serviceTypeCode: "transfer_port_hotel"
   },
   transfer_airport: {

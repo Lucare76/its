@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
@@ -9,6 +10,11 @@ import { agencyBookingCreateSchema } from "@/lib/validation";
 import {
   SNAV_ARRIVAL_TIMES, MEDMAR_ARRIVAL_TIMES,
   SNAV_DEPARTURE_TIMES, MEDMAR_DEPARTURE_TIMES,
+  MEDMAR_NAPOLI_ARRIVAL_TIMES, MEDMAR_POZZUOLI_ARRIVAL_TIMES,
+  MEDMAR_NAPOLI_DEPARTURE_TIMES, MEDMAR_POZZUOLI_DEPARTURE_TIMES,
+  MEDMAR_NAPOLI_ARRIVALS_WITH_PORTO, MEDMAR_POZZUOLI_ARRIVALS_WITH_PORTO,
+  MEDMAR_NAPOLI_DEPARTURES_WITH_PORTO, MEDMAR_POZZUOLI_DEPARTURES_WITH_PORTO,
+  getAvailableSnavDepartureTimes, getAvailableSnavArrivalTimes,
   getArrivalPorto, getDepartureRule, normalizeZonaToPickup,
 } from "@/lib/snav-medmar-lookup";
 
@@ -47,7 +53,8 @@ function deriveBusLineFamily(lineCode: string): BusLineFamily {
 
 const kindOptions: Array<{ value: BookingKind; label: string }> = [
   { value: "formula_snav", label: "Formula SNAV" },
-  { value: "formula_medmar", label: "Formula MEDMAR" },
+  { value: "formula_medmar_napoli", label: "Formula MEDMAR — Napoli" },
+  { value: "formula_medmar_pozzuoli", label: "Formula MEDMAR — Pozzuoli" },
   { value: "transfer_airport_hotel", label: "Transfer aeroporto → hotel" },
   { value: "transfer_airport_hotel_exclusive", label: "Transfer aeroporto → hotel (esclusivo)" },
   { value: "transfer_airport_hotel_aliscafo", label: "Transfer aeroporto → hotel (aliscafo 🚤)" },
@@ -81,8 +88,8 @@ function nextSunday(fromDate: string, skipSame = false): string {
 }
 
 function bookingContext(kind: BookingKind) {
-  if (kind === "formula_snav" || kind === "formula_medmar") {
-    const label = kind === "formula_snav" ? "SNAV" : "MEDMAR";
+  if (kind === "formula_snav" || kind === "formula_medmar_napoli" || kind === "formula_medmar_pozzuoli") {
+    const label = kind === "formula_snav" ? "SNAV" : kind === "formula_medmar_napoli" ? "MEDMAR Napoli" : "MEDMAR Pozzuoli";
     return {
       arrivalDateLabel: `Data arrivo ${label}*`,
       arrivalTimeLabel: `Ora arrivo ${label}*`,
@@ -155,6 +162,7 @@ function bookingContext(kind: BookingKind) {
 }
 
 export default function OpsNewBookingPage() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("Compila i campi obbligatori e conferma la prenotazione.");
   const [submitting, setSubmitting] = useState(false);
@@ -200,9 +208,8 @@ export default function OpsNewBookingPage() {
   const [savingAgency, setSavingAgency] = useState(false);
 
   // Duplicate detection modal
-  const [duplicateWarning, setDuplicateWarning] = useState<{
-    match_type: "exact" | "name_only";
-    customer_name: string;
+  type DuplicateService = {
+    id: string;
     date: string;
     direction: string;
     hotel_name: string;
@@ -211,6 +218,11 @@ export default function OpsNewBookingPage() {
     phone: string | null;
     arrival_date: string | null;
     departure_date: string | null;
+  };
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    match_type: "exact" | "name_only";
+    customer_name: string;
+    services: DuplicateService[];
   } | null>(null);
 
   // Bus catalog
@@ -221,6 +233,7 @@ export default function OpsNewBookingPage() {
   const [selectedBusStop, setSelectedBusStop] = useState<BusCatalogStop | null>(null);
   const [busReturnTime, setBusReturnTime] = useState<string | null>(null);
   const [busReturnTimeLoading, setBusReturnTimeLoading] = useState(false);
+  const [replaceError, setReplaceError] = useState<string | null>(null);
 
   // Excursion lines
   const [excursionLines, setExcursionLines] = useState<Array<{ id: string; name: string }>>([]);
@@ -271,7 +284,7 @@ export default function OpsNewBookingPage() {
   // Auto-fill prelievo hotel per SNAV/MEDMAR (calcolato inline per evitare forward-reference)
   useEffect(() => {
     const kind = form.booking_service_kind;
-    if (kind !== "formula_snav" && kind !== "formula_medmar") return;
+    if (kind !== "formula_snav" && kind !== "formula_medmar_napoli" && kind !== "formula_medmar_pozzuoli") return;
     const company = kind === "formula_snav" ? "snav" as const : "medmar" as const;
     const hotel = hotels.find((h) => h.id === form.hotel_id);
     const zona = normalizeZonaToPickup(hotel?.zone ?? null);
@@ -280,12 +293,29 @@ export default function OpsNewBookingPage() {
     if (pickup) setForm((prev) => ({ ...prev, departure_time: pickup }));
   }, [form.booking_service_kind, ferryDepTime, form.hotel_id, hotels]);
 
-  // Reset ferry dep time quando cambia il tipo servizio
+  // Reset ferry dep time quando cambia il tipo servizio o la data di partenza
   useEffect(() => {
     const kind = form.booking_service_kind;
-    if (kind === "formula_snav") setFerryDepTime(SNAV_DEPARTURE_TIMES[0] ?? "07:10");
-    else if (kind === "formula_medmar") setFerryDepTime(MEDMAR_DEPARTURE_TIMES[0] ?? "06:20");
-  }, [form.booking_service_kind]);
+    if (kind === "formula_snav") {
+      const available = getAvailableSnavDepartureTimes(form.departure_date);
+      if (!available.includes(ferryDepTime)) setFerryDepTime(available[0] ?? "07:10");
+    } else if (kind === "formula_medmar_napoli") {
+      if (!MEDMAR_NAPOLI_DEPARTURE_TIMES.includes(ferryDepTime)) setFerryDepTime(MEDMAR_NAPOLI_DEPARTURE_TIMES[0] ?? "06:25");
+    } else if (kind === "formula_medmar_pozzuoli") {
+      if (!MEDMAR_POZZUOLI_DEPARTURE_TIMES.includes(ferryDepTime)) setFerryDepTime(MEDMAR_POZZUOLI_DEPARTURE_TIMES[0] ?? "06:20");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.booking_service_kind, form.departure_date]);
+
+  // Reset arrival_time SNAV se non disponibile nella data selezionata
+  useEffect(() => {
+    if (form.booking_service_kind !== "formula_snav") return;
+    const available = getAvailableSnavArrivalTimes(form.arrival_date);
+    if (!available.includes(form.arrival_time)) {
+      setForm((prev) => ({ ...prev, arrival_time: available[0] ?? "" }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.booking_service_kind, form.arrival_date]);
 
   // Escursioni
   useEffect(() => {
@@ -365,7 +395,7 @@ export default function OpsNewBookingPage() {
 
   const selectedKind = form.booking_service_kind;
   const isSnavKind = selectedKind === "formula_snav";
-  const isMedmarKind = selectedKind === "formula_medmar";
+  const isMedmarKind = selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli";
   const isSnavMedmar = isSnavKind || isMedmarKind;
   const snavMedmarCompany = isSnavKind ? "snav" : isMedmarKind ? "medmar" : null;
 
@@ -392,7 +422,7 @@ export default function OpsNewBookingPage() {
   }, [snavMedmarCompany, ferryDepTime, hotelZona]);
 
   const isTransportCodeRequired = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_airport_hotel_aliscafo" || selectedKind === "transfer_train_hotel" || selectedKind === "transfer_train_hotel_aliscafo";
-  const showTransportCodeField = isTransportCodeRequired || selectedKind === "bus_city_hotel" || selectedKind === "excursion" || selectedKind === "formula_snav" || selectedKind === "formula_medmar";
+  const showTransportCodeField = isTransportCodeRequired || selectedKind === "bus_city_hotel" || selectedKind === "excursion" || selectedKind === "formula_snav" || selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli";
   const isBusOriginRequired = selectedKind === "bus_city_hotel";
   const isExcursionTitleRequired = selectedKind === "excursion";
   const hasHotels = hotels.length > 0;
@@ -421,14 +451,19 @@ export default function OpsNewBookingPage() {
       if (!form.customer_first_name.trim() || !form.customer_last_name.trim()) warnings.push("Completa nome e cognome cliente.");
     }
     if (!form.customer_phone.trim()) warnings.push("Inserisci un telefono cliente.");
+    const paxNum = Number(form.pax);
+    if (!form.pax || isNaN(paxNum) || paxNum < 1) warnings.push("Inserisci il numero di pax (min. 1).");
     if (!form.hotel_id) warnings.push("Seleziona la struttura.");
-    if (!form.notes.trim()) warnings.push("Aggiungi una nota operativa.");
+    if (!form.arrival_date) warnings.push(`${contextLabels.arrivalDateLabel.replace("*", "").trim()} mancante.`);
+    if (!form.arrival_time) warnings.push(`${contextLabels.arrivalTimeLabel.replace("*", "").trim()} mancante.`);
+    if (!form.departure_date) warnings.push(`${contextLabels.departureDateLabel.replace("*", "").trim()} mancante.`);
+    if (!form.departure_time) warnings.push(`${contextLabels.departureTimeLabel.replace("*", "").trim()} mancante.`);
     if (isTransportCodeRequired && !form.transport_code.trim()) warnings.push(`${contextLabels.transportCodeLabel.replace("*", "")} mancante.`);
     if (isTransportCodeRequired && contextLabels.transportCodeReturnLabel && !form.transport_code_return.trim()) warnings.push(`${contextLabels.transportCodeReturnLabel.replace("*", "")} mancante.`);
     if (isBusOriginRequired && !form.bus_city_origin.trim()) warnings.push("Città di partenza bus mancante.");
     if (isExcursionTitleRequired && !form.excursion_title.trim()) warnings.push("Nome escursione mancante.");
     return warnings;
-  }, [contextLabels.transportCodeLabel, contextLabels.transportCodeReturnLabel, form.bus_city_origin, form.customer_first_name, form.customer_last_name, form.customer_phone, form.excursion_title, form.hotel_id, form.notes, form.transport_code, form.transport_code_return, isBusOriginRequired, isExcursionTitleRequired, isSnavKind, isTransportCodeRequired]);
+  }, [contextLabels.arrivalDateLabel, contextLabels.arrivalTimeLabel, contextLabels.departureDateLabel, contextLabels.departureTimeLabel, contextLabels.transportCodeLabel, contextLabels.transportCodeReturnLabel, form.arrival_date, form.arrival_time, form.bus_city_origin, form.customer_first_name, form.customer_last_name, form.customer_phone, form.departure_date, form.departure_time, form.excursion_title, form.hotel_id, form.notes, form.pax, form.transport_code, form.transport_code_return, isBusOriginRequired, isExcursionTitleRequired, isSnavKind, isTransportCodeRequired]);
 
   const doSubmit = async () => {
     if (!accessToken) { setMessage("Sessione non valida. Rifai login."); return; }
@@ -484,6 +519,31 @@ export default function OpsNewBookingPage() {
   };
 
   const submit = async (force = false) => {
+    // Blocco duro: evidenzia campi obbligatori mancanti
+    if (reviewWarnings.length > 0) {
+      const errs: Record<string, string> = {};
+      if (isSnavKind) {
+        if (!form.customer_last_name.trim()) errs.customer_last_name = "Campo obbligatorio";
+      } else {
+        if (!form.customer_first_name.trim()) errs.customer_first_name = "Campo obbligatorio";
+        if (!form.customer_last_name.trim()) errs.customer_last_name = "Campo obbligatorio";
+      }
+      if (!form.customer_phone.trim()) errs.customer_phone = "Campo obbligatorio";
+      if (!form.pax || isNaN(Number(form.pax)) || Number(form.pax) < 1) errs.pax = "Minimo 1 pax";
+      if (!form.hotel_id) errs.hotel_id = "Seleziona la struttura";
+      if (!form.arrival_date) errs.arrival_date = "Campo obbligatorio";
+      if (!form.arrival_time) errs.arrival_time = "Campo obbligatorio";
+      if (!form.departure_date) errs.departure_date = "Campo obbligatorio";
+      if (!form.departure_time) errs.departure_time = "Campo obbligatorio";
+      if (isTransportCodeRequired && !form.transport_code.trim()) errs.transport_code = "Campo obbligatorio";
+      if (isTransportCodeRequired && contextLabels.transportCodeReturnLabel && !form.transport_code_return.trim()) errs.transport_code_return = "Campo obbligatorio";
+      if (isBusOriginRequired && !form.bus_city_origin.trim()) errs.bus_city_origin = "Campo obbligatorio";
+      if (isExcursionTitleRequired && !form.excursion_title.trim()) errs.excursion_title = "Campo obbligatorio";
+      setFieldErrors(errs);
+      setMessage("Compila tutti i campi obbligatori (*) prima di continuare.");
+      return;
+    }
+
     const parsed = agencyBookingCreateSchema.safeParse(normalizedPayload);
     if (!parsed.success) { await doSubmit(); return; }
 
@@ -502,18 +562,17 @@ export default function OpsNewBookingPage() {
           const dupBody = await res.json() as {
             found: boolean;
             match_type?: "exact" | "name_only";
-            service?: { date: string; direction: string; hotel_name: string; agency_name: string | null; pax: number | null; phone: string | null; arrival_date: string | null; departure_date: string | null; };
+            services?: Array<{ id: string; date: string; direction: string; hotel_name: string; agency_name: string | null; pax: number | null; phone: string | null; arrival_date: string | null; departure_date: string | null; }>;
           };
-          if (dupBody.found && dupBody.service) {
+          if (dupBody.found && dupBody.services && dupBody.services.length > 0) {
+            setReplaceError(null);
             setDuplicateWarning({
               match_type: dupBody.match_type ?? "exact",
-              customer_name: customerName, date: dupBody.service.date,
-              direction: dupBody.service.direction === "arrival" ? "Arrivo" : "Partenza",
-              hotel_name: dupBody.service.hotel_name,
-              agency_name: dupBody.service.agency_name ?? null,
-              pax: dupBody.service.pax ?? null,
-              phone: dupBody.service.phone ?? null,
-              arrival_date: dupBody.service.arrival_date, departure_date: dupBody.service.departure_date,
+              customer_name: customerName,
+              services: dupBody.services.map((s) => ({
+                ...s,
+                direction: s.direction === "arrival" ? "Arrivo" : "Partenza",
+              })),
             });
             return;
           }
@@ -559,8 +618,8 @@ export default function OpsNewBookingPage() {
                 booking_service_kind: kind,
                 arrival_date: kind === "bus_city_hotel" ? nextSunday(prev.arrival_date) : prev.arrival_date,
                 departure_date: kind === "bus_city_hotel" ? nextSunday(prev.departure_date, true) : prev.departure_date,
-                arrival_time: kind === "formula_snav" ? SNAV_ARRIVAL_TIMES[0]! : kind === "formula_medmar" ? MEDMAR_ARRIVAL_TIMES[0]! : prev.arrival_time,
-                departure_time: kind === "formula_snav" ? SNAV_DEPARTURE_TIMES[0]! : kind === "formula_medmar" ? MEDMAR_DEPARTURE_TIMES[0]! : prev.departure_time
+                arrival_time: kind === "formula_snav" ? SNAV_ARRIVAL_TIMES[0]! : kind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_ARRIVAL_TIMES[0]! : kind === "formula_medmar_pozzuoli" ? MEDMAR_POZZUOLI_ARRIVAL_TIMES[0]! : prev.arrival_time,
+                departure_time: kind === "formula_snav" ? SNAV_DEPARTURE_TIMES[0]! : kind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_DEPARTURE_TIMES[0]! : kind === "formula_medmar_pozzuoli" ? MEDMAR_POZZUOLI_DEPARTURE_TIMES[0]! : prev.departure_time
               }));
               if (kind !== "bus_city_hotel") { setBusSearch(""); setSelectedBusStop(null); }
             }}
@@ -647,15 +706,17 @@ export default function OpsNewBookingPage() {
         <div className="md:col-span-2 grid grid-cols-2 gap-3">
           <label className="text-sm">
             {contextLabels.arrivalDateLabel}
-            <input type="date" className="input-saas mt-1" value={form.arrival_date}
+            <input type="date" className={`input-saas mt-1${fieldErrors.arrival_date ? " border-rose-400" : ""}`} value={form.arrival_date}
               onChange={(e) => {
                 const newDate = e.target.value;
                 setForm((prev) => ({
                   ...prev, arrival_date: newDate,
                   departure_date: prev.booking_service_kind === "excursion" || prev.departure_date < newDate ? newDate : prev.departure_date
                 }));
+                setFieldErrors((prev) => { const n = { ...prev }; delete n.arrival_date; return n; });
               }}
             />
+            {fieldErrors.arrival_date ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.arrival_date}</span> : null}
             {selectedKind === "bus_city_hotel" && form.arrival_date && !isSunday(form.arrival_date) ? (
               <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
             ) : null}
@@ -664,10 +725,18 @@ export default function OpsNewBookingPage() {
             {isSnavMedmar ? "Orario traghetto arrivo*" : contextLabels.arrivalTimeLabel}
             {isSnavMedmar ? (
               <select className="input-saas mt-1" value={form.arrival_time} onChange={(e) => setForm((prev) => ({ ...prev, arrival_time: e.target.value }))}>
-                {(isSnavKind ? SNAV_ARRIVAL_TIMES : MEDMAR_ARRIVAL_TIMES).map((t) => <option key={t} value={t}>{t}</option>)}
+                {isSnavKind
+                  ? getAvailableSnavArrivalTimes(form.arrival_date).map((t) => <option key={t} value={t}>{t}</option>)
+                  : (selectedKind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_ARRIVALS_WITH_PORTO : MEDMAR_POZZUOLI_ARRIVALS_WITH_PORTO).map(({ time, porto }) => (
+                    <option key={time} value={time}>{time} — {porto === "ISCHIA PORTO" ? "Ischia Porto" : "Casamicciola"}</option>
+                  ))
+                }
               </select>
             ) : (
-              <input type="time" className="input-saas mt-1" value={form.arrival_time} onChange={(e) => setForm((prev) => ({ ...prev, arrival_time: e.target.value }))} />
+              <>
+                <input type="time" className={`input-saas mt-1${fieldErrors.arrival_time ? " border-rose-400" : ""}`} value={form.arrival_time} onChange={(e) => { setForm((prev) => ({ ...prev, arrival_time: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.arrival_time; return n; }); }} />
+                {fieldErrors.arrival_time ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.arrival_time}</span> : null}
+              </>
             )}
           </label>
         </div>
@@ -676,10 +745,11 @@ export default function OpsNewBookingPage() {
         <div className="md:col-span-2 grid grid-cols-2 gap-3">
           <label className="text-sm">
             {contextLabels.departureDateLabel}
-            <input type="date" className={`input-saas mt-1${selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
+            <input type="date" className={`input-saas mt-1${fieldErrors.departure_date ? " border-rose-400" : selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
               value={form.departure_date} min={form.arrival_date}
-              onChange={(e) => setForm((prev) => ({ ...prev, departure_date: e.target.value }))}
+              onChange={(e) => { setForm((prev) => ({ ...prev, departure_date: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.departure_date; return n; }); }}
             />
+            {fieldErrors.departure_date ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.departure_date}</span> : null}
             {selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? (
               <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
             ) : null}
@@ -692,12 +762,18 @@ export default function OpsNewBookingPage() {
                 value={ferryDepTime}
                 onChange={(e) => setFerryDepTime(e.target.value)}
               >
-                {(isSnavKind ? SNAV_DEPARTURE_TIMES : MEDMAR_DEPARTURE_TIMES).map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
+                {isSnavKind
+                  ? getAvailableSnavDepartureTimes(form.departure_date).map((t) => <option key={t} value={t}>{t}</option>)
+                  : (selectedKind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_DEPARTURES_WITH_PORTO : MEDMAR_POZZUOLI_DEPARTURES_WITH_PORTO).map(({ time, porto }) => (
+                    <option key={time} value={time}>{time} — {porto === "ISCHIA PORTO" ? "Ischia Porto" : "Casamicciola"}</option>
+                  ))
+                }
               </select>
             ) : (
-              <input type="time" className="input-saas mt-1" value={form.departure_time} onChange={(e) => setForm((prev) => ({ ...prev, departure_time: e.target.value }))} />
+              <>
+                <input type="time" className={`input-saas mt-1${fieldErrors.departure_time ? " border-rose-400" : ""}`} value={form.departure_time} onChange={(e) => { setForm((prev) => ({ ...prev, departure_time: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.departure_time; return n; }); }} />
+                {fieldErrors.departure_time ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.departure_time}</span> : null}
+              </>
             )}
           </label>
         </div>
@@ -741,9 +817,10 @@ export default function OpsNewBookingPage() {
             {contextLabels.transportCodeReturnLabel ? (
               <label className="text-sm">
                 {contextLabels.transportCodeReturnLabel}
-                <input className="input-saas mt-1" placeholder={contextLabels.transportCodeReturnPlaceholder ?? ""}
-                  value={form.transport_code_return} onChange={(e) => setForm((prev) => ({ ...prev, transport_code_return: e.target.value }))}
+                <input className={`input-saas mt-1${fieldErrors.transport_code_return ? " border-rose-400" : ""}`} placeholder={contextLabels.transportCodeReturnPlaceholder ?? ""}
+                  value={form.transport_code_return} onChange={(e) => { setForm((prev) => ({ ...prev, transport_code_return: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.transport_code_return; return n; }); }}
                 />
+                {fieldErrors.transport_code_return ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.transport_code_return}</span> : null}
               </label>
             ) : null}
           </>
@@ -851,7 +928,7 @@ export default function OpsNewBookingPage() {
 
         {/* Note */}
         <label className="text-sm md:col-span-2">
-          Note*
+          Note
           <textarea rows={4} className="input-saas mt-1 min-h-[104px]" value={form.notes}
             onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
           />
@@ -884,47 +961,119 @@ export default function OpsNewBookingPage() {
           </div>
         )}
 
+        {message && !message.startsWith("Prenotazione creata") ? (
+          <div className="md:col-span-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800">
+            {message}
+          </div>
+        ) : null}
+        {message && message.startsWith("Prenotazione creata") ? (
+          <div className="md:col-span-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+            {message}
+          </div>
+        ) : null}
+
         <button type="button" onClick={() => void submit()} disabled={submitting || !isFormValid}
           className="btn-primary md:col-span-2 disabled:opacity-60">
           {submitting ? "Creazione in corso..." : "Conferma prenotazione"}
         </button>
       </div>
 
-      <p className="section-subtitle mt-4">{message}</p>
-
       {/* Modal duplicato */}
       {duplicateWarning ? (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/45 p-4" onClick={() => setDuplicateWarning(null)}>
-          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="text-center text-4xl">{duplicateWarning.match_type === "exact" ? "⚠️" : "🔎"}</div>
             <h2 className="text-center text-lg font-bold text-slate-800">
               {duplicateWarning.match_type === "exact" ? "Prenotazione già esistente" : "Possibile duplicato"}
             </h2>
             <p className="text-center text-sm text-slate-500">
               {duplicateWarning.match_type === "exact"
-                ? "Esiste già una pratica attiva con stesso nome e telefono:"
-                : "Stesso nome ma telefono diverso — potrebbe essere un duplicato:"}
+                ? "Esiste già una pratica attiva con stesso nome e telefono. Si tratta di una modifica?"
+                : "Stesso nome ma telefono diverso — potrebbe essere una modifica di una pratica esistente?"}
             </p>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 divide-y divide-slate-100 text-sm">
+            {/* Card nuova prenotazione */}
+            <div className="w-full rounded-xl border-2 border-indigo-300 bg-indigo-50 divide-y divide-indigo-100 text-sm">
+              <div className="px-3 py-2 bg-indigo-600 rounded-t-xl">
+                <span className="text-xs font-bold text-white uppercase tracking-wide">Nuova prenotazione</span>
+              </div>
               {[
                 ["Cliente", duplicateWarning.customer_name],
-                ["Tipo", duplicateWarning.direction],
-                ...(duplicateWarning.arrival_date ? [["Arrivo", duplicateWarning.arrival_date]] : []),
-                ...(duplicateWarning.departure_date ? [["Partenza", duplicateWarning.departure_date]] : []),
-                ["Hotel", duplicateWarning.hotel_name],
-                ...(duplicateWarning.pax ? [["Pax", String(duplicateWarning.pax)]] : []),
-                ...(duplicateWarning.phone ? [["Telefono", duplicateWarning.phone]] : []),
-                ...(duplicateWarning.agency_name ? [["Agenzia", duplicateWarning.agency_name]] : []),
+                ["Tipo", "Arrivo"],
+                ...(form.arrival_date ? [["Arrivo", form.arrival_date.split("-").reverse().join("/")]] : []),
+                ...(form.departure_date ? [["Partenza", form.departure_date.split("-").reverse().join("/")]] : []),
+                ["Hotel", hotels.find((h) => h.id === form.hotel_id)?.name ?? "—"],
+                ...(form.pax ? [["Pax", form.pax]] : []),
+                ...(form.customer_phone ? [["Telefono", form.customer_phone]] : []),
+                ...(form.agency_id ? [["Agenzia", agencies.find((a) => a.id === form.agency_id)?.name ?? "—"]] : []),
               ].map(([label, value]) => (
-                <div key={label} className="flex justify-between px-3 py-2">
-                  <span className="font-semibold text-slate-500">{label}</span>
-                  <span className="text-slate-800">{value}</span>
+                <div key={String(label)} className="flex justify-between px-3 py-1.5">
+                  <span className="font-semibold text-indigo-600">{label}</span>
+                  <span className="text-right text-slate-800">{value}</span>
                 </div>
               ))}
             </div>
-            <p className="text-center text-xs text-slate-400">Vuoi continuare comunque con l&apos;inserimento?</p>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setDuplicateWarning(null)}
+
+            <div className="flex gap-3 flex-wrap">
+              {duplicateWarning.services.map((svc) => (
+                <div key={svc.id} className="flex-1 min-w-[220px] rounded-xl border border-slate-200 bg-slate-50 divide-y divide-slate-100 text-sm">
+                  {[
+                    ["Cliente", duplicateWarning.customer_name],
+                    ["Tipo", svc.direction],
+                    ...(svc.arrival_date ? [["Arrivo", svc.arrival_date]] : []),
+                    ...(svc.departure_date ? [["Partenza", svc.departure_date]] : []),
+                    ["Hotel", svc.hotel_name],
+                    ...(svc.pax ? [["Pax", String(svc.pax)]] : []),
+                    ...(svc.phone ? [["Telefono", svc.phone]] : []),
+                    ...(svc.agency_name ? [["Agenzia", svc.agency_name]] : []),
+                  ].map(([label, value]) => (
+                    <div key={label} className="flex justify-between px-3 py-1.5">
+                      <span className="font-semibold text-slate-500">{label}</span>
+                      <span className="text-right text-slate-800">{value}</span>
+                    </div>
+                  ))}
+                  <div className="px-3 py-2">
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={async () => {
+                          if (!accessToken) return;
+                          setSubmitting(true);
+                          try {
+                            const payload = {
+                              ...normalizedPayload,
+                              agency_id: normalizedPayload.agency_id || null,
+                              agency_quoted_price_cents: normalizedPayload.agency_quoted_price_cents ?? null,
+                            };
+                            const res = await fetch(`/api/ops/services/${svc.id}/replace`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+                              body: JSON.stringify(payload),
+                            });
+                            const body = await res.json() as { ok?: boolean; error?: string };
+                            if (!res.ok || !body.ok) {
+                              setReplaceError(body.error ?? "Errore durante la sostituzione. Riprova.");
+                            } else {
+                              router.push(`/services`);
+                            }
+                          } finally {
+                            setSubmitting(false);
+                          }
+                        }}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 py-2 text-sm font-semibold text-white hover:bg-indigo-700 transition disabled:opacity-60"
+                      >
+                        {submitting ? "Sostituzione..." : "✏️ Sostituisci pratica esistente"}
+                      </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {replaceError ? (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-700 font-medium">
+                {replaceError}
+              </div>
+            ) : null}
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={() => { setDuplicateWarning(null); setReplaceError(null); }}
                 className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50">
                 Annulla
               </button>

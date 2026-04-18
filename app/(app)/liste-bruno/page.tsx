@@ -259,6 +259,7 @@ function ServiceCard({
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-slate-600">
             {isDeparture ? (
               <>
+                <span className="font-mono font-bold text-slate-800">⏰ {svc.time.slice(0, 5)}</span>
                 {svc.connection_time && (
                   <span className="font-semibold text-orange-700">
                     {svc.place_type === "airport" ? "✈️" : "🚂"} {svc.connection_time.slice(0, 5)}
@@ -548,6 +549,14 @@ export default function ListeBrunoPage() {
   const [editState, setEditState] = useState<EditState>({ place_type: "station", meeting_point: "", porto_bruno: "", vessel: "" });
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Aggiungi manuale per nome
+  type SearchResult = { id: string; customer_name: string; pax: number; date: string; time: string; departure_date: string | null; departure_time: string | null; vessel: string; hotel_name: string | null };
+  const [manualQuery, setManualQuery] = useState("");
+  const [manualResults, setManualResults] = useState<SearchResult[]>([]);
+  const [manualSearching, setManualSearching] = useState(false);
+  const [manualAdding, setManualAdding] = useState<string | null>(null);
+  const [manualError, setManualError] = useState<string | null>(null);
+
   const load = useCallback(async (d: string) => {
     const token = await getToken();
     if (!token) { setLoading(false); return; }
@@ -635,6 +644,31 @@ export default function ListeBrunoPage() {
       setEditingId(null);
     } else {
       setMessage({ type: "err", text: body?.error ?? "Errore salvataggio." });
+    }
+  };
+
+  const handleManualSearch = async (q: string) => {
+    setManualQuery(q);
+    setManualError(null);
+    if (q.trim().length < 2) { setManualResults([]); return; }
+    setManualSearching(true);
+    const body = await post("search_services", { query: q });
+    setManualSearching(false);
+    setManualResults(body?.results ?? []);
+  };
+
+  const handleManualAdd = async (serviceId: string, placeType: PlaceType) => {
+    setManualAdding(serviceId);
+    setManualError(null);
+    const body = await post("set_place_type", { service_id: serviceId, place_type: placeType });
+    setManualAdding(null);
+    if (body?.ok) {
+      setArrivals(body.arrivals ?? []);
+      setDepartures(body.departures ?? []);
+      setManualResults([]);
+      setManualQuery("");
+    } else {
+      setManualError(body?.error ?? "Errore.");
     }
   };
 
@@ -752,6 +786,52 @@ export default function ListeBrunoPage() {
             )}
           </button>
         ))}
+      </div>
+
+      {/* Aggiungi manuale per nome */}
+      <div className="border-b border-slate-100 bg-slate-50 px-6 py-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500 shrink-0">Aggiungi manuale:</span>
+          <div className="relative">
+            <input
+              value={manualQuery}
+              onChange={(e) => void handleManualSearch(e.target.value)}
+              placeholder="Cerca per nome cliente..."
+              className="w-64 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
+            />
+            {manualSearching && <span className="absolute right-2 top-1 text-xs text-slate-400">...</span>}
+          </div>
+          {manualError && <span className="text-xs text-rose-600">{manualError}</span>}
+        </div>
+        {manualResults.length > 0 && (
+          <div className="mt-2 space-y-1">
+            {manualResults.map((r) => (
+              <div key={r.id} className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+                <span className="font-semibold text-slate-800 uppercase">{r.customer_name}</span>
+                <span className="text-slate-500">📥 {r.date.split("-").reverse().join("/")} {r.time}</span>
+                {r.departure_date && <span className="text-slate-500">📤 {r.departure_date.split("-").reverse().join("/")} {r.departure_time ?? ""}</span>}
+                <span className="text-slate-500">{r.hotel_name ?? r.vessel}</span>
+                <span className="text-slate-400">{r.pax} pax</span>
+                <div className="ml-auto flex gap-1">
+                  <button
+                    onClick={() => void handleManualAdd(r.id, "airport")}
+                    disabled={manualAdding === r.id}
+                    className="rounded bg-sky-600 px-2 py-0.5 text-white hover:bg-sky-700 disabled:opacity-40"
+                  >
+                    {manualAdding === r.id ? "..." : "✈️ Aeroporto"}
+                  </button>
+                  <button
+                    onClick={() => void handleManualAdd(r.id, "station")}
+                    disabled={manualAdding === r.id}
+                    className="rounded bg-blue-600 px-2 py-0.5 text-white hover:bg-blue-700 disabled:opacity-40"
+                  >
+                    {manualAdding === r.id ? "..." : "🚂 Stazione"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Contenuto */}

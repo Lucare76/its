@@ -30,7 +30,8 @@ function AgencyKindBadge({ service }: { service: Service }) {
   if (!kind) return null;
   const map: Record<string, { label: string; className: string }> = {
     formula_snav: { label: "SNAV", className: "border-indigo-200 bg-indigo-50 text-indigo-700" },
-    formula_medmar: { label: "MEDMAR", className: "border-sky-200 bg-sky-50 text-sky-700" },
+    formula_medmar_napoli: { label: "MEDMAR Napoli", className: "border-sky-200 bg-sky-50 text-sky-700" },
+    formula_medmar_pozzuoli: { label: "MEDMAR Pozzuoli", className: "border-sky-200 bg-sky-50 text-sky-700" },
     transfer_airport_hotel: { label: "Agenzia · Aeroporto", className: "border-amber-200 bg-amber-50 text-amber-700" },
     transfer_airport_hotel_exclusive: { label: "Agenzia · Aeroporto 🔒", className: "border-amber-300 bg-amber-100 text-amber-800" },
     transfer_airport_hotel_aliscafo: { label: "Agenzia · Aeroporto 🚤", className: "border-cyan-200 bg-cyan-50 text-cyan-700" },
@@ -73,6 +74,11 @@ function EditServiceModal({
   const [time, setTime] = useState((service.time ?? "").slice(0, 5));
   const [phone, setPhone] = useState(service.phone ?? "");
   const [notes, setNotes] = useState(service.notes ?? "");
+  const [arrivalDate, setArrivalDate] = useState((service as Record<string, unknown>).arrival_date as string ?? "");
+  const [arrivalTime, setArrivalTime] = useState(((service as Record<string, unknown>).arrival_time as string ?? "").slice(0, 5));
+  const [departureDate, setDepartureDate] = useState((service as Record<string, unknown>).departure_date as string ?? "");
+  const [departureTime, setDepartureTime] = useState(((service as Record<string, unknown>).departure_time as string ?? "").slice(0, 5));
+  const [transportCode, setTransportCode] = useState((service as Record<string, unknown>).transport_code as string ?? "");
   const [localAgencies, setLocalAgencies] = useState<AgencyOption[]>(agencies);
   const [agencyId, setAgencyId] = useState(() => {
     if (service.agency_id) return service.agency_id;
@@ -165,6 +171,11 @@ function EditServiceModal({
         billing_party_name: selectedAgency?.name ?? null,
         place_type: placeType,
         meeting_point: placeType !== "hotel" ? meetingPoint.trim() || null : null,
+        arrival_date: arrivalDate || null,
+        arrival_time: arrivalTime || null,
+        departure_date: departureDate || null,
+        departure_time: departureTime || null,
+        transport_code: transportCode.trim() || null,
       })
       .eq("id", service.id)
       .eq("tenant_id", tenantId);
@@ -245,6 +256,33 @@ function EditServiceModal({
           <label className="text-xs font-medium text-slate-600 sm:col-span-2">
             Telefono
             <input value={phone} onChange={(e) => setPhone(e.target.value)} className="mt-1 input-saas w-full" />
+          </label>
+
+          {/* Date prenotazione */}
+          <div className="sm:col-span-2">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Date prenotazione</p>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs font-medium text-slate-600">
+                Data arrivo
+                <input type="date" value={arrivalDate} onChange={(e) => setArrivalDate(e.target.value)} className="mt-1 input-saas w-full" />
+              </label>
+              <label className="text-xs font-medium text-slate-600">
+                Ora arrivo
+                <input type="time" step="300" value={arrivalTime} onChange={(e) => setArrivalTime(e.target.value)} className="mt-1 input-saas w-full" />
+              </label>
+              <label className="text-xs font-medium text-slate-600">
+                Data partenza
+                <input type="date" value={departureDate} onChange={(e) => setDepartureDate(e.target.value)} className="mt-1 input-saas w-full" />
+              </label>
+              <label className="text-xs font-medium text-slate-600">
+                Ora partenza
+                <input type="time" step="300" value={departureTime} onChange={(e) => setDepartureTime(e.target.value)} className="mt-1 input-saas w-full" />
+              </label>
+            </div>
+          </div>
+          <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+            Rif. volo / treno
+            <input value={transportCode} onChange={(e) => setTransportCode(e.target.value)} className="mt-1 input-saas w-full" placeholder="Es. FR1234 / IC345" />
           </label>
           <div className="sm:col-span-2">
             <div className="flex items-center justify-between mb-1">

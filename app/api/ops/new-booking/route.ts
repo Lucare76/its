@@ -19,7 +19,8 @@ type BookingKind = z.infer<typeof agencyBookingCreateSchema>["booking_service_ki
 
 function vesselFromKind(kind: BookingKind, transportCode: string, busCityOrigin?: string) {
   if (kind === "formula_snav") return "SNAV";
-  if (kind === "formula_medmar") return "MEDMAR";
+  if (kind === "formula_medmar_napoli") return "MEDMAR Napoli";
+  if (kind === "formula_medmar_pozzuoli") return "MEDMAR Pozzuoli";
   if (kind === "transfer_airport_hotel" || kind === "transfer_airport_hotel_exclusive")
     return transportCode ? `Volo ${transportCode}` : "Transfer aeroporto";
   if (kind === "transfer_airport_hotel_aliscafo")
@@ -89,11 +90,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Data/ora arrivo deve precedere partenza
-    const arrivalMs = new Date(`${d.arrival_date}T${d.arrival_time}:00`).getTime();
-    const departureMs = new Date(`${d.departure_date}T${d.departure_time}:00`).getTime();
-    if (departureMs < arrivalMs) {
-      return NextResponse.json({ error: "La data di partenza non può essere precedente all'arrivo." }, { status: 400 });
+    // Data arrivo deve precedere partenza
+    // Per SNAV/MEDMAR confronta solo le date (departure_time è pickup hotel, non ora traghetto)
+    const isFerryKind = bookingKind === "formula_snav" || bookingKind === "formula_medmar_napoli" || bookingKind === "formula_medmar_pozzuoli";
+    if (isFerryKind) {
+      if (d.departure_date < d.arrival_date) {
+        return NextResponse.json({ error: "La data di partenza non può essere precedente alla data di arrivo." }, { status: 400 });
+      }
+    } else {
+      const arrivalMs = new Date(`${d.arrival_date}T${d.arrival_time}:00`).getTime();
+      const departureMs = new Date(`${d.departure_date}T${d.departure_time}:00`).getTime();
+      if (departureMs < arrivalMs) {
+        return NextResponse.json({ error: "La data di partenza non può essere precedente all'arrivo." }, { status: 400 });
+      }
     }
 
     const insert = {
@@ -109,7 +118,7 @@ export async function POST(request: NextRequest) {
       vessel: (() => {
         const base = vesselFromKind(bookingKind, transportCode, busCityOrigin);
         // Per SNAV/MEDMAR arricchisce il vessel con porto e orario traghetto arrivo
-        if ((bookingKind === "formula_snav" || bookingKind === "formula_medmar") && d.arrival_time) {
+        if ((bookingKind === "formula_snav" || bookingKind === "formula_medmar_napoli" || bookingKind === "formula_medmar_pozzuoli") && d.arrival_time) {
           return `${base} ${d.arrival_time}`;
         }
         return base;
@@ -171,10 +180,19 @@ export async function POST(request: NextRequest) {
           pax: d.pax,
           hotel_id: d.hotel_id,
           customer_name: customerName,
+          customer_first_name: (d.customer_first_name ?? "").trim() || null,
+          customer_last_name: d.customer_last_name.trim(),
           phone: d.customer_phone.trim(),
           notes,
           agency_id: agencyId,
           billing_party_name: billingPartyName,
+          booking_service_kind: bookingKind,
+          arrival_date: d.arrival_date,
+          arrival_time: d.arrival_time,
+          departure_date: d.departure_date,
+          departure_time: d.departure_time,
+          transport_code: transportCode || null,
+          bus_city_origin: busCityOrigin || null,
         })
         .select("id")
         .single();

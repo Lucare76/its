@@ -35,7 +35,8 @@ const TRANSFER_KINDS = [
 
 const FORMULA_KINDS = [
   { key: "formula_snav",   label: "Formula SNAV" },
-  { key: "formula_medmar", label: "Formula MEDMAR" },
+  { key: "formula_medmar_napoli", label: "Formula MEDMAR Napoli" },
+  { key: "formula_medmar_pozzuoli", label: "Formula MEDMAR Pozzuoli" },
 ];
 
 const EXCURSION_PRELOADED: { key: string; label: string; defaultCostCents: number }[] = [

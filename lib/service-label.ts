@@ -14,7 +14,8 @@ export type AgencyBookingKind =
   | "bus_city_hotel"
   | "excursion"
   | "formula_snav"
-  | "formula_medmar";
+  | "formula_medmar_napoli"
+  | "formula_medmar_pozzuoli";
 
 export interface ServiceLabelContext {
   kind: AgencyBookingKind;
@@ -63,8 +64,10 @@ export function buildServiceLabel(ctx: ServiceLabelContext): string {
     }
     case "formula_snav":
       return `Formula SNAV${hotel}`;
-    case "formula_medmar":
-      return `Formula MEDMAR${hotel}`;
+    case "formula_medmar_napoli":
+      return `Formula MEDMAR Napoli${hotel}`;
+    case "formula_medmar_pozzuoli":
+      return `Formula MEDMAR Pozzuoli${hotel}`;
   }
 }
 

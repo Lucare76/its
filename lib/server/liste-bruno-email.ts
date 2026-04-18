@@ -93,7 +93,8 @@ function portoDaVessel(vessel: string): string {
   const v = vessel.toLowerCase();
   if (v.includes("snav")) return "Pozzuoli";
   if (v.includes("alilauro")) return "Napoli Beverello";
-  if (v.includes("medmar")) return "Napoli Beverello";
+  if (v.includes("medmar napoli")) return "Napoli Beverello";
+  if (v.includes("medmar pozzuoli") || v.includes("medmar")) return "Pozzuoli";
   return vessel;
 }
 

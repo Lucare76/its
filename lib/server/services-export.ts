@@ -217,8 +217,12 @@ function operationalCategory(service: ServiceRow) {
     service.transport_mode === "hydrofoil" ||
     service.transport_mode === "ferry"
   ) {
+    const kind = service.booking_service_kind ?? "";
+    if (kind === "formula_medmar_napoli") return "Formula MEDMAR Napoli";
+    if (kind === "formula_medmar_pozzuoli") return "Formula MEDMAR Pozzuoli";
     const transportReference = `${service.transport_code ?? ""} ${service.vessel ?? ""}`.toLowerCase();
-    if (transportReference.includes("medmar")) return "Formula Medmar";
+    if (transportReference.includes("medmar napoli")) return "Formula MEDMAR Napoli";
+    if (transportReference.includes("medmar")) return "Formula MEDMAR Pozzuoli";
     if (transportReference.includes("snav")) return "Formula SNAV";
     return "Transfer porto";
   }

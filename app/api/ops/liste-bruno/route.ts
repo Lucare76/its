@@ -54,11 +54,11 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
   const tenantId = auth.membership.tenant_id;
 
   // Arrivi Bruno: solo aeroporto (non stazione — la stazione è gestita da altri vettori)
-  const AIRPORT_KINDS = ["transfer_airport_hotel", "transfer_airport_hotel_exclusive"];
+  const AIRPORT_KINDS = ["transfer_airport_hotel", "transfer_airport_hotel_aliscafo", "transfer_airport_hotel_exclusive", "transfer_train_hotel_aliscafo"];
 
-  // Partenze Bruno: solo servizi esclusivi Sosandra aliscafo (volo o treno)
-  // I trasferimenti standard (non _exclusive) sono gestiti dal Piano del Giorno con i vettori
-  const EXCLUSIVE_KINDS = ["transfer_airport_hotel_exclusive", "transfer_train_hotel_exclusive"];
+  // Partenze Bruno: servizi esclusivi Sosandra aliscafo (volo o treno) + aliscafo aeroporto
+  // I trasferimenti standard (non _exclusive, non aliscafo) sono gestiti dal Piano del Giorno con i vettori
+  const EXCLUSIVE_KINDS = ["transfer_airport_hotel_exclusive", "transfer_train_hotel_exclusive", "transfer_airport_hotel_aliscafo", "transfer_train_hotel_aliscafo"];
 
   const [arrivalsRes, departuresRes, settingsRes] = await Promise.all([
     // @ts-expect-error auth type resolved at runtime
@@ -113,6 +113,12 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
     return "station"; // tutti gli altri STATION_KINDS
   }
 
+  // Le note che iniziano con [pdf_import] sono metadati interni — non visibili a Bruno
+  function cleanNotes(raw: string | null): string {
+    if (!raw) return "";
+    return raw.includes("[pdf_import]") ? "" : raw;
+  }
+
   const mapArrival = (r: Row): BrunoArrival => ({
     id: r.id,
     customer_name: r.customer_name,
@@ -124,7 +130,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
     meeting_point: r.meeting_point,
     phone: r.phone,
     hotel_name: r.hotels?.name ?? null,
-    notes: r.notes ?? "",
+    notes: cleanNotes(r.notes),
   });
 
   const mapDeparture = (r: Row): BrunoDeparture => {
@@ -157,9 +163,9 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
 
     const transportTypes: string[] = [];
     if (kind === "transfer_train_hotel") transportTypes.push("treno_traghetto", "treno_aliscafo");
-    else if (kind === "transfer_airport_hotel") transportTypes.push("volo_traghetto", "volo_aliscafo");
+    else if (kind === "transfer_airport_hotel" || kind === "transfer_airport_hotel_aliscafo") transportTypes.push("volo_traghetto", "volo_aliscafo");
     else if (kind === "formula_snav") transportTypes.push("snav");
-    else if (kind === "formula_medmar" || kind.startsWith("medmar")) transportTypes.push("medmar");
+    else if (kind === "formula_medmar_napoli" || kind === "formula_medmar_pozzuoli" || kind.startsWith("medmar")) transportTypes.push("medmar");
     // Fallback su place_type se booking_service_kind non è riconosciuto
     if (transportTypes.length === 0) {
       if (effectivePlaceType === "airport") transportTypes.push("volo_traghetto", "volo_aliscafo");
@@ -227,7 +233,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
       phone: r.phone,
       porto_bruno,
       hotel_name: r.hotels?.name ?? null,
-      notes: r.notes ?? "",
+      notes: cleanNotes(r.notes),
     };
   };
 
@@ -299,6 +305,41 @@ export async function POST(req: NextRequest) {
 
       if (error) throw new Error(error.message);
       return NextResponse.json({ ok: true });
+    }
+
+    // ── search_services: cerca servizi per nome cliente (per aggiunte manuali) ──
+    if (action === "search_services") {
+      const { query } = body as { query: string };
+      if (!query || query.trim().length < 2) return NextResponse.json({ ok: true, results: [] });
+
+      const { data, error } = await auth.admin
+        .from("services")
+        .select("id, customer_name, pax, date, time, departure_date, departure_time, vessel, place_type, booking_service_kind, hotels(name)")
+        .eq("tenant_id", tenantId)
+        .eq("is_draft", false)
+        .neq("status", "cancelled")
+        .ilike("customer_name", `%${query.trim()}%`)
+        .order("date", { ascending: false })
+        .limit(10);
+
+      if (error) throw new Error(error.message);
+
+      type SearchRow = { id: string; customer_name: string; pax: number; date: string; time: string; departure_date: string | null; departure_time: string | null; vessel: string; place_type: string; booking_service_kind: string | null; hotels: { name: string } | null };
+      const results = ((data ?? []) as SearchRow[]).map((r) => ({
+        id: r.id,
+        customer_name: r.customer_name,
+        pax: r.pax,
+        date: r.date,
+        time: r.time.slice(0, 5),
+        departure_date: r.departure_date ?? null,
+        departure_time: r.departure_time ? r.departure_time.slice(0, 5) : null,
+        vessel: r.vessel,
+        place_type: r.place_type,
+        booking_service_kind: r.booking_service_kind,
+        hotel_name: r.hotels?.name ?? null,
+      }));
+
+      return NextResponse.json({ ok: true, results });
     }
 
     // ── set_place_type: aggiorna place_type di un servizio ────────────────
