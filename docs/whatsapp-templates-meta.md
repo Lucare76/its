@@ -4,10 +4,12 @@
 ## Istruzioni invio a Meta
 1. Accedi a business.facebook.com
 2. Vai su WhatsApp > Gestione template > Crea template
-3. Categoria: UTILITY
-4. Copia il testo del Body esattamente come scritto (con {{1}}, {{2}})
-5. Nessun Header, nessun Footer, nessun bottone — solo Body
-6. Ogni template va sottomesso DUE VOLTE: una versione IT e una EN (stesso nome, lingue diverse)
+3. Categoria: **UTILITY**
+4. Copia il testo del Body esattamente come scritto (con {{1}}, {{2}} ecc.)
+5. Footer: `Ischia Transfer Service • 0813331053`
+6. Bottone tipo PHONE_NUMBER: testo `📞 Chiama assistenza`, numero `+390813331053`
+7. Ogni template va sottomesso DUE VOLTE: una versione IT e una EN (stesso nome, lingue diverse)
+8. Template Bus (`its_qr_bus`): aggiungere Header di tipo IMAGE (il sistema invia il QR dinamicamente)
 
 ---
 
@@ -18,40 +20,44 @@
 
 **Body:**
 ```
-Gentile {{1}},
+🛬 Gentile {{1}},
 
-in vista del suo arrivo, ecco le informazioni per il ritiro:
+benvenuto! Ecco tutto ciò che ti serve sapere per il tuo arrivo.
 
-1. Nella hall degli arrivi in aeroporto troverà il nostro assistente con il cartello Ischia Transfer Service.
+*In aeroporto:*
+📍 Il nostro assistente ti aspetta in sala arrivi con il cartello Ischia Transfer Service.
 
-2. Il nostro team la accompagnerà al porto di imbarco per la navigazione verso Ischia.
+*Al porto:*
+🚢 Ti accompagniamo all'imbarco per la traversata verso Ischia.
 
-3. Allo sbarco a Ischia, il nostro assistente la attenderà con lo stesso cartello.
+*A Ischia:*
+🏝 All'arrivo trovi di nuovo il nostro assistente con lo stesso cartello.
 
-Per qualsiasi necessità siamo a sua disposizione.
-Ischia Transfer Service
+✅ Siamo pronti ad accoglierti!
 ```
 **Variabili:** {{1}} = nome cliente
 
 ---
 
 ## 2. `its_info_stazione` — Lingua: Italiano
-**Trigger:** booking_service_kind = transfer_train_hotel, prefisso +39
+**Trigger:** booking_service_kind = transfer_train_hotel / transfer_station_hotel, prefisso +39
 
 **Body:**
 ```
-Gentile {{1}},
+🚉 Gentile {{1}},
 
-in vista della sua partenza, ecco le informazioni per il ritiro in stazione:
+benvenuto! Ecco tutto ciò che ti serve sapere per il tuo arrivo in stazione.
 
-1. Alla stazione troverà il nostro assistente con il cartello Ischia Transfer Service.
+*In stazione:*
+📍 Il nostro assistente ti aspetta con il cartello Ischia Transfer Service.
 
-2. Il nostro team la accompagnerà al porto di imbarco per la navigazione verso Ischia.
+*Al porto:*
+🚢 Ti accompagniamo all'imbarco per la traversata verso Ischia.
 
-3. Allo sbarco a Ischia, il nostro assistente la attenderà con lo stesso cartello.
+*A Ischia:*
+🏝 All'arrivo trovi di nuovo il nostro assistente con lo stesso cartello.
 
-Per qualsiasi necessità siamo a sua disposizione.
-Ischia Transfer Service
+✅ Siamo pronti ad accoglierti!
 ```
 **Variabili:** {{1}} = nome cliente
 
@@ -62,16 +68,17 @@ Ischia Transfer Service
 
 **Body:**
 ```
-Gentile {{1}},
+⛴ Gentile {{1}},
 
-in vista della sua partenza da {{2}}, ecco le informazioni utili:
+sei in partenza da {{2}}? Ecco le informazioni utili per il tuo viaggio.
 
-1. Allo sbarco a Ischia troverà il nostro assistente con il cartello Ischia Transfer Service.
+*All'arrivo a Ischia:*
+📍 Il nostro assistente ti aspetta allo sbarco con il cartello Ischia Transfer Service.
 
-2. Il giorno della partenza da Ischia riceverà via WhatsApp l'orario e i dettagli del trasferimento verso {{2}}.
+*Per il rientro:*
+📱 Riceverai via WhatsApp orario e dettagli del trasferimento verso {{2}}.
 
-Per qualsiasi necessità siamo a sua disposizione.
-Ischia Transfer Service
+✅ Buon viaggio!
 ```
 **Variabili:** {{1}} = nome cliente, {{2}} = "Napoli Beverello" oppure "Pozzuoli"
 
@@ -82,114 +89,158 @@ Ischia Transfer Service
 
 **Body:**
 ```
-Gentile {{1}},
+⛴ Gentile {{1}},
 
-in vista della sua partenza con SNAV, ecco le informazioni utili:
+sei in arrivo con SNAV? Ecco le informazioni utili per il tuo sbarco.
 
-1. Allo sbarco a Casamicciola si rechi presso le biglietterie SNAV.
+*A Casamicciola:*
+📍 Recati alle biglietterie SNAV — il nostro assistente ti aspetta con il cartello Ischia Transfer Service.
 
-2. Alle biglietterie troverà il nostro assistente con il cartello Ischia Transfer Service.
+*Per il rientro:*
+📱 Riceverai via WhatsApp orario e dettagli del trasferimento.
 
-3. Il giorno della partenza da Ischia riceverà via WhatsApp l'orario e i dettagli del trasferimento.
-
-Per qualsiasi necessità siamo a sua disposizione.
-Ischia Transfer Service
+✅ Buon viaggio!
 ```
 **Variabili:** {{1}} = nome cliente
 
 ---
 
+## 5. `its_qr_bus` — Lingua: Italiano
+**Trigger:** booking_service_kind = bus_city_hotel, prefisso +39
+**Header:** IMAGE (QR code dinamico — inviato dal sistema)
+
+**Body:**
+```
+🚌 Gentile {{1}},
+
+il tuo QR code per salire sul bus è qui sopra.
+
+*Come funziona:*
+📍 Mostra il QR all'autista al momento della salita.
+🗓 Il servizio è previsto per il {{2}}.
+
+✅ Salva questo messaggio — ti servirà il giorno del viaggio!
+```
+**Variabili:** {{1}} = nome cliente, {{2}} = data servizio (es. 2025-07-15)
+
+---
+
 # VERSIONI INGLESI (lingua: en) — per numeri con prefisso non +39
 
-## 5. `its_info_aeroporto_en` — Lingua: English
+## 6. `its_info_aeroporto_en` — Lingua: English
 **Trigger:** booking_service_kind = transfer_airport_hotel, prefisso non +39
 
 **Body:**
 ```
-Dear {{1}},
+🛬 Dear {{1}},
 
-here is the information for your arrival at the airport:
+welcome! Here is everything you need to know for your arrival.
 
-1. In the arrivals hall, our assistant will be waiting for you with an Ischia Transfer Service sign.
+*At the airport:*
+📍 Our assistant will be waiting for you in the arrivals hall with an Ischia Transfer Service sign.
 
-2. Our team will transfer you to the port for the crossing to Ischia.
+*At the port:*
+🚢 We will accompany you to the boarding area for the crossing to Ischia.
 
-3. Upon arrival in Ischia, our assistant will be waiting for you with the same sign.
+*In Ischia:*
+🏝 Upon arrival, our assistant will be waiting again with the same sign.
 
-We are at your disposal for any questions.
-Ischia Transfer Service
+✅ We are ready to welcome you!
 ```
 **Variables:** {{1}} = customer name
 
 ---
 
-## 6. `its_info_stazione_en` — Lingua: English
-**Trigger:** booking_service_kind = transfer_train_hotel, prefisso non +39
+## 7. `its_info_stazione_en` — Lingua: English
+**Trigger:** booking_service_kind = transfer_train_hotel / transfer_station_hotel, prefisso non +39
 
 **Body:**
 ```
-Dear {{1}},
+🚉 Dear {{1}},
 
-here is the information for your departure from the train station:
+welcome! Here is everything you need to know for your arrival at the train station.
 
-1. At the station, our assistant will be waiting for you with an Ischia Transfer Service sign.
+*At the station:*
+📍 Our assistant will be waiting for you with an Ischia Transfer Service sign.
 
-2. Our team will transfer you to the port for the crossing to Ischia.
+*At the port:*
+🚢 We will accompany you to the boarding area for the crossing to Ischia.
 
-3. Upon arrival in Ischia, our assistant will be waiting for you with the same sign.
+*In Ischia:*
+🏝 Upon arrival, our assistant will be waiting again with the same sign.
 
-We are at your disposal for any questions.
-Ischia Transfer Service
+✅ We are ready to welcome you!
 ```
 **Variables:** {{1}} = customer name
 
 ---
 
-## 7. `its_info_medmar_en` — Lingua: English
+## 8. `its_info_medmar_en` — Lingua: English
 **Trigger:** booking_service_kind = formula_medmar_napoli / formula_medmar_pozzuoli, prefisso non +39
 
 **Body:**
 ```
-Dear {{1}},
+⛴ Dear {{1}},
 
-here is the information for your departure from {{2}}:
+departing from {{2}}? Here is the information for your trip.
 
-1. Upon arrival in Ischia, our assistant will be waiting for you with an Ischia Transfer Service sign.
+*Upon arrival in Ischia:*
+📍 Our assistant will be waiting for you at the dock with an Ischia Transfer Service sign.
 
-2. On the day of your departure from Ischia, you will receive via WhatsApp the time and details of the transfer to {{2}}.
+*For your return:*
+📱 You will receive via WhatsApp the time and details of the transfer to {{2}}.
 
-We are at your disposal for any questions.
-Ischia Transfer Service
+✅ Have a great trip!
 ```
 **Variables:** {{1}} = customer name, {{2}} = "Naples (Beverello)" or "Pozzuoli"
 
 ---
 
-## 8. `its_info_snav_en` — Lingua: English
+## 9. `its_info_snav_en` — Lingua: English
 **Trigger:** booking_service_kind = formula_snav, prefisso non +39
 
 **Body:**
 ```
-Dear {{1}},
+⛴ Dear {{1}},
 
-here is the information for your SNAV departure:
+arriving with SNAV? Here is what you need to know upon disembarkation.
 
-1. Upon arrival at Casamicciola, please go to the SNAV ticket office.
+*At Casamicciola:*
+📍 Please go to the SNAV ticket office — our assistant will be waiting with an Ischia Transfer Service sign.
 
-2. At the SNAV ticket office, our assistant will be waiting for you with an Ischia Transfer Service sign.
+*For your return:*
+📱 You will receive via WhatsApp the time and details of the transfer.
 
-3. On the day of your departure from Ischia, you will receive via WhatsApp the time and details of the transfer.
-
-We are at your disposal for any questions.
-Ischia Transfer Service
+✅ Have a great trip!
 ```
 **Variables:** {{1}} = customer name
 
 ---
 
+## 10. `its_qr_bus_en` — Lingua: English
+**Trigger:** booking_service_kind = bus_city_hotel, prefisso non +39
+**Header:** IMAGE (dynamic QR code — sent by the system)
+
+**Body:**
+```
+🚌 Dear {{1}},
+
+your QR code to board the bus is shown above.
+
+*How it works:*
+📍 Show the QR to the driver when boarding.
+🗓 Your service is scheduled for {{2}}.
+
+✅ Save this message — you will need it on the day of your trip!
+```
+**Variables:** {{1}} = customer name, {{2}} = service date (e.g. 2025-07-15)
+
+---
+
 ## Note anti-ban
 - Categoria UTILITY: approvazione rapida, nessun limite giornaliero di invio
-- Nessun link, nessun emoji, nessun numero di telefono nel body
-- Spread automatico: gli arrivi di domenica vengono distribuiti su lunedi-giovedi (3-6gg prima)
+- Emoji e testo strutturato: meta accetta emoji in UTILITY se il contenuto è chiaro e non promozionale
+- Spread automatico: arrivi domenica distribuiti su lunedì-giovedì (3-6gg prima) via hash del service_id
 - Rilevamento lingua automatico: prefisso +39 = italiano, altri = inglese
-- Deduplicazione integrata: ogni cliente riceve il messaggio al massimo una volta per prenotazione
+- Deduplicazione integrata: ogni cliente riceve il messaggio al massimo una volta per prenotazione (kind=info_3d)
+- Bottone PHONE_NUMBER: i bottoni non contano come "call to action" promozionale in UTILITY

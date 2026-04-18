@@ -178,13 +178,17 @@ async function runCron(request: NextRequest) {
       ? `${appUrl}/api/public/qr/${svc.id as string}`
       : null;
 
+    const extraParams = info.needsDate
+      ? [...info.parameters, svc.date as string]
+      : info.parameters;
+
     const result = await sendInfoTemplate(
       phoneNumberId,
       accessToken,
       phone,
       info.templateName,
       (svc.customer_name as string) ?? "",
-      info.parameters,
+      extraParams,
       lang,
       qrUrl
     );

@@ -364,7 +364,7 @@ export async function sendWhatsAppReminder(
 export function selectInfoTemplate(
   bookingKind: string | null | undefined,
   lang: string = "it"
-): { templateName: string; parameters: string[]; hasQrHeader?: boolean } | null {
+): { templateName: string; parameters: string[]; hasQrHeader?: boolean; needsDate?: boolean } | null {
   const suffix     = lang === "en" ? "_en" : "";
   const aeroporto  = (process.env.WHATSAPP_TEMPLATE_INFO_AEROPORTO ?? "its_info_aeroporto") + suffix;
   const stazione   = (process.env.WHATSAPP_TEMPLATE_INFO_STAZIONE  ?? "its_info_stazione")  + suffix;
@@ -385,7 +385,8 @@ export function selectInfoTemplate(
       return { templateName: snav, parameters: [] };
     case "bus_city_hotel": {
       const busName = (process.env.WHATSAPP_TEMPLATE_INFO_BUS ?? "its_qr_bus") + suffix;
-      return { templateName: busName, parameters: [], hasQrHeader: true };
+      // {{2}} = data servizio — passata dal cron
+      return { templateName: busName, parameters: [], hasQrHeader: true, needsDate: true };
     }
     default:
       return null;
