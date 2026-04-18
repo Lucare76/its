@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ExportServicesButton } from "@/components/export-services-button";
-import { KpiCard } from "@/components/kpi-card";
-import { ServicesTable } from "@/components/services-table";
-import { EmptyState, PageHeader, SidePanel } from "@/components/ui";
+import { EmptyState, SidePanel } from "@/components/ui";
 import { needsInboxReview } from "@/lib/inbox-review";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { formatServiceSlot, getCustomerFullName, getOutboundTime } from "@/lib/service-display";
@@ -166,7 +164,6 @@ export default function OperatorDashboardPage() {
   const todayServices = data.services.filter((service) => todayServiceIds.has(service.id));
   const todayArrivals = todayInstances.filter((instance) => instance.direction === "arrival").length;
   const todayDepartures = todayInstances.filter((instance) => instance.direction === "departure").length;
-  const todayPdfServices = todayServices.filter((service) => getServicePdfOperationalMeta(service, data.inboundEmails).isPdf);
   const todayPdfNeedsAttention = todayServices.filter((service) => getServicePdfOperationalMeta(service, data.inboundEmails).reviewRecommended);
   const inboxToReview = data.inboundEmails.filter((email) => needsInboxReview(email.parsed_json));
   const futureInstances = buildOperationalInstances(data.services).filter((instance) => instance.date > todayIso && instance.date <= next48hIso);
@@ -514,7 +511,6 @@ export default function OperatorDashboardPage() {
         </div>
       </div>
 
-      <ServicesTable services={todayServices} hotels={data.hotels} assignments={data.assignments} memberships={data.memberships} statusEvents={data.statusEvents} inboundEmails={data.inboundEmails} />
       <SidePanel open={isSuggestionsOpen} onClose={() => setIsSuggestionsOpen(false)} title="Supporto assegnazioni" subtitle="Suggerimenti interni opzionali: il servizio resta operativo anche senza assegnazione.">
         <div className="mt-4 space-y-3">
           {suggestedGroups.filter((group) => !appliedGroupIds.includes(group.id) && !skippedGroupIds.includes(group.id)).length === 0 ? (
