@@ -927,7 +927,7 @@ export default function ArrivalsPage() {
                     <div className="flex flex-wrap items-center gap-1">
                       <AgencyKindBadge service={item.service} />
                       {item.service.billing_party_name ? (
-                        <span className="truncate text-[11px] text-slate-400" title={item.service.billing_party_name}>{item.service.billing_party_name}</span>
+                        <span className="truncate text-[11px] text-slate-400" title={item.service.billing_party_name}>{item.service.billing_party_name.toUpperCase()}</span>
                       ) : null}
                     </div>
                   </div>

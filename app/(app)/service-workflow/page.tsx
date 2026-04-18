@@ -455,7 +455,7 @@ export default function ServiceWorkflowPage() {
                         <div>
                           <p className="text-sm font-semibold text-text">{service.customer_name}</p>
                           <p className="text-xs text-muted">
-                            {formatDateLabel(service.date)} {service.time} - {service.billing_party_name ?? "Privato"}
+                            {formatDateLabel(service.date)} {service.time} - {(service.billing_party_name ?? "Privato").toUpperCase()}
                           </p>
                           <p className="text-xs text-muted">
                             {service.service_type_code ?? service.booking_service_kind ?? "N/D"} - {service.pax} pax
@@ -493,7 +493,7 @@ export default function ServiceWorkflowPage() {
                 <div className="mt-3 grid gap-2 text-sm text-text md:grid-cols-2">
                   <p><span className="text-muted">Data:</span> {formatDateLabel(selectedService.date)}</p>
                   <p><span className="text-muted">Ora:</span> {selectedService.time}</p>
-                  <p><span className="text-muted">Agenzia:</span> {selectedService.billing_party_name ?? "Privato"}</p>
+                  <p><span className="text-muted">Agenzia:</span> {(selectedService.billing_party_name ?? "Privato").toUpperCase()}</p>
                   <p><span className="text-muted">Telefono:</span> {selectedService.phone}</p>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">

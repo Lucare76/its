@@ -714,7 +714,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
           {selectedService.source_price_per_pax_cents ? (
             <p className="text-sm">Costo PDF/pax: {(selectedService.source_price_per_pax_cents / 100).toFixed(2)} {selectedService.source_amount_currency ?? "EUR"}</p>
           ) : null}
-          {selectedService.billing_party_name ? <p className="text-sm">Agenzia fatturazione: {selectedService.billing_party_name}</p> : null}
+          {selectedService.billing_party_name ? <p className="text-sm">Agenzia fatturazione: {selectedService.billing_party_name.toUpperCase()}</p> : null}
           <p className="text-sm">Tipo: {selectedService.service_type_code ?? selectedService.service_type ?? "transfer"}</p>
           <p className="text-sm">Nave: {selectedService.vessel}</p>
           <p className="text-sm">Hotel: {hotels.find((item) => item.id === selectedService.hotel_id)?.name ?? "N/D"}</p>

@@ -24,9 +24,7 @@ export type NavMainGroup = {
 };
 
 export function iconWrapClass(active: boolean) {
-  return active
-    ? "bg-slate-900 text-white shadow-sm"
-    : "bg-white text-slate-600 ring-1 ring-slate-200";
+  return active ? "text-white" : "text-slate-400";
 }
 
 export function renderNavIcon(icon: string) {

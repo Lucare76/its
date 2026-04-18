@@ -671,8 +671,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   return (
     <>
       <section className={`grid min-h-[calc(100vh-86px)] grid-cols-1 gap-5 py-4 md:py-6 ${authRole === "driver" ? "" : "md:grid-cols-[auto_1fr] md:gap-6"}`}>
-      <aside className={`sticky top-24 h-fit transition-all duration-200 ${authRole === "driver" ? "hidden" : `hidden md:block ${collapsed ? "w-[72px]" : "w-[260px]"}`}`}>
-        <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-3 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
+      <aside className={`sticky top-24 h-fit transition-all duration-200 ${authRole === "driver" ? "hidden" : `hidden md:block ${collapsed ? "w-[72px]" : "w-[280px]"}`}`}>
+        <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white p-3 shadow-[0_8px_40px_rgba(15,23,42,0.10)]">
 
           {/* Brand + collapse */}
           <div className="mb-3 flex items-center justify-between gap-2 rounded-2xl px-3 py-3 text-white" style={{ background: "linear-gradient(135deg,#1e3a8a,#4338ca,#7c3aed)" }}>
@@ -713,17 +713,16 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     <div key={href} className="group/fav relative">
                       <Link
                         href={href}
-                        className={`flex min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 pr-8 transition ${
+                        className={`flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 pr-8 transition ${
                           active
-                            ? "border-amber-100 bg-white text-amber-900 shadow-[0_4px_16px_rgba(245,158,11,0.10)]"
-                            : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                            ? "bg-slate-900 text-white"
+                            : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                         }`}
                       >
-                        {active ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-amber-400" /> : null}
-                        <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${iconWrapClass(active)}`}>
-                          {renderNavIcon(item.icon)}
+                        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center transition">
+                          <span className={iconWrapClass(active)}>{renderNavIcon(item.icon)}</span>
                         </span>
-                        <span className="truncate text-sm font-medium">{item.label}</span>
+                        <span className={`truncate text-sm ${active ? "font-semibold" : "font-medium"}`}>{item.label}</span>
                       </Link>
                       <button
                         type="button"
@@ -756,19 +755,18 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   <Link
                     href={item.href}
                     title={collapsed ? item.label : undefined}
-                    className={`relative flex min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 transition ${
+                    className={`relative flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 transition ${
                       active
-                        ? "border-indigo-100 bg-white text-indigo-900 shadow-[0_4px_16px_rgba(99,102,241,0.10)]"
-                        : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                        ? "bg-slate-900 text-white"
+                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                     } ${collapsed ? "justify-center" : !collapsed && (isFav || favoritesEditMode) ? "pr-8" : ""}`}
                   >
-                  {active ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-indigo-500" /> : null}
-                  <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${iconWrapClass(active)}`}>
-                    {renderNavIcon(item.icon)}
+                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center transition">
+                    <span className={iconWrapClass(active)}>{renderNavIcon(item.icon)}</span>
                   </span>
                   {!collapsed ? (
                     <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                      <span className="truncate text-sm font-medium">{item.label}</span>
+                      <span className={`truncate text-sm ${active ? "font-semibold" : "font-medium"}`}>{item.label}</span>
                       {badge > 0 ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
                           🔔 {badge > 99 ? "99+" : badge}
@@ -810,14 +808,13 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     type="button"
                     title={collapsed ? AGENZIE_GROUP.label : undefined}
                     onClick={() => { if (!collapsed) setAgenzieOpen((v) => !v); }}
-                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
+                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
                       groupActive
-                        ? "border-indigo-100 bg-white text-indigo-900 shadow-[0_4px_16px_rgba(99,102,241,0.10)]"
-                        : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                        ? "bg-slate-900 text-white"
+                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                     } ${collapsed ? "justify-center" : ""}`}
                   >
-                    {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-indigo-500" /> : null}
-                    <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${groupActive ? "bg-slate-900 text-white shadow-sm" : "bg-white text-slate-600 ring-1 ring-slate-200"}`}>
+                    <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center transition">
                       {renderNavIcon("C")}
                     </span>
                     {!collapsed ? (
@@ -853,10 +850,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                           <div key={item.href} className="group/fav relative">
                             <Link href={item.href}
                               className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                                active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                                active ? "bg-slate-900 text-white font-semibold" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                               } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
                             >
-                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
                                 {renderNavIcon(item.icon)}
                               </span>
                               <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
@@ -890,14 +887,14 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     type="button"
                     title={collapsed ? OPERATIVO_GROUP.label : undefined}
                     onClick={() => { if (!collapsed) setOperativoOpen((v) => !v); }}
-                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
+                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
                       groupActive
-                        ? "border-amber-100 bg-white text-amber-900 shadow-[0_4px_16px_rgba(245,158,11,0.10)]"
-                        : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                        ? "bg-slate-900 text-white"
+                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                     } ${collapsed ? "justify-center" : ""}`}
                   >
-                    {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-amber-500" /> : null}
-                    <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${groupActive ? "bg-slate-900 text-white shadow-sm" : "bg-white text-slate-600 ring-1 ring-slate-200"}`}>
+                    {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-1 rounded-r-full bg-amber-500" /> : null}
+                    <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${groupActive ? "bg-indigo-600 text-white shadow-[0_2px_8px_rgba(99,102,241,0.30)]" : "bg-slate-100 text-slate-500"}`}>
                       {renderNavIcon("O")}
                     </span>
                     {!collapsed ? (
@@ -930,10 +927,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                           <div key={item.href} className="group/fav relative">
                             <Link href={item.href}
                               className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                                active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                                active ? "bg-slate-900 text-white font-semibold" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                               } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
                             >
-                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
                                 {renderNavIcon(item.icon)}
                               </span>
                               <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
@@ -968,7 +965,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
                       groupActive
                         ? "border-slate-200 bg-white text-slate-950 shadow-[0_8px_20px_rgba(15,23,42,0.08)]"
-                        : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                     } ${collapsed ? "justify-center" : ""}`}
                   >
                     {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-red-500" /> : null}
@@ -993,10 +990,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                           <div key={item.href} className="group/fav relative">
                             <Link href={item.href}
                               className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                                active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                                active ? "bg-slate-900 text-white font-semibold" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                               } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
                             >
-                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
                                 {renderNavIcon(item.icon)}
                               </span>
                               <span className="truncate">{item.label}</span>
@@ -1028,7 +1025,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
                       groupActive
                         ? "border-slate-200 bg-white text-slate-950 shadow-[0_8px_20px_rgba(15,23,42,0.08)]"
-                        : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                     } ${collapsed ? "justify-center" : ""}`}
                   >
                     {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-pink-500" /> : null}
@@ -1053,10 +1050,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                           <div key={item.href} className="group/fav relative">
                             <Link href={item.href}
                               className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                                active ? "border-slate-200 bg-white font-semibold text-slate-950 shadow-sm" : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                                active ? "bg-slate-900 text-white font-semibold" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                               } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
                             >
-                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
                                 {renderNavIcon(item.icon)}
                               </span>
                               <span className="truncate">{item.label}</span>
@@ -1086,14 +1083,13 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   type="button"
                   title={collapsed ? "Impostazioni" : undefined}
                   onClick={() => setSettingsOpen((prev) => !prev)}
-                  className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
+                  className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2.5 text-left transition ${
                     isSettingsExpanded
-                      ? "border-slate-200 bg-white text-slate-950 shadow-[0_8px_20px_rgba(15,23,42,0.06)]"
-                      : "border-transparent text-slate-500 hover:bg-white/80 hover:text-slate-900"
+                      ? "border-slate-200 bg-gradient-to-r from-slate-50 to-white text-slate-950 shadow-[0_2px_12px_rgba(15,23,42,0.06)]"
+                      : "border-transparent text-slate-500 hover:bg-slate-50 hover:text-slate-900"
                   } ${collapsed ? "justify-center" : ""}`}
                 >
-                  {settingsPathActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-slate-400" /> : null}
-                  <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${iconWrapClass(isSettingsExpanded)}`}>
+                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center transition">
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-3.5 w-3.5" aria-hidden="true">
                       <circle cx="8" cy="8" r="2" />
                       <path d="M8 2.5v1.5M8 12v1.5M2.5 8H4M12 8h1.5M4.2 4.2l1 1M10.8 10.8l1 1M11.8 4.2l-1 1M5.2 10.8l-1 1" />
@@ -1163,9 +1159,31 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
               </div>
             ) : null}
 
-            {/* ── Pulsante Personalizza preferiti ─────────────────── */}
-            {!collapsed && authUserId ? (
-              <div className="mt-3 border-t border-slate-100 pt-2">
+            {/* ── Footer utente + pulsante preferiti ──────────────── */}
+            <div className={`mt-3 border-t border-slate-100 pt-2 space-y-1 ${collapsed ? "flex flex-col items-center" : ""}`}>
+              {/* User chip */}
+              {authName || authEmail ? (
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  title="Esci"
+                  className={`group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition hover:bg-rose-50 ${collapsed ? "justify-center" : ""}`}
+                >
+                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-bold text-white shadow-sm">
+                    {(authName ?? authEmail ?? "U").trim().charAt(0).toUpperCase()}
+                  </span>
+                  {!collapsed && (
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-semibold text-slate-700 group-hover:text-rose-700">
+                        {authName ?? authEmail}
+                      </span>
+                      <span className="block text-[10px] text-slate-400 capitalize">{authRole}</span>
+                    </span>
+                  )}
+                </button>
+              ) : null}
+              {/* Personalizza preferiti */}
+              {!collapsed && authUserId ? (
                 <button
                   type="button"
                   onClick={() => setFavoritesEditMode((v) => !v)}
@@ -1178,8 +1196,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   <span>{favoritesEditMode ? "★" : "☆"}</span>
                   <span>{favoritesEditMode ? "Fine personalizzazione" : "Personalizza preferiti"}</span>
                 </button>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </nav>
         </div>
       </aside>
