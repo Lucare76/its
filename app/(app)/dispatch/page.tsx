@@ -46,17 +46,19 @@ async function ensureSupabaseClientReady() {
 }
 
 type RowState = { driverId: string; vehicleLabel: string; saving: boolean; saved: boolean; error: string };
+type DateTab = "today" | "tomorrow" | "all";
 
 export default function DispatchPage() {
-  const [loading, setLoading]       = useState(true);
-  const [message, setMessage]       = useState("");
-  const [tenantId, setTenantId]     = useState<string | null>(null);
+  const [loading, setLoading]         = useState(true);
+  const [message, setMessage]         = useState("");
+  const [tenantId, setTenantId]       = useState<string | null>(null);
   const [actorUserId, setActorUserId] = useState<string | null>(null);
-  const [services, setServices]     = useState<Service[]>([]);
+  const [services, setServices]       = useState<Service[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
-  const [hotels, setHotels]         = useState<Hotel[]>([]);
+  const [hotels, setHotels]           = useState<Hotel[]>([]);
   const [memberships, setMemberships] = useState<Membership[]>([]);
-  const [search, setSearch]         = useState("");
+  const [search, setSearch]           = useState("");
+  const [dateTab, setDateTab]         = useState<DateTab>("today");
   const rowStates = useRef<Map<string, RowState>>(new Map());
   const [, forceRender] = useState(0);
 
@@ -127,7 +129,10 @@ export default function DispatchPage() {
   const hotelsById            = useMemo(() => new Map((tenantId ? hotels.filter((h) => h.tenant_id === tenantId) : hotels).map((h) => [h.id, h])), [hotels, tenantId]);
   const drivers               = useMemo(() => tenantMemberships.filter((m) => m.role === "driver"), [tenantMemberships]);
 
-  const servicesToAssign = useMemo(() =>
+  const today    = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const tomorrow = useMemo(() => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10), []);
+
+  const baseServices = useMemo(() =>
     tenantServices
       .filter((s) => s.status === "new" || s.status === "assigned")
       .filter((s) => {
@@ -137,23 +142,48 @@ export default function DispatchPage() {
           getCustomerFullName(s).toLowerCase().includes(q) ||
           (hotelsById.get(s.hotel_id)?.name ?? "").toLowerCase().includes(q)
         );
-      })
-      .sort((a, b) => a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time)),
+      }),
   [tenantServices, search, hotelsById]);
 
-  const pendingCount  = servicesToAssign.filter((s) => !assignmentByServiceId.has(s.id)).length;
-  const assignedCount = tenantAssignments.length;
-  const totalCount    = servicesToAssign.length;
+  const filteredServices = useMemo(() => {
+    let list = baseServices;
+    if (dateTab === "today")    list = list.filter((s) => s.date === today);
+    if (dateTab === "tomorrow") list = list.filter((s) => s.date === tomorrow);
+    return [...list].sort((a, b) => {
+      const aAssigned = assignmentByServiceId.has(a.id) ? 1 : 0;
+      const bAssigned = assignmentByServiceId.has(b.id) ? 1 : 0;
+      if (aAssigned !== bAssigned) return aAssigned - bAssigned;
+      return a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time);
+    });
+  }, [baseServices, dateTab, today, tomorrow, assignmentByServiceId]);
 
-  // Raggruppa per data
   const grouped = useMemo(() => {
+    if (dateTab !== "all") {
+      const date = dateTab === "today" ? today : tomorrow;
+      return filteredServices.length > 0 ? [[date, filteredServices] as [string, Service[]]] : [];
+    }
     const map = new Map<string, Service[]>();
-    for (const s of servicesToAssign) {
+    for (const s of filteredServices) {
       if (!map.has(s.date)) map.set(s.date, []);
       map.get(s.date)!.push(s);
     }
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [servicesToAssign]);
+  }, [filteredServices, dateTab, today, tomorrow]);
+
+  const todayPending    = baseServices.filter((s) => s.date === today && !assignmentByServiceId.has(s.id)).length;
+  const todayTotal      = baseServices.filter((s) => s.date === today).length;
+  const tomorrowPending = baseServices.filter((s) => s.date === tomorrow && !assignmentByServiceId.has(s.id)).length;
+  const tomorrowTotal   = baseServices.filter((s) => s.date === tomorrow).length;
+
+  useEffect(() => {
+    for (const [sid, state] of rowStates.current) {
+      const ex = assignmentByServiceId.get(sid);
+      if (ex && !state.saving) {
+        state.driverId     = ex.driver_user_id ?? "";
+        state.vehicleLabel = ex.vehicle_label ?? state.vehicleLabel;
+      }
+    }
+  }, [assignmentByServiceId]);
 
   const getRow = (svc: Service): RowState => {
     if (!rowStates.current.has(svc.id)) {
@@ -166,17 +196,6 @@ export default function DispatchPage() {
     }
     return rowStates.current.get(svc.id)!;
   };
-
-  // Aggiorna row state quando arrivano nuovi assignments
-  useEffect(() => {
-    for (const [sid, state] of rowStates.current) {
-      const ex = assignmentByServiceId.get(sid);
-      if (ex && !state.saving) {
-        state.driverId     = ex.driver_user_id ?? "";
-        state.vehicleLabel = ex.vehicle_label ?? state.vehicleLabel;
-      }
-    }
-  }, [assignmentByServiceId]);
 
   const save = async (svc: Service) => {
     if (!tenantId || !actorUserId || !supabase) return;
@@ -210,117 +229,155 @@ export default function DispatchPage() {
 
   if (loading) return <div className="card p-4 text-sm text-slate-500">Caricamento assegnazioni...</div>;
 
+  const tabs: { key: DateTab; label: string; pending: number; total: number }[] = [
+    { key: "today",    label: "Oggi",   pending: todayPending,    total: todayTotal },
+    { key: "tomorrow", label: "Domani", pending: tomorrowPending, total: tomorrowTotal },
+    { key: "all",      label: "Tutte le date", pending: 0, total: baseServices.length },
+  ];
+
   return (
     <section className="page-section">
       <PageHeader
-        title="Dispatch e Assegnazione"
-        subtitle="Assegna driver e mezzo direttamente dalla lista. Non blocca l'operativo."
+        title="Dispatch"
+        subtitle="Assegna driver e mezzo a ogni servizio."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Dispatch" }]}
       />
 
       {message && <p className="text-sm text-red-600">{message}</p>}
 
-      {/* ── KPI ── */}
-      <div className="grid grid-cols-3 gap-3">
-        {[
-          { label: "Da gestire", value: totalCount,    sub: `${pendingCount} senza scheda`, color: "#4338ca", bg: "#eef2ff" },
-          { label: "Assegnati",  value: assignedCount, sub: "con driver/mezzo salvato",     color: "#0f766e", bg: "#f0fdfa" },
-          { label: "Senza scheda", value: pendingCount, sub: "ancora da organizzare",       color: pendingCount > 0 ? "#dc2626" : "#64748b", bg: pendingCount > 0 ? "#fef2f2" : "#f8fafc" },
-        ].map(({ label, value, sub, color, bg }) => (
-          <div key={label} className="rounded-2xl border border-slate-100 p-4 shadow-sm" style={{ backgroundColor: bg }}>
-            <p className="text-3xl font-extrabold" style={{ color }}>{value}</p>
-            <p className="mt-1 text-sm font-semibold text-slate-600">{label}</p>
-            <p className="text-xs text-slate-400">{sub}</p>
-          </div>
-        ))}
+      {/* ── Tabs data ── */}
+      <div className="flex gap-2 flex-wrap">
+        {tabs.map(({ key, label, pending, total }) => {
+          const active = dateTab === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setDateTab(key)}
+              className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition border ${
+                active
+                  ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                  : "bg-white text-slate-600 border-slate-200 hover:border-indigo-300 hover:text-indigo-600"
+              }`}
+            >
+              {label}
+              {key !== "all" && (
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                  active
+                    ? pending > 0 ? "bg-white/20 text-white" : "bg-white/20 text-white"
+                    : pending > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+                }`}>
+                  {pending > 0 ? `${pending}/${total}` : `${total} ✓`}
+                </span>
+              )}
+              {key === "all" && total > 0 && (
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${active ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"}`}>
+                  {total}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── Barra ricerca ── */}
-      <div className="flex items-center gap-2 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4 shrink-0 text-indigo-500">
+      <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4 shrink-0 text-slate-400">
           <circle cx="6.5" cy="6.5" r="4" /><path d="M10.5 10.5 14 14" />
         </svg>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Cerca per cliente o hotel..."
+          placeholder="Cerca cliente o hotel…"
           className="flex-1 bg-transparent text-sm text-slate-700 placeholder:text-slate-400 outline-none"
         />
         {search && <button onClick={() => setSearch("")} className="text-slate-400 hover:text-slate-600 text-lg leading-none">×</button>}
       </div>
 
-      {/* ── Lista per data ── */}
+      {/* ── Lista ── */}
       {grouped.length === 0 ? (
         <div className="rounded-2xl border border-slate-100 bg-white p-8 text-center text-sm text-slate-400">
-          Nessun servizio da assegnare.
+          {dateTab === "today" ? "Nessun servizio da assegnare oggi." : dateTab === "tomorrow" ? "Nessun servizio da assegnare domani." : "Nessun servizio trovato."}
         </div>
       ) : (
         <div className="space-y-6">
-          {grouped.map(([date, rows]) => (
-            <div key={date}>
-              <p className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-400">
-                {formatIsoDateShort(date)} — {rows.length} servizi
-              </p>
-              <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden divide-y divide-slate-100">
-                {rows.map((svc) => {
-                  const state    = getRow(svc);
-                  const hotel    = hotelsById.get(svc.hotel_id);
-                  const hasAssign = assignmentByServiceId.has(svc.id);
-                  return (
-                    <div key={svc.id} className="grid grid-cols-1 gap-3 px-4 py-3 sm:grid-cols-[1fr_auto_auto_auto]  sm:items-center">
-                      {/* Info servizio */}
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-semibold text-slate-800 truncate">{getCustomerFullName(svc)}</p>
-                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${hasAssign ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                            {hasAssign ? "Assegnato" : "Senza scheda"}
-                          </span>
+          {grouped.map(([date, rows]) => {
+            const groupPending = rows.filter((s) => !assignmentByServiceId.has(s.id)).length;
+            return (
+              <div key={date}>
+                {/* Header gruppo — visibile solo in "Tutte le date" */}
+                {dateTab === "all" && (
+                  <div className="mb-2 flex items-center gap-3">
+                    <p className="text-xs font-bold uppercase tracking-widest text-slate-400">
+                      {formatIsoDateShort(date)}
+                    </p>
+                    {groupPending > 0
+                      ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">{groupPending} senza scheda</span>
+                      : <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">tutti assegnati</span>
+                    }
+                  </div>
+                )}
+
+                <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden divide-y divide-slate-100">
+                  {rows.map((svc) => {
+                    const state     = getRow(svc);
+                    const hotel     = hotelsById.get(svc.hotel_id);
+                    const hasAssign = assignmentByServiceId.has(svc.id);
+                    return (
+                      <div key={svc.id} className={`grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[1fr_180px_130px_90px] sm:items-center transition-colors ${!hasAssign ? "bg-amber-50/40" : ""}`}>
+
+                        {/* Info servizio */}
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${hasAssign ? "bg-emerald-500" : "bg-amber-400"}`} />
+                            <p className="text-sm font-semibold text-slate-800 truncate">{getCustomerFullName(svc)}</p>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-0.5 pl-3">
+                            {svc.time.slice(0, 5)} · {hotel?.name ?? "Hotel N/D"} · {svc.pax} pax · {svc.vessel}
+                          </p>
                         </div>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {svc.time.slice(0, 5)} · {hotel?.name ?? "Hotel N/D"} · {svc.pax} pax · {svc.vessel}
-                        </p>
+
+                        {/* Driver */}
+                        <select
+                          value={state.driverId}
+                          onChange={(e) => { state.driverId = e.target.value; rerender(); }}
+                          className="input-saas text-sm"
+                        >
+                          <option value="">— Nessun driver —</option>
+                          {drivers.map((d) => (
+                            <option key={d.user_id} value={d.user_id}>{d.full_name}</option>
+                          ))}
+                        </select>
+
+                        {/* Mezzo */}
+                        <input
+                          value={state.vehicleLabel}
+                          onChange={(e) => { state.vehicleLabel = e.target.value; rerender(); }}
+                          placeholder="Mezzo"
+                          className="input-saas text-sm"
+                        />
+
+                        {/* Salva */}
+                        <button
+                          type="button"
+                          onClick={() => void save(svc)}
+                          disabled={state.saving}
+                          className={`rounded-xl px-3 py-2 text-sm font-semibold transition whitespace-nowrap ${
+                            state.saved
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                          }`}
+                        >
+                          {state.saving ? "…" : state.saved ? "✓" : "Salva"}
+                        </button>
+
+                        {state.error && <p className="text-xs text-red-600 sm:col-span-4">{state.error}</p>}
                       </div>
-
-                      {/* Driver */}
-                      <select
-                        value={state.driverId}
-                        onChange={(e) => { state.driverId = e.target.value; rerender(); }}
-                        className="input-saas text-sm min-w-[160px]"
-                      >
-                        <option value="">— Nessun driver —</option>
-                        {drivers.map((d) => (
-                          <option key={d.user_id} value={d.user_id}>{d.full_name}</option>
-                        ))}
-                      </select>
-
-                      {/* Mezzo */}
-                      <input
-                        value={state.vehicleLabel}
-                        onChange={(e) => { state.vehicleLabel = e.target.value; rerender(); }}
-                        placeholder="Mezzo"
-                        className="input-saas text-sm min-w-[140px]"
-                      />
-
-                      {/* Salva */}
-                      <button
-                        type="button"
-                        onClick={() => void save(svc)}
-                        disabled={state.saving}
-                        className={`rounded-xl px-4 py-2 text-sm font-semibold transition whitespace-nowrap ${
-                          state.saved
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
-                        }`}
-                      >
-                        {state.saving ? "..." : state.saved ? "Salvato ✓" : "Salva"}
-                      </button>
-                      {state.error && <p className="text-xs text-red-600 sm:col-span-4">{state.error}</p>}
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </section>
