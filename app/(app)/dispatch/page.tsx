@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader, SectionCard } from "@/components/ui";
 import { calculateDriverSuggestions } from "@/lib/dispatch-driver-scoring";
 import { formatServiceSlot, getCustomerFullName } from "@/lib/service-display";
@@ -230,6 +230,12 @@ export default function DispatchPage() {
   const assignedServicesCount = tenantAssignments.length;
   const dispatchPendingCount = servicesToAssign.filter((service) => !assignmentByServiceId.has(service.id)).length;
   const reviewedPdfCount = servicesToAssign.filter((service) => pdfMetaByServiceId.get(service.id)?.manualReview).length;
+  const formRef = useRef<HTMLFormElement>(null);
+
+  const jumpToForm = (applyFilters?: () => void) => {
+    applyFilters?.();
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  };
 
   const runAssign = async (nextServiceId: string, nextDriverId: string, nextVehicleLabel: string) => {
     setSaving(true);
@@ -356,20 +362,41 @@ export default function DispatchPage() {
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Dispatch" }]}
       />
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <SectionCard title="Da gestire internamente" subtitle="Servizi nuovi o gia assegnabili">
+        <button
+          type="button"
+          onClick={() => jumpToForm(() => { setSourceFilter("all"); setReviewFilter("all"); setQualityFilter("all"); })}
+          className="text-left rounded-2xl border border-border bg-surface shadow-sm p-4 hover:border-indigo-300 hover:shadow-md transition-all"
+        >
+          <p className="text-sm font-semibold text-text">Da gestire internamente</p>
+          <p className="text-xs text-muted mb-2">Servizi nuovi o già assegnabili</p>
           <p className="text-3xl font-semibold text-text">{servicesToAssign.length}</p>
           <p className="mt-1 text-sm text-muted">{dispatchPendingCount} ancora senza scheda interna</p>
-        </SectionCard>
-        <SectionCard title="Schede dispatch create" subtitle="Servizi con mezzo e/o autista già salvati">
+          <p className="mt-2 text-xs font-semibold text-indigo-600">Vai al form →</p>
+        </button>
+        <button
+          type="button"
+          onClick={() => jumpToForm(() => { setSourceFilter("all"); setReviewFilter("all"); setQualityFilter("all"); })}
+          className="text-left rounded-2xl border border-border bg-surface shadow-sm p-4 hover:border-indigo-300 hover:shadow-md transition-all"
+        >
+          <p className="text-sm font-semibold text-text">Schede dispatch create</p>
+          <p className="text-xs text-muted mb-2">Servizi con mezzo e/o autista già salvati</p>
           <p className="text-3xl font-semibold text-text">{assignedServicesCount}</p>
           <p className="mt-1 text-sm text-muted">Dato interno, non blocca l&apos;operativo</p>
-        </SectionCard>
-        <SectionCard title="PDF gia revisionati" subtitle="Servizi PDF con review manuale eseguita">
+          <p className="mt-2 text-xs font-semibold text-indigo-600">Vai al form →</p>
+        </button>
+        <button
+          type="button"
+          onClick={() => jumpToForm(() => { setSourceFilter("pdf"); setReviewFilter("yes"); setQualityFilter("all"); })}
+          className="text-left rounded-2xl border border-border bg-surface shadow-sm p-4 hover:border-indigo-300 hover:shadow-md transition-all"
+        >
+          <p className="text-sm font-semibold text-text">PDF già revisionati</p>
+          <p className="text-xs text-muted mb-2">Servizi PDF con review manuale eseguita</p>
           <p className="text-3xl font-semibold text-text">{reviewedPdfCount}</p>
           <p className="mt-1 text-sm text-muted">Utile per decidere cosa organizzare per primo</p>
-        </SectionCard>
+          <p className="mt-2 text-xs font-semibold text-indigo-600">Filtra PDF revisionati →</p>
+        </button>
       </div>
-      <form action={submit} className="card grid gap-5 p-4 md:p-7">
+      <form ref={formRef} action={submit} className="card grid gap-5 p-4 md:p-7">
         <h2 className="text-base">Dettagli assegnazione</h2>
         <p className="text-sm text-muted">Questa schermata serve solo a Ischia Transfer per l&apos;organizzazione interna successiva.</p>
         <div className="grid gap-3 md:grid-cols-3">
