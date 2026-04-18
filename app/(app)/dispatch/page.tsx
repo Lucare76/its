@@ -365,7 +365,7 @@ export default function DispatchPage() {
         <button
           type="button"
           onClick={() => jumpToForm(() => { setSourceFilter("all"); setReviewFilter("all"); setQualityFilter("all"); })}
-          className="text-left rounded-2xl border border-border bg-surface shadow-sm p-4 hover:border-indigo-300 hover:shadow-md transition-all"
+          className="cursor-pointer text-left rounded-2xl border border-border bg-surface shadow-sm p-4 hover:border-indigo-300 hover:bg-indigo-50/40 hover:shadow-md transition-all"
         >
           <p className="text-sm font-semibold text-text">Da gestire internamente</p>
           <p className="text-xs text-muted mb-2">Servizi nuovi o già assegnabili</p>
@@ -376,7 +376,7 @@ export default function DispatchPage() {
         <button
           type="button"
           onClick={() => jumpToForm(() => { setSourceFilter("all"); setReviewFilter("all"); setQualityFilter("all"); })}
-          className="text-left rounded-2xl border border-border bg-surface shadow-sm p-4 hover:border-indigo-300 hover:shadow-md transition-all"
+          className="cursor-pointer text-left rounded-2xl border border-border bg-surface shadow-sm p-4 hover:border-indigo-300 hover:bg-indigo-50/40 hover:shadow-md transition-all"
         >
           <p className="text-sm font-semibold text-text">Schede dispatch create</p>
           <p className="text-xs text-muted mb-2">Servizi con mezzo e/o autista già salvati</p>
@@ -387,7 +387,7 @@ export default function DispatchPage() {
         <button
           type="button"
           onClick={() => jumpToForm(() => { setSourceFilter("pdf"); setReviewFilter("yes"); setQualityFilter("all"); })}
-          className="text-left rounded-2xl border border-border bg-surface shadow-sm p-4 hover:border-indigo-300 hover:shadow-md transition-all"
+          className="cursor-pointer text-left rounded-2xl border border-border bg-surface shadow-sm p-4 hover:border-indigo-300 hover:bg-indigo-50/40 hover:shadow-md transition-all"
         >
           <p className="text-sm font-semibold text-text">PDF già revisionati</p>
           <p className="text-xs text-muted mb-2">Servizi PDF con review manuale eseguita</p>
