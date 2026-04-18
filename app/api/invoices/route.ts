@@ -36,6 +36,41 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ ok: true, invoices: data ?? [] });
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Restituisce tutti i billing_party_name distinti che corrispondono all'agenzia.
+ * Usa matching bidirezionale: cerca se il nome agenzia contiene il billing_party_name
+ * O se il billing_party_name contiene il nome agenzia (es. "SOSANDRA" ↔ "SOSANDRA TOUR BY ROSSELLA…").
+ */
+async function resolveBillingNames(
+  admin: ReturnType<typeof import("@supabase/supabase-js").createClient>,
+  tenantId: string,
+  agencyName: string
+): Promise<string[]> {
+  const { data } = await (admin as any)
+    .from("services")
+    .select("billing_party_name")
+    .eq("tenant_id", tenantId)
+    .not("billing_party_name", "is", null);
+
+  if (!data?.length) return [agencyName];
+
+  const agencyLower = agencyName.toLowerCase();
+  const distinct = [...new Set((data as Array<{ billing_party_name: string }>)
+    .map((r) => r.billing_party_name)
+    .filter(Boolean)
+  )];
+
+  const matched = distinct.filter((bpn) => {
+    const bpnLower = bpn.toLowerCase();
+    return agencyLower.includes(bpnLower) || bpnLower.includes(agencyLower);
+  });
+
+  // Se non c'è nessun match, fallback al nome agenzia originale (ilike nel caller)
+  return matched.length > 0 ? matched : [];
+}
+
 // ─── POST ───────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
@@ -53,31 +88,46 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "agency_name, period_from, period_to obbligatori." }, { status: 400 });
   }
 
-  // Recupera agenzia
+  // Recupera agenzia — email priorità: booking > contact > invoice
   const { data: agencyRow } = await (auth.admin as any)
     .from("agencies")
-    .select("id, name, invoice_email, contact_email, booking_email")
+    .select("id, name, booking_email, contact_email, invoice_email, booking_emails, contact_emails, email")
     .eq("tenant_id", tenantId)
     .eq("name", agency_name)
     .maybeSingle();
 
-  const invoiceEmail = agencyRow?.invoice_email ?? agencyRow?.contact_email ?? agencyRow?.booking_email ?? null;
+  const invoiceEmail: string | null =
+    agencyRow?.booking_email ??
+    (Array.isArray(agencyRow?.booking_emails) && agencyRow.booking_emails.length > 0 ? agencyRow.booking_emails[0] : null) ??
+    agencyRow?.contact_email ??
+    (Array.isArray(agencyRow?.contact_emails) && agencyRow.contact_emails.length > 0 ? agencyRow.contact_emails[0] : null) ??
+    agencyRow?.invoice_email ??
+    agencyRow?.email ??
+    null;
 
-  // Recupera servizi nel periodo
-  const { data: services, error: servicesError } = await (auth.admin as any)
+  // Risolve i billing_party_name che corrispondono all'agenzia (matching bidirezionale)
+  const billingNames = await resolveBillingNames(auth.admin as any, tenantId, agency_name);
+
+  let serviceQuery = (auth.admin as any)
     .from("services")
     .select("id, date, time, customer_name, customer_first_name, customer_last_name, billing_party_name, booking_service_kind, service_type, notes, source_total_amount_cents, pax")
     .eq("tenant_id", tenantId)
     .eq("is_draft", false)
-    .ilike("billing_party_name", `%${agency_name}%`)
     .gte("date", period_from)
     .lte("date", period_to)
     .order("date");
 
+  if (billingNames.length > 0) {
+    serviceQuery = serviceQuery.in("billing_party_name", billingNames);
+  } else {
+    // Fallback ilike se non ci sono billing_party_name nel DB
+    serviceQuery = serviceQuery.ilike("billing_party_name", `%${agency_name}%`);
+  }
+
+  const { data: services, error: servicesError } = await serviceQuery;
   if (servicesError) return NextResponse.json({ ok: false, error: servicesError.message }, { status: 500 });
 
   const items: InvoiceLineItem[] = (services ?? []).map((s: any) => {
-    // Estrai numero pratica dalle note
     const practiceMatch = (s.notes ?? "").match(/\[practice:([^\]]+)\]/);
     const practiceNumber = practiceMatch?.[1] ?? "—";
     const clienteName = [s.customer_first_name, s.customer_last_name].filter(Boolean).join(" ") || s.customer_name || "—";
@@ -135,8 +185,9 @@ export async function POST(request: NextRequest) {
     const fromEmail = getVerifiedFromEmail();
     const months = ["gen","feb","mar","apr","mag","giu","lug","ago","set","ott","nov","dic"];
     const [fy, fm] = period_from.split("-");
-    const [ty, tm] = period_to.split("-");
-    const periodLabel = fm === tm ? `${months[Number(fm)-1]} ${fy}` : `${months[Number(fm)-1]}-${months[Number(tm)-1]} ${fy}`;
+    const periodLabel = fm === period_to.split("-")[1]
+      ? `${months[Number(fm)-1]} ${fy}`
+      : `${months[Number(fm)-1]}-${months[Number(period_to.split("-")[1])-1]} ${fy}`;
 
     await resendFetch(process.env.RESEND_API_KEY!, {
       from: `Ischia Transfer Service <${fromEmail}>`,
