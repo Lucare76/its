@@ -63,7 +63,7 @@ export interface WhatsAppEventInsert {
   tenant_id: string;
   service_id: string | null;
   to_phone: string;
-  kind?: "24h" | "2h" | "48h_departure" | "24h_reminder" | "manual" | "webhook" | null;
+  kind?: "24h" | "2h" | "48h_departure" | "24h_reminder" | "info_3d" | "manual" | "webhook" | null;
   template: string | null;
   status: WhatsAppEventStatus;
   provider_message_id: string | null;
@@ -359,6 +359,29 @@ export async function sendWhatsAppReminder(
     languageCode,
     deliveryMode: "text" as const
   };
+}
+
+export function selectInfoTemplate(bookingKind: string | null | undefined): { templateName: string; parameters: string[] } | null {
+  const aeroporto  = process.env.WHATSAPP_TEMPLATE_INFO_AEROPORTO  ?? "its_info_aeroporto";
+  const stazione   = process.env.WHATSAPP_TEMPLATE_INFO_STAZIONE   ?? "its_info_stazione";
+  const medmar     = process.env.WHATSAPP_TEMPLATE_INFO_MEDMAR     ?? "its_info_medmar";
+  const snav       = process.env.WHATSAPP_TEMPLATE_INFO_SNAV       ?? "its_info_snav";
+
+  switch (bookingKind) {
+    case "transfer_airport_hotel":
+      return { templateName: aeroporto, parameters: [] };
+    case "transfer_train_hotel":
+    case "transfer_station_hotel":
+      return { templateName: stazione, parameters: [] };
+    case "formula_medmar_napoli":
+      return { templateName: medmar, parameters: ["Napoli Beverello"] };
+    case "formula_medmar_pozzuoli":
+      return { templateName: medmar, parameters: ["Pozzuoli"] };
+    case "formula_snav":
+      return { templateName: snav, parameters: [] };
+    default:
+      return null;
+  }
 }
 
 export function isReminderDueIn24h(date: string, time: string, now = new Date()) {
