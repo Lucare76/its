@@ -8,14 +8,29 @@ import {
 
 export const runtime = "nodejs";
 
-// Template WhatsApp "Prima di partire" — inviati 3 giorni prima dell'arrivo del cliente.
-// Selezione automatica del template in base al booking_service_kind.
-// Deduplicazione via whatsapp_events (kind = "info_3d").
+// Template WhatsApp "Prima di partire".
+// Spread anti-ban: gli arrivi vengono distribuiti su 4 giorni (3-6 giorni prima)
+// in base all'hash del service_id — evita picchi di volume sulla domenica.
+// Lingua: +39 → italiano, altri prefissi → inglese.
 
 function hasCronAuth(request: NextRequest) {
   const expected = process.env.WHATSAPP_CRON_SECRET ?? process.env.CRON_SECRET;
   if (!expected) return false;
   return request.headers.get("authorization") === `Bearer ${expected}`;
+}
+
+// Restituisce 3, 4, 5 o 6 in base all'id del servizio — distribuzione uniforme
+function sendDaysAhead(serviceId: string): number {
+  let hash = 0;
+  for (let i = 0; i < serviceId.length; i++) {
+    hash = (hash * 31 + serviceId.charCodeAt(i)) >>> 0;
+  }
+  return 3 + (hash % 4);
+}
+
+function detectLanguage(phone: string): "it" | "en" {
+  const e164 = normalizeE164(phone);
+  return e164.startsWith("+39") ? "it" : "en";
 }
 
 async function sendInfoTemplate(
@@ -69,7 +84,7 @@ async function runCron(request: NextRequest) {
 
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
   const accessToken   = process.env.WHATSAPP_TOKEN?.trim();
-  const languageCode  = (process.env.WHATSAPP_TEMPLATE_LANGUAGE ?? "it").replace("-", "_");
+  const defaultLang   = (process.env.WHATSAPP_TEMPLATE_LANGUAGE ?? "it").replace("-", "_");
 
   if (!phoneNumberId || !accessToken) {
     return NextResponse.json({ error: "WHATSAPP_PHONE_NUMBER_ID e WHATSAPP_TOKEN non configurati" }, { status: 500 });
@@ -82,8 +97,11 @@ async function runCron(request: NextRequest) {
     return NextResponse.json({ error: "Server env missing" }, { status: 500 });
   }
 
-  // Servizi con arrivo fra esattamente 3 giorni
-  const targetDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const today = new Date();
+  // Finestra 3-6 giorni: carica tutti i candidati dell'intervallo, poi filtra per spread
+  const dateFrom = new Date(today.getTime() + 3 * 86_400_000).toISOString().slice(0, 10);
+  const dateTo   = new Date(today.getTime() + 6 * 86_400_000).toISOString().slice(0, 10);
+  const todayStr = today.toISOString().slice(0, 10);
 
   const infoKinds = [
     "transfer_airport_hotel",
@@ -96,23 +114,32 @@ async function runCron(request: NextRequest) {
 
   const { data: candidates, error: candidatesError } = await admin
     .from("services")
-    .select("id, tenant_id, customer_name, phone, phone_e164, booking_service_kind, status")
-    .eq("date", targetDate)
+    .select("id, tenant_id, customer_name, phone, phone_e164, booking_service_kind, status, date")
+    .gte("date", dateFrom)
+    .lte("date", dateTo)
     .neq("status", "cancelled")
     .in("booking_service_kind", infoKinds)
     .not("phone", "is", null)
-    .limit(1000);
+    .limit(2000);
 
   if (candidatesError) {
     return NextResponse.json({ error: "Query fallita: " + candidatesError.message }, { status: 500 });
   }
 
-  const services = candidates ?? [];
+  // Filtra solo quelli il cui "send day" è oggi
+  const services = (candidates ?? []).filter((svc) => {
+    const arrivalDate = svc.date as string;
+    const daysAhead   = sendDaysAhead(svc.id as string);
+    const sendDate    = new Date(new Date(arrivalDate).getTime() - daysAhead * 86_400_000)
+      .toISOString().slice(0, 10);
+    return sendDate === todayStr;
+  });
+
   if (services.length === 0) {
-    return NextResponse.json({ ok: true, targetDate, scanned: 0, sent: 0, skipped: 0, failed: 0 });
+    return NextResponse.json({ ok: true, todayStr, scanned: candidates?.length ?? 0, toSend: 0, sent: 0, skipped: 0, failed: 0 });
   }
 
-  // Carica eventi già inviati per deduplicazione
+  // Deduplicazione
   const serviceIds = services.map((s) => s.id);
   const { data: priorEvents } = await admin
     .from("whatsapp_events")
@@ -130,26 +157,26 @@ async function runCron(request: NextRequest) {
   for (const svc of services) {
     if (alreadySent.has(svc.id)) { skipped++; continue; }
 
-    const info = selectInfoTemplate(svc.booking_service_kind);
+    const phone    = (svc.phone_e164 as string | null) ?? normalizeE164(svc.phone as string);
+    const lang     = detectLanguage(phone) === "it" ? defaultLang : "en";
+    const info     = selectInfoTemplate(svc.booking_service_kind, lang);
     if (!info) { skipped++; continue; }
 
-    const toPhone = (svc.phone_e164 as string | null) ?? normalizeE164(svc.phone as string);
-    const nowIso  = new Date().toISOString();
-
+    const nowIso = new Date().toISOString();
     const result = await sendInfoTemplate(
       phoneNumberId,
       accessToken,
-      toPhone,
+      phone,
       info.templateName,
       (svc.customer_name as string) ?? "",
       info.parameters,
-      languageCode
+      lang
     );
 
     await logWhatsAppEvent(admin, {
       tenant_id: svc.tenant_id as string,
       service_id: svc.id,
-      to_phone: toPhone,
+      to_phone: phone,
       kind: "info_3d",
       template: info.templateName,
       status: result.ok ? "sent" : "failed",
@@ -158,6 +185,8 @@ async function runCron(request: NextRequest) {
       payload_json: {
         source: "api/cron/whatsapp-info",
         booking_service_kind: svc.booking_service_kind,
+        lang,
+        arrival_date: svc.date,
         error: result.error ?? undefined,
       },
     });
@@ -165,20 +194,8 @@ async function runCron(request: NextRequest) {
     if (result.ok) { sent++; } else { failed++; }
   }
 
-  return NextResponse.json({
-    ok: true,
-    targetDate,
-    scanned: services.length,
-    sent,
-    skipped,
-    failed,
-  });
+  return NextResponse.json({ ok: true, todayStr, scanned: candidates?.length ?? 0, toSend: services.length, sent, skipped, failed });
 }
 
-export async function GET(request: NextRequest) {
-  return runCron(request);
-}
-
-export async function POST(request: NextRequest) {
-  return runCron(request);
-}
+export async function GET(request: NextRequest) { return runCron(request); }
+export async function POST(request: NextRequest) { return runCron(request); }

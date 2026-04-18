@@ -40,6 +40,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/inbox", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/pricing", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/richieste-modifica", roles: ["admin", "operator", "supervisor"] },
+  { prefix: "/whatsapp-log",      roles: ["admin", "operator", "supervisor"] },
   { prefix: "/settings/users", roles: ["admin", "supervisor"] },
   { prefix: "/settings/whatsapp", roles: ["admin", "supervisor"] },
   { prefix: "/settings/tenant", roles: ["admin", "supervisor"] },

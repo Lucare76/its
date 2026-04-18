@@ -243,6 +243,7 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/ricerca", label: "Ricerca", icon: "🔍" },
   { href: "/cancellazioni", label: "Cancellazioni", icon: "✕" },
   { href: "/richieste-modifica", label: "Richieste modifica", icon: "✏️" },
+  { href: "/whatsapp-log", label: "WhatsApp Log", icon: "💬" },
 ];
 
 export const AGENZIE_GROUP: NavMainGroup = {

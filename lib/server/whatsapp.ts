@@ -361,11 +361,15 @@ export async function sendWhatsAppReminder(
   };
 }
 
-export function selectInfoTemplate(bookingKind: string | null | undefined): { templateName: string; parameters: string[] } | null {
-  const aeroporto  = process.env.WHATSAPP_TEMPLATE_INFO_AEROPORTO  ?? "its_info_aeroporto";
-  const stazione   = process.env.WHATSAPP_TEMPLATE_INFO_STAZIONE   ?? "its_info_stazione";
-  const medmar     = process.env.WHATSAPP_TEMPLATE_INFO_MEDMAR     ?? "its_info_medmar";
-  const snav       = process.env.WHATSAPP_TEMPLATE_INFO_SNAV       ?? "its_info_snav";
+export function selectInfoTemplate(
+  bookingKind: string | null | undefined,
+  lang: string = "it"
+): { templateName: string; parameters: string[] } | null {
+  const suffix     = lang === "en" ? "_en" : "";
+  const aeroporto  = (process.env.WHATSAPP_TEMPLATE_INFO_AEROPORTO ?? "its_info_aeroporto") + suffix;
+  const stazione   = (process.env.WHATSAPP_TEMPLATE_INFO_STAZIONE  ?? "its_info_stazione")  + suffix;
+  const medmar     = (process.env.WHATSAPP_TEMPLATE_INFO_MEDMAR    ?? "its_info_medmar")    + suffix;
+  const snav       = (process.env.WHATSAPP_TEMPLATE_INFO_SNAV      ?? "its_info_snav")      + suffix;
 
   switch (bookingKind) {
     case "transfer_airport_hotel":
@@ -374,7 +378,7 @@ export function selectInfoTemplate(bookingKind: string | null | undefined): { te
     case "transfer_station_hotel":
       return { templateName: stazione, parameters: [] };
     case "formula_medmar_napoli":
-      return { templateName: medmar, parameters: ["Napoli Beverello"] };
+      return { templateName: medmar, parameters: [lang === "en" ? "Naples (Beverello)" : "Napoli Beverello"] };
     case "formula_medmar_pozzuoli":
       return { templateName: medmar, parameters: ["Pozzuoli"] };
     case "formula_snav":
