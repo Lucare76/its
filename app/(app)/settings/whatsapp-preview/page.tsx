@@ -34,7 +34,7 @@ const TEMPLATES: Template[] = [
   {
     id: "aeroporto_it", name: "its_info_aeroporto", label: "Aeroporto", lang: "it",
     trigger: "Arrivo da aeroporto — prefisso +39",
-    footer: FOOTER_IT, btnLabel: "📞 Chiama assistenza",
+    footer: FOOTER_IT, btnLabel: "Chiama assistenza",
     body: `Gentile *${SAMPLE.name}*, benvenuto! 🏝
 
 Ecco le informazioni per il giorno del suo arrivo:
@@ -53,7 +53,7 @@ Ci vediamo presto!`,
   {
     id: "aeroporto_en", name: "its_info_aeroporto_en", label: "Airport", lang: "en",
     trigger: "Airport arrival — non +39 prefix",
-    footer: FOOTER_EN, btnLabel: "📞 Call us",
+    footer: FOOTER_EN, btnLabel: "Call us",
     body: `Dear *${SAMPLE.nameEn}*, welcome! 🏝
 
 Here is the information for your arrival day:
@@ -72,7 +72,7 @@ See you soon!`,
   {
     id: "stazione_it", name: "its_info_stazione", label: "Stazione", lang: "it",
     trigger: "Arrivo da stazione/treno — prefisso +39",
-    footer: FOOTER_IT, btnLabel: "📞 Chiama assistenza",
+    footer: FOOTER_IT, btnLabel: "Chiama assistenza",
     body: `Gentile *${SAMPLE.name}*, benvenuto! 🏝
 
 Ecco le informazioni per il giorno della sua partenza:
@@ -91,7 +91,7 @@ Ci vediamo presto!`,
   {
     id: "stazione_en", name: "its_info_stazione_en", label: "Train Station", lang: "en",
     trigger: "Train station arrival — non +39 prefix",
-    footer: FOOTER_EN, btnLabel: "📞 Call us",
+    footer: FOOTER_EN, btnLabel: "Call us",
     body: `Dear *${SAMPLE.nameEn}*, welcome! 🏝
 
 Here is the information for your departure day:
@@ -110,7 +110,7 @@ See you soon!`,
   {
     id: "medmar_it", name: "its_info_medmar", label: "MEDMAR", lang: "it",
     trigger: "Formula MEDMAR Napoli / Pozzuoli — prefisso +39",
-    footer: FOOTER_IT, btnLabel: "📞 Chiama assistenza",
+    footer: FOOTER_IT, btnLabel: "Chiama assistenza",
     body: `Gentile *${SAMPLE.name}*, benvenuto! 🏝
 
 Ecco le informazioni per il suo viaggio da *${SAMPLE.porto}*:
@@ -126,7 +126,7 @@ Ci vediamo presto!`,
   {
     id: "medmar_en", name: "its_info_medmar_en", label: "MEDMAR (EN)", lang: "en",
     trigger: "Formula MEDMAR — non +39 prefix",
-    footer: FOOTER_EN, btnLabel: "📞 Call us",
+    footer: FOOTER_EN, btnLabel: "Call us",
     body: `Dear *${SAMPLE.nameEn}*, welcome! 🏝
 
 Here is the information for your journey from *${SAMPLE.portoEn}*:
@@ -142,7 +142,7 @@ See you soon!`,
   {
     id: "snav_it", name: "its_info_snav", label: "SNAV", lang: "it",
     trigger: "Formula SNAV — prefisso +39",
-    footer: FOOTER_IT, btnLabel: "📞 Chiama assistenza",
+    footer: FOOTER_IT, btnLabel: "Chiama assistenza",
     body: `Gentile *${SAMPLE.name}*, benvenuto! 🏝
 
 Ecco le informazioni per la sua partenza con SNAV:
@@ -161,7 +161,7 @@ Ci vediamo presto!`,
   {
     id: "snav_en", name: "its_info_snav_en", label: "SNAV (EN)", lang: "en",
     trigger: "Formula SNAV — non +39 prefix",
-    footer: FOOTER_EN, btnLabel: "📞 Call us",
+    footer: FOOTER_EN, btnLabel: "Call us",
     body: `Dear *${SAMPLE.nameEn}*, welcome! 🏝
 
 Here is the information for your SNAV departure:
@@ -180,7 +180,7 @@ See you soon!`,
   {
     id: "bus_it", name: "its_qr_bus", label: "Bus + QR", lang: "it",
     trigger: "Servizio bus (bus_city_hotel) — prefisso +39",
-    hasQr: true, footer: FOOTER_IT, btnLabel: "📞 Chiama assistenza",
+    hasQr: true, footer: FOOTER_IT, btnLabel: "Chiama assistenza",
     body: `Gentile *${SAMPLE.name}*! 🏝
 
 Ecco il suo *QR code* per accedere al servizio bus del *${SAMPLE.date}*.
@@ -192,7 +192,7 @@ Ci vediamo presto!`,
   {
     id: "bus_en", name: "its_qr_bus_en", label: "Bus + QR (EN)", lang: "en",
     trigger: "Bus service (bus_city_hotel) — non +39 prefix",
-    hasQr: true, footer: FOOTER_EN, btnLabel: "📞 Call us",
+    hasQr: true, footer: FOOTER_EN, btnLabel: "Call us",
     body: `Dear *${SAMPLE.nameEn}*! 🏝
 
 Here is your *QR code* to access the bus service on *${SAMPLE.dateEn}*.
