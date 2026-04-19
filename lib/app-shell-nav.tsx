@@ -239,6 +239,7 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/arrivals", label: "Arrivi", icon: "A" },
   { href: "/departures", label: "Partenze", icon: "P" },
   { href: "/inbox", label: "Prenotazioni", icon: "I" },
+  { href: "/piano-giorno", label: "Piano del Giorno", icon: "📋" },
   { href: "/dispatch", label: "Assegnazioni", icon: "G" },
   { href: "/ricerca", label: "Ricerca", icon: "🔍" },
   { href: "/cancellazioni", label: "Cancellazioni", icon: "✕" },
