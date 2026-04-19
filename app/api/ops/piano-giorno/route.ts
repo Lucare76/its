@@ -7,6 +7,19 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
 
+type FerryScheduleRow = {
+  id: string;
+  company: string;
+  departure_port: string;
+  arrival_port: string;
+  departure_time: string;
+  direction: string;
+  days_of_week: number[] | null;
+  valid_from: string | null;
+  valid_to: string | null;
+  notes: string | null;
+};
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
@@ -19,39 +32,57 @@ export async function GET(request: NextRequest) {
     // Giorno della settimana (0=dom, 1=lun, …) per ferry schedules
     const dow = new Date(date + "T12:00:00Z").getDay();
 
+    // Carica prima i servizi del giorno per filtrare assignments per service_id
+    const servicesResult = await auth.admin
+      .from("services")
+      .select("id, date, time, direction, customer_name, customer_first_name, customer_last_name, pax, hotel_id, vessel, notes, status, meeting_point, place_type, pickup_hotel, booking_service_kind, service_type, phone")
+      .eq("tenant_id", tenantId)
+      .eq("date", date)
+      .neq("status", "cancelled")
+      .neq("is_draft", true)
+      .order("time")
+      .limit(2000);
+
+    if (servicesResult.error)
+      return NextResponse.json({ ok: false, error: servicesResult.error.message }, { status: 500 });
+
+    const dayServiceIds = (servicesResult.data ?? []).map((s) => s.id);
+
+    // Step 1: trip_groups del giorno (serve per filtrare assignments per group_id)
+    const tripGroupsResult = await auth.admin
+      .from("trip_groups")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .eq("date", date)
+      .eq("status", "active")
+      .limit(2000);
+
+    if (tripGroupsResult.error)
+      return NextResponse.json({ ok: false, error: tripGroupsResult.error.message }, { status: 500 });
+
+    const tripGroups = tripGroupsResult.data ?? [];
+    const todayGroupIds = tripGroups.map((g) => g.id as string);
+
+    // Step 2: assignments filtrati per group_id + altri dati in parallelo
     const [
-      servicesResult,
-      tripGroupsResult,
       assignmentsResult,
       hotelsResult,
       membershipsResult,
       vehiclesResult,
       ferryResult,
     ] = await Promise.all([
-      auth.admin
-        .from("services")
-        .select("id, date, time, direction, customer_name, customer_first_name, customer_last_name, pax, hotel_id, vessel, notes, status, meeting_point, place_type, pickup_hotel, booking_service_kind, service_type, phone, phone_e164")
-        .eq("tenant_id", tenantId)
-        .eq("date", date)
-        .neq("status", "cancelled")
-        .neq("is_draft", true)
-        .order("time"),
-
-      auth.admin
-        .from("trip_groups")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .eq("date", date)
-        .eq("status", "active"),
-
-      auth.admin
-        .from("assignments")
-        .select("id, service_id, driver_user_id, vehicle_label, group_id")
-        .eq("tenant_id", tenantId),
+      todayGroupIds.length > 0
+        ? auth.admin
+            .from("assignments")
+            .select("id, service_id, driver_user_id, vehicle_label, group_id")
+            .eq("tenant_id", tenantId)
+            .in("group_id", todayGroupIds)
+            .limit(5000)
+        : Promise.resolve({ data: [] as Array<{ id: string; service_id: string; driver_user_id: string | null; vehicle_label: string | null; group_id: string }>, error: null }),
 
       auth.admin
         .from("hotels")
-        .select("id, name, zone")
+        .select("id, name, zone, lat, lng")
         .eq("tenant_id", tenantId),
 
       auth.admin
@@ -69,15 +100,12 @@ export async function GET(request: NextRequest) {
 
       auth.admin
         .from("ferry_schedules")
-        .select("id, company, departure_port, arrival_port, departure_time, direction, notes")
+        .select("id, company, departure_port, arrival_port, departure_time, direction, days_of_week, valid_from, valid_to, notes")
         .eq("direction", "mainland_to_ischia")
-        .contains("days_of_week", [dow])
         .order("departure_time"),
     ]);
 
     const error =
-      servicesResult.error ??
-      tripGroupsResult.error ??
       assignmentsResult.error ??
       hotelsResult.error ??
       membershipsResult.error ??
@@ -85,22 +113,26 @@ export async function GET(request: NextRequest) {
 
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
-    // Filtra assignments per i servizi del giorno (join in JS per evitare query complessa)
-    const dayServiceIds = new Set((servicesResult.data ?? []).map((s) => s.id));
-    const dayAssignments = (assignmentsResult.data ?? []).filter(
-      (a) => dayServiceIds.has(a.service_id)
-    );
+    const dayAssignments = assignmentsResult.data ?? [];
+    const ferrySchedules = ((ferryResult.data ?? []) as FerryScheduleRow[]).filter((schedule) => {
+      if (schedule.valid_from && schedule.valid_from > date) return false;
+      if (schedule.valid_to && schedule.valid_to < date) return false;
+      if (schedule.days_of_week && schedule.days_of_week.length > 0) {
+        return schedule.days_of_week.includes(dow);
+      }
+      return true;
+    });
 
     return NextResponse.json({
       ok: true,
       date,
       services: servicesResult.data ?? [],
-      trip_groups: tripGroupsResult.data ?? [],
+      trip_groups: tripGroups,
       assignments: dayAssignments,
       hotels: hotelsResult.data ?? [],
       memberships: membershipsResult.data ?? [],
       vehicles: vehiclesResult.data ?? [],
-      ferry_schedules: ferryResult.data ?? [],
+      ferry_schedules: ferrySchedules,
     });
   } catch (err) {
     return NextResponse.json(

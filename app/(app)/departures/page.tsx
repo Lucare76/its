@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 
 import { formatIsoDateShort, getCustomerFullName, getTransportReferenceReturn } from "@/lib/service-display";
@@ -37,11 +37,12 @@ function EditDepartureModal({
   const [time, setTime]               = useState((service.time ?? "").slice(0, 5));
   const [phone, setPhone]             = useState(service.phone ?? "");
   const [notes, setNotes]             = useState(service.notes ?? "");
-  const [arrivalDate, setArrivalDate] = useState((service as Record<string, unknown>).arrival_date as string ?? "");
-  const [arrivalTime, setArrivalTime] = useState(((service as Record<string, unknown>).arrival_time as string ?? "").slice(0, 5));
-  const [departureDate, setDepartureDate] = useState((service as Record<string, unknown>).departure_date as string ?? "");
-  const [departureTime, setDepartureTime] = useState(((service as Record<string, unknown>).departure_time as string ?? "").slice(0, 5));
-  const [transportCode, setTransportCode] = useState((service as Record<string, unknown>).transport_code as string ?? "");
+  const serviceRecord = service as unknown as Record<string, unknown>;
+  const [arrivalDate, setArrivalDate] = useState(serviceRecord.arrival_date as string ?? "");
+  const [arrivalTime, setArrivalTime] = useState((serviceRecord.arrival_time as string ?? "").slice(0, 5));
+  const [departureDate, setDepartureDate] = useState(serviceRecord.departure_date as string ?? "");
+  const [departureTime, setDepartureTime] = useState((serviceRecord.departure_time as string ?? "").slice(0, 5));
+  const [transportCode, setTransportCode] = useState(serviceRecord.transport_code as string ?? "");
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState<string | null>(null);
 
@@ -115,7 +116,7 @@ function EditDepartureModal({
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs font-medium text-slate-600">
                 Data arrivo
-                <input type="date" value={arrivalDate} onChange={(e) => setArrivalDate(e.target.value)} className="mt-1 input-saas w-full" />
+                <DateInput value={arrivalDate} onChange={(iso) => setArrivalDate(iso)} className="mt-1 input-saas w-full" />
               </label>
               <label className="text-xs font-medium text-slate-600">
                 Ora arrivo
@@ -123,7 +124,7 @@ function EditDepartureModal({
               </label>
               <label className="text-xs font-medium text-slate-600">
                 Data partenza
-                <input type="date" value={departureDate} onChange={(e) => setDepartureDate(e.target.value)} className="mt-1 input-saas w-full" />
+                <DateInput value={departureDate} onChange={(iso) => setDepartureDate(iso)} className="mt-1 input-saas w-full" />
               </label>
               <label className="text-xs font-medium text-slate-600">
                 Ora partenza
@@ -614,7 +615,7 @@ export default function DeparturesPage() {
           <div className="flex flex-wrap gap-3">
             <label className="text-sm">
               Data
-              <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} className="input-saas mt-1 min-w-40" />
+              <DateInput value={selectedDate} onChange={(iso) => setSelectedDate(iso)} className="input-saas mt-1 min-w-40" />
             </label>
             <label className="text-sm">
               Agenzia
@@ -950,7 +951,7 @@ export default function DeparturesPage() {
               </label>
               <label className="text-xs text-slate-600 font-medium">
                 Data*
-                <input type="date" className="input-saas mt-1" value={addForm.date} onChange={(e) => setAddForm((f) => ({ ...f, date: e.target.value }))} />
+                <DateInput className="input-saas mt-1" value={addForm.date} onChange={(iso) => setAddForm((f) => ({ ...f, date: iso }))} />
               </label>
               <label className="text-xs text-slate-600 font-medium">
                 {addForm.place_type === "snav" || addForm.place_type === "medmar" ? "Ora barca*" : "Ora volo/treno*"}

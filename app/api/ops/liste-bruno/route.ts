@@ -324,8 +324,10 @@ export async function POST(req: NextRequest) {
 
       if (error) throw new Error(error.message);
 
-      type SearchRow = { id: string; customer_name: string; pax: number; date: string; time: string; departure_date: string | null; departure_time: string | null; vessel: string; place_type: string; booking_service_kind: string | null; hotels: { name: string } | null };
-      const results = ((data ?? []) as SearchRow[]).map((r) => ({
+      type SearchRow = { id: string; customer_name: string; pax: number; date: string; time: string; departure_date: string | null; departure_time: string | null; vessel: string; place_type: string; booking_service_kind: string | null; hotels: { name: string } | { name: string }[] | null };
+      const results = ((data ?? []) as unknown as SearchRow[]).map((r) => {
+        const hotel = Array.isArray(r.hotels) ? r.hotels[0] ?? null : r.hotels;
+        return ({
         id: r.id,
         customer_name: r.customer_name,
         pax: r.pax,
@@ -336,8 +338,9 @@ export async function POST(req: NextRequest) {
         vessel: r.vessel,
         place_type: r.place_type,
         booking_service_kind: r.booking_service_kind,
-        hotel_name: r.hotels?.name ?? null,
-      }));
+        hotel_name: hotel?.name ?? null,
+      });
+      });
 
       return NextResponse.json({ ok: true, results });
     }

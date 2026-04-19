@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { HOTEL_ZONES, inferZoneFromText, isMissingCoordinates, zoneCentroids } from "@/lib/hotel-geocoding";
+import { HOTEL_ZONES, hotelGeoQuality, inferZoneFromText, isIncompleteHotelAddress, isMissingCoordinates, zoneCentroids } from "@/lib/hotel-geocoding";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 interface HotelListItem {
@@ -60,6 +60,8 @@ type HotelEditDraft = {
   contact_name: string;
 };
 
+type HotelListFilter = "all" | "geo" | "address" | "inactive";
+
 const PAGE_SIZE = 20;
 
 function toEditDraft(hotel: HotelListItem): HotelEditDraft {
@@ -83,9 +85,19 @@ function formatCoord(value: number | null) {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(5) : "N/D";
 }
 
-function isAddressIncomplete(address: string) {
-  const trimmed = address.trim().toLowerCase();
-  return trimmed.length < 6 || trimmed === "ischia";
+function parseOptionalCoord(value: string) {
+  const trimmed = value.trim().replace(",", ".");
+  if (!trimmed) return 0;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function matchesHotelSearch(hotel: HotelListItem, term: string) {
+  const q = term.trim().toLowerCase();
+  if (!q) return true;
+  return [hotel.name, hotel.address, hotel.city, hotel.zone]
+    .filter(Boolean)
+    .some((value) => String(value).toLowerCase().includes(q));
 }
 
 function normalizeMergeName(value: string) {
@@ -138,6 +150,7 @@ export default function HotelsPage() {
   const [aliasHotelId, setAliasHotelId] = useState("");
   const [aliasValue, setAliasValue] = useState("");
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [listFilter, setListFilter] = useState<HotelListFilter>("geo");
   const [createDraft, setCreateDraft] = useState<HotelEditDraft>({
     name: "", address: "", city: "Ischia", zone: "Ischia Porto", lat: "", lng: "", small_vehicle_only: false, small_vehicle_max_pax: "", is_active: true, email: "", phone: "", contact_name: ""
   });
@@ -275,22 +288,49 @@ export default function HotelsPage() {
     } catch { /* ignore */ }
   }, [mergeStorageKey]);
 
-  const hasMore = items.length < totalCount;
+  const hasMore = listFilter === "all" && items.length < totalCount;
   const canManageHotels = role === "admin" || role === "operator" || role === "supervisor";
+  const filteredItems = useMemo(() => {
+    const base = listFilter === "all" ? items : allHotelsForMerge;
+    return base.filter((hotel) => {
+      if (!matchesHotelSearch(hotel, search)) return false;
+      if (listFilter === "geo") return hotelGeoQuality(hotel).routeUsable === false;
+      if (listFilter === "address") return isIncompleteHotelAddress(hotel.address);
+      if (listFilter === "inactive") return !hotel.is_active;
+      return true;
+    });
+  }, [allHotelsForMerge, items, listFilter, search]);
   const groupedItems = useMemo(() => {
     const groups = new Map<string, HotelListItem[]>();
-    for (const hotel of items) {
+    for (const hotel of filteredItems) {
       const key = hotel.zone || "N/D";
       const bucket = groups.get(key) ?? [];
       bucket.push(hotel);
       groups.set(key, bucket);
     }
     return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [items]);
+  }, [filteredItems]);
 
-  const missingCoordsCount = items.filter((hotel) => isMissingCoordinates(hotel.lat, hotel.lng)).length;
-  const incompleteAddressCount = items.filter((hotel) => isAddressIncomplete(hotel.address)).length;
-  const smallVehicleOnlyCount = items.filter((hotel) => hotel.small_vehicle_only).length;
+  const metricsHotels = allHotelsForMerge.length > 0 ? allHotelsForMerge : items;
+  const missingCoordsCount = metricsHotels.filter((hotel) => isMissingCoordinates(hotel.lat, hotel.lng)).length;
+  const incompleteAddressCount = metricsHotels.filter((hotel) => isIncompleteHotelAddress(hotel.address)).length;
+  const smallVehicleOnlyCount = metricsHotels.filter((hotel) => hotel.small_vehicle_only).length;
+  const geoQualityByHotelId = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof hotelGeoQuality>>();
+    for (const hotel of allHotelsForMerge) {
+      map.set(hotel.id, hotelGeoQuality(hotel));
+    }
+    return map;
+  }, [allHotelsForMerge]);
+  const geoBlockedCount = metricsHotels.filter((hotel) => (geoQualityByHotelId.get(hotel.id) ?? hotelGeoQuality(hotel)).routeUsable === false).length;
+  const geoWarningCount = metricsHotels.filter((hotel) => (geoQualityByHotelId.get(hotel.id) ?? hotelGeoQuality(hotel)).confidence === "warning").length;
+  const geoIssueLabels: Record<string, string> = {
+    missing_coordinates: "coordinate mancanti",
+    outside_ischia: "fuori isola",
+    default_centroid: "coordinate generiche",
+    zone_coordinate_mismatch: "zona non coerente",
+    incomplete_address: "indirizzo incompleto"
+  };
   const aliasByHotel = useMemo(() => {
     const map = new Map<string, HotelAlias[]>();
     for (const row of aliases) {
@@ -376,16 +416,15 @@ export default function HotelsPage() {
     }>;
 
     const updates = rows
-      .filter((hotel) => isMissingCoordinates(hotel.lat, hotel.lng) || !hotel.zone)
+      .filter((hotel) => !hotel.zone || isMissingCoordinates(hotel.lat, hotel.lng))
       .map((hotel) => {
         const inferredZone = inferZoneFromText(`${hotel.name} ${hotel.address}`);
         const nextZone = (hotel.zone || inferredZone || "Ischia Porto") as keyof typeof zoneCentroids;
-        const fallback = zoneCentroids[nextZone] ?? zoneCentroids["Ischia Porto"];
         return {
           id: hotel.id,
           zone: nextZone,
-          lat: isMissingCoordinates(hotel.lat, hotel.lng) ? fallback.lat : hotel.lat,
-          lng: isMissingCoordinates(hotel.lat, hotel.lng) ? fallback.lng : hotel.lng
+          lat: isMissingCoordinates(hotel.lat, hotel.lng) ? 0 : hotel.lat,
+          lng: isMissingCoordinates(hotel.lat, hotel.lng) ? 0 : hotel.lng
         };
       });
 
@@ -407,7 +446,7 @@ export default function HotelsPage() {
 
     await Promise.all([loadHotels(tenantId, search, 0, false), loadMergeContext(tenantId)]);
     setImporting(false);
-    setMessage(`Aggiornati ${updated} hotel (compilazione automatica coordinate/zona).`);
+    setMessage(`Aggiornati ${updated} hotel. Coordinate mancanti lasciate da geocodificare, senza punti finti.`);
   };
 
   const geocodeHotels = async (force: boolean) => {
@@ -562,13 +601,11 @@ export default function HotelsPage() {
       const parsedLng = row.lng ? Number(row.lng) : null;
       const inferredZone = inferZoneFromText(`${row.zone} ${row.address} ${row.name}`);
       const nextZone = row.zone || inferredZone || target.zone || "Ischia Porto";
-      const centroid = zoneCentroids[(nextZone as keyof typeof zoneCentroids) || "Ischia Porto"] ?? zoneCentroids["Ischia Porto"];
-
       const payload = {
         zone: nextZone,
         address: row.address || target.address,
-        lat: Number.isFinite(parsedLat) ? Number(parsedLat) : isMissingCoordinates(target.lat, target.lng) ? centroid.lat : target.lat,
-        lng: Number.isFinite(parsedLng) ? Number(parsedLng) : isMissingCoordinates(target.lat, target.lng) ? centroid.lng : target.lng,
+        lat: Number.isFinite(parsedLat) ? Number(parsedLat) : isMissingCoordinates(target.lat, target.lng) ? 0 : target.lat,
+        lng: Number.isFinite(parsedLng) ? Number(parsedLng) : isMissingCoordinates(target.lat, target.lng) ? 0 : target.lng,
         updated_at: new Date().toISOString()
       };
 
@@ -722,12 +759,12 @@ export default function HotelsPage() {
     setSaving(true);
     setError("");
 
-    const parsedLat = Number(editDraft.lat);
-    const parsedLng = Number(editDraft.lng);
+    const parsedLat = parseOptionalCoord(editDraft.lat);
+    const parsedLng = parseOptionalCoord(editDraft.lng);
     const parsedSmallVehicleMaxPax = editDraft.small_vehicle_max_pax ? Number(editDraft.small_vehicle_max_pax) : null;
-    if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLng)) {
+    if (parsedLat === null || parsedLng === null) {
       setSaving(false);
-      setError("Coordinate non valide.");
+      setError("Coordinate non valide. Puoi anche lasciarle vuote e salvare solo l'indirizzo.");
       return;
     }
     if (parsedSmallVehicleMaxPax !== null && (!Number.isFinite(parsedSmallVehicleMaxPax) || parsedSmallVehicleMaxPax < 1 || parsedSmallVehicleMaxPax > 60)) {
@@ -782,11 +819,15 @@ export default function HotelsPage() {
     if (!createDraft.name.trim()) { setError("Il nome è obbligatorio."); return; }
     setSaving(true);
     setError("");
-    const parsedLat = createDraft.lat ? Number(createDraft.lat) : null;
-    const parsedLng = createDraft.lng ? Number(createDraft.lng) : null;
+    const parsedLat = parseOptionalCoord(createDraft.lat);
+    const parsedLng = parseOptionalCoord(createDraft.lng);
     const parsedSmallVehicleMaxPax = createDraft.small_vehicle_max_pax ? Number(createDraft.small_vehicle_max_pax) : null;
     const zone = createDraft.zone || "Ischia Porto";
-    const centroid = zoneCentroids[(zone as keyof typeof zoneCentroids)] ?? zoneCentroids["Ischia Porto"];
+    if (parsedLat === null || parsedLng === null) {
+      setSaving(false);
+      setError("Coordinate non valide. Puoi lasciarle vuote e farle calcolare dal geocoding.");
+      return;
+    }
     if (parsedSmallVehicleMaxPax !== null && (!Number.isFinite(parsedSmallVehicleMaxPax) || parsedSmallVehicleMaxPax < 1 || parsedSmallVehicleMaxPax > 60)) {
       setSaving(false);
       setError("Il limite posti del bus piccolo deve essere compreso tra 1 e 60.");
@@ -799,8 +840,8 @@ export default function HotelsPage() {
       address: createDraft.address.trim() || "Ischia",
       city: createDraft.city.trim() || "Ischia",
       zone,
-      lat: parsedLat && Number.isFinite(parsedLat) ? parsedLat : centroid.lat,
-      lng: parsedLng && Number.isFinite(parsedLng) ? parsedLng : centroid.lng,
+      lat: parsedLat,
+      lng: parsedLng,
       small_vehicle_only: createDraft.small_vehicle_only,
       small_vehicle_max_pax: createDraft.small_vehicle_only ? parsedSmallVehicleMaxPax : null,
       is_active: createDraft.is_active,
@@ -834,7 +875,7 @@ export default function HotelsPage() {
               onChange={(event) => {
                 const nextSearch = event.target.value;
                 setSearch(nextSearch);
-                if (tenantId) void loadHotels(tenantId, nextSearch, 0, false);
+                if (tenantId && listFilter === "all") void loadHotels(tenantId, nextSearch, 0, false);
               }}
               placeholder="Nome, zona, indirizzo"
               className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5"
@@ -842,7 +883,7 @@ export default function HotelsPage() {
           </label>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-4">
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Hotel registrati</p>
             <p className="mt-2 text-3xl font-semibold text-slate-900">{totalCount}</p>
@@ -853,11 +894,44 @@ export default function HotelsPage() {
             <p className="mt-2 text-3xl font-semibold text-amber-900">{missingCoordsCount + incompleteAddressCount}</p>
             <p className="mt-1 text-sm text-amber-800">{missingCoordsCount} con coordinate da verificare, {incompleteAddressCount} con indirizzo da completare.</p>
           </div>
+          <div className="rounded-2xl border border-rose-200 bg-rose-50/70 px-4 py-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-rose-700">Geo bloccanti</p>
+            <p className="mt-2 text-3xl font-semibold text-rose-900">{geoBlockedCount}</p>
+            <p className="mt-1 text-sm text-rose-800">{geoWarningCount} altri hotel hanno dati deboli ma utilizzabili.</p>
+          </div>
           <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-indigo-700">Accesso solo bus piccolo</p>
             <p className="mt-2 text-3xl font-semibold text-indigo-900">{smallVehicleOnlyCount}</p>
             <p className="mt-1 text-sm text-indigo-800">Vincolo pronto per l’assegnazione Ischia quando configureremo la flotta.</p>
           </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+          {([
+            { key: "geo", label: `Da correggere (${geoBlockedCount})` },
+            { key: "address", label: `Indirizzo mancante (${incompleteAddressCount})` },
+            { key: "all", label: "Tutti" },
+            { key: "inactive", label: "Disattivi" },
+          ] as Array<{ key: HotelListFilter; label: string }>).map((filter) => (
+            <button
+              key={filter.key}
+              type="button"
+              onClick={() => {
+                setListFilter(filter.key);
+                if (filter.key === "all" && tenantId) void loadHotels(tenantId, search, 0, false);
+              }}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+                listFilter === filter.key
+                  ? "border-slate-900 bg-slate-900 text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              {filter.label}
+            </button>
+          ))}
+          <span className="ml-auto text-xs text-slate-500">
+            Vista attuale: {filteredItems.length} hotel
+          </span>
         </div>
       </article>
 
@@ -899,7 +973,7 @@ export default function HotelsPage() {
                       disabled={importing}
                       className="input-saas font-medium disabled:opacity-50"
                     >
-                      {importing ? "Aggiornamento..." : "Compila lat/lng mancanti"}
+                      {importing ? "Aggiornamento..." : "Normalizza zone mancanti"}
                     </button>
                     <button
                       type="button"
@@ -968,11 +1042,11 @@ export default function HotelsPage() {
                     </label>
                     <label className="space-y-1">
                       <span className="text-xs font-medium text-slate-600">Lat (opzionale)</span>
-                      <input value={createDraft.lat} onChange={(e) => setCreateDraft({ ...createDraft, lat: e.target.value })} placeholder="Auto dalla zona" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                      <input value={createDraft.lat} onChange={(e) => setCreateDraft({ ...createDraft, lat: e.target.value })} placeholder="Lascia vuoto" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     </label>
                     <label className="space-y-1">
                       <span className="text-xs font-medium text-slate-600">Lng (opzionale)</span>
-                      <input value={createDraft.lng} onChange={(e) => setCreateDraft({ ...createDraft, lng: e.target.value })} placeholder="Auto dalla zona" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                      <input value={createDraft.lng} onChange={(e) => setCreateDraft({ ...createDraft, lng: e.target.value })} placeholder="Lascia vuoto" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     </label>
                     <label className="space-y-1 rounded-xl border border-slate-200 bg-white px-3 py-3 md:col-span-2">
                       <span className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Vincolo assegnazione Ischia</span>
@@ -1009,7 +1083,7 @@ export default function HotelsPage() {
                 </div>
               ) : null}
                   <p className="text-xs text-slate-500">
-                    Zone supportate: {HOTEL_ZONES.join(", ")}. Se lat/lng mancano, viene usato il centroide zona. Quando il cliente completerà gli indirizzi, il motore potrà ottimizzare meglio i servizi geograficamente.
+                    Zone supportate: {HOTEL_ZONES.join(", ")}. Inserisci indirizzo e zona; lascia vuote le coordinate. Dopo il caricamento indirizzi usa geocoding per calcolare lat/lng reali.
                   </p>
                   <div className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
                     <select
@@ -1111,7 +1185,7 @@ export default function HotelsPage() {
             </article>
           ) : null}
 
-          {items.length === 0 ? <div className="card p-4 text-sm text-slate-500">Nessun hotel trovato.</div> : null}
+          {filteredItems.length === 0 ? <div className="card p-4 text-sm text-slate-500">Nessun hotel trovato con questi filtri.</div> : null}
 
           {groupedItems.map(([zone, hotels]) => (
             <article key={zone} className="card overflow-x-auto">
@@ -1134,7 +1208,9 @@ export default function HotelsPage() {
                   {hotels.map((hotel) => {
                     const isEditing = editingId === hotel.id && editDraft !== null;
                     const hasMissingCoords = isMissingCoordinates(hotel.lat, hotel.lng);
-                    const hasWeakAddress = isAddressIncomplete(hotel.address);
+                    const hasWeakAddress = isIncompleteHotelAddress(hotel.address);
+                    const geoQuality = geoQualityByHotelId.get(hotel.id) ?? hotelGeoQuality(hotel);
+                    const geoIssues = geoQuality.issues.map((issue) => geoIssueLabels[issue] ?? issue);
                     return (
                       <tr key={hotel.id} className="border-t border-slate-100 align-top">
                         <td className="max-w-72 px-3 py-2">
@@ -1187,14 +1263,17 @@ export default function HotelsPage() {
                                 value={editDraft.lat}
                                 onChange={(event) => setEditDraft({ ...editDraft, lat: event.target.value })}
                                 className="rounded-md border border-slate-300 px-2 py-1"
-                                placeholder="Lat"
+                                placeholder="Lat opzionale"
                               />
                               <input
                                 value={editDraft.lng}
                                 onChange={(event) => setEditDraft({ ...editDraft, lng: event.target.value })}
                                 className="rounded-md border border-slate-300 px-2 py-1"
-                                placeholder="Lng"
+                                placeholder="Lng opzionale"
                               />
+                              <p className="text-xs text-slate-500 md:col-span-2">
+                                Per domani basta indirizzo e zona. Se lasci lat/lng vuoti, restano da geocodificare.
+                              </p>
                             </div>
                           ) : (
                             <div className="space-y-1">
@@ -1306,8 +1385,18 @@ export default function HotelsPage() {
                           ) : (
                             <span className="text-slate-500">Disattivo</span>
                           )}
-                          {hasMissingCoords ? <div className="text-xs text-amber-700">Coordinate da verificare</div> : null}
-                          {hasWeakAddress ? <div className="text-xs text-amber-700">Indirizzo incompleto</div> : null}
+                          {geoQuality.confidence === "ok" ? (
+                            <div className="text-xs text-emerald-700">Geo ok</div>
+                          ) : (
+                            <div className={geoQuality.routeUsable ? "text-xs text-amber-700" : "text-xs font-semibold text-rose-700"}>
+                              {geoQuality.routeUsable ? "Geo debole" : "Geo da correggere"}
+                            </div>
+                          )}
+                          {geoIssues.length > 0 ? (
+                            <div className="max-w-44 text-xs text-slate-500">{geoIssues.join(", ")}</div>
+                          ) : null}
+                          {hasMissingCoords && geoIssues.length === 0 ? <div className="text-xs text-amber-700">Coordinate da verificare</div> : null}
+                          {hasWeakAddress && geoIssues.length === 0 ? <div className="text-xs text-amber-700">Indirizzo incompleto</div> : null}
                         </td>
                         <td className="px-3 py-2">
                           {canManageHotels ? (

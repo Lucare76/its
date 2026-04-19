@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PageHeader, SectionCard } from "@/components/ui";
+import { DateInput, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 type Vehicle = {
@@ -289,7 +289,7 @@ export default function FleetOpsPage() {
         ))}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_420px]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
 
         {/* ── Lista veicoli ───────────────────────────────────────────────── */}
         <SectionCard
@@ -317,7 +317,7 @@ export default function FleetOpsPage() {
           }
         >
           <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="min-w-full text-sm">
+            <table className="min-w-[980px] table-auto whitespace-nowrap text-sm">
               <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-400">
                 <tr>
                   <th className="px-3 py-2.5">Veicolo</th>
@@ -345,7 +345,7 @@ export default function FleetOpsPage() {
                       className={`cursor-pointer transition ${isSelected ? "bg-blue-50/70" : todayCommitment ? "bg-amber-50/40" : "hover:bg-slate-50/80"}`}
                     >
                       <td className="px-3 py-2.5">
-                        <span className={`font-medium ${isSelected ? "text-blue-800" : "text-slate-800"}`}>{vehicle.label}</span>
+                        <span className={`block max-w-[160px] truncate font-medium ${isSelected ? "text-blue-800" : "text-slate-800"}`} title={vehicle.label}>{vehicle.label}</span>
                       </td>
                       <td className="px-3 py-2.5">
                         <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${SIZE_BADGE[vehicle.vehicle_size ?? ""] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
@@ -355,7 +355,9 @@ export default function FleetOpsPage() {
                       <td className="px-3 py-2.5 font-mono text-xs text-slate-600">{vehicle.plate ?? "—"}</td>
                       <td className="px-3 py-2.5 text-slate-600">{vehicle.capacity ?? "—"}</td>
                       <td className="px-3 py-2.5 text-slate-600">
-                        {vehicle.habitual_driver_profile_id ? driverNameById.get(vehicle.habitual_driver_profile_id) ?? "—" : <span className="text-slate-300">—</span>}
+                        <span className="block max-w-[150px] truncate" title={vehicle.habitual_driver_profile_id ? driverNameById.get(vehicle.habitual_driver_profile_id) ?? "" : ""}>
+                          {vehicle.habitual_driver_profile_id ? driverNameById.get(vehicle.habitual_driver_profile_id) ?? "—" : <span className="text-slate-300">—</span>}
+                        </span>
                       </td>
                       <td className="px-3 py-2.5">
                         <span className={`inline-block h-2.5 w-2.5 rounded-full ${hasGps ? "bg-emerald-400" : "bg-slate-200"}`} title={hasGps ? vehicle.radius_vehicle_id ?? "" : "Nessun GPS"} />
@@ -417,7 +419,7 @@ export default function FleetOpsPage() {
                             is_blocked_manual: vehicle.is_blocked_manual ?? false,
                             active: !vehicle.active,
                           })}
-                          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition hover:opacity-80 ${
+                          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition hover:opacity-80 whitespace-nowrap ${
                             isBlocked
                               ? "border-rose-200 bg-rose-50 text-rose-700"
                               : vehicle.active
@@ -580,11 +582,10 @@ export default function FleetOpsPage() {
                                   </span>
                                 )}
                               </div>
-                              <input
-                                type="date"
+                              <DateInput
                                 className="input-saas mt-1 w-full"
                                 value={form[field]}
-                                onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
+                                onChange={(iso) => setForm((f) => ({ ...f, [field]: iso }))}
                               />
                             </label>
                           );
@@ -1060,11 +1061,10 @@ function CommitmentsPanel({
         <div className="border-t border-amber-100 pt-3 grid grid-cols-2 gap-2">
           <label className="col-span-2 text-xs font-semibold text-slate-500">
             Data impegno
-            <input
-              type="date"
+            <DateInput
               className="input-saas mt-1 w-full"
               value={form.commitment_date}
-              onChange={(e) => setForm((f) => ({ ...f, commitment_date: e.target.value }))}
+              onChange={(iso) => setForm((f) => ({ ...f, commitment_date: iso }))}
             />
           </label>
           <label className="col-span-2 text-xs font-semibold text-slate-500">

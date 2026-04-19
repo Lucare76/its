@@ -1,4 +1,5 @@
 export { DataTable } from "@/components/ui/data-table";
+export { DateInput } from "@/components/ui/date-input";
 export { EmptyState } from "@/components/ui/empty-state";
 export { FilterBar } from "@/components/ui/filter-bar";
 export { PageHeader } from "@/components/ui/page-header";

@@ -104,10 +104,7 @@ function normalizeElement(element: OverpassElement): NormalizedOsmHotel | null {
   const zoneByText = inferZoneFromText(`${name} ${address} ${city}`);
 
   if (typeof lat !== "number" || typeof lng !== "number" || !Number.isFinite(lat) || !Number.isFinite(lng)) {
-    const fallbackZone = zoneByText ?? "Ischia Porto";
-    const centroid = zoneCentroids[fallbackZone];
-    lat = centroid.lat;
-    lng = centroid.lng;
+    return null;
   }
 
   const zone = zoneByText ?? inferZoneFromCoords(lat, lng);

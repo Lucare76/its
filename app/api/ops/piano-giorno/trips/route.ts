@@ -246,7 +246,7 @@ export async function POST(request: NextRequest) {
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
 async function _assignServicesToGroup(
-  admin: ReturnType<typeof import("@supabase/supabase-js").createClient>,
+  admin: any,
   tenantId: string,
   serviceIds: string[],
   groupId: string,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { EmptyState, PageHeader, SectionCard, StatCard } from "@/components/ui";
+import { DateInput, EmptyState, PageHeader, SectionCard, StatCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { formatIsoDateShort, getCustomerFullName, getTransportReferenceOutward } from "@/lib/service-display";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
@@ -74,11 +74,12 @@ function EditServiceModal({
   const [time, setTime] = useState((service.time ?? "").slice(0, 5));
   const [phone, setPhone] = useState(service.phone ?? "");
   const [notes, setNotes] = useState(service.notes ?? "");
-  const [arrivalDate, setArrivalDate] = useState((service as Record<string, unknown>).arrival_date as string ?? "");
-  const [arrivalTime, setArrivalTime] = useState(((service as Record<string, unknown>).arrival_time as string ?? "").slice(0, 5));
-  const [departureDate, setDepartureDate] = useState((service as Record<string, unknown>).departure_date as string ?? "");
-  const [departureTime, setDepartureTime] = useState(((service as Record<string, unknown>).departure_time as string ?? "").slice(0, 5));
-  const [transportCode, setTransportCode] = useState((service as Record<string, unknown>).transport_code as string ?? "");
+  const serviceRecord = service as unknown as Record<string, unknown>;
+  const [arrivalDate, setArrivalDate] = useState(serviceRecord.arrival_date as string ?? "");
+  const [arrivalTime, setArrivalTime] = useState((serviceRecord.arrival_time as string ?? "").slice(0, 5));
+  const [departureDate, setDepartureDate] = useState(serviceRecord.departure_date as string ?? "");
+  const [departureTime, setDepartureTime] = useState((serviceRecord.departure_time as string ?? "").slice(0, 5));
+  const [transportCode, setTransportCode] = useState(serviceRecord.transport_code as string ?? "");
   const [localAgencies, setLocalAgencies] = useState<AgencyOption[]>(agencies);
   const [agencyId, setAgencyId] = useState(() => {
     if (service.agency_id) return service.agency_id;
@@ -264,7 +265,7 @@ function EditServiceModal({
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs font-medium text-slate-600">
                 Data arrivo
-                <input type="date" value={arrivalDate} onChange={(e) => setArrivalDate(e.target.value)} className="mt-1 input-saas w-full" />
+                <DateInput value={arrivalDate} onChange={(iso) => setArrivalDate(iso)} className="mt-1 input-saas w-full" />
               </label>
               <label className="text-xs font-medium text-slate-600">
                 Ora arrivo
@@ -272,7 +273,7 @@ function EditServiceModal({
               </label>
               <label className="text-xs font-medium text-slate-600">
                 Data partenza
-                <input type="date" value={departureDate} onChange={(e) => setDepartureDate(e.target.value)} className="mt-1 input-saas w-full" />
+                <DateInput value={departureDate} onChange={(iso) => setDepartureDate(iso)} className="mt-1 input-saas w-full" />
               </label>
               <label className="text-xs font-medium text-slate-600">
                 Ora partenza
@@ -785,7 +786,7 @@ export default function ArrivalsPage() {
           <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white/80 px-3 py-3 shadow-sm backdrop-blur-sm">
             <label className="text-sm">
               <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Data</span>
-              <input type="date" value={selectedDate} onChange={(event) => { setSelectedDate(event.target.value); setShowAllDates(false); }} className="input-saas mt-1 min-w-40" disabled={showAllDates} />
+              <DateInput value={selectedDate} onChange={(iso) => { setSelectedDate(iso); setShowAllDates(false); }} className="input-saas mt-1 min-w-40" disabled={showAllDates} />
             </label>
             <div className="flex flex-col gap-1 self-end">
               <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Visualizza</span>
@@ -1177,7 +1178,7 @@ export default function ArrivalsPage() {
               </label>
               <label className="text-xs text-slate-600 font-medium">
                 Data*
-                <input type="date" className="input-saas mt-1" value={addForm.date} onChange={(e) => setAddForm((f) => ({ ...f, date: e.target.value }))} />
+                <DateInput className="input-saas mt-1" value={addForm.date} onChange={(iso) => setAddForm((f) => ({ ...f, date: iso }))} />
               </label>
               <label className="text-xs text-slate-600 font-medium">
                 Ora*

@@ -1,19 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { zoneCentroids, HOTEL_ZONES, ZONE_TO_CITY } from "@/lib/hotel-geocoding";
-import type { HotelZone } from "@/lib/hotel-geocoding";
+import { inferZoneFromCoords, isDefaultZoneCentroid, isWithinIschiaBounds, ZONE_TO_CITY } from "@/lib/hotel-geocoding";
 
 export const runtime = "nodejs";
 
 type NominatimResult = { lat: string; lon: string; display_name: string };
-
-// Bounding box dell'isola d'Ischia per validare i risultati Nominatim
-const ISCHIA_BOUNDS = { minLat: 40.67, maxLat: 40.77, minLng: 13.82, maxLng: 13.98 };
-
-function isWithinIschia(lat: number, lng: number): boolean {
-  return lat >= ISCHIA_BOUNDS.minLat && lat <= ISCHIA_BOUNDS.maxLat &&
-         lng >= ISCHIA_BOUNDS.minLng && lng <= ISCHIA_BOUNDS.maxLng;
-}
 
 async function nominatimSearch(query: string): Promise<{ lat: number; lng: number } | null> {
   const url = new URL("https://nominatim.openstreetmap.org/search");
@@ -34,7 +25,7 @@ async function nominatimSearch(query: string): Promise<{ lat: number; lng: numbe
   for (const result of data) {
     const lat = parseFloat(result.lat);
     const lng = parseFloat(result.lon);
-    if (Number.isFinite(lat) && Number.isFinite(lng) && isWithinIschia(lat, lng)) {
+    if (Number.isFinite(lat) && Number.isFinite(lng) && isWithinIschiaBounds(lat, lng)) {
       return { lat, lng };
     }
   }
@@ -54,33 +45,6 @@ async function geocodeAddress(address: string, hotelName: string): Promise<{ lat
   if (result2) return result2;
 
   return null;
-}
-
-// Dato lat/lng, restituisce la zona più vicina in base alla distanza dai centroidi
-function inferZoneFromCoords(lat: number, lng: number): HotelZone {
-  let best: HotelZone = "Ischia Porto";
-  let bestDist = Infinity;
-  for (const zone of HOTEL_ZONES) {
-    const c = zoneCentroids[zone];
-    const dist = Math.hypot(lat - c.lat, lng - c.lng);
-    if (dist < bestDist) {
-      bestDist = dist;
-      best = zone;
-    }
-  }
-  return best;
-}
-
-// Controlla se le coordinate sono quelle di default (centroide di una zona)
-function isDefaultCoord(lat: number | null, lng: number | null): boolean {
-  if (lat == null || lng == null) return true;
-  for (const zone of HOTEL_ZONES) {
-    const c = zoneCentroids[zone];
-    if (Math.abs(lat - c.lat) < 0.001 && Math.abs(lng - c.lng) < 0.001) return true;
-  }
-  // Ischia Porto default usato nei vecchi import manuali
-  if (Math.abs(lat - 40.7418) < 0.001 && Math.abs(lng - 13.9426) < 0.001) return true;
-  return false;
 }
 
 function sleep(ms: number) {
@@ -119,7 +83,7 @@ export async function POST(request: NextRequest) {
   // Filtra solo quelli da aggiornare
   const toProcess = force
     ? rows
-    : rows.filter((h) => isDefaultCoord(h.lat, h.lng) || !h.zone);
+    : rows.filter((h) => isDefaultZoneCentroid(h.lat, h.lng) || !h.zone || h.lat == null || h.lng == null);
 
   let updated = 0;
   let failed = 0;
