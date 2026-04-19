@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import { STATEMENT_AGENCY_NAMES } from "@/lib/server/statement-agencies";
@@ -1354,10 +1354,9 @@ export default function CrmAgenciesPage() {
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Data di riferimento</label>
-                <input
-                  type="date"
+                <DateInput
                   value={sendReportDate}
-                  onChange={(e) => setSendReportDate(e.target.value)}
+                  onChange={(iso) => setSendReportDate(iso)}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300"
                 />
               </div>

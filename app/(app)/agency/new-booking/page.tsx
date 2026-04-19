@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
+import { DateInput } from "@/components/ui";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { agencyBookingCreateSchema } from "@/lib/validation";
@@ -756,12 +757,11 @@ export default function AgencyNewBookingPage() {
         <div className="md:col-span-2 grid grid-cols-2 gap-3">
           <label className="text-sm">
             {contextLabels.arrivalDateLabel}
-            <input
-              type="date"
+            <DateInput
               className="input-saas mt-1"
               value={form.arrival_date}
-              onChange={(event) => {
-                const newDate = event.target.value;
+              onChange={(iso) => {
+                const newDate = iso;
                 setForm((prev) => ({
                   ...prev,
                   arrival_date: newDate,
@@ -807,12 +807,11 @@ export default function AgencyNewBookingPage() {
         <div className="md:col-span-2 grid grid-cols-2 gap-3">
           <label className="text-sm">
             {contextLabels.departureDateLabel}
-            <input
-              type="date"
+            <DateInput
               className={`input-saas mt-1${selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
               value={form.departure_date}
               min={form.arrival_date}
-              onChange={(event) => setForm((prev) => ({ ...prev, departure_date: event.target.value }))}
+              onChange={(iso) => setForm((prev) => ({ ...prev, departure_date: iso }))}
             />
             {selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? (
               <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>

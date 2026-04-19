@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { PageHeader } from "@/components/ui";
+import { DateInput, PageHeader } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 // ── Tipi ─────────────────────────────────────────────────────────────────────
@@ -695,10 +695,9 @@ export default function ListeBrunoPage() {
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-6 py-3">
-        <input
-          type="date"
+        <DateInput
           value={date}
-          onChange={(e) => setDate(e.target.value)}
+          onChange={(iso) => setDate(iso)}
           className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm"
         />
 

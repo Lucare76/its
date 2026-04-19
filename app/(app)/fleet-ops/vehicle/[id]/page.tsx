@@ -3,6 +3,7 @@
 import { use, useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import Link from "next/link";
+import { DateInput } from "@/components/ui";
 
 /* ─── Tipi ───────────────────────────────────────────────────────────────── */
 
@@ -263,7 +264,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
               <>
                 <label className="text-xs font-semibold text-slate-500 col-span-2 sm:col-span-1">
                   Data *
-                  <input type="date" value={fDate} onChange={(e) => setFDate(e.target.value)} className="input-saas mt-1 w-full" />
+                  <DateInput value={fDate} onChange={(iso) => setFDate(iso)} className="input-saas mt-1 w-full" />
                 </label>
                 <label className="text-xs font-semibold text-slate-500 col-span-2">
                   Descrizione *
@@ -292,7 +293,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
               <>
                 <label className="text-xs font-semibold text-slate-500">
                   Data *
-                  <input type="date" value={fDate} onChange={(e) => setFDate(e.target.value)} className="input-saas mt-1 w-full" />
+                  <DateInput value={fDate} onChange={(iso) => setFDate(iso)} className="input-saas mt-1 w-full" />
                 </label>
                 <label className="text-xs font-semibold text-slate-500">
                   Carburante
@@ -327,7 +328,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
               <>
                 <label className="text-xs font-semibold text-slate-500">
                   Data ordine *
-                  <input type="date" value={fDate} onChange={(e) => setFDate(e.target.value)} className="input-saas mt-1 w-full" />
+                  <DateInput value={fDate} onChange={(iso) => setFDate(iso)} className="input-saas mt-1 w-full" />
                 </label>
                 <label className="text-xs font-semibold text-slate-500 col-span-2">
                   Nome pezzo *
@@ -355,7 +356,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
                 </label>
                 <label className="text-xs font-semibold text-slate-500">
                   Data installazione
-                  <input type="date" value={fInstalledAt} onChange={(e) => setFInstalledAt(e.target.value)} className="input-saas mt-1 w-full" />
+                  <DateInput value={fInstalledAt} onChange={(iso) => setFInstalledAt(iso)} className="input-saas mt-1 w-full" />
                 </label>
               </>
             )}

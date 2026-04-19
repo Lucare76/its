@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { OpsArrivalsExportButtons } from "@/components/ops-arrivals-export-buttons";
 import { OpsStatementExportButtons } from "@/components/ops-statement-export-buttons";
-import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import type { SummaryPreviewPayload } from "@/lib/server/operational-summary";
 
 type SummaryLine = SummaryPreviewPayload["arrivals_48h"][string][number];
@@ -185,7 +185,7 @@ export default function OpsSummaryPage() {
         actions={
           <label className="text-sm">
             Data base
-            <input type="date" value={today} onChange={(event) => setToday(event.target.value)} className="input-saas mt-1 w-full min-w-40" />
+            <DateInput value={today} onChange={(iso) => setToday(iso)} className="input-saas mt-1 w-full min-w-40" />
           </label>
         }
       />

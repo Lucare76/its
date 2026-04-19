@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { DateInput } from "@/components/ui";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
@@ -184,11 +185,10 @@ function PriceRow({ label, kindKey, lineCode = null, agencyIds, rates, token, is
         ) : null}
 
         {/* Data validità */}
-        <input
-          type="date"
+        <DateInput
           className="rounded-xl border border-slate-200 px-2 py-1.5 text-xs text-slate-600"
           value={validFrom}
-          onChange={(e) => setValidFrom(e.target.value)}
+          onChange={(iso) => setValidFrom(iso)}
           title="Valido dal"
         />
 

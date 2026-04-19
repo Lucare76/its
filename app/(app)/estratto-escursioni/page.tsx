@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { PageHeader } from "@/components/ui";
+import { DateInput, PageHeader } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { AgencyStatement, EscursioneBooking } from "@/app/api/ops/estratto-escursioni/route";
 
@@ -157,10 +157,10 @@ export default function EstrattoCursioniPage() {
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-6 py-3">
         <div className="flex items-center gap-2">
           <label className="text-xs font-medium text-slate-500">Dal</label>
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+          <DateInput value={from} onChange={(iso) => setFrom(iso)}
             className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm" />
           <label className="text-xs font-medium text-slate-500">Al</label>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+          <DateInput value={to} onChange={(iso) => setTo(iso)}
             className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm" />
         </div>
         <input

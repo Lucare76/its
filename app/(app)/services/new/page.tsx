@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
+import { DateInput } from "@/components/ui";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { agencyBookingCreateSchema } from "@/lib/validation";
@@ -706,9 +707,9 @@ export default function OpsNewBookingPage() {
         <div className="md:col-span-2 grid grid-cols-2 gap-3">
           <label className="text-sm">
             {contextLabels.arrivalDateLabel}
-            <input type="date" className={`input-saas mt-1${fieldErrors.arrival_date ? " border-rose-400" : ""}`} value={form.arrival_date}
-              onChange={(e) => {
-                const newDate = e.target.value;
+            <DateInput className={`input-saas mt-1${fieldErrors.arrival_date ? " border-rose-400" : ""}`} value={form.arrival_date}
+              onChange={(iso) => {
+                const newDate = iso;
                 setForm((prev) => ({
                   ...prev, arrival_date: newDate,
                   departure_date: prev.booking_service_kind === "excursion" || prev.departure_date < newDate ? newDate : prev.departure_date
@@ -745,9 +746,9 @@ export default function OpsNewBookingPage() {
         <div className="md:col-span-2 grid grid-cols-2 gap-3">
           <label className="text-sm">
             {contextLabels.departureDateLabel}
-            <input type="date" className={`input-saas mt-1${fieldErrors.departure_date ? " border-rose-400" : selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
+            <DateInput className={`input-saas mt-1${fieldErrors.departure_date ? " border-rose-400" : selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
               value={form.departure_date} min={form.arrival_date}
-              onChange={(e) => { setForm((prev) => ({ ...prev, departure_date: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.departure_date; return n; }); }}
+              onChange={(iso) => { setForm((prev) => ({ ...prev, departure_date: iso })); setFieldErrors((prev) => { const n = { ...prev }; delete n.departure_date; return n; }); }}
             />
             {fieldErrors.departure_date ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.departure_date}</span> : null}
             {selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? (

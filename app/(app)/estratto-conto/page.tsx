@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { DateInput } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 
@@ -353,11 +354,11 @@ export default function EstrattoContoPage() {
           </label>
           <label className="text-xs font-medium text-slate-600">
             Dal
-            <input type="date" value={genFrom} onChange={(e) => setGenFrom(e.target.value)} className="mt-1 input-saas w-full" />
+            <DateInput value={genFrom} onChange={(iso) => setGenFrom(iso)} className="mt-1 input-saas w-full" />
           </label>
           <label className="text-xs font-medium text-slate-600">
             Al
-            <input type="date" value={genTo} onChange={(e) => setGenTo(e.target.value)} className="mt-1 input-saas w-full" />
+            <DateInput value={genTo} onChange={(iso) => setGenTo(iso)} className="mt-1 input-saas w-full" />
           </label>
           <div className="flex flex-col justify-end gap-2">
             <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">

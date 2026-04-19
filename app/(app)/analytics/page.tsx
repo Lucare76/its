@@ -6,7 +6,7 @@ import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import { KpiCard } from "@/components/kpi-card";
-import { DataTable, EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { DataTable, DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 /* ─── Tipi ─────────────────────────────────────────────── */
@@ -130,11 +130,11 @@ export default function AnalyticsPage() {
         <div className="flex flex-wrap items-end gap-2">
           <label className="text-xs text-muted">
             Dal
-            <input type="date" className="input-saas mt-1 w-full min-w-[150px]" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <DateInput className="input-saas mt-1 w-full min-w-[150px]" value={dateFrom} onChange={(iso) => setDateFrom(iso)} />
           </label>
           <label className="text-xs text-muted">
             Al
-            <input type="date" className="input-saas mt-1 w-full min-w-[150px]" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DateInput className="input-saas mt-1 w-full min-w-[150px]" value={dateTo} onChange={(iso) => setDateTo(iso)} />
           </label>
           <button type="button" onClick={() => void loadAnalytics()} disabled={loading} className="btn-primary h-[42px] px-4 text-sm disabled:opacity-50">
             {loading ? "Caricamento…" : "Aggiorna"}

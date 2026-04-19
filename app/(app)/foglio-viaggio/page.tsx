@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { DateInput } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 // ── Tipi ─────────────────────────────────────────────────────────────────────
@@ -304,10 +305,9 @@ export default function FoglioViaggioPage() {
           <p className="text-sm text-slate-500">Servizi del giorno raggruppati per veicolo</p>
         </div>
         <div className="flex items-center gap-3">
-          <input
-            type="date"
+          <DateInput
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={(iso) => setDate(iso)}
             className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
           />
           {data && data.total_services > 0 && (

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PageHeader } from "@/components/ui";
+import { DateInput, PageHeader } from "@/components/ui";
 import { supabase } from "@/lib/supabase/client";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -487,15 +487,14 @@ function BusGeneralPlanning({ token }: { token: string }) {
           <div className="grid grid-cols-2 gap-3 mb-3">
             <label className="flex flex-col gap-1 text-xs font-medium text-muted">
               Dal
-              <input
-                type="date"
+              <DateInput
                 value={newBlock.startDate}
                 min={monthStart}
                 max={monthEnd}
-                onChange={(e) =>
+                onChange={(iso) =>
                   setNewBlock((prev) =>
                     prev
-                      ? { ...prev, startDate: e.target.value, endDate: e.target.value > prev.endDate ? e.target.value : prev.endDate }
+                      ? { ...prev, startDate: iso, endDate: iso > prev.endDate ? iso : prev.endDate }
                       : null
                   )
                 }
@@ -504,12 +503,11 @@ function BusGeneralPlanning({ token }: { token: string }) {
             </label>
             <label className="flex flex-col gap-1 text-xs font-medium text-muted">
               Al
-              <input
-                type="date"
+              <DateInput
                 value={newBlock.endDate}
                 min={newBlock.startDate}
                 max={monthEnd}
-                onChange={(e) => setNewBlock((prev) => prev ? { ...prev, endDate: e.target.value } : null)}
+                onChange={(iso) => setNewBlock((prev) => prev ? { ...prev, endDate: iso } : null)}
                 className="input-saas text-sm"
               />
             </label>
@@ -593,15 +591,14 @@ function BusGeneralPlanning({ token }: { token: string }) {
           <div className="grid grid-cols-2 gap-3 mb-3">
             <label className="flex flex-col gap-1 text-xs font-medium text-muted">
               Dal
-              <input
-                type="date"
+              <DateInput
                 value={editBlock.startDate}
                 min={monthStart}
                 max={monthEnd}
-                onChange={(e) =>
+                onChange={(iso) =>
                   setEditBlock((prev) =>
                     prev
-                      ? { ...prev, startDate: e.target.value, endDate: e.target.value > prev.endDate ? e.target.value : prev.endDate }
+                      ? { ...prev, startDate: iso, endDate: iso > prev.endDate ? iso : prev.endDate }
                       : null
                   )
                 }
@@ -610,12 +607,11 @@ function BusGeneralPlanning({ token }: { token: string }) {
             </label>
             <label className="flex flex-col gap-1 text-xs font-medium text-muted">
               Al
-              <input
-                type="date"
+              <DateInput
                 value={editBlock.endDate}
                 min={editBlock.startDate}
                 max={monthEnd}
-                onChange={(e) => setEditBlock((prev) => prev ? { ...prev, endDate: e.target.value } : null)}
+                onChange={(iso) => setEditBlock((prev) => prev ? { ...prev, endDate: iso } : null)}
                 className="input-saas text-sm"
               />
             </label>
@@ -818,7 +814,7 @@ function GruppiPlanning({ token }: { token: string }) {
       </div>
 
       <div className="flex gap-2 items-center flex-wrap">
-        <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)}
+        <DateInput value={newDate} onChange={(iso) => setNewDate(iso)}
           className="input-saas text-sm" min={`${cy - 2}-01-01`} max={`${cy + 2}-12-31`} />
         <button onClick={handleAddDate} className="btn-secondary text-sm" disabled={!newDate}>
           + Aggiungi data
@@ -1016,7 +1012,7 @@ function TrattaPlanning({ token }: { token: string }) {
       </div>
 
       <div className="flex gap-2 items-center flex-wrap">
-        <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)}
+        <DateInput value={newDate} onChange={(iso) => setNewDate(iso)}
           className="input-saas text-sm" min={`${cy - 2}-01-01`} max={`${cy + 2}-12-31`} />
         <button onClick={handleAddDate} className="btn-secondary text-sm" disabled={!newDate}>
           + Aggiungi data

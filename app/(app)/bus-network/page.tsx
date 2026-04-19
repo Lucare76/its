@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PageHeader, SectionCard } from "@/components/ui";
+import { DateInput, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import BusImportModal from "./BusImportModal";
 
@@ -923,10 +923,8 @@ export default function BusNetworkPage() {
         {/* Date nav */}
         <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1">
           <button onClick={() => setDate(shiftSunday(date, -1))} className="rounded p-1 text-slate-500 hover:bg-white hover:text-slate-800">←</button>
-          <input type="date" value={date}
-            min="2024-01-01"
-            max={`${new Date().getFullYear() + 1}-12-31`}
-            onChange={(e) => { if (e.target.value) setDate(e.target.value); }}
+          <DateInput value={date}
+            onChange={(iso) => { if (iso) setDate(iso); }}
             className="w-36 rounded-md border-0 bg-transparent px-2 py-0.5 text-sm font-medium text-slate-700 focus:outline-none" />
           <button onClick={() => setDate(shiftSunday(date, 1))} className="rounded p-1 text-slate-500 hover:bg-white hover:text-slate-800">→</button>
         </div>

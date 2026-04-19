@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PageHeader } from "@/components/ui";
+import { DateInput, PageHeader } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getPickupRule, getPickupRuleByRange, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 
@@ -825,7 +825,7 @@ ${driverInfo ? `<p style="font-size:12px;margin:0 0 12px;color:#475569">Autista:
     <div className="flex flex-col h-full">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-6 py-3">
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+        <DateInput value={date} onChange={(iso) => setDate(iso)}
           className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm" />
 
         {/* Toggle Arrivi / Partenze */}
@@ -1264,7 +1264,7 @@ function TabServiziIsola() {
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-6 py-3">
-        <input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)}
+        <DateInput value={filterDate} onChange={(iso) => setFilterDate(iso)}
           className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm" />
         <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
           className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700">
@@ -1400,7 +1400,7 @@ function TabServiziIsola() {
               {hotels.map((h) => <option key={h.id} value={h.name} />)}
             </datalist>
             <div className="flex gap-2">
-              <input type="date" value={form.travel_date} onChange={(e) => setForm((f) => ({ ...f, travel_date: e.target.value }))}
+              <DateInput value={form.travel_date} onChange={(iso) => setForm((f) => ({ ...f, travel_date: iso }))}
                 className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm" />
               <input type="time" value={form.orario} onChange={(e) => setForm((f) => ({ ...f, orario: e.target.value }))}
                 className="w-28 rounded-lg border border-slate-200 px-3 py-2 text-sm" />

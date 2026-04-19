@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
+import { DateInput } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import type { Hotel, Service } from "@/lib/types";
@@ -250,11 +251,11 @@ export default function BigliettiMedmarPage() {
         <div className="ml-auto flex flex-wrap items-center gap-2 text-sm">
           <label className="text-xs font-medium text-slate-600">
             Dal
-            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="ml-1 input-saas" />
+            <DateInput value={dateFrom} onChange={(iso) => setDateFrom(iso)} className="ml-1 input-saas" />
           </label>
           <label className="text-xs font-medium text-slate-600">
             Al
-            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="ml-1 input-saas" />
+            <DateInput value={dateTo} onChange={(iso) => setDateTo(iso)} className="ml-1 input-saas" />
           </label>
           <button
             type="button"

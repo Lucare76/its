@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { EmptyState, FilterBar, PageHeader, SectionCard } from "@/components/ui";
+import { DateInput, EmptyState, FilterBar, PageHeader, SectionCard } from "@/components/ui";
 import { formatIsoDateShort, formatIsoDateTimeShort } from "@/lib/service-display";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
@@ -502,8 +502,8 @@ function AgencyBookingsPageInner() {
                   <div className="grid gap-3 md:grid-cols-2">
                     <div>
                       <label className="text-xs text-muted">Data andata</label>
-                      <input className="input-saas mt-1" type="date" value={modDraft.arrival_date}
-                        onChange={(e) => setModDraft((d) => d && ({ ...d, arrival_date: e.target.value }))} />
+                      <DateInput className="input-saas mt-1" value={modDraft.arrival_date}
+                        onChange={(iso) => setModDraft((d) => d && ({ ...d, arrival_date: iso }))} />
                     </div>
                     <div>
                       <label className="text-xs text-muted">Ora andata</label>
@@ -512,8 +512,8 @@ function AgencyBookingsPageInner() {
                     </div>
                     <div>
                       <label className="text-xs text-muted">Data ritorno</label>
-                      <input className="input-saas mt-1" type="date" value={modDraft.departure_date}
-                        onChange={(e) => setModDraft((d) => d && ({ ...d, departure_date: e.target.value }))} />
+                      <DateInput className="input-saas mt-1" value={modDraft.departure_date}
+                        onChange={(iso) => setModDraft((d) => d && ({ ...d, departure_date: iso }))} />
                     </div>
                     <div>
                       <label className="text-xs text-muted">Ora ritorno</label>

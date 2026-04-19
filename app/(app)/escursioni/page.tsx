@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { PageHeader } from "@/components/ui";
+import { DateInput, PageHeader } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 // ── Tipi ─────────────────────────────────────────────────────────────────────
@@ -502,7 +502,7 @@ export default function EscursioniPage() {
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-6 py-3">
         <button onClick={() => setDate((d) => shiftDate(d, -1))} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm hover:bg-slate-50">‹</button>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+        <DateInput value={date} onChange={(iso) => setDate(iso)}
           className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm" />
         <button onClick={() => setDate((d) => shiftDate(d, 1))} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm hover:bg-slate-50">›</button>
         <span className="text-sm text-slate-500">{fmtDate(date)}</span>

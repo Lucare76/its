@@ -2,6 +2,7 @@
 
 import { useEffect, useEffectEvent, useMemo, useState, type FormEvent } from "react";
 import { z } from "zod";
+import { DateInput } from "@/components/ui";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { BUS_LINES_2026 } from "@/lib/bus-lines-catalog";
@@ -1663,8 +1664,8 @@ export default function PricingAdminPage() {
             <select name="currency" className="input-saas" value={listDraft.currency} onChange={(event) => setListDraft((current) => ({ ...current, currency: event.target.value.toUpperCase() }))}>
               <option value="EUR">EUR</option>
             </select>
-            <input name="valid_from" type="date" className="input-saas" value={listDraft.valid_from} onChange={(event) => setListDraft((current) => ({ ...current, valid_from: event.target.value }))} />
-            <input name="valid_to" type="date" className="input-saas" value={listDraft.valid_to} onChange={(event) => setListDraft((current) => ({ ...current, valid_to: event.target.value }))} />
+            <DateInput className="input-saas" value={listDraft.valid_from} onChange={(iso) => setListDraft((current) => ({ ...current, valid_from: iso }))} />
+            <DateInput className="input-saas" value={listDraft.valid_to} onChange={(iso) => setListDraft((current) => ({ ...current, valid_to: iso }))} />
             <select name="agency_id" className="input-saas" value={listDraft.agency_id} onChange={(event) => setListDraft((current) => ({ ...current, agency_id: event.target.value }))}>
               <option value="">Listino privati</option>
               {agencies.map((agency) => (

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PageHeader, SectionCard } from "@/components/ui";
+import { DateInput, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 type ArrivalWindow = {
@@ -87,7 +87,7 @@ export default function ArrivalsClockPage() {
           <div className="flex items-end gap-2">
             <label className="text-sm">
               Data
-              <input className="input-saas mt-1" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
+              <DateInput className="input-saas mt-1" value={selectedDate} onChange={(iso) => setSelectedDate(iso)} />
             </label>
             <button type="button" className="btn-secondary px-3 py-2 text-sm" onClick={() => void refresh()}>
               Aggiorna

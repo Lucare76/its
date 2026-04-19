@@ -76,7 +76,6 @@ function genCustomer() {
     customer_first_name: first,
     customer_last_name: last,
     phone,
-    phone_e164: phone.replace(/\s/g, ""),
     customer_email: `${first.toLowerCase()}.${last.toLowerCase()}${rndInt(1, 99)}@${rnd(["gmail.com","yahoo.com","hotmail.com","outlook.com","web.de","libero.it","orange.fr"])}`,
   };
 }
@@ -107,7 +106,7 @@ const SPECIAL_NOTES = [
 ];
 
 function genNotes() {
-  return Math.random() < 0.15 ? rnd(SPECIAL_NOTES) : null;
+  return Math.random() < 0.15 ? rnd(SPECIAL_NOTES) : "";
 }
 
 // ─── Corse traghetto ──────────────────────────────────────────────────────────
@@ -137,14 +136,16 @@ const ARRIVALS_RUNS = [
 // ─── Destinazioni partenze ────────────────────────────────────────────────────
 
 const DEPARTURE_DESTINATIONS = [
-  { place_type: "airport", dest: "Aeroporto Napoli Capodichino", vessel: "Volo", weight: 30 },
-  { place_type: "station", dest: "Stazione Napoli Centrale", vessel: "Treno", weight: 25 },
-  { place_type: "station", dest: "Stazione Napoli Afragola", vessel: "Treno AV", weight: 10 },
-  { place_type: "bus_stop", dest: "FlixBus Napoli", vessel: "FlixBus", weight: 8 },
-  { place_type: "port", dest: "Porto Napoli Beverello", vessel: "Traghetto", weight: 15 },
-  { place_type: "port", dest: "Porto Pozzuoli", vessel: "Traghetto", weight: 7 },
-  { place_type: "hotel", dest: null, vessel: null, weight: 5 },
+  { place_type: "airport", dest: "Aeroporto Napoli Capodichino", vessel: "Volo", weight: 33 },
+  { place_type: "station", dest: "Stazione Napoli Centrale", vessel: "Treno", weight: 27 },
+  { place_type: "hotel",   dest: "FlixBus Napoli", vessel: "FlixBus", weight: 10 },
+  { place_type: "hotel",   dest: "Porto Napoli Beverello", vessel: "Traghetto", weight: 17 },
+  { place_type: "hotel",   dest: "Porto Pozzuoli", vessel: "Traghetto", weight: 8 },
+  { place_type: "hotel",   dest: null, vessel: null, weight: 5 },
 ];
+
+// Veicoli premium per transfer privati/esclusivi
+const PRIVATE_VEHICLES = ["Classe E", "SAAB 9-5", "Vito Extra Long"];
 
 function pickDestination() {
   const roll = rndInt(1, 100);
@@ -171,14 +172,14 @@ function genTransportCode(dest) {
 // ─── Fasce pickup per zona ────────────────────────────────────────────────────
 
 const ZONE_PICKUP_TIMES = {
-  "Ischia Porto":     ["04:00","04:30","05:00","05:30","06:00","06:30","07:00","07:30","08:00","08:30","09:00","09:30","10:00","10:30","11:00","12:00"],
-  "Ischia Ponte":     ["03:30","04:00","04:30","05:00","05:30","06:00","06:30","07:00","07:30","08:00","09:00","10:00","11:00"],
-  "Casamicciola":     ["03:30","04:00","04:30","05:00","05:30","06:00","06:30","07:00","07:30","08:00","09:00","10:00"],
-  "Lacco Ameno":      ["03:00","03:30","04:00","04:30","05:00","05:30","06:00","06:30","07:00","08:00","09:00"],
-  "Forio":            ["02:30","03:00","03:30","04:00","04:30","05:00","05:30","06:00","06:30","07:00","08:00"],
-  "Barano":           ["03:30","04:00","04:30","05:00","05:30","06:00","06:30","07:00","08:00"],
-  "Sant'Angelo":      ["02:30","03:00","03:30","04:00","04:30","05:00","05:30","06:00","06:30"],
-  "Serrara Fontana":  ["02:30","03:00","03:30","04:00","04:30","05:00","05:30"],
+  "Ischia Porto":     ["05:15","05:30","06:30","07:20","08:40","11:50","12:30","14:00","15:30","16:45"],
+  "Ischia Ponte":     ["05:30","06:00","06:30","07:00","07:30","08:40","11:50","12:30","14:00","15:30","16:45"],
+  "Casamicciola":     ["05:15","05:30","06:30","07:15","08:45","11:50","12:45","14:00","14:30","15:30","16:50"],
+  "Lacco Ameno":      ["05:15","05:20","06:30","07:10","08:40","08:45","11:50","12:30","14:00","15:30","16:50"],
+  "Forio":            ["05:00","06:20","07:00","08:30","11:45","12:15","13:45","14:00","15:15","16:45"],
+  "Barano":           ["05:00","06:15","07:10","08:15","09:00","11:30","12:00","13:45","15:15","16:30"],
+  "Sant'Angelo":      ["05:00","06:00","07:00","08:00","09:00","11:00","13:00","15:00","16:00"],
+  "Serrara Fontana":  ["05:00","06:00","07:00","08:00","09:00","11:00","13:00","15:00"],
 };
 
 // ─── Supabase fetch ───────────────────────────────────────────────────────────
@@ -214,17 +215,28 @@ async function ask(question) {
 
 // ─── Batch insert ─────────────────────────────────────────────────────────────
 
+function normalizeRows(rows) {
+  const allKeys = new Set();
+  for (const r of rows) for (const k of Object.keys(r)) allKeys.add(k);
+  return rows.map((r) => {
+    const out = {};
+    for (const k of allKeys) out[k] = k in r ? r[k] : null;
+    return out;
+  });
+}
+
 async function batchInsert(table, rows, batchSize = 200) {
+  const normalized = normalizeRows(rows);
   let inserted = 0;
-  for (let i = 0; i < rows.length; i += batchSize) {
-    const chunk = rows.slice(i, i + batchSize);
+  for (let i = 0; i < normalized.length; i += batchSize) {
+    const chunk = normalized.slice(i, i + batchSize);
     await supabaseFetch(`/${table}`, {
       method: "POST",
       headers: { Prefer: "return=minimal" },
       body: JSON.stringify(chunk),
     });
     inserted += chunk.length;
-    process.stdout.write(`\r  Inseriti ${inserted}/${rows.length} in ${table}…`);
+    process.stdout.write(`\r  Inseriti ${inserted}/${normalized.length} in ${table}…`);
   }
   console.log();
   return inserted;
@@ -256,21 +268,25 @@ async function cleanTestData() {
 
   const ids = testServices.map((s) => s.id);
 
-  // Elimina assignments prima (FK)
-  await supabaseFetch(
-    `/assignments?tenant_id=eq.${TENANT_ID}&service_id=in.(${ids.join(",")})`,
-    { method: "DELETE" }
-  );
+  // 1. Elimina assignments in batch da 50 (URL limit)
+  const BATCH = 50;
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const chunk = ids.slice(i, i + BATCH);
+    await supabaseFetch(
+      `/assignments?tenant_id=eq.${TENANT_ID}&service_id=in.(${chunk.join(",")})`,
+      { method: "DELETE" }
+    );
+  }
 
-  // Elimina servizi
-  await supabaseFetch(
-    `/services?tenant_id=eq.${TENANT_ID}&is_test_data=eq.true&date=eq.${TEST_DATE}`,
-    { method: "DELETE" }
-  );
-
-  // Elimina trip_groups del giorno di test
+  // 2. Elimina trip_groups del giorno (prima dei servizi)
   await supabaseFetch(
     `/trip_groups?tenant_id=eq.${TENANT_ID}&date=eq.${TEST_DATE}`,
+    { method: "DELETE" }
+  );
+
+  // 3. Elimina servizi
+  await supabaseFetch(
+    `/services?tenant_id=eq.${TENANT_ID}&is_test_data=eq.true&date=eq.${TEST_DATE}`,
     { method: "DELETE" }
   );
 
@@ -303,32 +319,25 @@ async function seed() {
 
   // ─── Genera ARRIVI ───────────────────────────────────────────────────────
 
-  console.log("Generazione arrivi (target ~600 PAX)…");
+  console.log("Generazione arrivi (target ~600 prenotazioni)…");
 
   const arrivalRows = [];
   const arrivalStats = {};
   let totalArrivalPax = 0;
 
-  // Distribuisci i pax target sulle corse in proporzione al peso
   const totalWeight = ARRIVALS_RUNS.reduce((s, r) => s + r[3], 0);
-
-  // Casi limite speciali per arrivi
   let sameCognome = IT_LAST[rndInt(0, IT_LAST.length - 1)];
   let sameCognomeCount = 0;
 
   for (const [time, vessel, porto, weight] of ARRIVALS_RUNS) {
-    const targetPax = Math.round((weight / totalWeight) * 600);
+    const targetBookings = Math.max(2, Math.round((weight / totalWeight) * 600));
     const key = `${time} ${vessel}`;
     arrivalStats[key] = { bookings: 0, pax: 0, porto };
 
-    let runPax = 0;
-    while (runPax < targetPax - 5) {
-      const pax = Math.min(genPax(), targetPax - runPax);
-      if (pax <= 0) break;
-
+    for (let b = 0; b < targetBookings; b++) {
+      const pax = genPax();
       const customer = genCustomer();
 
-      // Caso limite: stesso cognome su corse diverse (prime 3 occorrenze)
       if (sameCognomeCount < 3 && Math.random() < 0.08) {
         customer.customer_last_name = sameCognome;
         customer.customer_name = `${customer.customer_first_name} ${sameCognome}`;
@@ -352,55 +361,80 @@ async function seed() {
         is_draft: false,
         notes,
         meeting_point: porto === "Casamicciola" ? "Biglietteria SNAV Casamicciola" : "Uscita arrivi",
+        place_type: "hotel",
         service_type: "transfer",
         ...customer,
       });
 
-      runPax += pax;
+      totalArrivalPax += pax;
       arrivalStats[key].bookings++;
       arrivalStats[key].pax += pax;
     }
-    totalArrivalPax += runPax;
   }
 
   // ─── Genera PARTENZE ─────────────────────────────────────────────────────
 
-  console.log("Generazione partenze (target ~600 PAX)…");
+  console.log("Generazione partenze (target ~600 prenotazioni)…");
+
+  // Orari di partenza realistici per tipo destinazione
+  const DEPARTURE_FERRY_TIMES = ["06:20", "07:30", "09:00", "11:00", "13:00", "15:30", "17:00"];
+  const DEPARTURE_TRAIN_TIMES = ["09:05", "10:30", "12:00", "14:15", "16:30", "18:00", "19:30"];
+  const DEPARTURE_FLIGHT_TIMES = ["07:00", "08:30", "10:00", "12:30", "15:00", "17:30", "20:00"];
+
+  function pickDepartureTime(dest) {
+    if (dest.place_type === "airport") return rnd(DEPARTURE_FLIGHT_TIMES);
+    if (dest.place_type === "station") return rnd(DEPARTURE_TRAIN_TIMES);
+    return rnd(DEPARTURE_FERRY_TIMES);
+  }
+
+  // Per stazione/aeroporto: orario barca di connessione
+  const FERRY_CONNECTIONS = [
+    { barca: "MEDMAR", orario: "06:20", porto: "Casamicciola" },
+    { barca: "MEDMAR", orario: "09:00", porto: "Pozzuoli" },
+    { barca: "ALILAURO", orario: "07:10", porto: "Ischia Porto" },
+    { barca: "SNAV",    orario: "08:30", porto: "Casamicciola" },
+  ];
 
   const departureRows = [];
   const departureStats = {};
   let totalDeparturePax = 0;
 
-  // Distribuisci uniformemente su zone e fasce
   const zoneList = zones.filter((z) => hotelsByZone[z]?.length > 0);
-  let depPax = 0;
+  const targetPerZone = Math.ceil(600 / zoneList.length);
+  let totalDepBookings = 0;
 
-  // Zone con più hotels → più partenze
   for (const zone of zoneList) {
     const zoneHotels = hotelsByZone[zone] || [];
     if (!zoneHotels.length) continue;
     const pickupTimes = ZONE_PICKUP_TIMES[zone] || ["06:00"];
-    const targetPaxZone = Math.round(600 / zoneList.length * (zoneHotels.length / hotels.length * zoneList.length));
-
-    let zonePax = 0;
     departureStats[zone] = { bookings: 0, pax: 0 };
 
-    while (zonePax < targetPaxZone - 3 && depPax < 620) {
-      const pax = Math.min(genPax(), targetPaxZone - zonePax);
-      if (pax <= 0) break;
-
+    for (let b = 0; b < targetPerZone && totalDepBookings < 615; b++) {
+      const pax = genPax();
       const customer = genCustomer();
       const hotel = rnd(zoneHotels);
-      const pickupTime = rnd(pickupTimes);
       const dest = pickDestination();
       const transportCode = genTransportCode(dest);
       const notes = genNotes();
+
+      // Orario servizio: per traghetti/porto = pickup dall'hotel,
+      // per stazione/aeroporto = orario treno/volo
+      const isTransport = dest.place_type === "station" || dest.place_type === "airport";
+      const serviceTime = isTransport ? pickDepartureTime(dest) : rnd(pickupTimes);
+
+      // pickup_hotel: per stazione/aeroporto = zona pickup, altrimenti null
+      const pickupHotel = isTransport ? rnd(pickupTimes) : null;
+
+      // Connessione barca per stazione/aeroporto
+      const ferry = isTransport ? rnd(FERRY_CONNECTIONS) : null;
+      const barcaCompagnia = ferry?.barca ?? null;
+      const orarioBarca = ferry?.orario ?? null;
 
       departureRows.push({
         id: uuid(),
         tenant_id: TENANT_ID,
         date: TEST_DATE,
-        time: `${pickupTime}:00`,
+        time: `${serviceTime}:00`,
         direction: "departure",
         vessel: dest.vessel ?? "Traghetto",
         place_type: dest.place_type,
@@ -411,21 +445,22 @@ async function seed() {
         is_draft: false,
         notes,
         transport_code: transportCode,
+        pickup_hotel: pickupHotel,
+        barca_compagnia: barcaCompagnia,
+        orario_barca: orarioBarca,
         service_type: "transfer",
         ...customer,
       });
 
-      zonePax += pax;
-      depPax += pax;
+      totalDeparturePax += pax;
+      totalDepBookings++;
       departureStats[zone].bookings++;
       departureStats[zone].pax += pax;
     }
-    totalDeparturePax += zonePax;
   }
 
-  // ─── Casi limite aggiuntivi ───────────────────────────────────────────────
+  // ─── Casi limite: gruppi grandi overbooking ───────────────────────────────
 
-  // Partenze con pickup molto vicini nella stessa zona (overbooking test)
   const ischiaPortoHotels = hotelsByZone["Ischia Porto"] || [];
   for (let i = 0; i < 3; i++) {
     const customer = genCustomer();
@@ -437,18 +472,117 @@ async function seed() {
       time: "05:30:00",
       direction: "departure",
       vessel: "Traghetto",
-      pax: rndInt(14, 18), // overbooking su van 8/9 posti
+      pax: rndInt(14, 18),
       hotel_id: hotel.id,
       status: "new",
       is_test_data: true,
       is_draft: false,
       notes: "GRUPPO GRANDE — verificare capienza mezzo",
+      transport_code: null,
+      pickup_hotel: null,
+      barca_compagnia: null,
+      orario_barca: null,
       service_type: "transfer",
-      place_type: "port",
+      place_type: "hotel",
       ...customer,
     });
     totalDeparturePax += rndInt(14, 18);
-    departureStats["Ischia Porto"].bookings++;
+    if (departureStats["Ischia Porto"]) departureStats["Ischia Porto"].bookings++;
+  }
+
+  // ─── Transfer privati/esclusivi ──────────────────────────────────────────
+  // ~12 arrivi + ~12 partenze con veicolo premium, sempre via traghetto/aliscafo
+
+  const PRIVATE_FERRY_ARRIVALS = [
+    { time: "08:10", vessel: "SNAV FR8110", porto: "Casamicciola" },
+    { time: "09:20", vessel: "SNAV FR9200", porto: "Casamicciola" },
+    { time: "09:40", vessel: "Medmar MN940", porto: "Ischia Porto" },
+    { time: "12:30", vessel: "SNAV FR1230", porto: "Casamicciola" },
+    { time: "13:30", vessel: "Medmar MN1330", porto: "Ischia Porto" },
+    { time: "16:30", vessel: "Medmar MN1630", porto: "Ischia Porto" },
+  ];
+
+  const PRIVATE_FERRY_DEPARTURES = [
+    { vessel: "SNAV",   orario: "07:00", porto: "Casamicciola" },
+    { vessel: "SNAV",   orario: "09:30", porto: "Casamicciola" },
+    { vessel: "Medmar", orario: "06:00", porto: "Ischia Porto" },
+    { vessel: "Medmar", orario: "08:00", porto: "Casamicciola" },
+    { vessel: "Medmar", orario: "11:00", porto: "Ischia Porto" },
+    { vessel: "Medmar", orario: "14:00", porto: "Casamicciola" },
+  ];
+
+  const PRIVATE_ORIGIN_DEST = [
+    { place_type: "airport", label: "Aeroporto Napoli Capodichino", vessel_dest: "Volo", kind: "transfer_airport_hotel_exclusive" },
+    { place_type: "station", label: "Stazione Napoli Centrale",     vessel_dest: "Treno", kind: "transfer_train_hotel_exclusive" },
+  ];
+
+  // Arrivi privati: il cliente arriva dall'aeroporto/stazione in traghetto/aliscafo
+  for (const ferry of PRIVATE_FERRY_ARRIVALS) {
+    const reps = rndInt(1, 2); // 1-2 clienti privati per corsa
+    for (let i = 0; i < reps; i++) {
+      const customer = genCustomer();
+      const hotel = rnd(allHotels);
+      const origin = rnd(PRIVATE_ORIGIN_DEST);
+      const vehicle = rnd(PRIVATE_VEHICLES);
+      arrivalRows.push({
+        id: uuid(),
+        tenant_id: TENANT_ID,
+        date: TEST_DATE,
+        time: `${ferry.time}:00`,
+        direction: "arrival",
+        vessel: ferry.vessel,
+        pax: rndInt(1, 3),
+        hotel_id: hotel.id,
+        status: "new",
+        is_test_data: true,
+        is_draft: false,
+        notes: `Transfer privato — ${vehicle}`,
+        meeting_point: ferry.porto === "Casamicciola" ? "Biglietteria SNAV Casamicciola" : "Uscita arrivi",
+        place_type: origin.place_type,
+        booking_service_kind: origin.kind,
+        service_type: "transfer",
+        ...customer,
+      });
+    }
+  }
+
+  // Partenze private: il cliente parte dall'hotel per traghetto/aliscafo verso aeroporto/stazione
+  for (const ferry of PRIVATE_FERRY_DEPARTURES) {
+    const reps = rndInt(1, 2);
+    for (let i = 0; i < reps; i++) {
+      const customer = genCustomer();
+      const zone = rnd(zoneList);
+      const hotel = rnd(hotelsByZone[zone] || allHotels);
+      const dest = rnd(PRIVATE_ORIGIN_DEST);
+      const vehicle = rnd(PRIVATE_VEHICLES);
+      const pickupTimes = ZONE_PICKUP_TIMES[zone] || ["06:00"];
+      const pickupTime = rnd(pickupTimes);
+      const destTime = dest.place_type === "airport"
+        ? rnd(DEPARTURE_FLIGHT_TIMES)
+        : rnd(DEPARTURE_TRAIN_TIMES);
+
+      departureRows.push({
+        id: uuid(),
+        tenant_id: TENANT_ID,
+        date: TEST_DATE,
+        time: `${destTime}:00`,
+        direction: "departure",
+        vessel: ferry.vessel,
+        pax: rndInt(1, 3),
+        hotel_id: hotel.id,
+        status: "new",
+        is_test_data: true,
+        is_draft: false,
+        notes: `Transfer privato — ${vehicle}`,
+        place_type: dest.place_type,
+        pickup_hotel: `${pickupTime}:00`,
+        barca_compagnia: ferry.vessel,
+        orario_barca: `${ferry.orario}:00`,
+        booking_service_kind: dest.kind,
+        service_type: "transfer",
+        ...customer,
+      });
+    }
   }
 
   // ─── Preview e conferma ───────────────────────────────────────────────────
@@ -476,12 +610,22 @@ async function seed() {
   const withBigGroups = [...arrivalRows, ...departureRows].filter((r) => r.pax >= 11).length;
   const intlPhones = [...arrivalRows, ...departureRows].filter((r) => !r.phone.startsWith("+39")).length;
   const completed = [...arrivalRows, ...departureRows].filter((r) => r.status === "completato").length;
+  const withPickupHotel = departureRows.filter((r) => r.pickup_hotel).length;
+  const airportDeps = departureRows.filter((r) => r.place_type === "airport").length;
+  const stationDeps = departureRows.filter((r) => r.place_type === "station").length;
+  const privatiArr = arrivalRows.filter((r) => r.booking_service_kind?.includes("exclusive")).length;
+  const privatiDep = departureRows.filter((r) => r.booking_service_kind?.includes("exclusive")).length;
 
   console.log(`\n  CASI LIMITE:`);
   console.log(`    Note speciali:           ${withNotes}`);
   console.log(`    Gruppi grandi (11+ PAX): ${withBigGroups}`);
   console.log(`    Telefoni internazionali:  ${intlPhones}`);
   console.log(`    Già completati (test):    ${completed}`);
+  console.log(`    Partenze aeroporto:       ${airportDeps}`);
+  console.log(`    Partenze stazione:        ${stationDeps}`);
+  console.log(`    Con pickup_hotel calcolato: ${withPickupHotel}`);
+  console.log(`    Transfer privati arrivi:  ${privatiArr}`);
+  console.log(`    Transfer privati partenze:${privatiDep}`);
   console.log(`\n  TOTALE INSERIMENTI: ${total} prenotazioni`);
   console.log("══════════════════════════════════════════════════\n");
 

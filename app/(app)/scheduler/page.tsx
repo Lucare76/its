@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { SummaryPreviewPayload } from "@/lib/server/operational-summary";
 import { STATEMENT_AGENCY_NAMES } from "@/lib/server/statement-agencies";
@@ -92,7 +92,7 @@ export default function SchedulerPage() {
         actions={
           <label className="text-sm">
             Data base
-            <input type="date" value={today} onChange={(event) => setToday(event.target.value)} className="input-saas mt-1 min-w-40" />
+            <DateInput value={today} onChange={(iso) => setToday(iso)} className="input-saas mt-1 min-w-40" />
           </label>
         }
       />

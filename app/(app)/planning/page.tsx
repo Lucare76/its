@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { DragEvent } from "react";
-import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { buildOperationalInstances, type OperationalInstance } from "@/lib/operational-service-instances";
 import { formatIsoDateShort } from "@/lib/service-display";
 import { supabase } from "@/lib/supabase/client";
@@ -217,7 +217,7 @@ export default function PlanningPage() {
       <div className="filters-grid md:grid-cols-4">
         <label className="text-sm">
           Data
-          <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} className="input-saas mt-1 w-full" />
+          <DateInput value={selectedDate} onChange={(iso) => setSelectedDate(iso)} className="input-saas mt-1 w-full" />
         </label>
         <label className="text-sm">
           Autista

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { DateInput } from "@/components/ui";
 import { supabase } from "@/lib/supabase/client";
 
 type ServiceSnapshot = {
@@ -164,17 +165,15 @@ export default function AgencyReviewsPage() {
             placeholder="Cerca agenzia..."
             className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300"
           />
-          <input
-            type="date"
+          <DateInput
             value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
+            onChange={(iso) => setDateFrom(iso)}
             className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300"
             title="Data da"
           />
-          <input
-            type="date"
+          <DateInput
             value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
+            onChange={(iso) => setDateTo(iso)}
             className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300"
             title="Data a"
           />

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { DateInput } from "@/components/ui";
 import { PdfAdvancedReview } from "@/components/pdf/PdfAdvancedReview";
 import { getInboxPdfParsingSignal } from "@/lib/pdf/parser";
 import type { PdfImportDetail } from "@/lib/server/pdf-imports";
@@ -998,8 +999,8 @@ export default function InboxPage() {
                       </label>
                       <label className="text-xs font-medium text-slate-600">
                         Data arrivo *
-                        <input type="date" value={toDateValue(form.data_arrivo)}
-                          onChange={(e) => setField("data_arrivo", e.target.value)}
+                        <DateInput value={toDateValue(form.data_arrivo)}
+                          onChange={(iso) => setField("data_arrivo", iso)}
                           className={`mt-1 input-saas w-full ${!form.data_arrivo ? "border-amber-300 bg-amber-50" : ""}`} />
                       </label>
                       <label className="text-xs font-medium text-slate-600">
@@ -1009,8 +1010,8 @@ export default function InboxPage() {
                       </label>
                       <label className="text-xs font-medium text-slate-600">
                         Data partenza
-                        <input type="date" value={toDateValue(form.data_partenza)}
-                          onChange={(e) => setField("data_partenza", e.target.value)}
+                        <DateInput value={toDateValue(form.data_partenza)}
+                          onChange={(iso) => setField("data_partenza", iso)}
                           className="mt-1 input-saas w-full" />
                       </label>
                       <label className="text-xs font-medium text-slate-600">
@@ -1140,12 +1141,12 @@ export default function InboxPage() {
               {/* Selettore data */}
               <div className="flex items-center gap-2">
                 <label className="text-xs font-medium text-slate-500">Data escursione:</label>
-                <input type="date" value={escursioneDate}
-                  onChange={async (e) => {
-                    setEscursioneDate(e.target.value);
+                <DateInput value={escursioneDate}
+                  onChange={async (iso) => {
+                    setEscursioneDate(iso);
                     const token = await getToken();
                     if (!token) return;
-                    const res = await fetch(`/api/ops/escursioni?date=${e.target.value}`, { headers: { Authorization: `Bearer ${token}` } });
+                    const res = await fetch(`/api/ops/escursioni?date=${iso}`, { headers: { Authorization: `Bearer ${token}` } });
                     const body = await res.json().catch(() => null);
                     if (body?.ok) { setEscursioneUnits(body.units ?? []); setEscursioneLines(body.lines ?? []); }
                   }}
@@ -1397,8 +1398,8 @@ export default function InboxPage() {
                         <div className="grid gap-2 sm:grid-cols-4">
                           <label className="sm:col-span-2 block text-xs font-medium text-slate-600">
                             Data
-                            <input type="date" className="mt-1 input-saas w-full" value={pdfEditForm.data_arrivo}
-                              onChange={(e) => setPdfEditForm(p => ({ ...p, data_arrivo: e.target.value }))} />
+                            <DateInput className="mt-1 input-saas w-full" value={pdfEditForm.data_arrivo}
+                              onChange={(iso) => setPdfEditForm(p => ({ ...p, data_arrivo: iso }))} />
                           </label>
                           <label className="block text-xs font-medium text-slate-600">
                             Ora
@@ -1427,8 +1428,8 @@ export default function InboxPage() {
                         <div className="grid gap-2 sm:grid-cols-4">
                           <label className="sm:col-span-2 block text-xs font-medium text-slate-600">
                             Data
-                            <input type="date" className="mt-1 input-saas w-full" value={pdfEditForm.data_partenza}
-                              onChange={(e) => setPdfEditForm(p => ({ ...p, data_partenza: e.target.value }))} />
+                            <DateInput className="mt-1 input-saas w-full" value={pdfEditForm.data_partenza}
+                              onChange={(iso) => setPdfEditForm(p => ({ ...p, data_partenza: iso }))} />
                           </label>
                           <label className="block text-xs font-medium text-slate-600">
                             Ora
