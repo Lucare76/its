@@ -1592,36 +1592,37 @@ export default function PianoGiornoPage() {
 
         {/* Barra superiore */}
         <div className="toolbar flex-wrap gap-2">
-          <div className="flex flex-wrap items-center gap-2 rounded border border-slate-200 bg-white px-2 py-2">
+          <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white/80 px-3 py-2.5 shadow-sm backdrop-blur-sm">
             <div className="min-w-[180px] px-1">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Giornata operativa</p>
+              <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">Giornata operativa</p>
               <p className="text-sm font-semibold capitalize text-slate-800">{readableDate(date)}</p>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition"
+                onClick={() => changeDate(addIsoDays(date, -1))}
+                title="Giorno precedente"
+              >
+                ‹
+              </button>
+              <DateInput
+                className="input-saas h-10 w-40 text-sm font-semibold"
+                value={date}
+                onChange={changeDate}
+              />
+              <button
+                type="button"
+                className="rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition"
+                onClick={() => changeDate(addIsoDays(date, 1))}
+                title="Giorno successivo"
+              >
+                ›
+              </button>
             </div>
             <button
               type="button"
-              className="rounded border border-slate-200 px-2.5 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
-              onClick={() => changeDate(addIsoDays(date, -1))}
-              title="Giorno precedente"
-            >
-              &lt;
-            </button>
-            <DateInput
-              className="input-saas h-10 w-36 text-center font-mono text-sm font-semibold"
-              value={date}
-              onChange={changeDate}
-              withCalendar
-            />
-            <button
-              type="button"
-              className="rounded border border-slate-200 px-2.5 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
-              onClick={() => changeDate(addIsoDays(date, 1))}
-              title="Giorno successivo"
-            >
-              &gt;
-            </button>
-            <button
-              type="button"
-              className="rounded border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition"
               onClick={() => changeDate(today())}
             >
               Oggi
