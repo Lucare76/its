@@ -1803,7 +1803,7 @@ export async function POST(request: NextRequest) {
       const lineOrder = (lineId: string | null): number => {
         if (!lineId) return 999;
         const fc = lineFamilyMap.get(lineId);
-        return (fc && ferryOrderByFamily.get(fc)) ?? 999;
+        return (fc ? ferryOrderByFamily.get(fc) : undefined) ?? 999;
       };
 
       // Bus regolari: raggruppa prima per linea, poi per zona
