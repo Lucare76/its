@@ -40,8 +40,8 @@ export default function WhatsAppLogPage() {
     if (!token) { setError("Non autenticato."); setLoading(false); return; }
 
     const res  = await fetch(`/api/ops/whatsapp-log?days=${d}`, { headers: { Authorization: `Bearer ${token}` } });
-    const body = await res.json().catch(() => null) as { ok?: boolean; kpi?: KPI; notReadRows?: NotReadRow[] } | null;
-    if (!res.ok || !body?.ok) { setError("Errore caricamento dati."); setLoading(false); return; }
+    const body = await res.json().catch(() => null) as { ok?: boolean; kpi?: KPI; notReadRows?: NotReadRow[]; error?: string } | null;
+    if (!res.ok || !body?.ok) { setError(body?.error ?? `Errore caricamento dati (HTTP ${res.status}).`); setLoading(false); return; }
     setKpi(body.kpi ?? null);
     setRows(body.notReadRows ?? []);
     setLoading(false);
