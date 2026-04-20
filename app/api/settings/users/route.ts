@@ -693,6 +693,9 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: updateResult.error?.message ?? "Aggiornamento utente fallito." }, { status: 500 });
   }
 
+  // Revoca le sessioni attive così l'utente ricarica il nuovo ruolo al prossimo login
+  await auth.admin.auth.admin.signOut(parsed.data.user_id).then(() => undefined, () => undefined);
+
   const updateGender = typeof (parsed.data as Record<string, unknown>).gender === "string"
     ? (parsed.data as Record<string, unknown>).gender as string
     : null;
