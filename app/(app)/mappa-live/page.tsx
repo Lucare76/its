@@ -13,6 +13,8 @@ const DynamicMap = dynamic(() => import("@/components/control-room-map").then((m
 });
 
 const DEFAULT_REFRESH_SECONDS = 60;
+const PANORAMAX_VIEWER_BASE_URL = "https://api.panoramax.xyz/";
+const PANORAMAX_SEARCH_URL = "https://api.panoramax.xyz/api/search";
 
 type ControlRoomPayload = {
   ok?: boolean;
@@ -28,6 +30,29 @@ type ControlRoomPayload = {
   };
   fetched_at?: string;
 };
+
+type PanoramaxFeature = {
+  id?: string;
+  geometry?: {
+    type?: string;
+    coordinates?: [number, number];
+  };
+  assets?: {
+    thumb?: { href?: string };
+    sd?: { href?: string };
+  };
+  properties?: {
+    datetime?: string;
+    datetimetz?: string;
+    "geovisio:producer"?: string;
+  };
+};
+
+type PanoramaxResult =
+  | { status: "idle" | "loading" }
+  | { status: "found"; id: string; lat: number; lng: number; distanceMeters: number; thumbUrl: string | null; capturedAt: string | null; producer: string | null }
+  | { status: "empty" }
+  | { status: "error"; message: string };
 
 function formatRelativeSeconds(seconds: number) {
   if (seconds < 60) return `${seconds}s fa`;
@@ -161,6 +186,43 @@ function alertTone(severity: "high" | "medium" | "low") {
   return "border-sky-200 bg-sky-50 text-sky-800";
 }
 
+function panoramaxPictureViewerUrl(entry: GpsControlRoomEntry, pictureId: string) {
+  const params = new URLSearchParams({
+    focus: "pic",
+    map: `18/${entry.lat.toFixed(7)}/${entry.lng.toFixed(7)}`,
+    pic: pictureId,
+    background: "streets"
+  });
+  return `${PANORAMAX_VIEWER_BASE_URL}#${params.toString()}`;
+}
+
+function distanceMeters(aLat: number, aLng: number, bLat: number, bLng: number) {
+  const earthRadius = 6371000;
+  const toRad = (value: number) => (value * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const lat1 = toRad(aLat);
+  const lat2 = toRad(bLat);
+  const h =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 2 * earthRadius * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function panoramaxSearchUrl(entry: GpsControlRoomEntry) {
+  const radiusDegrees = 0.012;
+  const params = new URLSearchParams({
+    bbox: [
+      (entry.lng - radiusDegrees).toFixed(6),
+      (entry.lat - radiusDegrees).toFixed(6),
+      (entry.lng + radiusDegrees).toFixed(6),
+      (entry.lat + radiusDegrees).toFixed(6)
+    ].join(","),
+    limit: "30"
+  });
+  return `${PANORAMAX_SEARCH_URL}?${params.toString()}`;
+}
+
 async function accessToken() {
   if (!hasSupabaseEnv || !supabase) return null;
   const { data } = await supabase.auth.getSession();
@@ -180,6 +242,8 @@ export default function MappaLivePage() {
   const [search, setSearch] = useState("");
   const [refreshSeconds, setRefreshSeconds] = useState(DEFAULT_REFRESH_SECONDS);
   const [countdown, setCountdown] = useState(DEFAULT_REFRESH_SECONDS);
+  const [streetViewOpen, setStreetViewOpen] = useState(false);
+  const [streetViewResult, setStreetViewResult] = useState<PanoramaxResult>({ status: "idle" });
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -280,6 +344,10 @@ export default function MappaLivePage() {
     () => filteredEntries.find((entry) => entry.radius_vehicle_id === selectedId) ?? filteredEntries[0] ?? null,
     [filteredEntries, selectedId]
   );
+  const selectedStreetViewKey = selected
+    ? `${selected.radius_vehicle_id}:${selected.lat.toFixed(6)}:${selected.lng.toFixed(6)}`
+    : null;
+  const streetViewUrl = selected && streetViewResult.status === "found" ? panoramaxPictureViewerUrl(selected, streetViewResult.id) : null;
 
   const visibleSummary = useMemo(
     () =>
@@ -331,6 +399,61 @@ export default function MappaLivePage() {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     void fetchControlRoom(false);
   };
+
+  useEffect(() => {
+    setStreetViewOpen(false);
+    setStreetViewResult({ status: "idle" });
+  }, [selectedStreetViewKey]);
+
+  useEffect(() => {
+    if (!selected) return;
+    let cancelled = false;
+
+    async function loadPanoramaxPicture(entry: GpsControlRoomEntry) {
+      setStreetViewResult({ status: "loading" });
+      try {
+        const response = await fetch(panoramaxSearchUrl(entry), { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("Ricerca Panoramax non disponibile.");
+        }
+        const body = (await response.json()) as { features?: PanoramaxFeature[] };
+        const candidates = (body.features ?? [])
+          .map((feature) => {
+            const coordinates = feature.geometry?.coordinates;
+            if (!feature.id || !coordinates) return null;
+            const [lng, lat] = coordinates;
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+            return {
+              id: feature.id,
+              lat,
+              lng,
+              distanceMeters: distanceMeters(entry.lat, entry.lng, lat, lng),
+              thumbUrl: feature.assets?.thumb?.href ?? feature.assets?.sd?.href ?? null,
+              capturedAt: feature.properties?.datetimetz ?? feature.properties?.datetime ?? null,
+              producer: feature.properties?.["geovisio:producer"] ?? null
+            };
+          })
+          .filter((item): item is Exclude<typeof item, null> => item !== null)
+          .sort((left, right) => left.distanceMeters - right.distanceMeters);
+
+        if (cancelled) return;
+        const nearest = candidates[0];
+        setStreetViewResult(nearest ? { status: "found", ...nearest } : { status: "empty" });
+      } catch (loadError) {
+        if (cancelled) return;
+        setStreetViewResult({
+          status: "error",
+          message: loadError instanceof Error ? loadError.message : "Vista strada non disponibile."
+        });
+      }
+    }
+
+    void loadPanoramaxPicture(selected);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedStreetViewKey, selected]);
 
   return (
     <section className="space-y-4">
@@ -572,12 +695,65 @@ export default function MappaLivePage() {
                   <div className="mt-4 flex flex-wrap gap-2">
                     <Link href="/bus-network" className="btn-secondary px-3 py-1.5 text-xs">Apri Rete Bus</Link>
                     <Link href="/fleet-ops" className="btn-secondary px-3 py-1.5 text-xs">Apri dettaglio mezzo</Link>
+                    {streetViewUrl && streetViewResult.status === "found" ? (
+                      <>
+                        <button type="button" onClick={() => setStreetViewOpen((value) => !value)} className="btn-secondary px-3 py-1.5 text-xs">
+                          {streetViewOpen ? "Chiudi vista strada" : "Vista strada"}
+                        </button>
+                        <a href={streetViewUrl} target="_blank" rel="noreferrer" className="btn-secondary px-3 py-1.5 text-xs">
+                          Apri Panoramax
+                        </a>
+                      </>
+                    ) : null}
                   </div>
                 </article>
               ) : (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">Nessun mezzo disponibile con i filtri attivi.</div>
               )}
             </SectionCard>
+
+            {selected && streetViewOpen && streetViewResult.status === "found" && streetViewUrl ? (
+              <SectionCard
+                title="Vista strada"
+                subtitle="Foto pubblica Panoramax piu vicina alla posizione del mezzo."
+                className="overflow-hidden rounded-[28px] border border-slate-200 shadow-[0_18px_50px_rgba(15,23,42,0.08)]"
+                bodyClassName="space-y-3 p-4"
+              >
+                <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+                  <iframe
+                    title={`Vista strada ${selected.pms_label ?? selected.label}`}
+                    src={streetViewUrl}
+                    className="h-[420px] w-full"
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                    sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                  />
+                </div>
+                <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-[96px_minmax(0,1fr)]">
+                  {streetViewResult.thumbUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={streetViewResult.thumbUrl} alt="" className="h-20 w-24 rounded-lg object-cover" />
+                  ) : (
+                    <div className="h-20 w-24 rounded-lg bg-slate-100" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-950">Foto Panoramax piu vicina</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Distanza dal mezzo: {Math.round(streetViewResult.distanceMeters)} m
+                      {streetViewResult.capturedAt ? ` - Scatto: ${formatTime(streetViewResult.capturedAt)}` : ""}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Mezzo: {selected.lat.toFixed(5)}, {selected.lng.toFixed(5)} - Foto: {streetViewResult.lat.toFixed(5)}, {streetViewResult.lng.toFixed(5)}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <a href={streetViewUrl} target="_blank" rel="noreferrer" className="btn-secondary px-3 py-1.5 text-xs">
+                        Apri a schermo intero
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </SectionCard>
+            ) : null}
 
             <SectionCard
               title="Lista mezzi"

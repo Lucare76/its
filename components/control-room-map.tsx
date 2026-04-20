@@ -12,7 +12,7 @@ interface ControlRoomMapProps {
 
 const DEFAULT_CENTER: [number, number] = [40.7395, 13.9124];
 
-const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+const TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
 const PROTOMAPS_URL =
   process.env.NEXT_PUBLIC_PROTOMAPS_PM_TILES_URL?.trim() ||
   process.env.NEXT_PUBLIC_PROTOMAPS_PMtiles_URL?.trim() ||
@@ -42,53 +42,54 @@ function escapeHtml(value: string) {
 }
 
 function statusPalette(status: GpsControlRoomEntry["status_key"], selected: boolean) {
-  if (selected) return { bg: "#0f172a", border: "#020617", text: "#f8fafc", glow: "0 0 0 4px rgba(15,23,42,0.22)" };
-  if (status === "moving") return { bg: "#16a34a", border: "#166534", text: "#f0fdf4", glow: "0 0 0 3px rgba(34,197,94,0.22)" };
-  if (status === "stopped") return { bg: "#dc2626", border: "#991b1b", text: "#fff1f2", glow: "0 0 0 3px rgba(239,68,68,0.2)" };
-  if (status === "warning") return { bg: "#f59e0b", border: "#b45309", text: "#1c1917", glow: "0 0 0 3px rgba(245,158,11,0.22)" };
-  return { bg: "#64748b", border: "#475569", text: "#f8fafc", glow: "0 0 0 3px rgba(100,116,139,0.2)" };
+  if (selected) return { bg: "#2563eb", border: "#1d4ed8", text: "#eff6ff", glow: "0 0 0 7px rgba(37,99,235,0.18)" };
+  if (status === "moving") return { bg: "#16a34a", border: "#15803d", text: "#f0fdf4", glow: "0 0 0 6px rgba(34,197,94,0.18)" };
+  if (status === "stopped") return { bg: "#dc2626", border: "#b91c1c", text: "#fff1f2", glow: "0 0 0 6px rgba(239,68,68,0.16)" };
+  if (status === "warning") return { bg: "#f59e0b", border: "#d97706", text: "#1c1917", glow: "0 0 0 6px rgba(245,158,11,0.18)" };
+  return { bg: "#64748b", border: "#475569", text: "#f8fafc", glow: "0 0 0 6px rgba(100,116,139,0.16)" };
 }
 
 function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
   const offlineWithActiveService = entry.status_key === "offline" && Boolean(entry.active_service);
   const palette = offlineWithActiveService && !selected
-    ? { bg: "#be123c", border: "#881337", text: "#fff1f2", glow: "0 0 0 4px rgba(225,29,72,0.24)" }
+    ? { bg: "#be123c", border: "#881337", text: "#fff1f2", glow: "0 0 0 7px rgba(225,29,72,0.2)" }
     : statusPalette(entry.status_key, selected);
   const iconSurface = "#ffffff";
-  const iconStroke = selected ? "#cbd5e1" : "#d7e0ea";
   const accent = palette.bg;
   const label = escapeHtml((entry.pms_label ?? entry.label).slice(0, selected ? 18 : 12));
   const line = escapeHtml((entry.line_name ?? "").slice(0, selected ? 16 : 11));
-  const showDetails = selected;
-  const size = selected ? 50 : 34;
+  const critical = entry.status_key === "warning" || entry.status_key === "stopped" || offlineWithActiveService;
+  const showDetails = selected || critical;
+  const size = selected ? 48 : critical ? 42 : 36;
   const speed = entry.speed_kmh !== null ? Math.round(entry.speed_kmh) : null;
 
   return L.divIcon({
     className: "",
     html: `
-      <div style="display:flex;flex-direction:column;align-items:center;gap:5px;">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:7px;">
         <div style="
           width:${size}px;
           height:${size}px;
           display:flex;
           align-items:center;
           justify-content:center;
-          border-radius:999px;
-          border:1px solid ${iconStroke};
-          background:${iconSurface};
-          color:${accent};
-          box-shadow:${palette.glow}, 0 8px 18px rgba(15,23,42,0.12);
+          border-radius:50% 50% 50% 10px;
+          border:2px solid #ffffff;
+          background:${accent};
+          color:${iconSurface};
+          box-shadow:${palette.glow}, 0 12px 24px rgba(15,23,42,0.18);
           position:relative;
+          transform:rotate(-45deg);
           overflow:hidden;
         ">
           <div style="
             position:absolute;
-            inset:auto 0 0 0;
-            height:${selected ? 5 : 4}px;
-            background:${accent};
-            opacity:0.95;
+            inset:5px;
+            border-radius:999px;
+            background:${iconSurface};
+            box-shadow:inset 0 -1px 0 rgba(15,23,42,0.08);
           "></div>
-          <svg xmlns="http://www.w3.org/2000/svg" width="${size - 8}" height="${size - 8}" viewBox="0 0 40 40" fill="none" style="position:relative;z-index:1;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="${size - 13}" height="${size - 13}" viewBox="0 0 40 40" fill="none" style="position:relative;z-index:1;transform:rotate(45deg);">
             <path d="M8.5 24.8v-8.4c0-4.1 3.3-7.4 7.4-7.4h7.8c3.9 0 6 1.7 6 5.2v10.6c0 1.9-1.5 3.5-3.5 3.5H12c-1.9 0-3.5-1.6-3.5-3.5Z" fill="#ffffff" stroke="#1f2937" stroke-width="1.8"/>
             <path d="M11.2 14.9h15.4c1.2 0 1.9.5 1.9 1.5v1.4H10v-1.2c0-1.2.5-1.7 1.2-1.7Z" fill="${accent}"/>
             <rect x="11.4" y="18.8" width="5.8" height="4.2" rx="0.9" fill="#eef4ff" stroke="#1f2937" stroke-width="1.3"/>
@@ -122,26 +123,27 @@ function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
         </div>
         ${showDetails ? `
           <div style="
-            min-width:124px;
-            max-width:148px;
-            border-radius:16px;
-            border:1px solid ${iconStroke};
-            background:rgba(255,255,255,0.97);
-            box-shadow:0 12px 26px rgba(15,23,42,0.12);
-            padding:8px 11px;
+            min-width:${selected ? 132 : 104}px;
+            max-width:${selected ? 158 : 132}px;
+            border-radius:8px;
+            border:1px solid rgba(148,163,184,0.22);
+            background:rgba(255,255,255,0.96);
+            box-shadow:0 12px 28px rgba(15,23,42,0.14);
+            padding:${selected ? "8px 11px" : "6px 9px"};
             text-align:center;
             font-family:ui-sans-serif,system-ui,sans-serif;
+            backdrop-filter:blur(10px);
           ">
             <div style="font-size:11px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</div>
-            <div style="margin-top:2px;font-size:10px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${line || "Bus live"}</div>
-            <div style="margin-top:4px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:#f8fafc;padding:3px 8px;font-size:10px;font-weight:700;color:${accent};">${speed !== null ? `${speed} km/h` : "-- km/h"}</div>
+            ${selected ? `<div style="margin-top:2px;font-size:10px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${line || "Bus live"}</div>` : ""}
+            <div style="margin-top:4px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:${accent};padding:3px 8px;font-size:10px;font-weight:800;color:${palette.text};">${speed !== null ? `${speed} km/h` : "-- km/h"}</div>
           </div>
         ` : ""}
       </div>
     `,
     iconSize: [size + (showDetails ? 20 : 8), size + (showDetails ? 44 : 8)],
-    iconAnchor: [size / 2 + 8, size / 2 + 8],
-    popupAnchor: [0, -(size / 2 + 6)]
+    iconAnchor: [size / 2 + (showDetails ? 10 : 4), size],
+    popupAnchor: [0, -(size + 6)]
   });
 }
 
@@ -155,8 +157,10 @@ function formatTimestamp(ts: string) {
 
 function addOsmLayer(map: L.Map) {
   return L.tileLayer(TILE_URL, {
-    attribution: "&copy; OpenStreetMap contributors",
-    maxZoom: 19
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    detectRetina: true,
+    maxZoom: 20,
+    subdomains: "abcd"
   }).addTo(map);
 }
 
@@ -171,17 +175,17 @@ async function pmtilesIsReachable(url: string) {
 
 async function addBaseLayer(map: L.Map): Promise<{ label: string; layer: L.Layer }> {
   if (!PROTOMAPS_URL) {
-    return { label: "OSM fallback • Protomaps-ready", layer: addOsmLayer(map) };
+    return { label: "CARTO Voyager - OSM gratuito", layer: addOsmLayer(map) };
   }
 
   const reachable = await pmtilesIsReachable(PROTOMAPS_URL);
   if (!reachable) {
-    return { label: "OSM fallback • PMTiles non trovato", layer: addOsmLayer(map) };
+    return { label: "CARTO Voyager - PMTiles non trovato", layer: addOsmLayer(map) };
   }
 
   const { leafletLayer } = await import("protomaps-leaflet");
   const layer = leafletLayer({
-    attribution: '<a href="https://protomaps.com">Protomaps</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
+    attribution: '<a href="https://protomaps.com">Protomaps</a> - <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
     flavor: "light",
     lang: "it",
     maxDataZoom: 14,
@@ -240,7 +244,7 @@ function spreadOverlapping(items: GpsControlRoomEntry[]): Array<GpsControlRoomEn
 }
 
 export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMapProps) {
-  const [baseLayerLabel, setBaseLayerLabel] = useState(PROTOMAPS_URL ? "Protomaps in caricamento" : "OSM fallback • Protomaps-ready");
+  const [baseLayerLabel, setBaseLayerLabel] = useState(PROTOMAPS_URL ? "Protomaps in caricamento" : "CARTO Voyager - OSM gratuito");
   const [operationalLayerEnabled, setOperationalLayerEnabled] = useState(true);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -263,7 +267,8 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
     if (!containerRef.current || mapRef.current) return;
     let disposed = false;
     let baseLayer: L.Layer | null = null;
-    const map = L.map(containerRef.current, { zoomControl: true }).setView(DEFAULT_CENTER, 12);
+    const map = L.map(containerRef.current, { zoomControl: false }).setView(DEFAULT_CENTER, 12);
+    L.control.zoom({ position: "topright" }).addTo(map);
     mapRef.current = map;
     markersRef.current = L.layerGroup().addTo(map);
     opsLayerRef.current = L.layerGroup().addTo(map);
@@ -315,24 +320,24 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
       }
 
       const popup = `
-        <div style="font-family:ui-sans-serif,system-ui,sans-serif;min-width:220px;color:#0f172a;">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-            <div style="font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(entry.pms_label ?? entry.label)}</div>
-            <div style="display:inline-flex;border-radius:999px;padding:3px 9px;background:#f8fafc;border:1px solid #cbd5e1;font-size:11px;font-weight:700;">
+        <div style="font-family:ui-sans-serif,system-ui,sans-serif;min-width:240px;color:#0f172a;">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+            <div style="font-size:15px;font-weight:800;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:165px;">${escapeHtml(entry.pms_label ?? entry.label)}</div>
+            <div style="display:inline-flex;border-radius:999px;padding:4px 9px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;font-size:11px;font-weight:800;">
               ${escapeHtml(entry.status_label)}
             </div>
           </div>
-          <div style="margin-top:8px;display:grid;gap:4px;font-size:12px;color:#475569;">
+          <div style="margin-top:12px;display:grid;gap:5px;font-size:12px;color:#475569;">
             <div>Linea: ${escapeHtml(entry.line_name ?? "N/D")}</div>
             <div>Autista: ${escapeHtml(entry.driver_name ?? "N/D")}</div>
             <div>Velocita: ${entry.speed_kmh !== null ? `${Math.round(entry.speed_kmh)} km/h` : "N/D"}</div>
             <div>Update: ${formatTimestamp(entry.timestamp)}</div>
-            <div style="line-height:1.35;">${escapeHtml(entry.current_address ?? "N/D")}${entry.current_city ? ` • ${escapeHtml(entry.current_city)}` : ""}</div>
+            <div style="line-height:1.35;">${escapeHtml(entry.current_address ?? "N/D")}${entry.current_city ? ` - ${escapeHtml(entry.current_city)}` : ""}</div>
           </div>
         </div>
       `;
 
-      marker.bindPopup(popup, { maxWidth: 260, offset: [0, -10] });
+      marker.bindPopup(popup, { className: "control-room-map-popup", maxWidth: 300, offset: [0, -12] });
       marker.on("click", () => onSelect(entry.radius_vehicle_id));
       marker.addTo(markers);
       bounds.extend([entry.lat, entry.lng]);
@@ -354,11 +359,11 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
       L.circle([zone.lat, zone.lng], {
         radius: zone.radius,
         color: zone.tone,
-        weight: 1.4,
-        opacity: 0.38,
+        weight: 1.1,
+        opacity: 0.24,
         fillColor: zone.tone,
-        fillOpacity: 0.045,
-        dashArray: "7 8",
+        fillOpacity: 0.025,
+        dashArray: "5 10",
         interactive: false
       }).addTo(layer);
 
@@ -369,13 +374,14 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
           html: `
             <div style="
               border:1px solid rgba(15,23,42,0.12);
-              background:rgba(255,255,255,0.86);
+              background:rgba(255,255,255,0.76);
               color:#334155;
               padding:3px 8px;
-              border-radius:999px;
+              border-radius:8px;
               font:700 10px ui-sans-serif,system-ui,sans-serif;
-              box-shadow:0 8px 18px rgba(15,23,42,0.10);
+              box-shadow:0 6px 14px rgba(15,23,42,0.08);
               white-space:nowrap;
+              backdrop-filter:blur(8px);
             ">${escapeHtml(zone.name)}</div>
           `,
           iconSize: [120, 22],
@@ -386,7 +392,7 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
 
     OPERATING_PORTS.forEach((port) => {
       L.circleMarker([port.lat, port.lng], {
-        radius: 7,
+        radius: 6,
         color: "#ffffff",
         weight: 2,
         fillColor: port.tone,
@@ -427,8 +433,8 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
   }, [entries, selectedId]);
 
   return (
-    <div className="relative overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.12)]">
-      <div className="border-b border-slate-200 bg-[linear-gradient(90deg,#f8fafc_0%,#ffffff_55%,#eff6ff_100%)] px-5 py-4">
+    <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.12)]">
+      <div className="border-b border-slate-200 bg-white px-5 py-4">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Fleet Control</p>
@@ -438,7 +444,7 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
             <button
               type="button"
               onClick={() => setOperationalLayerEnabled((value) => !value)}
-              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+              className={`rounded-lg border px-3 py-1 text-xs font-semibold transition ${
                 operationalLayerEnabled
                   ? "border-teal-200 bg-teal-50 text-teal-700"
                   : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
@@ -446,7 +452,7 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
             >
               Layer operativo {operationalLayerEnabled ? "on" : "off"}
             </button>
-            <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
+            <div className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
               {baseLayerLabel}
             </div>
           </div>
@@ -456,13 +462,13 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
         <div
           ref={containerRef}
           style={{ height: "calc(100vh - 280px)", minHeight: "560px", width: "100%" }}
-          className="bg-[#eef3f7] [&_.leaflet-control-attribution]:!rounded-tl-lg [&_.leaflet-control-attribution]:!bg-white/80 [&_.leaflet-control-attribution]:!text-[10px] [&_.leaflet-control-container]:z-[450] [&_.leaflet-control-zoom]:!border-0 [&_.leaflet-control-zoom]:!shadow-[0_10px_24px_rgba(15,23,42,0.14)] [&_.leaflet-control-zoom_a]:!text-slate-700 [&_.leaflet-control-zoom_a]:!h-10 [&_.leaflet-control-zoom_a]:!w-10 [&_.leaflet-control-zoom_a]:!leading-[38px] [&_.leaflet-control-zoom_a]:!border-slate-200 [&_.leaflet-control-zoom_a]:!bg-white/95 [&_.leaflet-control-zoom_a]:hover:!bg-slate-50 [&_.leaflet-pane.leaflet-tile-pane]:[filter:saturate(0.78)_contrast(1.02)_brightness(1.06)] [&_.leaflet-popup-content-wrapper]:!rounded-2xl [&_.leaflet-popup-content-wrapper]:!shadow-[0_18px_45px_rgba(15,23,42,0.18)] [&_.leaflet-popup-tip]:!shadow-none"
+          className="bg-[#eef3f7] [&_.leaflet-control-attribution]:!rounded-tl-lg [&_.leaflet-control-attribution]:!bg-white/85 [&_.leaflet-control-attribution]:!text-[10px] [&_.leaflet-control-container]:z-[450] [&_.leaflet-control-zoom]:!overflow-hidden [&_.leaflet-control-zoom]:!rounded-lg [&_.leaflet-control-zoom]:!border [&_.leaflet-control-zoom]:!border-slate-200 [&_.leaflet-control-zoom]:!shadow-[0_10px_24px_rgba(15,23,42,0.14)] [&_.leaflet-control-zoom_a]:!text-slate-700 [&_.leaflet-control-zoom_a]:!h-10 [&_.leaflet-control-zoom_a]:!w-10 [&_.leaflet-control-zoom_a]:!leading-[38px] [&_.leaflet-control-zoom_a]:!border-slate-200 [&_.leaflet-control-zoom_a]:!bg-white/95 [&_.leaflet-control-zoom_a]:hover:!bg-slate-50 [&_.leaflet-pane.leaflet-tile-pane]:[filter:saturate(1.04)_contrast(1.02)_brightness(1.01)] [&_.leaflet-popup-content]:!m-0 [&_.leaflet-popup-content-wrapper]:!rounded-lg [&_.leaflet-popup-content-wrapper]:!p-3 [&_.leaflet-popup-content-wrapper]:!shadow-[0_18px_45px_rgba(15,23,42,0.18)] [&_.leaflet-popup-tip]:!shadow-none"
         />
 
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-[linear-gradient(180deg,rgba(255,255,255,0.68)_0%,rgba(255,255,255,0)_100%)]" />
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-12 bg-[linear-gradient(180deg,rgba(255,255,255,0.52)_0%,rgba(255,255,255,0)_100%)]" />
 
-        <div className="absolute left-[4.5rem] top-4 z-[500] flex max-w-[calc(100%-5.5rem)] flex-wrap gap-2 md:left-[5rem]">
-          <div className="rounded-full border border-white/80 bg-white/94 px-3 py-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] backdrop-blur">
+        <div className="absolute left-4 top-4 z-[500] flex max-w-[calc(100%-6rem)] flex-wrap gap-2">
+          <div className="rounded-lg border border-white/80 bg-white/94 px-3 py-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] backdrop-blur">
             <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-slate-700">
               <span className="inline-flex items-center gap-1.5 text-slate-900"><span className="h-2.5 w-2.5 rounded-full bg-slate-900" />{summary.total} live</span>
               <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />{summary.moving}</span>
@@ -473,7 +479,7 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
           </div>
         </div>
 
-        <div className="absolute bottom-4 left-4 z-[500] rounded-full border border-white/80 bg-white/94 px-3 py-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] backdrop-blur">
+        <div className="absolute bottom-4 left-4 z-[500] rounded-lg border border-white/80 bg-white/94 px-3 py-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] backdrop-blur">
           <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-700">
             <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />In movimento</span>
             <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-amber-500" />Warning</span>
@@ -482,7 +488,7 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
           </div>
         </div>
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-[linear-gradient(0deg,rgba(255,255,255,0.54)_0%,rgba(255,255,255,0)_100%)]" />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-[linear-gradient(0deg,rgba(255,255,255,0.40)_0%,rgba(255,255,255,0)_100%)]" />
 
       </div>
     </div>
