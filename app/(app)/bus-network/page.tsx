@@ -1724,14 +1724,14 @@ export default function BusNetworkPage() {
                     </button>
                   </div>
 
-                  {payload.ischia_dist_buses.filter((b) => b.date === date).length === 0 ? (
+                  {payload.ischia_dist_buses.filter((b) => b.date === date && (b.bus_line_id === selectedLine?.id || !b.bus_line_id)).length === 0 ? (
                     <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
-                      Nessun bus distribuzione. Clicca <strong>⚡ Smista per zona</strong> per generarli automaticamente.
+                      Nessun bus distribuzione per questa linea. Clicca <strong>⚡ Smista per zona</strong> per generarli automaticamente.
                     </div>
                   ) : (() => {
-                    // Raggruppa i bus per linea (usando bus_line_id → family_code → ferry config)
+                    // Mostra solo i bus della linea selezionata (ogni linea ha il suo traghetto)
                     const busesForDate = payload.ischia_dist_buses
-                      .filter((b) => b.date === date)
+                      .filter((b) => b.date === date && (b.bus_line_id === selectedLine?.id || !b.bus_line_id))
                       .sort((a, b) => a.sort_order - b.sort_order);
 
                     // Costruisce mappa bus_line_id → ferry config (tramite lines)
@@ -2080,14 +2080,14 @@ export default function BusNetworkPage() {
                     </div>
                   </div>
 
-                  {payload.pozzuoli_dist_buses.filter((b) => b.date === date).length === 0 ? (
+                  {payload.pozzuoli_dist_buses.filter((b) => b.date === date && (b.bus_line_id === selectedLine?.id || !b.bus_line_id)).length === 0 ? (
                     <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
-                      Nessun bus smistamento Pozzuoli. Aggiungili manualmente con il tasto qui sotto.
+                      Nessun bus smistamento Pozzuoli per questa linea. Aggiungili manualmente con il tasto qui sotto.
                     </div>
                   ) : (
                     <div className="flex gap-4 overflow-x-auto pb-2">
                       {payload.pozzuoli_dist_buses
-                        .filter((b) => b.date === date)
+                        .filter((b) => b.date === date && (b.bus_line_id === selectedLine?.id || !b.bus_line_id))
                         .sort((a, b) => a.sort_order - b.sort_order)
                         .map((bus) => {
                           const busAllocs = payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id);
