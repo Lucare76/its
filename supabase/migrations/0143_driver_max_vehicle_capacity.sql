@@ -18,15 +18,16 @@ declare
   -- (confronto case-insensitive su full_name)
   limits record;
 begin
-  for limits in (values
-    ('andy',          25),
-    ('ilaria',        40),
-    ('alberto sebon',  8),
-    ('jamal',         16),
-    ('leo',           16),
-    ('angioletto',    25),
-    ('biagio ischia',  8)
-  ) as t(name_pattern, cap)
+  for limits in
+    select name_pattern, cap from (values
+      ('andy',          25),
+      ('ilaria',        40),
+      ('alberto sebon',  8),
+      ('jamal',         16),
+      ('leo',           16),
+      ('angioletto',    25),
+      ('biagio ischia',  8)
+    ) as t(name_pattern, cap)
   loop
     update public.memberships
     set max_vehicle_capacity = limits.cap
