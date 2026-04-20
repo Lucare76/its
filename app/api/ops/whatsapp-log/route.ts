@@ -57,36 +57,44 @@ export async function GET(request: NextRequest) {
   const failed    = rows.filter((r) => r.status === "failed").length;
   const notRead   = rows.filter((r) => r.status === "sent" || r.status === "delivered").length;
 
-  // Arricchisce i "non letti" con il nome cliente
-  const notReadIds = rows
-    .filter((r) => r.status === "sent" || r.status === "delivered")
+  // Arricchisce non letti + falliti con il nome cliente
+  const actionableIds = rows
+    .filter((r) => r.status === "sent" || r.status === "delivered" || r.status === "failed")
     .map((r) => r.service_id!)
     .filter(Boolean);
 
-  const { data: serviceNames } = notReadIds.length === 0 ? { data: [] } : await admin
+  const { data: serviceNames } = actionableIds.length === 0 ? { data: [] } : await admin
     .from("services")
     .select("id, customer_name, date, booking_service_kind")
-    .in("id", notReadIds);
+    .in("id", actionableIds);
 
   const serviceMap = new Map((serviceNames ?? []).map((s) => [s.id, s]));
 
+  const enrichRow = (r: typeof rows[number]) => ({
+    service_id:           r.service_id,
+    to_phone:             r.to_phone,
+    template:             r.template,
+    status:               r.status,
+    happened_at:          r.happened_at,
+    customer_name:        serviceMap.get(r.service_id!)?.customer_name ?? null,
+    arrival_date:         serviceMap.get(r.service_id!)?.date ?? null,
+    booking_service_kind: serviceMap.get(r.service_id!)?.booking_service_kind ?? null,
+  });
+
   const notReadRows = rows
     .filter((r) => r.status === "sent" || r.status === "delivered")
-    .map((r) => ({
-      service_id:          r.service_id,
-      to_phone:            r.to_phone,
-      template:            r.template,
-      status:              r.status,
-      happened_at:         r.happened_at,
-      customer_name:       serviceMap.get(r.service_id!)?.customer_name ?? null,
-      arrival_date:        serviceMap.get(r.service_id!)?.date ?? null,
-      booking_service_kind: serviceMap.get(r.service_id!)?.booking_service_kind ?? null,
-    }))
+    .map(enrichRow)
+    .sort((a, b) => (a.arrival_date ?? "").localeCompare(b.arrival_date ?? ""));
+
+  const failedRows = rows
+    .filter((r) => r.status === "failed")
+    .map(enrichRow)
     .sort((a, b) => (a.arrival_date ?? "").localeCompare(b.arrival_date ?? ""));
 
   return NextResponse.json({
     ok: true,
     kpi: { total, read, delivered, sent, failed, notRead },
     notReadRows,
+    failedRows,
   });
 }

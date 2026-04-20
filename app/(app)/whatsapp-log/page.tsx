@@ -28,6 +28,7 @@ export default function WhatsAppLogPage() {
   const [loading, setLoading] = useState(true);
   const [kpi, setKpi]         = useState<KPI | null>(null);
   const [rows, setRows]       = useState<NotReadRow[]>([]);
+  const [failedRows, setFailedRows] = useState<NotReadRow[]>([]);
   const [days, setDays]       = useState(30);
   const [error, setError]     = useState("");
 
@@ -40,10 +41,11 @@ export default function WhatsAppLogPage() {
     if (!token) { setError("Non autenticato."); setLoading(false); return; }
 
     const res  = await fetch(`/api/ops/whatsapp-log?days=${d}`, { headers: { Authorization: `Bearer ${token}` } });
-    const body = await res.json().catch(() => null) as { ok?: boolean; kpi?: KPI; notReadRows?: NotReadRow[]; error?: string } | null;
+    const body = await res.json().catch(() => null) as { ok?: boolean; kpi?: KPI; notReadRows?: NotReadRow[]; failedRows?: NotReadRow[]; error?: string } | null;
     if (!res.ok || !body?.ok) { setError(body?.error ?? `Errore caricamento dati (HTTP ${res.status}).`); setLoading(false); return; }
     setKpi(body.kpi ?? null);
     setRows(body.notReadRows ?? []);
+    setFailedRows(body.failedRows ?? []);
     setLoading(false);
   };
 
@@ -147,6 +149,41 @@ export default function WhatsAppLogPage() {
           ) : (
             <div className="rounded-2xl border border-slate-100 bg-white p-8 text-center text-sm text-slate-400">
               Tutti i messaggi risultano letti.
+            </div>
+          )}
+
+          {/* Tabella falliti */}
+          {failedRows.length > 0 && (
+            <div>
+              <p className="mb-2 text-sm font-semibold text-rose-700">
+                {failedRows.length} messaggi non consegnati (falliti)
+              </p>
+              <div className="rounded-2xl border border-rose-200 bg-white overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-rose-50 border-b border-rose-100">
+                    <tr>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Cliente</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Arrivo</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Tipo</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Telefono</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Data</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-rose-50">
+                    {failedRows.map((r, i) => (
+                      <tr key={r.service_id ?? i} className="hover:bg-rose-50/50">
+                        <td className="px-4 py-2.5 font-medium text-slate-800">{r.customer_name ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-slate-600">{r.arrival_date ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-slate-500 text-xs">{kindLabel[r.booking_service_kind ?? ""] ?? r.booking_service_kind ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{r.to_phone}</td>
+                        <td className="px-4 py-2.5 text-xs text-slate-400">
+                          {new Date(r.happened_at).toLocaleDateString("it-IT", { day: "2-digit", month: "short" })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </>
