@@ -287,6 +287,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: agencyIdResult.error }, { status: 400 });
     }
 
+    // Limite 500 servizi giornalieri
+    const DAILY_SERVICE_LIMIT = 500;
+    const { count: dailyCount } = await auth.admin
+      .from("services")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", auth.membership.tenant_id)
+      .eq("date", parsed.data.arrival_date)
+      .eq("is_draft", false)
+      .neq("status", "cancelled");
+    if ((dailyCount ?? 0) >= DAILY_SERVICE_LIMIT) {
+      return NextResponse.json({
+        error: `Limite giornaliero raggiunto: massimo ${DAILY_SERVICE_LIMIT} servizi per data.`
+      }, { status: 422 });
+    }
+
     const { data: hotelData } = await auth.admin
       .from("hotels")
       .select("id, name")

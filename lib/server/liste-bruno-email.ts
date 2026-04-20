@@ -16,6 +16,7 @@ export type BrunoArrival = {
   phone: string;
   hotel_name: string | null;
   notes: string;
+  flight_number: string | null;     // numero volo arrivo (train_arrival_number)
 };
 
 export type BrunoDeparture = {
@@ -33,6 +34,7 @@ export type BrunoDeparture = {
   porto_bruno: string | null;   // porto dove Bruno ritira il cliente (Pozzuoli / Napoli Beverello)
   hotel_name: string | null;    // hotel sull'isola (utile per identificare il cliente)
   notes: string;
+  flight_number: string | null; // numero volo partenza (train_departure_number)
 };
 
 type BrunoEmailInput = {
@@ -66,6 +68,7 @@ function buildArrivalsHtml(arrivals: BrunoArrival[]): string {
         <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;text-align:center">${a.pax}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">${placeLabel(a.place_type, a.meeting_point)}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">${a.vessel}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">${a.flight_number ? `<strong>✈️ ${a.flight_number}</strong>` : "—"}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">${a.hotel_name ?? "—"}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:12px">${a.phone}${a.notes ? ` · ${a.notes}` : ""}</td>
       </tr>`)
@@ -80,6 +83,7 @@ function buildArrivalsHtml(arrivals: BrunoArrival[]): string {
           <th style="padding:8px 12px;text-align:center;font-size:11px;text-transform:uppercase;color:#64748b">Pax</th>
           <th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Da</th>
           <th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Traghetto</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Volo</th>
           <th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Hotel</th>
           <th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Telefono / Note</th>
         </tr>
@@ -128,6 +132,7 @@ function buildDeparturesHtml(departures: BrunoDeparture[]): string {
             <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;text-align:center">${d.pax}</td>
             <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">⚓ ${portoBrunoLabel}</td>
             <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">${connLabel}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">${d.flight_number ? `<strong>✈️ ${d.flight_number}</strong>` : "—"}</td>
             <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">${placeLabel(d.place_type, d.meeting_point)}</td>
             <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:12px">${d.phone}${d.notes ? ` · ${d.notes}` : ""}</td>
           </tr>`;
@@ -152,7 +157,8 @@ function buildDeparturesHtml(departures: BrunoDeparture[]): string {
                 <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Cliente</th>
                 <th style="padding:7px 12px;text-align:center;font-size:11px;text-transform:uppercase;color:#64748b">Pax</th>
                 <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Porto ritiro Bruno</th>
-                <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Volo / Treno</th>
+                <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Orario connessione</th>
+                <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">N° Volo</th>
                 <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Verso</th>
                 <th style="padding:7px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#64748b">Telefono / Note</th>
               </tr>

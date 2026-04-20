@@ -63,6 +63,21 @@ export async function POST(request: NextRequest) {
     const ferryDepTime = typeof bodyRaw.ferry_dep_time === "string" ? bodyRaw.ferry_dep_time.trim() || null : null;
     const portoPartenza = typeof bodyRaw.porto_partenza === "string" ? bodyRaw.porto_partenza.trim() || null : null;
 
+    // Limite 500 servizi giornalieri (arrivi + partenze)
+    const DAILY_SERVICE_LIMIT = 500;
+    const { count: dailyCount } = await auth.admin
+      .from("services")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenantId)
+      .eq("date", d.arrival_date)
+      .eq("is_draft", false)
+      .neq("status", "cancelled");
+    if ((dailyCount ?? 0) >= DAILY_SERVICE_LIMIT) {
+      return NextResponse.json({
+        error: `Limite giornaliero raggiunto: massimo ${DAILY_SERVICE_LIMIT} servizi per data. Contatta il supporto se necessario.`
+      }, { status: 422 });
+    }
+
     // Valida hotel
     const { data: hotelData } = await auth.admin
       .from("hotels")

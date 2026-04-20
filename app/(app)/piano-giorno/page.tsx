@@ -1136,6 +1136,16 @@ export default function PianoGiornoPage() {
 
   const hasGroups = (data?.trip_groups.length ?? 0) > 0;
 
+  // Check disponibilità confermata per la data
+  const [availConfirmed, setAvailConfirmed] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!token) return;
+    fetch(`/api/ops/disponibilita?date=${date}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then((b: { ok: boolean; confirmed?: boolean }) => { if (b.ok) setAvailConfirmed(b.confirmed ?? false); })
+      .catch(() => setAvailConfirmed(null));
+  }, [token, date]);
+
   const runAutoAssign = useCallback(async (mode: "unassigned_only" | "regenerate_all") => {
     if (!token) return;
     setShowAutoModal(false);
@@ -1584,6 +1594,17 @@ export default function PianoGiornoPage() {
       )}
 
       <section className="page-section no-print">
+        {availConfirmed === false ? (
+          <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+            <p className="text-sm font-semibold text-amber-800 flex-1">
+              ⚠️ Disponibilità di autisti e mezzi non ancora confermata per questa data.
+              Il Piano del Giorno è in sola lettura fino alla conferma.
+            </p>
+            <a href={`/disponibilita?date=${date}`} className="px-3 py-1.5 rounded-xl bg-amber-500 text-white text-xs font-bold hover:bg-amber-600 whitespace-nowrap">
+              Vai a Disponibilità →
+            </a>
+          </div>
+        ) : null}
         <PageHeader
           title="Piano del Giorno"
           subtitle="Controlla la giornata, risolvi le eccezioni e stampa i piani autista."
@@ -1695,6 +1716,38 @@ export default function PianoGiornoPage() {
             >
               Stampa piani
             </button>
+            {(() => {
+              const missingDriver = tripRows.filter(t => !t.group.driver_user_id || !t.group.vehicle_label);
+              const canExport = unassignedServices.length === 0 && missingDriver.length === 0 && (data?.trip_groups.length ?? 0) > 0;
+              const blockerDetail = unassignedServices.length > 0
+                ? `${unassignedServices.length} servizi senza giro`
+                : missingDriver.length > 0
+                  ? `${missingDriver.length} giri senza autista/mezzo`
+                  : "";
+              return (
+                <a
+                  href={canExport ? `/api/ops/piano-giorno/export-excel?date=${date}&token=${token ?? ""}` : undefined}
+                  onClick={e => {
+                    if (!canExport || !token) { e.preventDefault(); return; }
+                    const url = `/api/ops/piano-giorno/export-excel?date=${date}`;
+                    void fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+                      .then(r => r.blob())
+                      .then(blob => {
+                        const a = document.createElement("a");
+                        a.href = URL.createObjectURL(blob);
+                        a.download = `piano-giorno-${date.replace(/-/g, "")}.xlsx`;
+                        a.click();
+                      });
+                    e.preventDefault();
+                  }}
+                  title={canExport ? "Scarica Excel completo del giorno" : `Non disponibile: ${blockerDetail}`}
+                  className={`btn-secondary text-xs ${canExport ? "cursor-pointer" : "opacity-40 cursor-not-allowed pointer-events-auto"}`}
+                >
+                  📥 Genera file del giorno
+                  {!canExport && blockerDetail ? <span className="ml-1 text-amber-600">({blockerDetail})</span> : null}
+                </a>
+              );
+            })()}
           </div>
         </div>
 

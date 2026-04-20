@@ -29,20 +29,35 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { id: serviceId } = await params;
   const tenantId = auth.membership.tenant_id;
 
-  const { data: existing } = await auth.admin
+  if (!serviceId || serviceId === "undefined") {
+    return NextResponse.json({ ok: false, error: "ID pratica non valido." }, { status: 400 });
+  }
+
+  // Verifica esistenza + tenant in un'unica query
+  const { data: existing, error: fetchErr } = await auth.admin
     .from("services")
-    .select("id")
+    .select("id, tenant_id, status")
     .eq("id", serviceId)
-    .eq("tenant_id", tenantId)
     .maybeSingle();
 
-  if (!existing?.id) {
-    return NextResponse.json({ error: "Pratica non trovata." }, { status: 404 });
+  if (fetchErr) {
+    auditLog({ event: "ops_service_replace_fetch_error", tenantId, userId: auth.user.id, serviceId, level: "error", details: { error: fetchErr.message } });
+    return NextResponse.json({ ok: false, error: "Errore durante la ricerca della pratica." }, { status: 500 });
+  }
+
+  if (!existing) {
+    auditLog({ event: "ops_service_replace_not_found", tenantId, userId: auth.user.id, serviceId, level: "warn" });
+    return NextResponse.json({ ok: false, error: "Pratica non trovata. Potrebbe essere stata eliminata." }, { status: 404 });
+  }
+
+  if (existing.tenant_id !== tenantId) {
+    auditLog({ event: "ops_service_replace_wrong_tenant", tenantId, userId: auth.user.id, serviceId, level: "warn" });
+    return NextResponse.json({ ok: false, error: "Pratica non trovata." }, { status: 404 });
   }
 
   const parsed = replaceSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Dati non validi." }, { status: 400 });
+    return NextResponse.json({ ok: false, error: parsed.error.issues[0]?.message ?? "Dati non validi." }, { status: 400 });
   }
 
   const d = parsed.data;
@@ -65,6 +80,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     notes: d.notes,
     transport_code: d.transport_code ?? null,
     bus_city_origin: d.bus_city_origin ?? null,
+    // Ripristina status a "new" se era cancellato (sostituzione esplicita)
+    ...(existing.status === "cancelled" ? { status: "new" } : {}),
   };
   if (d.customer_first_name !== undefined) update.customer_first_name = d.customer_first_name;
   if (d.agency_id !== undefined) update.agency_id = d.agency_id ?? null;
@@ -77,7 +94,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     .eq("tenant_id", tenantId);
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
   auditLog({
@@ -87,7 +104,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     role: auth.membership.role,
     serviceId,
     outcome: "replaced",
-    details: { fields: Object.keys(update) }
+    details: { fields: Object.keys(update), prev_status: existing.status }
   });
 
   return NextResponse.json({ ok: true, id: serviceId });

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Seed: domenica di alta stagione — 12 ottobre 2025
- * Crea ~600 arrivi e ~600 partenze per stress-test del Piano del Giorno.
+ * Crea ~500 servizi per stress-test del Piano del Giorno.
+ * Include casi limite per: hotel_vehicle_limits, max_vehicle_capacity autisti,
+ * vehicle_time_blocks, disponibilità driver, numero volo arrivo/partenza, Lista Bruno.
  * Tutti i record sono marcati con is_test_data=true per pulizia facile.
  *
  * Uso:
@@ -290,7 +292,13 @@ async function cleanTestData() {
     { method: "DELETE" }
   );
 
-  console.log(`  ✅ Eliminati ${ids.length} servizi di test.`);
+  // 4. Elimina disponibilità autisti/mezzi e blocchi orari del giorno
+  await supabaseFetch(`/driver_daily_availability?tenant_id=eq.${TENANT_ID}&date=eq.${TEST_DATE}`, { method: "DELETE" });
+  await supabaseFetch(`/vehicle_daily_availability?tenant_id=eq.${TENANT_ID}&date=eq.${TEST_DATE}`, { method: "DELETE" });
+  await supabaseFetch(`/vehicle_time_blocks?tenant_id=eq.${TENANT_ID}&date=eq.${TEST_DATE}`, { method: "DELETE" });
+  await supabaseFetch(`/daily_availability_confirmations?tenant_id=eq.${TENANT_ID}&date=eq.${TEST_DATE}`, { method: "DELETE" });
+
+  console.log(`  ✅ Eliminati ${ids.length} servizi di test + dati disponibilità.`);
 }
 
 // ─── SEED ─────────────────────────────────────────────────────────────────────
@@ -319,7 +327,7 @@ async function seed() {
 
   // ─── Genera ARRIVI ───────────────────────────────────────────────────────
 
-  console.log("Generazione arrivi (target ~600 prenotazioni)…");
+  console.log("Generazione arrivi (target ~250 prenotazioni)…");
 
   const arrivalRows = [];
   const arrivalStats = {};
@@ -330,7 +338,7 @@ async function seed() {
   let sameCognomeCount = 0;
 
   for (const [time, vessel, porto, weight] of ARRIVALS_RUNS) {
-    const targetBookings = Math.max(2, Math.round((weight / totalWeight) * 600));
+    const targetBookings = Math.max(2, Math.round((weight / totalWeight) * 250));
     const key = `${time} ${vessel}`;
     arrivalStats[key] = { bookings: 0, pax: 0, porto };
 
@@ -347,6 +355,12 @@ async function seed() {
       const hotel = rnd(allHotels);
       const notes = genNotes();
 
+      // Simula clienti aeroporto (20% degli arrivi) con numero volo
+      const isAirportArrival = Math.random() < 0.20;
+      const airlines = ["AZ", "FR", "VY", "U2", "LH"];
+      const trainCodes = ["IC709", "FR9341", "IC601", "AV9313"];
+      const arrFlightNum = isAirportArrival ? `${rnd(airlines)}${rndInt(1000,9999)}` : null;
+
       arrivalRows.push({
         id: uuid(),
         tenant_id: TENANT_ID,
@@ -361,8 +375,10 @@ async function seed() {
         is_draft: false,
         notes,
         meeting_point: porto === "Casamicciola" ? "Biglietteria SNAV Casamicciola" : "Uscita arrivi",
-        place_type: "hotel",
+        place_type: isAirportArrival ? "airport" : "hotel",
         service_type: "transfer",
+        train_arrival_number: arrFlightNum ?? (Math.random() < 0.10 ? rnd(trainCodes) : null),
+        booking_service_kind: isAirportArrival ? "transfer_airport_hotel" : null,
         ...customer,
       });
 
@@ -374,7 +390,7 @@ async function seed() {
 
   // ─── Genera PARTENZE ─────────────────────────────────────────────────────
 
-  console.log("Generazione partenze (target ~600 prenotazioni)…");
+  console.log("Generazione partenze (target ~250 prenotazioni)…");
 
   // Orari di partenza realistici per tipo destinazione
   const DEPARTURE_FERRY_TIMES = ["06:20", "07:30", "09:00", "11:00", "13:00", "15:30", "17:00"];
@@ -400,7 +416,7 @@ async function seed() {
   let totalDeparturePax = 0;
 
   const zoneList = zones.filter((z) => hotelsByZone[z]?.length > 0);
-  const targetPerZone = Math.ceil(600 / zoneList.length);
+  const targetPerZone = Math.ceil(250 / zoneList.length);
   let totalDepBookings = 0;
 
   for (const zone of zoneList) {
@@ -409,7 +425,7 @@ async function seed() {
     const pickupTimes = ZONE_PICKUP_TIMES[zone] || ["06:00"];
     departureStats[zone] = { bookings: 0, pax: 0 };
 
-    for (let b = 0; b < targetPerZone && totalDepBookings < 615; b++) {
+    for (let b = 0; b < targetPerZone && totalDepBookings < 255; b++) {
       const pax = genPax();
       const customer = genCustomer();
       const hotel = rnd(zoneHotels);
@@ -430,6 +446,14 @@ async function seed() {
       const barcaCompagnia = ferry?.barca ?? null;
       const orarioBarca = ferry?.orario ?? null;
 
+      const airlines2 = ["AZ", "FR", "VY", "U2", "LH"];
+      const trainCodes2 = ["IC709", "FR9341", "IC601"];
+      const depFlightNum = dest.place_type === "airport"
+        ? `${rnd(airlines2)}${rndInt(1000, 9999)}`
+        : dest.place_type === "station"
+          ? (Math.random() < 0.60 ? rnd(trainCodes2) : null)
+          : null;
+
       departureRows.push({
         id: uuid(),
         tenant_id: TENANT_ID,
@@ -449,6 +473,7 @@ async function seed() {
         barca_compagnia: barcaCompagnia,
         orario_barca: orarioBarca,
         service_type: "transfer",
+        train_departure_number: depFlightNum,
         ...customer,
       });
 
@@ -645,6 +670,73 @@ async function seed() {
   const t0 = Date.now();
   await batchInsert("services", arrivalRows, 200);
   await batchInsert("services", departureRows, 200);
+
+  // ─── Seed disponibilità autisti + vincoli mezzi ───────────────────────────
+
+  console.log("\n  Seeding disponibilità autisti per test constraints…");
+
+  // Carica autisti (driver)
+  const drivers = await supabaseFetch(
+    `/memberships?select=user_id,full_name,max_vehicle_capacity&tenant_id=eq.${TENANT_ID}&role=eq.driver&limit=30`,
+    { method: "GET", headers: { Prefer: "" } }
+  );
+
+  if (drivers.length > 0) {
+    const driverAvailRows = drivers.map((d, i) => ({
+      id: uuid(),
+      tenant_id: TENANT_ID,
+      driver_user_id: d.user_id,
+      date: TEST_DATE,
+      // Primo driver non disponibile (test constraint), alternati disponibili con orari
+      available: i === 0 ? false : true,
+      available_from: i === 2 ? "09:00" : null,  // terzo driver disponibile solo dalle 9
+      available_to: i === 3 ? "14:00" : null,     // quarto driver disponibile fino alle 14
+      notes: i === 0 ? "Test: non disponibile" : i === 2 ? "Test: disponibile dalle 09:00" : null,
+    }));
+    await batchInsert("driver_daily_availability", driverAvailRows, 50);
+    console.log(`  ${driverAvailRows.length} disponibilità autisti inserite.`);
+  }
+
+  // Carica mezzi
+  const vehicles = await supabaseFetch(
+    `/vehicles?select=id,label,capacity&tenant_id=eq.${TENANT_ID}&active=eq.true&limit=20`,
+    { method: "GET", headers: { Prefer: "" } }
+  );
+
+  if (vehicles.length >= 2) {
+    // Primo mezzo non disponibile
+    const vehicleAvailRows = [
+      { id: uuid(), tenant_id: TENANT_ID, vehicle_id: vehicles[0].id, date: TEST_DATE, available: false, notes: "Test: fuori servizio" },
+    ];
+    await batchInsert("vehicle_daily_availability", vehicleAvailRows, 10);
+
+    // Secondo mezzo: blocco orario 09:00-12:00 (manutenzione)
+    const blockRows = [
+      {
+        id: uuid(), tenant_id: TENANT_ID, vehicle_id: vehicles[1].id, date: TEST_DATE,
+        block_from: "09:00", block_to: "12:00", reason: "manutenzione",
+        reason_notes: "Test: manutenzione programmata",
+      },
+      {
+        id: uuid(), tenant_id: TENANT_ID, vehicle_id: vehicles[1].id, date: TEST_DATE,
+        block_from: "15:00", block_to: "17:00", reason: "escursione",
+        reason_notes: "Test: escursione privata",
+      },
+    ];
+    await batchInsert("vehicle_time_blocks", blockRows, 10);
+    console.log(`  Vincoli mezzi inseriti (1 fuori servizio, 1 con blocchi orari).`);
+  }
+
+  // Conferma disponibilità (set confirmed=true per il giorno di test)
+  await supabaseFetch("/daily_availability_confirmations", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates" },
+    body: JSON.stringify({
+      id: uuid(), tenant_id: TENANT_ID, date: TEST_DATE,
+      confirmed: true, confirmed_at: new Date().toISOString(), confirmed_by: null,
+    }),
+  }).catch(() => {});
+  console.log("  Disponibilità confermata per il giorno di test.");
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`\n  ✅ Completato in ${elapsed}s`);

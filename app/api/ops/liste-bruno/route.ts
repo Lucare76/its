@@ -64,7 +64,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
     // @ts-expect-error auth type resolved at runtime
     auth.admin
       .from("services")
-      .select("id, customer_name, pax, time, vessel, place_type, meeting_point, phone, notes, service_type_code, booking_service_kind, hotels(name)")
+      .select("id, customer_name, pax, time, vessel, place_type, meeting_point, phone, notes, service_type_code, booking_service_kind, train_arrival_number, hotels(name)")
       .eq("tenant_id", tenantId)
       .eq("date", date)
       .eq("direction", "arrival")
@@ -74,7 +74,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
     // @ts-expect-error auth type resolved at runtime
     auth.admin
       .from("services")
-      .select("id, customer_name, pax, time, departure_time, vessel, place_type, meeting_point, phone, notes, porto_bruno, service_type_code, booking_service_kind, billing_party_name, hotels(name, zone)")
+      .select("id, customer_name, pax, time, departure_time, vessel, place_type, meeting_point, phone, notes, porto_bruno, service_type_code, booking_service_kind, billing_party_name, train_departure_number, hotels(name, zone)")
       .eq("tenant_id", tenantId)
       .eq("is_draft", false)
       // Partenze round-trip: la data rilevante è departure_date (≠ date del servizio principale)
@@ -101,6 +101,8 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
     phone: string; notes: string; porto_bruno?: string | null;
     service_type_code?: string | null; booking_service_kind?: string | null;
     billing_party_name?: string | null;
+    train_arrival_number?: string | null;
+    train_departure_number?: string | null;
     hotels: { name: string; zone?: string | null } | null;
   };
 
@@ -131,6 +133,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
     phone: r.phone,
     hotel_name: r.hotels?.name ?? null,
     notes: cleanNotes(r.notes),
+    flight_number: r.train_arrival_number ?? null,
   });
 
   const mapDeparture = (r: Row): BrunoDeparture => {
@@ -234,6 +237,7 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
       porto_bruno,
       hotel_name: r.hotels?.name ?? null,
       notes: cleanNotes(r.notes),
+      flight_number: r.train_departure_number ?? null,
     };
   };
 

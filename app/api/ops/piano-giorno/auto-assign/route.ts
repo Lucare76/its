@@ -165,7 +165,46 @@ type ServiceRow = {
 };
 type HotelRow = { id: string; name: string | null; address: string | null; zone: string | null; lat: number | null; lng: number | null };
 type VehicleRow = { id: string; label: string; capacity: number | null };
-type DriverRow = { user_id: string; full_name: string };
+type DriverRow = { user_id: string; full_name: string; max_vehicle_capacity: number | null };
+
+// Verifica se un veicolo è disponibile in un certo orario tenendo conto dei blocchi orari
+function vehicleAvailableAtTime(
+  vehicleId: string,
+  tripTimeMin: number,
+  vehicleAvailMap: Map<string, boolean>,
+  vehicleBlocksMap: Map<string, Array<{ block_from: string; block_to: string }>>,
+  durationMin = 90
+): boolean {
+  if (vehicleAvailMap.get(vehicleId) === false) return false;
+  const blocks = vehicleBlocksMap.get(vehicleId) ?? [];
+  const tripEnd = tripTimeMin + durationMin;
+  for (const b of blocks) {
+    const bStart = timeToMin(b.block_from);
+    const bEnd = timeToMin(b.block_to);
+    if (tripTimeMin < bEnd && tripEnd > bStart) return false;
+  }
+  return true;
+}
+
+// Verifica disponibilità oraria autista
+function driverAvailableAtTime(
+  driverId: string,
+  tripTimeMin: number,
+  driverAvailMap: Map<string, { available: boolean; available_from: string | null; available_to: string | null }>
+): boolean {
+  const avail = driverAvailMap.get(driverId);
+  if (!avail) return true; // non dichiarato = disponibile
+  if (!avail.available) return false;
+  if (avail.available_from) {
+    const fromMin = timeToMin(avail.available_from);
+    if (tripTimeMin < fromMin) return false;
+  }
+  if (avail.available_to) {
+    const toMin = timeToMin(avail.available_to);
+    if (tripTimeMin >= toMin) return false;
+  }
+  return true;
+}
 
 type TripDraft = {
   serviceIds: string[];
@@ -191,7 +230,8 @@ export async function POST(request: NextRequest) {
 
     // ── 1. Carica dati ────────────────────────────────────────────────────────
 
-    const [servicesRes, hotelsRes, vehiclesRes, membershipsRes, assignmentsRes, groupsRes] =
+    const [servicesRes, hotelsRes, vehiclesRes, membershipsRes, assignmentsRes, groupsRes,
+           hotelLimitsRes, driverAvailRes, vehicleAvailRes, vehicleBlocksRes] =
       await Promise.all([
         auth.admin.from("services")
           .select("id, time, direction, vessel, hotel_id, pax, status, meeting_point, pickup_hotel")
@@ -203,7 +243,7 @@ export async function POST(request: NextRequest) {
           .eq("tenant_id", tenantId).eq("active", true)
           .order("capacity"),
         auth.admin.from("memberships")
-          .select("user_id, full_name")
+          .select("user_id, full_name, max_vehicle_capacity")
           .eq("tenant_id", tenantId).eq("role", "driver"),
         auth.admin.from("assignments")
           .select("service_id, group_id")
@@ -211,6 +251,22 @@ export async function POST(request: NextRequest) {
         auth.admin.from("trip_groups")
           .select("id")
           .eq("tenant_id", tenantId).eq("date", date).eq("status", "active"),
+        // Vincoli rigidi hotel → capienza mezzo
+        auth.admin.from("hotel_vehicle_limits")
+          .select("hotel_id, max_capacity")
+          .eq("tenant_id", tenantId),
+        // Disponibilità autisti del giorno
+        auth.admin.from("driver_daily_availability")
+          .select("driver_user_id, available, available_from, available_to")
+          .eq("tenant_id", tenantId).eq("date", date),
+        // Disponibilità mezzi del giorno
+        auth.admin.from("vehicle_daily_availability")
+          .select("vehicle_id, available")
+          .eq("tenant_id", tenantId).eq("date", date),
+        // Blocchi orari mezzi
+        auth.admin.from("vehicle_time_blocks")
+          .select("vehicle_id, block_from, block_to")
+          .eq("tenant_id", tenantId).eq("date", date),
       ]);
 
     if (servicesRes.error || hotelsRes.error)
@@ -225,10 +281,46 @@ export async function POST(request: NextRequest) {
       const quality = hotelGeoQuality(hotel);
       if (!quality.routeUsable) geoBlockedByHotelId.set(hotel.id, quality);
     }
-    const vehicles = ((vehiclesRes.data ?? []) as VehicleRow[])
+
+    // hotel_id → max_capacity limite rigido
+    const hotelVehicleLimitMap = new Map<string, number>(
+      (hotelLimitsRes.data ?? []).map((l) => [l.hotel_id as string, l.max_capacity as number])
+    );
+
+    // driver_user_id → disponibilità giornaliera
+    const driverAvailMap = new Map(
+      (driverAvailRes.data ?? []).map((d) => [
+        d.driver_user_id as string,
+        { available: d.available as boolean, available_from: d.available_from as string | null, available_to: d.available_to as string | null },
+      ])
+    );
+
+    // vehicle_id → disponibile (false = non disponibile)
+    const vehicleAvailByIdMap = new Map(
+      (vehicleAvailRes.data ?? []).map((v) => [v.vehicle_id as string, v.available as boolean])
+    );
+    // vehicle_id → blocchi orari
+    const vehicleBlocksByIdMap = new Map<string, Array<{ block_from: string; block_to: string }>>();
+    for (const b of vehicleBlocksRes.data ?? []) {
+      const list = vehicleBlocksByIdMap.get(b.vehicle_id as string) ?? [];
+      list.push({ block_from: b.block_from as string, block_to: b.block_to as string });
+      vehicleBlocksByIdMap.set(b.vehicle_id as string, list);
+    }
+
+    const allVehicles = ((vehiclesRes.data ?? []) as VehicleRow[])
       .filter((v) => v.capacity && v.capacity > 0)
       .sort((a, b) => (a.capacity ?? 0) - (b.capacity ?? 0));
-    const drivers = (membershipsRes.data ?? []) as DriverRow[];
+
+    // Filtra veicoli globalmente non disponibili (available=false senza blocchi orari specifici)
+    const vehicles = allVehicles.filter((v) => vehicleAvailByIdMap.get(v.id) !== false);
+
+    const allDrivers = (membershipsRes.data ?? []) as DriverRow[];
+    // Filtra autisti dichiarati non disponibili (available=false)
+    const drivers = allDrivers.filter((d) => {
+      const avail = driverAvailMap.get(d.user_id);
+      return !avail || avail.available;
+    });
+
     const allDayServiceIds = new Set(allServices.map((s) => s.id));
     const assignedMap = new Map(
       (assignmentsRes.data ?? [])
@@ -315,7 +407,14 @@ export async function POST(request: NextRequest) {
 
       for (const [zone, zoneSvcs] of sortedZones) {
         const sorted = routeSort(zoneSvcs, hotelMap, portCoords(ferryServices[0]?.meeting_point), "arrival");
-        const batches = batchByCapacity(sorted.map((s) => ({ id: s.id, pax: s.pax })), maxCap);
+        // Applica anche il limite hotel più restrittivo nella zona
+        const zoneHotelMax = zoneSvcs.reduce<number | null>((min, s) => {
+          const limit = s.hotel_id ? hotelVehicleLimitMap.get(s.hotel_id) : null;
+          if (limit == null) return min;
+          return min == null ? limit : Math.min(min, limit);
+        }, null);
+        const effectiveCap = zoneHotelMax != null ? Math.min(maxCap, zoneHotelMax) : maxCap;
+        const batches = batchByCapacity(sorted.map((s) => ({ id: s.id, pax: s.pax })), effectiveCap);
         for (const batch of batches) {
           drafts.push({
             serviceIds: batch.map((b) => b.id),
@@ -344,7 +443,13 @@ export async function POST(request: NextRequest) {
     for (const [key, depSvcs] of depGroups.entries()) {
       const [pickup, zone] = key.split("|");
       const sorted = routeSort(depSvcs, hotelMap, portCoords(depSvcs[0]?.meeting_point), "departure");
-      const batches = batchByCapacity(sorted.map((s) => ({ id: s.id, pax: s.pax })), maxCap);
+      const groupHotelMax = depSvcs.reduce<number | null>((min, s) => {
+        const limit = s.hotel_id ? hotelVehicleLimitMap.get(s.hotel_id) : null;
+        if (limit == null) return min;
+        return min == null ? limit : Math.min(min, limit);
+      }, null);
+      const effectiveCap = groupHotelMax != null ? Math.min(maxCap, groupHotelMax) : maxCap;
+      const batches = batchByCapacity(sorted.map((s) => ({ id: s.id, pax: s.pax })), effectiveCap);
       for (const batch of batches) {
         drafts.push({
           serviceIds: batch.map((b) => b.id),
@@ -378,6 +483,8 @@ export async function POST(request: NextRequest) {
         );
 
         for (const driver of sorted) {
+          // Verifica disponibilità oraria autista
+          if (!driverAvailableAtTime(driver.user_id, tripMin, driverAvailMap)) continue;
           const times = driverTimes.get(driver.user_id) ?? [];
           const conflict = times.some((t) => Math.abs(t - tripMin) < 75);
           if (!conflict) {
@@ -388,11 +495,13 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Fallback: assegna al meno occupato ignorando conflitti
+        // Fallback: assegna al meno occupato ignorando conflitto orario (ma rispettando disponibilità)
         if (!assigned) {
-          const fallback = [...drivers].sort((a, b) =>
-            (driverTimes.get(a.user_id)?.length ?? 0) - (driverTimes.get(b.user_id)?.length ?? 0)
-          )[0];
+          const fallback = [...drivers]
+            .filter((d) => driverAvailableAtTime(d.user_id, tripMin, driverAvailMap))
+            .sort((a, b) =>
+              (driverTimes.get(a.user_id)?.length ?? 0) - (driverTimes.get(b.user_id)?.length ?? 0)
+            )[0];
           if (fallback) {
             assigned = fallback.user_id;
             const times = driverTimes.get(fallback.user_id) ?? [];
@@ -405,10 +514,47 @@ export async function POST(request: NextRequest) {
       draftAssignments.push({ draft, driverId: assigned });
     }
 
-    // ── 8. Assegna mezzi (il più piccolo che soddisfa i PAX) ─────────────────
+    // ── 8. Assegna mezzi (il più piccolo che soddisfa PAX + vincoli hotel + autista) ─
 
-    const pickVehicle = (pax: number): VehicleRow | null =>
-      vehicles.find((v) => (v.capacity ?? 0) >= pax) ?? vehicles[vehicles.length - 1] ?? null;
+    const pickVehicle = (pax: number, draft: TripDraft, driverId: string | null): VehicleRow | null => {
+      const tripMin = timeToMin(draft.time);
+
+      // Calcola la capienza massima consentita per questo giro:
+      // 1. Limite hotel: minima max_capacity tra tutti gli hotel del giro
+      const hotelIds = draft.serviceIds
+        .map((sid) => allServices.find((s) => s.id === sid)?.hotel_id)
+        .filter((id): id is string => Boolean(id));
+      const hotelMaxCap = hotelIds.reduce<number | null>((min, hid) => {
+        const limit = hotelVehicleLimitMap.get(hid);
+        if (limit == null) return min;
+        return min == null ? limit : Math.min(min, limit);
+      }, null);
+
+      // 2. Limite autista: max_vehicle_capacity del driver
+      const driver = driverId ? allDrivers.find((d) => d.user_id === driverId) : null;
+      const driverMaxCap = driver?.max_vehicle_capacity ?? null;
+
+      // Capienza massima finale: il più restrittivo tra hotel e autista
+      const hardMaxCap = hotelMaxCap != null && driverMaxCap != null
+        ? Math.min(hotelMaxCap, driverMaxCap)
+        : hotelMaxCap ?? driverMaxCap ?? null;
+
+      // Cerca il veicolo più piccolo che soddisfa i PAX, rispetta i limiti e non ha blocchi orari
+      const candidate = vehicles.find((v) => {
+        const cap = v.capacity ?? 0;
+        if (cap < pax) return false;
+        if (hardMaxCap != null && cap > hardMaxCap) return false;
+        if (!vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap)) return false;
+        return true;
+      });
+      if (candidate) return candidate;
+
+      // Fallback: veicolo più grande disponibile (anche se non soddisfa i vincoli di capienza)
+      const fallback = [...vehicles]
+        .filter((v) => vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap))
+        .sort((a, b) => (b.capacity ?? 0) - (a.capacity ?? 0))[0];
+      return fallback ?? null;
+    };
 
     // ── 9. Persisti giri ─────────────────────────────────────────────────────
 
@@ -417,7 +563,7 @@ export async function POST(request: NextRequest) {
     const errors: string[] = [];
 
     for (const { draft, driverId } of draftAssignments) {
-      const vehicle = pickVehicle(draft.pax);
+      const vehicle = pickVehicle(draft.pax, draft, driverId);
 
       const { data: group, error: groupErr } = await auth.admin
         .from("trip_groups")
