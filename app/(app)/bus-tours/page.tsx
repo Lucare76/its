@@ -411,7 +411,7 @@ export default function BusToursPage() {
         </label>
       </FilterBar>
 
-      <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="card p-4">
           <div className="mb-3 flex items-center justify-between">
             <div>
@@ -434,42 +434,60 @@ export default function BusToursPage() {
             <EmptyState title="Nessun lotto linea bus trovato." compact />
           ) : (
             <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+              <table className="min-w-[980px] table-auto whitespace-nowrap text-sm">
+                <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="px-3 py-2">Data / dir</th>
-                    <th className="px-3 py-2">Linea / origine</th>
+                    <th className="px-3 py-2.5">Data</th>
+                    <th className="px-3 py-2.5">Linea</th>
                     <th className="px-3 py-2">Codice</th>
-                    <th className="px-3 py-2">Servizi</th>
-                    <th className="px-3 py-2">Pax</th>
+                    <th className="px-3 py-2">Carico</th>
                     <th className="px-3 py-2">Posti</th>
                     <th className="px-3 py-2">Alert</th>
                     <th className="px-3 py-2">Dettaglio</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {busLots.map((lot) => (
-                    <tr key={lot.key} className="border-t border-slate-100">
-                      <td className="px-3 py-2">{lot.date}<br />{lot.direction === "arrival" ? "Arrivo" : "Partenza"}</td>
-                      <td className="px-3 py-2">{lot.title ?? "Linea bus"}<br /><span className="text-xs text-muted">{lot.bus_city_origin ?? "Origine N/D"}</span></td>
-                      <td className="px-3 py-2">{lot.transport_code ?? "N/D"}</td>
-                      <td className="px-3 py-2">{lot.service_count}</td>
-                      <td className="px-3 py-2">{lot.pax_total}</td>
-                      <td className="px-3 py-2">Cap: {lot.capacity ?? "N/D"}<br />Disp: {lot.remaining_seats ?? "N/D"}</td>
-                      <td className="px-3 py-2">
+                  {busLots.map((lot) => {
+                    const isSelected = selectedLot?.key === lot.key;
+                    return (
+                    <tr key={lot.key} className={`border-t border-slate-100 transition ${isSelected ? "bg-blue-50/70" : "hover:bg-slate-50"}`}>
+                      <td className="px-3 py-2.5">
+                        <div className="font-mono text-xs font-semibold text-slate-700">{lot.date}</div>
+                        <span className={`mt-1 inline-flex rounded px-2 py-0.5 text-[10px] font-bold uppercase ${lot.direction === "arrival" ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"}`}>
+                          {lot.direction === "arrival" ? "Arrivo" : "Partenza"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className="block max-w-[220px] truncate font-semibold text-slate-800" title={lot.title ?? "Linea bus"}>{lot.title ?? "Linea bus"}</span>
+                        <span className="block max-w-[220px] truncate text-xs text-muted" title={lot.bus_city_origin ?? "Origine N/D"}>{lot.bus_city_origin ?? "Origine N/D"}</span>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className="block max-w-[150px] truncate font-mono text-xs text-slate-700" title={lot.transport_code ?? "N/D"}>{lot.transport_code ?? "N/D"}</span>
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-700">
+                        <span className="font-semibold">{lot.service_count}</span> servizi
+                        <br />
+                        <span className="font-semibold">{lot.pax_total}</span> pax
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-700">
+                        <span>Cap: <b>{lot.capacity ?? "N/D"}</b></span>
+                        <br />
+                        <span>Disp: <b>{lot.remaining_seats ?? "N/D"}</b></span>
+                      </td>
+                      <td className="px-3 py-2.5">
                         <div className="flex flex-wrap gap-1">
                           {lot.alerts.length > 0 ? lot.alerts.map((alert) => (
                             <span key={`${lot.key}-${alert.label}`} className={alert.severity === "high" ? "rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700" : alert.severity === "medium" ? "rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700" : "rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-700"}>{alert.label}</span>
                           )) : <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">Disponibile</span>}
                         </div>
                       </td>
-                      <td className="px-3 py-2">
-                        <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={() => setSelectedLotKey(lot.key)}>
-                          Modifica
+                      <td className="px-3 py-2.5">
+                        <button type="button" className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => setSelectedLotKey(lot.key)}>
+                          {isSelected ? "Aperto" : "Modifica"}
                         </button>
                       </td>
                     </tr>
-                  ))}
+                  );})}
                 </tbody>
               </table>
             </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import type { GpsControlRoomEntry } from "@/lib/types";
 
@@ -12,8 +12,25 @@ interface ControlRoomMapProps {
 
 const DEFAULT_CENTER: [number, number] = [40.7395, 13.9124];
 
-const TILE_PROVIDER = "OpenStreetMap";
 const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+const PROTOMAPS_URL =
+  process.env.NEXT_PUBLIC_PROTOMAPS_PM_TILES_URL?.trim() ||
+  process.env.NEXT_PUBLIC_PROTOMAPS_PMtiles_URL?.trim() ||
+  "";
+
+const OPERATING_PORTS = [
+  { name: "Ischia Porto", lat: 40.7329, lng: 13.9477, tone: "#0f766e" },
+  { name: "Casamicciola", lat: 40.7507, lng: 13.9013, tone: "#0369a1" },
+  { name: "Forio", lat: 40.7355, lng: 13.8675, tone: "#7c3aed" },
+  { name: "Lacco Ameno", lat: 40.7580, lng: 13.8887, tone: "#be123c" }
+];
+
+const OPERATING_ZONES = [
+  { name: "Ischia / Barano", lat: 40.7240, lng: 13.9555, radius: 2400, tone: "#0f766e" },
+  { name: "Casamicciola / Lacco", lat: 40.7520, lng: 13.8955, radius: 2300, tone: "#0369a1" },
+  { name: "Forio / Panza", lat: 40.7265, lng: 13.8525, radius: 3200, tone: "#7c3aed" },
+  { name: "Serrara / Barano alto", lat: 40.7072, lng: 13.9142, radius: 2800, tone: "#b45309" }
+];
 
 function escapeHtml(value: string) {
   return value
@@ -136,6 +153,46 @@ function formatTimestamp(ts: string) {
   }
 }
 
+function addOsmLayer(map: L.Map) {
+  return L.tileLayer(TILE_URL, {
+    attribution: "&copy; OpenStreetMap contributors",
+    maxZoom: 19
+  }).addTo(map);
+}
+
+async function pmtilesIsReachable(url: string) {
+  try {
+    const response = await fetch(url, { method: "HEAD", cache: "no-store" });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function addBaseLayer(map: L.Map): Promise<{ label: string; layer: L.Layer }> {
+  if (!PROTOMAPS_URL) {
+    return { label: "OSM fallback • Protomaps-ready", layer: addOsmLayer(map) };
+  }
+
+  const reachable = await pmtilesIsReachable(PROTOMAPS_URL);
+  if (!reachable) {
+    return { label: "OSM fallback • PMTiles non trovato", layer: addOsmLayer(map) };
+  }
+
+  const { leafletLayer } = await import("protomaps-leaflet");
+  const layer = leafletLayer({
+    attribution: '<a href="https://protomaps.com">Protomaps</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
+    flavor: "light",
+    lang: "it",
+    maxDataZoom: 14,
+    maxZoom: 19,
+    url: PROTOMAPS_URL
+  }) as unknown as L.Layer;
+
+  layer.addTo(map);
+  return { label: "Protomaps self-hosted", layer };
+}
+
 /**
  * Distribuisce i mezzi molto vicini su piccole corone concentriche
  * per evitare pile di marker nello stesso punto.
@@ -183,9 +240,12 @@ function spreadOverlapping(items: GpsControlRoomEntry[]): Array<GpsControlRoomEn
 }
 
 export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMapProps) {
+  const [baseLayerLabel, setBaseLayerLabel] = useState(PROTOMAPS_URL ? "Protomaps in caricamento" : "OSM fallback • Protomaps-ready");
+  const [operationalLayerEnabled, setOperationalLayerEnabled] = useState(true);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markersRef = useRef<L.LayerGroup | null>(null);
+  const opsLayerRef = useRef<L.LayerGroup | null>(null);
   const fittedRef = useRef(false);
   const summary = entries.reduce(
     (acc, entry) => {
@@ -201,17 +261,29 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
+    let disposed = false;
+    let baseLayer: L.Layer | null = null;
     const map = L.map(containerRef.current, { zoomControl: true }).setView(DEFAULT_CENTER, 12);
-    L.tileLayer(TILE_URL, {
-      attribution: "&copy; OpenStreetMap contributors",
-      maxZoom: 19
-    }).addTo(map);
     mapRef.current = map;
     markersRef.current = L.layerGroup().addTo(map);
+    opsLayerRef.current = L.layerGroup().addTo(map);
+
+    void addBaseLayer(map).then((result) => {
+      if (disposed) {
+        result.layer.remove();
+        return;
+      }
+      baseLayer = result.layer;
+      setBaseLayerLabel(result.label);
+    });
 
     return () => {
+      disposed = true;
       markersRef.current?.clearLayers();
+      opsLayerRef.current?.clearLayers();
+      baseLayer?.remove();
       markersRef.current = null;
+      opsLayerRef.current = null;
       mapRef.current = null;
       fittedRef.current = false;
       map.off();
@@ -273,6 +345,79 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
   }, [entries, onSelect, selectedId]);
 
   useEffect(() => {
+    const layer = opsLayerRef.current;
+    if (!layer) return;
+    layer.clearLayers();
+    if (!operationalLayerEnabled) return;
+
+    OPERATING_ZONES.forEach((zone) => {
+      L.circle([zone.lat, zone.lng], {
+        radius: zone.radius,
+        color: zone.tone,
+        weight: 1.4,
+        opacity: 0.38,
+        fillColor: zone.tone,
+        fillOpacity: 0.045,
+        dashArray: "7 8",
+        interactive: false
+      }).addTo(layer);
+
+      L.marker([zone.lat, zone.lng], {
+        interactive: false,
+        icon: L.divIcon({
+          className: "",
+          html: `
+            <div style="
+              border:1px solid rgba(15,23,42,0.12);
+              background:rgba(255,255,255,0.86);
+              color:#334155;
+              padding:3px 8px;
+              border-radius:999px;
+              font:700 10px ui-sans-serif,system-ui,sans-serif;
+              box-shadow:0 8px 18px rgba(15,23,42,0.10);
+              white-space:nowrap;
+            ">${escapeHtml(zone.name)}</div>
+          `,
+          iconSize: [120, 22],
+          iconAnchor: [60, 11]
+        })
+      }).addTo(layer);
+    });
+
+    OPERATING_PORTS.forEach((port) => {
+      L.circleMarker([port.lat, port.lng], {
+        radius: 7,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: port.tone,
+        fillOpacity: 1
+      }).addTo(layer);
+
+      L.marker([port.lat, port.lng], {
+        interactive: false,
+        icon: L.divIcon({
+          className: "",
+          html: `
+            <div style="
+              transform:translate(12px,-12px);
+              border:1px solid rgba(15,23,42,0.12);
+              background:rgba(255,255,255,0.94);
+              color:${port.tone};
+              padding:3px 8px;
+              border-radius:8px;
+              font:800 10px ui-sans-serif,system-ui,sans-serif;
+              box-shadow:0 8px 18px rgba(15,23,42,0.12);
+              white-space:nowrap;
+            ">${escapeHtml(port.name)}</div>
+          `,
+          iconSize: [120, 24],
+          iconAnchor: [0, 12]
+        })
+      }).addTo(layer);
+    });
+  }, [operationalLayerEnabled]);
+
+  useEffect(() => {
     const map = mapRef.current;
     if (!map || !selectedId) return;
     const entry = entries.find((item) => item.radius_vehicle_id === selectedId);
@@ -289,8 +434,21 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Fleet Control</p>
             <h3 className="mt-1 text-lg font-semibold text-slate-950">Mappa live mezzi</h3>
           </div>
-          <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
-            Leaflet • {TILE_PROVIDER}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setOperationalLayerEnabled((value) => !value)}
+              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                operationalLayerEnabled
+                  ? "border-teal-200 bg-teal-50 text-teal-700"
+                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              Layer operativo {operationalLayerEnabled ? "on" : "off"}
+            </button>
+            <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
+              {baseLayerLabel}
+            </div>
           </div>
         </div>
       </div>
@@ -298,7 +456,7 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
         <div
           ref={containerRef}
           style={{ height: "calc(100vh - 280px)", minHeight: "560px", width: "100%" }}
-          className="bg-[#eef3f7] [&_.leaflet-control-container]:z-[450] [&_.leaflet-control-zoom]:!border-0 [&_.leaflet-control-zoom]:!shadow-[0_10px_24px_rgba(15,23,42,0.14)] [&_.leaflet-control-zoom_a]:!text-slate-700 [&_.leaflet-control-zoom_a]:!h-10 [&_.leaflet-control-zoom_a]:!w-10 [&_.leaflet-control-zoom_a]:!leading-[38px] [&_.leaflet-control-zoom_a]:!border-slate-200 [&_.leaflet-control-zoom_a]:!bg-white/95 [&_.leaflet-control-zoom_a]:hover:!bg-slate-50 [&_.leaflet-pane.leaflet-tile-pane]:[filter:saturate(0.92)_contrast(1.03)_brightness(1.02)] [&_.leaflet-popup-content-wrapper]:!rounded-2xl [&_.leaflet-popup-content-wrapper]:!shadow-[0_18px_45px_rgba(15,23,42,0.18)] [&_.leaflet-popup-tip]:!shadow-none"
+          className="bg-[#eef3f7] [&_.leaflet-control-attribution]:!rounded-tl-lg [&_.leaflet-control-attribution]:!bg-white/80 [&_.leaflet-control-attribution]:!text-[10px] [&_.leaflet-control-container]:z-[450] [&_.leaflet-control-zoom]:!border-0 [&_.leaflet-control-zoom]:!shadow-[0_10px_24px_rgba(15,23,42,0.14)] [&_.leaflet-control-zoom_a]:!text-slate-700 [&_.leaflet-control-zoom_a]:!h-10 [&_.leaflet-control-zoom_a]:!w-10 [&_.leaflet-control-zoom_a]:!leading-[38px] [&_.leaflet-control-zoom_a]:!border-slate-200 [&_.leaflet-control-zoom_a]:!bg-white/95 [&_.leaflet-control-zoom_a]:hover:!bg-slate-50 [&_.leaflet-pane.leaflet-tile-pane]:[filter:saturate(0.78)_contrast(1.02)_brightness(1.06)] [&_.leaflet-popup-content-wrapper]:!rounded-2xl [&_.leaflet-popup-content-wrapper]:!shadow-[0_18px_45px_rgba(15,23,42,0.18)] [&_.leaflet-popup-tip]:!shadow-none"
         />
 
         <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-[linear-gradient(180deg,rgba(255,255,255,0.68)_0%,rgba(255,255,255,0)_100%)]" />
