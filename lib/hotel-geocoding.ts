@@ -82,6 +82,21 @@ export type HotelGeoQuality = {
   distanceFromZoneKm: number | null;
 };
 
+export type HotelGeoStatus = "missing" | "generic" | "approximate" | "verified";
+export type HotelGeoSource = "manual" | "google" | "nominatim" | "import" | "unknown";
+export type HotelGeoAccuracy = "unknown" | "area" | "street" | "rooftop";
+
+export type HotelGeoEvaluation = HotelGeoQuality & {
+  status: HotelGeoStatus;
+  source: HotelGeoSource;
+  accuracy: HotelGeoAccuracy;
+  label: string;
+  helper: string;
+  tooltipLines: string[];
+  canBeVerified: boolean;
+  outsideIschia: boolean;
+};
+
 export function isWithinIschiaBounds(lat?: number | null, lng?: number | null) {
   if (lat == null || lng == null) return false;
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
@@ -91,6 +106,12 @@ export function isWithinIschiaBounds(lat?: number | null, lng?: number | null) {
 export function isIncompleteHotelAddress(address?: string | null) {
   const trimmed = String(address ?? "").trim().toLowerCase();
   return trimmed.length < 6 || trimmed === "ischia";
+}
+
+export function hasPreciseAddress(address?: string | null) {
+  const trimmed = String(address ?? "").trim();
+  if (isIncompleteHotelAddress(trimmed)) return false;
+  return /\d/.test(trimmed) || /\b(via|viale|corso|piazza|strada|lungomare|provinciale|ss|sp)\b/i.test(trimmed);
 }
 
 export function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
@@ -173,4 +194,116 @@ export function hotelGeoQuality(input: {
   const confidence = routeUsable && issues.length === 0 ? "ok" : routeUsable ? "warning" : "blocked";
 
   return { issues, confidence, routeUsable, inferredZone, distanceFromZoneKm };
+}
+
+function normalizeGeoStatus(value?: string | null): HotelGeoStatus | null {
+  if (value === "missing" || value === "generic" || value === "approximate" || value === "verified") return value;
+  return null;
+}
+
+function normalizeGeoSource(value?: string | null): HotelGeoSource {
+  if (value === "manual" || value === "google" || value === "nominatim" || value === "import" || value === "unknown") return value;
+  return "unknown";
+}
+
+function normalizeGeoAccuracy(value?: string | null): HotelGeoAccuracy {
+  if (value === "unknown" || value === "area" || value === "street" || value === "rooftop") return value;
+  return "unknown";
+}
+
+function geoStatusCopy(status: HotelGeoStatus) {
+  switch (status) {
+    case "missing":
+      return { label: "Geo mancante", helper: "nessuna coordinata" };
+    case "generic":
+      return { label: "Geo da correggere", helper: "coordinate generiche" };
+    case "approximate":
+      return { label: "Geo approssimativa", helper: "controllo consigliato" };
+    case "verified":
+      return { label: "Geo verificata", helper: "posizione confermata" };
+  }
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "non confermata";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "non confermata";
+  return date.toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" });
+}
+
+export function evaluateHotelGeo(input: {
+  address?: string | null;
+  zone?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  geo_status?: string | null;
+  geo_source?: string | null;
+  geo_accuracy?: string | null;
+  geo_verified_at?: string | null;
+  geo_verified_by?: string | null;
+  geo_notes?: string | null;
+  place_id?: string | null;
+  formatted_address?: string | null;
+}): HotelGeoEvaluation {
+  const quality = hotelGeoQuality(input);
+  const source = normalizeGeoSource(input.geo_source);
+  const accuracy = normalizeGeoAccuracy(input.geo_accuracy);
+  const storedStatus = normalizeGeoStatus(input.geo_status);
+  const missing = quality.issues.includes("missing_coordinates");
+  const outsideIschia = quality.issues.includes("outside_ischia");
+  const generic =
+    quality.issues.includes("default_centroid") ||
+    quality.issues.includes("zone_coordinate_mismatch") ||
+    quality.issues.includes("incomplete_address") ||
+    accuracy === "area";
+  const hasReliablePlace = Boolean(input.place_id && String(input.place_id).trim().length > 2);
+  const manuallyVerified = storedStatus === "verified" && source === "manual" && accuracy === "rooftop" && Boolean(input.geo_verified_at);
+  const trustedGeocoderVerified =
+    storedStatus === "verified" &&
+    (source === "google" || source === "manual") &&
+    accuracy === "rooftop" &&
+    hasReliablePlace &&
+    Boolean(input.geo_verified_at);
+
+  let status: HotelGeoStatus;
+  if (missing || outsideIschia) {
+    status = missing ? "missing" : "generic";
+  } else if (manuallyVerified || trustedGeocoderVerified) {
+    status = "verified";
+  } else if (generic) {
+    status = "generic";
+  } else if (storedStatus === "approximate" || storedStatus === "generic") {
+    status = storedStatus;
+  } else if (hasPreciseAddress(input.address)) {
+    status = "approximate";
+  } else {
+    status = "generic";
+  }
+
+  if (outsideIschia && status === "verified") {
+    status = "generic";
+  }
+
+  const copy = geoStatusCopy(status);
+  const tooltipLines = [
+    `Fonte: ${source}`,
+    `Precisione: ${accuracy}`,
+    `Verifica: ${formatDateTime(input.geo_verified_at)}`,
+    input.geo_verified_by ? `Verificato da: ${input.geo_verified_by}` : null,
+    input.formatted_address ? `Indirizzo: ${input.formatted_address}` : null,
+    input.geo_notes ? `Note: ${input.geo_notes}` : null,
+    outsideIschia ? "Alert: coordinate fuori Ischia" : null
+  ].filter((line): line is string => Boolean(line));
+
+  return {
+    ...quality,
+    status,
+    source,
+    accuracy,
+    label: copy.label,
+    helper: outsideIschia ? "coordinate fuori Ischia" : copy.helper,
+    tooltipLines,
+    canBeVerified: !missing && !outsideIschia,
+    outsideIschia
+  };
 }

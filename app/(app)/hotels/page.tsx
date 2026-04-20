@@ -1,7 +1,10 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { HOTEL_ZONES, hotelGeoQuality, inferZoneFromText, isIncompleteHotelAddress, isMissingCoordinates, zoneCentroids } from "@/lib/hotel-geocoding";
+import L from "leaflet";
+import { HotelGeoBadge } from "@/components/hotel-geo-badge";
+import { evaluateHotelGeo, HOTEL_ZONES, hotelGeoQuality, inferZoneFromText, isIncompleteHotelAddress, isMissingCoordinates, zoneCentroids } from "@/lib/hotel-geocoding";
+import type { HotelGeoAccuracy, HotelGeoSource, HotelGeoStatus } from "@/lib/types";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 interface HotelListItem {
@@ -21,6 +24,14 @@ interface HotelListItem {
   email: string | null;
   phone: string | null;
   contact_name: string | null;
+  geo_status: HotelGeoStatus;
+  geo_source: HotelGeoSource;
+  geo_accuracy: HotelGeoAccuracy;
+  geo_verified_at: string | null;
+  geo_verified_by: string | null;
+  geo_notes: string | null;
+  place_id: string | null;
+  formatted_address: string | null;
 }
 
 interface HotelAlias {
@@ -60,9 +71,23 @@ type HotelEditDraft = {
   contact_name: string;
 };
 
-type HotelListFilter = "all" | "geo" | "address" | "inactive";
+type HotelListFilter = "all" | "corrections" | "verified" | "missing" | "inactive";
+
+type GeoCorrectionDraft = {
+  hotel: HotelListItem;
+  query: string;
+  lat: string;
+  lng: string;
+  formatted_address: string;
+  notes: string;
+  startedFromGenericCoords: boolean;
+  autoLookupDone: boolean;
+  suggestionLabel: string | null;
+};
 
 const PAGE_SIZE = 20;
+const HOTEL_SELECT_FIELDS =
+  "id,name,zone,address,city,lat,lng,small_vehicle_only,small_vehicle_max_pax,source,source_osm_type,source_osm_id,is_active,email,phone,contact_name,geo_status,geo_source,geo_accuracy,geo_verified_at,geo_verified_by,geo_notes,place_id,formatted_address";
 
 function toEditDraft(hotel: HotelListItem): HotelEditDraft {
   return {
@@ -87,9 +112,9 @@ function formatCoord(value: number | null) {
 
 function parseOptionalCoord(value: string) {
   const trimmed = value.trim().replace(",", ".");
-  if (!trimmed) return 0;
+  if (!trimmed) return null;
   const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) ? parsed : "invalid";
 }
 
 function matchesHotelSearch(hotel: HotelListItem, term: string) {
@@ -125,6 +150,79 @@ function scoreMergeCandidate(leftName: string, rightName: string) {
   return Math.round((shared.length / Math.max(leftTokens.length, 1)) * 88);
 }
 
+function GeoCorrectionMap({
+  lat,
+  lng,
+  onChange
+}: {
+  lat: number;
+  lng: number;
+  onChange: (coords: { lat: number; lng: number }) => void;
+}) {
+  const mapId = "hotel-geo-correction-map";
+
+  useEffect(() => {
+    const element = document.getElementById(mapId);
+    if (!element) return;
+
+    const correctionPin = L.divIcon({
+      className: "",
+      html: `
+        <div style="
+          width:34px;
+          height:34px;
+          transform:translate(-17px,-34px);
+          filter:drop-shadow(0 10px 12px rgba(15,23,42,0.28));
+          position:relative;
+        ">
+          <div style="
+            width:34px;
+            height:34px;
+            border-radius:18px 18px 18px 4px;
+            transform:rotate(-45deg);
+            background:#0f172a;
+            border:3px solid #ffffff;
+            box-shadow:0 0 0 2px rgba(14,165,233,0.55);
+          "></div>
+          <div style="
+            position:absolute;
+            left:9px;
+            top:9px;
+            width:16px;
+            height:16px;
+            border-radius:999px;
+            background:#38bdf8;
+            border:3px solid #ffffff;
+          "></div>
+        </div>
+      `,
+      iconSize: [34, 34],
+      iconAnchor: [0, 0]
+    });
+
+    const map = L.map(element, { zoomControl: true }).setView([lat, lng], 17);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors",
+      maxZoom: 19
+    }).addTo(map);
+
+    const marker = L.marker([lat, lng], { draggable: true, icon: correctionPin, zIndexOffset: 1000 }).addTo(map);
+    marker.on("dragend", () => {
+      const position = marker.getLatLng();
+      onChange({ lat: position.lat, lng: position.lng });
+    });
+
+    setTimeout(() => map.invalidateSize(), 120);
+
+    return () => {
+      map.off();
+      map.remove();
+    };
+  }, [lat, lng, onChange]);
+
+  return <div id={mapId} className="h-[320px] w-full rounded-xl border border-slate-200 bg-slate-100" />;
+}
+
 export default function HotelsPage() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [role, setRole] = useState<string | null>(null);
@@ -150,7 +248,9 @@ export default function HotelsPage() {
   const [aliasHotelId, setAliasHotelId] = useState("");
   const [aliasValue, setAliasValue] = useState("");
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [listFilter, setListFilter] = useState<HotelListFilter>("geo");
+  const [listFilter, setListFilter] = useState<HotelListFilter>("corrections");
+  const [geoCorrection, setGeoCorrection] = useState<GeoCorrectionDraft | null>(null);
+  const [geoSearching, setGeoSearching] = useState(false);
   const [createDraft, setCreateDraft] = useState<HotelEditDraft>({
     name: "", address: "", city: "Ischia", zone: "Ischia Porto", lat: "", lng: "", small_vehicle_only: false, small_vehicle_max_pax: "", is_active: true, email: "", phone: "", contact_name: ""
   });
@@ -166,7 +266,7 @@ export default function HotelsPage() {
 
       let query = supabase
         .from("hotels")
-        .select("id,name,zone,address,city,lat,lng,small_vehicle_only,small_vehicle_max_pax,source,source_osm_type,source_osm_id,is_active,email,phone,contact_name", { count: "exact" })
+        .select(HOTEL_SELECT_FIELDS, { count: "exact" })
         .eq("tenant_id", currentTenantId)
         .order("name", { ascending: true })
         .range(offset, nextLimit);
@@ -210,7 +310,7 @@ export default function HotelsPage() {
     const [{ data: allHotels, error: hotelsError }, { data: services, error: servicesError }] = await Promise.all([
       supabase
         .from("hotels")
-        .select("id,name,zone,address,city,lat,lng,small_vehicle_only,small_vehicle_max_pax,source,source_osm_type,source_osm_id,is_active,email,phone,contact_name")
+        .select(HOTEL_SELECT_FIELDS)
         .eq("tenant_id", currentTenantId)
         .order("name", { ascending: true }),
       supabase
@@ -294,8 +394,10 @@ export default function HotelsPage() {
     const base = listFilter === "all" ? items : allHotelsForMerge;
     return base.filter((hotel) => {
       if (!matchesHotelSearch(hotel, search)) return false;
-      if (listFilter === "geo") return hotelGeoQuality(hotel).routeUsable === false;
-      if (listFilter === "address") return isIncompleteHotelAddress(hotel.address);
+      const geo = evaluateHotelGeo(hotel);
+      if (listFilter === "corrections") return geo.status === "generic" || geo.status === "approximate" || geo.status === "missing";
+      if (listFilter === "verified") return geo.status === "verified";
+      if (listFilter === "missing") return geo.status === "missing";
       if (listFilter === "inactive") return !hotel.is_active;
       return true;
     });
@@ -322,8 +424,20 @@ export default function HotelsPage() {
     }
     return map;
   }, [allHotelsForMerge]);
-  const geoBlockedCount = metricsHotels.filter((hotel) => (geoQualityByHotelId.get(hotel.id) ?? hotelGeoQuality(hotel)).routeUsable === false).length;
-  const geoWarningCount = metricsHotels.filter((hotel) => (geoQualityByHotelId.get(hotel.id) ?? hotelGeoQuality(hotel)).confidence === "warning").length;
+  const geoEvaluationByHotelId = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof evaluateHotelGeo>>();
+    for (const hotel of allHotelsForMerge) {
+      map.set(hotel.id, evaluateHotelGeo(hotel));
+    }
+    return map;
+  }, [allHotelsForMerge]);
+  const geoMissingCount = metricsHotels.filter((hotel) => (geoEvaluationByHotelId.get(hotel.id) ?? evaluateHotelGeo(hotel)).status === "missing").length;
+  const geoVerifiedCount = metricsHotels.filter((hotel) => (geoEvaluationByHotelId.get(hotel.id) ?? evaluateHotelGeo(hotel)).status === "verified").length;
+  const geoToFixCount = metricsHotels.filter((hotel) => {
+    const status = (geoEvaluationByHotelId.get(hotel.id) ?? evaluateHotelGeo(hotel)).status;
+    return status === "missing" || status === "generic" || status === "approximate";
+  }).length;
+  const geoWarningCount = metricsHotels.filter((hotel) => (geoEvaluationByHotelId.get(hotel.id) ?? evaluateHotelGeo(hotel)).status === "approximate").length;
   const geoIssueLabels: Record<string, string> = {
     missing_coordinates: "coordinate mancanti",
     outside_ischia: "fuori isola",
@@ -423,8 +537,8 @@ export default function HotelsPage() {
         return {
           id: hotel.id,
           zone: nextZone,
-          lat: isMissingCoordinates(hotel.lat, hotel.lng) ? 0 : hotel.lat,
-          lng: isMissingCoordinates(hotel.lat, hotel.lng) ? 0 : hotel.lng
+          lat: isMissingCoordinates(hotel.lat, hotel.lng) ? null : hotel.lat,
+          lng: isMissingCoordinates(hotel.lat, hotel.lng) ? null : hotel.lng
         };
       });
 
@@ -438,7 +552,15 @@ export default function HotelsPage() {
     for (const row of updates) {
       const { error: updateError } = await supabase
         .from("hotels")
-        .update({ zone: row.zone, lat: row.lat, lng: row.lng, updated_at: new Date().toISOString() })
+        .update({
+          zone: row.zone,
+          lat: row.lat,
+          lng: row.lng,
+          geo_status: row.lat == null || row.lng == null ? "missing" : "approximate",
+          geo_source: "unknown",
+          geo_accuracy: row.lat == null || row.lng == null ? "unknown" : "street",
+          updated_at: new Date().toISOString()
+        })
         .eq("id", row.id)
         .eq("tenant_id", tenantId);
       if (!updateError) updated += 1;
@@ -604,14 +726,25 @@ export default function HotelsPage() {
       const payload = {
         zone: nextZone,
         address: row.address || target.address,
-        lat: Number.isFinite(parsedLat) ? Number(parsedLat) : isMissingCoordinates(target.lat, target.lng) ? 0 : target.lat,
-        lng: Number.isFinite(parsedLng) ? Number(parsedLng) : isMissingCoordinates(target.lat, target.lng) ? 0 : target.lng,
+        lat: Number.isFinite(parsedLat) ? Number(parsedLat) : isMissingCoordinates(target.lat, target.lng) ? null : target.lat,
+        lng: Number.isFinite(parsedLng) ? Number(parsedLng) : isMissingCoordinates(target.lat, target.lng) ? null : target.lng,
+        geo_source: "import" as const,
+        geo_accuracy: Number.isFinite(parsedLat) && Number.isFinite(parsedLng) ? "street" as const : "unknown" as const,
         updated_at: new Date().toISOString()
       };
+      const evaluation = evaluateHotelGeo({
+        address: payload.address,
+        zone: payload.zone,
+        lat: payload.lat,
+        lng: payload.lng,
+        geo_source: payload.geo_source,
+        geo_accuracy: payload.geo_accuracy
+      });
+      const updatePayload = { ...payload, geo_status: evaluation.status };
 
       const { error: updateError } = await supabase
         .from("hotels")
-        .update(payload)
+        .update(updatePayload)
         .eq("id", target.id)
         .eq("tenant_id", tenantId);
 
@@ -754,6 +887,118 @@ export default function HotelsPage() {
     setError("");
   };
 
+  const openGeoCorrection = (hotel: HotelListItem) => {
+    const geoEvaluation = evaluateHotelGeo(hotel);
+    const fallbackZone = inferZoneFromText(`${hotel.zone ?? ""} ${hotel.city ?? ""} ${hotel.address ?? ""}`) ?? "Ischia Porto";
+    const fallback = zoneCentroids[fallbackZone as keyof typeof zoneCentroids];
+    const useFallback = geoEvaluation.status === "missing" || geoEvaluation.status === "generic";
+    setGeoCorrection({
+      hotel,
+      query: [hotel.name, hotel.address, hotel.city || hotel.zone].filter(Boolean).join(", "),
+      lat: String(useFallback ? fallback.lat : hotel.lat ?? fallback.lat),
+      lng: String(useFallback ? fallback.lng : hotel.lng ?? fallback.lng),
+      formatted_address: hotel.formatted_address ?? hotel.address,
+      notes: hotel.geo_notes ?? "",
+      startedFromGenericCoords: useFallback,
+      autoLookupDone: !useFallback,
+      suggestionLabel: null
+    });
+    setMessage("");
+    setError("");
+  };
+
+  const searchGeoCorrectionAddress = useCallback(async (options?: { automatic?: boolean }) => {
+    if (!geoCorrection) return;
+    setGeoSearching(true);
+    setError("");
+    try {
+      const { data: sessionData } = await supabase!.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error("Sessione non valida. Rifai login.");
+
+      const query = `${geoCorrection.query}, Ischia, Italia`;
+      const response = await fetch(`/api/admin/hotels/geo-lookup?q=${encodeURIComponent(query)}`, {
+        headers: { authorization: `Bearer ${token}` }
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        error?: string;
+        results?: Array<{ lat: number; lng: number; label: string }>;
+      } | null;
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error ?? "Ricerca indirizzo non riuscita.");
+
+      const first = payload.results?.[0];
+      const lat = Number(first?.lat);
+      const lng = Number(first?.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        setGeoCorrection((current) => current ? { ...current, autoLookupDone: true, suggestionLabel: null } : current);
+        if (!options?.automatic) setError("Nessun risultato affidabile trovato. Sposta il pin manualmente.");
+        return;
+      }
+      setGeoCorrection((current) => current ? {
+        ...current,
+        lat: String(lat),
+        lng: String(lng),
+        formatted_address: first?.label ?? current.formatted_address,
+        startedFromGenericCoords: false,
+        autoLookupDone: true,
+        suggestionLabel: first?.label ?? "Posizione suggerita dalla mappa"
+      } : current);
+    } catch (searchError) {
+      setGeoCorrection((current) => current ? { ...current, autoLookupDone: true, suggestionLabel: null } : current);
+      if (!options?.automatic) setError(searchError instanceof Error ? searchError.message : "Ricerca indirizzo non riuscita.");
+    } finally {
+      setGeoSearching(false);
+    }
+  }, [geoCorrection]);
+
+  useEffect(() => {
+    if (!geoCorrection || geoCorrection.autoLookupDone || !geoCorrection.startedFromGenericCoords || geoSearching) return;
+    void searchGeoCorrectionAddress({ automatic: true });
+  }, [geoCorrection, geoSearching, searchGeoCorrectionAddress]);
+
+  const saveGeoCorrection = async () => {
+    if (!tenantId || !supabase || !geoCorrection) return;
+    const lat = Number(geoCorrection.lat.replace(",", "."));
+    const lng = Number(geoCorrection.lng.replace(",", "."));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      setError("Coordinate non valide.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error("Sessione non valida. Rifai login.");
+
+      const response = await fetch(`/api/admin/hotels/${geoCorrection.hotel.id}/verify-geo`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          lat,
+          lng,
+          formatted_address: geoCorrection.formatted_address,
+          geo_notes: geoCorrection.notes
+        })
+      });
+      const payload = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error ?? "Salvataggio geo non riuscito.");
+      setGeoCorrection(null);
+      setMessage("Posizione hotel verificata.");
+      await Promise.all([loadHotels(tenantId, search, 0, false), loadMergeContext(tenantId)]);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Salvataggio geo non riuscito.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateGeoCorrectionPin = useCallback((coords: { lat: number; lng: number }) => {
+    setGeoCorrection((current) => current ? { ...current, lat: coords.lat.toFixed(7), lng: coords.lng.toFixed(7) } : current);
+  }, []);
+
   const saveEdit = async (hotelId: string) => {
     if (!tenantId || !supabase || !editDraft) return;
     setSaving(true);
@@ -762,7 +1007,7 @@ export default function HotelsPage() {
     const parsedLat = parseOptionalCoord(editDraft.lat);
     const parsedLng = parseOptionalCoord(editDraft.lng);
     const parsedSmallVehicleMaxPax = editDraft.small_vehicle_max_pax ? Number(editDraft.small_vehicle_max_pax) : null;
-    if (parsedLat === null || parsedLng === null) {
+    if (parsedLat === "invalid" || parsedLng === "invalid") {
       setSaving(false);
       setError("Coordinate non valide. Puoi anche lasciarle vuote e salvare solo l'indirizzo.");
       return;
@@ -787,6 +1032,25 @@ export default function HotelsPage() {
       email: editDraft.email.trim() || null,
       phone: editDraft.phone.trim() || null,
       contact_name: editDraft.contact_name.trim() || null,
+      ...(() => {
+        const nextGeoAccuracy: HotelGeoAccuracy = parsedLat == null || parsedLng == null ? "unknown" : "street";
+        const evaluation = evaluateHotelGeo({
+          address: editDraft.address.trim(),
+          zone: editDraft.zone.trim() || "Ischia Porto",
+          lat: parsedLat,
+          lng: parsedLng,
+          geo_status: "approximate",
+          geo_source: "manual",
+          geo_accuracy: nextGeoAccuracy
+        });
+        return {
+          geo_status: evaluation.status,
+          geo_source: "manual" as const,
+          geo_accuracy: nextGeoAccuracy,
+          geo_verified_at: null,
+          geo_verified_by: null
+        };
+      })(),
       updated_at: new Date().toISOString()
     };
 
@@ -823,7 +1087,7 @@ export default function HotelsPage() {
     const parsedLng = parseOptionalCoord(createDraft.lng);
     const parsedSmallVehicleMaxPax = createDraft.small_vehicle_max_pax ? Number(createDraft.small_vehicle_max_pax) : null;
     const zone = createDraft.zone || "Ischia Porto";
-    if (parsedLat === null || parsedLng === null) {
+    if (parsedLat === "invalid" || parsedLng === "invalid") {
       setSaving(false);
       setError("Coordinate non valide. Puoi lasciarle vuote e farle calcolare dal geocoding.");
       return;
@@ -848,7 +1112,24 @@ export default function HotelsPage() {
       email: createDraft.email.trim() || null,
       phone: createDraft.phone.trim() || null,
       contact_name: createDraft.contact_name.trim() || null,
-      source: "manual"
+      source: "manual",
+      ...(() => {
+        const nextGeoAccuracy: HotelGeoAccuracy = parsedLat == null || parsedLng == null ? "unknown" : "street";
+        const evaluation = evaluateHotelGeo({
+          address: createDraft.address.trim() || "Ischia",
+          zone,
+          lat: parsedLat,
+          lng: parsedLng,
+          geo_source: "manual",
+          geo_accuracy: nextGeoAccuracy
+        });
+        return {
+          geo_status: evaluation.status,
+          geo_source: "manual" as const,
+          geo_accuracy: nextGeoAccuracy,
+          formatted_address: createDraft.address.trim() || null
+        };
+      })()
     });
     setSaving(false);
     if (insertError) { setError(insertError.message); return; }
@@ -892,12 +1173,12 @@ export default function HotelsPage() {
           <div className="rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">Dati da completare</p>
             <p className="mt-2 text-3xl font-semibold text-amber-900">{missingCoordsCount + incompleteAddressCount}</p>
-            <p className="mt-1 text-sm text-amber-800">{missingCoordsCount} con coordinate da verificare, {incompleteAddressCount} con indirizzo da completare.</p>
+            <p className="mt-1 text-sm text-amber-800">{geoMissingCount} senza coordinate, {incompleteAddressCount} con indirizzo da completare.</p>
           </div>
           <div className="rounded-2xl border border-rose-200 bg-rose-50/70 px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-rose-700">Geo bloccanti</p>
-            <p className="mt-2 text-3xl font-semibold text-rose-900">{geoBlockedCount}</p>
-            <p className="mt-1 text-sm text-rose-800">{geoWarningCount} altri hotel hanno dati deboli ma utilizzabili.</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-rose-700">Geo da correggere</p>
+            <p className="mt-2 text-3xl font-semibold text-rose-900">{geoToFixCount}</p>
+            <p className="mt-1 text-sm text-rose-800">{geoWarningCount} approssimativi, {geoVerifiedCount} già verificati.</p>
           </div>
           <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-indigo-700">Accesso solo bus piccolo</p>
@@ -908,8 +1189,9 @@ export default function HotelsPage() {
 
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
           {([
-            { key: "geo", label: `Da correggere (${geoBlockedCount})` },
-            { key: "address", label: `Indirizzo mancante (${incompleteAddressCount})` },
+            { key: "corrections", label: `Da correggere (${geoToFixCount})` },
+            { key: "verified", label: `Verificati (${geoVerifiedCount})` },
+            { key: "missing", label: `Mancanti (${geoMissingCount})` },
             { key: "all", label: "Tutti" },
             { key: "inactive", label: "Disattivi" },
           ] as Array<{ key: HotelListFilter; label: string }>).map((filter) => (
@@ -1210,6 +1492,7 @@ export default function HotelsPage() {
                     const hasMissingCoords = isMissingCoordinates(hotel.lat, hotel.lng);
                     const hasWeakAddress = isIncompleteHotelAddress(hotel.address);
                     const geoQuality = geoQualityByHotelId.get(hotel.id) ?? hotelGeoQuality(hotel);
+                    const geoEvaluation = geoEvaluationByHotelId.get(hotel.id) ?? evaluateHotelGeo(hotel);
                     const geoIssues = geoQuality.issues.map((issue) => geoIssueLabels[issue] ?? issue);
                     if (isEditing) {
                       return (
@@ -1245,6 +1528,9 @@ export default function HotelsPage() {
                             <td className="px-3 py-3">
                               <span className={hotel.is_active ? "text-emerald-700" : "text-slate-500"}>{hotel.is_active ? "Attivo" : "Disattivo"}</span>
                               <div className="text-xs font-semibold text-rose-700">Modifica aperta</div>
+                              <div className="mt-2">
+                                <HotelGeoBadge evaluation={geoEvaluation} />
+                              </div>
                             </td>
                             <td className="px-3 py-3">
                               <div className="flex flex-wrap gap-2">
@@ -1602,13 +1888,9 @@ export default function HotelsPage() {
                           ) : (
                             <span className="text-slate-500">Disattivo</span>
                           )}
-                          {geoQuality.confidence === "ok" ? (
-                            <div className="text-xs text-emerald-700">Geo ok</div>
-                          ) : (
-                            <div className={geoQuality.routeUsable ? "text-xs text-amber-700" : "text-xs font-semibold text-rose-700"}>
-                              {geoQuality.routeUsable ? "Geo debole" : "Geo da correggere"}
-                            </div>
-                          )}
+                          <div className="mt-2">
+                            <HotelGeoBadge evaluation={geoEvaluation} />
+                          </div>
                           {geoIssues.length > 0 ? (
                             <div className="max-w-44 text-xs text-slate-500">{geoIssues.join(", ")}</div>
                           ) : null}
@@ -1649,6 +1931,13 @@ export default function HotelsPage() {
                                 </button>
                                 <button
                                   type="button"
+                                  onClick={() => openGeoCorrection(hotel)}
+                                  className="rounded-md border border-sky-200 px-2 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-50"
+                                >
+                                  Correggi geo
+                                </button>
+                                <button
+                                  type="button"
                                   onClick={() => void deleteHotel(hotel.id, hotel.name)}
                                   disabled={saving}
                                   className="rounded-md border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:opacity-50"
@@ -1683,6 +1972,141 @@ export default function HotelsPage() {
             </button>
           ) : null}
         </>
+      ) : null}
+
+      {geoCorrection ? (
+        <div className="fixed inset-0 z-[900] bg-slate-950/35 p-3 backdrop-blur-sm">
+          <div className="ml-auto flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Correzione geolocalizzazione</p>
+                  <h2 className="mt-1 text-xl font-semibold text-slate-950">{geoCorrection.hotel.name}</h2>
+                  <p className="mt-1 text-sm text-slate-500">{geoCorrection.hotel.address}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setGeoCorrection(null)}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Chiudi
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5">
+              <div className="grid gap-4 lg:grid-cols-[1fr_1.1fr]">
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                    <p><b>Coordinate attuali:</b> {formatCoord(geoCorrection.hotel.lat)} / {formatCoord(geoCorrection.hotel.lng)}</p>
+                    <p className="mt-1"><b>Stato:</b> {evaluateHotelGeo(geoCorrection.hotel).label}</p>
+                    {geoCorrection.startedFromGenericCoords ? (
+                      <p className="mt-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-700">
+                        Coordinate salvate generiche: sto cercando automaticamente l&apos;hotel sulla mappa. Conferma solo se il pin cade sul punto giusto.
+                      </p>
+                    ) : null}
+                    {geoSearching ? (
+                      <p className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700">
+                        Ricerca automatica posizione in corso...
+                      </p>
+                    ) : null}
+                    {geoCorrection.suggestionLabel ? (
+                      <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                        Suggerimento trovato: controlla il pin e premi Salva e verifica se la posizione e corretta.
+                      </p>
+                    ) : null}
+                  </div>
+                  <label className="block text-xs font-semibold text-slate-600">
+                    Cerca indirizzo / hotel
+                    <div className="mt-1 flex gap-2">
+                      <input
+                        value={geoCorrection.query}
+                        onChange={(event) => setGeoCorrection({ ...geoCorrection, query: event.target.value })}
+                        className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Nome hotel, via, comune"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void searchGeoCorrectionAddress()}
+                        disabled={geoSearching}
+                        className="rounded-lg border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                      >
+                        {geoSearching ? "Cerco..." : "Cerca"}
+                      </button>
+                    </div>
+                  </label>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="block text-xs font-semibold text-slate-600">
+                      Latitudine
+                      <input
+                        value={geoCorrection.lat}
+                        onChange={(event) => setGeoCorrection({ ...geoCorrection, lat: event.target.value })}
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block text-xs font-semibold text-slate-600">
+                      Longitudine
+                      <input
+                        value={geoCorrection.lng}
+                        onChange={(event) => setGeoCorrection({ ...geoCorrection, lng: event.target.value })}
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <label className="block text-xs font-semibold text-slate-600">
+                    Indirizzo verificato
+                    <input
+                      value={geoCorrection.formatted_address}
+                      onChange={(event) => setGeoCorrection({ ...geoCorrection, formatted_address: event.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  {geoCorrection.suggestionLabel ? (
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                      <span className="font-semibold text-slate-700">Risultato mappa:</span> {geoCorrection.suggestionLabel}
+                    </div>
+                  ) : null}
+                  <label className="block text-xs font-semibold text-slate-600">
+                    Note geo
+                    <textarea
+                      value={geoCorrection.notes}
+                      onChange={(event) => setGeoCorrection({ ...geoCorrection, notes: event.target.value })}
+                      className="mt-1 min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                      placeholder="Es. pin confermato da Google Maps / reception"
+                    />
+                  </label>
+                </div>
+
+                <div className="space-y-3">
+                  <GeoCorrectionMap
+                    lat={Number(geoCorrection.lat.replace(",", ".")) || zoneCentroids["Ischia Porto"].lat}
+                    lng={Number(geoCorrection.lng.replace(",", ".")) || zoneCentroids["Ischia Porto"].lng}
+                    onChange={updateGeoCorrectionPin}
+                  />
+                  <p className="text-xs text-slate-500">Trascina il pin sul punto reale di arrivo mezzo. Il salvataggio manuale imposta la geo come verificata.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setGeoCorrection(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-white"
+              >
+                Annulla
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveGeoCorrection()}
+                disabled={saving}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {saving ? "Salvataggio..." : "Salva e verifica"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </section>
   );

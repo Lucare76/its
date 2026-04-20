@@ -92,10 +92,17 @@ export function calculateDriverSuggestions({ drivers, assignments, services, hot
         } else if (selectedHotel.zone === latestHotel.zone) {
           proximityScore = 24;
           reasons.push(`Stessa zona (${selectedHotel.zone})`);
-        } else {
+        } else if (
+          typeof selectedHotel.lat === "number" &&
+          typeof selectedHotel.lng === "number" &&
+          typeof latestHotel.lat === "number" &&
+          typeof latestHotel.lng === "number"
+        ) {
           const distanceKm = haversineKm(selectedHotel.lat, selectedHotel.lng, latestHotel.lat, latestHotel.lng);
           proximityScore = Math.max(6, Math.round(18 - Math.min(distanceKm, 12)));
           reasons.push(`Distanza stimata da ultimo hotel: ${distanceKm.toFixed(1)} km`);
+        } else {
+          reasons.push("Coordinate hotel non verificate");
         }
       } else {
         reasons.push("Prossimita hotel non disponibile");

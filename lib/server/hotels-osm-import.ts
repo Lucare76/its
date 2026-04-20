@@ -1,4 +1,4 @@
-import { inferZoneFromText, zoneCentroids } from "@/lib/hotel-geocoding";
+import { evaluateHotelGeo, inferZoneFromText, zoneCentroids } from "@/lib/hotel-geocoding";
 
 type SupabaseAdminClient = any;
 
@@ -314,7 +314,7 @@ export async function importHotelsFromOsmForTenant(
 
     const { data: existing, error: existingError } = await admin
       .from("hotels")
-      .select("id,name,normalized_name,address,city,zone,lat,lng,source,source_osm_type,source_osm_id,is_active")
+      .select("id,name,normalized_name,address,city,zone,lat,lng,source,source_osm_type,source_osm_id,geo_status,is_active")
       .eq("tenant_id", tenantId);
     if (existingError) {
       throw new Error(existingError.message);
@@ -335,6 +335,7 @@ export async function importHotelsFromOsmForTenant(
         source: string | null;
         source_osm_type: string | null;
         source_osm_id: number | null;
+        geo_status: string | null;
         is_active: boolean | null;
       }
     >();
@@ -350,6 +351,7 @@ export async function importHotelsFromOsmForTenant(
       source: string | null;
       source_osm_type: string | null;
       source_osm_id: number | null;
+      geo_status: string | null;
       is_active: boolean | null;
     }>) {
       existingById.set(row.id, row);
@@ -391,6 +393,22 @@ export async function importHotelsFromOsmForTenant(
         source: row.source,
         source_osm_type: row.osmType,
         source_osm_id: row.osmId,
+        geo_status: evaluateHotelGeo({
+          address: row.address,
+          zone: row.zone,
+          lat: row.lat,
+          lng: row.lng,
+          geo_source: "import",
+          geo_accuracy: "street",
+          place_id: `${row.osmType}:${row.osmId}`,
+          formatted_address: row.address
+        }).status,
+        geo_source: "import",
+        geo_accuracy: "street",
+        geo_verified_at: null,
+        geo_verified_by: null,
+        place_id: `${row.osmType}:${row.osmId}`,
+        formatted_address: row.address,
         is_active: row.isActive,
         updated_at: new Date().toISOString()
       };
@@ -424,6 +442,7 @@ export async function importHotelsFromOsmForTenant(
         current.source === payload.source &&
         current.source_osm_type === payload.source_osm_type &&
         current.source_osm_id === payload.source_osm_id &&
+        current.geo_status === payload.geo_status &&
         current.is_active === payload.is_active
       ) {
         skipped += 1;

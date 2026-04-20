@@ -24,6 +24,9 @@ export type TransportMode = "train" | "hydrofoil" | "ferry" | "road_transfer" | 
 
 export type ServiceStatus = "needs_review" | "new" | "assigned" | "partito" | "arrivato" | "completato" | "problema" | "cancelled";
 export type ReminderStatus = "pending" | "sent" | "delivered" | "read" | "failed";
+export type HotelGeoStatus = "missing" | "generic" | "approximate" | "verified";
+export type HotelGeoSource = "manual" | "google" | "nominatim" | "import" | "unknown";
+export type HotelGeoAccuracy = "unknown" | "area" | "street" | "rooftop";
 
 export interface Membership {
   user_id: string;
@@ -66,8 +69,8 @@ export interface Hotel {
   normalized_name?: string | null;
   address: string;
   city?: string | null;
-  lat: number;
-  lng: number;
+  lat: number | null;
+  lng: number | null;
   zone: "Ischia Porto" | "Ischia Ponte" | "Casamicciola" | "Lacco Ameno" | "Forio" | "Barano" | "Serrara Fontana";
   small_vehicle_only?: boolean;
   small_vehicle_max_pax?: number | null;
@@ -76,6 +79,14 @@ export interface Hotel {
   source_osm_id?: number | null;
   is_active?: boolean;
   updated_at?: string;
+  geo_status?: HotelGeoStatus;
+  geo_source?: HotelGeoSource;
+  geo_accuracy?: HotelGeoAccuracy;
+  geo_verified_at?: string | null;
+  geo_verified_by?: string | null;
+  geo_notes?: string | null;
+  place_id?: string | null;
+  formatted_address?: string | null;
 }
 
 export interface Service {

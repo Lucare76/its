@@ -1,12 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { inferZoneFromCoords, isDefaultZoneCentroid, isWithinIschiaBounds, ZONE_TO_CITY } from "@/lib/hotel-geocoding";
+import { evaluateHotelGeo, inferZoneFromCoords, isDefaultZoneCentroid, isWithinIschiaBounds, ZONE_TO_CITY } from "@/lib/hotel-geocoding";
 
 export const runtime = "nodejs";
 
-type NominatimResult = { lat: string; lon: string; display_name: string };
+type NominatimResult = {
+  lat: string;
+  lon: string;
+  display_name: string;
+  place_id?: number;
+  osm_type?: string;
+  osm_id?: number;
+  class?: string;
+  type?: string;
+  addresstype?: string;
+};
 
-async function nominatimSearch(query: string): Promise<{ lat: number; lng: number } | null> {
+type GeocodeResult = {
+  lat: number;
+  lng: number;
+  formattedAddress: string;
+  placeId: string | null;
+  accuracy: "area" | "street";
+};
+
+function nominatimAccuracy(result: NominatimResult): "area" | "street" {
+  const tokens = [result.class, result.type, result.addresstype].filter(Boolean).join(" ").toLowerCase();
+  if (/\b(house|building|hotel|guest_house|resort|tourism|amenity|road|street)\b/.test(tokens)) return "street";
+  return "area";
+}
+
+async function nominatimSearch(query: string): Promise<GeocodeResult | null> {
   const url = new URL("https://nominatim.openstreetmap.org/search");
   url.searchParams.set("q", query);
   url.searchParams.set("format", "json");
@@ -26,14 +50,20 @@ async function nominatimSearch(query: string): Promise<{ lat: number; lng: numbe
     const lat = parseFloat(result.lat);
     const lng = parseFloat(result.lon);
     if (Number.isFinite(lat) && Number.isFinite(lng) && isWithinIschiaBounds(lat, lng)) {
-      return { lat, lng };
+      return {
+        lat,
+        lng,
+        formattedAddress: result.display_name,
+        placeId: result.place_id != null ? String(result.place_id) : result.osm_type && result.osm_id != null ? `${result.osm_type}:${result.osm_id}` : null,
+        accuracy: nominatimAccuracy(result)
+      };
     }
   }
   return null;
 }
 
 // Chiama Nominatim con fallback progressivo se l'indirizzo esatto non viene trovato
-async function geocodeAddress(address: string, hotelName: string): Promise<{ lat: number; lng: number } | null> {
+async function geocodeAddress(address: string, hotelName: string): Promise<GeocodeResult | null> {
   // Tentativo 1: indirizzo completo + Ischia
   const result1 = await nominatimSearch(`${address}, Ischia, Italy`);
   if (result1) return result1;
@@ -115,6 +145,22 @@ export async function POST(request: NextRequest) {
         lng: coords.lng,
         zone,
         city,
+        geo_status: evaluateHotelGeo({
+          address,
+          zone,
+          lat: coords.lat,
+          lng: coords.lng,
+          geo_source: "nominatim",
+          geo_accuracy: coords.accuracy,
+          place_id: coords.placeId,
+          formatted_address: coords.formattedAddress
+        }).status,
+        geo_source: "nominatim",
+        geo_accuracy: coords.accuracy,
+        geo_verified_at: null,
+        geo_verified_by: null,
+        place_id: coords.placeId,
+        formatted_address: coords.formattedAddress,
         updated_at: new Date().toISOString()
       })
       .eq("id", hotel.id)

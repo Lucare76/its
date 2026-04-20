@@ -280,7 +280,7 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
     )
   );
 
-  // Bus di distribuzione Ischia (smistamento dopo sbarco traghetto)
+  // Bus di distribuzione (smistamento Ischia + Pozzuoli)
   const [distBusesResult, distAllocResult, distVehiclesResult, distDriversResult, ferryConfigResult] = await Promise.all([
     auth.admin.from("bus_ischia_dist_buses").select("*").eq("tenant_id", tenantId).order("sort_order").order("zone"),
     auth.admin.from("bus_ischia_dist_allocations").select("*").eq("tenant_id", tenantId),
@@ -288,6 +288,8 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
     auth.admin.from("driver_profiles").select("id, full_name, phone").eq("tenant_id", tenantId).eq("active", true).order("full_name"),
     (auth.admin as any).from("bus_line_ferry_config").select("*").eq("tenant_id", tenantId).order("sort_order"),
   ]);
+
+  const allDistBuses = (distBusesResult.data ?? []) as Array<Record<string, unknown>>;
 
   return {
     lines,
@@ -303,7 +305,8 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
     redistribution_suggestions: redistribution,
     arrival_windows: arrivalWindows,
     pending_passengers: pendingResult.data ?? [],
-    ischia_dist_buses: distBusesResult.data ?? [],
+    ischia_dist_buses: allDistBuses.filter((b) => !b.section || b.section === "ischia"),
+    pozzuoli_dist_buses: allDistBuses.filter((b) => b.section === "pozzuoli"),
     ischia_dist_allocations: distAllocResult.data ?? [],
     ischia_dist_vehicles: distVehiclesResult.data ?? [],
     ischia_dist_drivers: distDriversResult.data ?? [],
@@ -1663,19 +1666,21 @@ export async function POST(request: NextRequest) {
         { data: exclusiveUnits },
         { data: lineAllocations },
         { data: busUnitsForLines },
+        { data: linesMeta },
+        { data: ferryConfigs },
       ] = await Promise.all([
         auth.admin.from("ops_bus_allocation_details").select("service_id, hotel_name")
           .eq("tenant_id", tenantId).eq("direction", "arrival").eq("service_date", parsed.date),
         auth.admin.from("hotels").select("id, name, zone, lat, lng").eq("tenant_id", tenantId),
-        // Allocazioni a bus ESCLUSIVI per rilevare i passeggeri dedicati
         auth.admin.from("tenant_bus_allocations").select("service_id, bus_unit_id")
           .eq("tenant_id", tenantId).eq("direction", "arrival").in("service_id", serviceIds),
         auth.admin.from("tenant_bus_units").select("id, label").eq("tenant_id", tenantId).eq("tag", "esclusivo"),
-        // Allocazioni bus linea: per sapere a quale bus_line appartiene ogni servizio
         auth.admin.from("tenant_bus_allocations").select("service_id, bus_unit_id")
           .eq("tenant_id", tenantId).eq("direction", "arrival").in("service_id", serviceIds),
-        // Tutti i bus unit con il loro bus_line_id
         auth.admin.from("tenant_bus_units").select("id, bus_line_id").eq("tenant_id", tenantId),
+        // Mappa line_id → family_code per ordinamento per orario traghetto
+        auth.admin.from("tenant_bus_lines").select("id, family_code").eq("tenant_id", tenantId),
+        (auth.admin as any).from("bus_line_ferry_config").select("bus_line_family_code, departure_time, sort_order").eq("tenant_id", tenantId),
       ]);
 
       // ── Step 3: lookup hotel name + zona ───────────────────────────────────
@@ -1782,15 +1787,36 @@ export async function POST(request: NextRequest) {
         await createDistBus(`⭐ ${label}`, zone, passengers, sortOrder++, lineId);
       }
 
+      // Mappa line_id → orario traghetto per ordinamento cronologico
+      const lineFamilyMap = new Map<string, string>(
+        ((linesMeta ?? []) as Array<{ id: string; family_code: string }>)
+          .map(l => [l.id, l.family_code.toLowerCase()])
+      );
+      const ferryTimeByFamily = new Map<string, string>(
+        ((ferryConfigs ?? []) as Array<{ bus_line_family_code: string; departure_time: string; sort_order: number }>)
+          .map(c => [c.bus_line_family_code.toLowerCase(), c.departure_time])
+      );
+      const ferryOrderByFamily = new Map<string, number>(
+        ((ferryConfigs ?? []) as Array<{ bus_line_family_code: string; sort_order: number }>)
+          .map(c => [c.bus_line_family_code.toLowerCase(), c.sort_order])
+      );
+      const lineOrder = (lineId: string | null): number => {
+        if (!lineId) return 999;
+        const fc = lineFamilyMap.get(lineId);
+        return (fc && ferryOrderByFamily.get(fc)) ?? 999;
+      };
+
       // Bus regolari: raggruppa prima per linea, poi per zona
-      // I passeggeri della stessa linea finiscono sullo stesso blocco di bus
       const byLine = new Map<string | null, Svc[]>();
       for (const svc of regularServices) {
         const key = svc.bus_line_id ?? null;
         const b = byLine.get(key) ?? []; b.push(svc); byLine.set(key, b);
       }
 
-      for (const [lineId, lineSvcs] of byLine.entries()) {
+      // Ordina i gruppi linea per orario traghetto (centro 12:00 → adriatica 13:30 → italia 18:30)
+      const sortedByLine = [...byLine.entries()].sort(([a], [b]) => lineOrder(a) - lineOrder(b));
+
+      for (const [lineId, lineSvcs] of sortedByLine) {
         // Raggruppa per zona all'interno della linea
         const byZoneLine = new Map<string, Svc[]>();
         for (const svc of lineSvcs) {
@@ -1903,9 +1929,25 @@ export async function POST(request: NextRequest) {
         label: z.string().min(2).max(120),
         zone: z.string().min(2).max(60),
         capacity: z.number().int().min(1).max(120).default(50),
+        section: z.enum(["ischia", "pozzuoli"]).default("ischia"),
       });
       const parsed = schema.parse(body);
       await auth.admin.from("bus_ischia_dist_buses").insert({ tenant_id: tenantId, bus_line_id: null, ...parsed });
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
+    if (action === "clone_dist_bus") {
+      const dist_bus_id = z.string().uuid().parse(body?.dist_bus_id);
+      const { data: orig, error: origErr } = await auth.admin
+        .from("bus_ischia_dist_buses").select("*")
+        .eq("id", dist_bus_id).eq("tenant_id", tenantId).single();
+      if (origErr || !orig) return NextResponse.json({ ok: false, error: "Bus non trovato" }, { status: 404 });
+      const { id: _id, created_at: _ca, ...fields } = orig as Record<string, unknown>;
+      await auth.admin.from("bus_ischia_dist_buses").insert({
+        ...fields,
+        tenant_id: tenantId,
+        sort_order: ((fields.sort_order as number) ?? 0) + 1,
+      });
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 

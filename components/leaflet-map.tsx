@@ -65,6 +65,7 @@ export function LeafletMap({ hotels, services, selectedServiceId, onSelectServic
     const bounds = L.latLngBounds([]);
 
     hotels.forEach((hotel) => {
+      if (hotel.lat == null || hotel.lng == null) return;
       const marker = L.circleMarker([hotel.lat, hotel.lng], {
         radius: 7,
         color: "#0f172a",
@@ -79,7 +80,7 @@ export function LeafletMap({ hotels, services, selectedServiceId, onSelectServic
 
     services.forEach((service) => {
       const hotel = hotels.find((item) => item.id === service.hotel_id);
-      if (!hotel) return;
+      if (!hotel || hotel.lat == null || hotel.lng == null) return;
 
       const colors = serviceStatusColor(service.status);
       const isSelected = selectedServiceId === service.id;

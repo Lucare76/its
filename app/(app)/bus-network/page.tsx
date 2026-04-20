@@ -37,15 +37,15 @@ type BusService = { id: string; customer_name: string; customer_display_name: st
 type UnitLoad = BusUnit & { pax_assigned: number; remaining_seats: number; suggested_status: string };
 type StopLoad = BusStop & { pax_assigned: number };
 type PendingPassenger = { id: string; bus_line_id: string; direction: "arrival" | "departure"; travel_date: string; passenger_name: string; passenger_phone: string | null; city_original: string; pax: number; notes: string | null; geo_suggested_stop: string | null; created_at: string };
-type IschiaDistBus = { id: string; date: string; bus_line_id: string | null; label: string; zone: string; capacity: number; driver_name: string | null; driver_phone: string | null; driver_profile_id: string | null; vehicle_id: string | null; sort_order: number };
+type IschiaDistBus = { id: string; date: string; bus_line_id: string | null; label: string; zone: string; capacity: number; driver_name: string | null; driver_phone: string | null; driver_profile_id: string | null; vehicle_id: string | null; sort_order: number; section?: "ischia" | "pozzuoli" };
 type BusLineFerryConfig = { id: string; bus_line_family_code: string; departure_port: string; arrival_port: string; departure_time: string; line_color: string; line_label: string; sort_order: number };
 type IschiaDistAllocation = { id: string; dist_bus_id: string; service_id: string; pax_assigned: number; customer_name: string; hotel_name: string; hotel_zone: string; stop_order: number };
 type IschiaDistVehicle = { id: string; label: string; plate: string; capacity: number };
 type IschiaDistDriver = { id: string; full_name: string; phone: string | null };
 type HotelListItem = { id: string; name: string; zone: string };
-type ApiPayload = { lines: BusLine[]; stops: BusStop[]; units: BusUnit[]; allocations: BusAllocation[]; allocation_details: AllocationDetail[]; moves: BusMove[]; services: BusService[]; unit_loads: UnitLoad[]; stop_loads: StopLoad[]; redistribution_suggestions: Array<{ source_label: string; target_label: string | null; reason: string }>; geographic_suggestions: Array<{ service_id: string; customer_name: string; stop_name: string; grouped_zone: string; suggested_vehicle_type: string; suggested_stop_order: number | null }>; arrival_windows: Array<{ time: string; totalPax: number; snavPax: number; medmarPax: number; otherPax: number }>; pending_passengers: PendingPassenger[]; ischia_dist_buses: IschiaDistBus[]; ischia_dist_allocations: IschiaDistAllocation[]; ischia_dist_vehicles: IschiaDistVehicle[]; ischia_dist_drivers: IschiaDistDriver[]; hotels_list: HotelListItem[]; bus_line_ferry_config: BusLineFerryConfig[]; user_role?: string };
+type ApiPayload = { lines: BusLine[]; stops: BusStop[]; units: BusUnit[]; allocations: BusAllocation[]; allocation_details: AllocationDetail[]; moves: BusMove[]; services: BusService[]; unit_loads: UnitLoad[]; stop_loads: StopLoad[]; redistribution_suggestions: Array<{ source_label: string; target_label: string | null; reason: string }>; geographic_suggestions: Array<{ service_id: string; customer_name: string; stop_name: string; grouped_zone: string; suggested_vehicle_type: string; suggested_stop_order: number | null }>; arrival_windows: Array<{ time: string; totalPax: number; snavPax: number; medmarPax: number; otherPax: number }>; pending_passengers: PendingPassenger[]; ischia_dist_buses: IschiaDistBus[]; pozzuoli_dist_buses: IschiaDistBus[]; ischia_dist_allocations: IschiaDistAllocation[]; ischia_dist_vehicles: IschiaDistVehicle[]; ischia_dist_drivers: IschiaDistDriver[]; hotels_list: HotelListItem[]; bus_line_ferry_config: BusLineFerryConfig[]; user_role?: string };
 
-const emptyPayload: ApiPayload = { lines: [], stops: [], units: [], allocations: [], allocation_details: [], moves: [], services: [], unit_loads: [], stop_loads: [], redistribution_suggestions: [], geographic_suggestions: [], arrival_windows: [], pending_passengers: [], ischia_dist_buses: [], ischia_dist_allocations: [], ischia_dist_vehicles: [], ischia_dist_drivers: [], hotels_list: [], bus_line_ferry_config: [], user_role: undefined };
+const emptyPayload: ApiPayload = { lines: [], stops: [], units: [], allocations: [], allocation_details: [], moves: [], services: [], unit_loads: [], stop_loads: [], redistribution_suggestions: [], geographic_suggestions: [], arrival_windows: [], pending_passengers: [], ischia_dist_buses: [], pozzuoli_dist_buses: [], ischia_dist_allocations: [], ischia_dist_vehicles: [], ischia_dist_drivers: [], hotels_list: [], bus_line_ferry_config: [], user_role: undefined };
 
 async function getToken() {
   if (!hasSupabaseEnv || !supabase) return null;
@@ -209,6 +209,7 @@ export default function BusNetworkPage() {
       arrival_windows: body.arrival_windows ?? [],
       pending_passengers: body.pending_passengers ?? [],
       ischia_dist_buses: body.ischia_dist_buses ?? [],
+      pozzuoli_dist_buses: body.pozzuoli_dist_buses ?? [],
       ischia_dist_allocations: body.ischia_dist_allocations ?? [],
       ischia_dist_vehicles: body.ischia_dist_vehicles ?? [],
       ischia_dist_drivers: body.ischia_dist_drivers ?? [],
@@ -240,6 +241,7 @@ export default function BusNetworkPage() {
       arrival_windows: body.arrival_windows ?? [],
       pending_passengers: body.pending_passengers ?? [],
       ischia_dist_buses: body.ischia_dist_buses ?? [],
+      pozzuoli_dist_buses: body.pozzuoli_dist_buses ?? [],
       ischia_dist_allocations: body.ischia_dist_allocations ?? [],
       ischia_dist_vehicles: body.ischia_dist_vehicles ?? [],
       ischia_dist_drivers: body.ischia_dist_drivers ?? [],
@@ -1844,6 +1846,11 @@ export default function BusNetworkPage() {
                                         a.click(); URL.revokeObjectURL(url);
                                       }}>📥</button>
                                     <button
+                                      title="Clona bus"
+                                      onClick={() => void post("clone_dist_bus", { dist_bus_id: bus.id })}
+                                      disabled={saving}
+                                      className="text-slate-400 hover:text-sky-400 disabled:opacity-30 text-xs">⧉</button>
+                                    <button
                                       onClick={() => void post("remove_dist_bus", { dist_bus_id: bus.id })}
                                       disabled={saving}
                                       className="text-slate-400 hover:text-rose-400 disabled:opacity-30 text-xs">✕</button>
@@ -2060,6 +2067,91 @@ export default function BusNetworkPage() {
                     </div>
                     );
                   })()}
+                </div>
+              )}
+
+              {/* ── Smistamento Pozzuoli ── */}
+              {activeTab === "bus" && direction === "departure" && (
+                <div className="mt-6">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="flex items-center gap-1.5 text-base font-bold text-slate-800"><FerryIcon size={22} /> Smistamento Pozzuoli</span>
+                      <span className="text-xs text-slate-400">Bus continentali per le partenze da Ischia</span>
+                    </div>
+                  </div>
+
+                  {payload.pozzuoli_dist_buses.filter((b) => b.date === date).length === 0 ? (
+                    <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
+                      Nessun bus smistamento Pozzuoli. Aggiungili manualmente con il tasto qui sotto.
+                    </div>
+                  ) : (
+                    <div className="flex gap-4 overflow-x-auto pb-2">
+                      {payload.pozzuoli_dist_buses
+                        .filter((b) => b.date === date)
+                        .sort((a, b) => a.sort_order - b.sort_order)
+                        .map((bus) => {
+                          const busAllocs = payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id);
+                          const totalPax = busAllocs.reduce((s, a) => s + a.pax_assigned, 0);
+                          const pct = bus.capacity > 0 ? Math.round((totalPax / bus.capacity) * 100) : 0;
+                          return (
+                            <div key={bus.id} className="flex w-56 flex-shrink-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
+                              <div className="rounded-t-2xl bg-emerald-700 px-4 py-3 text-white">
+                                <div className="flex items-center justify-between">
+                                  <div className="min-w-0">
+                                    <span className="font-bold text-sm truncate block max-w-[140px]">{bus.label}</span>
+                                    {bus.zone && <span className="text-xs text-white/80">{bus.zone}</span>}
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    <button
+                                      title="Clona bus"
+                                      onClick={() => void post("clone_dist_bus", { dist_bus_id: bus.id })}
+                                      disabled={saving}
+                                      className="text-white/60 hover:text-sky-300 disabled:opacity-30 text-xs">⧉</button>
+                                    <button
+                                      onClick={() => void post("remove_dist_bus", { dist_bus_id: bus.id })}
+                                      disabled={saving}
+                                      className="text-white/60 hover:text-rose-300 disabled:opacity-30 text-xs">✕</button>
+                                  </div>
+                                </div>
+                                <div className="mt-1 flex items-center gap-2">
+                                  <div className="h-1.5 flex-1 rounded-full bg-slate-600">
+                                    <div className="h-1.5 rounded-full bg-emerald-300" style={{ width: `${Math.min(pct, 100)}%` }} />
+                                  </div>
+                                  <span className="text-xs text-slate-300">{totalPax}/{bus.capacity}</span>
+                                </div>
+                              </div>
+                              <div className="p-3 text-xs text-slate-500">
+                                {bus.driver_name
+                                  ? <div className="font-medium text-slate-700">👤 {bus.driver_name}</div>
+                                  : <div className="italic text-slate-400">Autista da assegnare</div>}
+                                {busAllocs.length === 0
+                                  ? <div className="mt-2 text-center text-slate-300 italic">Nessun passeggero</div>
+                                  : busAllocs.map((a) => (
+                                      <div key={a.id} className="mt-1 flex items-center justify-between gap-1 rounded bg-slate-50 px-2 py-1">
+                                        <span className="truncate">{a.customer_name}</span>
+                                        <span className="shrink-0 font-semibold text-slate-600">{a.pax_assigned}p</span>
+                                      </div>
+                                    ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+
+                  {/* Aggiungi bus Pozzuoli manuale */}
+                  <div className="mt-3">
+                    <button
+                      onClick={() => {
+                        const label = window.prompt("Etichetta bus (es. Bus Napoli Nord):");
+                        const zone = window.prompt("Zona/destinazione (es. Napoli, Caserta, Roma):");
+                        if (label && zone) void post("add_dist_bus", { date, label, zone, capacity: 50, section: "pozzuoli" });
+                      }}
+                      disabled={saving}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-40">
+                      + Aggiungi bus Pozzuoli
+                    </button>
+                  </div>
                 </div>
               )}
 
