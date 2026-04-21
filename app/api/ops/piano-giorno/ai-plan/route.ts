@@ -350,13 +350,11 @@ export async function POST(request: NextRequest) {
     const anth = await callAnthropic(input);
     const text = anth.content?.map((part) => part.text ?? "").join("") ?? "";
     const jsonText = safeJsonText(text);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(jsonText);
-    } catch {
+    const parseResult = (() => { try { return { ok: true, value: JSON.parse(jsonText) }; } catch { return { ok: false }; } })();
+    if (!parseResult.ok) {
       return NextResponse.json({ ok: false, error: "Risposta AI troncata. Riprova — se persiste ridurre la complessità della giornata." }, { status: 502 });
     }
-    const aiParsed = aiPlanSchema.safeParse(parsed);
+    const aiParsed = aiPlanSchema.safeParse(parseResult.value);
     if (!aiParsed.success) {
       return NextResponse.json({ ok: false, error: "Risposta AI non valida. Riprova." }, { status: 502 });
     }
