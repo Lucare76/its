@@ -6,8 +6,8 @@ import { hotelGeoQuality } from "@/lib/hotel-geocoding";
 export const runtime = "nodejs";
 
 const MODEL = "claude-haiku-4-5-20251001";
-const MAX_CLUSTERS = 90;
-const MAX_GEO_ISSUES = 40;
+const MAX_CLUSTERS = 40;
+const MAX_GEO_ISSUES = 20;
 
 const requestSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -59,6 +59,10 @@ type HotelRow = {
   zone: string | null;
   lat: number | null;
   lng: number | null;
+  geo_status: string | null;
+  geo_source: string | null;
+  geo_accuracy: string | null;
+  geo_verified_at: string | null;
 };
 
 type VehicleRow = { id: string; label: string; capacity: number | null; vehicle_size: string | null; active: boolean | null };
@@ -137,7 +141,7 @@ async function callAnthropic(input: unknown) {
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 1600,
+      max_tokens: 2048,
       system: [
         "Sei un assistente operativo per Ischia Transfer.",
         "Aiuti un operatore a gestire giornate enormi, anche 600 arrivi e 600 partenze.",
@@ -211,7 +215,7 @@ export async function POST(request: NextRequest) {
         .neq("is_draft", true),
       auth.admin
         .from("hotels")
-        .select("id,name,address,zone,lat,lng")
+        .select("id,name,address,zone,lat,lng,geo_status,geo_source,geo_accuracy,geo_verified_at")
         .eq("tenant_id", tenantId),
       auth.admin
         .from("vehicles")
@@ -346,7 +350,13 @@ export async function POST(request: NextRequest) {
     const anth = await callAnthropic(input);
     const text = anth.content?.map((part) => part.text ?? "").join("") ?? "";
     const jsonText = safeJsonText(text);
-    const aiParsed = aiPlanSchema.safeParse(JSON.parse(jsonText));
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch {
+      return NextResponse.json({ ok: false, error: "Risposta AI troncata. Riprova — se persiste ridurre la complessità della giornata." }, { status: 502 });
+    }
+    const aiParsed = aiPlanSchema.safeParse(parsed);
     if (!aiParsed.success) {
       return NextResponse.json({ ok: false, error: "Risposta AI non valida. Riprova." }, { status: 502 });
     }
