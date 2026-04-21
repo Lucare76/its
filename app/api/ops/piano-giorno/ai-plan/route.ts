@@ -6,8 +6,8 @@ import { hotelGeoQuality } from "@/lib/hotel-geocoding";
 export const runtime = "nodejs";
 
 const MODEL = "claude-haiku-4-5-20251001";
-const MAX_CLUSTERS = 40;
-const MAX_GEO_ISSUES = 20;
+const MAX_CLUSTERS = 20;
+const MAX_GEO_ISSUES = 10;
 
 const requestSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -141,7 +141,7 @@ async function callAnthropic(input: unknown) {
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 2048,
+      max_tokens: 4096,
       system: [
         "Sei un assistente operativo per Ischia Transfer.",
         "Aiuti un operatore a gestire giornate enormi, anche 600 arrivi e 600 partenze.",
@@ -338,7 +338,7 @@ export async function POST(request: NextRequest) {
         vehicles: vehicles.length,
         max_vehicle_capacity: vehicles.reduce((max, vehicle) => Math.max(max, vehicle.capacity ?? 0), 0)
       },
-      vehicles: vehicles.slice(0, 60).map((vehicle) => ({
+      vehicles: vehicles.slice(0, 20).map((vehicle) => ({
         label: vehicle.label,
         capacity: vehicle.capacity,
         size: vehicle.vehicle_size
