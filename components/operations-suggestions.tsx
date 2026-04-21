@@ -120,7 +120,7 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
 
     if (suggestion.action_payload.action === "open_service") {
       const sid = suggestion.action_payload.service_id;
-      router.push(sid ? `/scan/${sid}` : "/ricerca");
+      router.push(sid ? `/services/${sid}/edit` : "/ricerca");
     }
     if (suggestion.action_payload.action === "open_hotel") router.push("/hotels");
   };
