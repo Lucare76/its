@@ -119,8 +119,8 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
     await load();
 
     if (suggestion.action_payload.action === "open_service") {
-      const name = suggestion.action_payload.customer_name;
-      router.push(name ? `/ricerca?q=${encodeURIComponent(name)}` : "/ricerca");
+      const sid = suggestion.action_payload.service_id;
+      router.push(sid ? `/scan/${sid}` : "/ricerca");
     }
     if (suggestion.action_payload.action === "open_hotel") router.push("/hotels");
   };
