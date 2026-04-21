@@ -19,6 +19,7 @@ const quoteSchema = z.object({
   waypoints: z.array(z.string().min(2).max(120)).max(20),
   client_name: z.string().max(200).nullable().optional(),
   client_email: z.string().email().nullable().optional(),
+  hotel_name: z.string().max(200).nullable().optional(),
   bus_city_origin: z.string().min(2).max(120).nullable().optional(),
   bus_city_lat: z.number().finite().nullable().optional(),
   bus_city_lng: z.number().finite().nullable().optional(),
@@ -50,6 +51,9 @@ function buildQuoteEmail(quote: Record<string, unknown>, waypoints: string[], re
   const busCityRow = quote.bus_city_origin
     ? `<tr><td style="padding:8px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Città partenza bus</td><td style="padding:8px 16px;font-size:13px;color:#0f172a;border-bottom:1px solid #f1f5f9;">${String(quote.bus_city_origin)}</td></tr>`
     : "";
+  const hotelRow = quote.hotel_name
+    ? `<tr><td style="padding:8px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Hotel</td><td style="padding:8px 16px;font-size:13px;color:#0f172a;border-bottom:1px solid #f1f5f9;">${String(quote.hotel_name)}</td></tr>`
+    : "";
   const notesRow = quote.notes
     ? `<tr><td style="padding:8px 16px;font-size:13px;color:#64748b;">Note</td><td style="padding:8px 16px;font-size:13px;color:#0f172a;">${String(quote.notes)}</td></tr>`
     : "";
@@ -62,6 +66,7 @@ function buildQuoteEmail(quote: Record<string, unknown>, waypoints: string[], re
     <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border-radius:10px;overflow:hidden;border:1px solid #e2e8f0;margin-bottom:24px;">
       <tr><td style="padding:8px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Servizio</td><td style="padding:8px 16px;font-size:13px;font-weight:600;color:#0f172a;border-bottom:1px solid #f1f5f9;">${String(quote.service_kind)}</td></tr>
       <tr><td style="padding:8px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Tratta</td><td style="padding:8px 16px;font-size:13px;color:#0f172a;border-bottom:1px solid #f1f5f9;">${String(quote.route_label)}</td></tr>
+      ${hotelRow}
       ${busCityRow}
       ${waypointRows}
       <tr><td style="padding:8px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Passeggeri</td><td style="padding:8px 16px;font-size:13px;color:#0f172a;border-bottom:1px solid #f1f5f9;">${String(quote.passenger_count ?? "N/D")}</td></tr>
@@ -117,6 +122,7 @@ export async function POST(request: NextRequest) {
           notes: parsed.notes ?? null,
           client_name: parsed.client_name ?? null,
           client_email: parsed.client_email ?? null,
+          hotel_name: parsed.hotel_name ?? null,
           bus_city_origin: parsed.bus_city_origin ?? null,
           bus_city_lat: parsed.bus_city_lat ?? null,
           bus_city_lng: parsed.bus_city_lng ?? null,

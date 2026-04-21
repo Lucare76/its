@@ -5,7 +5,6 @@ import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import { KpiCard } from "@/components/kpi-card";
 import { DataTable, DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
@@ -14,7 +13,8 @@ type CountItem    = { label: string; count: number };
 type DailyTrend   = { date: string; services: number; pax: number; revenue_cents: number };
 type AgencyRank   = { agency_id: string; agency_name: string; services: number; pax: number; revenue_cents: number };
 type DriverLoad   = { driver_user_id: string; driver_name: string; total_assigned: number; by_day: Record<string, number> };
-type PunctRow     = { service_id: string; date: string; time: string; customer_name: string; vessel: string; zone: string; actual_at: string | null; delay_minutes: number | null; punctuality: "on_time" | "delayed" | "missing" };
+type PunctRow     = { service_id: string; date: string; time: string; customer_name: string; vessel: string; zone: string; hotel_name?: string | null; actual_at: string | null; delay_minutes: number | null; punctuality: "on_time" | "delayed" | "missing" };
+type PunctualityFilter = "all" | PunctRow["punctuality"];
 
 type Payload = {
   dateFrom: string; dateTo: string; punctualityThresholdMinutes: number;
@@ -32,10 +32,13 @@ type Payload = {
 };
 
 /* ─── Helpers ───────────────────────────────────────────── */
-const COLORS = ["#1e3a5f","#0e7490","#166534","#854d0e","#7c3aed","#be123c","#0369a1","#065f46"];
+const COLORS = ["#0f766e","#2563eb","#16a34a","#ca8a04","#7c3aed","#e11d48","#0891b2","#475569"];
 
 function fmt(cents: number) {
   return (cents / 100).toLocaleString("it-IT", { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + " €";
+}
+function fmtInt(value: number) {
+  return value.toLocaleString("it-IT");
 }
 function fmtDate(iso: string) {
   const [,m,d] = iso.split("-");
@@ -63,6 +66,46 @@ function RevenueTooltip({ active, payload, label }: { active?: boolean; payload?
   );
 }
 
+function qualityTone(value: number) {
+  if (value >= 90) return "text-emerald-700 bg-emerald-50 border-emerald-200";
+  if (value >= 70) return "text-amber-700 bg-amber-50 border-amber-200";
+  return "text-rose-700 bg-rose-50 border-rose-200";
+}
+
+function punctualityBadge(value: PunctRow["punctuality"]) {
+  if (value === "on_time") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (value === "delayed") return "border-rose-200 bg-rose-50 text-rose-700";
+  return "border-blue-200 bg-blue-50 text-blue-700";
+}
+
+function MetricTile({
+  label,
+  value,
+  detail,
+  tone = "slate",
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone?: "slate" | "emerald" | "blue" | "amber" | "rose";
+}) {
+  const tones = {
+    slate: "border-slate-200 bg-white text-slate-900",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-900",
+    blue: "border-blue-200 bg-blue-50 text-blue-900",
+    amber: "border-amber-200 bg-amber-50 text-amber-900",
+    rose: "border-rose-200 bg-rose-50 text-rose-900",
+  };
+
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${tones[tone]}`}>
+      <p className="text-[11px] font-bold uppercase tracking-[0.14em] opacity-70">{label}</p>
+      <p className="mt-2 text-2xl font-black leading-none">{value}</p>
+      <p className="mt-2 text-xs opacity-70">{detail}</p>
+    </div>
+  );
+}
+
 /* ─── Pagina ─────────────────────────────────────────────── */
 export default function AnalyticsPage() {
   const range = useMemo(() => defaultRange(), []);
@@ -72,6 +115,7 @@ export default function AnalyticsPage() {
   const [exporting, setExporting] = useState(false);
   const [error, setError]       = useState<string | null>(null);
   const [data, setData]         = useState<Payload | null>(null);
+  const [punctualityFilter, setPunctualityFilter] = useState<PunctualityFilter>("all");
 
   const loadAnalytics = async () => {
     if (!hasSupabaseEnv || !supabase) { setError("Supabase non configurato."); return; }
@@ -116,6 +160,20 @@ export default function AnalyticsPage() {
     (data?.dailyTrend ?? []).map((d) => ({ ...d, label: fmtDate(d.date) })),
     [data]
   );
+  const insights = useMemo(() => {
+    if (!data) return null;
+    const busiestDay = [...data.dailyTrend].sort((a, b) => b.services - a.services)[0] ?? null;
+    const bestAgency = data.agencyRank[0] ?? null;
+    const busiestDriver = data.driverWeeklyLoad[0] ?? null;
+    const missingShare = data.kpi.totalServices > 0 ? Math.round((data.kpi.missing / data.kpi.totalServices) * 100) : 0;
+    const marginPct = data.kpi.totalRevenueCents > 0 ? Math.round((data.kpi.totalMarginCents / data.kpi.totalRevenueCents) * 100) : 0;
+    const issueRate = Math.max(data.kpi.problemaRate, data.kpi.cancellationRate);
+    return { busiestDay, bestAgency, busiestDriver, missingShare, marginPct, issueRate };
+  }, [data]);
+  const filteredPunctuality = useMemo(() => {
+    const rows = data?.punctualityTable ?? [];
+    return punctualityFilter === "all" ? rows : rows.filter((row) => row.punctuality === punctualityFilter);
+  }, [data, punctualityFilter]);
 
   return (
     <section className="page-section">
@@ -125,77 +183,108 @@ export default function AnalyticsPage() {
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Analytics" }]}
       />
 
-      {/* Toolbar */}
-      <header className="toolbar">
-        <div className="flex flex-wrap items-end gap-2">
-          <label className="text-xs text-muted">
-            Dal
-            <DateInput className="input-saas mt-1 w-full min-w-[150px]" value={dateFrom} onChange={(iso) => setDateFrom(iso)} />
-          </label>
-          <label className="text-xs text-muted">
-            Al
-            <DateInput className="input-saas mt-1 w-full min-w-[150px]" value={dateTo} onChange={(iso) => setDateTo(iso)} />
-          </label>
-          <button type="button" onClick={() => void loadAnalytics()} disabled={loading} className="btn-primary h-[42px] px-4 text-sm disabled:opacity-50">
-            {loading ? "Caricamento…" : "Aggiorna"}
-          </button>
-          <button type="button" onClick={() => void exportExcel()} disabled={exporting} className="btn-secondary h-[42px] px-4 text-sm disabled:opacity-50">
-            {exporting ? "Esportazione…" : "Esporta Excel"}
-          </button>
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+        <div className="grid gap-4 xl:grid-cols-[1fr_auto]">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">Cruscotto periodo</p>
+            <h2 className="mt-1 text-xl font-bold text-slate-950">
+              {data ? `${data.dateFrom} - ${data.dateTo}` : "Seleziona periodo"}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {error ? error : data ? `${fmtInt(data.kpi.totalServices)} servizi, ${fmtInt(data.kpi.totalPax)} pax, ${fmt(data.kpi.totalRevenueCents)} di revenue.` : "Carica il periodo per vedere operativita, revenue e puntualita."}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="text-xs font-medium text-slate-500">
+              Dal
+              <DateInput className="input-saas mt-1 w-40" value={dateFrom} onChange={(iso) => setDateFrom(iso)} />
+            </label>
+            <label className="text-xs font-medium text-slate-500">
+              Al
+              <DateInput className="input-saas mt-1 w-40" value={dateTo} onChange={(iso) => setDateTo(iso)} />
+            </label>
+            <button type="button" onClick={() => void loadAnalytics()} disabled={loading} className="btn-primary h-10 px-4 text-sm disabled:opacity-50">
+              {loading ? "Caricamento..." : "Aggiorna"}
+            </button>
+            <button type="button" onClick={() => void exportExcel()} disabled={exporting || !data} className="btn-secondary h-10 px-4 text-sm disabled:opacity-50">
+              {exporting ? "Esportazione..." : "Excel"}
+            </button>
+          </div>
         </div>
-        {error ? <p className="text-sm text-red-600">{error}</p> : null}
-      </header>
+      </section>
 
       {!data && !loading ? <EmptyState title="Nessun dato disponibile." compact /> : null}
 
       {data ? (
         <>
-          {/* ── KPI OPERATIVI ─── */}
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard label="Servizi periodo"  value={String(data.kpi.totalServices)} hint={`${data.dateFrom} → ${data.dateTo}`} loading={loading} />
-            <KpiCard label="PAX totali"       value={String(data.kpi.totalPax)}       hint="Passeggeri nel periodo" loading={loading} />
-            <KpiCard label="Puntualità"       value={`${data.kpi.punctualityRate}%`}  hint={`Soglia ${data.punctualityThresholdMinutes} min`} loading={loading} />
-            <KpiCard label="On time"          value={String(data.kpi.onTime)}          hint={`Ritardo: ${data.kpi.delayed} | Mancanti: ${data.kpi.missing}`} loading={loading} />
-          </div>
-
-          {/* ── KPI FINANZIARI ── */}
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <article className="card p-4">
-              <p className="text-xs uppercase tracking-widest text-muted">Revenue totale</p>
-              <p className="mt-2 text-3xl font-bold text-text">{fmt(data.kpi.totalRevenueCents)}</p>
-              <p className="mt-1 text-xs text-muted">Periodo selezionato</p>
-            </article>
-            <article className="card p-4">
-              <p className="text-xs uppercase tracking-widest text-muted">Margine totale</p>
-              <p className="mt-2 text-3xl font-bold text-emerald-600">{fmt(data.kpi.totalMarginCents)}</p>
-              <p className="mt-1 text-xs text-muted">
-                {data.kpi.totalRevenueCents > 0
-                  ? `${Math.round((data.kpi.totalMarginCents / data.kpi.totalRevenueCents) * 100)}% sul fatturato`
-                  : "Nessun fatturato"}
-              </p>
-            </article>
-            <article className="card p-4">
-              <p className="text-xs uppercase tracking-widest text-muted">ARPU (avg per servizio)</p>
-              <p className="mt-2 text-3xl font-bold text-text">{fmt(data.kpi.avgRevenueCents)}</p>
-              <p className="mt-1 text-xs text-muted">Ricavo medio per corsa</p>
-            </article>
-            <article className="card p-4">
-              <p className="text-xs uppercase tracking-widest text-muted">Qualità servizio</p>
-              <div className="mt-2 flex gap-4">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(340px,0.85fr)]">
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-2xl font-bold text-rose-500">{data.kpi.problemaRate}%</p>
-                  <p className="text-xs text-muted">Problemi</p>
+                  <h2 className="text-base font-bold text-slate-950">Quadro operativo</h2>
+                  <p className="text-sm text-slate-500">Volumi, revenue e qualita del periodo.</p>
                 </div>
-                <div>
-                  <p className="text-2xl font-bold text-slate-400">{data.kpi.cancellationRate}%</p>
-                  <p className="text-xs text-muted">Cancellati</p>
+                <span className={`rounded-full border px-3 py-1 text-xs font-bold ${qualityTone(data.kpi.punctualityRate)}`}>
+                  Puntualita {data.kpi.punctualityRate}%
+                </span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <MetricTile label="Servizi" value={fmtInt(data.kpi.totalServices)} detail={`${fmtInt(data.kpi.totalPax)} pax`} tone="blue" />
+                <MetricTile label="Revenue" value={fmt(data.kpi.totalRevenueCents)} detail={`Media ${fmt(data.kpi.avgRevenueCents)}`} tone="slate" />
+                <MetricTile label="Margine" value={fmt(data.kpi.totalMarginCents)} detail={`${insights?.marginPct ?? 0}% sul fatturato`} tone="emerald" />
+                <MetricTile label="Alert" value={`${data.kpi.missing}`} detail={`${insights?.missingShare ?? 0}% senza evento`} tone={data.kpi.missing > 0 ? "rose" : "slate"} />
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Giorno piu carico</p>
+                  <p className="mt-2 text-xl font-black text-slate-950">{insights?.busiestDay ? fmtDate(insights.busiestDay.date) : "-"}</p>
+                  <p className="mt-1 text-xs text-slate-500">{insights?.busiestDay ? `${insights.busiestDay.services} servizi · ${insights.busiestDay.pax} pax` : "Nessun dato"}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Prima agenzia</p>
+                  <p className="mt-2 line-clamp-2 min-h-10 break-words text-base font-black leading-5 text-slate-950" title={insights?.bestAgency?.agency_name ?? ""}>
+                    {insights?.bestAgency?.agency_name ?? "-"}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">{insights?.bestAgency ? `${fmt(insights.bestAgency.revenue_cents)} · ${insights.bestAgency.services} servizi` : "Nessun dato"}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Qualita</p>
+                  <p className="mt-2 text-xl font-black text-slate-950">{insights?.issueRate ?? 0}%</p>
+                  <p className="mt-1 text-xs text-slate-500">Problemi {data.kpi.problemaRate}% · cancellati {data.kpi.cancellationRate}%</p>
                 </div>
               </div>
-            </article>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-4">
+                <h2 className="text-base font-bold text-slate-950">Driver settimana</h2>
+                <p className="text-sm text-slate-500">{data.weeklyWindow.from} - {data.weeklyWindow.to}</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Autista piu carico</p>
+                <p className="mt-2 truncate text-2xl font-black text-slate-950">{insights?.busiestDriver?.driver_name ?? "-"}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {insights?.busiestDriver ? `${insights.busiestDriver.total_assigned} assegnazioni` : "Nessuna assegnazione"}
+                </p>
+              </div>
+              <div className="mt-3 grid grid-cols-7 gap-1">
+                {(["lun","mar","mer","gio","ven","sab","dom"] as const).map((day) => {
+                  const value = insights?.busiestDriver?.by_day[day] ?? 0;
+                  return (
+                    <div key={day} className="rounded-lg border border-slate-200 bg-white px-1 py-2 text-center">
+                      <p className="text-[10px] font-bold uppercase text-slate-400">{day}</p>
+                      <p className="mt-1 text-sm font-black text-slate-900">{value}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           </div>
 
           {/* ── TREND GIORNALIERO ── */}
-          <SectionCard title="Trend servizi e revenue (giornaliero)">
+          <SectionCard title="Trend giornaliero" subtitle="Servizi, pax e revenue nel periodo.">
             <ResponsiveContainer width="100%" height={240}>
               <AreaChart data={trendData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                 <defs>
@@ -318,36 +407,60 @@ export default function AnalyticsPage() {
           </SectionCard>
 
           {/* ── PUNTUALITÀ ── */}
-          <SectionCard title="Tabella puntualità servizi" className="space-y-0">
+          <SectionCard
+            title="Puntualità servizi"
+            subtitle={`${filteredPunctuality.length} righe visibili su ${data.punctualityTable.length}`}
+            className="space-y-0"
+            actions={
+              <div className="flex flex-wrap gap-1">
+                {[
+                  { key: "all", label: "Tutti" },
+                  { key: "missing", label: "Mancanti" },
+                  { key: "delayed", label: "Ritardi" },
+                  { key: "on_time", label: "Puntuali" },
+                ].map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => setPunctualityFilter(item.key as PunctualityFilter)}
+                    className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${punctualityFilter === item.key ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"}`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            }
+          >
             <DataTable minWidthClassName="min-w-full" loading={loading} loadingRows={6}>
               <thead className="text-muted">
                 <tr>
-                  {["Data/Ora","Cliente","Nave","Zona","Effettivo","Δ min","Esito"].map((h) => (
+                  {["Data/Ora","Cliente","Nave","Hotel / zona","Effettivo","Delta","Esito"].map((h) => (
                     <th key={h} className="px-2 py-2 text-left text-xs font-semibold">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {data.punctualityTable.slice(0, 120).map((row) => (
-                  <tr key={row.service_id} className="border-t border-border/70">
-                    <td className="px-2 py-2 text-sm">{row.date} {row.time}</td>
-                    <td className="px-2 py-2 text-sm">{row.customer_name}</td>
-                    <td className="px-2 py-2 text-sm">{row.vessel}</td>
-                    <td className="px-2 py-2 text-sm">{row.zone}</td>
-                    <td className="px-2 py-2 text-sm">{row.actual_at ? new Date(row.actual_at).toLocaleString("it-IT") : "–"}</td>
-                    <td className="px-2 py-2 text-sm">{row.delay_minutes ?? "–"}</td>
+                {filteredPunctuality.slice(0, 120).map((row) => (
+                  <tr key={row.service_id} className="border-t border-border/70 hover:bg-slate-50">
+                    <td className="px-2 py-2 text-sm whitespace-nowrap">{fmtDate(row.date)} {row.time}</td>
+                    <td className="px-2 py-2 text-sm">
+                      <span className="block max-w-[180px] truncate font-medium text-slate-800">{row.customer_name}</span>
+                    </td>
+                    <td className="px-2 py-2 text-sm max-w-[160px] truncate">{row.vessel}</td>
+                    <td className="px-2 py-2 text-sm">
+                      <span className="block max-w-[180px] truncate text-slate-800">{row.hotel_name ?? "N/D"}</span>
+                      <span className="block text-xs text-slate-400">{row.zone}</span>
+                    </td>
+                    <td className="px-2 py-2 text-sm whitespace-nowrap">{row.actual_at ? new Date(row.actual_at).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" }) : "-"}</td>
+                    <td className="px-2 py-2 text-sm">{row.delay_minutes != null ? `${row.delay_minutes} min` : "-"}</td>
                     <td className="px-2 py-2">
-                      <span className={`status-badge ${
-                        row.punctuality === "on_time" ? "status-badge-completato"
-                        : row.punctuality === "delayed" ? "status-badge-cancelled"
-                        : "status-badge-assigned"
-                      }`}>
+                      <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${punctualityBadge(row.punctuality)}`}>
                         {row.punctuality === "on_time" ? "Puntuale" : row.punctuality === "delayed" ? "Ritardo" : "Mancante"}
                       </span>
                     </td>
                   </tr>
                 ))}
-                {data.punctualityTable.length === 0 && (
+                {filteredPunctuality.length === 0 && (
                   <tr><td colSpan={7} className="px-2 py-3 text-muted text-sm">Nessun servizio nel periodo.</td></tr>
                 )}
               </tbody>

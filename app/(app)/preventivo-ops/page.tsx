@@ -18,6 +18,7 @@ type Quote = {
   notes?: string | null;
   client_name?: string | null;
   client_email?: string | null;
+  hotel_name?: string | null;
   bus_city_origin?: string | null;
   bus_city_lat?: number | null;
   bus_city_lng?: number | null;
@@ -35,6 +36,21 @@ const STATUS_CONFIG: Record<string, { label: string; bg: string; color: string; 
   rejected: { label: "Rifiutato", bg: "#fef2f2", color: "#991b1b", border: "#fecaca" },
   expired:  { label: "Scaduto",   bg: "#fafafa", color: "#9ca3af", border: "#e5e7eb" },
 };
+
+const SERVICE_KIND_OPTIONS = [
+  "Formula SNAV",
+  "Formula MEDMAR - Napoli",
+  "Formula MEDMAR - Pozzuoli",
+  "Transfer aeroporto - hotel",
+  "Transfer aeroporto - hotel (esclusivo)",
+  "Transfer aeroporto - hotel (aliscafo)",
+  "Transfer stazione / bus - hotel",
+  "Transfer stazione / bus - hotel (esclusivo)",
+  "Transfer stazione / bus - hotel (aliscafo)",
+  "Linea bus - hotel",
+  "Escursione",
+  "Transfer porto - hotel",
+] as const;
 
 function normalizeCity(value: string) {
   return value
@@ -95,7 +111,7 @@ export default function PreventivoOpsPage() {
   const [sending, setSending] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>("all");
-  const [serviceKind, setServiceKind] = useState("Transfer");
+  const [serviceKind, setServiceKind] = useState<(typeof SERVICE_KIND_OPTIONS)[number]>("Transfer porto - hotel");
   const [routeLabel, setRouteLabel] = useState("");
   const [busCityInput, setBusCityInput] = useState("");
   const [selectedBusCity, setSelectedBusCity] = useState<CitySuggestion | null>(null);
@@ -235,6 +251,7 @@ export default function PreventivoOpsPage() {
       notes: String(form.get("notes") ?? "") || null,
       client_name: String(form.get("client_name") ?? "") || null,
       client_email: String(form.get("client_email") ?? "") || null,
+      hotel_name: String(form.get("hotel_name") ?? "") || null,
       bus_city_origin: busCity?.name ?? null,
       bus_city_lat: busCity?.lat ?? null,
       bus_city_lng: busCity?.lng ?? null,
@@ -246,7 +263,7 @@ export default function PreventivoOpsPage() {
     setWaypoints(res.waypoints ?? []);
     setMessage({ type: "ok", text: "Preventivo creato." });
     e.currentTarget.reset();
-    setServiceKind("Transfer");
+    setServiceKind("Transfer porto - hotel");
     setRouteLabel("");
     setBusCityInput("");
     setSelectedBusCity(null);
@@ -338,21 +355,25 @@ export default function PreventivoOpsPage() {
               <label className="text-xs font-medium text-slate-600">
                 Tipo servizio*
                 <select name="service_kind" required value={serviceKind} onChange={(event) => {
-                  setServiceKind(event.target.value);
+                  const nextServiceKind = event.target.value as (typeof SERVICE_KIND_OPTIONS)[number];
+                  setServiceKind(nextServiceKind);
                   if (!isBusQuote(event.target.value)) {
                     setBusCityInput("");
                     setSelectedBusCity(null);
                   }
                 }} className="mt-1 input-saas w-full">
-                  <option value="Transfer">Transfer</option>
-                  <option value="Linea Bus">Linea Bus</option>
-                  <option value="Escursione">Escursione</option>
-                  <option value="Ferry Transfer">Ferry Transfer</option>
+                  {SERVICE_KIND_OPTIONS.map((kind) => (
+                    <option key={kind} value={kind}>{kind}</option>
+                  ))}
                 </select>
               </label>
               <label className="text-xs font-medium text-slate-600">
                 Tratta{busSelected ? "" : "*"}
                 <input name="route_label" required={!busSelected} value={routeLabel} onChange={(event) => setRouteLabel(event.target.value)} className="mt-1 input-saas w-full" placeholder={busSelected ? "auto: citta - Ischia" : "es. Napoli - Forio"} />
+              </label>
+              <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+                Hotel / struttura
+                <input name="hotel_name" className="mt-1 input-saas w-full" placeholder="Nome hotel o struttura cliente" />
               </label>
               {busSelected && (
                 <label className="relative text-xs font-medium text-slate-600 sm:col-span-2">
@@ -470,6 +491,9 @@ export default function PreventivoOpsPage() {
                           </span>
                         </div>
                         <p className="text-xs text-slate-500 mt-0.5">{q.service_kind}{q.client_name ? ` · ${q.client_name}` : ""}{q.client_email ? ` <${q.client_email}>` : ""}</p>
+                        {q.hotel_name && (
+                          <p className="mt-0.5 text-xs text-slate-500">Hotel: {q.hotel_name}</p>
+                        )}
                         {q.bus_city_origin && (
                           <p className="mt-0.5 text-xs text-slate-500">Partenza bus: {q.bus_city_origin}{q.bus_city_geo_label ? ` · ${q.bus_city_geo_label}` : ""}</p>
                         )}

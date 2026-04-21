@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
 
   const { data: quote } = await admin
     .from("quotes")
-    .select("id, route_label, service_kind, price_cents, currency, passenger_count, arrival_date, departure_date, valid_until, notes, client_name, status")
+    .select("id, route_label, service_kind, price_cents, currency, passenger_count, arrival_date, departure_date, valid_until, notes, client_name, hotel_name, status")
     .eq("response_token", token)
     .maybeSingle();
 
@@ -63,6 +63,7 @@ export async function GET(request: NextRequest) {
       valid_until: quote.valid_until ?? null,
       notes: quote.notes ?? null,
       client_name: quote.client_name ?? null,
+      hotel_name: quote.hotel_name ?? null,
       status: quote.status,
       waypoints: pickupWaypoints,
       pickup_waypoints: pickupWaypoints,

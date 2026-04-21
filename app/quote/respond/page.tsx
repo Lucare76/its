@@ -17,6 +17,7 @@ type QuoteDetail = {
   valid_until: string | null;
   notes: string | null;
   client_name: string | null;
+  hotel_name: string | null;
   waypoints: string[];
   pickup_waypoints?: string[];
   dropoff_waypoints?: string[];
@@ -189,6 +190,7 @@ function QuoteDetails({ token }: { token: string }) {
   const rows: Array<{ label: string; value: string }> = [
     { label: "Servizio",   value: quote.service_kind },
     { label: "Tratta",     value: quote.route_label },
+    ...(quote.hotel_name ? [{ label: "Hotel", value: quote.hotel_name }] : []),
     { label: "Data arrivo", value: quote.arrival_date ? fmtDate(quote.arrival_date) : "Non indicata" },
     { label: "Data partenza", value: quote.departure_date ? fmtDate(quote.departure_date) : "Non indicata" },
     ...((quote.pickup_waypoints ?? quote.waypoints).length > 0 ? [{ label: "Punti di carico", value: (quote.pickup_waypoints ?? quote.waypoints).join(" → ") }] : []),

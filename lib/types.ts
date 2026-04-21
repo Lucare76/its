@@ -339,6 +339,7 @@ export interface QuoteRecord {
   price_cents: number;
   currency: string;
   passenger_count?: number | null;
+  hotel_name?: string | null;
   arrival_date?: string | null;
   departure_date?: string | null;
   valid_until?: string | null;
