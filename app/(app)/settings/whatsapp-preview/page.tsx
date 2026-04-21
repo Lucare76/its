@@ -78,7 +78,7 @@ See you soon!`,
 Ecco le informazioni per il giorno della sua partenza:
 
 🚉 *In stazione*
-Il nostro assistente la attende con il cartello *Ischia Transfer Service*.
+Il nostro assistente la attende con il cartello *Ischia Transfer Service* al binario 24.
 
 🚢 *Trasferimento*
 Il team la accompagnerà al porto per la navigazione verso Ischia.
@@ -97,7 +97,7 @@ Ci vediamo presto!`,
 Here is the information for your departure day:
 
 🚉 *At the station*
-Our assistant will be waiting for you with an *Ischia Transfer Service* sign.
+Our assistant will be waiting for you with an *Ischia Transfer Service* sign at platform 24.
 
 🚢 *Transfer*
 Our team will take you to the port for the crossing to Ischia.
