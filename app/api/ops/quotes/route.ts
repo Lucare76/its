@@ -3,71 +3,167 @@ import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import type { PricingAuthContext } from "@/lib/server/pricing-auth";
 import { requireQuotesAccess } from "@/lib/server/quotes-access";
-import { emailHtml } from "@/lib/server/email-layout";
+import { emailButton, emailDataTable, emailHtml } from "@/lib/server/email-layout";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
 
+const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const quoteServiceCodeSchema = z.enum([
+  "transfer_port_hotel",
+  "transfer_airport_hotel",
+  "transfer_airport_hotel_exclusive",
+  "transfer_airport_hotel_aliscafo",
+  "transfer_train_hotel",
+  "transfer_train_hotel_exclusive",
+  "transfer_train_hotel_aliscafo",
+  "bus_city_hotel",
+  "excursion",
+  "formula_snav",
+  "formula_medmar_napoli",
+  "formula_medmar_pozzuoli",
+]);
+
 const quoteSchema = z.object({
+  quote_service_code: quoteServiceCodeSchema.optional(),
+  quote_bus_line_id: z.string().uuid().nullable().optional(),
   service_kind: z.string().min(2).max(120),
   route_label: z.string().min(2).max(200),
   price_cents: z.number().int().min(0),
   currency: z.string().length(3).default("EUR"),
   passenger_count: z.number().int().min(1).max(120).nullable(),
-  valid_until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  arrival_date: isoDateSchema.nullable().optional(),
+  departure_date: isoDateSchema.nullable().optional(),
+  valid_until: isoDateSchema.nullable(),
   notes: z.string().max(2000).nullable(),
-  waypoints: z.array(z.string().min(2).max(120)).max(20),
+  waypoints: z.array(z.string().min(2).max(120)).max(20).optional(),
+  pickup_waypoints: z.array(z.string().min(2).max(120)).max(40).optional(),
+  dropoff_waypoints: z.array(z.string().min(2).max(120)).max(40).optional(),
   client_name: z.string().max(200).nullable().optional(),
   client_email: z.string().email().nullable().optional(),
 });
 
 async function loadQuotes(auth: PricingAuthContext) {
   const tenantId = auth.membership.tenant_id;
-  const [quotesResult, waypointsResult, flagsResult] = await Promise.all([
+  const [quotesResult, waypointsResult, flagsResult, busLinesResult, busStopsResult] = await Promise.all([
     auth.admin.from("quotes").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }),
     auth.admin.from("quote_waypoints").select("*").eq("tenant_id", tenantId).order("sort_order"),
-    auth.admin.from("tenant_user_feature_flags").select("*").eq("tenant_id", tenantId).eq("feature_code", "quotes_access")
+    auth.admin.from("tenant_user_feature_flags").select("*").eq("tenant_id", tenantId).eq("feature_code", "quotes_access"),
+    auth.admin.from("tenant_bus_lines").select("id,code,name,family_code,family_name").eq("tenant_id", tenantId).eq("active", true).order("family_code").order("name"),
+    auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,direction,stop_name,city,pickup_note,stop_order").eq("tenant_id", tenantId).eq("active", true).order("direction").order("stop_order"),
   ]);
-  const error = quotesResult.error || waypointsResult.error || flagsResult.error;
+  const error = quotesResult.error || waypointsResult.error || flagsResult.error || busLinesResult.error || busStopsResult.error;
   if (error) throw new Error(error.message);
   return {
     quotes: quotesResult.data ?? [],
     waypoints: waypointsResult.data ?? [],
-    quote_users: flagsResult.data ?? []
+    quote_users: flagsResult.data ?? [],
+    bus_lines: busLinesResult.data ?? [],
+    bus_stops: busStopsResult.data ?? [],
   };
 }
 
-function buildQuoteEmail(quote: Record<string, unknown>, waypoints: string[], responseUrl: string): string {
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function formatDate(value: unknown, fallback = "Non indicata"): string {
+  if (!value) return fallback;
+  const [year, month, day] = String(value).split("-");
+  if (!year || !month || !day) return escapeHtml(value);
+  return `${day}/${month}/${year}`;
+}
+
+function buildQuoteEmail(quote: Record<string, unknown>, pickupWaypoints: string[], dropoffWaypoints: string[], responseUrl: string): string {
   const price = ((quote.price_cents as number) / 100).toFixed(2);
-  const validUntil = quote.valid_until ? new Date(quote.valid_until as string).toLocaleDateString("it-IT") : "Aperta";
-  const waypointRows = waypoints.length
-    ? `<tr><td style="padding:8px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Punti di carico</td><td style="padding:8px 16px;font-size:13px;color:#0f172a;border-bottom:1px solid #f1f5f9;">${waypoints.join(" → ")}</td></tr>`
-    : "";
-  const notesRow = quote.notes
-    ? `<tr><td style="padding:8px 16px;font-size:13px;color:#64748b;">Note</td><td style="padding:8px 16px;font-size:13px;color:#0f172a;">${String(quote.notes)}</td></tr>`
+  const currency = escapeHtml(quote.currency ?? "EUR");
+  const routeLabel = escapeHtml(quote.route_label);
+  const validUntil = quote.valid_until ? formatDate(quote.valid_until) : "Aperta";
+  const rows: Array<[string, string]> = [
+    ["Servizio", escapeHtml(quote.service_kind)],
+    ["Tratta", routeLabel],
+    ["Data arrivo", formatDate(quote.arrival_date)],
+    ["Data partenza", formatDate(quote.departure_date)],
+    ...(pickupWaypoints.length > 0 ? ([["Punti di carico", pickupWaypoints.map(escapeHtml).join(" -> ")]] as Array<[string, string]>) : []),
+    ...(dropoffWaypoints.length > 0 ? ([["Punti di scarico", dropoffWaypoints.map(escapeHtml).join(" -> ")]] as Array<[string, string]>) : []),
+    ["Passeggeri", quote.passenger_count ? `${escapeHtml(quote.passenger_count)} pax` : "Non indicati"],
+    ["Validita offerta", validUntil],
+  ];
+  const notesBlock = quote.notes
+    ? `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 16px;margin:18px 0;font-size:13px;color:#9a3412;"><strong>Note operative:</strong><br/>${escapeHtml(quote.notes)}</div>`
     : "";
 
   const body = `
-    <p style="font-size:15px;color:#475569;margin:0 0 20px;">
-      Gentile <strong>${String(quote.client_name ?? "Cliente")}</strong>,<br/>
-      di seguito il preventivo per il servizio richiesto.
+    <p style="font-size:15px;color:#475569;margin:0 0 18px;">
+      Gentile <strong>${escapeHtml(quote.client_name ?? "Cliente")}</strong>,<br/>
+      abbiamo preparato il preventivo per il servizio richiesto.
     </p>
-    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border-radius:10px;overflow:hidden;border:1px solid #e2e8f0;margin-bottom:24px;">
-      <tr><td style="padding:8px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Servizio</td><td style="padding:8px 16px;font-size:13px;font-weight:600;color:#0f172a;border-bottom:1px solid #f1f5f9;">${String(quote.service_kind)}</td></tr>
-      <tr><td style="padding:8px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Tratta</td><td style="padding:8px 16px;font-size:13px;color:#0f172a;border-bottom:1px solid #f1f5f9;">${String(quote.route_label)}</td></tr>
-      ${waypointRows}
-      <tr><td style="padding:8px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Passeggeri</td><td style="padding:8px 16px;font-size:13px;color:#0f172a;border-bottom:1px solid #f1f5f9;">${String(quote.passenger_count ?? "N/D")}</td></tr>
-      <tr><td style="padding:8px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Importo</td><td style="padding:8px 16px;font-size:15px;font-weight:800;color:#0f172a;border-bottom:1px solid #f1f5f9;">${String(quote.currency)} ${price}</td></tr>
-      <tr><td style="padding:8px 16px;font-size:13px;color:#64748b;border-bottom:${notesRow ? "1px solid #f1f5f9" : "0"};">Validità offerta</td><td style="padding:8px 16px;font-size:13px;color:#0f172a;border-bottom:${notesRow ? "1px solid #f1f5f9" : "0"};">${validUntil}</td></tr>
-      ${notesRow}
-    </table>
-    <div style="text-align:center;margin:28px 0;">
-      <a href="${responseUrl}&action=accepted" style="display:inline-block;background:#166534;color:#fff;text-decoration:none;padding:12px 28px;border-radius:10px;font-weight:700;font-size:14px;margin:0 6px;">✅ Accetta preventivo</a>
-      <a href="${responseUrl}&action=rejected" style="display:inline-block;background:#991b1b;color:#fff;text-decoration:none;padding:12px 28px;border-radius:10px;font-weight:700;font-size:14px;margin:0 6px;">❌ Rifiuta</a>
+    <div style="background:linear-gradient(135deg,#0f2744,#1e3a5f);border-radius:14px;padding:20px 24px;margin-bottom:24px;">
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:6px;">Preventivo transfer</div>
+      <div style="font-size:22px;font-weight:800;color:#ffffff;">${routeLabel}</div>
+      <div style="font-size:30px;font-weight:800;color:#ffffff;margin-top:12px;">${currency} ${price}</div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.72);margin-top:4px;">Arrivo ${formatDate(quote.arrival_date)} · Partenza ${formatDate(quote.departure_date)}</div>
     </div>
-    <p style="font-size:12px;color:#94a3b8;text-align:center;margin-top:20px;">Questa offerta è valida fino al ${validUntil}. Per informazioni contattaci via email.</p>
+    ${emailDataTable(rows)}
+    ${notesBlock}
+    <p style="font-size:14px;color:#475569;margin:18px 0 8px;">
+      Puoi confermare o rifiutare direttamente da qui. Dopo la conferma ti ricontatteremo per gli ultimi dettagli operativi.
+    </p>
+    ${emailButton("Accetta preventivo", `${responseUrl}&action=accepted`, "#166534")}
+    ${emailButton("Rifiuta", `${responseUrl}&action=rejected`, "#991b1b")}
+    <p style="font-size:12px;color:#94a3b8;text-align:center;margin-top:20px;">Offerta valida fino al ${validUntil}. Per informazioni contattaci via email.</p>
   `;
-  return emailHtml(body, { title: `Preventivo — ${String(quote.route_label)}`, preheader: `Preventivo ${String(quote.currency)} ${price} · ${String(quote.route_label)}` });
+  return emailHtml(body, { title: `Preventivo - ${routeLabel}`, preheader: `Preventivo ${currency} ${price} - ${routeLabel}` });
+}
+
+function normalizeStopName(value: string) {
+  return value.trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+async function ensureBusStops(
+  auth: PricingAuthContext,
+  busLineId: string | null | undefined,
+  direction: "arrival" | "departure",
+  labels: string[]
+) {
+  if (!busLineId || labels.length === 0) return;
+  const tenantId = auth.membership.tenant_id;
+  const normalizedLabels = [...new Set(labels.map(normalizeStopName).filter(Boolean))];
+  if (normalizedLabels.length === 0) return;
+
+  const existingResult = await auth.admin
+    .from("tenant_bus_line_stops")
+    .select("stop_name,stop_order")
+    .eq("tenant_id", tenantId)
+    .eq("bus_line_id", busLineId)
+    .eq("direction", direction);
+  if (existingResult.error) throw new Error(existingResult.error.message);
+
+  const existingNames = new Set((existingResult.data ?? []).map((stop: { stop_name: string }) => normalizeStopName(stop.stop_name)));
+  const maxOrder = Math.max(0, ...(existingResult.data ?? []).map((stop: { stop_order: number }) => Number(stop.stop_order) || 0));
+  const missing = normalizedLabels.filter((label) => !existingNames.has(label));
+  if (missing.length === 0) return;
+
+  const { error } = await auth.admin.from("tenant_bus_line_stops").insert(
+    missing.map((label, index) => ({
+      tenant_id: tenantId,
+      bus_line_id: busLineId,
+      direction,
+      stop_name: label,
+      city: label,
+      pickup_note: "Creata da preventivo",
+      stop_order: maxOrder + index + 1,
+      order_index: maxOrder + index + 1,
+      is_manual: true,
+      active: true,
+    }))
+  );
+  if (error) throw new Error(error.message);
 }
 
 export async function GET(request: NextRequest) {
@@ -94,17 +190,24 @@ export async function POST(request: NextRequest) {
 
     if (action === "create_quote") {
       const parsed = quoteSchema.parse(body);
+      if (parsed.quote_service_code === "bus_city_hotel" && !parsed.quote_bus_line_id) {
+        return NextResponse.json({ ok: false, error: "Seleziona una linea bus per il preventivo." }, { status: 400 });
+      }
       const insertResult = await auth.admin
         .from("quotes")
         .insert({
           tenant_id: tenantId,
           created_by_user_id: auth.user.id,
           owner_label: "owen",
+          quote_service_code: parsed.quote_service_code ?? null,
+          quote_bus_line_id: parsed.quote_service_code === "bus_city_hotel" ? parsed.quote_bus_line_id ?? null : null,
           service_kind: parsed.service_kind,
           route_label: parsed.route_label,
           price_cents: parsed.price_cents,
           currency: parsed.currency.toUpperCase(),
           passenger_count: parsed.passenger_count ?? null,
+          arrival_date: parsed.arrival_date ?? null,
+          departure_date: parsed.departure_date ?? null,
           valid_until: parsed.valid_until ?? null,
           notes: parsed.notes ?? null,
           client_name: parsed.client_name ?? null,
@@ -113,15 +216,30 @@ export async function POST(request: NextRequest) {
         .select("id")
         .single();
       if (insertResult.error || !insertResult.data?.id) throw new Error(insertResult.error?.message ?? "Preventivo non creato.");
-      if (parsed.waypoints.length > 0) {
-        await auth.admin.from("quote_waypoints").insert(
-          parsed.waypoints.map((label, index) => ({
+      const pickupWaypoints = parsed.pickup_waypoints?.length ? parsed.pickup_waypoints : (parsed.waypoints ?? []);
+      const dropoffWaypoints = parsed.dropoff_waypoints ?? [];
+      if (parsed.quote_service_code === "bus_city_hotel") {
+        await ensureBusStops(auth, parsed.quote_bus_line_id, "arrival", pickupWaypoints);
+        await ensureBusStops(auth, parsed.quote_bus_line_id, "departure", dropoffWaypoints);
+      }
+      const waypointRows = [
+        ...pickupWaypoints.map((label, index) => ({
             tenant_id: tenantId,
             quote_id: insertResult.data.id,
             label,
-            sort_order: index + 1
-          }))
-        );
+            waypoint_type: "pickup",
+            sort_order: index + 1,
+        })),
+        ...dropoffWaypoints.map((label, index) => ({
+          tenant_id: tenantId,
+          quote_id: insertResult.data.id,
+          label,
+          waypoint_type: "dropoff",
+          sort_order: index + 1,
+        })),
+      ];
+      if (waypointRows.length > 0) {
+        await auth.admin.from("quote_waypoints").insert(waypointRows);
       }
     }
 
@@ -139,12 +257,13 @@ export async function POST(request: NextRequest) {
       if (!quote) return NextResponse.json({ ok: false, error: "Preventivo non trovato." }, { status: 404 });
       if (!quote.client_email) return NextResponse.json({ ok: false, error: "Email cliente non impostata." }, { status: 400 });
 
-      const { data: wps } = await auth.admin.from("quote_waypoints").select("label").eq("quote_id", quoteId).order("sort_order");
-      const waypointLabels = (wps ?? []).map((w: { label: string }) => w.label);
+      const { data: wps } = await auth.admin.from("quote_waypoints").select("label, waypoint_type").eq("quote_id", quoteId).order("sort_order");
+      const pickupLabels = (wps ?? []).filter((w: { waypoint_type?: string | null }) => (w.waypoint_type ?? "pickup") === "pickup").map((w: { label: string }) => w.label);
+      const dropoffLabels = (wps ?? []).filter((w: { waypoint_type?: string | null }) => w.waypoint_type === "dropoff").map((w: { label: string }) => w.label);
 
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://ischiatransferservice.it";
       const responseUrl = `${appUrl}/quote/respond?token=${String(quote.response_token ?? quote.id)}`;
-      const html = buildQuoteEmail(quote as Record<string, unknown>, waypointLabels, responseUrl);
+      const html = buildQuoteEmail(quote as Record<string, unknown>, pickupLabels, dropoffLabels, responseUrl);
 
       const apiKey = process.env.RESEND_API_KEY;
       const fromEmail = getVerifiedFromEmail();
@@ -152,7 +271,7 @@ export async function POST(request: NextRequest) {
         const res = await resendFetch(apiKey, {
           from: `Ischia Transfer Service <${fromEmail}>`,
           to: [String(quote.client_email)],
-          subject: `Preventivo — ${String(quote.route_label)} · ${String(quote.currency)} ${((quote.price_cents as number) / 100).toFixed(2)}`,
+          subject: `Preventivo - ${String(quote.route_label)} - ${String(quote.currency)} ${((quote.price_cents as number) / 100).toFixed(2)}`,
           html,
         });
         if (!res.ok) {

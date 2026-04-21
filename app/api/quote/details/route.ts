@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
 
   const { data: quote } = await admin
     .from("quotes")
-    .select("id, route_label, service_kind, price_cents, currency, passenger_count, valid_until, notes, client_name, status")
+    .select("id, route_label, service_kind, price_cents, currency, passenger_count, arrival_date, departure_date, valid_until, notes, client_name, status")
     .eq("response_token", token)
     .maybeSingle();
 
@@ -43,9 +43,11 @@ export async function GET(request: NextRequest) {
 
   const { data: wps } = await admin
     .from("quote_waypoints")
-    .select("label")
+    .select("label, waypoint_type")
     .eq("quote_id", String(quote.id))
     .order("sort_order");
+  const pickupWaypoints = (wps ?? []).filter((w: { waypoint_type?: string | null }) => (w.waypoint_type ?? "pickup") === "pickup").map((w: { label: string }) => w.label);
+  const dropoffWaypoints = (wps ?? []).filter((w: { waypoint_type?: string | null }) => w.waypoint_type === "dropoff").map((w: { label: string }) => w.label);
 
   return NextResponse.json({
     ok: true,
@@ -56,11 +58,15 @@ export async function GET(request: NextRequest) {
       price_cents: quote.price_cents,
       currency: quote.currency,
       passenger_count: quote.passenger_count ?? null,
+      arrival_date: quote.arrival_date ?? null,
+      departure_date: quote.departure_date ?? null,
       valid_until: quote.valid_until ?? null,
       notes: quote.notes ?? null,
       client_name: quote.client_name ?? null,
       status: quote.status,
-      waypoints: (wps ?? []).map((w: { label: string }) => w.label),
+      waypoints: pickupWaypoints,
+      pickup_waypoints: pickupWaypoints,
+      dropoff_waypoints: dropoffWaypoints,
     },
   });
 }

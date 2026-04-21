@@ -4,6 +4,7 @@ import { useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 
 const TEMPLATES = [
+  { key: "quote",    label: "Preventivo cliente",       desc: "Email preventivo con accetta/rifiuta e riepilogo viaggio" },
   { key: "booking",  label: "Conferma prenotazione",   desc: "Email inviata al cliente agenzia dopo una prenotazione" },
   { key: "otp",      label: "Codice di verifica OTP",  desc: "Email con codice accesso a 6 cifre" },
   { key: "reset",    label: "Reset password",           desc: "Email con link per impostare nuova password" },
@@ -14,7 +15,7 @@ const TEMPLATES = [
 ];
 
 export default function EmailPreviewPage() {
-  const [active, setActive] = useState("booking");
+  const [active, setActive] = useState("quote");
   const [sending, setSending] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string; url?: string } | null>(null);
 

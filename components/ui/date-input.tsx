@@ -61,6 +61,7 @@ function withinBounds(iso: string, min?: string, max?: string, minYear?: number,
 export function DateInput({
   value,
   onChange,
+  name,
   className,
   min,
   max,
@@ -72,6 +73,7 @@ export function DateInput({
 }: {
   value: string;
   onChange: (iso: string) => void;
+  name?: string;
   className?: string;
   min?: string;
   max?: string;
@@ -157,6 +159,7 @@ export function DateInput({
           />
         </>
       ) : null}
+      {name ? <input type="hidden" name={name} value={value} /> : null}
     </span>
   );
 }

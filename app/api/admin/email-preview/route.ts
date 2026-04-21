@@ -46,6 +46,34 @@ function buildBookingSample(): string {
   `, { title: "Conferma prenotazione — Ischia Transfer", preheader: "Prenotazione confermata — Grand Hotel Excelsior, 15/06/2026" });
 }
 
+function buildQuoteSample(): string {
+  return emailHtml(`
+    <p style="font-size:17px;margin-bottom:6px;">Ciao <strong>Luca Renna</strong>,</p>
+    <p style="color:#475569;margin-bottom:24px;">Abbiamo preparato il preventivo per il servizio richiesto. Trovi qui sotto il riepilogo del viaggio.</p>
+    <div style="background:linear-gradient(135deg,#0f2744,#1e3a5f);border-radius:14px;padding:20px 24px;margin-bottom:24px;">
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:6px;">Preventivo transfer</div>
+      <div style="font-size:22px;font-weight:800;color:#ffffff;">Perugia - Ischia Porto</div>
+      <div style="font-size:30px;font-weight:800;color:#ffffff;margin-top:12px;">EUR 4400.00</div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.72);margin-top:4px;">Arrivo 15/06/2026 - Partenza 22/06/2026</div>
+    </div>
+    ${emailDataTable([
+      ["Servizio", "Bus"],
+      ["Data arrivo", "15/06/2026"],
+      ["Data partenza", "22/06/2026"],
+      ["Passeggeri", "40 pax"],
+      ["Punti di carico", "Perugia Stazione FS - Assisi Santa Maria - Foligno"],
+      ["Punti di scarico", "Ischia Porto - Hotel Continental - Hotel San Valentino"],
+      ["Validita offerta", "30/04/2026"],
+    ])}
+    <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 16px;margin:18px 0;font-size:13px;color:#9a3412;">
+      <strong>Note operative:</strong><br/>Bagagli inclusi, orari definitivi da concordare.
+    </div>
+    <p style="color:#475569;margin-top:20px;">Puoi confermare o rifiutare direttamente da questa email.</p>
+    ${emailButton("Accetta preventivo", "#", "#166534")}
+    ${emailButton("Rifiuta", "#", "#991b1b")}
+  `, { title: "Preventivo - Perugia - Ischia Porto", preheader: "Preventivo EUR 4400.00 - Perugia - Ischia Porto" });
+}
+
 function buildResetSample(): string {
   return emailHtml(`
     <p style="font-size:17px;margin-bottom:8px;">Ciao <strong>Luca Renna</strong>,</p>
@@ -141,6 +169,7 @@ function buildReportSample(): string {
 const SAMPLES: Record<string, () => string> = {
   otp:      buildOtpSample,
   booking:  buildBookingSample,
+  quote:    buildQuoteSample,
   reset:    buildResetSample,
   approval: buildApprovalSample,
   report: () => buildServiceListEmailHtml({

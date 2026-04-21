@@ -7,7 +7,9 @@ export function emailHtml(body: string, options?: { title?: string; preheader?: 
   // Logo come URL pubblico — Gmail e la maggior parte dei client email bloccano le immagini base64.
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "https://ischia-transfer.vercel.app";
   const logoUrl = `${appUrl}/brand/logo-ischia-transfer-email.png`;
-  const logoBlock = `<img class="email-logo" src="${logoUrl}" alt="Ischia Transfer Service" width="200" style="width:200px;max-width:200px;height:auto;display:block;margin:0 auto;" />`;
+  const logoBlock = `<div class="email-logo-crop" style="width:200px;height:64px;overflow:hidden;margin:0 auto;line-height:0;">
+        <img class="email-logo" src="${logoUrl}" alt="Ischia Transfer Service" width="200" style="width:200px;max-width:200px;height:auto;display:block;margin:-113px auto 0;" />
+      </div>`;
 
   const preheader = options?.preheader
     ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${options.preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>`
@@ -70,7 +72,8 @@ ${options?.title ? `<title>${options.title}</title>` : ""}
     .service-title { font-size:17px!important; }
 
     /* Logo */
-    img.email-logo { width:160px!important; max-width:160px!important; }
+    .email-logo-crop { width:160px!important; height:52px!important; }
+    img.email-logo { width:160px!important; max-width:160px!important; margin-top:-91px!important; }
   }
 </style>
 </head>
@@ -84,7 +87,7 @@ ${preheader}
 
   <!-- HEADER -->
   <tr>
-    <td class="email-header" style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:26px 24px;text-align:center;line-height:0;">
+    <td class="email-header" style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:18px 24px;text-align:center;line-height:0;">
       ${logoBlock}
     </td>
   </tr>

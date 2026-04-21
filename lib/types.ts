@@ -107,6 +107,8 @@ export interface Service {
   source_total_amount_cents?: number | null;
   source_price_per_pax_cents?: number | null;
   source_amount_currency?: string | null;
+  source_quote_id?: string | null;
+  source_quote_leg?: "arrival" | "departure" | null;
   margin_cents?: number | null;
   pricing_apply_mode?: "manual" | "auto_rule" | "fallback" | null;
   pricing_confidence?: number | null;
@@ -330,11 +332,15 @@ export interface QuoteRecord {
   created_by_user_id?: string | null;
   owner_label: string;
   status: "draft" | "sent" | "accepted" | "rejected" | "expired";
+  quote_service_code?: string | null;
+  quote_bus_line_id?: string | null;
   service_kind: string;
   route_label: string;
   price_cents: number;
   currency: string;
   passenger_count?: number | null;
+  arrival_date?: string | null;
+  departure_date?: string | null;
   valid_until?: string | null;
   notes?: string | null;
   created_at: string;
@@ -345,6 +351,7 @@ export interface QuoteWaypoint {
   tenant_id: string;
   quote_id: string;
   label: string;
+  waypoint_type?: "pickup" | "dropoff" | null;
   sort_order: number;
   created_at?: string;
 }
