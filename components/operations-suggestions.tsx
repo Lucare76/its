@@ -118,7 +118,10 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
     setMessage(`Suggerimento risolto.${moved}`);
     await load();
 
-    if (suggestion.action_payload.action === "open_service") router.push("/servizi");
+    if (suggestion.action_payload.action === "open_service") {
+      const name = suggestion.action_payload.customer_name;
+      router.push(name ? `/ricerca?q=${encodeURIComponent(name)}` : "/ricerca");
+    }
     if (suggestion.action_payload.action === "open_hotel") router.push("/hotels");
   };
 

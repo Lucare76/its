@@ -11,6 +11,7 @@ export type SuggestionActionPayload = {
   to_bus_label?: string;
   pax?: number;
   service_id?: string;
+  customer_name?: string;
   hotel_id?: string;
   date?: string;
   direction?: Service["direction"];
@@ -264,7 +265,7 @@ export function generateSuggestions(state: OperationsSuggestionState): Suggestio
         title: "Telefono cliente mancante",
         description: `${service.customer_name || "Cliente"} non ha un telefono salvato. Recuperalo prima di inviare reminder o aggiornamenti.`,
         action_label: "Apri servizio",
-        action_payload: { action: "open_service", service_id: service.id }
+        action_payload: { action: "open_service", service_id: service.id, customer_name: service.customer_name ?? undefined }
       }, state));
     }
   }

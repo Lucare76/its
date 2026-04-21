@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
@@ -55,8 +56,9 @@ function fmtDate(d: string | null) {
   return new Date(`${d}T00:00:00`).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-export default function RicercaPage() {
-  const [query, setQuery] = useState("");
+function RicercaInner() {
+  const searchParams = useSearchParams();
+  const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -187,5 +189,13 @@ export default function RicercaPage() {
         </div>
       ) : null}
     </section>
+  );
+}
+
+export default function RicercaPage() {
+  return (
+    <Suspense>
+      <RicercaInner />
+    </Suspense>
   );
 }
