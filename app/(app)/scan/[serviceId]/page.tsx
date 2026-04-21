@@ -65,6 +65,10 @@ export default function ScanPage() {
   const [completedAt, setCompletedAt] = useState<string | null>(null);
   const [alreadyCompleted, setAlreadyCompleted] = useState(false);
 
+  const [phoneEdit, setPhoneEdit] = useState("");
+  const [savingPhone, setSavingPhone] = useState(false);
+  const [phoneSaved, setPhoneSaved] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -84,6 +88,23 @@ export default function ScanPage() {
     void load();
     return () => { cancelled = true; };
   }, [serviceId]);
+
+  async function savePhone() {
+    setSavingPhone(true);
+    const token = await accessToken();
+    if (!token) { setSavingPhone(false); return; }
+    const res = await fetch(`/api/scan/${serviceId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "update_phone", phone: phoneEdit }),
+    });
+    const data = await res.json().catch(() => null) as { ok?: boolean; phone?: string | null } | null;
+    setSavingPhone(false);
+    if (data?.ok && service) {
+      setService({ ...service, phone: data.phone ?? null });
+      setPhoneSaved(true);
+    }
+  }
 
   async function confirmComplete() {
     setCompleting(true);
@@ -186,6 +207,35 @@ export default function ScanPage() {
           {service.hotel_name && <Row label="Destinazione" value={service.hotel_name} />}
           {service.meeting_point && <Row label="Meeting point" value={service.meeting_point} />}
         </div>
+
+        {/* Phone edit when missing */}
+        {!service.phone && !phoneSaved && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 space-y-3">
+            <p className="text-sm font-semibold text-amber-800">Telefono cliente mancante</p>
+            <div className="flex gap-2">
+              <input
+                type="tel"
+                value={phoneEdit}
+                onChange={(e) => setPhoneEdit(e.target.value)}
+                placeholder="+39 333 1234567"
+                className="flex-1 rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-400"
+              />
+              <button
+                type="button"
+                disabled={savingPhone || !phoneEdit.trim()}
+                onClick={() => void savePhone()}
+                className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {savingPhone ? "..." : "Salva"}
+              </button>
+            </div>
+          </div>
+        )}
+        {phoneSaved && (
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+            <p className="text-sm font-semibold text-emerald-700">✓ Telefono salvato</p>
+          </div>
+        )}
 
         {/* Assignment */}
         {assignment && (

@@ -98,7 +98,18 @@ export async function POST(
 
     const { serviceId } = await params;
     const tenantId = auth.membership.tenant_id;
-    const body = await request.json().catch(() => null) as { action?: string } | null;
+    const body = await request.json().catch(() => null) as { action?: string; phone?: string } | null;
+
+    if (body?.action === "update_phone") {
+      const phone = (body.phone ?? "").trim() || null;
+      const { error: upErr } = await auth.admin
+        .from("services")
+        .update({ phone })
+        .eq("id", serviceId)
+        .eq("tenant_id", tenantId);
+      if (upErr) throw new Error(upErr.message);
+      return NextResponse.json({ ok: true, phone });
+    }
 
     if (body?.action !== "complete") {
       return NextResponse.json({ ok: false, error: "Azione non valida." }, { status: 400 });
