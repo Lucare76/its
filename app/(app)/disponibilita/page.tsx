@@ -172,22 +172,27 @@ export default function DisponibilitaPage() {
 
   return (
     <section className="mx-auto max-w-6xl page-section">
-      <div className="section-head">
-        <h1 className="section-title">Disponibilità del Giorno</h1>
-        <p className="section-subtitle">Dichiara quali autisti e mezzi sono disponibili. Conferma prima di aprire il Piano del Giorno.</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Operativo giornaliero</p>
+          <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-slate-950">Disponibilità del giorno</h1>
+        </div>
+        <p className="max-w-xl text-sm leading-6 text-slate-500">
+          Dichiara quali autisti e mezzi sono disponibili. Conferma prima di aprire il Piano del Giorno.
+        </p>
       </div>
 
       {/* Selettore data */}
-      <div className="card p-4 mb-4 flex flex-wrap items-end gap-4">
-        <label className="text-sm font-medium text-slate-700">
-          Data
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <label className="flex flex-wrap items-center gap-3 text-sm font-semibold text-slate-700">
+          <span>Data</span>
           <DateInput
             value={date}
             onChange={setDate}
-            className="mt-1"
+            className="h-10 w-36 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-slate-400 focus:bg-white"
           />
         </label>
-        <div className="text-sm text-slate-500">
+        <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-500">
           {loading ? "Caricamento..." : `${availableDrivers}/${drivers.length} autisti · ${availableVehicles}/${vehicles.length} mezzi`}
         </div>
       </div>

@@ -1203,17 +1203,17 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       </aside>
 
       <div className="space-y-4">
-        <header className="card relative z-30 space-y-4 px-4 py-4 md:px-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+        <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Vista operativa</p>
-            <h2 className="mt-1 line-clamp-2 text-2xl text-slate-950">{title}</h2>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Vista operativa</p>
+            <h2 className="mt-0.5 line-clamp-1 text-xl font-extrabold tracking-tight text-slate-950 md:text-2xl">{title}</h2>
           </div>
-          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end sm:gap-3">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
             {authRole === "admin" || authRole === "supervisor" ? (
               <Link
                 href="/settings/users"
-                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium shadow-sm transition ${
+                className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition ${
                   pendingAccessRequestCount > 0
                     ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
                     : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
@@ -1239,7 +1239,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
               <button
                 type="button"
                 onClick={toggleTheme}
-                className="btn-secondary px-3 py-2 text-xs sm:text-sm"
+                className="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
                 title={isDark ? "Passa alla modalità chiara" : "Passa alla modalità scura"}
               >
                 <span className="inline-flex items-center gap-2">
@@ -1256,7 +1256,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
               <button
                 type="button"
                 onClick={toggleInboxSound}
-                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs shadow-sm transition sm:text-sm ${
+                className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition ${
                   inboxSoundEnabled
                     ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                     : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
@@ -1273,7 +1273,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
               <button
                 type="button"
                 onClick={handleSignOut}
-                className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-600 shadow-sm transition hover:bg-rose-100 sm:text-sm"
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-600 transition hover:bg-rose-100"
                 title="Esci"
               >
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0" aria-hidden="true">
@@ -1285,40 +1285,40 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 <img
                   src="/bowser-avatar.png"
                   alt="Leonardo"
-                  className="h-24 w-24 object-contain drop-shadow-md"
+                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
                 />
               ) : authRole === "admin" && authName?.toLowerCase().includes("mario") ? (
                 <img
                   src="/mario-avatar.png"
                   alt="Mario"
-                  className="h-24 w-24 object-contain drop-shadow-md"
+                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
                 />
               ) : authRole === "admin" && (authName?.toLowerCase().includes("karmen") || authName?.toLowerCase().includes("peach")) ? (
                 <img
                   src="/karmen-avatar.png"
                   alt="Karmen"
-                  className="h-24 w-24 object-contain drop-shadow-md"
+                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
                 />
               ) : authRole === "operator" && authGender === "female" ? (
                 <img
                   src="/toadette-avatar.png"
                   alt="Operatrice"
-                  className="h-24 w-24 object-contain drop-shadow-md"
+                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
                 />
               ) : authRole === "operator" && authGender === "male" ? (
                 <img
                   src="/bowser-avatar.png"
                   alt="Operatore"
-                  className="h-24 w-24 object-contain drop-shadow-md"
+                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
                 />
               ) : authRole === "supervisor" ? (
                 <img
                   src="/luca-avatar.png"
                   alt="Luca"
-                  className="h-24 w-24 object-cover rounded-full drop-shadow-md"
+                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-cover p-1 shadow-sm"
                 />
               ) : (
-                <div className="inline-flex h-9 min-w-9 items-center justify-center rounded-full border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-700 shadow-sm">
+                <div className="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-700 shadow-sm">
                   {(authRole ?? "U").slice(0, 2).toUpperCase()}
                 </div>
               )}

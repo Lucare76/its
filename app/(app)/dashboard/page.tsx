@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ExportServicesButton } from "@/components/export-services-button";
+import { OperationsSuggestions } from "@/components/operations-suggestions";
 import { EmptyState, SidePanel } from "@/components/ui";
 import { needsInboxReview } from "@/lib/inbox-review";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
@@ -431,6 +432,8 @@ export default function OperatorDashboardPage() {
           </p>
         </div>
       )}
+
+      <OperationsSuggestions refreshIntervalMs={30_000} />
 
       {/* ── Sezione 48h + liste ─────────────────────────────────────────── */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">

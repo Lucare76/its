@@ -163,7 +163,18 @@ type ServiceRow = {
   vessel: string | null; hotel_id: string | null; pax: number;
   status: string; meeting_point: string | null; pickup_hotel: string | null;
 };
-type HotelRow = { id: string; name: string | null; address: string | null; zone: string | null; lat: number | null; lng: number | null };
+type HotelRow = {
+  id: string;
+  name: string | null;
+  address: string | null;
+  zone: string | null;
+  lat: number | null;
+  lng: number | null;
+  geo_status: string | null;
+  geo_source: string | null;
+  geo_accuracy: string | null;
+  geo_verified_at: string | null;
+};
 type VehicleRow = { id: string; label: string; capacity: number | null };
 type DriverRow = { user_id: string; full_name: string; max_vehicle_capacity: number | null };
 
@@ -237,7 +248,7 @@ export async function POST(request: NextRequest) {
           .select("id, time, direction, vessel, hotel_id, pax, status, meeting_point, pickup_hotel")
           .eq("tenant_id", tenantId).eq("date", date)
           .neq("status", "cancelled").neq("is_draft", true),
-        auth.admin.from("hotels").select("id, name, address, zone, lat, lng").eq("tenant_id", tenantId),
+        auth.admin.from("hotels").select("id, name, address, zone, lat, lng, geo_status, geo_source, geo_accuracy, geo_verified_at").eq("tenant_id", tenantId),
         auth.admin.from("vehicles")
           .select("id, label, capacity")
           .eq("tenant_id", tenantId).eq("active", true)

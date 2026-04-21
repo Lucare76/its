@@ -153,9 +153,18 @@ export function hotelGeoQuality(input: {
   zone?: string | null;
   lat?: number | null;
   lng?: number | null;
+  geo_status?: string | null;
+  geo_source?: string | null;
+  geo_accuracy?: string | null;
+  geo_verified_at?: string | null;
 }): HotelGeoQuality {
   const issues: HotelGeoIssue[] = [];
   const missing = isMissingCoordinates(input.lat, input.lng);
+  const manuallyVerifiedRooftop =
+    normalizeGeoStatus(input.geo_status) === "verified" &&
+    normalizeGeoSource(input.geo_source) === "manual" &&
+    normalizeGeoAccuracy(input.geo_accuracy) === "rooftop" &&
+    Boolean(input.geo_verified_at);
   let inferredZone: HotelZone | null = null;
   let distanceFromZoneKm: number | null = null;
 
@@ -167,7 +176,7 @@ export function hotelGeoQuality(input: {
     const point = { lat: input.lat!, lng: input.lng! };
     inferredZone = inferZoneFromCoords(point.lat, point.lng);
 
-    if (isDefaultZoneCentroid(point.lat, point.lng)) {
+    if (!manuallyVerifiedRooftop && isDefaultZoneCentroid(point.lat, point.lng)) {
       issues.push("default_centroid");
     }
 

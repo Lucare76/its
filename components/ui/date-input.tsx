@@ -8,6 +8,17 @@ function isoToDisplay(value: string) {
   return `${match[3]}/${match[2]}/${match[1]}`;
 }
 
+function normalizeTypedDisplay(value: string) {
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{0,2}-?\d{0,2}$/.test(trimmed)) return trimmed;
+
+  const digits = trimmed.replace(/\D/g, "").slice(-8);
+  if (!digits) return "";
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
 function dateExists(year: number, month: number, day: number) {
   const date = new Date(year, month - 1, day);
   return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
@@ -107,7 +118,8 @@ export function DateInput({
         disabled={disabled}
         title={fallbackTitle}
         placeholder="gg/mm/aaaa"
-        onChange={(event) => setDisplayValue(event.target.value)}
+        onFocus={(event) => event.currentTarget.select()}
+        onChange={(event) => setDisplayValue(normalizeTypedDisplay(event.target.value))}
         onBlur={(event) => commitDisplayValue(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
