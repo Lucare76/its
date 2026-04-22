@@ -230,6 +230,7 @@ export const MAIN_NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/map", label: "Mappa", icon: "M" }
   ],
   driver: [{ href: "/driver", label: "Area Autista", icon: "R" }],
+  autista: [{ href: "/driver", label: "Area Autista", icon: "R" }],
   assistenza: [{ href: "/scan", label: "Smarcamento", icon: "Q" }],
 };
 

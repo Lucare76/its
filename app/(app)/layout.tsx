@@ -96,7 +96,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const redirectByRole = (role: UserRole | null) => {
     if (!role) return "/login";
     if (role === "admin" || role === "operator" || role === "supervisor") return "/dashboard";
-    if (role === "driver") return "/driver";
+    if (role === "driver" || role === "autista") return "/driver";
     return "/agency";
   };
 

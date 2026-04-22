@@ -31,9 +31,9 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/ops-rules", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/audit", roles: ["admin", "supervisor"] },
   { prefix: "/hotels", roles: ["admin", "operator", "supervisor"] },
-  { prefix: "/driver", roles: ["admin", "driver", "supervisor"] },
-  { prefix: "/fleet-ops", roles: ["admin", "operator", "driver", "supervisor"] },
-  { prefix: "/scan", roles: ["admin", "operator", "driver", "supervisor", "assistenza"] },
+  { prefix: "/driver", roles: ["admin", "driver", "supervisor", "autista"] },
+  { prefix: "/fleet-ops", roles: ["admin", "operator", "driver", "supervisor", "autista"] },
+  { prefix: "/scan", roles: ["admin", "operator", "driver", "supervisor", "assistenza", "autista"] },
   { prefix: "/mappa-live", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/preventivo-ops", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/map", roles: ["admin", "operator", "supervisor"] },
@@ -114,8 +114,8 @@ export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
   "agencies:manage": ["admin", "supervisor"],
   "agency_bookings:self": ["agency"],
   "agency_bookings:manage": ["admin", "supervisor"],
-  "driver:self": ["driver", "admin", "supervisor"],
-  "fleet_ops:view": ["admin", "operator", "driver", "supervisor"],
+  "driver:self": ["driver", "admin", "supervisor", "autista"],
+  "fleet_ops:view": ["admin", "operator", "driver", "supervisor", "autista"],
   "control_room:view": ["admin", "operator", "supervisor"],
   "quotes:view": ["admin", "operator", "supervisor"],
   "users:manage": ["admin", "supervisor"],
@@ -183,7 +183,7 @@ export function isAllowedWithOverrides(pathname: string, role: UserRole | null, 
 export function parseRole(raw: string | undefined): UserRole | null {
   if (!raw) return null;
   const normalized = raw.trim().toLowerCase();
-  if (normalized === "admin" || normalized === "operator" || normalized === "driver" || normalized === "agency" || normalized === "supervisor" || normalized === "assistenza") {
+  if (normalized === "admin" || normalized === "operator" || normalized === "driver" || normalized === "agency" || normalized === "supervisor" || normalized === "assistenza" || normalized === "autista") {
     return normalized;
   }
   return null;
