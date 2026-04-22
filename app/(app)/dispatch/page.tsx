@@ -330,9 +330,14 @@ export default function DispatchPage() {
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${hasAssign ? "bg-emerald-500" : "bg-amber-400"}`} />
                             <p className="text-sm font-semibold text-slate-800 truncate">{getCustomerFullName(svc)}</p>
+                            {svc.linked_service_id && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700">A/R</span>}
                           </div>
                           <p className="text-xs text-slate-500 mt-0.5 pl-3">
-                            {svc.time.slice(0, 5)} · {hotel?.name ?? "Hotel N/D"} · {svc.pax} pax · {svc.vessel}
+                            {svc.booking_service_kind === "private_island" && svc.time_from
+                              ? `${svc.time_from}–${svc.time_to ?? "?"}`
+                              : svc.time.slice(0, 5)}
+                            {" · "}{hotel?.name ?? "Hotel N/D"} · {svc.pax} pax · {svc.vessel}
+                            {svc.pickup_time ? ` · ⏱ ${svc.pickup_time}` : ""}
                           </p>
                         </div>
 

@@ -22,6 +22,7 @@ export default function DriverDetailPage() {
   const service = useMemo(() => data.services.find((item) => item.id === serviceId), [data.services, serviceId]);
   const hotel = useMemo(() => (service ? data.hotels.find((item) => item.id === service.hotel_id) : null), [data.hotels, service]);
   const assignment = useMemo(() => (service ? data.assignments.find((item) => item.service_id === service.id) : null), [data.assignments, service]);
+  const linkedService = useMemo(() => (service?.linked_service_id ? data.services.find((item) => item.id === service.linked_service_id) : null), [data.services, service]);
   const isMine = role === "driver" ? assignment?.driver_user_id === userId : true;
 
   const pickupNotes = useMemo(() => {
@@ -168,8 +169,14 @@ export default function DriverDetailPage() {
       <article className="card space-y-3 p-5">
         <h1 className="text-xl font-semibold">{service.customer_name}</h1>
         <p className="text-sm text-muted">
-          {service.date} {service.time}
+          {service.date} ·{" "}
+          {service.booking_service_kind === "private_island" && service.time_from
+            ? `dalle ${service.time_from} alle ${service.time_to ?? "—"}`
+            : service.time}
         </p>
+        {service.pickup_time && (
+          <p className="text-sm font-semibold text-amber-700">⏱ Prelevamento: {service.pickup_time}</p>
+        )}
         <p className="text-sm text-muted">Nave: {service.vessel}</p>
         <p className="text-sm text-muted">Hotel: {hotel?.name ?? "N/D"}</p>
         <p className="text-sm text-muted">Passeggeri: {service.pax}</p>
@@ -177,6 +184,20 @@ export default function DriverDetailPage() {
         <p className="text-sm">
           Stato attuale: <strong className={statusBadgeClass(service.status)}>{service.status}</strong>
         </p>
+        {linkedService && (
+          <div className="rounded-xl border border-purple-200 bg-purple-50 p-3 text-sm">
+            <p className="font-semibold text-purple-800 mb-1">
+              {service.direction === "arrival" ? "↩ Tratta di ritorno" : "↗ Tratta di andata"}
+            </p>
+            <p className="text-purple-700">
+              {linkedService.date} · {linkedService.time} ·{" "}
+              <span className={`font-semibold ${linkedService.status === "completato" ? "text-emerald-700" : ""}`}>{linkedService.status}</span>
+            </p>
+            <Link href={`/driver/${linkedService.id}`} className="mt-1.5 inline-block text-xs font-semibold text-purple-600 underline">
+              Apri tratta collegata →
+            </Link>
+          </div>
+        )}
         <div className="rounded-xl border border-border bg-surface-2 p-3 text-sm">
           <p className="font-medium">Note operative</p>
           <p className="mt-1 whitespace-pre-wrap text-muted">{service.notes || "Nessuna nota"}</p>
