@@ -102,6 +102,7 @@ function DriverPageInner() {
   const [isOnline, setIsOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [tab, setTab] = useState<Tab>("oggi");
   const [showSign, setShowSign] = useState(false);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
   const channelRef = useRef<ReturnType<NonNullable<typeof supabase>["channel"]> | null>(null);
 
   /* ---- carica dati driver */
@@ -285,6 +286,14 @@ function DriverPageInner() {
       (focused.service.pax <= 6 && !!focused.service.customer_name)
     : false;
 
+  const handleInstallApp = () => {
+    if (installPromptAvailable) {
+      triggerInstall();
+      return;
+    }
+    setShowInstallHelp(true);
+  };
+
   if (loading) return <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">Caricamento...</div>;
   if (errorMessage) return <div className="p-4 text-sm text-rose-600">{errorMessage}</div>;
 
@@ -299,6 +308,47 @@ function DriverPageInner() {
           isExclusive={isExclusive}
           onClose={() => setShowSign(false)}
         />
+      )}
+
+      {showInstallHelp && !isStandalone && (
+        <div className="fixed inset-0 z-50 flex items-end bg-slate-950/55 px-3 pb-3" onClick={() => setShowInstallHelp(false)}>
+          <div
+            className="w-full rounded-3xl bg-white p-5 text-slate-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-lg font-black">Installa app autista</p>
+                <p className="mt-1 text-sm text-slate-500">Aggiungila alla schermata Home per aprirla come app.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowInstallHelp(false)}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 text-lg font-bold"
+                aria-label="Chiudi istruzioni installazione"
+              >
+                ×
+              </button>
+            </div>
+            <div className="mt-4 space-y-3 text-sm leading-6">
+              <div className="rounded-2xl bg-slate-50 p-3">
+                <p className="font-bold text-slate-900">Android</p>
+                <p>Apri questa pagina con Chrome, tocca il menu ⋮ in alto a destra, poi Installa app oppure Aggiungi a schermata Home.</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-3">
+                <p className="font-bold text-slate-900">iPhone</p>
+                <p>Apri questa pagina con Safari, tocca Condividi, poi Aggiungi a schermata Home.</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowInstallHelp(false)}
+              className="mt-4 w-full rounded-2xl bg-slate-900 py-3 text-sm font-bold text-white"
+            >
+              Ho capito
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Header profilo */}
@@ -332,10 +382,10 @@ function DriverPageInner() {
 
         {/* Bottoni PWA */}
         <div className="mt-3 flex flex-wrap gap-2">
-          {installPromptAvailable && (
-            <button onClick={triggerInstall}
-              className="rounded-xl bg-white/15 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/25 active:scale-95 transition">
-              📲 Installa app
+          {!isStandalone && (
+            <button onClick={handleInstallApp}
+              className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-slate-900 hover:bg-slate-100 active:scale-95 transition">
+              Installa app
             </button>
           )}
           {pushState === "unsubscribed" && (
@@ -357,35 +407,6 @@ function DriverPageInner() {
           )}
         </div>
 
-        {!isStandalone && (
-          <div className="mt-3 rounded-2xl border border-white/10 bg-white/10 px-3 py-3 text-xs text-slate-200">
-            <div className="flex items-center justify-between gap-3">
-              <p className="font-bold text-white">Installa app autista</p>
-              {installPromptAvailable && (
-                <button
-                  type="button"
-                  onClick={triggerInstall}
-                  className="shrink-0 rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-slate-900 active:scale-95"
-                >
-                  Installa
-                </button>
-              )}
-            </div>
-            {isIos ? (
-              <p className="mt-2 leading-5">
-                iPhone: apri da Safari, tocca Condividi, poi Aggiungi a schermata Home.
-              </p>
-            ) : isAndroid ? (
-              <p className="mt-2 leading-5">
-                Android: apri da Chrome, tocca il menu ⋮, poi Installa app o Aggiungi a schermata Home.
-              </p>
-            ) : (
-              <p className="mt-2 leading-5">
-                Android: menu Chrome ⋮, Installa app. iPhone: Safari, Condividi, Aggiungi a schermata Home.
-              </p>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Servizio in focus */}
