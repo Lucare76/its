@@ -271,9 +271,13 @@ function DriverPageInner() {
     if (typeof navigator === "undefined") return false;
     return /iphone|ipad|ipod/.test(navigator.userAgent.toLowerCase());
   }, []);
+  const isAndroid = useMemo(() => {
+    if (typeof navigator === "undefined") return false;
+    return /android/.test(navigator.userAgent.toLowerCase());
+  }, []);
   const isStandalone = useMemo(() => {
     if (typeof window === "undefined") return false;
-    return window.matchMedia("(display-mode: standalone)").matches;
+    return window.matchMedia("(display-mode: standalone)").matches || (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
   }, []);
 
   const isExclusive = focused
@@ -353,11 +357,34 @@ function DriverPageInner() {
           )}
         </div>
 
-        {/* Hint installazione iOS (solo se non già installata e siamo su Safari iOS) */}
-        {isIos && !isStandalone && (
-          <p className="mt-3 rounded-xl bg-white/10 px-3 py-2 text-xs text-slate-300">
-            📱 Per installare su iPhone: tocca <strong>Condividi</strong> → <strong>Aggiungi a schermata Home</strong>
-          </p>
+        {!isStandalone && (
+          <div className="mt-3 rounded-2xl border border-white/10 bg-white/10 px-3 py-3 text-xs text-slate-200">
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-bold text-white">Installa app autista</p>
+              {installPromptAvailable && (
+                <button
+                  type="button"
+                  onClick={triggerInstall}
+                  className="shrink-0 rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-slate-900 active:scale-95"
+                >
+                  Installa
+                </button>
+              )}
+            </div>
+            {isIos ? (
+              <p className="mt-2 leading-5">
+                iPhone: apri da Safari, tocca Condividi, poi Aggiungi a schermata Home.
+              </p>
+            ) : isAndroid ? (
+              <p className="mt-2 leading-5">
+                Android: apri da Chrome, tocca il menu ⋮, poi Installa app o Aggiungi a schermata Home.
+              </p>
+            ) : (
+              <p className="mt-2 leading-5">
+                Android: menu Chrome ⋮, Installa app. iPhone: Safari, Condividi, Aggiungi a schermata Home.
+              </p>
+            )}
+          </div>
         )}
       </div>
 

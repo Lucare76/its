@@ -21,8 +21,29 @@ export function DriverSign({ customerName, hotelName, isExclusive, onClose }: Pr
       className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-white"
       onClick={onClose}
     >
-      {/* Tap per chiudere */}
-      <p className="absolute top-4 right-4 text-xs text-slate-300 select-none">Tocca per chiudere</p>
+      <div className="absolute left-0 right-0 top-0 flex items-center justify-between border-b border-slate-200 bg-white/95 px-4 py-3 shadow-sm">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose();
+          }}
+          className="rounded-full bg-slate-900 px-4 py-2 text-sm font-bold text-white shadow-sm active:scale-95"
+        >
+          ← Torna ai servizi
+        </button>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose();
+          }}
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 text-lg font-bold text-slate-600 active:scale-95"
+          aria-label="Chiudi cartello"
+        >
+          ×
+        </button>
+      </div>
 
       {isExclusive && customerName ? (
         /* ── Servizio esclusivo ── */
