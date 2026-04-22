@@ -5,6 +5,10 @@ import { PageHeader } from "@/components/ui";
 import { DateInput } from "@/components/ui";
 import { supabase } from "@/lib/supabase/client";
 import {
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Cell,
+} from "recharts";
+import {
   ROUTE_LABELS,
   TICKET_MODE_LABELS,
   LEG_STATUS_LABELS,
@@ -16,11 +20,17 @@ import {
   type MedmarArPendingGroup,
   type DecisionScenario,
 } from "@/lib/medmar-ar/types";
+import type { MedmarArStats } from "@/app/api/medmar-ar/stats/route";
+import type { MatchOpportunity } from "@/app/api/medmar-ar/matching/route";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function firstOfYear() {
+  return `${todayIso().slice(0, 4)}-01-01`;
 }
 
 async function getToken(): Promise<string | null> {
@@ -68,9 +78,27 @@ const RISK_COLORS: Record<string, { card: string; badge: string }> = {
   high:   { card: "border-rose-200 bg-rose-50",        badge: "bg-rose-600 text-white" },
 };
 
+const URGENCY_COLORS: Record<string, string> = {
+  critical: "border-rose-200 bg-rose-50",
+  high:     "border-amber-200 bg-amber-50",
+  normal:   "border-slate-200 bg-white",
+};
+
+const URGENCY_BADGE: Record<string, string> = {
+  critical: "bg-rose-600 text-white",
+  high:     "bg-amber-500 text-white",
+  normal:   "bg-slate-200 text-slate-600",
+};
+
+const URGENCY_LABEL: Record<string, string> = {
+  critical: "Critico",
+  high:     "Urgente",
+  normal:   "Normale",
+};
+
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 
-type Tab = "emissione" | "biglietti" | "pending";
+type Tab = "emissione" | "biglietti" | "pending" | "recupero" | "dashboard";
 
 // ─── Componente Decision Helper ───────────────────────────────────────────────
 
@@ -101,7 +129,6 @@ function DecisionHelper({
 
   return (
     <div className="rounded-2xl border border-indigo-200 bg-white shadow-sm overflow-hidden">
-      {/* Header */}
       <div className="border-b border-indigo-100 bg-indigo-50 px-5 py-4">
         <h3 className="text-sm font-bold text-indigo-900">💡 Suggerimento Economico</h3>
         {sampleSize > 0 && (
@@ -114,7 +141,6 @@ function DecisionHelper({
         )}
       </div>
 
-      {/* Raccomandazione */}
       {recommended && (
         <div className="border-b border-indigo-100 bg-indigo-600 px-5 py-3">
           <p className="text-sm font-semibold text-white">
@@ -123,7 +149,6 @@ function DecisionHelper({
         </div>
       )}
 
-      {/* Card scenari */}
       <div className={`grid gap-4 p-5 ${scenarios.length === 1 ? "grid-cols-1" : scenarios.length === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1 sm:grid-cols-3"}`}>
         {scenarios.map((s) => {
           const colors = RISK_COLORS[s.riskLevel];
@@ -164,7 +189,6 @@ function DecisionHelper({
         })}
       </div>
 
-      {/* Semafori orari */}
       {timeSignals.length > 0 && (
         <div className="border-t border-slate-100 px-5 py-4">
           <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -230,7 +254,6 @@ function TicketCard({
         <span className="text-xs text-slate-400">{formatEur(ticket.unit_price_cents)}/tratta·pax</span>
       </div>
 
-      {/* Legs */}
       {legs.length > 0 && (
         <div className="border-t border-slate-100 pt-3 space-y-2">
           {legs.map((leg) => (
@@ -263,6 +286,18 @@ function TicketCard({
       {ticket.notes && (
         <p className="text-xs text-slate-400 italic border-t border-slate-100 pt-2">{ticket.notes}</p>
       )}
+    </div>
+  );
+}
+
+// ─── Componente KPI Card ──────────────────────────────────────────────────────
+
+function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+      <p className={`mt-1 text-2xl font-extrabold ${color ?? "text-slate-900"}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
     </div>
   );
 }
@@ -308,6 +343,20 @@ export default function MedmarArPage() {
   const [pendingGroups, setPendingGroups] = useState<MedmarArPendingGroup[]>([]);
   const [pendingLoading, setPendingLoading] = useState(false);
 
+  // Recupero (matching)
+  const [opportunities, setOpportunities] = useState<MatchOpportunity[]>([]);
+  const [opportunitiesLoading, setOpportunitiesLoading] = useState(false);
+  const [selectedOpportunity, setSelectedOpportunity] = useState<MatchOpportunity | null>(null);
+  const [reassigning, setReassigning] = useState<string | null>(null); // booking_id in corso
+  const [reassignMsg, setReassignMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // Dashboard / Stats
+  const [stats, setStats] = useState<MedmarArStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsPeriodFrom, setStatsPeriodFrom] = useState(firstOfYear());
+  const [statsPeriodTo, setStatsPeriodTo] = useState(todayIso());
+  const [exportingExcel, setExportingExcel] = useState(false);
+
   // Early-alert: biglietti A/R emessi con > 7 gg anticipo
   const earlyWarning = useMemo(() => {
     const today = todayIso();
@@ -317,6 +366,10 @@ export default function MedmarArPage() {
       return days > 7;
     });
   }, [tickets]);
+
+  // Badge recupero
+  const criticalOpp = opportunities.filter((o) => o.urgency === "critical").length;
+  const highOpp = opportunities.filter((o) => o.urgency !== "normal").length;
 
   // Boot
   useEffect(() => {
@@ -406,6 +459,37 @@ export default function MedmarArPage() {
     if (tab === "pending") void loadPending();
   }, [tab, loadPending]);
 
+  // Carica opportunità di recupero
+  const loadOpportunities = useCallback(async () => {
+    if (!token) return;
+    setOpportunitiesLoading(true);
+    const res = await api<{ opportunities: MatchOpportunity[]; total_available: number; total_value_cents: number }>(
+      "/api/medmar-ar/matching",
+      undefined,
+      token
+    );
+    setOpportunitiesLoading(false);
+    if (res.ok && res.data) setOpportunities(res.data.opportunities);
+  }, [token]);
+
+  useEffect(() => {
+    if (tab === "recupero") void loadOpportunities();
+  }, [tab, loadOpportunities]);
+
+  // Carica stats
+  const loadStats = useCallback(async () => {
+    if (!token) return;
+    setStatsLoading(true);
+    const params = new URLSearchParams({ date_from: statsPeriodFrom, date_to: statsPeriodTo });
+    const res = await api<{ stats: MedmarArStats }>(`/api/medmar-ar/stats?${params}`, undefined, token);
+    setStatsLoading(false);
+    if (res.ok && res.data) setStats(res.data.stats);
+  }, [token, statsPeriodFrom, statsPeriodTo]);
+
+  useEffect(() => {
+    if (tab === "dashboard") void loadStats();
+  }, [tab, loadStats]);
+
   // Submit emissione
   const handleEmit = async (modeOverride?: TicketMode) => {
     const mode = modeOverride ?? (formMode as TicketMode);
@@ -477,6 +561,45 @@ export default function MedmarArPage() {
     if (res.ok) void loadTickets();
   };
 
+  // Riassegna leg a prenotazione
+  const handleReassign = async (legId: string, bookingId: string) => {
+    setReassigning(bookingId);
+    setReassignMsg(null);
+    const res = await api<{ customer_name: string; value_recovered_cents: number }>(
+      "/api/medmar-ar/matching",
+      { method: "POST", body: JSON.stringify({ leg_id: legId, booking_id: bookingId }) },
+      token
+    );
+    setReassigning(null);
+    if (res.ok && res.data) {
+      setReassignMsg({ type: "ok", text: `✅ Riassegnato a ${res.data.customer_name} — recuperato ${formatEur(res.data.value_recovered_cents)}` });
+      setSelectedOpportunity(null);
+      void loadOpportunities();
+    } else {
+      setReassignMsg({ type: "err", text: res.error ?? "Errore riassegnazione." });
+    }
+  };
+
+  // Export Excel
+  const handleExport = async () => {
+    if (!token) return;
+    setExportingExcel(true);
+    const params = new URLSearchParams({ date_from: statsPeriodFrom, date_to: statsPeriodTo });
+    const res = await fetch(`/api/medmar-ar/export?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `medmar-ar_${statsPeriodFrom}_${statsPeriodTo}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+    setExportingExcel(false);
+  };
+
   const availableTimes = MEDMAR_TIMES_BY_ROUTE[formRoute] ?? [];
 
   if (initError) return (
@@ -503,18 +626,33 @@ export default function MedmarArPage() {
         </div>
       )}
 
+      {/* Alert opportunità critiche */}
+      {criticalOpp > 0 && tab !== "recupero" && (
+        <button
+          type="button"
+          onClick={() => setTab("recupero")}
+          className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-left hover:bg-rose-100 transition"
+        >
+          <p className="text-sm font-semibold text-rose-800">
+            🚨 {criticalOpp} tratt{criticalOpp === 1 ? "a in scadenza critica" : "e in scadenza critica"} — clicca per gestire il recupero
+          </p>
+        </button>
+      )}
+
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-slate-200">
+      <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
         {([
-          { id: "emissione", label: "✏️ Emissione" },
-          { id: "biglietti", label: "🎫 Biglietti" },
-          { id: "pending",   label: `⏳ Gruppi in attesa${pendingGroups.length > 0 ? ` (${pendingGroups.length})` : ""}` },
+          { id: "emissione",  label: "✏️ Emissione" },
+          { id: "biglietti",  label: "🎫 Biglietti" },
+          { id: "pending",    label: `⏳ Gruppi${pendingGroups.length > 0 ? ` (${pendingGroups.length})` : ""}` },
+          { id: "recupero",   label: `🎯 Recupero${highOpp > 0 ? ` (${highOpp})` : ""}` },
+          { id: "dashboard",  label: "📊 Dashboard" },
         ] as { id: Tab; label: string }[]).map((t) => (
           <button
             key={t.id}
             type="button"
             onClick={() => setTab(t.id)}
-            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition ${
+            className={`shrink-0 px-4 py-2.5 text-sm font-semibold border-b-2 transition ${
               tab === t.id
                 ? "border-indigo-600 text-indigo-600"
                 : "border-transparent text-slate-500 hover:text-slate-700"
@@ -606,7 +744,6 @@ export default function MedmarArPage() {
               </label>
             </div>
 
-            {/* Pulsanti di emissione diretta (senza decision helper) */}
             {formMode && (
               <button
                 type="button"
@@ -651,7 +788,6 @@ export default function MedmarArPage() {
       {/* ─── TAB: BIGLIETTI ────────────────────────────────────────────────── */}
       {tab === "biglietti" && (
         <div className="space-y-4">
-          {/* Filtri */}
           <div className="rounded-xl border border-slate-200 bg-white p-4 flex flex-wrap gap-3 items-end">
             <label className="text-xs font-medium text-slate-600">
               Dal
@@ -683,11 +819,7 @@ export default function MedmarArPage() {
               Voucher
               <input value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} placeholder="Cerca..." className="mt-1 input-saas" />
             </label>
-            <button
-              type="button"
-              onClick={() => void loadTickets()}
-              className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700"
-            >
+            <button type="button" onClick={() => void loadTickets()} className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700">
               Cerca
             </button>
           </div>
@@ -786,6 +918,288 @@ export default function MedmarArPage() {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* ─── TAB: RECUPERO ─────────────────────────────────────────────────── */}
+      {tab === "recupero" && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-600">
+              Tratte disponibili per riassegnazione con prenotazioni compatibili
+            </p>
+            <button type="button" onClick={() => void loadOpportunities()} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+              ↻ Aggiorna
+            </button>
+          </div>
+
+          {reassignMsg && (
+            <div className={`rounded-xl px-4 py-3 text-sm font-medium ${
+              reassignMsg.type === "ok"
+                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                : "bg-rose-50 text-rose-700 border border-rose-200"
+            }`}>
+              {reassignMsg.text}
+            </div>
+          )}
+
+          {opportunitiesLoading && <p className="text-sm text-slate-400">Caricamento opportunità...</p>}
+
+          {!opportunitiesLoading && opportunities.length === 0 && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
+              Nessuna opportunità di recupero al momento.
+            </div>
+          )}
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            {opportunities.map((opp) => (
+              <div
+                key={opp.leg.id}
+                className={`rounded-2xl border p-5 space-y-3 cursor-pointer transition hover:shadow-md ${URGENCY_COLORS[opp.urgency]} ${selectedOpportunity?.leg.id === opp.leg.id ? "ring-2 ring-indigo-500" : ""}`}
+                onClick={() => setSelectedOpportunity(selectedOpportunity?.leg.id === opp.leg.id ? null : opp)}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="font-bold text-slate-900 text-sm">
+                      {opp.leg.leg_type === "outbound" ? "🛳️ Andata" : "↩️ Ritorno"} — {opp.leg.leg_route}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {opp.leg.ticket?.travel_date && new Date(`${opp.leg.ticket.travel_date}T00:00:00`).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" })}
+                      {opp.leg.leg_time && ` · ore ${opp.leg.leg_time}`}
+                      {opp.leg.ticket && ` · ${opp.leg.ticket.pax_count} pax`}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Voucher #{opp.leg.ticket?.voucher_number ?? "—"}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-right space-y-1">
+                    <span className={`block rounded-full px-2 py-0.5 text-[10px] font-bold ${URGENCY_BADGE[opp.urgency]}`}>
+                      {URGENCY_LABEL[opp.urgency]}
+                    </span>
+                    <p className="text-sm font-extrabold text-slate-900">{formatEur(opp.value_cents)}</p>
+                    <p className="text-[10px] text-slate-400">{Math.round(opp.hours_to_expiry)}h rimaste</p>
+                  </div>
+                </div>
+
+                {/* Prenotazioni compatibili */}
+                {opp.matched_bookings.length > 0 ? (
+                  <div className="border-t border-slate-200 pt-3 space-y-2">
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                      {opp.matched_bookings.length} prenotazion{opp.matched_bookings.length === 1 ? "e" : "i"} compatibil{opp.matched_bookings.length === 1 ? "e" : "i"}
+                    </p>
+                    {opp.matched_bookings.map((b) => (
+                      <div key={b.id} className="flex items-center justify-between gap-2 rounded-xl bg-white border border-slate-200 px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-900 truncate">{b.customer_name ?? "—"}</p>
+                          <p className="text-xs text-slate-500">
+                            {b.pax ? `${b.pax} pax` : ""}
+                            {b.hotel_name ? ` · ${b.hotel_name}` : ""}
+                            {b.time ? ` · ${b.time.slice(0, 5)}` : ""}
+                          </p>
+                          {b.phone && <p className="text-xs text-slate-400">{b.phone}</p>}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={reassigning === b.id}
+                          onClick={(e) => { e.stopPropagation(); void handleReassign(opp.leg.id, b.id); }}
+                          className="shrink-0 rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
+                        >
+                          {reassigning === b.id ? "..." : "Riassegna"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="border-t border-slate-200 pt-3">
+                    <p className="text-xs text-slate-400">Nessuna prenotazione compatibile trovata — tratta a rischio perdita.</p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ─── TAB: DASHBOARD ────────────────────────────────────────────────── */}
+      {tab === "dashboard" && (
+        <div className="space-y-6">
+          {/* Toolbar periodo */}
+          <div className="flex flex-wrap gap-3 items-end">
+            <label className="text-xs font-medium text-slate-600">
+              Dal
+              <DateInput value={statsPeriodFrom} onChange={setStatsPeriodFrom} className="mt-1 input-saas" />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              Al
+              <DateInput value={statsPeriodTo} onChange={setStatsPeriodTo} className="mt-1 input-saas" />
+            </label>
+            <button type="button" onClick={() => void loadStats()} className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700">
+              Aggiorna
+            </button>
+            <button
+              type="button"
+              disabled={exportingExcel}
+              onClick={() => void handleExport()}
+              className="rounded-xl border border-emerald-600 px-4 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+            >
+              {exportingExcel ? "Esportando..." : "⬇ Export Excel"}
+            </button>
+          </div>
+
+          {statsLoading && <p className="text-sm text-slate-400">Caricamento statistiche...</p>}
+
+          {stats && (
+            <>
+              {/* KPI Cards */}
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <KpiCard
+                  label="Biglietti emessi"
+                  value={String(stats.kpi.total_tickets)}
+                  sub={`${stats.kpi.total_pax} passeggeri totali`}
+                />
+                <KpiCard
+                  label="Valore totale"
+                  value={formatEur(stats.kpi.total_value_cents)}
+                  sub={`A/R: ${stats.kpi.by_mode.round_trip} · Andata: ${stats.kpi.by_mode.single_outbound} · Ritorno: ${stats.kpi.by_mode.single_return}`}
+                />
+                <KpiCard
+                  label="Perso netto"
+                  value={formatEur(stats.kpi.net_loss_cents)}
+                  sub={`Perso: ${formatEur(stats.kpi.value_lost_cents)} · Recuperato: ${formatEur(stats.kpi.value_recovered_cents)}`}
+                  color={stats.kpi.loss_traffic_light === "green" ? "text-emerald-600" : stats.kpi.loss_traffic_light === "yellow" ? "text-amber-600" : "text-rose-600"}
+                />
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Stato tratte</p>
+                  <div className="mt-2 space-y-1.5">
+                    {[
+                      { label: "Utilizzate",   val: stats.kpi.legs.used,                       color: "bg-emerald-500" },
+                      { label: "Disponibili",  val: stats.kpi.legs.available,                  color: "bg-amber-400" },
+                      { label: "Riassegnate",  val: stats.kpi.legs.reassigned,                 color: "bg-blue-500" },
+                      { label: "Perse",        val: stats.kpi.legs.lost,                       color: "bg-rose-500" },
+                    ].map((item) => (
+                      <div key={item.label} className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`h-2 w-2 rounded-full ${item.color}`} />
+                          <span className="text-xs text-slate-500">{item.label}</span>
+                        </div>
+                        <span className="text-xs font-bold text-slate-900">{item.val}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Trend mensile */}
+              {stats.monthly_trend.length > 0 && (
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <h3 className="text-sm font-bold text-slate-900 mb-4">Trend mensile — Valore emesso vs perso</h3>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <LineChart data={stats.monthly_trend.map((d) => ({
+                      month: d.month.slice(5),
+                      valore: d.value_cents / 100,
+                      perso: d.lost_cents / 100,
+                      recuperato: d.recovered_cents / 100,
+                    }))}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                      <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `€${v}`} />
+                      <Tooltip formatter={(v) => typeof v === "number" ? `€${v.toFixed(2)}` : v} />
+                      <Line type="monotone" dataKey="valore" stroke="#4f46e5" strokeWidth={2} dot={false} name="Valore" />
+                      <Line type="monotone" dataKey="perso" stroke="#ef4444" strokeWidth={2} dot={false} name="Perso" />
+                      <Line type="monotone" dataKey="recuperato" stroke="#22c55e" strokeWidth={2} dot={false} name="Recuperato" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                {/* Per tratta */}
+                {stats.by_route.length > 0 && (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <h3 className="text-sm font-bold text-slate-900 mb-4">Biglietti per tratta</h3>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <BarChart data={stats.by_route.map((r) => ({
+                        route: (ROUTE_LABELS[r.route as MedmarRoute] ?? r.route).replace(" → ", "→").split("→")[1]?.trim() ?? r.route,
+                        biglietti: r.tickets,
+                        perso: r.lost_cents / 100,
+                      }))}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                        <XAxis dataKey="route" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 11 }} />
+                        <Tooltip />
+                        <Bar dataKey="biglietti" fill="#4f46e5" radius={[4, 4, 0, 0]} name="Biglietti">
+                          {stats.by_route.map((_, i) => (
+                            <Cell key={i} fill={["#4f46e5", "#6366f1", "#818cf8", "#a5b4fc"][i % 4]} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+
+                {/* Per operatore */}
+                {stats.by_operator.length > 0 && (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <h3 className="text-sm font-bold text-slate-900 mb-4">Per operatore</h3>
+                    <div className="space-y-2">
+                      {stats.by_operator.sort((a, b) => b.tickets - a.tickets).map((op) => {
+                        const maxTickets = Math.max(...stats.by_operator.map((o) => o.tickets));
+                        return (
+                          <div key={op.operator_id} className="space-y-1">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-medium text-slate-700 truncate max-w-[140px]">{op.operator_name}</span>
+                              <span className="text-slate-500">{op.tickets} bgl · {op.round_trip_count} A/R{op.lost_cents > 0 ? ` · 🔴 ${formatEur(op.lost_cents)}` : ""}</span>
+                            </div>
+                            <div className="w-full bg-slate-100 rounded-full h-1.5">
+                              <div
+                                className="h-1.5 bg-indigo-500 rounded-full transition-all"
+                                style={{ width: `${maxTickets > 0 ? (op.tickets / maxTickets) * 100 : 0}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Tratte in scadenza */}
+              {stats.expiring_legs.length > 0 && (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 space-y-3">
+                  <h3 className="text-sm font-bold text-rose-900">⏰ Tratte in scadenza (&lt; 48h)</h3>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {stats.expiring_legs.map((leg) => (
+                      <div key={leg.id} className="rounded-xl bg-white border border-rose-200 px-3 py-2.5 space-y-0.5">
+                        <p className="text-xs font-semibold text-slate-900">{leg.leg_route}</p>
+                        <p className="text-xs text-slate-500">
+                          {new Date(`${leg.travel_date}T00:00:00`).toLocaleDateString("it-IT", { day: "2-digit", month: "short" })}
+                          {leg.leg_time && ` · ${leg.leg_time}`}
+                        </p>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-rose-700">{formatEur(leg.value_cents)}</span>
+                          <span className="text-[10px] text-rose-500">{Math.round(leg.hours_to_expiry)}h rimaste</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTab("recupero")}
+                    className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white hover:bg-rose-700"
+                  >
+                    Gestisci recupero →
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {!statsLoading && !stats && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
+              Clicca "Aggiorna" per caricare le statistiche del periodo.
+            </div>
+          )}
         </div>
       )}
     </section>
