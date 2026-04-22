@@ -6,12 +6,19 @@ export type ServiceType = "transfer" | "bus_tour";
 export type AgencyBookingServiceKind =
   | "transfer_port_hotel"
   | "transfer_airport_hotel"
+  | "transfer_airport_hotel_exclusive"
+  | "transfer_airport_hotel_aliscafo"
   | "transfer_train_hotel"
+  | "transfer_train_hotel_exclusive"
+  | "transfer_train_hotel_aliscafo"
   | "bus_city_hotel"
   | "excursion"
   | "formula_snav"
   | "formula_medmar_napoli"
-  | "formula_medmar_pozzuoli";
+  | "formula_medmar_pozzuoli"
+  | "transfer_hotel_hotel"
+  | "shuttle_hotel"
+  | "private_island";
 export type OperationalServiceType =
   | "transfer_station_hotel"
   | "transfer_airport_hotel"
@@ -144,6 +151,10 @@ export interface Service {
   bus_plate?: string | null;
   booking_service_kind?: AgencyBookingServiceKind | null;
   service_type_code?: OperationalServiceType | null;
+  linked_service_id?: string | null;
+  pickup_time?: string | null;
+  time_from?: string | null;
+  time_to?: string | null;
   customer_first_name?: string | null;
   customer_last_name?: string | null;
   customer_email?: string | null;

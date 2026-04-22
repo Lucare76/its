@@ -12,7 +12,7 @@ export const metadata: Metadata = {
     title: "ITS Driver",
   },
   icons: {
-    apple: "/brand/logo-ischia-transfer-email.png",
+    apple: "/apple-touch-icon.png",
   },
 };
 

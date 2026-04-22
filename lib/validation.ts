@@ -16,7 +16,10 @@ export const agencyBookingServiceKindSchema = z.enum([
   "excursion",
   "formula_snav",
   "formula_medmar_napoli",
-  "formula_medmar_pozzuoli"
+  "formula_medmar_pozzuoli",
+  "transfer_hotel_hotel",
+  "shuttle_hotel",
+  "private_island"
 ]);
 
 export const serviceCreateSchema = z.object({
@@ -149,7 +152,11 @@ export const agencyBookingCreateSchema = z
     excursion_title: z.string().max(160).optional().or(z.literal("")),
     notes: z.string().max(2000),
     agency_id: z.string().uuid().optional().or(z.literal("")),
-    agency_quoted_price_cents: z.number().int().min(0).max(9999900).optional().nullable()
+    agency_quoted_price_cents: z.number().int().min(0).max(9999900).optional().nullable(),
+    trip_leg: z.enum(["outbound_only", "return_only", "round_trip"]).optional(),
+    pickup_time_outbound: z.string().regex(/^\d{2}:\d{2}$/).optional().or(z.literal("")),
+    pickup_time_return: z.string().regex(/^\d{2}:\d{2}$/).optional().or(z.literal("")),
+    hotel_dest_id: z.string().uuid().optional().or(z.literal(""))
   })
   .superRefine((value, ctx) => {
     if (value.booking_service_kind !== "formula_snav") {

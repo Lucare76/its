@@ -31,6 +31,9 @@ function vesselFromKind(kind: BookingKind, transportCode: string, busCityOrigin?
     return transportCode ? transportCode : "Transfer stazione (aliscafo)";
   if (kind === "transfer_port_hotel") return "Transfer porto";
   if (kind === "bus_city_hotel") return busCityOrigin?.trim() ? `Bus da ${busCityOrigin.trim()}` : "Bus";
+  if (kind === "transfer_hotel_hotel") return transportCode ? transportCode : "Transfer hotel → hotel";
+  if (kind === "shuttle_hotel") return "Navetta hotel";
+  if (kind === "private_island") return "Servizio Privato sull'Isola";
   return "Escursione";
 }
 
@@ -62,6 +65,23 @@ export async function POST(request: NextRequest) {
     const meetingPoint = typeof bodyRaw.meeting_point === "string" ? bodyRaw.meeting_point.trim() || null : null;
     const ferryDepTime = typeof bodyRaw.ferry_dep_time === "string" ? bodyRaw.ferry_dep_time.trim() || null : null;
     const portoPartenza = typeof bodyRaw.porto_partenza === "string" ? bodyRaw.porto_partenza.trim() || null : null;
+
+    // A/R e pickup_time
+    const tripLeg = d.trip_leg ?? "outbound_only";
+    const pickupTimeOutbound = d.pickup_time_outbound?.trim() || null;
+    const pickupTimeReturn = d.pickup_time_return?.trim() || null;
+    const hotelDestId = d.hotel_dest_id?.trim() || null;
+
+    // Per private_island: mappa arrival_time→time_from, departure_time→time_to
+    const isPrivateIsland = bookingKind === "private_island";
+
+    // Destinazione hotel per transfer_hotel_hotel
+    let hotelDestName: string | null = null;
+    if (bookingKind === "transfer_hotel_hotel" && hotelDestId) {
+      const { data: destHotel } = await auth.admin
+        .from("hotels").select("name").eq("tenant_id", tenantId).eq("id", hotelDestId).maybeSingle();
+      hotelDestName = destHotel?.name ?? null;
+    }
 
     // Limite 500 servizi giornalieri (arrivi + partenze)
     const DAILY_SERVICE_LIMIT = 500;
@@ -120,19 +140,21 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Direzione base per la tratta
+    const baseDirection = tripLeg === "return_only" ? "departure" : "arrival";
+
     const insert = {
       tenant_id: tenantId,
       agency_id: agencyId,
       billing_party_name: billingPartyName,
       is_draft: false,
       status: "new",
-      date: d.arrival_date,
-      time: d.arrival_time,
+      date: tripLeg === "return_only" ? d.departure_date : d.arrival_date,
+      time: tripLeg === "return_only" ? d.departure_time : d.arrival_time,
       service_type: bookingKind === "excursion" ? "bus_tour" : "transfer",
-      direction: "arrival",
+      direction: baseDirection,
       vessel: (() => {
         const base = vesselFromKind(bookingKind, transportCode, busCityOrigin);
-        // Per SNAV/MEDMAR arricchisce il vessel con porto e orario traghetto arrivo
         if ((bookingKind === "formula_snav" || bookingKind === "formula_medmar_napoli" || bookingKind === "formula_medmar_pozzuoli") && d.arrival_time) {
           return `${base} ${d.arrival_time}`;
         }
@@ -155,7 +177,9 @@ export async function POST(request: NextRequest) {
       bus_city_origin: busCityOrigin || null,
       meeting_point: bookingKind === "bus_city_hotel"
         ? buildServiceLabelShort({ kind: "bus_city_hotel", busCityOrigin: busCityOrigin || null })
-        : meetingPoint,
+        : (bookingKind === "transfer_hotel_hotel" && hotelDestName)
+          ? hotelDestName
+          : meetingPoint,
       // Per SNAV/MEDMAR: orario barca partenza e porto partenza nei campi calcolati
       ...(ferryDepTime ? { orario_barca: ferryDepTime } : {}),
       ...(portoPartenza ? { barca_compagnia: portoPartenza } : {}),
@@ -167,6 +191,8 @@ export async function POST(request: NextRequest) {
       excursion_details: bookingKind === "excursion" ? { title: excursionTitle } : {},
       agency_quoted_price_cents: d.agency_quoted_price_cents ?? null,
       created_by_user_id: auth.user.id,
+      pickup_time: tripLeg === "return_only" ? (pickupTimeReturn || null) : (pickupTimeOutbound || null),
+      ...(isPrivateIsland ? { time_from: d.arrival_time, time_to: d.departure_time } : {}),
     };
 
     let serviceId: string | null = null;
@@ -224,6 +250,31 @@ export async function POST(request: NextRequest) {
       by_user_id: auth.user.id
     });
 
+    // Per A/R: crea la tratta di ritorno e collega i due record
+    let returnServiceId: string | null = null;
+    if (tripLeg === "round_trip" && serviceId) {
+      const returnInsert = {
+        ...insert,
+        date: d.departure_date,
+        time: d.departure_time,
+        direction: "departure",
+        pickup_time: pickupTimeReturn || null,
+        linked_service_id: null,
+      };
+      const { data: retData } = await auth.admin
+        .from("services").insert(returnInsert).select("id").single();
+      if (retData?.id) {
+        returnServiceId = retData.id;
+        await auth.admin.from("status_events").insert({
+          tenant_id: tenantId, service_id: returnServiceId, status: "new", by_user_id: auth.user.id
+        });
+        await Promise.all([
+          auth.admin.from("services").update({ linked_service_id: returnServiceId }).eq("id", serviceId).eq("tenant_id", tenantId),
+          auth.admin.from("services").update({ linked_service_id: serviceId }).eq("id", returnServiceId).eq("tenant_id", tenantId),
+        ]).catch(() => {});
+      }
+    }
+
     auditLog({
       event: "ops_booking_created",
       tenantId,
@@ -231,10 +282,14 @@ export async function POST(request: NextRequest) {
       role: auth.membership.role,
       serviceId,
       outcome: "created",
-      details: { booking_kind: bookingKind, agency_id: agencyId, hotel_id: d.hotel_id }
+      details: { booking_kind: bookingKind, agency_id: agencyId, hotel_id: d.hotel_id, trip_leg: tripLeg }
     });
 
-    return NextResponse.json({ ok: true, id: serviceId });
+    return NextResponse.json({
+      ok: true,
+      id: serviceId,
+      ...(returnServiceId ? { id_return: returnServiceId, round_trip: true } : {}),
+    });
   } catch (error) {
     auditLog({ event: "ops_booking_create_failed", level: "error", details: { message: error instanceof Error ? error.message : "Unknown error" } });
     return NextResponse.json({ error: "Errore interno server." }, { status: 500 });

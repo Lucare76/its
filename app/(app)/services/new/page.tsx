@@ -64,7 +64,10 @@ const kindOptions: Array<{ value: BookingKind; label: string }> = [
   { value: "transfer_train_hotel_aliscafo", label: "Transfer stazione / bus → hotel (aliscafo 🚤)" },
   { value: "bus_city_hotel", label: "Linea bus → hotel" },
   { value: "excursion", label: "Escursione" },
-  { value: "transfer_port_hotel", label: "Transfer porto → hotel" }
+  { value: "transfer_port_hotel", label: "Transfer porto → hotel" },
+  { value: "transfer_hotel_hotel", label: "Transfer hotel → hotel" },
+  { value: "shuttle_hotel", label: "Navetta hotel" },
+  { value: "private_island", label: "Servizio Privato sull'Isola" },
 ];
 
 // Orari traghetti: ora derivati da snav-medmar-lookup.ts
@@ -150,6 +153,42 @@ function bookingContext(kind: BookingKind) {
       transportCodeReturnPlaceholder: undefined as string | undefined
     };
   }
+  if (kind === "transfer_hotel_hotel") {
+    return {
+      arrivalDateLabel: "Data andata*",
+      arrivalTimeLabel: "Ora andata*",
+      departureDateLabel: "Data ritorno*",
+      departureTimeLabel: "Ora ritorno*",
+      transportCodeLabel: "Riferimento operativo",
+      transportCodePlaceholder: "Facoltativo",
+      transportCodeReturnLabel: undefined as string | undefined,
+      transportCodeReturnPlaceholder: undefined as string | undefined
+    };
+  }
+  if (kind === "shuttle_hotel") {
+    return {
+      arrivalDateLabel: "Data servizio*",
+      arrivalTimeLabel: "Ora inizio*",
+      departureDateLabel: "Data fine servizio*",
+      departureTimeLabel: "Ora fine*",
+      transportCodeLabel: "Riferimento operativo",
+      transportCodePlaceholder: "Facoltativo",
+      transportCodeReturnLabel: undefined as string | undefined,
+      transportCodeReturnPlaceholder: undefined as string | undefined
+    };
+  }
+  if (kind === "private_island") {
+    return {
+      arrivalDateLabel: "Data servizio*",
+      arrivalTimeLabel: "Dalle*",
+      departureDateLabel: "Data fine",
+      departureTimeLabel: "Alle*",
+      transportCodeLabel: "Riferimento operativo",
+      transportCodePlaceholder: "Facoltativo",
+      transportCodeReturnLabel: undefined as string | undefined,
+      transportCodeReturnPlaceholder: undefined as string | undefined
+    };
+  }
   return {
     arrivalDateLabel: "Data andata*",
     arrivalTimeLabel: "Ora andata*",
@@ -172,21 +211,25 @@ export default function OpsNewBookingPage() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [hotels, setHotels] = useState<HotelOption[]>([]);
   const [agencies, setAgencies] = useState<AgencyOption[]>([]);
+  const [tripLeg, setTripLeg] = useState<"outbound_only" | "return_only" | "round_trip">("outbound_only");
   const [form, setForm] = useState({
     customer_first_name: "",
     customer_last_name: "",
     customer_phone: "",
     pax: "2",
     hotel_id: "",
+    hotel_dest_id: "",
     booking_service_kind: "transfer_port_hotel" as BookingKind,
     arrival_date: todayIsoDate(),
     arrival_time: "12:00",
     departure_date: todayIsoDate(),
-    departure_time: "12:00",
+    departure_time: "18:00",
     transport_code: "",
     transport_code_return: "",
     bus_city_origin: "",
     excursion_title: "",
+    pickup_time_outbound: "",
+    pickup_time_return: "",
     notes: "",
     agency_id: "",
     quoted_price_eur: ""
@@ -341,6 +384,13 @@ export default function OpsNewBookingPage() {
       .finally(() => setBusLoading(false));
   }, [form.booking_service_kind, accessToken, busStops.length]);
 
+  // Per private_island: departure_date = arrival_date (stesso giorno)
+  useEffect(() => {
+    if (form.booking_service_kind === "private_island") {
+      setForm((prev) => prev.departure_date === prev.arrival_date ? prev : { ...prev, departure_date: prev.arrival_date });
+    }
+  }, [form.arrival_date, form.booking_service_kind]);
+
   // Bus return pickup
   useEffect(() => {
     if (form.booking_service_kind !== "bus_city_hotel" || !selectedBusStop || !form.hotel_id || !accessToken) {
@@ -426,6 +476,11 @@ export default function OpsNewBookingPage() {
   const showTransportCodeField = isTransportCodeRequired || selectedKind === "bus_city_hotel" || selectedKind === "excursion" || selectedKind === "formula_snav" || selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli";
   const isBusOriginRequired = selectedKind === "bus_city_hotel";
   const isExcursionTitleRequired = selectedKind === "excursion";
+  const isPrivateIsland = selectedKind === "private_island";
+  const isTransferHotelHotel = selectedKind === "transfer_hotel_hotel";
+  const showTripLeg = ["transfer_port_hotel", "transfer_hotel_hotel", "excursion", "shuttle_hotel"].includes(selectedKind);
+  const isRoundTrip = tripLeg === "round_trip" && showTripLeg;
+  const showPickupTime = !isSnavMedmar && !isBusOriginRequired && !isPrivateIsland;
   const hasHotels = hotels.length > 0;
 
   const normalizedPayload = useMemo(() => ({
@@ -435,8 +490,9 @@ export default function OpsNewBookingPage() {
     transport_code_return: form.transport_code_return.trim(),
     agency_quoted_price_cents: form.quoted_price_eur
       ? Math.round(Number(form.quoted_price_eur.replace(",", ".")) * 100)
-      : null
-  }), [form]);
+      : null,
+    trip_leg: showTripLeg ? tripLeg : undefined,
+  }), [form, showTripLeg, tripLeg]);
 
   const parsedPreview = useMemo(() => agencyBookingCreateSchema.safeParse(normalizedPayload), [normalizedPayload]);
   const isFormValid = parsedPreview.success && hasHotels;
@@ -494,7 +550,7 @@ export default function OpsNewBookingPage() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify({ ...parsed.data, ...extraFields })
     });
-    const body = (await response.json().catch(() => null)) as { ok?: boolean; id?: string; error?: string } | null;
+    const body = (await response.json().catch(() => null)) as { ok?: boolean; id?: string; id_return?: string; round_trip?: boolean; error?: string } | null;
     setSubmitting(false);
 
     if (!response.ok || !body?.id) {
@@ -502,18 +558,23 @@ export default function OpsNewBookingPage() {
       return;
     }
 
-    setMessage(`Prenotazione creata (${serviceKindLabel}). ID: ${body.id}`);
+    setMessage(body.round_trip
+      ? `Prenotazione A/R creata (${serviceKindLabel}). Andata: ${body.id} · Ritorno: ${body.id_return ?? "—"}`
+      : `Prenotazione creata (${serviceKindLabel}). ID: ${body.id}`);
 
     // Reset form
     const firstHotelId = hotels[0]?.id ?? "";
+    setTripLeg("outbound_only");
     setForm({
       customer_first_name: "", customer_last_name: "", customer_phone: "",
-      pax: "2", hotel_id: firstHotelId,
+      pax: "2", hotel_id: firstHotelId, hotel_dest_id: "",
       booking_service_kind: "transfer_port_hotel",
       arrival_date: todayIsoDate(), arrival_time: "12:00",
-      departure_date: todayIsoDate(), departure_time: "12:00",
+      departure_date: todayIsoDate(), departure_time: "18:00",
       transport_code: "", transport_code_return: "",
-      bus_city_origin: "", excursion_title: "", notes: "", agency_id: "", quoted_price_eur: ""
+      bus_city_origin: "", excursion_title: "",
+      pickup_time_outbound: "", pickup_time_return: "",
+      notes: "", agency_id: "", quoted_price_eur: ""
     });
     setFieldErrors({});
     setBusSearch(""); setSelectedBusStop(null); setBusReturnTime(null);
@@ -703,81 +764,153 @@ export default function OpsNewBookingPage() {
           )}
         </div>
 
-        {/* Date arrivo */}
-        <div className="md:col-span-2 grid grid-cols-2 gap-3">
-          <label className="text-sm">
-            {contextLabels.arrivalDateLabel}
-            <DateInput className={`input-saas mt-1${fieldErrors.arrival_date ? " border-rose-400" : ""}`} value={form.arrival_date}
-              onChange={(iso) => {
-                const newDate = iso;
-                setForm((prev) => ({
-                  ...prev, arrival_date: newDate,
-                  departure_date: prev.booking_service_kind === "excursion" || prev.departure_date < newDate ? newDate : prev.departure_date
-                }));
-                setFieldErrors((prev) => { const n = { ...prev }; delete n.arrival_date; return n; });
-              }}
-            />
-            {fieldErrors.arrival_date ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.arrival_date}</span> : null}
-            {selectedKind === "bus_city_hotel" && form.arrival_date && !isSunday(form.arrival_date) ? (
-              <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
-            ) : null}
-          </label>
-          <label className="text-sm">
-            {isSnavMedmar ? "Orario traghetto arrivo*" : contextLabels.arrivalTimeLabel}
-            {isSnavMedmar ? (
-              <select className="input-saas mt-1" value={form.arrival_time} onChange={(e) => setForm((prev) => ({ ...prev, arrival_time: e.target.value }))}>
-                {isSnavKind
-                  ? getAvailableSnavArrivalTimes(form.arrival_date).map((t) => <option key={t} value={t}>{t}</option>)
-                  : (selectedKind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_ARRIVALS_WITH_PORTO : MEDMAR_POZZUOLI_ARRIVALS_WITH_PORTO).map(({ time, porto }) => (
-                    <option key={time} value={time}>{time} — {porto === "ISCHIA PORTO" ? "Ischia Porto" : "Casamicciola"}</option>
-                  ))
-                }
-              </select>
-            ) : (
-              <>
-                <input type="time" className={`input-saas mt-1${fieldErrors.arrival_time ? " border-rose-400" : ""}`} value={form.arrival_time} onChange={(e) => { setForm((prev) => ({ ...prev, arrival_time: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.arrival_time; return n; }); }} />
-                {fieldErrors.arrival_time ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.arrival_time}</span> : null}
-              </>
-            )}
-          </label>
-        </div>
+        {/* Hotel destinazione (transfer_hotel_hotel) */}
+        {isTransferHotelHotel ? (
+          <div className="text-sm md:col-span-2">
+            <span>Hotel destinazione*</span>
+            <select
+              className="input-saas mt-1"
+              value={form.hotel_dest_id}
+              onChange={(e) => setForm((prev) => ({ ...prev, hotel_dest_id: e.target.value }))}
+            >
+              <option value="">— Seleziona hotel destinazione —</option>
+              {hotels.filter((h) => h.id !== form.hotel_id).map((hotel) => (
+                <option key={hotel.id} value={hotel.id}>{hotel.name}{hotel.zone ? ` - ${hotel.zone}` : ""}</option>
+              ))}
+            </select>
+          </div>
+        ) : null}
 
-        {/* Date ritorno */}
-        <div className="md:col-span-2 grid grid-cols-2 gap-3">
-          <label className="text-sm">
-            {contextLabels.departureDateLabel}
-            <DateInput className={`input-saas mt-1${fieldErrors.departure_date ? " border-rose-400" : selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
-              value={form.departure_date} min={form.arrival_date}
-              onChange={(iso) => { setForm((prev) => ({ ...prev, departure_date: iso })); setFieldErrors((prev) => { const n = { ...prev }; delete n.departure_date; return n; }); }}
-            />
-            {fieldErrors.departure_date ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.departure_date}</span> : null}
-            {selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? (
-              <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
-            ) : null}
-          </label>
-          <label className="text-sm">
-            {isSnavMedmar ? "Orario traghetto partenza*" : contextLabels.departureTimeLabel}
-            {isSnavMedmar ? (
-              <select
-                className="input-saas mt-1"
-                value={ferryDepTime}
-                onChange={(e) => setFerryDepTime(e.target.value)}
-              >
-                {isSnavKind
-                  ? getAvailableSnavDepartureTimes(form.departure_date).map((t) => <option key={t} value={t}>{t}</option>)
-                  : (selectedKind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_DEPARTURES_WITH_PORTO : MEDMAR_POZZUOLI_DEPARTURES_WITH_PORTO).map(({ time, porto }) => (
-                    <option key={time} value={time}>{time} — {porto === "ISCHIA PORTO" ? "Ischia Porto" : "Casamicciola"}</option>
-                  ))
-                }
-              </select>
-            ) : (
-              <>
-                <input type="time" className={`input-saas mt-1${fieldErrors.departure_time ? " border-rose-400" : ""}`} value={form.departure_time} onChange={(e) => { setForm((prev) => ({ ...prev, departure_time: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.departure_time; return n; }); }} />
-                {fieldErrors.departure_time ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.departure_time}</span> : null}
-              </>
-            )}
-          </label>
-        </div>
+        {/* Selettore tratta A/R */}
+        {showTripLeg ? (
+          <div className="md:col-span-2">
+            <span className="text-sm font-medium text-slate-700">Tratta</span>
+            <div className="mt-1 flex gap-2">
+              {([
+                { value: "outbound_only", label: "Solo andata" },
+                { value: "round_trip", label: "A/R stesso giorno" },
+                { value: "return_only", label: "Solo ritorno" },
+              ] as const).map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setTripLeg(value)}
+                  className={`flex-1 rounded-xl border py-2 text-xs font-semibold transition ${tripLeg === value ? "bg-slate-900 text-white border-slate-900" : "border-slate-200 text-slate-600 hover:border-slate-400"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Date/orari: layout speciale per private_island */}
+        {isPrivateIsland ? (
+          <div className="md:col-span-2 grid grid-cols-3 gap-3">
+            <label className="text-sm">
+              {contextLabels.arrivalDateLabel}
+              <DateInput className={`input-saas mt-1${fieldErrors.arrival_date ? " border-rose-400" : ""}`} value={form.arrival_date}
+                onChange={(iso) => {
+                  setForm((prev) => ({ ...prev, arrival_date: iso, departure_date: iso }));
+                  setFieldErrors((prev) => { const n = { ...prev }; delete n.arrival_date; return n; });
+                }}
+              />
+              {fieldErrors.arrival_date ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.arrival_date}</span> : null}
+            </label>
+            <label className="text-sm">
+              {contextLabels.arrivalTimeLabel}
+              <input type="time" className={`input-saas mt-1${fieldErrors.arrival_time ? " border-rose-400" : ""}`} value={form.arrival_time}
+                onChange={(e) => { setForm((prev) => ({ ...prev, arrival_time: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.arrival_time; return n; }); }}
+              />
+              {fieldErrors.arrival_time ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.arrival_time}</span> : null}
+            </label>
+            <label className="text-sm">
+              {contextLabels.departureTimeLabel}
+              <input type="time" className={`input-saas mt-1${fieldErrors.departure_time ? " border-rose-400" : ""}`} value={form.departure_time}
+                onChange={(e) => { setForm((prev) => ({ ...prev, departure_time: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.departure_time; return n; }); }}
+              />
+              {fieldErrors.departure_time ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.departure_time}</span> : null}
+            </label>
+          </div>
+        ) : (
+          <>
+            {/* Date arrivo */}
+            <div className="md:col-span-2 grid grid-cols-2 gap-3">
+              <label className="text-sm">
+                {contextLabels.arrivalDateLabel}
+                <DateInput className={`input-saas mt-1${fieldErrors.arrival_date ? " border-rose-400" : ""}`} value={form.arrival_date}
+                  onChange={(iso) => {
+                    const newDate = iso;
+                    setForm((prev) => ({
+                      ...prev, arrival_date: newDate,
+                      departure_date: prev.booking_service_kind === "excursion" || prev.departure_date < newDate ? newDate : prev.departure_date
+                    }));
+                    setFieldErrors((prev) => { const n = { ...prev }; delete n.arrival_date; return n; });
+                  }}
+                />
+                {fieldErrors.arrival_date ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.arrival_date}</span> : null}
+                {selectedKind === "bus_city_hotel" && form.arrival_date && !isSunday(form.arrival_date) ? (
+                  <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
+                ) : null}
+              </label>
+              <label className="text-sm">
+                {isSnavMedmar ? "Orario traghetto arrivo*" : contextLabels.arrivalTimeLabel}
+                {isSnavMedmar ? (
+                  <select className="input-saas mt-1" value={form.arrival_time} onChange={(e) => setForm((prev) => ({ ...prev, arrival_time: e.target.value }))}>
+                    {isSnavKind
+                      ? getAvailableSnavArrivalTimes(form.arrival_date).map((t) => <option key={t} value={t}>{t}</option>)
+                      : (selectedKind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_ARRIVALS_WITH_PORTO : MEDMAR_POZZUOLI_ARRIVALS_WITH_PORTO).map(({ time, porto }) => (
+                        <option key={time} value={time}>{time} — {porto === "ISCHIA PORTO" ? "Ischia Porto" : "Casamicciola"}</option>
+                      ))
+                    }
+                  </select>
+                ) : (
+                  <>
+                    <input type="time" className={`input-saas mt-1${fieldErrors.arrival_time ? " border-rose-400" : ""}`} value={form.arrival_time} onChange={(e) => { setForm((prev) => ({ ...prev, arrival_time: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.arrival_time; return n; }); }} />
+                    {fieldErrors.arrival_time ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.arrival_time}</span> : null}
+                  </>
+                )}
+              </label>
+            </div>
+
+            {/* Date ritorno */}
+            <div className="md:col-span-2 grid grid-cols-2 gap-3">
+              <label className="text-sm">
+                {contextLabels.departureDateLabel}
+                <DateInput className={`input-saas mt-1${fieldErrors.departure_date ? " border-rose-400" : selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
+                  value={form.departure_date} min={form.arrival_date}
+                  onChange={(iso) => { setForm((prev) => ({ ...prev, departure_date: iso })); setFieldErrors((prev) => { const n = { ...prev }; delete n.departure_date; return n; }); }}
+                />
+                {fieldErrors.departure_date ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.departure_date}</span> : null}
+                {selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? (
+                  <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
+                ) : null}
+              </label>
+              <label className="text-sm">
+                {isSnavMedmar ? "Orario traghetto partenza*" : contextLabels.departureTimeLabel}
+                {isSnavMedmar ? (
+                  <select
+                    className="input-saas mt-1"
+                    value={ferryDepTime}
+                    onChange={(e) => setFerryDepTime(e.target.value)}
+                  >
+                    {isSnavKind
+                      ? getAvailableSnavDepartureTimes(form.departure_date).map((t) => <option key={t} value={t}>{t}</option>)
+                      : (selectedKind === "formula_medmar_napoli" ? MEDMAR_NAPOLI_DEPARTURES_WITH_PORTO : MEDMAR_POZZUOLI_DEPARTURES_WITH_PORTO).map(({ time, porto }) => (
+                        <option key={time} value={time}>{time} — {porto === "ISCHIA PORTO" ? "Ischia Porto" : "Casamicciola"}</option>
+                      ))
+                    }
+                  </select>
+                ) : (
+                  <>
+                    <input type="time" className={`input-saas mt-1${fieldErrors.departure_time ? " border-rose-400" : ""}`} value={form.departure_time} onChange={(e) => { setForm((prev) => ({ ...prev, departure_time: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.departure_time; return n; }); }} />
+                    {fieldErrors.departure_time ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.departure_time}</span> : null}
+                  </>
+                )}
+              </label>
+            </div>
+          </>
+        )}
 
         {/* Porto e prelievo auto-calcolati per SNAV/MEDMAR */}
         {isSnavMedmar && (
@@ -803,6 +936,28 @@ export default function OpsNewBookingPage() {
             </div>
           </div>
         )}
+
+        {/* Orario prelevamento hotel */}
+        {showPickupTime ? (
+          <div className={`md:col-span-2 grid gap-3 ${isRoundTrip ? "grid-cols-2" : "grid-cols-1"}`}>
+            <label className="text-sm">
+              {isRoundTrip ? "Prelevamento andata" : "Orario prelevamento hotel"}
+              <input type="time" className="input-saas mt-1" value={form.pickup_time_outbound}
+                onChange={(e) => setForm((prev) => ({ ...prev, pickup_time_outbound: e.target.value }))}
+              />
+              <span className="mt-1 block text-xs text-slate-400">Facoltativo.</span>
+            </label>
+            {isRoundTrip ? (
+              <label className="text-sm">
+                Prelevamento ritorno
+                <input type="time" className="input-saas mt-1" value={form.pickup_time_return}
+                  onChange={(e) => setForm((prev) => ({ ...prev, pickup_time_return: e.target.value }))}
+                />
+                <span className="mt-1 block text-xs text-slate-400">Facoltativo.</span>
+              </label>
+            ) : null}
+          </div>
+        ) : null}
 
         {/* Codice trasporto */}
         {showTransportCodeField ? (

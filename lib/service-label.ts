@@ -15,7 +15,10 @@ export type AgencyBookingKind =
   | "excursion"
   | "formula_snav"
   | "formula_medmar_napoli"
-  | "formula_medmar_pozzuoli";
+  | "formula_medmar_pozzuoli"
+  | "transfer_hotel_hotel"
+  | "shuttle_hotel"
+  | "private_island";
 
 export interface ServiceLabelContext {
   kind: AgencyBookingKind;
@@ -68,6 +71,12 @@ export function buildServiceLabel(ctx: ServiceLabelContext): string {
       return `Formula MEDMAR Napoli${hotel}`;
     case "formula_medmar_pozzuoli":
       return `Formula MEDMAR Pozzuoli${hotel}`;
+    case "transfer_hotel_hotel":
+      return `Transfer Hotel → Hotel${hotel}`;
+    case "shuttle_hotel":
+      return `Navetta Hotel${hotel}`;
+    case "private_island":
+      return `Servizio Privato sull'Isola${hotel}`;
   }
 }
 

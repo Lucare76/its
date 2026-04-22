@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
     const [servicesResult, statusEventsResult, hotelsResult] = await Promise.all([
       auth.admin
         .from("services")
-        .select("*")
+        .select("id,tenant_id,date,time,service_type,direction,vessel,pax,hotel_id,customer_name,phone,phone_e164,notes,status,meeting_point,pickup_time,linked_service_id,booking_service_kind")
         .eq("tenant_id", tenantId)
         .in("id", serviceIds)
         .gte("date", cutoffIso),
@@ -74,13 +74,30 @@ export async function GET(request: NextRequest) {
 
     if (servicesResult.error) throw new Error(servicesResult.error.message);
 
+    // 3. Carica anche i servizi linkati (tratta A/R) non direttamente assegnati
+    //    per permettere all'autista di vedere entrambe le tratte in contesto
+    const services = servicesResult.data ?? [];
+    const linkedIds = services
+      .map((s: { linked_service_id?: string | null }) => s.linked_service_id)
+      .filter((id): id is string => !!id && !serviceIds.includes(id));
+
+    let linkedServices: typeof services = [];
+    if (linkedIds.length > 0) {
+      const { data: linked } = await auth.admin
+        .from("services")
+        .select("id,tenant_id,date,time,service_type,direction,vessel,pax,hotel_id,customer_name,phone,phone_e164,notes,status,meeting_point,pickup_time,linked_service_id,booking_service_kind")
+        .eq("tenant_id", tenantId)
+        .in("id", linkedIds);
+      linkedServices = linked ?? [];
+    }
+
     return NextResponse.json({
       ok: true,
       tenant_id: tenantId,
       user_id: userId,
       role: auth.membership.role,
       assignments: assignments ?? [],
-      services: servicesResult.data ?? [],
+      services: [...services, ...linkedServices],
       status_events: statusEventsResult.data ?? [],
       hotels: hotelsResult.data ?? [],
     });

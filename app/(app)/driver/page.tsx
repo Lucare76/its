@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { ServiceStatus } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
 import { usePwa } from "@/components/driver/PwaInit";
+import { DriverSign } from "@/components/driver/DriverSign";
 
 /* ------------------------------------------------------------------ offline queue */
 
@@ -38,7 +39,9 @@ type DriverService = {
   service_type: string; direction: string; vessel: string; pax: number;
   hotel_id: string | null; customer_name: string; phone: string | null;
   phone_e164: string | null; notes: string | null; status: ServiceStatus;
-  meeting_point: string | null;
+  meeting_point: string | null; pickup_time: string | null;
+  linked_service_id: string | null;
+  booking_service_kind: string | null;
 };
 type DriverAssignment = { id: string; service_id: string; driver_user_id: string; vehicle_label: string };
 type DriverHotel = { id: string; name: string; zone: string | null; lat: number | null; lng: number | null };
@@ -98,6 +101,7 @@ function DriverPageInner() {
   const [savingNote, setSavingNote] = useState(false);
   const [isOnline, setIsOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [tab, setTab] = useState<Tab>("oggi");
+  const [showSign, setShowSign] = useState(false);
   const channelRef = useRef<ReturnType<NonNullable<typeof supabase>["channel"]> | null>(null);
 
   /* ---- carica dati driver */
@@ -272,11 +276,26 @@ function DriverPageInner() {
     return window.matchMedia("(display-mode: standalone)").matches;
   }, []);
 
+  const isExclusive = focused
+    ? (focused.service.booking_service_kind?.includes("exclusive") ?? false) ||
+      (focused.service.pax <= 6 && !!focused.service.customer_name)
+    : false;
+
   if (loading) return <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">Caricamento...</div>;
   if (errorMessage) return <div className="p-4 text-sm text-rose-600">{errorMessage}</div>;
 
   return (
     <div className="mx-auto max-w-lg space-y-4 px-2 pb-10 pt-4">
+
+      {/* Cartello digitale — overlay fullscreen */}
+      {showSign && focused && (
+        <DriverSign
+          customerName={focused.service.customer_name}
+          hotelName={focusedHotel?.name ?? focused.service.meeting_point ?? null}
+          isExclusive={isExclusive}
+          onClose={() => setShowSign(false)}
+        />
+      )}
 
       {/* Header profilo */}
       <div className="rounded-2xl bg-slate-900 px-5 py-4 text-white">
@@ -353,11 +372,22 @@ function DriverPageInner() {
               <div>
                 <p className="text-2xl font-bold text-slate-900">{focused.service.customer_name}</p>
                 <p className="text-sm text-slate-500 mt-0.5">{formatDateLabel(focused.service.date)} · {focused.service.time} · {focused.service.pax} pax</p>
+                {focused.service.pickup_time && (
+                  <p className="text-xs font-semibold text-amber-700 mt-0.5">⏱ Prelevamento: {focused.service.pickup_time}</p>
+                )}
                 <p className="text-xs text-slate-400 mt-0.5">{focused.service.vessel}</p>
               </div>
-              <Link href={`/driver/${focused.service.id}`} className="shrink-0 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
-                Dettagli
-              </Link>
+              <div className="flex flex-col gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowSign(true)}
+                  className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 active:scale-95 transition">
+                  🪧 Cartello
+                </button>
+                <Link href={`/driver/${focused.service.id}`} className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 text-center">
+                  Dettagli
+                </Link>
+              </div>
             </div>
             <div className="rounded-xl bg-slate-50 px-4 py-3 space-y-1">
               <p className="font-semibold text-slate-800">{focusedHotel?.name ?? focused.service.meeting_point ?? "Destinazione N/D"}</p>
@@ -449,11 +479,14 @@ function DriverPageInner() {
                       className={`w-full px-4 py-3 text-left transition hover:bg-slate-50 ${focused?.service.id === entry.service.id ? "bg-blue-50/60" : ""}`}>
                       <div className="flex items-center justify-between">
                         <p className="font-semibold text-slate-800">{entry.service.customer_name}</p>
-                        <span className="text-xs text-slate-500">{entry.service.time}</span>
+                        <div className="flex items-center gap-1.5">
+                          {entry.service.linked_service_id && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700">A/R</span>}
+                          <span className="text-xs text-slate-500">{entry.service.time}</span>
+                        </div>
                       </div>
                       <div className="mt-1 flex items-center gap-2">
                         <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusColor(entry.service.status)}`}>{entry.service.status}</span>
-                        <span className="text-xs text-slate-400">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</span>
+                        <span className="text-xs text-slate-400">{entry.service.direction === "departure" ? "↗ Partenza" : "↙ Arrivo"} · {hotel?.name ?? "N/D"} · {entry.service.pax} pax</span>
                       </div>
                     </button>
                   );
@@ -469,10 +502,13 @@ function DriverPageInner() {
                       onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                       className="w-full px-4 py-3 text-left transition hover:bg-slate-50">
                       <div className="flex items-center justify-between">
-                        <p className="font-semibold text-slate-800">{entry.service.customer_name}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-semibold text-slate-800">{entry.service.customer_name}</p>
+                          {entry.service.linked_service_id && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700">A/R</span>}
+                        </div>
                         <span className="text-xs font-semibold text-slate-600">{formatDateLabel(entry.service.date)} {entry.service.time}</span>
                       </div>
-                      <p className="mt-1 text-xs text-slate-400">{hotel?.name ?? "N/D"} · {entry.service.pax} pax · {entry.service.vessel}</p>
+                      <p className="mt-1 text-xs text-slate-400">{entry.service.direction === "departure" ? "↗" : "↙"} {hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
                     </button>
                   );
                 })
