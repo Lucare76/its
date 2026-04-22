@@ -103,6 +103,7 @@ export async function POST(req: NextRequest) {
         user_metadata: {
           full_name: (profile as { id: string; full_name: string }).full_name,
           force_password_change: true,
+          password_change_required: true,
         },
       });
 

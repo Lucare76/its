@@ -28,9 +28,15 @@ export default function ChangePasswordPage() {
     try {
       if (!supabase) { setError("Errore di configurazione."); return; }
 
+      const userResponse = await supabase.auth.getUser();
+      const currentMetadata = (userResponse.data.user?.user_metadata ?? {}) as Record<string, unknown>;
       const { error: updateErr } = await supabase.auth.updateUser({
         password,
-        data: { force_password_change: false },
+        data: {
+          ...currentMetadata,
+          force_password_change: false,
+          password_change_required: false,
+        },
       });
 
       if (updateErr) {

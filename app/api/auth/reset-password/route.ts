@@ -77,12 +77,18 @@ export async function POST(request: NextRequest) {
   }
 
   const temporaryPassword = generateTemporaryPassword(14);
+  const membershipResult = await admin
+    .from("memberships")
+    .select("role")
+    .eq("user_id", existingUser.id);
+  const isDriver = (membershipResult.data ?? []).some((membership: { role?: string | null }) => membership.role === "driver");
 
   const updateResult = await admin.auth.admin.updateUserById(existingUser.id, {
     password: temporaryPassword,
     user_metadata: {
       ...((existingUser.user_metadata ?? {}) as Record<string, unknown>),
-      password_change_required: true
+      password_change_required: true,
+      ...(isDriver ? { force_password_change: true } : {})
     }
   });
 

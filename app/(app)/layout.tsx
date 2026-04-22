@@ -186,9 +186,12 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         return;
       }
 
-      const passwordChangeRequired = userData.user.user_metadata?.password_change_required === true;
-      if (passwordChangeRequired && pathname !== "/auth/update-password") {
-        hardRedirect("/auth/update-password");
+      const userMetadata = userData.user.user_metadata ?? {};
+      const passwordChangeRequired = userMetadata.password_change_required === true;
+      const driverPasswordChangeRequired = userMetadata.force_password_change === true;
+      const passwordChangeTarget = driverPasswordChangeRequired ? "/driver/change-password" : "/auth/update-password";
+      if ((passwordChangeRequired || driverPasswordChangeRequired) && pathname !== passwordChangeTarget) {
+        hardRedirect(passwordChangeTarget);
         return;
       }
 

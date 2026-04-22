@@ -68,7 +68,8 @@ export default function UpdatePasswordPage() {
       password: password.trim(),
       data: {
         ...currentMetadata,
-        password_change_required: false
+        password_change_required: false,
+        force_password_change: false
       }
     });
     if (error) {

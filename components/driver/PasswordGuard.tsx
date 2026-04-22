@@ -10,17 +10,28 @@ export function PasswordGuard({ children }: { children: React.ReactNode }) {
   const [checked, setChecked] = useState(false);
 
   useEffect(() => {
-    if (!supabase) { setChecked(true); return; }
-    if (pathname === "/driver/change-password") { setChecked(true); return; }
+    let active = true;
 
-    supabase.auth.getUser().then(({ data }) => {
-      const flag = data.user?.user_metadata?.force_password_change;
-      if (flag === true) {
+    const checkPasswordPolicy = async () => {
+      await Promise.resolve();
+      if (!active) return;
+      if (!supabase) { setChecked(true); return; }
+      if (pathname === "/driver/change-password") { setChecked(true); return; }
+
+      const { data } = await supabase.auth.getUser();
+      if (!active) return;
+      const metadata = data.user?.user_metadata;
+      const forceDriverChange = metadata?.force_password_change === true;
+      const temporaryPassword = metadata?.password_change_required === true;
+      if (forceDriverChange || temporaryPassword) {
         router.replace("/driver/change-password");
       } else {
         setChecked(true);
       }
-    });
+    };
+
+    void checkPasswordPolicy();
+    return () => { active = false; };
   }, [pathname, router]);
 
   if (!checked) return null;

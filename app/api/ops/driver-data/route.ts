@@ -13,6 +13,37 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
 
+const DRIVER_SERVICE_SELECT =
+  "id,tenant_id,date,time,service_type,direction,vessel,pax,hotel_id,customer_name,phone,notes,status,meeting_point,pickup_time,linked_service_id,booking_service_kind";
+
+type DriverServiceRow = {
+  id: string;
+  tenant_id: string;
+  date: string;
+  time: string;
+  service_type: string | null;
+  direction: string;
+  vessel: string | null;
+  pax: number;
+  hotel_id: string | null;
+  customer_name: string;
+  phone: string | null;
+  phone_e164?: string | null;
+  notes: string | null;
+  status: string;
+  meeting_point: string | null;
+  pickup_time: string | null;
+  linked_service_id: string | null;
+  booking_service_kind: string | null;
+};
+
+function withPhoneE164Fallback(services: DriverServiceRow[]) {
+  return services.map((service) => ({
+    ...service,
+    phone_e164: service.phone_e164 ?? null,
+  }));
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor"]);
@@ -57,7 +88,7 @@ export async function GET(request: NextRequest) {
     const [servicesResult, statusEventsResult, hotelsResult] = await Promise.all([
       auth.admin
         .from("services")
-        .select("id,tenant_id,date,time,service_type,direction,vessel,pax,hotel_id,customer_name,phone,phone_e164,notes,status,meeting_point,pickup_time,linked_service_id,booking_service_kind")
+        .select(DRIVER_SERVICE_SELECT)
         .eq("tenant_id", tenantId)
         .in("id", serviceIds)
         .gte("date", cutoffIso),
@@ -76,7 +107,7 @@ export async function GET(request: NextRequest) {
 
     // 3. Carica anche i servizi linkati (tratta A/R) non direttamente assegnati
     //    per permettere all'autista di vedere entrambe le tratte in contesto
-    const services = servicesResult.data ?? [];
+    const services = withPhoneE164Fallback((servicesResult.data ?? []) as DriverServiceRow[]);
     const linkedIds = services
       .map((s: { linked_service_id?: string | null }) => s.linked_service_id)
       .filter((id): id is string => !!id && !serviceIds.includes(id));
@@ -85,10 +116,10 @@ export async function GET(request: NextRequest) {
     if (linkedIds.length > 0) {
       const { data: linked } = await auth.admin
         .from("services")
-        .select("id,tenant_id,date,time,service_type,direction,vessel,pax,hotel_id,customer_name,phone,phone_e164,notes,status,meeting_point,pickup_time,linked_service_id,booking_service_kind")
+        .select(DRIVER_SERVICE_SELECT)
         .eq("tenant_id", tenantId)
         .in("id", linkedIds);
-      linkedServices = linked ?? [];
+      linkedServices = withPhoneE164Fallback((linked ?? []) as DriverServiceRow[]);
     }
 
     return NextResponse.json({

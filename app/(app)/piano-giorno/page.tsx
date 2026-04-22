@@ -9,10 +9,12 @@ import { DateInput, PageHeader } from "@/components/ui";
 
 type Service = {
   id: string; date: string; time: string; direction: "arrival" | "departure";
+  time_from: string | null; time_to: string | null;
   customer_name: string; customer_first_name?: string | null; customer_last_name?: string | null;
   pax: number; hotel_id: string | null; vessel: string | null; notes: string | null;
   status: string; meeting_point: string | null; place_type: string | null;
   pickup_hotel: string | null; phone: string | null;
+  booking_service_kind: string | null; service_type: string | null;
 };
 type TripGroup = {
   id: string; date: string; driver_user_id: string | null; vehicle_label: string | null;
@@ -106,6 +108,22 @@ type AiPlanResult = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmt(time: string) { return time?.slice(0, 5) ?? "—"; }
+function fmtNullable(time: string | null | undefined) { return time ? fmt(time) : null; }
+function isPrivateIslandService(service: Service) {
+  return service.booking_service_kind === "private_island" || service.service_type === "private_island";
+}
+function serviceSortTime(service: Service) {
+  return isPrivateIslandService(service) ? service.time_from ?? service.time : service.pickup_hotel ?? service.time;
+}
+function serviceDisplayTime(service: Service) {
+  if (isPrivateIslandService(service)) {
+    const from = fmtNullable(service.time_from);
+    const to = fmtNullable(service.time_to);
+    if (from && to) return `${from}-${to}`;
+    return from ?? to ?? fmt(service.time);
+  }
+  return fmt(service.direction === "departure" ? service.pickup_hotel ?? service.time : service.time);
+}
 function today() { return new Date().toISOString().slice(0, 10); }
 const STRESS_TEST_DATE = "2025-10-12";
 function companyLabel(c: string) {
@@ -259,9 +277,10 @@ function DriverTimeline({ trips, tripServices }: {
     const all: Array<{ time: string; label: string; status: string }> = [];
     for (const t of trips) {
       const svcs = tripServices.get(t.id) ?? [];
-      const time = svcs[0]?.time ?? "";
+      const firstService = svcs[0];
+      const time = firstService ? serviceSortTime(firstService) : "";
       const st = tripServiceStatus(svcs);
-      all.push({ time, label: fmt(time), status: st });
+      all.push({ time, label: firstService ? serviceDisplayTime(firstService) : fmt(time), status: st });
     }
     return all.sort((a, b) => a.time.localeCompare(b.time));
   }, [trips, tripServices]);
@@ -336,7 +355,7 @@ function PoolPanel({ services, hotels, assignments, ferrySchedules, selectedIds,
     const map = new Map<string, Service[]>();
     for (const s of filtered) {
       const zone = hotels.get(s.hotel_id ?? "")?.zone ?? "—";
-      const pickupTime = s.pickup_hotel ? fmt(s.pickup_hotel) : fmt(s.time);
+      const pickupTime = serviceDisplayTime(s);
       const key = `${pickupTime}|${zone}`;
       map.set(key, [...(map.get(key) ?? []), s]);
     }
@@ -406,7 +425,7 @@ function PoolPanel({ services, hotels, assignments, ferrySchedules, selectedIds,
           if (tab === "arrivals") {
             const ferry = ferrySchedules.find((f) => svcs[0]?.vessel?.toLowerCase().includes(f.company.toLowerCase()));
             groupLabel = svcs[0]?.vessel || "—";
-            groupSub = `ore ${fmt(svcs[0]?.time ?? "")}`;
+            groupSub = `ore ${svcs[0] ? serviceDisplayTime(svcs[0]) : "—"}`;
             if (ferry) groupSub += ` · ${portLabel(ferry.arrival_port)}`;
           } else {
             const [time, zone] = key.split("|");
@@ -583,7 +602,7 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
           <div key={svc.id} className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded px-2 py-1.5">
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium text-slate-800 truncate">{customerName(svc)}</p>
-              <p className="text-[10px] text-slate-500">{hotels.get(svc.hotel_id ?? "")?.name ?? "—"} · {fmt(svc.time)}</p>
+              <p className="text-[10px] text-slate-500">{hotels.get(svc.hotel_id ?? "")?.name ?? "—"} · {serviceDisplayTime(svc)}</p>
             </div>
             <span className="text-[10px] font-semibold text-slate-600 shrink-0">{svc.pax} px</span>
             <button onClick={() => onRemove(svc.id)} className="text-slate-300 hover:text-red-500 text-xs shrink-0">✕</button>
@@ -798,7 +817,7 @@ function DriverPanel({ drivers, tripGroups, tripServices, token, vehicles, onUpd
                             st === "done" ? "bg-emerald-500" : st === "ongoing" ? "bg-amber-400" : "bg-slate-300"
                           }`} />
                           <span className="text-[11px] font-semibold text-slate-700 flex-1">
-                            {tg.vehicle_label ?? "—"} · {pax} PAX · {fmt(svcs[0]?.time ?? "")}
+                            {tg.vehicle_label ?? "—"} · {pax} PAX · {svcs[0] ? serviceDisplayTime(svcs[0]) : "—"}
                           </span>
                           <button
                             className="text-[10px] text-slate-400 hover:text-blue-600 mr-1"
@@ -985,11 +1004,11 @@ function sortTripRouteServices(services: Service[], hotels: Map<string, Hotel>):
       const aHotel = hotels.get(a.hotel_id ?? "");
       const bHotel = hotels.get(b.hotel_id ?? "");
       const dist = distanceFromPoint(bHotel, port.lat, port.lng) - distanceFromPoint(aHotel, port.lat, port.lng);
-      return dist !== 0 ? dist : (a.pickup_hotel ?? a.time).localeCompare(b.pickup_hotel ?? b.time);
+      return dist !== 0 ? dist : serviceSortTime(a).localeCompare(serviceSortTime(b));
     });
   }
 
-  return [...services].sort((a, b) => (a.pickup_hotel ?? a.time).localeCompare(b.pickup_hotel ?? b.time));
+  return [...services].sort((a, b) => serviceSortTime(a).localeCompare(serviceSortTime(b)));
 }
 
 function companyFromVessel(vessel: string | null | undefined): string {
@@ -1034,7 +1053,7 @@ function printDriverPlans(drivers: Member[], tripGroups: TripGroup[], tripServic
             const { lat, lng } = portCoords(arrPorto);
             return nearestNeighborSort(svcs, hotels, lat, lng);
           }
-          return [...svcs].sort((a, b) => (a.pickup_hotel ?? a.time).localeCompare(b.pickup_hotel ?? b.time));
+          return [...svcs].sort((a, b) => serviceSortTime(a).localeCompare(serviceSortTime(b)));
         })
         .map((svc) => {
           const hotel = hotels.get(svc.hotel_id ?? "");
@@ -1074,9 +1093,11 @@ function printDriverPlans(drivers: Member[], tripGroups: TripGroup[], tripServic
             ].filter(Boolean).join(" &nbsp;·&nbsp; ");
           }
 
-          const orarioCell = isArr
-            ? arrivoIschia
-            : fmt(svc.pickup_hotel ?? svc.time);
+          const orarioCell = isPrivateIslandService(svc)
+            ? serviceDisplayTime(svc)
+            : isArr
+              ? arrivoIschia
+              : fmt(svc.pickup_hotel ?? svc.time);
 
           return `<tr style="border-bottom:1px solid #eee">
               <td style="padding:3px 6px;white-space:nowrap">${orarioCell}</td>
@@ -1239,7 +1260,7 @@ export default function PianoGiornoPage() {
   const unassignedWindows = useMemo<UnassignedWindow[]>(() => {
     const map = new Map<string, UnassignedWindow>();
     for (const svc of unassignedServices) {
-      const displayTime = svc.direction === "departure" ? svc.pickup_hotel ?? svc.time : svc.time;
+      const displayTime = serviceSortTime(svc);
       const minutes = minutesFromTime(displayTime);
       const startMin = minutes == null ? 0 : Math.floor(minutes / 60) * 60;
       const endMin = startMin + 60;
@@ -1320,9 +1341,7 @@ export default function PianoGiornoPage() {
     return (data?.trip_groups ?? [])
       .map((group) => {
         const services = sortTripRouteServices(tripServices.get(group.id) ?? [], hotelMap);
-        const time = services[0]?.direction === "departure"
-          ? fmt(services[0]?.pickup_hotel ?? services[0]?.time ?? "")
-          : fmt(services[0]?.time ?? "");
+        const time = services[0] ? serviceDisplayTime(services[0]) : "—";
         const directions = new Set(services.map((s) => s.direction));
         const direction: TripOverview["direction"] =
           directions.size > 1 ? "mixed" : services[0]?.direction ?? "mixed";
@@ -2254,7 +2273,7 @@ export default function PianoGiornoPage() {
                                 return (
                                   <div key={svc.id} className="grid gap-2 px-3 py-2 text-xs sm:grid-cols-[70px_minmax(160px,1fr)_minmax(160px,1fr)_120px]">
                                     <div className="font-mono font-semibold text-slate-700">
-                                      {fmt(svc.direction === "departure" ? svc.pickup_hotel ?? svc.time : svc.time)}
+                                      {serviceDisplayTime(svc)}
                                     </div>
                                     <div>
                                       <p className="font-semibold text-slate-800">{customerName(svc)} · {svc.pax}p</p>

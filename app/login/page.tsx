@@ -207,10 +207,10 @@ export default function LoginPage() {
         {mode !== "reset" ? (
           <label className="block text-sm">
             Password
-            <div className="relative mt-1">
+            <div className="mt-1 flex rounded-xl border border-slate-200 bg-white focus-within:border-slate-400">
               <input
                 data-testid="login-password"
-                className="input-saas pr-20"
+                className="min-w-0 flex-1 rounded-l-xl border-0 bg-transparent px-3 py-2 text-sm outline-none"
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
@@ -219,7 +219,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => setShowPassword((prev) => !prev)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                className="shrink-0 rounded-r-xl border-l border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                 aria-label={showPassword ? "Nascondi password" : "Mostra password"}
               >
                 {showPassword ? "Nascondi" : "Mostra"}

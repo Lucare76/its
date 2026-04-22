@@ -63,7 +63,9 @@ export async function POST(request: NextRequest) {
         password: driver.password,
         email_confirm: true,
         user_metadata: {
-          full_name: driver.full_name
+          full_name: driver.full_name,
+          force_password_change: true,
+          password_change_required: true
         }
       });
 

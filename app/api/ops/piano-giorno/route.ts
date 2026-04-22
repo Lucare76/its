@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
     // Carica prima i servizi del giorno per filtrare assignments per service_id
     const servicesResult = await auth.admin
       .from("services")
-      .select("id, date, time, direction, customer_name, customer_first_name, customer_last_name, pax, hotel_id, vessel, notes, status, meeting_point, place_type, pickup_hotel, booking_service_kind, service_type, phone")
+      .select("id, date, time, time_from, time_to, direction, customer_name, customer_first_name, customer_last_name, pax, hotel_id, vessel, notes, status, meeting_point, place_type, pickup_hotel, booking_service_kind, service_type, phone")
       .eq("tenant_id", tenantId)
       .eq("date", date)
       .neq("status", "cancelled")

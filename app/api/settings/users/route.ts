@@ -274,7 +274,8 @@ export async function POST(request: NextRequest) {
     email_confirm: true,
     user_metadata: {
       full_name: fullName,
-      ...(gender ? { gender } : {})
+      ...(gender ? { gender } : {}),
+      ...(parsed.data.role === "driver" ? { force_password_change: true, password_change_required: true } : {})
     }
   });
 
