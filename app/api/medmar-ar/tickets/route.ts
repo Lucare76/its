@@ -10,7 +10,7 @@ import { DEFAULT_PRICES_CENTS, type PriceType } from "@/lib/medmar-ar/types";
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
-  const auth = await authorizePricingRequest(request);
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
   const { admin, membership } = auth;
   const tenantId = membership.tenant_id;
@@ -61,7 +61,7 @@ const createTicketSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  const auth = await authorizePricingRequest(request);
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
   const { admin, membership, user } = auth;
   const tenantId = membership.tenant_id;

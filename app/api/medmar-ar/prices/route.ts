@@ -42,7 +42,7 @@ async function ensureDefaultPrices(admin: any, tenantId: string, userId: string)
 }
 
 export async function GET(request: NextRequest) {
-  const auth = await authorizePricingRequest(request);
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
   const { admin, membership, user } = auth;
   const tenantId = membership.tenant_id;

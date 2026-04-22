@@ -10,7 +10,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
-  const auth = await authorizePricingRequest(request);
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
   const { admin, membership } = auth;
 
@@ -37,7 +37,7 @@ const createGroupSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  const auth = await authorizePricingRequest(request);
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
   const { admin, membership, user } = auth;
 
@@ -83,7 +83,7 @@ const updateGroupSchema = z.object({
 });
 
 export async function PATCH(request: NextRequest) {
-  const auth = await authorizePricingRequest(request);
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
   const { admin, membership } = auth;
 

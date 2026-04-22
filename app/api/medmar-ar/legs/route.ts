@@ -14,7 +14,7 @@ const updateLegSchema = z.object({
 });
 
 export async function PATCH(request: NextRequest) {
-  const auth = await authorizePricingRequest(request);
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
   const { admin, membership, user } = auth;
 
