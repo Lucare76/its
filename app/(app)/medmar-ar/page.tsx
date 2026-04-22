@@ -23,6 +23,7 @@ import {
 import type { MedmarArStats } from "@/app/api/medmar-ar/stats/route";
 import type { MatchOpportunity } from "@/app/api/medmar-ar/matching/route";
 import type { SimulatorBase } from "@/app/api/medmar-ar/simulator/route";
+import type { InsightsResponse, StrategicInsight } from "@/app/api/medmar-ar/insights/route";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -99,7 +100,7 @@ const URGENCY_LABEL: Record<string, string> = {
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 
-type Tab = "emissione" | "biglietti" | "pending" | "recupero" | "dashboard" | "simulatore";
+type Tab = "emissione" | "biglietti" | "pending" | "recupero" | "dashboard" | "simulatore" | "leve";
 
 // ─── Componente Decision Helper ───────────────────────────────────────────────
 
@@ -367,6 +368,10 @@ export default function MedmarArPage() {
   const [simAvgPax, setSimAvgPax] = useState(2);
   const [simBaseLoaded, setSimBaseLoaded] = useState(false);
 
+  // Leve strategiche
+  const [insights, setInsights] = useState<InsightsResponse | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+
   // Early-alert: biglietti A/R emessi con > 7 gg anticipo
   const earlyWarning = useMemo(() => {
     const today = todayIso();
@@ -588,6 +593,19 @@ export default function MedmarArPage() {
     if (tab === "simulatore") void loadSimulator();
   }, [tab, loadSimulator]);
 
+  // Carica leve strategiche
+  const loadInsights = useCallback(async () => {
+    if (!token) return;
+    setInsightsLoading(true);
+    const res = await api<InsightsResponse>("/api/medmar-ar/insights", undefined, token);
+    setInsightsLoading(false);
+    if (res.ok && res.data) setInsights(res.data);
+  }, [token]);
+
+  useEffect(() => {
+    if (tab === "leve") void loadInsights();
+  }, [tab, loadInsights]);
+
   // Submit emissione
   const handleEmit = async (modeOverride?: TicketMode) => {
     const mode = modeOverride ?? (formMode as TicketMode);
@@ -746,6 +764,7 @@ export default function MedmarArPage() {
           { id: "recupero",   label: `🎯 Recupero${highOpp > 0 ? ` (${highOpp})` : ""}` },
           { id: "dashboard",   label: "📊 Dashboard" },
           { id: "simulatore",  label: "🔭 Simulatore" },
+          { id: "leve",        label: `⚡ Leve${insights && insights.summary.high_priority_count > 0 ? ` (${insights.summary.high_priority_count})` : ""}` },
         ] as { id: Tab; label: string }[]).map((t) => (
           <button
             key={t.id}
@@ -1143,6 +1162,16 @@ export default function MedmarArPage() {
             >
               {exportingExcel ? "Esportando..." : "⬇ Export Excel"}
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                const params = new URLSearchParams({ date_from: statsPeriodFrom, date_to: statsPeriodTo });
+                window.open(`/medmar-ar/stampa?${params}`, "_blank");
+              }}
+              className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+            >
+              🖨️ Stampa / PDF
+            </button>
           </div>
 
           {statsLoading && <p className="text-sm text-slate-400">Caricamento statistiche...</p>}
@@ -1506,6 +1535,116 @@ export default function MedmarArPage() {
           {!simLoading && !simBase && (
             <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
               Caricamento dati in corso...
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── TAB: LEVE STRATEGICHE ─────────────────────────────────────────── */}
+      {tab === "leve" && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-600">
+              Raccomandazioni prioritizzate basate sui dati dell'anno corrente
+            </p>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => void loadInsights()} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                ↻ Aggiorna
+              </button>
+              <button
+                type="button"
+                onClick={() => window.open(`/medmar-ar/stampa`, "_blank")}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                🖨️ Stampa report
+              </button>
+            </div>
+          </div>
+
+          {insightsLoading && <p className="text-sm text-slate-400">Analisi in corso...</p>}
+
+          {insights && (
+            <>
+              {/* Sommario */}
+              <div className="rounded-2xl border border-indigo-200 bg-indigo-50 px-5 py-4">
+                <div className="flex flex-wrap gap-6">
+                  <div>
+                    <p className="text-xs font-semibold text-indigo-500 uppercase">Risparmio potenziale</p>
+                    <p className="text-xl font-extrabold text-indigo-900 mt-0.5">{formatEur(insights.summary.total_potential_savings_cents)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-indigo-500 uppercase">Alta priorità</p>
+                    <p className="text-xl font-extrabold text-indigo-900 mt-0.5">{insights.summary.high_priority_count}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-indigo-500 uppercase">Break-even A/R</p>
+                    <p className="text-xl font-extrabold text-indigo-900 mt-0.5">{Math.round(insights.summary.breakeven_probability * 100)}%</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-indigo-500 uppercase">Prob. attuale</p>
+                    <p className={`text-xl font-extrabold mt-0.5 ${insights.summary.current_probability >= insights.summary.breakeven_probability ? "text-emerald-700" : "text-rose-600"}`}>
+                      {Math.round(insights.summary.current_probability * 100)}%
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {insights.insights.length === 0 && (
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-8 text-center space-y-2">
+                  <p className="text-2xl">✅</p>
+                  <p className="text-sm font-semibold text-emerald-800">Nessuna azione urgente rilevata</p>
+                  <p className="text-xs text-emerald-600">La gestione dei biglietti A/R è nella norma. Continua così!</p>
+                </div>
+              )}
+
+              {/* Card insights per priorità */}
+              {(["high", "medium", "low"] as const)
+                .map((priority) => {
+                  const group = insights.insights.filter((i: StrategicInsight) => i.priority === priority);
+                  if (group.length === 0) return null;
+                  const labelMap = { high: "🔴 Alta priorità", medium: "🟡 Media priorità", low: "⚪ Bassa priorità" };
+                  return (
+                    <div key={priority} className="space-y-3">
+                      <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">{labelMap[priority]}</h3>
+                      {group.map((ins: StrategicInsight) => (
+                        <div
+                          key={ins.id}
+                          className={`rounded-2xl border p-5 space-y-3 ${
+                            priority === "high" ? "border-rose-200 bg-rose-50" :
+                            priority === "medium" ? "border-amber-200 bg-amber-50" :
+                            "border-slate-200 bg-white"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="space-y-1 min-w-0">
+                              <p className="font-bold text-slate-900 text-sm">{ins.title}</p>
+                              <p className="text-xs text-slate-600">{ins.description}</p>
+                            </div>
+                            {ins.impact_cents > 0 && (
+                              <div className="shrink-0 text-right">
+                                <p className="text-[10px] text-slate-400 uppercase font-semibold">Impatto stimato</p>
+                                <p className="text-sm font-extrabold text-slate-900">{formatEur(ins.impact_cents)}</p>
+                              </div>
+                            )}
+                          </div>
+                          <div className={`rounded-xl px-4 py-3 ${
+                            priority === "high" ? "bg-rose-100" :
+                            priority === "medium" ? "bg-amber-100" :
+                            "bg-slate-100"
+                          }`}>
+                            <p className="text-xs font-semibold text-slate-700">→ {ins.action}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+            </>
+          )}
+
+          {!insightsLoading && !insights && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
+              Caricamento analisi in corso...
             </div>
           )}
         </div>
