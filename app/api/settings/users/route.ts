@@ -768,14 +768,19 @@ export async function DELETE(request: NextRequest) {
   if ((otherMembershipsLookup.data ?? []).length === 0) {
     const authDelete = await auth.admin.auth.admin.deleteUser(userId);
     if (authDelete.error) {
-      console.error(`Deletion da Auth fallito per ${userId}: ${authDelete.error.message}`);
-      // Non returniamo errore qui perché la membership è già stata cancellata
+      // La membership è già cancellata — avvisiamo il frontend che la mail è ancora bloccata in Auth
+      return NextResponse.json({
+        ok: true,
+        deleted_user_id: userId,
+        deleted_full_name: membershipLookup.data.full_name,
+        auth_delete_warning: `Utente rimosso dal tenant ma la cancellazione dall'autenticazione è fallita: ${authDelete.error.message}. La mail potrebbe non essere riutilizzabile.`,
+      });
     }
   }
 
   return NextResponse.json({
     ok: true,
     deleted_user_id: userId,
-    deleted_full_name: membershipLookup.data.full_name
+    deleted_full_name: membershipLookup.data.full_name,
   });
 }

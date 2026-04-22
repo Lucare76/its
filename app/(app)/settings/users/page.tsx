@@ -388,7 +388,7 @@ export default function SettingsUsersPage() {
       }
     });
 
-    const body = (await response.json().catch(() => null)) as { error?: string; deleted_user_id?: string } | null;
+    const body = (await response.json().catch(() => null)) as { error?: string; deleted_user_id?: string; auth_delete_warning?: string } | null;
     if (!response.ok || !body?.deleted_user_id) {
       setDeletingUserId(null);
       setMessage(body?.error ?? "Eliminazione utente fallita.");
@@ -407,8 +407,7 @@ export default function SettingsUsersPage() {
       return next;
     });
     setDeletingUserId(null);
-    setMessage(`Utente ${membership.full_name} eliminato definitivamente dal sistema.`);
-    setMessage(`Utente eliminato: ${membership.full_name}.`);
+    setMessage(body.auth_delete_warning ?? `Utente ${membership.full_name} eliminato definitivamente.`);
   };
 
   const sendResetPasswordEmail = async (membership: MembershipRow) => {
