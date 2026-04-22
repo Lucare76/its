@@ -22,6 +22,7 @@ import {
 } from "@/lib/medmar-ar/types";
 import type { MedmarArStats } from "@/app/api/medmar-ar/stats/route";
 import type { MatchOpportunity } from "@/app/api/medmar-ar/matching/route";
+import type { SimulatorBase } from "@/app/api/medmar-ar/simulator/route";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -98,7 +99,7 @@ const URGENCY_LABEL: Record<string, string> = {
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 
-type Tab = "emissione" | "biglietti" | "pending" | "recupero" | "dashboard";
+type Tab = "emissione" | "biglietti" | "pending" | "recupero" | "dashboard" | "simulatore";
 
 // ─── Componente Decision Helper ───────────────────────────────────────────────
 
@@ -357,6 +358,15 @@ export default function MedmarArPage() {
   const [statsPeriodTo, setStatsPeriodTo] = useState(todayIso());
   const [exportingExcel, setExportingExcel] = useState(false);
 
+  // Simulatore
+  const [simBase, setSimBase] = useState<SimulatorBase | null>(null);
+  const [simLoading, setSimLoading] = useState(false);
+  const [simMonthlyTickets, setSimMonthlyTickets] = useState(0);
+  const [simArPct, setSimArPct] = useState(50);
+  const [simReturnProb, setSimReturnProb] = useState(50);
+  const [simAvgPax, setSimAvgPax] = useState(2);
+  const [simBaseLoaded, setSimBaseLoaded] = useState(false);
+
   // Early-alert: biglietti A/R emessi con > 7 gg anticipo
   const earlyWarning = useMemo(() => {
     const today = todayIso();
@@ -370,6 +380,72 @@ export default function MedmarArPage() {
   // Badge recupero
   const criticalOpp = opportunities.filter((o) => o.urgency === "critical").length;
   const highOpp = opportunities.filter((o) => o.urgency !== "normal").length;
+
+  // Simulatore: calcolo scenari
+  const simProjection = useMemo(() => {
+    if (!simBase) return null;
+    const p = simBase.prices;
+    const arPct = simArPct / 100;
+    const returnProb = simReturnProb / 100;
+    const monthlyTickets = simMonthlyTickets;
+    const avgPax = simAvgPax;
+
+    const computeMonth = (tickets: number, ar: number, rProb: number, pax: number) => {
+      const arTickets = Math.round(tickets * ar);
+      const singleTickets = tickets - arTickets;
+      const arValueCents = arTickets * 2 * p.round_trip_per_leg * pax;
+      const singleValueCents = singleTickets * p.single_trip_under_12 * pax;
+      const valueCents = arValueCents + singleValueCents;
+      // Perdita attesa: per ogni biglietto A/R, prob (1-rProb) di perdere il ritorno
+      const expectedLostCents = arTickets * (1 - rProb) * p.round_trip_per_leg * pax;
+      return { tickets, pax: tickets * pax, valueCents, lostCents: Math.round(expectedLostCents) };
+    };
+
+    // 3 scenari fissi
+    const scenarios = [
+      {
+        id: "pessimistico",
+        label: "Pessimistico",
+        color: "#ef4444",
+        arPct: Math.min(1, arPct + 0.2),
+        returnProb: Math.max(0, returnProb - 0.3),
+      },
+      {
+        id: "realistico",
+        label: "Realistico",
+        color: "#4f46e5",
+        arPct,
+        returnProb,
+      },
+      {
+        id: "ottimistico",
+        label: "Ottimistico",
+        color: "#22c55e",
+        arPct: Math.max(0, arPct - 0.2),
+        returnProb: Math.min(1, returnProb + 0.3),
+      },
+    ];
+
+    return scenarios.map((sc) => {
+      const monthlyData = simBase.remaining_month_names.map((month) => {
+        const m = computeMonth(monthlyTickets, sc.arPct, sc.returnProb, avgPax);
+        return { month, ...m };
+      });
+      const projectedValue = monthlyData.reduce((s, m) => s + m.valueCents, 0);
+      const projectedLost = monthlyData.reduce((s, m) => s + m.lostCents, 0);
+      const yearEndValue = simBase.ytd.total_value_cents + projectedValue;
+      const yearEndLost = simBase.ytd.total_lost_cents + projectedLost;
+      return {
+        ...sc,
+        monthlyData,
+        projectedValue,
+        projectedLost,
+        yearEndValue,
+        yearEndLost,
+        yearEndNet: yearEndValue - yearEndLost,
+      };
+    });
+  }, [simBase, simMonthlyTickets, simArPct, simReturnProb, simAvgPax]);
 
   // Boot
   useEffect(() => {
@@ -489,6 +565,28 @@ export default function MedmarArPage() {
   useEffect(() => {
     if (tab === "dashboard") void loadStats();
   }, [tab, loadStats]);
+
+  // Carica base simulatore
+  const loadSimulator = useCallback(async () => {
+    if (!token) return;
+    setSimLoading(true);
+    const res = await api<SimulatorBase & { ok: boolean }>("/api/medmar-ar/simulator", undefined, token);
+    setSimLoading(false);
+    if (res.ok && res.data) {
+      setSimBase(res.data);
+      if (!simBaseLoaded) {
+        setSimMonthlyTickets(Math.round(res.data.ytd.avg_monthly_tickets) || 10);
+        setSimArPct(Math.round(res.data.ytd.ar_percentage * 100));
+        setSimReturnProb(Math.round(res.data.ytd.return_usage_probability * 100));
+        setSimAvgPax(Math.round(res.data.ytd.avg_pax_per_ticket) || 2);
+        setSimBaseLoaded(true);
+      }
+    }
+  }, [token, simBaseLoaded]);
+
+  useEffect(() => {
+    if (tab === "simulatore") void loadSimulator();
+  }, [tab, loadSimulator]);
 
   // Submit emissione
   const handleEmit = async (modeOverride?: TicketMode) => {
@@ -646,7 +744,8 @@ export default function MedmarArPage() {
           { id: "biglietti",  label: "🎫 Biglietti" },
           { id: "pending",    label: `⏳ Gruppi${pendingGroups.length > 0 ? ` (${pendingGroups.length})` : ""}` },
           { id: "recupero",   label: `🎯 Recupero${highOpp > 0 ? ` (${highOpp})` : ""}` },
-          { id: "dashboard",  label: "📊 Dashboard" },
+          { id: "dashboard",   label: "📊 Dashboard" },
+          { id: "simulatore",  label: "🔭 Simulatore" },
         ] as { id: Tab; label: string }[]).map((t) => (
           <button
             key={t.id}
@@ -1198,6 +1297,215 @@ export default function MedmarArPage() {
           {!statsLoading && !stats && (
             <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
               Clicca "Aggiorna" per caricare le statistiche del periodo.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── TAB: SIMULATORE ───────────────────────────────────────────────── */}
+      {tab === "simulatore" && (
+        <div className="space-y-6">
+          {simLoading && <p className="text-sm text-slate-400">Caricamento dati storici...</p>}
+
+          {simBase && (
+            <>
+              {/* Header YTD */}
+              <div className="rounded-2xl border border-indigo-200 bg-indigo-50 px-5 py-4 space-y-1">
+                <p className="text-sm font-bold text-indigo-900">
+                  📅 Anno {simBase.year} — {simBase.completed_months} mes{simBase.completed_months === 1 ? "e" : "i"} completat{simBase.completed_months === 1 ? "o" : "i"},&nbsp;
+                  {simBase.remaining_months} rimanent{simBase.remaining_months === 1 ? "e" : "i"}
+                </p>
+                <p className="text-xs text-indigo-600">
+                  YTD: {simBase.ytd.total_tickets} biglietti · {formatEur(simBase.ytd.total_value_cents)} emessi ·&nbsp;
+                  Perso netto {formatEur(simBase.ytd.net_loss_cents)} ·&nbsp;
+                  Prob. ritorno storica {Math.round(simBase.ytd.return_usage_probability * 100)}%
+                </p>
+              </div>
+
+              {/* Slider parametri */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-5">
+                <h3 className="text-sm font-bold text-slate-900">⚙️ Parametri previsione</h3>
+                <div className="grid gap-5 sm:grid-cols-2">
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs">
+                      <span className="font-medium text-slate-600">Biglietti/mese attesi</span>
+                      <span className="font-bold text-slate-900">{simMonthlyTickets}</span>
+                    </div>
+                    <input type="range" min="1" max="200" step="1"
+                      value={simMonthlyTickets}
+                      onChange={(e) => setSimMonthlyTickets(Number(e.target.value))}
+                      className="w-full accent-indigo-600"
+                    />
+                    <p className="text-[10px] text-slate-400">Media YTD: {simBase.ytd.avg_monthly_tickets}</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs">
+                      <span className="font-medium text-slate-600">% biglietti A/R</span>
+                      <span className="font-bold text-slate-900">{simArPct}%</span>
+                    </div>
+                    <input type="range" min="0" max="100" step="5"
+                      value={simArPct}
+                      onChange={(e) => setSimArPct(Number(e.target.value))}
+                      className="w-full accent-indigo-600"
+                    />
+                    <p className="text-[10px] text-slate-400">YTD attuale: {Math.round(simBase.ytd.ar_percentage * 100)}%</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs">
+                      <span className="font-medium text-slate-600">Probabilità ritorno usato</span>
+                      <span className={`font-bold ${simReturnProb >= 60 ? "text-emerald-600" : simReturnProb >= 40 ? "text-amber-600" : "text-rose-600"}`}>
+                        {simReturnProb}%
+                      </span>
+                    </div>
+                    <input type="range" min="0" max="100" step="5"
+                      value={simReturnProb}
+                      onChange={(e) => setSimReturnProb(Number(e.target.value))}
+                      className="w-full accent-indigo-600"
+                    />
+                    <p className="text-[10px] text-slate-400">Storico: {Math.round(simBase.ytd.return_usage_probability * 100)}%</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs">
+                      <span className="font-medium text-slate-600">Pax medi per biglietto</span>
+                      <span className="font-bold text-slate-900">{simAvgPax}</span>
+                    </div>
+                    <input type="range" min="1" max="20" step="1"
+                      value={simAvgPax}
+                      onChange={(e) => setSimAvgPax(Number(e.target.value))}
+                      className="w-full accent-indigo-600"
+                    />
+                    <p className="text-[10px] text-slate-400">YTD attuale: {simBase.ytd.avg_pax_per_ticket}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Scenari */}
+              {simProjection && (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    {simProjection.map((sc) => (
+                      <div key={sc.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+                        <div className="flex items-center gap-2">
+                          <span className="h-3 w-3 rounded-full" style={{ backgroundColor: sc.color }} />
+                          <p className="text-sm font-bold text-slate-900">{sc.label}</p>
+                        </div>
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-slate-500">A/R previsto</span>
+                            <span className="font-semibold">{Math.round(sc.arPct * 100)}%</span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-slate-500">Prob. ritorno</span>
+                            <span className={`font-semibold ${sc.returnProb >= 0.6 ? "text-emerald-600" : sc.returnProb >= 0.4 ? "text-amber-600" : "text-rose-600"}`}>
+                              {Math.round(sc.returnProb * 100)}%
+                            </span>
+                          </div>
+                        </div>
+                        <div className="border-t border-slate-100 pt-3 space-y-1">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-slate-500">Valore proiettato</span>
+                            <span className="font-bold">{formatEur(sc.projectedValue)}</span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-slate-500">Perdita attesa</span>
+                            <span className="font-bold text-rose-600">{formatEur(sc.projectedLost)}</span>
+                          </div>
+                        </div>
+                        <div className="rounded-xl p-3 space-y-1" style={{ backgroundColor: sc.color + "15" }}>
+                          <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: sc.color }}>
+                            Fine anno
+                          </p>
+                          <p className="text-xl font-extrabold text-slate-900">{formatEur(sc.yearEndValue)}</p>
+                          <p className="text-xs" style={{ color: sc.color }}>
+                            Perso stimato: {formatEur(sc.yearEndLost)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Grafico proiezione mensile */}
+                  {simBase.remaining_months > 0 && (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                      <h3 className="text-sm font-bold text-slate-900 mb-4">Proiezione mensile — perdita attesa</h3>
+                      <ResponsiveContainer width="100%" height={220}>
+                        <BarChart
+                          data={simBase.remaining_month_names.map((month, i) => {
+                            const row: Record<string, unknown> = { month: month.slice(5) };
+                            for (const sc of simProjection) {
+                              row[sc.label] = sc.monthlyData[i]?.lostCents ? sc.monthlyData[i].lostCents / 100 : 0;
+                            }
+                            return row;
+                          })}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                          <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `€${v}`} />
+                          <Tooltip formatter={(v) => typeof v === "number" ? `€${v.toFixed(2)}` : v} />
+                          {simProjection.map((sc) => (
+                            <Bar key={sc.id} dataKey={sc.label} fill={sc.color} radius={[3, 3, 0, 0]} opacity={0.8} />
+                          ))}
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                  {/* Breakeven */}
+                  {(() => {
+                    const singleCost = simBase.prices.single_trip_under_12;
+                    const arLegCost = simBase.prices.round_trip_per_leg;
+                    // AR totale = 2*arLeg; atteso con prob p = 2*arLeg*p + (arLeg + single)*(1-p)
+                    // break-even con single: 2*arLeg*p + arLeg*(1-p) + single*(1-p) = single
+                    // p*(2*arLeg - arLeg - single) = single - arLeg - single = -arLeg → p = arLeg/(arLeg+single-arLeg) = arLeg/single? No...
+                    // Expected AR cost = arLeg + arLeg*p (pago sempre andata arLeg, ritorno lo uso con prob p → costo atteso ritorno arLeg*p)
+                    // vs single cost = single
+                    // Breakeven: arLeg + arLeg*p = single → p = (single - arLeg) / arLeg
+                    const breakEvenProb = (singleCost - arLegCost) / arLegCost;
+                    const breakEvenPct = Math.round(Math.max(0, Math.min(1, breakEvenProb)) * 100);
+                    const currentAbove = simReturnProb >= breakEvenPct;
+                    return (
+                      <div className={`rounded-2xl border p-5 space-y-2 ${currentAbove ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+                        <p className="text-sm font-bold text-slate-900">
+                          {currentAbove ? "✅" : "⚠️"} Punto di pareggio A/R vs Singola
+                        </p>
+                        <p className="text-xs text-slate-600">
+                          Con la tariffa attuale ({formatEur(arLegCost)}/tratta A/R vs {formatEur(singleCost)} singola),
+                          l'A/R conviene se la probabilità di utilizzo del ritorno è{" "}
+                          <strong>superiore al {breakEvenPct}%</strong>.
+                        </p>
+                        <p className={`text-xs font-semibold ${currentAbove ? "text-emerald-700" : "text-amber-700"}`}>
+                          Parametro corrente: {simReturnProb}% — {currentAbove ? "sopra il break-even, A/R conviene" : "sotto il break-even, meglio singola"}
+                        </p>
+                        <div className="w-full bg-white rounded-full h-2.5 border border-slate-200 overflow-hidden relative mt-2">
+                          <div
+                            className={`h-2.5 rounded-full transition-all ${currentAbove ? "bg-emerald-500" : "bg-amber-400"}`}
+                            style={{ width: `${simReturnProb}%` }}
+                          />
+                          <div
+                            className="absolute top-0 h-2.5 w-0.5 bg-slate-700"
+                            style={{ left: `${breakEvenPct}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-[10px] text-slate-400">
+                          <span>0%</span>
+                          <span className="font-semibold text-slate-600">Break-even: {breakEvenPct}%</span>
+                          <span>100%</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </>
+              )}
+            </>
+          )}
+
+          {!simLoading && !simBase && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
+              Caricamento dati in corso...
             </div>
           )}
         </div>
