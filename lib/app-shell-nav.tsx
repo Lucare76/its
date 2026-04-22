@@ -362,7 +362,15 @@ const ALL_NAV_ITEMS = [
 ];
 
 export function matchesPath(pathname: string, href: string) {
-  return pathname === href || pathname.startsWith(`${href}/`);
+  if (pathname === href) return true;
+
+  const matchingChildItem = ALL_NAV_ITEMS.some((item) => (
+    item.href !== href &&
+    item.href.startsWith(`${href}/`) &&
+    (pathname === item.href || pathname.startsWith(`${item.href}/`))
+  ));
+
+  return !matchingChildItem && pathname.startsWith(`${href}/`);
 }
 
 export function canSeeNavItem(item: NavItem, role: UserRole | null, quotesAccess: boolean, overrides?: CapabilityOverrides) {

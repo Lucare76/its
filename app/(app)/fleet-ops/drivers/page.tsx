@@ -44,7 +44,10 @@ export default function DriverKpiPage() {
         });
         const body = await res.json().catch(() => null) as { ok?: boolean; kpi?: DriverKpi[]; error?: string } | null;
         if (!active) return;
-        if (!res.ok || !body?.ok) { setError(body?.error ?? "Errore caricamento."); return; }
+        if (!res.ok || !body?.ok) {
+          setError(body?.error && body.error !== "Bad Request" ? body.error : "KPI autisti non disponibili per il periodo selezionato.");
+          return;
+        }
         setKpi(body.kpi ?? []);
       } catch {
         if (active) setError("Errore di rete.");
