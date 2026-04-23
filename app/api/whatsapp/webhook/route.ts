@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient, logWhatsAppEvent, mapWebhookStatus } from "@/lib/server/whatsapp";
@@ -62,7 +63,29 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const parsed = webhookSchema.safeParse(await request.json().catch(() => null));
+  const rawBody = await request.text();
+
+  // Verifica firma HMAC-SHA256 Meta (X-Hub-Signature-256)
+  const appSecret = process.env.WHATSAPP_APP_SECRET;
+  if (appSecret) {
+    const signature = request.headers.get("x-hub-signature-256");
+    if (!signature) {
+      return NextResponse.json({ error: "Missing signature" }, { status: 401 });
+    }
+    const expectedSig = "sha256=" + createHmac("sha256", appSecret).update(rawBody).digest("hex");
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expectedSig);
+    const valid = sigBuf.length === expBuf.length && timingSafeEqual(sigBuf, expBuf);
+    if (!valid) {
+      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+    }
+  } else {
+    console.warn("[whatsapp/webhook] WHATSAPP_APP_SECRET non configurato – verifica firma saltata");
+  }
+
+  let bodyJson: unknown;
+  try { bodyJson = JSON.parse(rawBody); } catch { bodyJson = null; }
+  const parsed = webhookSchema.safeParse(bodyJson);
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid webhook payload" }, { status: 400 });
   }
