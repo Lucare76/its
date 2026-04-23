@@ -249,6 +249,7 @@ export default function FleetReportsPage() {
                               onClick={() => setLightbox(url)}
                               className="group relative h-24 w-24 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 shadow-sm transition hover:border-slate-400"
                             >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
                               <img
                                 src={photoUrl(url)}
                                 alt={`Foto ${i + 1}`}
@@ -312,6 +313,7 @@ export default function FleetReportsPage() {
           onClick={() => setLightbox(null)}
         >
           <div className="relative max-h-[90vh] max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={photoUrl(lightbox)}
               alt="Foto segnalazione"

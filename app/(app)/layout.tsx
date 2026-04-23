@@ -117,7 +117,6 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       }
     });
     return () => { authListener.subscription.unsubscribe(); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -620,6 +619,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   // NOTA: deve stare qui, prima dei return condizionali, per rispettare le regole degli hook
   useEffect(() => {
     if (!authUserId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFavorites(loadFavorites(authUserId));
   }, [authUserId]);
 

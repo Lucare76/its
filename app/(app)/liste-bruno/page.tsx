@@ -698,7 +698,10 @@ export default function ListeBrunoPage() {
       <PageHeader
         title="Liste Bruno"
         subtitle="Arrivi e partenze da stazione / aeroporto"
-        actions={<img src="/brand/logo-ischia-transfer.png" alt="Ischia Transfer" className="h-16 w-auto" />}
+        actions={
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src="/brand/logo-ischia-transfer.png" alt="Ischia Transfer" className="h-16 w-auto" />
+        }
       />
 
       {/* Toolbar */}
