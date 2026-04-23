@@ -16,7 +16,6 @@ export async function GET(request: NextRequest) {
     const tenantId = auth.membership.tenant_id;
     const date = request.nextUrl.searchParams.get("date") ?? new Date().toISOString().slice(0, 10);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const admin = auth.admin as any;
     const [servicesRes, assignmentsRes, hotelsRes] = await Promise.all([
       admin

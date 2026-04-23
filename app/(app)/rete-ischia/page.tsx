@@ -1068,7 +1068,7 @@ ${driverInfo ? `<p style="font-size:12px;margin:0 0 12px;color:#475569">Autista:
           <div className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
             <h2 className="text-lg font-bold text-slate-900">Attiva app — {activatingDriver.full_name}</h2>
             <p className="text-sm text-slate-500">
-              Crea l'account per permettere all'autista di accedere all'app driver.
+              Crea l&apos;account per permettere all&apos;autista di accedere all&apos;app driver.
               La password iniziale sarà il numero di telefono.
             </p>
             <div>

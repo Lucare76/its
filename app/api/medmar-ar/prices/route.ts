@@ -15,7 +15,6 @@ const PRICE_TYPES: PriceType[] = [
   "single_trip_12_or_more",
 ];
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function ensureDefaultPrices(admin: any, tenantId: string, userId: string) {
   const today = new Date().toISOString().slice(0, 10);
   for (const priceType of PRICE_TYPES) {

@@ -204,13 +204,13 @@ export default function ApproveBookingPage() {
                 }}
               />
             </div>
-            <span className="text-xs text-slate-400 mt-1 block">Obbligatorio per la conferma. Comunicato all'agenzia via email.</span>
+            <span className="text-xs text-slate-400 mt-1 block">Obbligatorio per la conferma. Comunicato all&apos;agenzia via email.</span>
           </label>
         </div>
 
         {/* Note + email operatore */}
         <div className="rounded-2xl bg-white border border-border p-5 shadow-sm space-y-3">
-          <h2 className="font-bold text-slate-800">Note per l'agenzia</h2>
+          <h2 className="font-bold text-slate-800">Note per l&apos;agenzia</h2>
           <label className="block text-sm">
             <span className="font-medium text-slate-700">Nota operativa (opzionale)</span>
             <textarea rows={3} className="input-saas mt-1" placeholder="Es. bus da Piazza Garibaldi alle 08:00" value={notes} onChange={e => setNotes(e.target.value)} />

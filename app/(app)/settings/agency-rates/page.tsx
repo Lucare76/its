@@ -115,8 +115,15 @@ function PriceRow({ label, kindKey, lineCode = null, agencyIds, rates, token, is
 
   useEffect(() => {
     const c = activeRate(rates, primaryId, kindKey, lineCode);
-    setPriceStr(centsToEur(c?.price_cents));
-    setCostStr(centsToEur(c?.cost_cents ?? preloadedCostCents));
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setPriceStr(centsToEur(c?.price_cents));
+      setCostStr(centsToEur(c?.cost_cents ?? preloadedCostCents));
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [rates, primaryId, kindKey, lineCode, preloadedCostCents]);
 
   const save = async () => {

@@ -156,7 +156,7 @@ function CancelPanel({
           </p>
         ) : (
           <p className="mt-1 text-[11px] text-rose-400">
-            Nessuna penale — nessuna email inviata all'agenzia.
+            Nessuna penale — nessuna email inviata all&apos;agenzia.
           </p>
         )}
       </div>

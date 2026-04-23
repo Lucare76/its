@@ -183,7 +183,6 @@ export async function POST(req: NextRequest) {
 
 // ── Applica cancellazione finale ──────────────────────────────────────────────
 async function applyFinalCancellation(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: any,
   tenantId: string,
   cr: Record<string, unknown>,

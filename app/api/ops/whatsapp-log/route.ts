@@ -7,7 +7,6 @@ export const runtime = "nodejs";
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
   if (auth instanceof NextResponse) return auth;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { membership, admin: authAdmin } = auth as any;
   const tenantId = membership.tenant_id as string;
   void authAdmin; // usa admin client con service role per query cross-tenant

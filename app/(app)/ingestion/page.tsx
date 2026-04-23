@@ -107,7 +107,15 @@ function InboundLog() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { void load(page * PAGE_SIZE); }, [load, page]);
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load(page * PAGE_SIZE);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load, page]);
 
   const filtered = useMemo(() =>
     filterStatus === "all" ? emails : emails.filter((e) => e.review_status === filterStatus),

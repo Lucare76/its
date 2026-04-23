@@ -130,7 +130,11 @@ export default function DispatchPage() {
   const drivers               = useMemo(() => tenantMemberships.filter((m) => m.role === "driver"), [tenantMemberships]);
 
   const today    = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const tomorrow = useMemo(() => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10), []);
+  const tomorrow = useMemo(() => {
+    const next = new Date(`${today}T12:00:00`);
+    next.setDate(next.getDate() + 1);
+    return next.toISOString().slice(0, 10);
+  }, [today]);
 
   const baseServices = useMemo(() =>
     tenantServices

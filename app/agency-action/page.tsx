@@ -81,7 +81,7 @@ export default function AgencyActionPage() {
       <div style={{ fontFamily: "sans-serif", maxWidth: 480, margin: "80px auto", padding: 24, textAlign: "center" }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>✅</div>
         <h2 style={{ color: "#166534", marginBottom: 8 }}>Annullamento confermato</h2>
-        <p style={{ color: "#475569" }}>Il servizio è stato annullato. L'operatore è stato notificato automaticamente.</p>
+        <p style={{ color: "#475569" }}>Il servizio è stato annullato. L&apos;operatore è stato notificato automaticamente.</p>
       </div>
     );
   }
@@ -165,7 +165,7 @@ export default function AgencyActionPage() {
             {submitting ? "Invio in corso..." : "Conferma annullamento"}
           </button>
           <p style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", marginTop: 12 }}>
-            L'operatore verrà notificato automaticamente via email.
+            L&apos;operatore verrà notificato automaticamente via email.
           </p>
         </>
       ) : null}

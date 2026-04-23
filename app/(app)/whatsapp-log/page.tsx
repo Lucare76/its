@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "@/components/ui";
 import { supabase } from "@/lib/supabase/client";
 
@@ -32,7 +32,7 @@ export default function WhatsAppLogPage() {
   const [days, setDays]       = useState(30);
   const [error, setError]     = useState("");
 
-  const load = async (d: number) => {
+  const load = useCallback(async (d: number) => {
     setLoading(true);
     setError("");
     if (!supabase) { setError("Sessione non disponibile."); setLoading(false); return; }
@@ -47,9 +47,17 @@ export default function WhatsAppLogPage() {
     setRows(body.notReadRows ?? []);
     setFailedRows(body.failedRows ?? []);
     setLoading(false);
-  };
+  }, []);
 
-  useEffect(() => { void load(days); }, [days]);
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load(days);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [days, load]);
 
   const pct = (n: number) => kpi && kpi.total > 0 ? Math.round((n / kpi.total) * 100) : 0;
 

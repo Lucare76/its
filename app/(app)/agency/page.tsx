@@ -212,7 +212,7 @@ export default function AgencyPage() {
         <div className="card p-4 flex flex-col gap-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">Confermate</p>
           <p className="text-3xl font-bold text-emerald-700">{loading ? "—" : kpi.confirmed}</p>
-          <p className="text-xs text-slate-400">Approvate dall'operatore</p>
+          <p className="text-xs text-slate-400">Approvate dall&apos;operatore</p>
         </div>
         <div className="card p-4 flex flex-col gap-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Prossimi</p>
@@ -247,7 +247,7 @@ export default function AgencyPage() {
             <p className="text-2xl font-bold text-emerald-700">
               {loading ? "—" : fmtEur(accounting.paid)}
             </p>
-            <p className="text-xs text-slate-400 mt-1">Saldato all'operatore</p>
+            <p className="text-xs text-slate-400 mt-1">Saldato all&apos;operatore</p>
           </div>
           {/* Totale impegnato */}
           <div className="rounded-xl bg-slate-50 border border-slate-200 p-4">
@@ -349,7 +349,7 @@ export default function AgencyPage() {
 
       {/* Info cancellazione */}
       <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
-        Per annullare una prenotazione vai in <strong>Le mie prenotazioni</strong>, seleziona la tratta e usa il pulsante <strong>Annulla tratta</strong>. L'operatore riceverà una notifica automatica.
+        Per annullare una prenotazione vai in <strong>Le mie prenotazioni</strong>, seleziona la tratta e usa il pulsante <strong>Annulla tratta</strong>. L&apos;operatore riceverà una notifica automatica.
       </div>
     </section>
   );

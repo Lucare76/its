@@ -42,7 +42,6 @@ export async function POST(
     const { id } = await params;
     const auth = await authorizePricingRequest(req, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const a = auth as any;
     const tenantId = a.membership.tenant_id as string;
     const userId   = a.user.id as string;
@@ -184,7 +183,6 @@ function formatDate(iso: string): string {
 }
 
 async function applyCancellation(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: any,
   tenantId: string,
   cr: Record<string, unknown>,

@@ -297,7 +297,7 @@ export default function AgencyMarginsPage() {
       ) : null}
 
       <p className="text-xs text-slate-400">
-        I margini vengono calcolati solo per i servizi con listino configurato (prezzo agenzia + costo operatore). Servizi senza costo operatore mostrano "—" nella colonna margine.
+        I margini vengono calcolati solo per i servizi con listino configurato (prezzo agenzia + costo operatore). Servizi senza costo operatore mostrano &quot;—&quot; nella colonna margine.
       </p>
     </section>
   );

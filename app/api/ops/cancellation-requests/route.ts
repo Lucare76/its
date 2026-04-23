@@ -21,9 +21,7 @@ export async function GET(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tenantId = (auth as any).membership.tenant_id as string;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const admin = (auth as any).admin;
 
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -117,7 +115,6 @@ export async function POST(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator", "agency"]);
     if (auth instanceof NextResponse) return auth;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const a = auth as any;
     const tenantId = a.membership.tenant_id as string;
     const role = a.membership.role as string;

@@ -213,7 +213,7 @@ export default function OperatorApproveBookingPage() {
 
         {/* Note + email operatore */}
         <div className="rounded-2xl bg-white border border-slate-200 p-5 shadow-sm space-y-3">
-          <h2 className="font-bold text-slate-800">Note per l'agenzia</h2>
+          <h2 className="font-bold text-slate-800">Note per l&apos;agenzia</h2>
           <label className="block text-sm">
             <span className="font-medium text-slate-700">Nota operativa (opzionale)</span>
             <textarea rows={3}

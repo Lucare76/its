@@ -12,7 +12,6 @@ export async function GET(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const a = auth as any;
     const tenantId = a.membership.tenant_id as string;
     const admin    = a.admin;

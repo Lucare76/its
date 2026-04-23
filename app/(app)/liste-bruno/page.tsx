@@ -575,7 +575,15 @@ export default function ListeBrunoPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { void load(date); }, [load, date]);
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load(date);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load, date]);
 
   const post = useCallback(async (action: string, data: Record<string, unknown>) => {
     const token = await getToken();

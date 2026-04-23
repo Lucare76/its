@@ -21,6 +21,11 @@ type PwaContextValue = {
   unsubscribePush: () => Promise<void>;
 };
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<unknown>;
+};
+
 /* ------------------------------------------------------------------ context */
 
 const PwaContext = createContext<PwaContextValue>({
@@ -55,16 +60,16 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 
 export function PwaInit({ children }: { children?: React.ReactNode }) {
   const [swReady, setSwReady] = useState(false);
-  const [pushState, setPushState] = useState<PwaContextValue["pushState"]>("loading");
+  const [pushState, setPushState] = useState<PwaContextValue["pushState"]>(() =>
+    typeof window !== "undefined" && !("serviceWorker" in navigator) ? "unsupported" : "loading"
+  );
   const [installPromptAvailable, setInstallPromptAvailable] = useState(false);
   const swReg = useRef<ServiceWorkerRegistration | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const deferredPrompt = useRef<any>(null);
+  const deferredPrompt = useRef<BeforeInstallPromptEvent | null>(null);
 
   /* ------------- SW registration */
   useEffect(() => {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) {
-      setPushState("unsupported");
       return;
     }
 
@@ -97,7 +102,7 @@ export function PwaInit({ children }: { children?: React.ReactNode }) {
   useEffect(() => {
     const handler = (e: Event) => {
       e.preventDefault();
-      deferredPrompt.current = e;
+      deferredPrompt.current = e as BeforeInstallPromptEvent;
       setInstallPromptAvailable(true);
     };
     window.addEventListener("beforeinstallprompt", handler);
@@ -112,11 +117,10 @@ export function PwaInit({ children }: { children?: React.ReactNode }) {
 
   /* ------------- Trigger install */
   const triggerInstall = useCallback(() => {
-    if (!deferredPrompt.current) return;
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    void deferredPrompt.current.prompt();
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    deferredPrompt.current.userChoice.then(() => {
+    const prompt = deferredPrompt.current;
+    if (!prompt) return;
+    void prompt.prompt();
+    prompt.userChoice.then(() => {
       deferredPrompt.current = null;
       setInstallPromptAvailable(false);
     });

@@ -307,6 +307,7 @@ function KpiCard({ label, value, sub, color }: { label: string; value: string; s
 // ─── Pagina principale ────────────────────────────────────────────────────────
 
 export default function MedmarArPage() {
+  const [nowMs] = useState(() => Date.now());
   const [tab, setTab] = useState<Tab>("emissione");
   const [token, setToken] = useState<string | null>(null);
   const [initError, setInitError] = useState("");
@@ -738,7 +739,7 @@ export default function MedmarArPage() {
           <p className="text-sm font-semibold text-amber-800">
             ⚠️ {earlyWarning.length} bigliett{earlyWarning.length === 1 ? "o A/R emesso" : "i A/R emessi"} con più di 7 giorni di anticipo
           </p>
-          <p className="text-xs text-amber-600 mt-0.5">Valuta se attendere più visibilità prima dell'emissione.</p>
+          <p className="text-xs text-amber-600 mt-0.5">Valuta se attendere più visibilità prima dell&apos;emissione.</p>
         </div>
       )}
 
@@ -972,7 +973,7 @@ export default function MedmarArPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             {pendingGroups.map((g) => {
               const expiresAt = new Date(g.expires_at);
-              const hoursLeft = (expiresAt.getTime() - Date.now()) / (1000 * 60 * 60);
+              const hoursLeft = (expiresAt.getTime() - nowMs) / (1000 * 60 * 60);
               const isExpiringSoon = hoursLeft < 48;
               const paxMissing = g.target_threshold - g.current_pax_count;
 
@@ -1325,7 +1326,7 @@ export default function MedmarArPage() {
 
           {!statsLoading && !stats && (
             <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
-              Clicca "Aggiorna" per caricare le statistiche del periodo.
+              Clicca &quot;Aggiorna&quot; per caricare le statistiche del periodo.
             </div>
           )}
         </div>
@@ -1503,7 +1504,7 @@ export default function MedmarArPage() {
                         </p>
                         <p className="text-xs text-slate-600">
                           Con la tariffa attuale ({formatEur(arLegCost)}/tratta A/R vs {formatEur(singleCost)} singola),
-                          l'A/R conviene se la probabilità di utilizzo del ritorno è{" "}
+                          l&apos;A/R conviene se la probabilità di utilizzo del ritorno è{" "}
                           <strong>superiore al {breakEvenPct}%</strong>.
                         </p>
                         <p className={`text-xs font-semibold ${currentAbove ? "text-emerald-700" : "text-amber-700"}`}>
@@ -1545,7 +1546,7 @@ export default function MedmarArPage() {
         <div className="space-y-6">
           <div className="flex items-center justify-between">
             <p className="text-sm text-slate-600">
-              Raccomandazioni prioritizzate basate sui dati dell'anno corrente
+              Raccomandazioni prioritizzate basate sui dati dell&apos;anno corrente
             </p>
             <div className="flex gap-2">
               <button type="button" onClick={() => void loadInsights()} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">

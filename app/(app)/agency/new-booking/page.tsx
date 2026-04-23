@@ -929,7 +929,7 @@ export default function AgencyNewBookingPage() {
                         <a href="mailto:info@ischiatransferservice.it" className="font-medium text-blue-600 underline">
                           info@ischiatransferservice.it
                         </a>{" "}
-                        per richiedere l'aggiunta della tua fermata.
+                        per richiedere l&apos;aggiunta della tua fermata.
                       </p>
                     </div>
                   );

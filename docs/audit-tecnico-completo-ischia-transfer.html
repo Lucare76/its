@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <title>Audit tecnico completo - Ischia Transfer Service</title>
+    <style>
+      @page {
+        margin: 18mm 15mm;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        color: #172033;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 12px;
+        line-height: 1.45;
+        margin: 0;
+      }
+
+      h1 {
+        border-bottom: 3px solid #123f5c;
+        color: #0f2740;
+        font-size: 25px;
+        line-height: 1.15;
+        margin: 0 0 18px;
+        padding-bottom: 12px;
+      }
+
+      h2 {
+        color: #123f5c;
+        font-size: 17px;
+        margin: 22px 0 8px;
+        page-break-after: avoid;
+      }
+
+      h3 {
+        color: #29384f;
+        font-size: 13px;
+        margin: 14px 0 6px;
+      }
+
+      p {
+        margin: 0 0 8px;
+      }
+
+      ul,
+      ol {
+        margin: 6px 0 12px 20px;
+        padding: 0;
+      }
+
+      li {
+        margin: 4px 0;
+      }
+
+      code {
+        background: #eef4f8;
+        border-radius: 4px;
+        color: #0f2740;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 11px;
+        padding: 1px 4px;
+      }
+
+      table {
+        border-collapse: collapse;
+        margin: 8px 0 16px;
+        page-break-inside: avoid;
+        width: 100%;
+      }
+
+      th,
+      td {
+        border: 1px solid #ccd9e5;
+        padding: 6px 7px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #eaf2f8;
+        color: #123f5c;
+        font-size: 11px;
+        text-transform: uppercase;
+      }
+
+      .meta {
+        background: #f4f8fb;
+        border: 1px solid #d8e4ee;
+        border-radius: 8px;
+        margin: 0 0 18px;
+        padding: 10px 12px;
+      }
+
+      .callout {
+        background: #fff8e6;
+        border: 1px solid #f1d58b;
+        border-radius: 8px;
+        margin: 10px 0 14px;
+        padding: 10px 12px;
+      }
+
+      .verdict {
+        background: #0f2740;
+        border-radius: 10px;
+        color: #ffffff;
+        margin-top: 18px;
+        padding: 14px 16px;
+      }
+
+      .verdict h2 {
+        color: #ffffff;
+        margin-top: 0;
+      }
+
+      .badge {
+        border-radius: 999px;
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        padding: 2px 8px;
+        text-transform: uppercase;
+      }
+
+      .high {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .medium {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .ok {
+        background: #dcfce7;
+        color: #166534;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>AUDIT TECNICO COMPLETO - ISCHIA TRANSFER SERVICE</h1>
+
+    <div class="meta">
+      <p><strong>Data audit:</strong> 23 aprile 2026</p>
+      <p><strong>Repository:</strong> <code>C:\Users\user\Downloads\its</code></p>
+      <p><strong>Stack rilevato:</strong> Next.js App Router, TypeScript, Tailwind, Supabase, pnpm, Vercel.</p>
+      <p><strong>Verifiche eseguite:</strong> <code>pnpm typecheck</code> OK, <code>pnpm build</code> OK, <code>pnpm lint</code> KO.</p>
+    </div>
+
+    <h2>1. Executive Summary</h2>
+    <p>Il progetto e una beta molto avanzata ma ancora fragile. Ha tante funzioni reali: gestionale servizi, agenzie, import email/PDF, bus, driver app, pricing, analytics, notifiche, cron, QR, WhatsApp e flotta.</p>
+    <p>Tecnicamente compila: <code>pnpm typecheck</code> passa, <code>pnpm build</code> passa, mentre <code>pnpm lint</code> fallisce con 35 errori e 42 warning.</p>
+    <p>Il problema principale non e la mancanza di funzionalita, ma la concentrazione di molta logica operativa in file enormi, con schema Supabase in evoluzione, API numerose, migrazioni duplicate e controlli auth non sempre uniformi.</p>
+    <div class="callout"><strong>Stato generale:</strong> beta operativa / staging avanzato. Per uso quotidiano reale resta rischioso senza hardening mirato.</div>
+
+    <h2>2. Cosa Funziona</h2>
+    <ul>
+      <li><strong>Build production:</strong> <code>pnpm build</code> completato correttamente con Next 16.2.2. Coinvolge <code>app/</code>, <code>app/api/</code>, <code>next.config.ts</code>.</li>
+      <li><strong>Auth base e ruoli:</strong> esiste un layout protetto con sessione, ruoli e tenant. File: <code>app/(app)/layout.tsx</code>, <code>lib/server/pricing-auth.ts</code>.</li>
+      <li><strong>API protette con helper condiviso:</strong> molte route usano <code>authorizePricingRequest</code> e <code>authorizeServiceRoleRequest</code>.</li>
+      <li><strong>Driver app:</strong> pagina driver, dati assegnati, cambio password e prompt PWA sono presenti. File: <code>app/(app)/driver/page.tsx</code>, <code>app/api/ops/driver-data/route.ts</code>, <code>components/driver/PwaInit.tsx</code>.</li>
+      <li><strong>Piano giorno / assegnazioni:</strong> flusso ricco con servizi, autisti, viaggi, assegnazioni, auto-assign ed export. File: <code>app/(app)/piano-giorno/page.tsx</code>, <code>app/api/ops/piano-giorno/*</code>.</li>
+      <li><strong>Import email/PDF:</strong> presenti parser, preview, conferma, salvataggio bozze e deduplica. File: <code>app/(app)/inbox/page.tsx</code>, <code>app/api/email/*</code>, <code>lib/server/agency-pdf-import.ts</code>.</li>
+      <li><strong>Pricing:</strong> struttura ampia con listini, margini, regole, storico e simulator. File: <code>app/(app)/pricing/page.tsx</code>, <code>app/api/pricing/*</code>, <code>lib/server/pricing-matching.ts</code>.</li>
+    </ul>
+
+    <h2>3. Cosa Non Funziona</h2>
+    <ul>
+      <li><strong>Lint non passa.</strong> <span class="badge high">alta</span> La Definition of Done non e rispettata. Errori in varie pagine agency, dispatch, Medmar AR e PWA driver.</li>
+      <li><strong>Migrazioni Supabase con numeri duplicati.</strong> <span class="badge high">alta</span> Duplicati in <code>0009</code>, <code>0025</code>, <code>0067</code>, <code>0074</code>, <code>0100</code>, <code>0140</code>. Rischio ambienti non allineati.</li>
+      <li><strong>Tipi Supabase incompleti o obsoleti.</strong> <span class="badge high">alta</span> <code>lib/supabase/types.ts</code> non rappresenta tutto lo schema usato dal codice.</li>
+      <li><strong>API fragili rispetto allo schema.</strong> <span class="badge high">alta</span> Alcune route usano colonne recenti come <code>phone_e164</code>, <code>time_from</code>, <code>time_to</code>, <code>pickup_hotel</code>, <code>porto_bruno</code>, <code>approval_status</code>.</li>
+    </ul>
+
+    <h2>4. Cosa E Incompleto O Fragile</h2>
+    <ul>
+      <li><strong>File troppo grandi:</strong> <code>bus-network/page.tsx</code> 181 KB, <code>pricing/page.tsx</code> 148 KB, <code>piano-giorno/page.tsx</code> 111 KB, <code>app/api/ops/bus-network/route.ts</code> 100 KB.</li>
+      <li><strong>Auth non centralizzata nel proxy:</strong> <code>proxy.ts</code> e quasi pass-through. Ogni API deve proteggersi correttamente da sola.</li>
+      <li><strong>Health/config parzialmente pubblici:</strong> <code>app/health/page.tsx</code> e <code>app/api/health/route.ts</code> espongono presenza/assenza delle env.</li>
+      <li><strong>Webhook WhatsApp:</strong> verificato token GET, ma la firma Meta sul POST e da rafforzare.</li>
+    </ul>
+
+    <h2>5. Bug Probabili O Certi</h2>
+    <table>
+      <thead>
+        <tr><th>Area</th><th>Problema</th><th>Gravita</th><th>File coinvolti</th><th>Fix suggerito</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>CI/qualita</td><td><code>pnpm lint</code> fallisce</td><td>Alta</td><td>varie pagine</td><td>Pulire errori ESLint/React Compiler</td></tr>
+        <tr><td>Database</td><td>Migrazioni duplicate</td><td>Alta</td><td><code>supabase/migrations</code></td><td>Rinumerare e validare ordine</td></tr>
+        <tr><td>Driver</td><td>Colonne Supabase recenti possono mancare</td><td>Alta</td><td><code>app/api/ops/driver-data/route.ts</code></td><td>Allineare schema prod/staging</td></tr>
+        <tr><td>Piano giorno</td><td>Export forse non riflette <code>time_from/time_to</code></td><td>Media</td><td><code>app/api/ops/piano-giorno/export-excel/route.ts</code></td><td>Uniformare display/export</td></tr>
+        <tr><td>Frontend</td><td><code>Date.now()</code> nel render</td><td>Media</td><td><code>dispatch</code>, <code>medmar-ar</code></td><td>Spostare in state/effect/memo stabile</td></tr>
+        <tr><td>Mappa live</td><td>Hook rule disabilitata</td><td>Alta</td><td><code>app/(app)/mappa-live/page.tsx</code></td><td>Rifattorizzare hook</td></tr>
+        <tr><td>PWA driver</td><td>iOS non supporta install programmatico</td><td>Media</td><td><code>components/driver/PwaInit.tsx</code></td><td>UI istruzioni chiara</td></tr>
+      </tbody>
+    </table>
+
+    <h2>6. Flussi Operativi Analizzati</h2>
+    <table>
+      <thead>
+        <tr><th>Flusso</th><th>Stato</th><th>Problemi</th><th>Note</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Login / ruoli / tenant</td><td>Parziale</td><td>Auth mista tra helper e codice custom</td><td>Base buona</td></tr>
+        <tr><td>Driver app</td><td>Parziale</td><td>PWA mobile e schema DB sensibili</td><td>Da testare su telefoni reali</td></tr>
+        <tr><td>Cambio password primo accesso</td><td>OK / Parziale</td><td>Dipende da flag DB/user metadata</td><td>Logica presente</td></tr>
+        <tr><td>Piano giorno / assegnazioni</td><td>Parziale</td><td>File enorme, schema-sensitive</td><td>Funzione centrale ma fragile</td></tr>
+        <tr><td>Fascia private_island</td><td>Parziale</td><td>Export da verificare</td><td>Vista aggiornata</td></tr>
+        <tr><td>Import email</td><td>Parziale</td><td>Dipende da IMAP/env/tenant default</td><td>Da verificare in staging</td></tr>
+        <tr><td>Preview PDF / Claude</td><td>Parziale</td><td>Dipende da <code>ANTHROPIC_API_KEY</code></td><td>Architettura presente</td></tr>
+        <tr><td>Conferma PDF</td><td>Parziale</td><td>Molti insert/update</td><td>Serve test regressione</td></tr>
+        <tr><td>Deduplica</td><td>Da verificare</td><td>Business-critical</td><td>Test con casi reali</td></tr>
+        <tr><td>Pricing</td><td>Parziale</td><td>Molto codice</td><td>Serve test listini/margini</td></tr>
+        <tr><td>Bus network</td><td>Parziale</td><td>Enorme e complesso</td><td>Alto valore, alto rischio</td></tr>
+        <tr><td>Analytics</td><td>Parziale</td><td>Dipende da dati/eventi</td><td>Build ok</td></tr>
+        <tr><td>Cron/notifiche</td><td>Da verificare</td><td>Dipendono da env e Vercel cron</td><td>Test staging obbligatorio</td></tr>
+        <tr><td>QR scan servizi</td><td>OK / Parziale</td><td>Scan autenticato</td><td>Pattern corretto</td></tr>
+        <tr><td>WhatsApp</td><td>Parziale</td><td>Webhook da firmare meglio</td><td>Send manuale protetto</td></tr>
+      </tbody>
+    </table>
+
+    <h2>7. Sicurezza / Auth / Config</h2>
+    <p><strong>Aspetti positivi:</strong> nessun segreto tracciato trovato via <code>git ls-files</code>; <code>.env</code> e <code>.env.local</code> sono ignorati; molte API usano role check e tenant filter; QR pubblico rimanda a scan autenticato.</p>
+    <p><strong>Rischi:</strong> service role usato molto, cron dipendenti da <code>CRON_SECRET</code>, webhook WhatsApp da firmare, auth custom in alcune API, fallback dev secret in <code>lib/server/agency-action-token.ts</code>.</p>
+
+    <h2>8. Prontezza Per Produzione</h2>
+    <div class="callout"><strong>Valutazione secca:</strong> PRONTO SOLO CON CORREZIONI.</div>
+    <p>La build passa e il prodotto ha molti flussi reali, ma non e ancora abbastanza solido per uso operativo senza interventi. I rischi maggiori sono lint KO, schema/migrazioni non blindati, file monolitici, route service-role numerose e flussi critici non coperti da test end-to-end.</p>
+
+    <h2>9. Priorita Operative</h2>
+    <h3>Da correggere subito</h3>
+    <ul>
+      <li>Far passare <code>pnpm lint</code>.</li>
+      <li>Sistemare migrazioni duplicate.</li>
+      <li>Rigenerare tipi Supabase reali.</li>
+      <li>Verificare schema production/staging contro colonne usate dal codice.</li>
+      <li>Proteggere meglio webhook WhatsApp.</li>
+      <li>Rimuovere fallback secret dev in produzione.</li>
+    </ul>
+    <h3>Da correggere a breve</h3>
+    <ul>
+      <li>Test end-to-end per driver, piano giorno, import PDF, conferma PDF, agency booking.</li>
+      <li>Spezzare <code>bus-network</code>, <code>piano-giorno</code>, <code>pricing</code>, <code>agency-pdf-import</code>.</li>
+      <li>Uniformare helper auth su tutte le API sensibili.</li>
+      <li>Limitare health/system-status ad admin.</li>
+    </ul>
+    <h3>Migliorie successive</h3>
+    <ul>
+      <li>Migliorare UX responsive delle pagine operative.</li>
+      <li>Aggiungere logging strutturato e audit trail uniforme.</li>
+      <li>Ridurre <code>any</code>, <code>eslint-disable</code>, <code>@ts-expect-error</code>.</li>
+      <li>Creare smoke test staging post-deploy.</li>
+    </ul>
+
+    <h2>10. Piano Consigliato</h2>
+    <ol>
+      <li>Congelare lo schema atteso: applicare/ordinare migrazioni e rigenerare <code>lib/supabase/types.ts</code>.</li>
+      <li>Pulire lint fino a <code>pnpm lint</code> OK.</li>
+      <li>Fare una passata sicurezza sulle API service-role: tenant filter, role check, validazione zod.</li>
+      <li>Scrivere smoke test sui flussi vitali: login, driver, piano giorno, import PDF, agency booking.</li>
+      <li>Rifattorizzare solo i file piu rischiosi, senza cambiare business logic.</li>
+      <li>Preparare staging Vercel con env complete e test cron/notifiche.</li>
+      <li>Solo dopo, usare il gestionale in produzione con backup e rollback pronti.</li>
+    </ol>
+
+    <div class="verdict">
+      <h2>VERDETTO FINALE</h2>
+      <p><strong>Voto tecnico complessivo:</strong> 6.5 / 10</p>
+      <p><strong>Affidabilita percepita:</strong> media, buona per demo/staging, non ancora tranquilla per operativita quotidiana senza supervisione.</p>
+      <p><strong>Rischio operativo:</strong> medio/alto, soprattutto su import PDF, bus, schema Supabase e automazioni.</p>
+      <p><strong>3 priorita assolute:</strong></p>
+      <ol>
+        <li>Allineare e bloccare schema/migrazioni Supabase.</li>
+        <li>Far passare lint e aggiungere smoke test sui flussi principali.</li>
+        <li>Hardening API service-role, webhook e cron.</li>
+      </ol>
+    </div>
+  </body>
+</html>

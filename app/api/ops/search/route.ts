@@ -7,7 +7,6 @@ export async function GET(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tenantId = (auth as any).membership.tenant_id as string;
 
     const q = (req.nextUrl.searchParams.get("q") ?? "").trim();
@@ -16,7 +15,6 @@ export async function GET(req: NextRequest) {
     const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? "30"), 100);
 
     // Cerca per nome cliente o telefono su tutti i servizi non cancellati
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (auth as any).admin
       .from("services")
       .select(`

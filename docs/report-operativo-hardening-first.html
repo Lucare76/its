@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <title>Report operativo hardening-first - Ischia Transfer Service</title>
+    <style>
+      @page { margin: 18mm 15mm; }
+      * { box-sizing: border-box; }
+      body {
+        color: #172033;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 12px;
+        line-height: 1.45;
+        margin: 0;
+      }
+      h1 {
+        border-bottom: 3px solid #123f5c;
+        color: #0f2740;
+        font-size: 24px;
+        line-height: 1.15;
+        margin: 0 0 18px;
+        padding-bottom: 12px;
+      }
+      h2 {
+        color: #123f5c;
+        font-size: 17px;
+        margin: 22px 0 8px;
+        page-break-after: avoid;
+      }
+      h3 {
+        color: #29384f;
+        font-size: 13px;
+        margin: 14px 0 6px;
+      }
+      p { margin: 0 0 8px; }
+      ul, ol { margin: 6px 0 12px 20px; padding: 0; }
+      li { margin: 4px 0; }
+      code {
+        background: #eef4f8;
+        border-radius: 4px;
+        color: #0f2740;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 11px;
+        padding: 1px 4px;
+      }
+      table {
+        border-collapse: collapse;
+        margin: 8px 0 16px;
+        page-break-inside: avoid;
+        width: 100%;
+      }
+      th, td {
+        border: 1px solid #ccd9e5;
+        padding: 6px 7px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #eaf2f8;
+        color: #123f5c;
+        font-size: 11px;
+        text-transform: uppercase;
+      }
+      .meta {
+        background: #f4f8fb;
+        border: 1px solid #d8e4ee;
+        border-radius: 8px;
+        margin: 0 0 18px;
+        padding: 10px 12px;
+      }
+      .callout {
+        background: #fff8e6;
+        border: 1px solid #f1d58b;
+        border-radius: 8px;
+        margin: 10px 0 14px;
+        padding: 10px 12px;
+      }
+      .badge {
+        border-radius: 999px;
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        padding: 2px 8px;
+        text-transform: uppercase;
+      }
+      .high { background: #fee2e2; color: #991b1b; }
+      .medium { background: #fef3c7; color: #92400e; }
+      .low { background: #dcfce7; color: #166534; }
+    </style>
+  </head>
+  <body>
+    <h1>REPORT OPERATIVO HARDENING-FIRST - ISCHIA TRANSFER SERVICE</h1>
+    <div class="meta">
+      <p><strong>Data:</strong> 23 aprile 2026</p>
+      <p><strong>Repository:</strong> <code>C:\Users\user\Downloads\its</code></p>
+      <p><strong>Approccio:</strong> correzione progressiva e sicura, senza refactor globale e senza cambiare business logic non necessaria.</p>
+      <p><strong>Stato verifiche:</strong> <code>pnpm typecheck</code> OK, <code>pnpm lint</code> KO, <code>pnpm build</code> da riconfermare per timeout nell'ultima esecuzione.</p>
+    </div>
+
+    <h2>FASE 1 - Analisi Sicura</h2>
+    <p>Analisi svolta solo in lettura. Nessuna patch applicata.</p>
+    <ul>
+      <li><code>pnpm typecheck</code>: OK</li>
+      <li><code>pnpm lint</code>: KO, 77 problemi: 35 errori e 42 warning</li>
+      <li><code>pnpm build</code>: da riconfermare. La build precedente era OK, ma l'ultima esecuzione e andata in timeout senza errore applicativo visibile.</li>
+    </ul>
+    <p>Worktree non pulito per artefatti precedenti:</p>
+    <ul>
+      <li><code>M next-env.d.ts</code></li>
+      <li><code>M tsconfig.tsbuildinfo</code></li>
+      <li><code>?? docs/audit-tecnico-completo-ischia-transfer.html</code></li>
+      <li><code>?? docs/audit-tecnico-completo-ischia-transfer.pdf</code></li>
+      <li><code>?? scripts/generate-audit-pdf.mjs</code></li>
+    </ul>
+
+    <h2>A. Errori Che Bloccano Qualita/Stabilita</h2>
+    <h3>Lint KO - priorita alta</h3>
+    <p>Errori principali:</p>
+    <ul>
+      <li><strong>Hook / React Compiler:</strong> <code>app/(app)/agency-statement/page.tsx</code>, <code>app/(app)/agency/approve/[token]/page.tsx</code>, <code>app/(app)/agency/new-booking/page.tsx</code>, <code>app/(app)/liste-bruno/page.tsx</code>, <code>app/(app)/settings/agency-rates/page.tsx</code>, <code>app/(app)/whatsapp-log/page.tsx</code>, <code>app/operator/approve/[token]/page.tsx</code>, <code>components/driver/PwaInit.tsx</code>.</li>
+      <li><strong>Uso impuro di <code>Date.now()</code> nel render:</strong> <code>app/(app)/dispatch/page.tsx</code>, <code>app/(app)/medmar-ar/page.tsx</code>.</li>
+      <li><strong>Dipendenze <code>useMemo</code> sbagliate:</strong> <code>app/(app)/agency/new-booking/page.tsx</code>. Rischio medio: warning/review non aggiornati nel modulo agenzia.</li>
+      <li><strong>Errori testo JSX non escapato:</strong> vari file agency, Medmar AR, rete Ischia, settings. Rischio basso runtime, ma bloccano lint.</li>
+    </ul>
+
+    <h3>File ad alto rischio per dimensione</h3>
+    <table>
+      <thead><tr><th>File</th><th>Dimensione circa</th><th>Rischio</th></tr></thead>
+      <tbody>
+        <tr><td><code>app/(app)/bus-network/page.tsx</code></td><td>181 KB</td><td>Alto</td></tr>
+        <tr><td><code>app/(app)/pricing/page.tsx</code></td><td>148 KB</td><td>Alto</td></tr>
+        <tr><td><code>app/(app)/piano-giorno/page.tsx</code></td><td>111 KB</td><td>Alto</td></tr>
+        <tr><td><code>app/api/ops/bus-network/route.ts</code></td><td>100 KB</td><td>Alto</td></tr>
+        <tr><td><code>lib/server/agency-pdf-import.ts</code></td><td>67 KB</td><td>Medio/alto</td></tr>
+      </tbody>
+    </table>
+    <div class="callout">Qui non conviene rifattorizzare ora. Prima hardening locale e test.</div>
+
+    <h2>B. Problemi Schema/Database</h2>
+    <h3>Migrazioni duplicate - priorita alta, diagnosi prima di fix</h3>
+    <table>
+      <thead><tr><th>Prefix</th><th>File</th></tr></thead>
+      <tbody>
+        <tr><td><code>0009</code></td><td><code>0009_inbound_attachments_and_needs_review.sql</code>, <code>0009_rls_multi_tenant_hardening.sql</code></td></tr>
+        <tr><td><code>0025</code></td><td><code>0025_agency_registry_profiles.sql</code>, <code>0025_services_billing_party_name.sql</code></td></tr>
+        <tr><td><code>0067</code></td><td><code>0067_reload_pgrst_schema_cache.sql</code>, <code>0067_vehicles_radius_gps.sql</code></td></tr>
+        <tr><td><code>0074</code></td><td><code>0074_agency_invoices.sql</code>, <code>0074_seed_hotels_from_departure_pdf.sql</code></td></tr>
+        <tr><td><code>0100</code></td><td><code>0100_services_transport_fields_index.sql</code>, <code>0100_vehicle_qr_and_records.sql</code></td></tr>
+        <tr><td><code>0140</code></td><td><code>0140_quotes_bus_city_geo.sql</code>, <code>0140_remove_snav_0810.sql</code></td></tr>
+      </tbody>
+    </table>
+    <p>Non vanno sistemate alla cieca: prima serve sapere quali risultano gia applicate su Supabase/staging/prod.</p>
+
+    <h3>Colonne schema-sensitive</h3>
+    <ul>
+      <li><code>phone_e164</code>: presente in <code>0001_schema.sql</code> / <code>bootstrap.sql</code>, usata in driver e WhatsApp.</li>
+      <li><code>pickup_hotel</code>: <code>0106_pickup_calc_fields.sql</code>.</li>
+      <li><code>porto_bruno</code>: <code>0105_porto_bruno_on_services.sql</code>.</li>
+      <li><code>approval_status</code>: <code>0120_booking_approval_tokens.sql</code>.</li>
+      <li><code>time_from</code>, <code>time_to</code>: <code>0148_services_ar_fields.sql</code> per servizi private island.</li>
+    </ul>
+    <p><strong>Rischio:</strong> se l'ambiente reale non ha tutte le migrazioni, alcune API possono andare in 500.</p>
+    <p><strong>Tipi Supabase:</strong> <code>lib/supabase/types.ts</code> non rappresenta tutto lo schema realmente usato. Da correggere dopo conferma dello schema remoto.</p>
+
+    <h2>C. Flussi Business Critici</h2>
+    <table>
+      <thead>
+        <tr><th>Flusso</th><th>Stato attuale</th><th>Rischio regressione</th><th>File coinvolti</th><th>Test rapido</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Login / ruoli / tenant</td><td>Parziale solido</td><td>Medio</td><td><code>app/(app)/layout.tsx</code>, <code>lib/server/pricing-auth.ts</code></td><td>Login admin/operator/driver/agency</td></tr>
+        <tr><td>Driver app</td><td>Buono ma fragile</td><td>Medio</td><td><code>app/(app)/driver/page.tsx</code>, <code>app/api/ops/driver-data/route.ts</code>, <code>components/driver/PwaInit.tsx</code></td><td>Login driver, servizi, bottoni stato, install app</td></tr>
+        <tr><td>Piano giorno</td><td>Funzionante ma fragile</td><td>Alto</td><td><code>app/(app)/piano-giorno/page.tsx</code>, <code>app/api/ops/piano-giorno/*</code></td><td>Carica giorno, assegna, stampa/export</td></tr>
+        <tr><td>Import email/PDF</td><td>Da verificare</td><td>Alto</td><td><code>app/(app)/inbox/page.tsx</code>, <code>app/api/email/*</code>, <code>lib/server/agency-pdf-import.ts</code></td><td>Preview PDF, conferma, deduplica</td></tr>
+        <tr><td>Pricing</td><td>Parziale</td><td>Medio/alto</td><td><code>app/(app)/pricing/page.tsx</code>, <code>app/api/pricing/*</code></td><td>Simula tariffa, salva regola, margini</td></tr>
+        <tr><td>Bus network</td><td>Parziale fragile</td><td>Alto</td><td><code>app/(app)/bus-network/page.tsx</code>, <code>app/api/ops/bus-network/route.ts</code></td><td>Import, allocazione, capienza</td></tr>
+        <tr><td>Cron/notifiche</td><td>Da verificare</td><td>Alto</td><td><code>app/api/cron/*</code>, <code>vercel.json</code></td><td>Chiamata con <code>CRON_SECRET</code> in staging</td></tr>
+        <tr><td>WhatsApp</td><td>Parziale</td><td>Medio/alto</td><td><code>app/api/whatsapp/*</code>, <code>lib/server/whatsapp.ts</code></td><td>Send manuale, webhook, log</td></tr>
+      </tbody>
+    </table>
+
+    <h2>D. Priorita</h2>
+    <h3>Subito</h3>
+    <ul>
+      <li>Far scendere <code>pnpm lint</code> da 35 errori a 0 o quasi.</li>
+      <li>Sistemare <code>Date.now()</code> nel render.</li>
+      <li>Sistemare hook lint locali senza cambiare business logic.</li>
+      <li>Proteggere meglio endpoint config/health se esposti.</li>
+      <li>Rimuovere fallback dev secret in produzione.</li>
+      <li>Diagnosticare migrazioni duplicate senza rinominarle ancora.</li>
+    </ul>
+    <h3>Breve termine</h3>
+    <ul>
+      <li>Validare schema reale Supabase contro colonne usate.</li>
+      <li>Rigenerare tipi Supabase.</li>
+      <li>Aggiungere smoke test manuali/Playwright sui flussi critici.</li>
+      <li>Hardening OTP/register/reset dove accettano dati sensibili dal client.</li>
+    </ul>
+    <h3>Dopo stabilizzazione</h3>
+    <ul>
+      <li>Spezzare file enormi.</li>
+      <li>Uniformare auth su tutte le API.</li>
+      <li>Introdurre test piu ampi su import PDF, bus, pricing.</li>
+    </ul>
+
+    <h2>FASE 2 - Piano Fix A Basso Rischio</h2>
+    <table>
+      <thead>
+        <tr><th>Intervento</th><th>Perche serve</th><th>File da toccare</th><th>Rischio</th><th>Verifica finale</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Fix lint JSX testuale</td><td>Elimina errori bloccanti senza cambiare logica</td><td>File agency, Medmar AR, rete Ischia, settings, agency-action</td><td><span class="badge low">basso</span></td><td><code>pnpm lint</code></td></tr>
+        <tr><td>Fix <code>Date.now()</code> nel render</td><td>React Compiler lo blocca ed e un bug reale di purezza render</td><td><code>dispatch/page.tsx</code>, <code>medmar-ar/page.tsx</code></td><td><span class="badge medium">basso/medio</span></td><td>Pagine caricano, lint, typecheck</td></tr>
+        <tr><td>Fix hook lint semplici</td><td>Riduce errori React Compiler senza cambiare flussi</td><td><code>PwaInit.tsx</code>, <code>whatsapp-log</code>, <code>liste-bruno</code>, <code>agency-rates</code></td><td><span class="badge medium">basso/medio</span></td><td>Lint + test manuale pagine</td></tr>
+        <tr><td>Fix <code>agency/new-booking</code> dependencies</td><td>Memoizzazione non preservata</td><td><code>app/(app)/agency/new-booking/page.tsx</code></td><td><span class="badge medium">medio</span></td><td>Creare booking agenzia, bus city hotel, SNAV, hotel</td></tr>
+        <tr><td>Hardening health/config</td><td>Riduce esposizione diagnostica</td><td><code>app/health/page.tsx</code>, <code>app/api/health/route.ts</code></td><td><span class="badge medium">medio</span></td><td>Admin vede status, utente non autorizzato no</td></tr>
+        <tr><td>Rimozione fallback dev secret</td><td>Evita token prevedibili in produzione</td><td><code>lib/server/agency-action-token.ts</code></td><td><span class="badge medium">medio</span></td><td>Token agency action funziona con env configurata</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Proposta Primi Fix Da Eseguire</h2>
+    <ol>
+      <li>JSX text lint + <code>Date.now()</code> render.</li>
+      <li><code>components/driver/PwaInit.tsx</code> lint, perche tocca driver ma in modo circoscritto.</li>
+      <li><code>whatsapp-log</code>, <code>liste-bruno</code>, <code>settings/agency-rates</code> solo se il primo blocco passa.</li>
+      <li>Eseguire <code>pnpm lint</code>, <code>pnpm typecheck</code>, <code>pnpm build</code>.</li>
+    </ol>
+
+    <h2>Cosa Non Toccare Ancora</h2>
+    <ul>
+      <li>Migrazioni duplicate.</li>
+      <li>Tipi Supabase.</li>
+      <li>Bus network monolitico.</li>
+      <li>Import PDF parser.</li>
+      <li>Auth globale/proxy.</li>
+    </ul>
+    <div class="callout">Queste aree vanno affrontate dopo diagnosi e staging, non con patch cieca.</div>
+  </body>
+</html>

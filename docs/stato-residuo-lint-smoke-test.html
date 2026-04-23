@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <title>Stato residuo lint e smoke test - Ischia Transfer Service</title>
+    <style>
+      @page { margin: 16mm 14mm; }
+      * { box-sizing: border-box; }
+      body {
+        color: #172033;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 11px;
+        line-height: 1.42;
+        margin: 0;
+      }
+      h1 {
+        border-bottom: 3px solid #123f5c;
+        color: #0f2740;
+        font-size: 23px;
+        line-height: 1.15;
+        margin: 0 0 16px;
+        padding-bottom: 10px;
+      }
+      h2 {
+        color: #123f5c;
+        font-size: 16px;
+        margin: 20px 0 8px;
+        page-break-after: avoid;
+      }
+      h3 {
+        color: #29384f;
+        font-size: 13px;
+        margin: 13px 0 6px;
+      }
+      p { margin: 0 0 7px; }
+      ul, ol { margin: 5px 0 11px 19px; padding: 0; }
+      li { margin: 3px 0; }
+      code {
+        background: #eef4f8;
+        border-radius: 4px;
+        color: #0f2740;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 10px;
+        padding: 1px 4px;
+      }
+      table {
+        border-collapse: collapse;
+        margin: 8px 0 15px;
+        page-break-inside: avoid;
+        width: 100%;
+      }
+      th, td {
+        border: 1px solid #ccd9e5;
+        padding: 5px 6px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #eaf2f8;
+        color: #123f5c;
+        font-size: 10px;
+        text-transform: uppercase;
+      }
+      .meta {
+        background: #f4f8fb;
+        border: 1px solid #d8e4ee;
+        border-radius: 8px;
+        margin: 0 0 16px;
+        padding: 9px 11px;
+      }
+      .callout {
+        background: #fff8e6;
+        border: 1px solid #f1d58b;
+        border-radius: 8px;
+        margin: 9px 0 13px;
+        padding: 9px 11px;
+      }
+      .badge {
+        border-radius: 999px;
+        display: inline-block;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        padding: 2px 7px;
+        text-transform: uppercase;
+      }
+      .low { background: #dcfce7; color: #166534; }
+      .medium { background: #fef3c7; color: #92400e; }
+      .high { background: #fee2e2; color: #991b1b; }
+      .page-break { page-break-before: always; }
+    </style>
+  </head>
+  <body>
+    <h1>STATO RESIDUO LINT E CHECKLIST SMOKE TEST - ISCHIA TRANSFER SERVICE</h1>
+
+    <div class="meta">
+      <p><strong>Data:</strong> 23 aprile 2026</p>
+      <p><strong>Repository:</strong> <code>C:\Users\user\Downloads\its</code></p>
+      <p><strong>Stato:</strong> <code>pnpm lint</code> KO con 16 errori / 25 warning. <code>pnpm typecheck</code> OK. <code>pnpm build</code> OK.</p>
+      <p><strong>Nota:</strong> fotografia residua senza nuove patch applicate.</p>
+    </div>
+
+    <h2>Errori Rimasti: 16</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Riga/area</th>
+          <th>Tipo</th>
+          <th>Spiegazione</th>
+          <th>Rischio</th>
+          <th>Consiglio</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><code>app/(app)/agency-statement/page.tsx</code></td><td>98</td><td><code>set-state-in-effect</code></td><td><code>loadData(...)</code> chiamata direttamente in <code>useEffect</code>.</td><td><span class="badge medium">medio</span></td><td>Fixare dopo test pagina estratto agenzia.</td></tr>
+        <tr><td><code>app/(app)/agency/approve/[token]/page.tsx</code></td><td>48</td><td><code>set-state-in-effect</code></td><td>Se manca token fa <code>setState</code> immediato nell'effect.</td><td><span class="badge medium">medio</span></td><td>Fixare con test link approvazione.</td></tr>
+        <tr><td><code>app/(app)/agency/new-booking/page.tsx</code></td><td>305</td><td><code>set-state-in-effect</code></td><td>Caricamento catalogo bus aggiorna stato subito da effect.</td><td><span class="badge high">alto</span></td><td>Rimandare, testare prima.</td></tr>
+        <tr><td><code>app/(app)/agency/new-booking/page.tsx</code></td><td>316</td><td><code>set-state-in-effect</code></td><td>Reset <code>busReturnTime</code> dentro effect.</td><td><span class="badge high">alto</span></td><td>Rimandare, testare prima.</td></tr>
+        <tr><td><code>app/(app)/agency/new-booking/page.tsx</code></td><td>395</td><td><code>preserve-manual-memoization</code></td><td><code>useMemo</code> con dipendenza mancante su <code>contextLabels.transportCodeReturnLabel</code>.</td><td><span class="badge high">alto</span></td><td>Rimandare, test form completo.</td></tr>
+        <tr><td><code>app/(app)/agency/new-booking/page.tsx</code></td><td>395</td><td><code>preserve-manual-memoization</code></td><td><code>useMemo</code> con dipendenza mancante su <code>form.transport_code_return</code>.</td><td><span class="badge high">alto</span></td><td>Rimandare, test form completo.</td></tr>
+        <tr><td><code>app/(app)/agency/new-booking/page.tsx</code></td><td>395</td><td><code>preserve-manual-memoization</code></td><td>Stessa area: memoizzazione manuale non preservata dal compiler.</td><td><span class="badge high">alto</span></td><td>Rimandare, fix unico mirato.</td></tr>
+        <tr><td><code>app/(app)/dispatch/page.tsx</code></td><td>307</td><td><code>react-hooks/refs</code></td><td>Accesso a ref durante render, probabilmente nel rendering gruppi.</td><td><span class="badge high">medio/alto</span></td><td>Testare dispatch prima.</td></tr>
+        <tr><td><code>app/(app)/medmar-ar/page.tsx</code></td><td>472</td><td><code>set-state-in-effect</code></td><td>Reset <code>decisionData</code> dentro effect.</td><td><span class="badge high">medio/alto</span></td><td>Rimandare, pagina ampia.</td></tr>
+        <tr><td><code>app/(app)/medmar-ar/page.tsx</code></td><td>528</td><td><code>set-state-in-effect</code></td><td><code>loadTickets()</code> chiamato direttamente in effect.</td><td><span class="badge high">medio/alto</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/medmar-ar/page.tsx</code></td><td>541</td><td><code>set-state-in-effect</code></td><td><code>loadPending()</code> chiamato direttamente in effect.</td><td><span class="badge high">medio/alto</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/medmar-ar/page.tsx</code></td><td>558</td><td><code>set-state-in-effect</code></td><td><code>loadOpportunities()</code> chiamato direttamente in effect.</td><td><span class="badge high">medio/alto</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/medmar-ar/page.tsx</code></td><td>572</td><td><code>set-state-in-effect</code></td><td><code>loadStats()</code> chiamato direttamente in effect.</td><td><span class="badge high">medio/alto</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/medmar-ar/page.tsx</code></td><td>594</td><td><code>set-state-in-effect</code></td><td><code>loadSimulator()</code> chiamato direttamente in effect.</td><td><span class="badge high">medio/alto</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/medmar-ar/page.tsx</code></td><td>607</td><td><code>set-state-in-effect</code></td><td><code>loadInsights()</code> chiamato direttamente in effect.</td><td><span class="badge high">medio/alto</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/operator/approve/[token]/page.tsx</code></td><td>51</td><td><code>set-state-in-effect</code></td><td>Se manca token fa <code>setState</code> immediato nell'effect.</td><td><span class="badge medium">medio</span></td><td>Fixare con test link operatore.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Warning Rimasti: 25</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Riga/area</th>
+          <th>Tipo</th>
+          <th>Spiegazione</th>
+          <th>Rischio</th>
+          <th>Consiglio</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><code>app/(app)/agency/new-booking/page.tsx</code></td><td>300</td><td><code>exhaustive-deps</code></td><td>Dipendenza <code>supabase</code> inutile.</td><td><span class="badge high">alto</span></td><td>Rimandare insieme al fix form.</td></tr>
+        <tr><td><code>app/(app)/agency/new-booking/page.tsx</code></td><td>410</td><td><code>exhaustive-deps</code></td><td>Mancano dipendenze del <code>useMemo</code>.</td><td><span class="badge high">alto</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/arrivals/page.tsx</code></td><td>731</td><td><code>exhaustive-deps</code></td><td>Manca <code>resolveHotelName</code> in <code>useCallback</code>.</td><td><span class="badge medium">medio</span></td><td>Fixabile dopo smoke arrivi.</td></tr>
+        <tr><td><code>app/(app)/bus-network/BusImportModal.tsx</code></td><td>953</td><td><code>exhaustive-deps</code></td><td>Manca <code>hotelsList</code>.</td><td><span class="badge high">alto</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/bus-network/page.tsx</code></td><td>223</td><td><code>exhaustive-deps</code></td><td>Manca <code>date</code>.</td><td><span class="badge high">alto</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/departures/page.tsx</code></td><td>583</td><td><code>exhaustive-deps</code></td><td>Manca <code>resolveHotelName</code>.</td><td><span class="badge medium">medio</span></td><td>Testare partenze prima.</td></tr>
+        <tr><td><code>app/(app)/departures/page.tsx</code></td><td>603</td><td><code>exhaustive-deps</code></td><td>Manca <code>resolveHotelName</code>.</td><td><span class="badge medium">medio</span></td><td>Testare partenze prima.</td></tr>
+        <tr><td><code>app/(app)/disponibilita/page.tsx</code></td><td>62</td><td><code>exhaustive-deps</code></td><td><code>supabase</code> inutile.</td><td><span class="badge low">basso</span></td><td>Fixabile.</td></tr>
+        <tr><td><code>app/(app)/excel-import/page.tsx</code></td><td>707</td><td><code>exhaustive-deps</code></td><td>Manca <code>defaultDirection</code>.</td><td><span class="badge medium">medio</span></td><td>Test import Excel prima.</td></tr>
+        <tr><td><code>app/(app)/excel-import/page.tsx</code></td><td>774</td><td>unused eslint-disable</td><td>Commento non piu necessario.</td><td><span class="badge low">basso</span></td><td>Fixabile.</td></tr>
+        <tr><td><code>app/(app)/inbox/fleet-reports/page.tsx</code></td><td>252</td><td><code>no-img-element</code></td><td>Usa <code>&lt;img&gt;</code>.</td><td><span class="badge low">basso</span></td><td>Rimandabile.</td></tr>
+        <tr><td><code>app/(app)/inbox/fleet-reports/page.tsx</code></td><td>315</td><td><code>no-img-element</code></td><td>Usa <code>&lt;img&gt;</code>.</td><td><span class="badge low">basso</span></td><td>Rimandabile.</td></tr>
+        <tr><td><code>app/(app)/layout.tsx</code></td><td>120</td><td>unused eslint-disable</td><td>Commento inutile.</td><td><span class="badge medium">medio</span></td><td>Toccare layout con cautela.</td></tr>
+        <tr><td><code>app/(app)/layout.tsx</code></td><td>1288</td><td><code>no-img-element</code></td><td>Avatar/logo con <code>&lt;img&gt;</code>.</td><td><span class="badge medium">medio</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/layout.tsx</code></td><td>1294</td><td><code>no-img-element</code></td><td>Avatar/logo con <code>&lt;img&gt;</code>.</td><td><span class="badge medium">medio</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/layout.tsx</code></td><td>1300</td><td><code>no-img-element</code></td><td>Avatar/logo con <code>&lt;img&gt;</code>.</td><td><span class="badge medium">medio</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/layout.tsx</code></td><td>1306</td><td><code>no-img-element</code></td><td>Avatar/logo con <code>&lt;img&gt;</code>.</td><td><span class="badge medium">medio</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/layout.tsx</code></td><td>1312</td><td><code>no-img-element</code></td><td>Avatar/logo con <code>&lt;img&gt;</code>.</td><td><span class="badge medium">medio</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/layout.tsx</code></td><td>1318</td><td><code>no-img-element</code></td><td>Avatar/logo con <code>&lt;img&gt;</code>.</td><td><span class="badge medium">medio</span></td><td>Rimandare.</td></tr>
+        <tr><td><code>app/(app)/liste-bruno/page.tsx</code></td><td>701</td><td><code>no-img-element</code></td><td>Usa <code>&lt;img&gt;</code> per stampa/preview.</td><td><span class="badge low">basso</span></td><td>Rimandabile.</td></tr>
+        <tr><td><code>app/(app)/rete-ischia/page.tsx</code></td><td>656</td><td><code>exhaustive-deps</code></td><td>Manca <code>date</code>.</td><td><span class="badge medium">medio</span></td><td>Testare Rete Ischia prima.</td></tr>
+        <tr><td><code>app/(app)/services/new/page.tsx</code></td><td>523</td><td><code>exhaustive-deps</code></td><td><code>form.notes</code> inutile.</td><td><span class="badge medium">medio</span></td><td>Test nuovo servizio prima.</td></tr>
+        <tr><td><code>app/(app)/settings/whatsapp-preview/page.tsx</code></td><td>238</td><td><code>no-img-element</code></td><td>Usa <code>&lt;img&gt;</code>.</td><td><span class="badge low">basso</span></td><td>Rimandabile.</td></tr>
+        <tr><td><code>app/api/ops/bus-network/route.ts</code></td><td>223</td><td>unused eslint-disable</td><td>Commento inutile.</td><td><span class="badge high">alto</span></td><td>Non toccare ora.</td></tr>
+        <tr><td><code>app/api/ops/bus-network/route.ts</code></td><td>233</td><td>unused eslint-disable</td><td>Commento inutile.</td><td><span class="badge high">alto</span></td><td>Non toccare ora.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Classificazione Operativa</h2>
+    <h3>Basso rischio</h3>
+    <ul>
+      <li><code>disponibilita/page.tsx</code> dependency cleanup.</li>
+      <li><code>excel-import/page.tsx</code> unused eslint-disable.</li>
+      <li><code>&lt;img&gt;</code> warning in pagine non critiche.</li>
+      <li><code>settings/whatsapp-preview/page.tsx</code>.</li>
+      <li>Commenti eslint inutili fuori bus/layout.</li>
+    </ul>
+    <h3>Medio rischio</h3>
+    <ul>
+      <li><code>agency-statement</code>.</li>
+      <li><code>agency/approve/[token]</code>.</li>
+      <li><code>operator/approve/[token]</code>.</li>
+      <li><code>arrivals</code>, <code>departures</code>, <code>rete-ischia</code>, <code>services/new</code>.</li>
+      <li><code>layout</code> warning, perche e globale.</li>
+    </ul>
+    <h3>Alto rischio / business-critical</h3>
+    <ul>
+      <li><code>agency/new-booking/page.tsx</code>.</li>
+      <li><code>dispatch/page.tsx</code>.</li>
+      <li><code>medmar-ar/page.tsx</code>.</li>
+      <li><code>bus-network/page.tsx</code>.</li>
+      <li><code>bus-network/BusImportModal.tsx</code>.</li>
+      <li><code>app/api/ops/bus-network/route.ts</code>.</li>
+    </ul>
+
+    <div class="page-break"></div>
+    <h2>Checklist Smoke Test Manuali</h2>
+
+    <h3>Login</h3>
+    <ol>
+      <li>Apri <code>/login</code>.</li>
+      <li>Login admin.</li>
+      <li>Verifica redirect alla dashboard/area operativa.</li>
+      <li>Logout.</li>
+      <li>Login driver.</li>
+      <li>Verifica accesso alla pagina driver.</li>
+      <li>Login agenzia, se disponibile.</li>
+      <li>Verifica che non veda aree admin/operator.</li>
+    </ol>
+
+    <h3>Driver App</h3>
+    <ol>
+      <li>Apri <code>/driver</code> da mobile o viewport mobile.</li>
+      <li>Verifica che carichi nome autista e servizi.</li>
+      <li>Apri dettaglio servizio.</li>
+      <li>Premi Partito, poi Arrivato, poi Completato su un servizio test.</li>
+      <li>Verifica che lo stato cambi senza errore.</li>
+      <li>Premi Cartello e torna indietro.</li>
+      <li>Verifica bottone Installa app e istruzioni.</li>
+    </ol>
+
+    <h3>Piano Giorno</h3>
+    <ol>
+      <li>Apri <code>/piano-giorno</code>.</li>
+      <li>Cambia data.</li>
+      <li>Verifica elenco servizi.</li>
+      <li>Assegna un servizio a un autista.</li>
+      <li>Verifica che il gruppo/viaggio si aggiorni.</li>
+      <li>Controlla un servizio <code>private_island</code>: deve mostrare fascia <code>time_from/time_to</code>.</li>
+      <li>Prova stampa/export solo su dati test.</li>
+    </ol>
+
+    <h3>Inbox / Import PDF</h3>
+    <ol>
+      <li>Apri <code>/inbox</code>.</li>
+      <li>Seleziona una email con PDF.</li>
+      <li>Avvia preview PDF.</li>
+      <li>Verifica dati estratti: cliente, date, hotel, pax, servizio.</li>
+      <li>Non confermare se i dati sembrano reali/non test.</li>
+      <li>Verifica stato loading/error/empty.</li>
+    </ol>
+
+    <h3>Conferma PDF</h3>
+    <ol>
+      <li>Da preview PDF, usa una pratica test.</li>
+      <li>Conferma import.</li>
+      <li>Verifica creazione servizio.</li>
+      <li>Controlla deduplica se la stessa pratica viene reinviata.</li>
+      <li>Verifica che non crei doppioni.</li>
+    </ol>
+
+    <h3>Pricing</h3>
+    <ol>
+      <li>Apri <code>/pricing</code>.</li>
+      <li>Cerca una rotta esistente.</li>
+      <li>Simula prezzo su servizio test.</li>
+      <li>Verifica listino, costo, margine.</li>
+      <li>Non modificare regole reali senza annotare prima il valore originale.</li>
+    </ol>
+
+    <h3>Bus Network</h3>
+    <ol>
+      <li>Apri <code>/bus-network</code>.</li>
+      <li>Cambia data.</li>
+      <li>Verifica linee, capienza e prenotazioni.</li>
+      <li>Apri import modal senza salvare.</li>
+      <li>Verifica che citta/hotel gia esistenti si carichino.</li>
+      <li>Non fare import reale senza file test.</li>
+    </ol>
+
+    <h3>WhatsApp Log / Webhook</h3>
+    <ol>
+      <li>Apri <code>/whatsapp-log</code>.</li>
+      <li>Cambia filtro 7/14/30/60 giorni.</li>
+      <li>Verifica KPI e lista messaggi.</li>
+      <li>Se in staging, invia messaggio manuale da servizio test.</li>
+      <li>Verifica comparsa evento nel log.</li>
+      <li>Webhook: testabile solo con Meta/staging configurato.</li>
+    </ol>
+
+    <h3>QR Scan</h3>
+    <ol>
+      <li>Apri QR pubblico di un servizio test.</li>
+      <li>Verifica che generi immagine QR.</li>
+      <li>Scansiona da utente loggato driver/operator.</li>
+      <li>Verifica pagina <code>/scan/[serviceId]</code>.</li>
+      <li>Prova azione completamento solo su servizio test.</li>
+    </ol>
+
+    <h3>Cron / Notifiche In Staging</h3>
+    <ol>
+      <li>Verifica <code>CRON_SECRET</code> configurato.</li>
+      <li>Chiama un endpoint cron con header <code>Authorization: Bearer &lt;CRON_SECRET&gt;</code>.</li>
+      <li>Parti da cron non distruttivi o preview/log.</li>
+      <li>Controlla risposta JSON.</li>
+      <li>Verifica log Vercel.</li>
+      <li>Non testare invii massivi su dati reali.</li>
+    </ol>
+  </body>
+</html>
