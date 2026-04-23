@@ -40,7 +40,9 @@ export default function OperatorApproveBookingPage() {
   const router = useRouter();
   const token = typeof params.token === "string" ? params.token : Array.isArray(params.token) ? params.token[0] : "";
 
-  const [state, setState] = useState<PageState>({ kind: "loading" });
+  const [state, setState] = useState<PageState>(
+    token ? { kind: "loading" } : { kind: "error", message: "Token mancante." }
+  );
   const [priceInput, setPriceInput] = useState("");
   const [notes, setNotes] = useState("");
   const [resolvedByEmail, setResolvedByEmail] = useState("");
@@ -48,7 +50,7 @@ export default function OperatorApproveBookingPage() {
   const [confirmStep, setConfirmStep] = useState<"confirmed" | "rejected" | null>(null);
 
   useEffect(() => {
-    if (!token) { setState({ kind: "error", message: "Token mancante." }); return; }
+    if (!token) return;
     fetch(`/api/agency/bookings/approve/${token}`)
       .then(r => r.json())
       .then(body => {

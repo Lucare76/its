@@ -95,7 +95,10 @@ export default function AgencyStatementPage() {
   // Ricalcola per-agenzia quando cambia selezione
   useEffect(() => {
     if (!token) return;
-    void loadData(token, selectedAgencyId);
+    const timeoutId = window.setTimeout(() => {
+      void loadData(token, selectedAgencyId);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [selectedAgencyId, token, loadData]);
 
   // Totali per ogni agenzia (per sidebar)
