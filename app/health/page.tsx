@@ -86,7 +86,15 @@ export default function HealthPage() {
 
     const runServerCheck = async () => {
       try {
-        const response = await fetch("/api/health", { cache: "no-store" });
+        const { data: sessionData } = await (supabase?.auth.getSession() ?? Promise.resolve({ data: { session: null } }));
+        const token = sessionData.session?.access_token;
+        const headers: Record<string, string> = { "Cache-Control": "no-store" };
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const response = await fetch("/api/health", { cache: "no-store", headers });
+        if (!response.ok && (response.status === 401 || response.status === 403)) {
+          setServerState({ ok: false, detail: "Accesso riservato agli amministratori." });
+          return;
+        }
         const data = (await response.json()) as HealthPayload;
         if (cancelled) return;
         setServerState({ ok: data.server.ok, detail: data.server.ok ? "Controllo server Supabase OK" : "Controllo server Supabase fallito" });

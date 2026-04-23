@@ -16,7 +16,9 @@ export interface AgencyActionPayload {
 }
 
 function getSecret(): string {
-  return process.env.AGENCY_ACTION_SECRET ?? process.env.CRON_SECRET ?? "fallback-dev-secret";
+  const secret = process.env.AGENCY_ACTION_SECRET ?? process.env.CRON_SECRET;
+  if (!secret) throw new Error("AGENCY_ACTION_SECRET (o CRON_SECRET) non configurato");
+  return secret;
 }
 
 function base64url(buf: Buffer | string): string {

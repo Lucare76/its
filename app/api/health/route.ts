@@ -1,10 +1,13 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { getEnvStatus } from "@/lib/server/env-requirements";
+import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await authorizePricingRequest(request, ["admin"]);
+  if (auth instanceof NextResponse) return auth;
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim().replace(/^["']|["']$/g, "");
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
