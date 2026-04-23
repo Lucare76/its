@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Procedura test cron/notifiche staging - Ischia Transfer Service</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #122033;
+      --muted: #526071;
+      --line: #d9e2ec;
+      --brand: #173f6b;
+      --accent: #245fa8;
+      --warn: #b54708;
+      --danger: #b42318;
+      --ok: #027a48;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .page {
+      width: 100%;
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+    .hero, .section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 24px 26px;
+      margin-bottom: 18px;
+    }
+    .eyebrow {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--accent);
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 32px;
+      line-height: 1.05;
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 22px;
+      line-height: 1.15;
+    }
+    h3 {
+      margin: 18px 0 10px;
+      font-size: 16px;
+      line-height: 1.2;
+    }
+    p {
+      margin: 0 0 10px;
+      color: var(--muted);
+    }
+    ul, ol {
+      margin: 8px 0 0 20px;
+      padding: 0;
+    }
+    li { margin: 0 0 8px; }
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.95em;
+      background: #eef3f8;
+      border: 1px solid #dbe5f0;
+      border-radius: 6px;
+      padding: 1px 6px;
+    }
+    pre {
+      margin: 12px 0 0;
+      padding: 14px 16px;
+      border-radius: 12px;
+      border: 1px solid #dbe5f0;
+      background: #0f172a;
+      color: #e5edf7;
+      font-size: 12px;
+      line-height: 1.55;
+      overflow: hidden;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .mini {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px 16px;
+      background: #fbfcfe;
+    }
+    .mini strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+    .tag {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .safe { background: #ecfdf3; color: var(--ok); border: 1px solid #abefc6; }
+    .care { background: #fff7ed; color: var(--warn); border: 1px solid #fed7aa; }
+    .stop { background: #fef3f2; color: var(--danger); border: 1px solid #fecdca; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f8fafc;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #5f6f82;
+    }
+    .checklist li { color: var(--text); }
+    .muted { color: var(--muted); }
+    @media print {
+      .page { padding: 0; }
+      .hero, .section, .mini { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="eyebrow">Staging Procedure</div>
+      <h1>Test Cron / Notifiche in staging</h1>
+      <p>Procedura pratica e prudente per verificare i job schedulati di Ischia Transfer Service senza toccare dati reali e senza aprire il perimetro a test distruttivi.</p>
+      <div class="grid" style="margin-top:16px;">
+        <div class="mini">
+          <strong>Obiettivo</strong>
+          Verificare autenticazione cron, env, risposta delle route e log Vercel.
+        </div>
+        <div class="mini">
+          <strong>Approccio</strong>
+          Prima endpoint innocui o in <code>dry_run</code>, poi review log, poi eventuali step successivi.
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>1. Endpoint cron esistenti</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th>Metodo</th>
+            <th>Uso</th>
+            <th>Rischio test</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>/api/cron/agency-reminders</code></td><td>POST</td><td>Email riepilogo servizi alle agenzie</td><td><span class="tag stop">alto</span></td></tr>
+          <tr><td><code>/api/cron/agency-invoices</code></td><td>POST</td><td>Genera/invia estratti conto agenzie</td><td><span class="tag stop">alto</span></td></tr>
+          <tr><td><code>/api/cron/vehicle-expiry-check</code></td><td>POST</td><td>Scadenze flotta, supporta <code>dry_run</code></td><td><span class="tag safe">basso</span></td></tr>
+          <tr><td><code>/api/cron/backup</code></td><td>GET/POST</td><td>Backup JSON su Supabase Storage + purge retention</td><td><span class="tag stop">alto</span></td></tr>
+          <tr><td><code>/api/cron/push-reminders</code></td><td>GET</td><td>Push 2h prima ai driver</td><td><span class="tag care">medio</span></td></tr>
+          <tr><td><code>/api/cron/poll-emails</code></td><td>GET</td><td>Polling IMAP + import email inbound</td><td><span class="tag stop">alto</span></td></tr>
+          <tr><td><code>/api/cron/expire-quotes</code></td><td>GET</td><td>Scade preventivi <code>sent</code></td><td><span class="tag stop">alto</span></td></tr>
+          <tr><td><code>/api/cron/sla-check</code></td><td>GET</td><td>Alert push per servizi senza autista nelle prossime 12h</td><td><span class="tag care">medio</span></td></tr>
+          <tr><td><code>/api/cron/whatsapp-info</code></td><td>GET/POST</td><td>WhatsApp info pre-partenza 3-6 giorni prima</td><td><span class="tag stop">alto</span></td></tr>
+          <tr><td><code>/api/cron/agency-bus-monday</code></td><td>POST</td><td>Email bus domenica alle agenzie</td><td><span class="tag stop">alto</span></td></tr>
+          <tr><td><code>/api/cron/whatsapp-reminders</code></td><td>GET/POST</td><td>WhatsApp reminder 48h/24h/2h con update servizi</td><td><span class="tag stop">alto</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>2. Endpoint sicuri da testare per primi</h2>
+      <ol>
+        <li><strong><code>/api/cron/vehicle-expiry-check</code> con <code>dry_run: true</code></strong><br /><span class="muted">Miglior primo test: nessuna email, nessuna modifica dati, risposta ricca di preview.</span></li>
+        <li><strong><code>/api/cron/sla-check</code></strong><br /><span class="muted">Buon test tecnico: verifica auth, query e chiusura corretta; in staging di solito non ha impatto forte.</span></li>
+        <li><strong><code>/api/cron/push-reminders</code></strong><br /><span class="muted">Testabile dopo SLA: se non ci sono servizi nella finestra oraria resta innocuo.</span></li>
+      </ol>
+    </section>
+
+    <section class="section">
+      <h2>3. Env / config da verificare prima</h2>
+      <div class="grid">
+        <div class="mini">
+          <strong>Minimo indispensabile</strong>
+          <ul>
+            <li><code>CRON_SECRET</code></li>
+            <li><code>NEXT_PUBLIC_SUPABASE_URL</code></li>
+            <li><code>SUPABASE_SERVICE_ROLE_KEY</code></li>
+          </ul>
+        </div>
+        <div class="mini">
+          <strong>Solo se testi push</strong>
+          <ul>
+            <li><code>VAPID_PUBLIC_KEY</code></li>
+            <li><code>VAPID_PRIVATE_KEY</code></li>
+            <li><code>VAPID_SUBJECT</code></li>
+          </ul>
+        </div>
+        <div class="mini">
+          <strong>Solo se testi email</strong>
+          <ul>
+            <li><code>RESEND_API_KEY</code></li>
+            <li>meglio anche <code>EMAIL_TEST_REDIRECT</code></li>
+          </ul>
+        </div>
+        <div class="mini">
+          <strong>Solo se testi WhatsApp</strong>
+          <ul>
+            <li><code>WHATSAPP_TOKEN</code></li>
+            <li><code>WHATSAPP_PHONE_NUMBER_ID</code></li>
+            <li><code>WHATSAPP_CRON_SECRET</code> se separato</li>
+          </ul>
+        </div>
+      </div>
+      <p style="margin-top:12px;">Supporto utile: controllare anche la route admin di stato sistema e i log delle funzioni in Vercel prima di partire.</p>
+    </section>
+
+    <section class="section">
+      <h2>4. Come chiamarli manualmente in staging</h2>
+      <p>Sostituisci <code>https://staging.tuodominio.it</code> e <code>YOUR_CRON_SECRET</code> con i valori reali di staging.</p>
+      <h3>Vehicle expiry check in dry run</h3>
+      <pre>curl -X POST "https://staging.tuodominio.it/api/cron/vehicle-expiry-check" \
+  -H "Authorization: Bearer YOUR_CRON_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"dry_run":true}'</pre>
+      <h3>SLA check</h3>
+      <pre>curl "https://staging.tuodominio.it/api/cron/sla-check" \
+  -H "Authorization: Bearer YOUR_CRON_SECRET"</pre>
+      <h3>Push reminders</h3>
+      <pre>curl "https://staging.tuodominio.it/api/cron/push-reminders" \
+  -H "Authorization: Bearer YOUR_CRON_SECRET"</pre>
+    </section>
+
+    <section class="section">
+      <h2>5. Header / token da usare</h2>
+      <p>Quasi tutte le route usano:</p>
+      <pre>Authorization: Bearer &lt;CRON_SECRET&gt;</pre>
+      <p>Le route WhatsApp accettano <code>WHATSAPP_CRON_SECRET</code> se presente, altrimenti fanno fallback a <code>CRON_SECRET</code>.</p>
+    </section>
+
+    <section class="section">
+      <h2>6. Cosa guardare nei log Vercel</h2>
+      <ul>
+        <li>status code: <code>200</code>, <code>401</code>, <code>500</code></li>
+        <li>durata funzione e timeout</li>
+        <li>messaggi tipo <code>Unauthorized</code></li>
+        <li>env mancanti: <code>Missing env</code>, <code>Server env missing</code></li>
+        <li>errori Supabase query</li>
+        <li>errori esterni: Resend, IMAP, WhatsApp Graph API, web push</li>
+        <li>payload JSON finale della response</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>7. Come capire se il test è riuscito</h2>
+      <div class="grid">
+        <div class="mini">
+          <strong>Successo tecnico</strong>
+          <ul>
+            <li>HTTP <code>200</code></li>
+            <li><code>ok: true</code></li>
+            <li>nessun <code>Unauthorized</code></li>
+            <li>nessun <code>Missing env</code></li>
+            <li>nessun <code>500</code></li>
+          </ul>
+        </div>
+        <div class="mini">
+          <strong>Nota importante</strong>
+          Un test riuscito non significa per forza che abbia inviato qualcosa. Per molte route va bene anche <code>sent: 0</code> se la query, l'autenticazione e la finestra temporale sono corrette.
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>8. Endpoint da evitare per ora</h2>
+      <ul>
+        <li><code>/api/cron/agency-invoices</code> — scrive fatture e invia email</li>
+        <li><code>/api/cron/agency-reminders</code> — invia email vere</li>
+        <li><code>/api/cron/agency-bus-monday</code> — invia email vere</li>
+        <li><code>/api/cron/poll-emails</code> — può importare email e booking</li>
+        <li><code>/api/cron/expire-quotes</code> — cambia stato ai preventivi</li>
+        <li><code>/api/cron/backup</code> — scrive su Storage e cancella backup vecchi</li>
+        <li><code>/api/cron/whatsapp-info</code> — può inviare messaggi veri</li>
+        <li><code>/api/cron/whatsapp-reminders</code> — può inviare messaggi e aggiornare servizi</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>9. Checklist finale passo-passo</h2>
+      <ol class="checklist">
+        <li>Verifica che lo staging punti a DB non produttivo.</li>
+        <li>Controlla <code>CRON_SECRET</code>, URL Supabase e service role.</li>
+        <li>Apri i Function Logs su Vercel prima del test.</li>
+        <li>Esegui <code>vehicle-expiry-check</code> con <code>dry_run: true</code>.</li>
+        <li>Conferma: <code>200</code>, <code>ok: true</code>, <code>dry_run: true</code>.</li>
+        <li>Esegui <code>sla-check</code>.</li>
+        <li>Conferma: niente <code>Unauthorized</code>, niente query error.</li>
+        <li>Esegui <code>push-reminders</code>.</li>
+        <li>Se <code>sent: 0</code>, verifica che la route chiuda comunque con JSON coerente.</li>
+        <li>Fermati qui nel primo giro.</li>
+        <li>Non eseguire ancora email, backup, import email, WhatsApp o quote expiry.</li>
+        <li>Solo dopo review log valuta un secondo round con dati e destinatari test dedicati.</li>
+      </ol>
+    </section>
+  </div>
+</body>
+</html>

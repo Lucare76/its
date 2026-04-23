@@ -704,7 +704,7 @@ export default function ExcelImportPage() {
           row.bus_city_origin
         ].some((value) => value.trim().length > 0) || row.pax > 0
       );
-  }, [defaultHotelId, inferredFileDate, mappings, selectedSheet, templateType]);
+  }, [defaultDirection, defaultHotelId, inferredFileDate, mappings, selectedSheet, templateType]);
 
   const busSimulation = useMemo<SimulatedFamilyLoad[]>(() => {
     const grouped = new Map<string, CandidateRow[]>();
@@ -771,7 +771,6 @@ export default function ExcelImportPage() {
       }
       return next;
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidateRows]);
 
   const approvedCandidates = useMemo(

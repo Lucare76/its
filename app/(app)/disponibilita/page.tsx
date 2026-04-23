@@ -59,7 +59,7 @@ export default function DisponibilitaPage() {
     supabase?.auth.getSession().then(({ data }: { data: { session: { access_token: string } | null } }) => {
       setAccessToken(data.session?.access_token ?? null);
     });
-  }, [supabase]);
+  }, []);
 
   const load = useCallback(async () => {
     if (!accessToken) return;

@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fase Hardening 1 Chiusa - Ischia Transfer Service</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --text: #102033;
+      --muted: #5b6b7d;
+      --line: #dbe4ee;
+      --brand: #173f6b;
+      --ok-bg: #ecfdf3;
+      --ok-border: #abefc6;
+      --ok-text: #027a48;
+      --wait-bg: #fff7ed;
+      --wait-border: #fed7aa;
+      --wait-text: #b54708;
+      --hold-bg: #f8fafc;
+      --hold-border: #dbe4ee;
+      --hold-text: #475467;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .page {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 24px 26px;
+      margin-bottom: 18px;
+    }
+    .eyebrow {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: #245fa8;
+      margin-bottom: 10px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 32px;
+      line-height: 1.05;
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 22px;
+      line-height: 1.15;
+    }
+    p {
+      margin: 0 0 10px;
+      color: var(--muted);
+    }
+    ul {
+      margin: 8px 0 0 20px;
+      padding: 0;
+    }
+    li { margin: 0 0 8px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .mini {
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      padding: 14px 16px;
+      background: #fbfcfe;
+    }
+    .mini strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+    .status {
+      display: inline-block;
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .ok {
+      background: var(--ok-bg);
+      border: 1px solid var(--ok-border);
+      color: var(--ok-text);
+    }
+    .wait {
+      background: var(--wait-bg);
+      border: 1px solid var(--wait-border);
+      color: var(--wait-text);
+    }
+    .hold {
+      background: var(--hold-bg);
+      border: 1px solid var(--hold-border);
+      color: var(--hold-text);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f8fafc;
+      color: #667085;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .summary {
+      font-size: 16px;
+      color: var(--text);
+    }
+    @media print {
+      .card, .mini { break-inside: avoid; }
+      .page { padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="card">
+      <div class="eyebrow">Hardening Report</div>
+      <h1>Fase Hardening 1 Chiusa</h1>
+      <p class="summary">Il gestionale risulta piu stabile dopo il primo pass di hardening e non emergono rotture sui flussi core testati.</p>
+      <div class="grid" style="margin-top:16px;">
+        <div class="mini">
+          <strong>Stato tecnico</strong>
+          <ul>
+            <li><strong>Build:</strong> OK</li>
+            <li><strong>Typecheck:</strong> OK</li>
+            <li><strong>Lint:</strong> migliorato, non ancora chiuso</li>
+          </ul>
+        </div>
+        <div class="mini">
+          <strong>Esito fase</strong>
+          Flussi core protetti, test safe completati, nessuna rottura emersa nelle aree operative gia verificate.
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <span class="status ok">Verificato</span>
+      <h2>Flussi verificati con esito positivo</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Area</th>
+            <th>Esito</th>
+            <th>Nota</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Login</td><td>OK</td><td>Accesso funzionante</td></tr>
+          <tr><td>Driver app</td><td>OK</td><td>Operativita mobile verificata</td></tr>
+          <tr><td>Piano giorno</td><td>OK</td><td>Vista e flussi principali stabili</td></tr>
+          <tr><td>Import PDF</td><td>OK</td><td>Import e preview verificati</td></tr>
+          <tr><td>Conferma PDF</td><td>OK</td><td>Conferma flusso completata</td></tr>
+          <tr><td>Bus network</td><td>OK</td><td>Operativita principale verificata</td></tr>
+          <tr><td>QR code</td><td>OK</td><td>Flusso QR verificato</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <span class="status ok">Cron Safe</span>
+      <h2>Endpoint cron verificati in sicurezza</h2>
+      <ul>
+        <li><code>vehicle-expiry-check</code> in modalita <code>dry_run</code></li>
+        <li><code>sla-check</code></li>
+        <li><code>push-reminders</code></li>
+      </ul>
+      <p>Questi test non hanno evidenziato rotture nel perimetro safe scelto per lo staging.</p>
+    </section>
+
+    <section class="card">
+      <span class="status wait">Non ancora verificato</span>
+      <h2>Aree ancora aperte ma non bloccanti per questa fase</h2>
+      <ul>
+        <li><strong>Pricing</strong> - non validabile per assenza listini</li>
+        <li><strong>WhatsApp</strong> - API e configurazione non ancora pronte</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <span class="status hold">Lasciato fermo volutamente</span>
+      <h2>Aree non toccate per ridurre il rischio</h2>
+      <ul>
+        <li><code>agency/new-booking</code></li>
+        <li><code>dispatch</code></li>
+        <li><code>medmar-ar</code></li>
+        <li><code>bus-network</code> profondo</li>
+        <li>migrazioni / schema / tipi Supabase</li>
+        <li>auth globale / proxy</li>
+      </ul>
+      <p>La scelta e stata intenzionale: il focus di questa fase era hardening locale e stabilizzazione, senza aprire fronti ad alto rischio regressione.</p>
+    </section>
+
+    <section class="card">
+      <h2>Conclusione</h2>
+      <p>La fase Hardening 1 si puo considerare chiusa con esito positivo. Il gestionale oggi risulta piu stabile, con build e typecheck integri e con i flussi core testati che continuano a funzionare.</p>
+      <p>Restano aree importanti ancora da affrontare, ma non sono piu aree oscure: sono state isolate e lasciate fuori da questa fase proprio per non compromettere l'operativita esistente.</p>
+    </section>
+  </div>
+</body>
+</html>

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState } from "react";
 
 const ITS_PHONE    = "0813331053";
@@ -235,10 +236,12 @@ function WaBubble({ t }: { t: Template }) {
           {/* QR header */}
           {t.hasQr && (
             <div className="rounded-t-2xl overflow-hidden bg-white shadow-sm">
-              <img
+              <Image
                 src={`${appUrl}/api/public/qr/${SAMPLE.serviceId}`}
                 alt="QR Code"
-                className="w-40 h-40 mx-auto block p-2"
+                width={160}
+                height={160}
+                className="mx-auto block h-40 w-40 p-2"
               />
             </div>
           )}
