@@ -653,7 +653,7 @@ function TabCorsePorto() {
     setBuses(body.buses ?? []);
     setPassengers(body.passengers ?? []);
     setAlertsByRun(body.alerts_by_run ?? {});
-  }, []);
+  }, [date]);
 
   // ── Stampa lista giro bus ───────────────────────────────────────────────────
   const printBusGroup = (group: DepBusGroup) => {

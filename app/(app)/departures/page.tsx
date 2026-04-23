@@ -282,7 +282,7 @@ export default function DeparturesPage() {
   const hotelsById = useMemo(() => new Map(data.hotels.map((hotel) => [hotel.id, hotel])), [data.hotels]);
   const tenantId = data.services[0]?.tenant_id ?? "";
 
-  function resolveHotelName(service: Service): string {
+  const resolveHotelName = useCallback((service: Service): string => {
     const byId = hotelsById.get(service.hotel_id)?.name;
     if (byId) return byId;
     const fromNotes = service.notes?.match(/Hotel:\s*([^·|\n]+)/)?.[1]?.trim();
@@ -292,7 +292,7 @@ export default function DeparturesPage() {
       return mp;
     }
     return "N/D";
-  }
+  }, [hotelsById]);
 
   const agencyNames = useMemo(() => {
     const seen = new Map<string, string>();
@@ -580,7 +580,7 @@ export default function DeparturesPage() {
       Tipo: item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "",
       Agenzia: item.service.billing_party_name ?? "",
     }))
-  , [departures]);
+  , [departures, resolveHotelName]);
 
   const handleExcel = () => void exportToExcel(buildRows(), `partenze-${selectedDate}.xlsx`);
   const handlePrint = () => void printTable(buildRows(), formatIsoDateShort(selectedDate));
@@ -600,7 +600,7 @@ export default function DeparturesPage() {
         Tipo: item.service.service_type_code ?? item.service.booking_service_kind ?? "",
         Agenzia: item.service.billing_party_name ?? "",
       }));
-  }, [data.services, selectedDate]);
+  }, [data.services, selectedDate, resolveHotelName]);
 
   const handleCombinedExcel = () => void exportCombinedExcel(buildArrivalRows(), buildRows(), selectedDate);
   const handleCombinedPrint = () => void printCombined(buildArrivalRows(), buildRows(), formatIsoDateShort(selectedDate));

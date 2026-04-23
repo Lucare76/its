@@ -505,19 +505,17 @@ export default function ArrivalsPage() {
   const hotelsById = useMemo(() => new Map(data.hotels.map((hotel) => [hotel.id, hotel])), [data.hotels]);
   const tenantId = tenantIdFromHook ?? data.services[0]?.tenant_id ?? "";
 
-  function resolveHotelName(service: Service): string {
+  const resolveHotelName = useCallback((service: Service): string => {
     const byId = hotelsById.get(service.hotel_id)?.name;
     if (byId) return byId;
-    // Fallback: cerca pattern "Hotel: X" nelle note (import vecchi)
     const fromNotes = service.notes?.match(/Hotel:\s*([^·|\n]+)/)?.[1]?.trim();
     if (fromNotes) return fromNotes;
-    // Fallback: meeting_point se non è un terminale generico
     const mp = service.meeting_point;
     if (mp && !["meeting point linea bus", "meeting point", "porto napoli", "porto pozzuoli", "aeroporto", "stazione"].includes(mp.toLowerCase().trim())) {
       return mp;
     }
     return "N/D";
-  }
+  }, [hotelsById]);
 
   const agencyOptions = agenciesList;
 
@@ -728,7 +726,7 @@ export default function ArrivalsPage() {
       Tipo: formatArrivalServiceTypeLabel(item.service),
       Agenzia: item.service.billing_party_name ?? agencyById.get(item.service.agency_id ?? "")?.name ?? "",
     }))
-  , [arrivals, showAllDates, agencyById]);
+  , [arrivals, showAllDates, agencyById, resolveHotelName]);
 
   const handleExcel = () => {
     const rows = buildRows();
