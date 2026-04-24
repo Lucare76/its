@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
+import "@maplibre/maplibre-gl-leaflet";
 import type { GpsControlRoomEntry } from "@/lib/types";
 
 interface ControlRoomMapProps {
@@ -13,6 +14,9 @@ interface ControlRoomMapProps {
 const DEFAULT_CENTER: [number, number] = [40.7395, 13.9124];
 
 const TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+const OPENFREEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/bright";
+const OPENFREEMAP_ATTRIBUTION =
+  '<a href="https://openfreemap.org" target="_blank" rel="noreferrer">OpenFreeMap</a> © <a href="https://openmaptiles.org" target="_blank" rel="noreferrer">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a>';
 const PROTOMAPS_URL =
   process.env.NEXT_PUBLIC_PROTOMAPS_PM_TILES_URL?.trim() ||
   process.env.NEXT_PUBLIC_PROTOMAPS_PMtiles_URL?.trim() ||
@@ -173,13 +177,50 @@ async function pmtilesIsReachable(url: string) {
   }
 }
 
-async function addBaseLayer(map: L.Map): Promise<{ label: string; layer: L.Layer }> {
+async function styleJsonIsReachable(url: string) {
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function addOpenFreeMapLayer(map: L.Map) {
+  const layer = L.maplibreGL({
+    attributionControl: false,
+    style: OPENFREEMAP_STYLE_URL
+  });
+  layer.addTo(map);
+  map.attributionControl.addAttribution(OPENFREEMAP_ATTRIBUTION);
+  return layer as unknown as L.Layer;
+}
+
+async function addBaseLayer(map: L.Map): Promise<{ label: string; layer: L.Layer; cleanup?: () => void }> {
   if (!PROTOMAPS_URL) {
-    return { label: "CARTO Voyager - OSM gratuito", layer: addOsmLayer(map) };
+    const openFreeMapReachable = await styleJsonIsReachable(OPENFREEMAP_STYLE_URL);
+    if (openFreeMapReachable) {
+      const layer = addOpenFreeMapLayer(map);
+      return {
+        label: "OpenFreeMap Bright - vettoriale gratuito",
+        layer,
+        cleanup: () => map.attributionControl.removeAttribution(OPENFREEMAP_ATTRIBUTION)
+      };
+    }
+    return { label: "CARTO Voyager - fallback raster", layer: addOsmLayer(map) };
   }
 
   const reachable = await pmtilesIsReachable(PROTOMAPS_URL);
   if (!reachable) {
+    const openFreeMapReachable = await styleJsonIsReachable(OPENFREEMAP_STYLE_URL);
+    if (openFreeMapReachable) {
+      const layer = addOpenFreeMapLayer(map);
+      return {
+        label: "OpenFreeMap Bright - PMTiles non trovato",
+        layer,
+        cleanup: () => map.attributionControl.removeAttribution(OPENFREEMAP_ATTRIBUTION)
+      };
+    }
     return { label: "CARTO Voyager - PMTiles non trovato", layer: addOsmLayer(map) };
   }
 
@@ -244,7 +285,7 @@ function spreadOverlapping(items: GpsControlRoomEntry[]): Array<GpsControlRoomEn
 }
 
 export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMapProps) {
-  const [baseLayerLabel, setBaseLayerLabel] = useState(PROTOMAPS_URL ? "Protomaps in caricamento" : "CARTO Voyager - OSM gratuito");
+  const [baseLayerLabel, setBaseLayerLabel] = useState(PROTOMAPS_URL ? "Protomaps in caricamento" : "OpenFreeMap in caricamento");
   const [operationalLayerEnabled, setOperationalLayerEnabled] = useState(true);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -267,7 +308,13 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
     if (!containerRef.current || mapRef.current) return;
     let disposed = false;
     let baseLayer: L.Layer | null = null;
-    const map = L.map(containerRef.current, { zoomControl: false }).setView(DEFAULT_CENTER, 12);
+    let baseLayerCleanup: (() => void) | undefined;
+    const map = L.map(containerRef.current, {
+      zoomControl: false,
+      maxBounds: [[-85, -180], [85, 180]],
+      maxBoundsViscosity: 1,
+      minZoom: 1
+    }).setView(DEFAULT_CENTER, 12);
     L.control.zoom({ position: "topright" }).addTo(map);
     mapRef.current = map;
     markersRef.current = L.layerGroup().addTo(map);
@@ -275,10 +322,12 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
 
     void addBaseLayer(map).then((result) => {
       if (disposed) {
+        result.cleanup?.();
         result.layer.remove();
         return;
       }
       baseLayer = result.layer;
+      baseLayerCleanup = result.cleanup;
       setBaseLayerLabel(result.label);
     });
 
@@ -287,6 +336,7 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
       markersRef.current?.clearLayers();
       opsLayerRef.current?.clearLayers();
       baseLayer?.remove();
+      baseLayerCleanup?.();
       markersRef.current = null;
       opsLayerRef.current = null;
       mapRef.current = null;
@@ -461,8 +511,8 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
       <div className="relative">
         <div
           ref={containerRef}
-          style={{ height: "calc(100vh - 280px)", minHeight: "560px", width: "100%" }}
-          className="bg-[#eef3f7] [&_.leaflet-control-attribution]:!rounded-tl-lg [&_.leaflet-control-attribution]:!bg-white/85 [&_.leaflet-control-attribution]:!text-[10px] [&_.leaflet-control-container]:z-[450] [&_.leaflet-control-zoom]:!overflow-hidden [&_.leaflet-control-zoom]:!rounded-lg [&_.leaflet-control-zoom]:!border [&_.leaflet-control-zoom]:!border-slate-200 [&_.leaflet-control-zoom]:!shadow-[0_10px_24px_rgba(15,23,42,0.14)] [&_.leaflet-control-zoom_a]:!text-slate-700 [&_.leaflet-control-zoom_a]:!h-10 [&_.leaflet-control-zoom_a]:!w-10 [&_.leaflet-control-zoom_a]:!leading-[38px] [&_.leaflet-control-zoom_a]:!border-slate-200 [&_.leaflet-control-zoom_a]:!bg-white/95 [&_.leaflet-control-zoom_a]:hover:!bg-slate-50 [&_.leaflet-pane.leaflet-tile-pane]:[filter:saturate(1.04)_contrast(1.02)_brightness(1.01)] [&_.leaflet-popup-content]:!m-0 [&_.leaflet-popup-content-wrapper]:!rounded-lg [&_.leaflet-popup-content-wrapper]:!p-3 [&_.leaflet-popup-content-wrapper]:!shadow-[0_18px_45px_rgba(15,23,42,0.18)] [&_.leaflet-popup-tip]:!shadow-none"
+          style={{ height: "clamp(500px, 70vh, 820px)", width: "100%" }}
+          className="bg-[#eef3f7] [&_.leaflet-container]:!bg-[#eef3f7] [&_.leaflet-control-attribution]:!rounded-tl-lg [&_.leaflet-control-attribution]:!bg-white/85 [&_.leaflet-control-attribution]:!text-[10px] [&_.leaflet-control-container]:z-[450] [&_.leaflet-control-zoom]:!overflow-hidden [&_.leaflet-control-zoom]:!rounded-lg [&_.leaflet-control-zoom]:!border [&_.leaflet-control-zoom]:!border-slate-200 [&_.leaflet-control-zoom]:!shadow-[0_10px_24px_rgba(15,23,42,0.14)] [&_.leaflet-control-zoom_a]:!text-slate-700 [&_.leaflet-control-zoom_a]:!h-10 [&_.leaflet-control-zoom_a]:!w-10 [&_.leaflet-control-zoom_a]:!leading-[38px] [&_.leaflet-control-zoom_a]:!border-slate-200 [&_.leaflet-control-zoom_a]:!bg-white/95 [&_.leaflet-control-zoom_a]:hover:!bg-slate-50 [&_.leaflet-pane.leaflet-tile-pane]:[filter:saturate(1.04)_contrast(1.02)_brightness(1.01)] [&_.leaflet-popup-content]:!m-0 [&_.leaflet-popup-content-wrapper]:!rounded-lg [&_.leaflet-popup-content-wrapper]:!p-3 [&_.leaflet-popup-content-wrapper]:!shadow-[0_18px_45px_rgba(15,23,42,0.18)] [&_.leaflet-popup-tip]:!shadow-none"
         />
 
         <div className="pointer-events-none absolute inset-x-0 top-0 h-12 bg-[linear-gradient(180deg,rgba(255,255,255,0.52)_0%,rgba(255,255,255,0)_100%)]" />

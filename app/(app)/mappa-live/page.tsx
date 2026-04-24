@@ -186,6 +186,12 @@ function alertTone(severity: "high" | "medium" | "low") {
   return "border-sky-200 bg-sky-50 text-sky-800";
 }
 
+function severityLabel(severity: "high" | "medium" | "low") {
+  if (severity === "high") return "alta";
+  if (severity === "medium") return "media";
+  return "bassa";
+}
+
 function panoramaxPictureViewerUrl(entry: GpsControlRoomEntry, pictureId: string) {
   const params = new URLSearchParams({
     focus: "pic",
@@ -393,11 +399,34 @@ export default function MappaLivePage() {
         .sort((left, right) => left.last_update_seconds - right.last_update_seconds),
     [filteredEntries]
   );
+  const criticalEntries = useMemo(
+    () => filteredEntries.filter((entry) => entryPriority(entry) <= 3),
+    [filteredEntries]
+  );
+  const activeServiceEntries = useMemo(
+    () => filteredEntries.filter((entry) => Boolean(entry.active_service)),
+    [filteredEntries]
+  );
+  const filtersActive = lineFilter !== "all" || statusFilter !== "all" || search.trim().length > 0;
+  const firstCriticalEntry = criticalEntries[0] ?? null;
 
   const handleManualRefresh = () => {
     setCountdown(refreshSeconds);
     // eslint-disable-next-line react-hooks/rules-of-hooks
     void fetchControlRoom(false);
+  };
+
+  const handleResetFilters = () => {
+    setLineFilter("all");
+    setStatusFilter("all");
+    setSearch("");
+  };
+
+  const handleFocusCritical = () => {
+    setStatusFilter("all");
+    if (firstCriticalEntry) {
+      setSelectedId(firstCriticalEntry.radius_vehicle_id);
+    }
   };
 
   useEffect(() => {
@@ -455,12 +484,85 @@ export default function MappaLivePage() {
     };
   }, [selectedStreetViewKey, selected]);
 
+  const vehicleListSection = (
+    <SectionCard
+      title="Lista mezzi"
+      subtitle="Ordinata per priorita operativa: i mezzi piu critici salgono in alto"
+      className="overflow-hidden rounded-[28px] border border-slate-200 shadow-[0_18px_50px_rgba(15,23,42,0.08)]"
+      bodyClassName="max-h-[560px] space-y-2 overflow-y-auto p-4"
+    >
+      {filteredEntries.length === 0 ? (
+        <p className="text-sm text-slate-500">Nessun bus corrisponde ai filtri impostati.</p>
+      ) : (
+        filteredEntries.map((entry) => {
+          const meta = statusMeta(entry.status_key);
+          const priority = priorityBadge(entry);
+          const selectedRow = selected?.radius_vehicle_id === entry.radius_vehicle_id;
+          return (
+            <button
+              key={entry.radius_vehicle_id}
+              type="button"
+              onClick={() => setSelectedId(entry.radius_vehicle_id)}
+              className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                selectedRow ? "border-slate-900 bg-slate-900 text-white shadow-[0_14px_36px_rgba(15,23,42,0.2)]" : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={selectedRow ? "text-white" : "text-slate-900"}>{entry.status_icon}</span>
+                    <p className={`truncate text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{entry.pms_label ?? entry.label}</p>
+                  </div>
+                  <p className={`mt-1 truncate text-xs ${selectedRow ? "text-slate-300" : "text-slate-500"}`}>{entry.line_name ?? "Linea non assegnata"} • {entry.driver_name ?? "Autista non assegnato"}</p>
+                  <p className={`mt-1 truncate text-[11px] ${selectedRow ? "text-slate-400" : "text-slate-400"}`}>
+                    {entry.current_address ?? "Indirizzo non disponibile"}{entry.current_city ? ` • ${entry.current_city}` : ""}
+                  </p>
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${selectedRow ? "border-white/20 bg-white/10 text-white" : meta.badge}`}>
+                    <span className={`inline-block h-2 w-2 rounded-full ${selectedRow ? "bg-white" : meta.dot}`} />
+                    {meta.label}
+                  </span>
+                  {priority ? (
+                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${selectedRow ? "border-white/15 bg-white/10 text-slate-100" : priority.tone}`}>
+                      {priority.label}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <div className={`mt-3 grid grid-cols-3 gap-2 text-xs ${selectedRow ? "text-slate-200" : "text-slate-500"}`}>
+                <div>
+                  <p className="uppercase tracking-[0.08em]">Velocita</p>
+                  <p className={`mt-1 text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{entry.speed_kmh !== null ? `${Math.round(entry.speed_kmh)} km/h` : "--"}</p>
+                </div>
+                <div>
+                  <p className="uppercase tracking-[0.08em]">Update</p>
+                  <p className={`mt-1 text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{formatRelativeSeconds(entry.last_update_seconds)}</p>
+                </div>
+                <div>
+                  <p className="uppercase tracking-[0.08em]">Servizio</p>
+                  <p className={`mt-1 truncate text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{entry.active_service?.time ?? "Nessuno"}</p>
+                </div>
+              </div>
+            </button>
+          );
+        })
+      )}
+    </SectionCard>
+  );
+
   return (
     <section className="space-y-4">
       <PageHeader
         title="Mappa Operativa"
         subtitle="Control room live per monitorare flotta, anomalie e stato mezzi senza cambiare schermata."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Mappa Operativa" }]}
+        badge={
+          <span className="inline-flex items-center gap-2 rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-700">
+            <span className="h-2.5 w-2.5 rounded-full bg-teal-500" />
+            {visibleSummary.total} mezzi visibili
+          </span>
+        }
         actions={
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[170px_170px_220px_170px_auto]">
             <label className="text-sm text-slate-600">
@@ -505,23 +607,105 @@ export default function MappaLivePage() {
         }
       />
 
+      <section className="rounded-[24px] border border-slate-200 bg-[linear-gradient(135deg,#f8fbff_0%,#eefaf8_100%)] px-4 py-4 shadow-[0_14px_36px_rgba(15,23,42,0.07)]">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Focus adesso</p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-semibold tracking-[-0.02em] text-slate-950">
+                {criticalEntries.length > 0
+                  ? `${criticalEntries.length} mezzi richiedono attenzione`
+                  : "Flotta stabile e sotto controllo"}
+              </h2>
+              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                {activeServiceEntries.length} servizi attivi
+              </span>
+              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                refresh {countdown}s
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-slate-600">
+              Usa i KPI come filtri rapidi e porta in alto solo i mezzi che meritano attenzione.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleFocusCritical}
+              className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+            >
+              {firstCriticalEntry ? `Apri ${firstCriticalEntry.pms_label ?? firstCriticalEntry.label}` : "Apri mezzo prioritario"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter("offline")}
+              className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              Solo offline
+            </button>
+            {filtersActive ? (
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Reset filtri
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </section>
+
       <div className="grid gap-3 md:grid-cols-5">
-        <article className="rounded-[18px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-3 min-h-[112px] shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+        <button
+          type="button"
+          onClick={() => setStatusFilter((current) => (current === "moving" ? "all" : "moving"))}
+          className={`min-h-[112px] rounded-[18px] border p-3 text-left shadow-[0_16px_40px_rgba(15,23,42,0.08)] transition hover:-translate-y-0.5 ${
+            statusFilter === "moving"
+              ? "border-emerald-300 bg-[linear-gradient(180deg,#ecfdf5_0%,#ffffff_100%)]"
+              : "border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)]"
+          }`}
+        >
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Bus attivi</p>
           <p className="mt-1.5 text-[1.45rem] leading-none font-semibold text-slate-950">{visibleSummary.moving}</p>
           <p className="mt-1 text-[12px] text-slate-500">Movimento reale</p>
-        </article>
-        <article className="rounded-[18px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#fff7ed_100%)] p-3 min-h-[112px] shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+        </button>
+        <button
+          type="button"
+          onClick={() => setStatusFilter((current) => (current === "warning" ? "all" : "warning"))}
+          className={`min-h-[112px] rounded-[18px] border p-3 text-left shadow-[0_16px_40px_rgba(15,23,42,0.08)] transition hover:-translate-y-0.5 ${
+            statusFilter === "warning"
+              ? "border-amber-300 bg-[linear-gradient(180deg,#fffbeb_0%,#ffffff_100%)]"
+              : "border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#fff7ed_100%)]"
+          }`}
+        >
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Warning</p>
           <p className="mt-1.5 text-[1.45rem] leading-none font-semibold text-amber-700">{visibleSummary.warning}</p>
           <p className="mt-1 text-[12px] text-slate-500">Lenti o da verificare</p>
-        </article>
-        <article className="rounded-[18px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#fff1f2_100%)] p-3 min-h-[112px] shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+        </button>
+        <button
+          type="button"
+          onClick={() => setStatusFilter((current) => (current === "stopped" ? "all" : "stopped"))}
+          className={`min-h-[112px] rounded-[18px] border p-3 text-left shadow-[0_16px_40px_rgba(15,23,42,0.08)] transition hover:-translate-y-0.5 ${
+            statusFilter === "stopped"
+              ? "border-rose-300 bg-[linear-gradient(180deg,#fff1f2_0%,#ffffff_100%)]"
+              : "border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#fff1f2_100%)]"
+          }`}
+        >
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Bus fermi</p>
           <p className="mt-1.5 text-[1.45rem] leading-none font-semibold text-rose-700">{visibleSummary.stopped}</p>
           <p className="mt-1 text-[12px] text-slate-500">Stop oltre soglia</p>
-        </article>
-        <article className="rounded-[18px] border border-rose-200 bg-[linear-gradient(180deg,#ffffff_0%,#fff1f2_100%)] p-3 min-h-[112px] shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+        </button>
+        <button
+          type="button"
+          onClick={() => setStatusFilter((current) => (current === "offline" ? "all" : "offline"))}
+          className={`min-h-[112px] rounded-[18px] border p-3 text-left shadow-[0_16px_40px_rgba(15,23,42,0.08)] transition hover:-translate-y-0.5 ${
+            statusFilter === "offline"
+              ? "border-rose-300 bg-[linear-gradient(180deg,#fff1f2_0%,#ffffff_100%)]"
+              : "border-rose-200 bg-[linear-gradient(180deg,#ffffff_0%,#fff1f2_100%)]"
+          }`}
+        >
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Offline operativi</p>
@@ -544,13 +728,26 @@ export default function MappaLivePage() {
               <p className="mt-0.5 text-[14px] font-semibold text-slate-700">{visibleSummary.offlineIdle}</p>
             </div>
           </div>
-        </article>
+        </button>
         <article className="rounded-[18px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#eef2ff_100%)] p-3 min-h-[112px] shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Sistema</p>
-          <p className="mt-1.5 text-[1.3rem] leading-none font-semibold text-slate-950">{summary ? "Operativo" : "In attesa"}</p>
-          <p className="mt-1 text-[12px] text-slate-500">
-            Ultimo aggiornamento: {fetchedAgoSeconds !== null ? `${formatRelativeSeconds(fetchedAgoSeconds)} • prossimo tra ${countdown}s` : "N/D"}
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Sistema</p>
+              <p className="mt-1.5 text-[1.3rem] leading-none font-semibold text-slate-950">{summary ? "Operativo" : "In attesa"}</p>
+              <p className="mt-1 text-[12px] text-slate-500">
+                Ultimo aggiornamento: {fetchedAgoSeconds !== null ? `${formatRelativeSeconds(fetchedAgoSeconds)} • prossimo tra ${countdown}s` : "N/D"}
+              </p>
+            </div>
+            {filtersActive ? (
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="rounded-full border border-slate-200 bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-white"
+              >
+                Reset
+              </button>
+            ) : null}
+          </div>
         </article>
       </div>
 
@@ -560,12 +757,31 @@ export default function MappaLivePage() {
         <div className="card p-6 text-sm text-slate-500">Caricamento control room GPS...</div>
       ) : (
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)]">
-          <DynamicMap entries={filteredEntries} selectedId={selected?.radius_vehicle_id ?? null} onSelect={setSelectedId} />
+          <div className="space-y-4">
+            <DynamicMap entries={filteredEntries} selectedId={selected?.radius_vehicle_id ?? null} onSelect={setSelectedId} />
+            {vehicleListSection}
+          </div>
 
           <div className="space-y-4">
             <SectionCard
               title="Alert intelligenti"
               subtitle={topAlerts.length > 0 ? "Priorita operative da verificare adesso" : "Nessuna criticita rilevata nei mezzi visibili"}
+              actions={
+                <div className="flex flex-wrap gap-2">
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                    {criticalEntries.length} priorita
+                  </span>
+                  {firstCriticalEntry ? (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedId(firstCriticalEntry.radius_vehicle_id)}
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Apri primo critico
+                    </button>
+                  ) : null}
+                </div>
+              }
               className="overflow-hidden rounded-[28px] border border-slate-200 shadow-[0_18px_50px_rgba(15,23,42,0.08)]"
               bodyClassName="space-y-2 p-4"
             >
@@ -626,7 +842,7 @@ export default function MappaLivePage() {
                         <p className="mt-1 text-xs opacity-90">{alert.detail}</p>
                       </div>
                       <span className="rounded-full border border-current/20 px-2 py-0.5 text-[10px] font-semibold uppercase">
-                        {alert.severity}
+                        {severityLabel(alert.severity)}
                       </span>
                     </div>
                   </button>
@@ -638,10 +854,10 @@ export default function MappaLivePage() {
               title="Stato operativo"
               subtitle={selected ? "Focus sul mezzo selezionato" : `Mezzi visibili: ${filteredEntries.length} / ${entries.length}`}
               className="overflow-hidden rounded-[28px] border border-slate-200 shadow-[0_18px_50px_rgba(15,23,42,0.08)]"
-              bodyClassName="space-y-3 p-4"
+              bodyClassName="space-y-2.5 p-4"
             >
               {selected ? (
-                <article className="rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+                <article className="rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-3.5 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="text-lg font-semibold tracking-[-0.02em] text-slate-950">{selected.pms_label ?? selected.label}</p>
@@ -656,22 +872,22 @@ export default function MappaLivePage() {
                     </span>
                   </div>
 
-                  <div className="mt-4 grid grid-cols-3 gap-2">
-                    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2.5 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Velocita</p>
                       <p className="mt-1 text-lg font-semibold text-slate-950">{selected.speed_kmh !== null ? `${Math.round(selected.speed_kmh)} km/h` : "--"}</p>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2.5 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Update</p>
                       <p className="mt-1 text-lg font-semibold text-slate-950">{formatRelativeSeconds(selected.last_update_seconds)}</p>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2.5 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Servizio</p>
                       <p className="mt-1 truncate text-sm font-semibold text-slate-950">{selected.active_service?.time ?? "Nessuno"}</p>
                     </div>
                   </div>
 
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-2.5 flex flex-wrap gap-2">
                     {focusSignals(selected).map((signal) => (
                       <span key={`${selected.radius_vehicle_id}-${signal.label}`} className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${signal.tone}`}>
                         {signal.label}
@@ -680,19 +896,25 @@ export default function MappaLivePage() {
                   </div>
 
                   {selected.active_service ? (
-                    <div className="mt-4 rounded-[22px] border border-sky-200 bg-[linear-gradient(180deg,rgba(240,249,255,0.92)_0%,rgba(255,255,255,0.98)_100%)] p-4 shadow-[0_12px_28px_rgba(14,165,233,0.08)]">
+                    <div className="mt-3 rounded-[22px] border border-sky-200 bg-[linear-gradient(180deg,rgba(240,249,255,0.92)_0%,rgba(255,255,255,0.98)_100%)] p-3.5 shadow-[0_12px_28px_rgba(14,165,233,0.08)]">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-700">Servizio attivo PMS</p>
                       <p className="mt-1.5 text-sm font-semibold text-slate-950">{selected.active_service.customer_name}</p>
                       <p className="mt-1 text-xs text-slate-600">{selected.active_service.date} • {selected.active_service.time} • {selected.active_service.hotel_name ?? "Destinazione non disponibile"}</p>
                       <p className="mt-1 text-xs text-slate-600">Stato servizio: {selected.active_service.status} • Linea: {selected.active_service.line_name ?? "N/D"}</p>
                     </div>
                   ) : (
-                    <div className="mt-4 rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-4 text-xs text-slate-600 shadow-[0_12px_28px_rgba(15,23,42,0.05)]">
-                      Ultima posizione nota: {selected.lat.toFixed(5)}, {selected.lng.toFixed(5)}
+                    <div className="mt-3 rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-3.5 text-xs text-slate-600 shadow-[0_12px_28px_rgba(15,23,42,0.05)]">
+                      Ultima posizione nota: {selected.current_address?.trim()
+                        ? selected.current_city
+                          ? `${selected.current_address} • ${selected.current_city}`
+                          : selected.current_address
+                        : selected.current_city
+                          ? selected.current_city
+                          : `${selected.lat.toFixed(5)}, ${selected.lng.toFixed(5)}`}
                     </div>
                   )}
 
-                  <div className="mt-4 flex flex-wrap gap-2">
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <Link href="/bus-network" className="btn-secondary px-3 py-1.5 text-xs">Apri Rete Bus</Link>
                     <Link href="/fleet-ops" className="btn-secondary px-3 py-1.5 text-xs">Apri dettaglio mezzo</Link>
                     {streetViewUrl && streetViewResult.status === "found" ? (
@@ -755,70 +977,6 @@ export default function MappaLivePage() {
               </SectionCard>
             ) : null}
 
-            <SectionCard
-              title="Lista mezzi"
-              subtitle="Ordinata per priorita operativa: i mezzi piu critici salgono in alto"
-              className="overflow-hidden rounded-[28px] border border-slate-200 shadow-[0_18px_50px_rgba(15,23,42,0.08)]"
-              bodyClassName="max-h-[560px] space-y-2 overflow-y-auto p-4"
-            >
-              {filteredEntries.length === 0 ? (
-                <p className="text-sm text-slate-500">Nessun bus corrisponde ai filtri impostati.</p>
-              ) : (
-                filteredEntries.map((entry) => {
-                  const meta = statusMeta(entry.status_key);
-                  const priority = priorityBadge(entry);
-                  const selectedRow = selected?.radius_vehicle_id === entry.radius_vehicle_id;
-                  return (
-                    <button
-                      key={entry.radius_vehicle_id}
-                      type="button"
-                      onClick={() => setSelectedId(entry.radius_vehicle_id)}
-                      className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                        selectedRow ? "border-slate-900 bg-slate-900 text-white shadow-[0_14px_36px_rgba(15,23,42,0.2)]" : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className={selectedRow ? "text-white" : "text-slate-900"}>{entry.status_icon}</span>
-                            <p className={`truncate text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{entry.pms_label ?? entry.label}</p>
-                          </div>
-                          <p className={`mt-1 truncate text-xs ${selectedRow ? "text-slate-300" : "text-slate-500"}`}>{entry.line_name ?? "Linea non assegnata"} • {entry.driver_name ?? "Autista non assegnato"}</p>
-                          <p className={`mt-1 truncate text-[11px] ${selectedRow ? "text-slate-400" : "text-slate-400"}`}>
-                            {entry.current_address ?? "Indirizzo non disponibile"}{entry.current_city ? ` • ${entry.current_city}` : ""}
-                          </p>
-                        </div>
-                        <div className="flex flex-col items-end gap-1">
-                          <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${selectedRow ? "border-white/20 bg-white/10 text-white" : meta.badge}`}>
-                            <span className={`inline-block h-2 w-2 rounded-full ${selectedRow ? "bg-white" : meta.dot}`} />
-                            {meta.label}
-                          </span>
-                          {priority ? (
-                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${selectedRow ? "border-white/15 bg-white/10 text-slate-100" : priority.tone}`}>
-                              {priority.label}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                      <div className={`mt-3 grid grid-cols-3 gap-2 text-xs ${selectedRow ? "text-slate-200" : "text-slate-500"}`}>
-                        <div>
-                          <p className="uppercase tracking-[0.08em]">Velocita</p>
-                          <p className={`mt-1 text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{entry.speed_kmh !== null ? `${Math.round(entry.speed_kmh)} km/h` : "--"}</p>
-                        </div>
-                        <div>
-                          <p className="uppercase tracking-[0.08em]">Update</p>
-                          <p className={`mt-1 text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{formatRelativeSeconds(entry.last_update_seconds)}</p>
-                        </div>
-                        <div>
-                          <p className="uppercase tracking-[0.08em]">Servizio</p>
-                          <p className={`mt-1 truncate text-sm font-semibold ${selectedRow ? "text-white" : "text-slate-900"}`}>{entry.active_service?.time ?? "Nessuno"}</p>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </SectionCard>
           </div>
         </div>
       )}

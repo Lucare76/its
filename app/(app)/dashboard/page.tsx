@@ -397,7 +397,7 @@ export default function OperatorDashboardPage() {
           { icon: "👥", label: "Passeggeri",      value: totalPax,              color: "#0f766e", bg: "#f0fdfa", href: "/arrivals" },
           { icon: "🚌", label: "Bus attivi GPS",   value: activeBusGps ?? "—",   color: activeBusGps !== null ? "#b45309" : "#94a3b8", bg: "#fffbeb", href: "/mappa-live" },
           { icon: "⚠️", label: "Non assegnati",   value: pending,               color: pending > 0 ? "#dc2626" : "#64748b", bg: pending > 0 ? "#fef2f2" : "#f8fafc", href: "/dispatch" },
-          { icon: "📄", label: "PDF da verificare", value: todayPdfNeedsAttention.length, color: todayPdfNeedsAttention.length > 0 ? "#d97706" : "#64748b", bg: todayPdfNeedsAttention.length > 0 ? "#fffbeb" : "#f8fafc" },
+          { icon: "📄", label: "PDF da verificare", value: todayPdfNeedsAttention.length, color: todayPdfNeedsAttention.length > 0 ? "#d97706" : "#64748b", bg: todayPdfNeedsAttention.length > 0 ? "#fffbeb" : "#f8fafc", href: "/pdf-imports" },
           { icon: "📧", label: "Inbox",           value: inboxToReview.length,  color: inboxToReview.length > 0 ? "#dc2626" : "#64748b", bg: inboxToReview.length > 0 ? "#fef2f2" : "#f8fafc", href: "/inbox" },
         ].map(({ icon, label, value, color, bg, href }) => {
           const inner = (
