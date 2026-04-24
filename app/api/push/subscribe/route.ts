@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor", "autista"]);
     if (auth instanceof NextResponse) return auth;
 
     const body = await request.json().catch(() => null) as {
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor", "autista"]);
     if (auth instanceof NextResponse) return auth;
 
     const body = await request.json().catch(() => null) as { endpoint?: string } | null;
