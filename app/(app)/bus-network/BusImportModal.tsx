@@ -950,7 +950,7 @@ export default function BusImportModal({
     } catch (e) {
       setError("Errore lettura file: " + (e instanceof Error ? e.message : String(e)));
     }
-  }, [allStops, allLines, direction]);
+  }, [allStops, allLines, direction, hotelsList]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();

@@ -220,7 +220,6 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
   const hotelsById = new Map<string, { id: string; name: string; zone: string }>(hotels.map((hotel: { id: string; name: string; zone: string }) => [hotel.id, hotel]));
 
   // Applica driver per-data alle unità (sovrascrive i campi statici con quelli del giorno)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const units = (unitsResult.data ?? []).map((u: any) => {
     const dayDriver = driverByUnit.get(u.id as string);
     return {
@@ -230,7 +229,6 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
       driver_name_return: dayDriver?.driver_name_return ?? null,
       driver_phone_return: dayDriver?.driver_phone_return ?? null,
     };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }) as any[];
 
   const enrichedServices = services.map((service: {

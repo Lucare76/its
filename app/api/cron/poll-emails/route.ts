@@ -27,8 +27,11 @@ function adminClient() {
 export async function GET(request: NextRequest) {
   // Autorizzazione cron
   const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    return NextResponse.json({ ok: false, error: "Server configuration error" }, { status: 500 });
+  }
   const auth = request.headers.get("authorization");
-  if (cronSecret && auth !== `Bearer ${cronSecret}`) {
+  if (auth !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 

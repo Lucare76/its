@@ -1,17 +1,16 @@
+import { randomBytes } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { isDisposableEmail, hasDeliverableEmailDomain } from "@/lib/email-validation";
 import { sendTemporaryPasswordEmail } from "@/lib/server/password-reset-email";
 import { checkRateLimit, RATE_LIMIT_DEFAULTS, type RateLimitConfig } from "@/lib/server/rate-limit";
 import { sendSecurityAlert } from "@/lib/server/security-alert-email";
+import { adminGetUserByEmail } from "@/lib/server/admin-user-lookup";
 
 function generateTemporaryPassword(length = 12) {
   const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
-  let result = "";
-  for (let i = 0; i < length; i += 1) {
-    result += charset[Math.floor(Math.random() * charset.length)];
-  }
-  return result;
+  const bytes = randomBytes(length);
+  return Array.from(bytes, (b) => charset[b % charset.length]).join("");
 }
 
 export const runtime = "nodejs";
@@ -54,12 +53,10 @@ export async function POST(request: NextRequest) {
   }
 
   const admin = createAdminClient();
-  const listResult = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-  if (listResult.error) {
+  const { user: existingUser, error: getUserError } = await adminGetUserByEmail(email);
+  if (getUserError) {
     return NextResponse.json({ error: "Errore interno durante la ricerca utente." }, { status: 500 });
   }
-
-  const existingUser = (listResult.data?.users ?? []).find((u) => u.email?.toLowerCase() === email) ?? null;
 
   if (!existingUser?.id) {
     // Per sicurezza, non riveliamo se l'email esiste o meno, ma logghiamo il tentativo

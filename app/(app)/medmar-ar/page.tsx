@@ -469,6 +469,7 @@ export default function MedmarArPage() {
   // Decision Helper: ricalcola quando cambiano route/pax/date
   useEffect(() => {
     if (!token || !formRoute || !formPax || parseInt(formPax) < 1) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDecisionData(null);
       return;
     }
@@ -525,6 +526,7 @@ export default function MedmarArPage() {
   }, [token, filterDateFrom, filterDateTo, filterRoute, filterMode, filterSearch]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (tab === "biglietti") void loadTickets();
   }, [tab, loadTickets]);
 
@@ -538,6 +540,7 @@ export default function MedmarArPage() {
   }, [token]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (tab === "pending") void loadPending();
   }, [tab, loadPending]);
 
@@ -555,6 +558,7 @@ export default function MedmarArPage() {
   }, [token]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (tab === "recupero") void loadOpportunities();
   }, [tab, loadOpportunities]);
 
@@ -569,6 +573,7 @@ export default function MedmarArPage() {
   }, [token, statsPeriodFrom, statsPeriodTo]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (tab === "dashboard") void loadStats();
   }, [tab, loadStats]);
 
@@ -591,6 +596,7 @@ export default function MedmarArPage() {
   }, [token, simBaseLoaded]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (tab === "simulatore") void loadSimulator();
   }, [tab, loadSimulator]);
 
@@ -604,6 +610,7 @@ export default function MedmarArPage() {
   }, [token]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (tab === "leve") void loadInsights();
   }, [tab, loadInsights]);
 

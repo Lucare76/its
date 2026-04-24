@@ -22,9 +22,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Tenant non autorizzato." }, { status: 403 });
     }
 
+    if (auth.membership.role === "agency" && !auth.membership.agency_id) {
+      return NextResponse.json({ error: "Account agenzia non configurato." }, { status: 403 });
+    }
+
     const filters = {
       ...parsed.data,
-      agency_id: auth.membership.role === "agency" ? auth.membership.agency_id ?? parsed.data.agency_id : parsed.data.agency_id
+      agency_id: auth.membership.role === "agency" ? auth.membership.agency_id : parsed.data.agency_id
     };
 
     const { query } = await buildServicesQuery({

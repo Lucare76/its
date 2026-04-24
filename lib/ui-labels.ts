@@ -13,5 +13,6 @@ export const SERVICE_STATUS_LABELS: Record<ServiceStatus, string> = {
   arrivato: "Arrivato",
   completato: "Completato",
   problema: "Problema",
-  cancelled: "Annullato"
+  cancelled: "Annullato",
+  pending_cancellation: "Cancellazione in corso"
 };

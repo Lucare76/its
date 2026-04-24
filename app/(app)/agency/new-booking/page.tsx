@@ -297,11 +297,12 @@ export default function AgencyNewBookingPage() {
           setForm((prev) => ({ ...prev, excursion_title: prev.excursion_title || data[0]?.name || "" }));
         }
       });
-  }, [form.booking_service_kind, supabase, tenantId, excursionLines.length]);
+  }, [form.booking_service_kind, tenantId, excursionLines.length]);
 
   // Carica catalogo fermate bus quando il tipo è bus_city_hotel
   useEffect(() => {
     if (form.booking_service_kind !== "bus_city_hotel" || !accessToken || busStops.length > 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setBusLoading(true);
     fetch("/api/agency/bus-catalog", { headers: { Authorization: `Bearer ${accessToken}` } })
       .then((r) => r.json())
@@ -313,6 +314,7 @@ export default function AgencyNewBookingPage() {
   // Carica orario pick-up ritorno quando cambia hotel o fermata bus selezionata
   useEffect(() => {
     if (form.booking_service_kind !== "bus_city_hotel" || !selectedBusStop || !form.hotel_id || !accessToken) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBusReturnTime(null);
       return;
     }
@@ -409,6 +411,7 @@ export default function AgencyNewBookingPage() {
     return warnings;
   }, [
     contextLabels.transportCodeLabel,
+    contextLabels.transportCodeReturnLabel,
     form.bus_city_origin,
     form.customer_first_name,
     form.customer_last_name,
@@ -417,6 +420,7 @@ export default function AgencyNewBookingPage() {
     form.hotel_id,
     form.notes,
     form.transport_code,
+    form.transport_code_return,
     isBusOriginRequired,
     isExcursionTitleRequired,
     isSnavKind,

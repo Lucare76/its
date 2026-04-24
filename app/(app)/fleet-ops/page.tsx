@@ -132,6 +132,25 @@ const EXPIRY_BADGE: Record<string, string> = {
   none:    "bg-slate-50 text-slate-400 border-slate-200",
 };
 
+function getVehicleDocumentSummary(vehicle: Vehicle) {
+  const docs = [
+    { key: "Ass.", val: vehicle.insurance_expiry },
+    { key: "Bollo", val: vehicle.road_tax_expiry },
+    { key: "Coll.", val: vehicle.inspection_expiry },
+  ];
+  const worst = docs.reduce<"ok" | "soon" | "expired" | "none">((acc, doc) => {
+    const status = expiryStatus(doc.val);
+    if (status === "expired") return "expired";
+    if (status === "soon" && acc !== "expired") return "soon";
+    if (status === "ok" && acc === "none") return "ok";
+    return acc;
+  }, "none");
+  const expiredDocs = docs.filter((doc) => expiryStatus(doc.val) === "expired").map((doc) => doc.key);
+  const soonDocs = docs.filter((doc) => expiryStatus(doc.val) === "soon").map((doc) => doc.key);
+  const label = expiredDocs.length ? `Scaduto: ${expiredDocs.join(", ")}` : soonDocs.length ? `In scadenza: ${soonDocs.join(", ")}` : worst === "ok" ? "Documenti in ordine" : "Nessun documento";
+  return { worst, label };
+}
+
 const EMPTY_ANOMALY = {
   title: "",
   severity: "medium",
@@ -153,6 +172,8 @@ export default function FleetOpsPage() {
   const [anomalyForm, setAnomalyForm] = useState(EMPTY_ANOMALY);
   const [showAnomalyPanel, setShowAnomalyPanel] = useState(false);
   const [sizeFilter, setSizeFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [isNewVehicle, setIsNewVehicle] = useState(false);
   const [driverFormOpen, setDriverFormOpen] = useState(false);
   const [editingDriverId, setEditingDriverId] = useState<string | null>(null);
@@ -246,10 +267,31 @@ export default function FleetOpsPage() {
     return true;
   };
 
-  const filteredVehicles = useMemo(
-    () => sizeFilter === "all" ? vehicles : vehicles.filter((v) => v.vehicle_size === sizeFilter),
-    [vehicles, sizeFilter]
-  );
+  const fleetStats = useMemo(() => ({
+    active: vehicles.filter((vehicle) => vehicle.active).length,
+    blocked: vehicles.filter((vehicle) => vehicle.is_blocked_manual || vehicle.blocked_until).length,
+    anomalies: anomalies.filter((anomaly) => anomaly.active).length,
+    gpsMissing: vehicles.filter((vehicle) => !vehicle.radius_vehicle_id).length,
+    docsCritical: vehicles.filter((vehicle) => {
+      const summary = getVehicleDocumentSummary(vehicle);
+      return summary.worst === "expired" || summary.worst === "soon";
+    }).length,
+  }), [anomalies, vehicles]);
+
+  const filteredVehicles = useMemo(() => {
+    return vehicles.filter((vehicle) => {
+      const matchesSize = sizeFilter === "all" || vehicle.vehicle_size === sizeFilter;
+      const haystack = `${vehicle.label} ${vehicle.plate ?? ""} ${driverNameById.get(vehicle.habitual_driver_profile_id ?? "") ?? ""} ${vehicle.default_zone ?? ""}`.toLowerCase();
+      const matchesSearch = !searchQuery.trim() || haystack.includes(searchQuery.trim().toLowerCase());
+      const docSummary = getVehicleDocumentSummary(vehicle);
+      const matchesStatus = statusFilter === "all"
+        || (statusFilter === "blocked" && Boolean(vehicle.is_blocked_manual || vehicle.blocked_until))
+        || (statusFilter === "attention" && (docSummary.worst === "expired" || docSummary.worst === "soon" || anomalies.some((anomaly) => anomaly.vehicle_id === vehicle.id && anomaly.active)))
+        || (statusFilter === "gpsless" && !vehicle.radius_vehicle_id)
+        || (statusFilter === "active" && vehicle.active && !vehicle.is_blocked_manual && !vehicle.blocked_until);
+      return matchesSize && matchesSearch && matchesStatus;
+    });
+  }, [anomalies, driverNameById, searchQuery, sizeFilter, statusFilter, vehicles]);
 
   if (loading) {
     return (
@@ -275,14 +317,16 @@ export default function FleetOpsPage() {
       ) : null}
 
       {/* Stats */}
-      <div className="grid gap-3 sm:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         {[
-          { label: "Mezzi attivi", value: vehicles.filter((v) => v.active).length, color: "text-slate-800" },
-          { label: "Mezzi bloccati", value: vehicles.filter((v) => v.is_blocked_manual || v.blocked_until).length, color: "text-rose-700" },
-          { label: "Anomalie aperte", value: anomalies.filter((a) => a.active).length, color: "text-amber-700" },
-          { label: "Autisti attivi", value: drivers.length, color: "text-slate-800" },
+          { label: "Mezzi attivi", value: fleetStats.active, tone: "bg-slate-900", color: "text-slate-900" },
+          { label: "Mezzi bloccati", value: fleetStats.blocked, tone: "bg-rose-500", color: "text-rose-700" },
+          { label: "Anomalie aperte", value: fleetStats.anomalies, tone: "bg-amber-500", color: "text-amber-700" },
+          { label: "Senza GPS", value: fleetStats.gpsMissing, tone: "bg-sky-500", color: "text-sky-700" },
+          { label: "Doc da controllare", value: fleetStats.docsCritical, tone: "bg-fuchsia-500", color: "text-fuchsia-700" },
         ].map((stat) => (
-          <div key={stat.label} className="rounded-2xl border border-border bg-white px-5 py-4 shadow-sm">
+          <div key={stat.label} className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+            <span className={`absolute inset-x-0 top-0 h-1 ${stat.tone}`} />
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{stat.label}</p>
             <p className={`mt-1 text-3xl font-semibold ${stat.color}`}>{stat.value}</p>
           </div>
@@ -294,37 +338,74 @@ export default function FleetOpsPage() {
         {/* ── Lista veicoli ───────────────────────────────────────────────── */}
         <SectionCard
           title="Veicoli"
+          subtitle={`${filteredVehicles.length} risultati su ${vehicles.length} mezzi`}
           actions={
-            <div className="flex gap-1.5">
-              <button
-                type="button"
-                onClick={() => { setIsNewVehicle(true); setSelectedVehicleId(""); resetVehicleEditor(); }}
-                className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-              >
-                + Nuovo mezzo
-              </button>
-              {["all", "bus", "large", "medium", "small"].map((size) => (
+            <div className="flex min-w-[320px] flex-col items-stretch gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Cerca mezzo, targa, autista..."
+                  className="min-w-[240px] flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
+                />
                 <button
-                  key={size}
                   type="button"
-                  onClick={() => setSizeFilter(size)}
-                  className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition ${sizeFilter === size ? "border-blue-300 bg-blue-50 text-blue-700" : "border-border bg-white text-slate-500 hover:bg-slate-50"}`}
+                  onClick={() => { setIsNewVehicle(true); setSelectedVehicleId(""); resetVehicleEditor(); }}
+                  className="rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
                 >
-                  {size === "all" ? "Tutti" : SIZE_LABEL[size]}
+                  + Nuovo mezzo
                 </button>
-              ))}
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Stato</span>
+                  {[
+                    ["all", "Tutti"],
+                    ["active", "Operativi"],
+                    ["blocked", "Bloccati"],
+                    ["attention", "Da controllare"],
+                    ["gpsless", "Senza GPS"],
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setStatusFilter(value)}
+                      className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                        statusFilter === value ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Taglia</span>
+                  {["all", "bus", "large", "medium", "small"].map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() => setSizeFilter(size)}
+                      className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                        sizeFilter === size ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      {size === "all" ? "Tutti" : SIZE_LABEL[size]}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           }
         >
           <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="min-w-[980px] table-auto whitespace-nowrap text-sm">
+            <table className="min-w-[1040px] table-auto whitespace-nowrap text-sm">
               <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-400">
                 <tr>
                   <th className="px-3 py-2.5">Veicolo</th>
                   <th className="px-3 py-2.5">Taglia</th>
                   <th className="px-3 py-2.5">Targa</th>
                   <th className="px-3 py-2.5">Posti</th>
-                  <th className="px-3 py-2.5">Autista abituale</th>
+                  <th className="min-w-[140px] px-3 py-2.5">Autista abituale</th>
                   <th className="px-3 py-2.5">GPS</th>
                   <th className="px-3 py-2.5">Documenti</th>
                   <th className="px-3 py-2.5">Impegni</th>
@@ -345,7 +426,7 @@ export default function FleetOpsPage() {
                       className={`cursor-pointer transition ${isSelected ? "bg-blue-50/70" : todayCommitment ? "bg-amber-50/40" : "hover:bg-slate-50/80"}`}
                     >
                       <td className="px-3 py-2.5">
-                        <span className={`block max-w-[160px] truncate font-medium ${isSelected ? "text-blue-800" : "text-slate-800"}`} title={vehicle.label}>{vehicle.label}</span>
+                        <span className={`block max-w-[180px] truncate font-medium ${isSelected ? "text-blue-800" : "text-slate-800"}`} title={vehicle.label}>{vehicle.label}</span>
                       </td>
                       <td className="px-3 py-2.5">
                         <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${SIZE_BADGE[vehicle.vehicle_size ?? ""] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
@@ -364,25 +445,11 @@ export default function FleetOpsPage() {
                       </td>
                       <td className="px-3 py-2.5">
                         {(() => {
-                          const docs = [
-                            { key: "Ass.", val: vehicle.insurance_expiry },
-                            { key: "Bollo", val: vehicle.road_tax_expiry },
-                            { key: "Coll.", val: vehicle.inspection_expiry },
-                          ];
-                          const worst = docs.reduce<"ok" | "soon" | "expired" | "none">((acc, d) => {
-                            const s = expiryStatus(d.val);
-                            if (s === "expired") return "expired";
-                            if (s === "soon" && acc !== "expired") return "soon";
-                            if (s === "ok" && acc === "none") return "ok";
-                            return acc;
-                          }, "none");
-                          if (worst === "none") return <span className="text-slate-300 text-xs">—</span>;
-                          const expiredDocs = docs.filter(d => expiryStatus(d.val) === "expired").map(d => d.key);
-                          const soonDocs = docs.filter(d => expiryStatus(d.val) === "soon").map(d => d.key);
-                          const label = expiredDocs.length ? `Scaduto: ${expiredDocs.join(", ")}` : soonDocs.length ? `In scadenza: ${soonDocs.join(", ")}` : "OK";
+                          const docSummary = getVehicleDocumentSummary(vehicle);
+                          if (docSummary.worst === "none") return <span className="text-slate-300 text-xs">—</span>;
                           return (
-                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${EXPIRY_BADGE[worst]}`} title={label}>
-                              {worst === "expired" ? "⚠ Scaduto" : worst === "soon" ? "⚠ In scad." : "✓ OK"}
+                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${EXPIRY_BADGE[docSummary.worst]}`} title={docSummary.label}>
+                              {docSummary.worst === "expired" ? "⚠ Scaduto" : docSummary.worst === "soon" ? "⚠ In scad." : "✓ OK"}
                             </span>
                           );
                         })()}
@@ -446,6 +513,59 @@ export default function FleetOpsPage() {
               <p className="text-sm text-muted">Clicca un veicolo nella tabella o crea un nuovo mezzo.</p>
             ) : (
               <div className="space-y-3">
+                {!isNewVehicle && selectedVehicle ? (
+                    <div className="rounded-2xl border border-slate-200 bg-[linear-gradient(135deg,rgba(248,250,252,0.98),rgba(241,245,249,0.96))] p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-lg font-semibold text-slate-900">{selectedVehicle.label}</p>
+                        <p className="mt-1 font-mono text-sm text-slate-500">{selectedVehicle.plate ?? "Targa da inserire"}</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${SIZE_BADGE[selectedVehicle.vehicle_size ?? ""] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
+                          {SIZE_LABEL[selectedVehicle.vehicle_size ?? ""] ?? "N/D"}
+                        </span>
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${selectedVehicle.radius_vehicle_id ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-500"}`}>
+                          {selectedVehicle.radius_vehicle_id ? "GPS collegato" : "GPS mancante"}
+                        </span>
+                        {(() => {
+                          const docSummary = getVehicleDocumentSummary(selectedVehicle);
+                          if (docSummary.worst === "none") return null;
+                          return (
+                            <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${EXPIRY_BADGE[docSummary.worst]}`} title={docSummary.label}>
+                              {docSummary.worst === "expired" ? "Documenti scaduti" : docSummary.worst === "soon" ? "Documenti in scadenza" : "Documenti OK"}
+                            </span>
+                          );
+                        })()}
+                        {selectedVehicle.is_blocked_manual || selectedVehicle.blocked_until ? (
+                          <span className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700">
+                            Mezzo bloccato
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      {[
+                        {
+                          label: "Autista abituale",
+                          value: selectedVehicle.habitual_driver_profile_id ? driverNameById.get(selectedVehicle.habitual_driver_profile_id) ?? "—" : "Non assegnato",
+                        },
+                        {
+                          label: "Zona abituale",
+                          value: selectedVehicle.default_zone ?? "Non definita",
+                        },
+                        {
+                          label: "Operatività",
+                          value: selectedAnomalies.length > 0 ? `${selectedAnomalies.length} anomalie aperte` : "Nessuna anomalia aperta",
+                        },
+                      ].map((item) => (
+                        <div key={item.label} className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{item.label}</p>
+                          <p className="mt-1 text-sm font-medium text-slate-700">{item.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-2 gap-3">
                   <label className="text-xs font-semibold text-slate-500">
                     Nome mezzo

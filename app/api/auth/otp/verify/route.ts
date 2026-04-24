@@ -5,27 +5,25 @@ export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
-  if (!body || typeof body.user_id !== "string" || typeof body.otp_code !== "string") {
-    return NextResponse.json({ error: "user_id e otp_code richiesti" }, { status: 400 });
+  if (!body || typeof body.session_id !== "string" || typeof body.otp_code !== "string") {
+    return NextResponse.json({ error: "session_id e otp_code richiesti" }, { status: 400 });
   }
 
-  const userId = body.user_id.trim();
+  const sessionId = body.session_id.trim();
   const otpCode = body.otp_code.trim();
 
-  if (!userId || !otpCode || otpCode.length !== 6 || !/^\d+$/.test(otpCode)) {
+  if (!sessionId || !otpCode || otpCode.length !== 6 || !/^\d+$/.test(otpCode)) {
     return NextResponse.json({ error: "OTP non valido" }, { status: 400 });
   }
 
   const admin = createAdminClient();
 
-  // Find active OTP session
+  // Find active OTP session by session_id (unguessable UUID, returned from /send)
   const otpLookup = await admin
     .from("otp_sessions")
-    .select("id, otp_code, attempts_remaining, expires_at")
-    .eq("user_id", userId)
+    .select("id, user_id, otp_code, attempts_remaining, expires_at")
+    .eq("id", sessionId)
     .is("verified_at", null)
-    .order("created_at", { ascending: false })
-    .limit(1)
     .maybeSingle();
 
   if (otpLookup.error || !otpLookup.data) {
@@ -84,7 +82,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Errore durante la verifica OTP" }, { status: 500 });
   }
 
-  // Log successful 2FA
+  // Log successful 2FA (userId comes from the DB session, not the request body)
+  const userId = otpSession.user_id as string;
   await admin
     .from("auth_audit_log")
     .insert({

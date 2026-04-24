@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 import { z } from "zod";
 import { formatIsoDateShort } from "@/lib/service-display";
 import { buildServicesQuery } from "@/lib/server/services-filter-builder";
+import { resolvePreferredMembership } from "@/lib/tenant-preference";
 
 const statusEnum = z.enum(["new", "assigned", "partito", "arrivato", "completato", "problema", "cancelled", "needs_review"]);
 
@@ -574,18 +575,26 @@ export async function buildServicesExportXlsx(request: NextRequest) {
 
     const { data: memberships, error: membershipsError } = await admin
       .from("memberships")
-      .select("tenant_id, role")
+      .select("tenant_id, role, agency_id")
       .eq("user_id", user.id);
 
     if (membershipsError || !memberships || memberships.length === 0) {
       return NextResponse.json({ error: "Membership non trovata." }, { status: 403 });
     }
 
-    const membership = memberships[0] as { tenant_id: string; role: Role };
+    const membership = resolvePreferredMembership(memberships as Array<{ tenant_id: string; role: string; agency_id?: string | null }>) as { tenant_id: string; role: Role; agency_id?: string | null } | null;
+    if (!membership) {
+      return NextResponse.json({ error: "Membership non trovata." }, { status: 403 });
+    }
+
     const { tenant_id: tenantId, role } = membership;
 
     if (role === "driver") {
       return NextResponse.json({ error: "Ruolo driver non autorizzato all'export." }, { status: 403 });
+    }
+
+    if (role === "agency" && !membership.agency_id) {
+      return NextResponse.json({ error: "Account agenzia non configurato." }, { status: 403 });
     }
 
     const { query: builtBaseQuery } = await buildServicesQuery({
@@ -599,7 +608,7 @@ export async function buildServicesExportXlsx(request: NextRequest) {
         zone: filters.zone,
         hotel_id: filters.hotel_id,
         search: filters.search,
-        agency_id: role === "agency" ? user.id : undefined
+        agency_id: role === "agency" ? membership.agency_id ?? undefined : undefined
       },
       select:
         "id, tenant_id, date, time, service_type, direction, vessel, pax, hotel_id, customer_name, billing_party_name, outbound_time, return_time, arrival_date, arrival_time, departure_date, departure_time, booking_service_kind, service_type_code, transport_mode, transport_code, train_arrival_number, train_departure_number, source_total_amount_cents, source_price_per_pax_cents, source_amount_currency, phone, notes, meeting_point, bus_plate, status"

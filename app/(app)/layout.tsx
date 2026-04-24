@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -1285,39 +1286,45 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 <span>Esci</span>
               </button>
               {authRole === "admin" && (authName?.toLowerCase().includes("leonardo") || authEmail?.toLowerCase().includes("leonardo")) ? (
-                <img
+                <Image
                   src="/bowser-avatar.png"
                   alt="Leonardo"
+                  width={56} height={56}
                   className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
                 />
               ) : authRole === "admin" && authName?.toLowerCase().includes("mario") ? (
-                <img
+                <Image
                   src="/mario-avatar.png"
                   alt="Mario"
+                  width={56} height={56}
                   className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
                 />
               ) : authRole === "admin" && (authName?.toLowerCase().includes("karmen") || authName?.toLowerCase().includes("peach")) ? (
-                <img
+                <Image
                   src="/karmen-avatar.png"
                   alt="Karmen"
+                  width={56} height={56}
                   className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
                 />
               ) : authRole === "operator" && authGender === "female" ? (
-                <img
+                <Image
                   src="/toadette-avatar.png"
                   alt="Operatrice"
+                  width={56} height={56}
                   className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
                 />
               ) : authRole === "operator" && authGender === "male" ? (
-                <img
+                <Image
                   src="/bowser-avatar.png"
                   alt="Operatore"
+                  width={56} height={56}
                   className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
                 />
               ) : authRole === "supervisor" ? (
-                <img
+                <Image
                   src="/luca-avatar.png"
                   alt="Luca"
+                  width={56} height={56}
                   className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-cover p-1 shadow-sm"
                 />
               ) : (

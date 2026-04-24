@@ -296,6 +296,7 @@ export const KARMEN_PEACH_GROUP: NavMainGroup = {
   icon: "KARMEN",
   items: [
     { href: "/liste-bruno", label: "Liste Bruno", icon: "S" },
+    { href: "/smistamento-continente", label: "Smistamento continente", icon: "S" },
     { href: "/estratto-escursioni", label: "Estratto Escursioni", icon: "S" }
   ]
 };
@@ -319,10 +320,9 @@ export const SETTINGS_GROUPS: NavGroup[] = [
   {
     title: "Commerciale",
     items: [
-      { href: "/settings/agency-rates", label: "Prezzi agenzie", icon: "€" },
-      { href: "/settings/agency-margins", label: "Margini", icon: "%", adminOnly: true },
-      { href: "/pricing", label: "Tariffe", icon: "T", supervisorOnly: true },
-      { href: "/ops-rules", label: "Regole operative", icon: "S" },
+      { href: "/settings/agency-rates", label: "Listini agenzie", icon: "€" },
+      { href: "/settings/agency-margins", label: "Redditivita", icon: "%", adminOnly: true },
+      { href: "/pricing", label: "Tariffe base", icon: "T", supervisorOnly: true },
     ]
   },
   {
@@ -332,9 +332,12 @@ export const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/excel-import", label: "Import Excel", icon: "E" },
       { href: "/excel-workspace", label: "Excel workspace", icon: "X" },
       { href: "/ops-summary", label: "Riepiloghi", icon: "S" },
+      { href: "/ops-rules", label: "Regole operative", icon: "S" },
       { href: "/arrivals-clock", label: "Arrivi a orario", icon: "@" },
       { href: "/report-center", label: "Centro report", icon: "Y" },
-      { href: "/bus-tours", label: "Servizi bus", icon: "B" },
+      { href: "/bus-tours", label: "Controllo bus", icon: "B" },
+      { href: "/analytics", label: "Analisi", icon: "Y" },
+      { href: "/audit", label: "Audit", icon: "Q" },
     ]
   },
   {
@@ -342,11 +345,8 @@ export const SETTINGS_GROUPS: NavGroup[] = [
     items: [
       { href: "/settings/whatsapp", label: "WhatsApp", icon: "W" },
       { href: "/notifications", label: "Notifiche", icon: "!" },
-      { href: "/services/new", label: "Nuovo servizio", icon: "N" },
       { href: "/scheduler", label: "Scheduler", icon: "J" },
       { href: "/service-workflow", label: "Workflow servizi", icon: "K" },
-      { href: "/analytics", label: "Analisi", icon: "Y" },
-      { href: "/audit", label: "Audit", icon: "Q" },
       { href: "/settings/system", label: "Stato sistema", icon: "⚙" },
       { href: "/settings/email-preview",     label: "Anteprima email",     icon: "✉" },
       { href: "/settings/whatsapp-preview", label: "Anteprima WhatsApp", icon: "💬" },

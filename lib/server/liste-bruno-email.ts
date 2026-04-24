@@ -17,6 +17,7 @@ export type BrunoArrival = {
   hotel_name: string | null;
   notes: string;
   flight_number: string | null;     // numero volo arrivo (train_arrival_number)
+  dispatch_source?: "rule" | "manual";
 };
 
 export type BrunoDeparture = {
@@ -35,6 +36,7 @@ export type BrunoDeparture = {
   hotel_name: string | null;    // hotel sull'isola (utile per identificare il cliente)
   notes: string;
   flight_number: string | null; // numero volo partenza (train_departure_number)
+  dispatch_source?: "rule" | "manual";
 };
 
 type BrunoEmailInput = {

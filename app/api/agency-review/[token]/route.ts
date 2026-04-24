@@ -6,6 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
+import { escapeHtml } from "@/lib/server/escape-html";
 
 export const runtime = "nodejs";
 
@@ -194,14 +195,14 @@ async function sendDiffEmailToOperator(params: {
   const diffRows = Array.from(byService.values()).map(({ service, mods }) => {
     const modRows = mods.map((m) => `
       <tr>
-        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#64748b;">${FIELD_LABELS[m.field] ?? m.field}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;text-decoration:line-through;">${m.original}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:700;color:#854d0e;background:#fef9c3;">${m.modified} ✏️</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#64748b;">${escapeHtml(FIELD_LABELS[m.field] ?? m.field)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;text-decoration:line-through;">${escapeHtml(m.original)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:700;color:#854d0e;background:#fef9c3;">${escapeHtml(m.modified)} ✏️</td>
       </tr>`).join("");
     return `
       <tr>
         <td colspan="3" style="padding:10px 12px;background:#f1f5f9;font-size:13px;font-weight:700;color:#0f2744;border-bottom:1px solid #e2e8f0;">
-          ${service.customer_name} — ${service.date} ${service.time}
+          ${escapeHtml(service.customer_name)} — ${escapeHtml(service.date)} ${escapeHtml(service.time)}
         </td>
       </tr>
       ${modRows}`;
@@ -211,13 +212,13 @@ async function sendDiffEmailToOperator(params: {
 <body style="font-family:-apple-system,Arial,sans-serif;font-size:14px;color:#1a1a1a;background:#eef2f7;padding:32px;">
 <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,0.08);">
   <div style="background:linear-gradient(135deg,#854d0e,#a16207);padding:28px 32px;">
-    <div style="font-size:22px;font-weight:800;color:#fff;">✏️ Modifiche da ${params.agencyName}</div>
-    <div style="font-size:13px;color:rgba(255,255,255,0.7);margin-top:4px;">Riepilogo ${params.targetDate} · ${params.modifications.length} modifiche</div>
+    <div style="font-size:22px;font-weight:800;color:#fff;">✏️ Modifiche da ${escapeHtml(params.agencyName)}</div>
+    <div style="font-size:13px;color:rgba(255,255,255,0.7);margin-top:4px;">Riepilogo ${escapeHtml(params.targetDate)} · ${params.modifications.length} modifiche</div>
   </div>
   <div style="padding:28px 32px;">
     <p style="color:#475569;margin-bottom:20px;">
-      <strong>${params.agencyName}</strong> ha segnalato delle modifiche al riepilogo del <strong>${params.targetDate}</strong>.
-      ${params.agencyNotes ? `<br/><br/>Nota agenzia: <em>"${params.agencyNotes}"</em>` : ""}
+      <strong>${escapeHtml(params.agencyName)}</strong> ha segnalato delle modifiche al riepilogo del <strong>${escapeHtml(params.targetDate)}</strong>.
+      ${params.agencyNotes ? `<br/><br/>Nota agenzia: <em>"${escapeHtml(params.agencyNotes)}"</em>` : ""}
     </p>
     <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border-radius:10px;overflow:hidden;border:1px solid #e2e8f0;">
       <thead>
@@ -280,12 +281,12 @@ async function sendConfirmationEmailToAgency(params: {
 <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,0.08);">
   <div style="background:${isApproved ? "linear-gradient(135deg,#166534,#15803d)" : "linear-gradient(135deg,#854d0e,#a16207)"};padding:28px 32px;">
     <div style="font-size:22px;font-weight:800;color:#fff;">${isApproved ? "✅ Riepilogo approvato" : "✏️ Modifiche ricevute"}</div>
-    <div style="font-size:13px;color:rgba(255,255,255,0.7);margin-top:4px;">${params.agencyName} · ${params.targetDate}</div>
+    <div style="font-size:13px;color:rgba(255,255,255,0.7);margin-top:4px;">${escapeHtml(params.agencyName)} · ${escapeHtml(params.targetDate)}</div>
   </div>
   <div style="padding:28px 32px;">
     ${isApproved
-      ? `<p style="color:#475569;font-size:15px;">Grazie! La tua approvazione del riepilogo del <strong>${params.targetDate}</strong> è stata ricevuta correttamente da Ischia Transfer Service.</p>`
-      : `<p style="color:#475569;font-size:15px;">Grazie! Le tue <strong>${params.modCount} modifiche</strong> al riepilogo del <strong>${params.targetDate}</strong> sono state ricevute. Il nostro team le verificherà e aggiornerà i servizi al più presto.</p>`
+      ? `<p style="color:#475569;font-size:15px;">Grazie! La tua approvazione del riepilogo del <strong>${escapeHtml(params.targetDate)}</strong> è stata ricevuta correttamente da Ischia Transfer Service.</p>`
+      : `<p style="color:#475569;font-size:15px;">Grazie! Le tue <strong>${params.modCount} modifiche</strong> al riepilogo del <strong>${escapeHtml(params.targetDate)}</strong> sono state ricevute. Il nostro team le verificherà e aggiornerà i servizi al più presto.</p>`
     }
     <p style="color:#94a3b8;font-size:13px;margin-top:20px;">Per informazioni scrivi a <a href="mailto:${from}" style="color:#3b82f6;">${from}</a></p>
   </div>

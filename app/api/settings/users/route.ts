@@ -5,6 +5,7 @@ import { sendPasswordResetEmail } from "@/lib/server/password-reset-email";
 import { capabilityRoleMap, type AppCapability } from "@/lib/rbac";
 import { resolvePreferredMembership } from "@/lib/tenant-preference";
 import { hasDeliverableEmailDomain, isDisposableEmail } from "@/lib/email-validation";
+import { adminGetUserByEmail } from "@/lib/server/admin-user-lookup";
 import type { UserRole } from "@/lib/types";
 import {
   adminRoleCapabilityOverrideSchema,
@@ -246,13 +247,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Esiste gia un utente con questo nome nel tenant." }, { status: 409 });
   }
 
-  const listResult = await auth.admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-  if (listResult.error) {
+  const { user: existingEmailUser, error: getUserError } = await adminGetUserByEmail(email);
+  if (getUserError) {
     return NextResponse.json({ error: "Errore durante la verifica utente esistente" }, { status: 500 });
   }
 
-  const alreadyExists = (listResult.data?.users ?? []).some((u) => u.email?.toLowerCase() === email);
-  if (alreadyExists) {
+  if (existingEmailUser) {
     return NextResponse.json({ error: "Email già utilizzata da un altro account" }, { status: 409 });
   }
 

@@ -16,6 +16,7 @@ import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
 import { sendEmail } from "@/lib/server/send-email";
 import { emailHtml } from "@/lib/server/email-layout";
+import { escapeHtml } from "@/lib/server/escape-html";
 
 export const runtime = "nodejs";
 
@@ -149,20 +150,20 @@ export async function POST(req: NextRequest) {
         const counterNote = action === "counter" && counter_cents !== undefined
           ? `<p style="color:#d97706;font-weight:600;">Controproposta: <strong>${formatEur(counter_cents)}</strong></p>`
           : "";
-        const noteHtml = note ? `<p style="color:#475569;font-size:13px;"><em>"${note}"</em></p>` : "";
+        const noteHtml = note ? `<p style="color:#475569;font-size:13px;"><em>"${escapeHtml(note)}"</em></p>` : "";
 
         await sendEmail({
           to: opsEmails,
-          subject: `${notifTitle} — ${svc?.customer_name as string}`,
+          subject: `${notifTitle} — ${escapeHtml(svc?.customer_name)}`,
           html: emailHtml(`
             <h2 style="color:#0f172a;margin-bottom:4px;">${notifTitle}</h2>
             <p style="color:#475569;margin-bottom:16px;">
-              ${agency?.name ?? "L'agenzia"} ha <strong>${actionLabel}</strong> la richiesta di cancellazione.
+              ${escapeHtml(agency?.name ?? "L'agenzia")} ha <strong>${actionLabel}</strong> la richiesta di cancellazione.
             </p>
             <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
-              <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;width:40%;">Cliente</td><td style="padding:8px 12px;">${svc?.customer_name as string}</td></tr>
-              <tr><td style="padding:8px 12px;background:#f1f5f9;font-weight:600;">Hotel</td><td style="padding:8px 12px;">${hotelName}</td></tr>
-              <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;">Data</td><td style="padding:8px 12px;">${dateFormatted}</td></tr>
+              <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;width:40%;">Cliente</td><td style="padding:8px 12px;">${escapeHtml(svc?.customer_name)}</td></tr>
+              <tr><td style="padding:8px 12px;background:#f1f5f9;font-weight:600;">Hotel</td><td style="padding:8px 12px;">${escapeHtml(hotelName)}</td></tr>
+              <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;">Data</td><td style="padding:8px 12px;">${escapeHtml(dateFormatted)}</td></tr>
               ${penaltyCents > 0 ? `<tr><td style="padding:8px 12px;background:#fef2f2;font-weight:600;color:#991b1b;">Penale richiesta</td><td style="padding:8px 12px;color:#991b1b;font-weight:700;">${formatEur(penaltyCents)}</td></tr>` : ""}
             </table>
             ${counterNote}

@@ -46,7 +46,7 @@ function serviceMapping(code: unknown) {
   }
 }
 
-async function createServicesFromAcceptedQuote(admin: ReturnType<typeof adminClient>, quote: Record<string, unknown>) {
+async function createServicesFromAcceptedQuote(admin: ReturnType<typeof adminClient>, quote: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
   const tenantId = String(quote.tenant_id ?? "");
   const quoteId = String(quote.id ?? "");
   const customerName = String(quote.client_name ?? "").trim() || "Cliente preventivo";
@@ -57,6 +57,22 @@ async function createServicesFromAcceptedQuote(admin: ReturnType<typeof adminCli
   const { data: wps } = await admin.from("quote_waypoints").select("label, waypoint_type").eq("quote_id", quoteId).order("sort_order");
   const pickupWaypoints = (wps ?? []).filter((w: { waypoint_type?: string | null }) => (w.waypoint_type ?? "pickup") === "pickup").map((w: { label: string }) => w.label);
   const dropoffWaypoints = (wps ?? []).filter((w: { waypoint_type?: string | null }) => w.waypoint_type === "dropoff").map((w: { label: string }) => w.label);
+
+  const legs = [
+    quote.arrival_date ? { direction: "arrival", date: String(quote.arrival_date), leg: "arrival" } : null,
+    quote.departure_date ? { direction: "departure", date: String(quote.departure_date), leg: "departure" } : null,
+  ].filter((leg): leg is { direction: "arrival" | "departure"; date: string; leg: string } => Boolean(leg));
+
+  if (!tenantId || !quoteId || legs.length === 0) return { ok: true };
+
+  // hotel_id è NOT NULL: recuperiamo il primo hotel del tenant come placeholder.
+  const { data: hotels } = await admin.from("hotels").select("id").eq("tenant_id", tenantId).eq("is_active", true).limit(1);
+  const placeholderHotelId = hotels?.[0]?.id;
+  if (!placeholderHotelId) {
+    console.error("[quotes] nessun hotel trovato per il tenant, impossibile creare servizi dal preventivo", quoteId);
+    return { ok: false, error: "Nessun hotel disponibile per creare i servizi." };
+  }
+
   const notes = [
     `Generato da preventivo accettato ${quoteId}.`,
     routeLabel ? `Tratta: ${routeLabel}` : "",
@@ -66,13 +82,6 @@ async function createServicesFromAcceptedQuote(admin: ReturnType<typeof adminCli
     quote.notes ? `Note preventivo: ${String(quote.notes)}` : "",
     "Orario, hotel e dettagli operativi da completare.",
   ].filter(Boolean).join("\n");
-
-  const legs = [
-    quote.arrival_date ? { direction: "arrival", date: String(quote.arrival_date), leg: "arrival" } : null,
-    quote.departure_date ? { direction: "departure", date: String(quote.departure_date), leg: "departure" } : null,
-  ].filter((leg): leg is { direction: "arrival" | "departure"; date: string; leg: string } => Boolean(leg));
-
-  if (!tenantId || !quoteId || legs.length === 0) return;
 
   const rows = legs.map((leg) => ({
     tenant_id: tenantId,
@@ -90,7 +99,7 @@ async function createServicesFromAcceptedQuote(admin: ReturnType<typeof adminCli
     booking_service_kind: mappedService.booking_service_kind,
     vessel: mappedService.vessel,
     pax,
-    hotel_id: null,
+    hotel_id: placeholderHotelId,
     customer_name: customerName,
     customer_email: quote.client_email ? String(quote.client_email) : null,
     phone: "",
@@ -101,7 +110,11 @@ async function createServicesFromAcceptedQuote(admin: ReturnType<typeof adminCli
   }));
 
   const { error } = await admin.from("services").upsert(rows, { onConflict: "tenant_id,source_quote_id,source_quote_leg", ignoreDuplicates: true });
-  if (error) console.error("[quotes] conversione preventivo in servizio fallita", error.message);
+  if (error) {
+    console.error("[quotes] conversione preventivo in servizio fallita", error.message);
+    return { ok: false, error: error.message };
+  }
+  return { ok: true };
 }
 
 export async function GET(request: NextRequest) {
@@ -124,7 +137,10 @@ export async function GET(request: NextRequest) {
   if (quote.status !== "sent") return NextResponse.redirect(new URL(`/quote/respond?error=alreadyresponded&status=${String(quote.status)}`, request.url));
 
   if (action === "accepted") {
-    await createServicesFromAcceptedQuote(admin, quote as Record<string, unknown>);
+    const result = await createServicesFromAcceptedQuote(admin, quote as Record<string, unknown>);
+    if (!result.ok) {
+      return NextResponse.redirect(new URL("/quote/respond?error=service_creation_failed", request.url));
+    }
   }
 
   await admin.from("quotes").update({ status: action }).eq("id", String(quote.id));

@@ -56,6 +56,16 @@ function kindLabel(key: string) {
 
 const CHART_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#f97316", "#84cc16"];
 
+function shortAgencyName(name: string) {
+  return name
+    .replace(/\bS\.?R\.?L\.?\b/gi, "")
+    .replace(/\bS\.?R\.?L\b/gi, "")
+    .replace(/\bVIAGGI\b/gi, "Viaggi")
+    .replace(/\bTOUR\b/gi, "Tour")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // ---------------------------------------------------------------------------
 // KPI Card
 // ---------------------------------------------------------------------------
@@ -129,7 +139,7 @@ export default function AgencyMarginsPage() {
   const agencyPieData = (data?.byAgency ?? [])
     .filter((a) => a.revenueCents > 0)
     .slice(0, 8)
-    .map((a) => ({ name: a.name, value: +(a.revenueCents / 100).toFixed(2) }));
+    .map((a) => ({ name: shortAgencyName(a.name), fullName: a.name, value: +(a.revenueCents / 100).toFixed(2) }));
 
   const kindChartData = (data?.byKind ?? [])
     .slice(0, 8)
@@ -151,6 +161,9 @@ export default function AgencyMarginsPage() {
   const ytd = data?.ytd;
   const marginPctYtd = ytd ? pct(ytd.marginCents, ytd.revenueCents) : "—";
   const availableYears = data?.availableYears ?? [year];
+  const topAgency = (data?.byAgency ?? [])[0] ?? null;
+  const agenciesWithMargin = (data?.byAgency ?? []).filter((row) => row.costCents > 0);
+  const profitableAgencies = agenciesWithMargin.filter((row) => row.marginCents > 0).length;
 
   return (
     <section className="mx-auto max-w-6xl space-y-6 p-4">
@@ -227,12 +240,29 @@ export default function AgencyMarginsPage() {
 
       {/* Per agenzia + Pie */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold text-slate-700">Margine per agenzia</h2>
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-800">Margine per agenzia</h2>
+              <p className="mt-1 text-xs text-slate-500">Classifica agenzie con ricavi, costi e resa percentuale.</p>
+            </div>
+            <div className="grid min-w-[220px] gap-2 sm:grid-cols-2">
+              <div className="rounded-2xl bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Top ricavi</p>
+                <p className="mt-1 line-clamp-1 text-sm font-semibold text-slate-800">{topAgency?.name ?? "—"}</p>
+                <p className="text-xs text-slate-500">{topAgency ? eur(topAgency.revenueCents) : "Nessun dato"}</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Agenzie in utile</p>
+                <p className="mt-1 text-sm font-semibold text-emerald-700">{profitableAgencies}</p>
+                <p className="text-xs text-slate-500">su {agenciesWithMargin.length || 0} con costi valorizzati</p>
+              </div>
+            </div>
+          </div>
           <div className="overflow-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-left text-xs font-semibold text-slate-500">
+                <tr className="border-b border-slate-100 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                   <th className="pb-2 pr-3">Agenzia</th>
                   <th className="pb-2 pr-3 text-right">Servizi</th>
                   <th className="pb-2 pr-3 text-right">Ricavi</th>
@@ -243,13 +273,23 @@ export default function AgencyMarginsPage() {
               <tbody>
                 {(data?.byAgency ?? []).length === 0 ? (
                   <tr><td colSpan={5} className="py-6 text-center text-slate-400 text-xs">Nessun dato disponibile.</td></tr>
-                ) : (data?.byAgency ?? []).map((a) => (
-                  <tr key={a.agencyId} className="border-b border-slate-50">
-                    <td className="py-2 pr-3 font-medium">{a.name}</td>
-                    <td className="py-2 pr-3 text-right text-slate-500">{a.services}</td>
-                    <td className="py-2 pr-3 text-right">{eur(a.revenueCents)}</td>
-                    <td className="py-2 pr-3 text-right text-slate-500">{a.costCents > 0 ? eur(a.costCents) : "—"}</td>
-                    <td className={`py-2 text-right font-semibold ${a.marginCents >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                ) : (data?.byAgency ?? []).map((a, index) => (
+                  <tr key={a.agencyId} className="border-b border-slate-50 align-top transition hover:bg-slate-50/70">
+                    <td className="py-3 pr-3">
+                      <div className="flex items-start gap-3">
+                        <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-slate-100 px-1.5 text-[11px] font-bold text-slate-600">
+                          {index + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="font-medium text-slate-800">{a.name}</p>
+                          <p className="text-xs text-slate-400">{pct(a.marginCents, a.revenueCents)} margine lordo</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="py-3 pr-3 text-right font-medium text-slate-600">{a.services}</td>
+                    <td className="py-3 pr-3 text-right font-medium text-slate-800">{eur(a.revenueCents)}</td>
+                    <td className="py-3 pr-3 text-right text-slate-500">{a.costCents > 0 ? eur(a.costCents) : "—"}</td>
+                    <td className={`py-3 text-right font-semibold ${a.marginCents >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
                       {a.costCents > 0 ? eur(a.marginCents) : "—"}
                       {a.costCents > 0 ? <span className="ml-1 text-xs font-normal text-slate-400">({pct(a.marginCents, a.revenueCents)})</span> : null}
                     </td>
@@ -261,17 +301,63 @@ export default function AgencyMarginsPage() {
         </div>
 
         {/* Pie ricavi per agenzia */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold text-slate-700">Distribuzione ricavi per agenzia</h2>
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4">
+            <h2 className="text-sm font-semibold text-slate-800">Distribuzione ricavi per agenzia</h2>
+            <p className="mt-1 text-xs text-slate-500">Focus sulle prime 8 agenzie per fatturato nell&apos;anno selezionato.</p>
+          </div>
           {agencyPieData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={260}>
-              <PieChart>
-                <Pie data={agencyPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={({ name, percent }) => `${name ?? ""} ${((Number(percent) || 0) * 100).toFixed(0)}%`} labelLine={false}>
-                  {agencyPieData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-                </Pie>
-                <Tooltip formatter={(value) => [`€${Number(value).toLocaleString("it-IT")}`, ""]} />
-              </PieChart>
-            </ResponsiveContainer>
+            <div className="grid gap-4 xl:grid-cols-[1fr_220px]">
+              <ResponsiveContainer width="100%" height={280}>
+                <PieChart>
+                  <Pie
+                    data={agencyPieData}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={52}
+                    outerRadius={96}
+                    paddingAngle={2}
+                    stroke="#ffffff"
+                    strokeWidth={2}
+                  >
+                    {agencyPieData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value, _name, entry) => [`€${Number(value).toLocaleString("it-IT")}`, entry?.payload?.fullName ?? ""]}
+                  />
+                  <Legend
+                    verticalAlign="bottom"
+                    height={36}
+                    formatter={(value) => <span className="text-xs text-slate-600">{value}</span>}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="space-y-2">
+                {agencyPieData.map((item, i) => {
+                  const total = agencyPieData.reduce((sum, row) => sum + row.value, 0);
+                  const share = total > 0 ? Math.round((item.value / total) * 100) : 0;
+                  return (
+                    <div key={`${item.name}-${i}`} className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2">
+                      <div className="flex items-start gap-2">
+                        <span
+                          className="mt-1 inline-flex h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-slate-800">{item.fullName}</p>
+                          <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-slate-500">
+                            <span>{share}% del totale</span>
+                            <span className="font-medium text-slate-700">{eur(Math.round(item.value * 100))}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           ) : (
             <div className="flex h-40 items-center justify-center text-sm text-slate-400">Nessun dato.</div>
           )}

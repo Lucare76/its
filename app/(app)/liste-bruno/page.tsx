@@ -24,6 +24,7 @@ type BrunoService = {
   porto_bruno: string | null;
   hotel_name: string | null;
   notes: string;
+  dispatch_source?: "rule" | "manual";
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -227,6 +228,8 @@ function ServiceCard({
   onEditChange,
   onEditSave,
   onEditCancel,
+  onMoveToContinent,
+  onResetDispatch,
   saving,
 }: {
   svc: BrunoService;
@@ -238,6 +241,8 @@ function ServiceCard({
   onEditChange: (s: Partial<EditState>) => void;
   onEditSave: () => void;
   onEditCancel: () => void;
+  onMoveToContinent: () => void;
+  onResetDispatch: () => void;
   saving: boolean;
 }) {
   const portoBruno = svc.porto_bruno || portoDaVessel(svc.vessel) || null;
@@ -255,6 +260,9 @@ function ServiceCard({
             <span className="font-bold uppercase text-slate-900">{svc.customer_name}</span>
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{svc.pax} pax</span>
             <PlaceBadge type={svc.place_type} point={svc.meeting_point} />
+            {svc.dispatch_source === "manual" ? (
+              <span className="rounded-full bg-fuchsia-100 px-2 py-0.5 text-xs font-semibold text-fuchsia-700">Manuale</span>
+            ) : null}
           </div>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-slate-600">
             {isDeparture ? (
@@ -277,13 +285,31 @@ function ServiceCard({
             {svc.notes && <span className="text-slate-400">{svc.notes}</span>}
           </div>
         </div>
-        <button
-          onClick={onEditStart}
-          className="shrink-0 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50 hover:border-slate-300"
-          title="Modifica"
-        >
-          ✏️
-        </button>
+        <div className="flex shrink-0 flex-col gap-2">
+          <button
+            onClick={onEditStart}
+            className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50 hover:border-slate-300"
+            title="Modifica"
+          >
+            ✏️
+          </button>
+          <button
+            onClick={onMoveToContinent}
+            className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100"
+            title="Sposta a Smistamento continente"
+          >
+            Smista
+          </button>
+          {svc.dispatch_source === "manual" ? (
+            <button
+              onClick={onResetDispatch}
+              className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-50"
+              title="Ripristina regola automatica"
+            >
+              Reset
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {/* Form modifica inline */}
@@ -352,7 +378,7 @@ function ServiceCard({
 
 function TabArrivi({
   arrivals, editingId, editState, saving,
-  onEditStart, onEditChange, onEditSave, onEditCancel,
+  onEditStart, onEditChange, onEditSave, onEditCancel, onMoveToContinent, onResetDispatch,
 }: {
   arrivals: BrunoService[];
   editingId: string | null;
@@ -362,12 +388,14 @@ function TabArrivi({
   onEditChange: (s: Partial<EditState>) => void;
   onEditSave: (id: string) => void;
   onEditCancel: () => void;
+  onMoveToContinent: (id: string) => void;
+  onResetDispatch: (id: string) => void;
 }) {
   if (arrivals.length === 0) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400">
-        <p className="text-lg font-semibold">Nessun arrivo da stazione/aeroporto</p>
-        <p className="mt-1 text-sm">I servizi con provenienza stazione o aeroporto appariranno qui.</p>
+        <p className="text-lg font-semibold">Nessun arrivo aeroporto per Bruno</p>
+        <p className="mt-1 text-sm">Qui compaiono gli arrivi aeroporto assegnati al bucket Bruno.</p>
       </div>
     );
   }
@@ -383,7 +411,7 @@ function TabArrivi({
   return (
     <div className="space-y-5">
       <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-        {arrivals.length} servizi · Bruno ritira da stazione/aeroporto e porta al porto per l&apos;imbarco
+        {arrivals.length} servizi · Bruno copre tutti gli arrivi aeroporto
       </p>
       {Object.entries(byVessel).map(([vessel, group]) => {
         const totalPax = group.reduce((s, a) => s + a.pax, 0);
@@ -416,6 +444,8 @@ function TabArrivi({
                   onEditChange={onEditChange}
                   onEditSave={() => onEditSave(svc.id)}
                   onEditCancel={onEditCancel}
+                  onMoveToContinent={() => onMoveToContinent(svc.id)}
+                  onResetDispatch={() => onResetDispatch(svc.id)}
                 />
               ))}
             </div>
@@ -430,7 +460,7 @@ function TabArrivi({
 
 function TabPartenze({
   departures, editingId, editState, saving,
-  onEditStart, onEditChange, onEditSave, onEditCancel,
+  onEditStart, onEditChange, onEditSave, onEditCancel, onMoveToContinent, onResetDispatch,
 }: {
   departures: BrunoService[];
   editingId: string | null;
@@ -440,12 +470,14 @@ function TabPartenze({
   onEditChange: (s: Partial<EditState>) => void;
   onEditSave: (id: string) => void;
   onEditCancel: () => void;
+  onMoveToContinent: (id: string) => void;
+  onResetDispatch: (id: string) => void;
 }) {
   if (departures.length === 0) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400">
-        <p className="text-lg font-semibold">Nessuna partenza verso stazione/aeroporto</p>
-        <p className="mt-1 text-sm">I servizi con destinazione stazione o aeroporto appariranno qui, raggruppati per traghetto.</p>
+        <p className="text-lg font-semibold">Nessuna partenza speciale per Bruno</p>
+        <p className="mt-1 text-sm">Qui compaiono solo le partenze su Napoli esclusive o con aliscafo.</p>
       </div>
     );
   }
@@ -458,7 +490,7 @@ function TabPartenze({
   return (
     <div className="space-y-5">
       <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-        {departures.length} servizi · Bruno ritira al porto (Napoli/Pozzuoli) e porta a stazione/aeroporto
+        {departures.length} servizi · Bruno ritira al porto di Napoli per le partenze speciali
       </p>
       {Object.entries(byVessel)
         .sort(([a], [b]) => {
@@ -516,6 +548,8 @@ function TabPartenze({
                       onEditChange={onEditChange}
                       onEditSave={() => onEditSave(svc.id)}
                       onEditCancel={onEditCancel}
+                      onMoveToContinent={() => onMoveToContinent(svc.id)}
+                      onResetDispatch={() => onResetDispatch(svc.id)}
                     />
                   ))}
               </div>
@@ -655,6 +689,35 @@ export default function ListeBrunoPage() {
     }
   };
 
+  const handleMoveToContinent = async (serviceId: string) => {
+    setSavingEdit(true);
+    const body = await post("set_dispatch_target", {
+      service_id: serviceId,
+      target: "continent_dispatch",
+    });
+    setSavingEdit(false);
+    if (body?.ok) {
+      setArrivals(body.arrivals ?? []);
+      setDepartures(body.departures ?? []);
+      setMessage({ type: "ok", text: "Servizio spostato su Smistamento continente." });
+    } else {
+      setMessage({ type: "err", text: body?.error ?? "Errore spostamento." });
+    }
+  };
+
+  const handleResetDispatch = async (serviceId: string) => {
+    setSavingEdit(true);
+    const body = await post("reset_dispatch_target", { service_id: serviceId });
+    setSavingEdit(false);
+    if (body?.ok) {
+      setArrivals(body.arrivals ?? []);
+      setDepartures(body.departures ?? []);
+      setMessage({ type: "ok", text: "Regola automatica ripristinata." });
+    } else {
+      setMessage({ type: "err", text: body?.error ?? "Errore ripristino." });
+    }
+  };
+
   const handleManualSearch = async (q: string) => {
     setManualQuery(q);
     setManualError(null);
@@ -697,7 +760,7 @@ export default function ListeBrunoPage() {
     <div className="flex h-full flex-col">
       <PageHeader
         title="Liste Bruno"
-        subtitle="Arrivi e partenze da stazione / aeroporto"
+        subtitle="Arrivi aeroporto e partenze speciali su Napoli"
         actions={
           // eslint-disable-next-line @next/next/no-img-element
           <img src="/brand/logo-ischia-transfer.png" alt="Ischia Transfer" className="h-16 w-auto" />
@@ -854,23 +917,27 @@ export default function ListeBrunoPage() {
             editingId={editingId}
             editState={editState}
             saving={savingEdit}
-            onEditStart={handleEditStart}
-            onEditChange={(s) => setEditState((prev) => ({ ...prev, ...s }))}
-            onEditSave={handleEditSave}
-            onEditCancel={() => setEditingId(null)}
-          />
-        ) : (
-          <TabPartenze
+          onEditStart={handleEditStart}
+          onEditChange={(s) => setEditState((prev) => ({ ...prev, ...s }))}
+          onEditSave={handleEditSave}
+          onEditCancel={() => setEditingId(null)}
+          onMoveToContinent={handleMoveToContinent}
+          onResetDispatch={handleResetDispatch}
+        />
+      ) : (
+        <TabPartenze
             departures={departures}
             editingId={editingId}
             editState={editState}
             saving={savingEdit}
-            onEditStart={handleEditStart}
-            onEditChange={(s) => setEditState((prev) => ({ ...prev, ...s }))}
-            onEditSave={handleEditSave}
-            onEditCancel={() => setEditingId(null)}
-          />
-        )}
+          onEditStart={handleEditStart}
+          onEditChange={(s) => setEditState((prev) => ({ ...prev, ...s }))}
+          onEditSave={handleEditSave}
+          onEditCancel={() => setEditingId(null)}
+          onMoveToContinent={handleMoveToContinent}
+          onResetDispatch={handleResetDispatch}
+        />
+      )}
       </div>
 
       {/* Modal invio */}

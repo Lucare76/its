@@ -29,7 +29,7 @@ export type OperationalServiceType =
   | "bus_line";
 export type TransportMode = "train" | "hydrofoil" | "ferry" | "road_transfer" | "bus" | "unknown";
 
-export type ServiceStatus = "needs_review" | "new" | "assigned" | "partito" | "arrivato" | "completato" | "problema" | "cancelled";
+export type ServiceStatus = "needs_review" | "new" | "assigned" | "partito" | "arrivato" | "completato" | "problema" | "cancelled" | "pending_cancellation";
 export type ReminderStatus = "pending" | "sent" | "delivered" | "read" | "failed";
 export type HotelGeoStatus = "missing" | "generic" | "approximate" | "verified";
 export type HotelGeoSource = "manual" | "google" | "nominatim" | "import" | "unknown";
@@ -169,6 +169,12 @@ export interface Service {
   train_departure_time?: string | null;
   bus_city_origin?: string | null;
   include_ferry_tickets?: boolean | null;
+  continent_dispatch_target?: "bruno" | "continent_dispatch" | null;
+  continent_dispatch_source?: "rule" | "manual" | null;
+  continent_dispatch_vendor?: string | null;
+  continent_dispatch_override_reason?: string | null;
+  continent_dispatch_updated_at?: string | null;
+  continent_dispatch_updated_by?: string | null;
   ferry_details?: Record<string, unknown> | null;
   excursion_details?: Record<string, unknown> | null;
   email_confirmation_to?: string | null;
@@ -181,6 +187,13 @@ export interface Service {
   message_id?: string | null;
   sent_at?: string | null;
   status: ServiceStatus;
+  agency_quoted_price_cents?: number | null;
+  agency_payment_status?: "unpaid" | "paid" | "waived" | null;
+  cancellation_request_id?: string | null;
+  transport_code_return?: string | null;
+  excursion_title?: string | null;
+  customer_gender?: "male" | "female" | null;
+  setup_required?: boolean | null;
 }
 
 export interface Assignment {

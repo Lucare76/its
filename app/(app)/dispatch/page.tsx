@@ -180,26 +180,27 @@ export default function DispatchPage() {
   const tomorrowTotal   = baseServices.filter((s) => s.date === tomorrow).length;
 
   useEffect(() => {
-    for (const [sid, state] of rowStates.current) {
-      const ex = assignmentByServiceId.get(sid);
-      if (ex && !state.saving) {
+    for (const svc of filteredServices) {
+      const ex = assignmentByServiceId.get(svc.id);
+      if (!rowStates.current.has(svc.id)) {
+        rowStates.current.set(svc.id, {
+          driverId:     ex?.driver_user_id ?? "",
+          vehicleLabel: ex?.vehicle_label ?? suggestedVehicleByPax(svc.pax),
+          saving: false, saved: false, error: "",
+        });
+      } else if (ex && !rowStates.current.get(svc.id)!.saving) {
+        const state = rowStates.current.get(svc.id)!;
         state.driverId     = ex.driver_user_id ?? "";
         state.vehicleLabel = ex.vehicle_label ?? state.vehicleLabel;
       }
     }
-  }, [assignmentByServiceId]);
+  }, [filteredServices, assignmentByServiceId]);
 
-  const getRow = (svc: Service): RowState => {
-    if (!rowStates.current.has(svc.id)) {
-      const ex = assignmentByServiceId.get(svc.id);
-      rowStates.current.set(svc.id, {
-        driverId:     ex?.driver_user_id ?? "",
-        vehicleLabel: ex?.vehicle_label ?? suggestedVehicleByPax(svc.pax),
-        saving: false, saved: false, error: "",
-      });
-    }
-    return rowStates.current.get(svc.id)!;
-  };
+  const getRow = (svc: Service): RowState =>
+    rowStates.current.get(svc.id) ?? {
+      driverId: "", vehicleLabel: suggestedVehicleByPax(svc.pax),
+      saving: false, saved: false, error: "",
+    };
 
   const save = async (svc: Service) => {
     if (!tenantId || !actorUserId || !supabase) return;

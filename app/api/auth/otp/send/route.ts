@@ -21,6 +21,15 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient();
 
+  // Verify email matches the actual auth user — prevents OTP hijacking
+  const { data: authUser, error: authUserErr } = await admin.auth.admin.getUserById(userId);
+  if (authUserErr || !authUser?.user?.email) {
+    return NextResponse.json({ error: "Utente non trovato" }, { status: 404 });
+  }
+  if (authUser.user.email.toLowerCase() !== email) {
+    return NextResponse.json({ error: "Dati non validi" }, { status: 400 });
+  }
+
   // Generate OTP
   const otpCode = generateOtpCode(6);
   const expiresAt = getOtpExpiration(10);

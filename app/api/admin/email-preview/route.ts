@@ -9,6 +9,7 @@ import { emailHtml, emailButton, emailHighlightBox, emailDataTable } from "@/lib
 import { generateInvoiceHtml, generateReminderEmailHtml } from "@/lib/server/invoice-pdf";
 import { buildServiceListEmailHtml } from "@/lib/server/service-list-email";
 import { sendEmail } from "@/lib/server/send-email";
+import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
 
@@ -212,6 +213,9 @@ const SAMPLES: Record<string, () => string> = {
 };
 
 export async function GET(request: NextRequest) {
+  const auth = await authorizePricingRequest(request, ["admin", "supervisor"]);
+  if (auth instanceof NextResponse) return auth;
+
   const { searchParams } = new URL(request.url);
   const template = searchParams.get("template") ?? "booking";
 
@@ -231,6 +235,9 @@ export async function GET(request: NextRequest) {
 // Body: { to: string, templates?: string[] }
 // Invia tutti i template (o quelli specificati) all'indirizzo indicato
 export async function POST(request: NextRequest) {
+  const auth = await authorizePricingRequest(request, ["admin", "supervisor"]);
+  if (auth instanceof NextResponse) return auth;
+
   let body: { to?: string; templates?: string[] };
   try {
     body = await request.json();

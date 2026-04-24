@@ -4,6 +4,7 @@ import { tenantAccessRequestCreateSchema } from "@/lib/validation";
 import { hasDeliverableEmailDomain, isDisposableEmail } from "@/lib/email-validation";
 import { checkRateLimit, RATE_LIMIT_DEFAULTS, type RateLimitConfig } from "@/lib/server/rate-limit";
 import { sendSecurityAlert } from "@/lib/server/security-alert-email";
+import { adminGetUserByEmail } from "@/lib/server/admin-user-lookup";
 
 export const runtime = "nodejs";
 
@@ -59,22 +60,44 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Esiste gia una richiesta in attesa per questa email." }, { status: 409 });
   }
 
-  const listedUsers = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-  if (listedUsers.error) {
-    return NextResponse.json({ error: listedUsers.error.message }, { status: 500 });
+  const { user: existingAuthUser, error: getUserError } = await adminGetUserByEmail(email);
+  if (getUserError) {
+    return NextResponse.json({ error: getUserError }, { status: 500 });
   }
 
-  const existingAuthUser = (listedUsers.data.users ?? []).find((item) => item.email?.trim().toLowerCase() === email) ?? null;
-
   let userId = existingAuthUser?.id ?? null;
-  if (!userId) {
+
+  // Check membership BEFORE touching auth.users — prevents password overwrite on existing accounts
+  if (userId) {
+    const existingMembership = await admin
+      .from("memberships")
+      .select("user_id")
+      .eq("user_id", userId)
+      .limit(1)
+      .maybeSingle();
+
+    if (existingMembership.error) {
+      return NextResponse.json({ error: existingMembership.error.message }, { status: 500 });
+    }
+
+    if (existingMembership.data?.user_id) {
+      return NextResponse.json({ error: "Questo utente ha gia almeno un accesso attivo." }, { status: 409 });
+    }
+
+    // User exists but no membership (e.g. re-registering after rejection).
+    // Update only metadata — never overwrite the password of an existing account.
+    const metadataUpdate = await admin.auth.admin.updateUserById(userId, {
+      user_metadata: { full_name: fullName }
+    });
+    if (metadataUpdate.error) {
+      return NextResponse.json({ error: metadataUpdate.error.message }, { status: 500 });
+    }
+  } else {
     const userResult = await admin.auth.admin.createUser({
       email,
       password: parsed.data.password,
       email_confirm: true,
-      user_metadata: {
-        full_name: fullName
-      }
+      user_metadata: { full_name: fullName }
     });
 
     if (userResult.error || !userResult.data.user) {
@@ -82,31 +105,6 @@ export async function POST(request: NextRequest) {
     }
 
     userId = userResult.data.user.id;
-  } else {
-    const metadataUpdate = await admin.auth.admin.updateUserById(userId, {
-      password: parsed.data.password,
-      user_metadata: {
-        full_name: fullName
-      }
-    });
-    if (metadataUpdate.error) {
-      return NextResponse.json({ error: metadataUpdate.error.message }, { status: 500 });
-    }
-  }
-
-  const existingMembership = await admin
-    .from("memberships")
-    .select("user_id")
-    .eq("user_id", userId)
-    .limit(1)
-    .maybeSingle();
-
-  if (existingMembership.error) {
-    return NextResponse.json({ error: existingMembership.error.message }, { status: 500 });
-  }
-
-  if (existingMembership.data?.user_id) {
-    return NextResponse.json({ error: "Questo utente ha gia almeno un accesso attivo." }, { status: 409 });
   }
 
   const requestInsert = await admin

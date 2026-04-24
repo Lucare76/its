@@ -220,7 +220,7 @@ export default function BusNetworkPage() {
     setPayload(next);
     setSelectedLineId((cur) => (cur && next.lines.some((l) => l.id === cur)) ? cur : (next.lines[0]?.id ?? ""));
     setLoading(false);
-  }, []);
+  }, [date]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { setSelectedBusUnitId(null); }, [selectedLineId, date, direction]);
