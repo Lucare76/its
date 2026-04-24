@@ -3,7 +3,6 @@ import Script from "next/script";
 import "@/lib/env-presence-log";
 import { getConfiguredAppUrl } from "@/lib/app-url";
 import "leaflet/dist/leaflet.css";
-import "maplibre-gl/dist/maplibre-gl.css";
 import "./globals.css";
 
 const appUrl = getConfiguredAppUrl() ?? "http://127.0.0.1:3010";

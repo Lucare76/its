@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
-import "@maplibre/maplibre-gl-leaflet";
 import type { GpsControlRoomEntry } from "@/lib/types";
 
 interface ControlRoomMapProps {
@@ -14,9 +13,6 @@ interface ControlRoomMapProps {
 const DEFAULT_CENTER: [number, number] = [40.7395, 13.9124];
 
 const TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
-const OPENFREEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/bright";
-const OPENFREEMAP_ATTRIBUTION =
-  '<a href="https://openfreemap.org" target="_blank" rel="noreferrer">OpenFreeMap</a> © <a href="https://openmaptiles.org" target="_blank" rel="noreferrer">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a>';
 const PROTOMAPS_URL =
   process.env.NEXT_PUBLIC_PROTOMAPS_PM_TILES_URL?.trim() ||
   process.env.NEXT_PUBLIC_PROTOMAPS_PMtiles_URL?.trim() ||
@@ -177,50 +173,13 @@ async function pmtilesIsReachable(url: string) {
   }
 }
 
-async function styleJsonIsReachable(url: string) {
-  try {
-    const response = await fetch(url, { cache: "no-store" });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
-function addOpenFreeMapLayer(map: L.Map) {
-  const layer = L.maplibreGL({
-    attributionControl: false,
-    style: OPENFREEMAP_STYLE_URL
-  });
-  layer.addTo(map);
-  map.attributionControl.addAttribution(OPENFREEMAP_ATTRIBUTION);
-  return layer as unknown as L.Layer;
-}
-
 async function addBaseLayer(map: L.Map): Promise<{ label: string; layer: L.Layer; cleanup?: () => void }> {
   if (!PROTOMAPS_URL) {
-    const openFreeMapReachable = await styleJsonIsReachable(OPENFREEMAP_STYLE_URL);
-    if (openFreeMapReachable) {
-      const layer = addOpenFreeMapLayer(map);
-      return {
-        label: "OpenFreeMap Bright - vettoriale gratuito",
-        layer,
-        cleanup: () => map.attributionControl.removeAttribution(OPENFREEMAP_ATTRIBUTION)
-      };
-    }
     return { label: "CARTO Voyager - fallback raster", layer: addOsmLayer(map) };
   }
 
   const reachable = await pmtilesIsReachable(PROTOMAPS_URL);
   if (!reachable) {
-    const openFreeMapReachable = await styleJsonIsReachable(OPENFREEMAP_STYLE_URL);
-    if (openFreeMapReachable) {
-      const layer = addOpenFreeMapLayer(map);
-      return {
-        label: "OpenFreeMap Bright - PMTiles non trovato",
-        layer,
-        cleanup: () => map.attributionControl.removeAttribution(OPENFREEMAP_ATTRIBUTION)
-      };
-    }
     return { label: "CARTO Voyager - PMTiles non trovato", layer: addOsmLayer(map) };
   }
 
@@ -285,7 +244,7 @@ function spreadOverlapping(items: GpsControlRoomEntry[]): Array<GpsControlRoomEn
 }
 
 export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMapProps) {
-  const [baseLayerLabel, setBaseLayerLabel] = useState(PROTOMAPS_URL ? "Protomaps in caricamento" : "OpenFreeMap in caricamento");
+  const [baseLayerLabel, setBaseLayerLabel] = useState(PROTOMAPS_URL ? "Protomaps in caricamento" : "CARTO in caricamento");
   const [operationalLayerEnabled, setOperationalLayerEnabled] = useState(true);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
