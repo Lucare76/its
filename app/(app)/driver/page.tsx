@@ -79,6 +79,55 @@ async function getToken(): Promise<string | null> {
   return data.session?.access_token ?? null;
 }
 
+/* ------------------------------------------------------------------ disposizione helpers */
+
+function parseH24Rate(notes: string | null): { day: number; night: number } | null {
+  if (!notes) return null;
+  const m = notes.match(/\[tariffa_h24:(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)\]/);
+  if (!m || !m[1] || !m[2]) return null;
+  return { day: parseFloat(m[1]), night: parseFloat(m[2]) };
+}
+
+function calcDispoCost(startAt: string, endAtOrNull: string | null, rate: { day: number; night: number }, nowMs = Date.now()): { hours: number; cost: number } {
+  const start = new Date(startAt).getTime();
+  const end = endAtOrNull ? new Date(endAtOrNull).getTime() : nowMs;
+  if (end <= start) return { hours: 0, cost: 0 };
+  const SLOT = 15 * 60 * 1000;
+  let cost = 0;
+  let t = start;
+  while (t < end) {
+    const slotEnd = Math.min(t + SLOT, end);
+    const hour = new Date((t + slotEnd) / 2).getHours();
+    cost += (hour < 7 || hour >= 22 ? rate.night : rate.day) * ((slotEnd - t) / 3600000);
+    t += SLOT;
+  }
+  return { hours: (end - start) / 3600000, cost };
+}
+
+/* ------------------------------------------------------------------ geo helpers */
+
+const ZONE_ORDER: Record<string, number> = {
+  porto: 0, ponte: 1, barano: 2, "serrara fontana": 3,
+  forio: 4, "lacco ameno": 5, casamicciola: 6,
+};
+function zoneRank(zone: string | null): number {
+  return ZONE_ORDER[zone?.toLowerCase().trim() ?? ""] ?? 99;
+}
+const PORT_LAT = 40.7448, PORT_LNG = 13.9470;
+function distFromPort(lat: number | null, lng: number | null): number {
+  if (lat == null || lng == null) return 0;
+  return Math.sqrt(Math.pow(lat - PORT_LAT, 2) + Math.pow(lng - PORT_LNG, 2));
+}
+
+/* ------------------------------------------------------------------ group type */
+
+type ServiceGroup = {
+  key: string;
+  label: string;
+  totalPax: number;
+  entries: { service: DriverService; assignment: DriverAssignment }[];
+};
+
 type Tab = "oggi" | "prossimi" | "storico";
 
 /* ================================================================ INNER PAGE */
@@ -103,7 +152,11 @@ function DriverPageInner() {
   const [tab, setTab] = useState<Tab>("oggi");
   const [showSign, setShowSign] = useState(false);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const channelRef = useRef<ReturnType<NonNullable<typeof supabase>["channel"]> | null>(null);
+  const trackChannelRef = useRef<ReturnType<NonNullable<typeof supabase>["channel"]> | null>(null);
+  const geoWatchRef = useRef<number | null>(null);
 
   /* ---- carica dati driver */
   const refresh = useCallback(async () => {
@@ -181,6 +234,7 @@ function DriverPageInner() {
     return () => window.clearTimeout(t);
   }, [message]);
 
+
   /* ---- persist status */
   const persistStatus = useCallback(async (serviceId: string, status: ServiceStatus, tid = tenantId): Promise<boolean> => {
     if (!supabase || !tid || !isOnline || !userId) return false;
@@ -252,6 +306,54 @@ function DriverPageInner() {
         .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5)
     : [];
 
+  const isDisposizione = focused?.service.booking_service_kind === "private_island";
+  const h24Rate = isDisposizione ? parseH24Rate(focused?.service.notes ?? null) : null;
+  const allFocusedEvents = focused
+    ? [...data.status_events].filter((e) => e.service_id === focused.service.id).sort((a, b) => a.at.localeCompare(b.at))
+    : [];
+  const dispoStartEvent = isDisposizione ? (allFocusedEvents.find((e) => e.status === "partito") ?? null) : null;
+  const dispoEndEvent = isDisposizione ? (allFocusedEvents.find((e) => e.status === "completato") ?? null) : null;
+  const dispoCost = isDisposizione && dispoStartEvent && h24Rate
+    ? calcDispoCost(dispoStartEvent.at, dispoEndEvent?.at ?? null, h24Rate, now)
+    : null;
+  const appOrigin = typeof window !== "undefined" ? window.location.origin : "https://ischiatransferservice.it";
+
+  /* ---- grouping helpers per tab */
+  const buildGroups = useCallback((entries: typeof mine): ServiceGroup[] => {
+    const arrivals = entries.filter((e) => e.service.direction !== "departure");
+    const departures = entries.filter((e) => e.service.direction === "departure");
+    const makeGroups = (list: typeof mine, keyFn: (e: typeof mine[0]) => string, labelFn: (e: typeof mine[0]) => string) => {
+      const map = new Map<string, ServiceGroup>();
+      for (const entry of list) {
+        const k = keyFn(entry);
+        if (!map.has(k)) map.set(k, { key: k, label: labelFn(entry), totalPax: 0, entries: [] });
+        const g = map.get(k)!;
+        g.totalPax += entry.service.pax;
+        g.entries.push(entry);
+      }
+      return [...map.values()];
+    };
+    const arrGroups = makeGroups(
+      arrivals,
+      (e) => e.service.vessel || "N/D",
+      (e) => e.service.vessel || "N/D"
+    ).sort((a, b) => {
+      const az = zoneRank(data.hotels.find((h) => h.id === a.entries[0]?.service.hotel_id)?.zone ?? null);
+      const bz = zoneRank(data.hotels.find((h) => h.id === b.entries[0]?.service.hotel_id)?.zone ?? null);
+      return az - bz;
+    });
+    const depGroups = makeGroups(
+      departures,
+      (e) => e.service.hotel_id ?? "none",
+      (e) => data.hotels.find((h) => h.id === e.service.hotel_id)?.name ?? "N/D"
+    ).sort((a, b) => {
+      const ah = data.hotels.find((h) => h.id === a.entries[0]?.service.hotel_id);
+      const bh = data.hotels.find((h) => h.id === b.entries[0]?.service.hotel_id);
+      return distFromPort(bh?.lat ?? null, bh?.lng ?? null) - distFromPort(ah?.lat ?? null, ah?.lng ?? null);
+    });
+    return [...arrGroups, ...depGroups];
+  }, [data.hotels]);
+
   const handleStatusAction = async (status: ServiceStatus) => {
     if (!focused) return;
     setSavingStatus(status);
@@ -291,6 +393,54 @@ function DriverPageInner() {
     }
     setShowInstallHelp(true);
   };
+
+  /* ---- live clock per disposizione in corso */
+  const focusedIsDisposizione = focused?.service.booking_service_kind === "private_island";
+  const focusedIsRunning = focused?.service.status === "partito";
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useEffect(() => {
+    if (!focusedIsDisposizione || !focusedIsRunning) return;
+    const id = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, [focusedIsDisposizione, focusedIsRunning]);
+
+  /* ---- GPS broadcasting per disposizione avviata */
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useEffect(() => {
+    if (!supabase || !focusedIsDisposizione || !focusedIsRunning || !focused) {
+      if (geoWatchRef.current != null && typeof navigator !== "undefined") {
+        navigator.geolocation.clearWatch(geoWatchRef.current);
+        geoWatchRef.current = null;
+      }
+      if (trackChannelRef.current) {
+        void supabase?.removeChannel(trackChannelRef.current);
+        trackChannelRef.current = null;
+      }
+      return;
+    }
+    const serviceId = focused.service.id;
+    const ch = supabase.channel(`driver-track-${serviceId}`, {
+      config: { presence: { key: userId ?? "driver" } }
+    });
+    trackChannelRef.current = ch;
+    void ch.subscribe(async (status) => {
+      if (status !== "SUBSCRIBED" || typeof navigator === "undefined" || !("geolocation" in navigator)) return;
+      geoWatchRef.current = navigator.geolocation.watchPosition(
+        async (pos) => { await ch.track({ lat: pos.coords.latitude, lng: pos.coords.longitude, ts: Date.now() }); },
+        undefined,
+        { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+      );
+    });
+    return () => {
+      if (geoWatchRef.current != null && typeof navigator !== "undefined") {
+        navigator.geolocation.clearWatch(geoWatchRef.current);
+        geoWatchRef.current = null;
+      }
+      void supabase?.removeChannel(ch);
+      trackChannelRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedIsDisposizione, focusedIsRunning, focused?.service.id, userId]);
 
   if (loading) return <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">Caricamento...</div>;
   if (errorMessage) return <div className="p-4 text-sm text-rose-600">{errorMessage}</div>;
@@ -462,27 +612,87 @@ function DriverPageInner() {
                 <p className="text-xs font-mono text-slate-400">{focused.assignment.vehicle_label}</p>
               )}
             </div>
-            {focused.service.notes && (
+            {focused.service.notes && !isDisposizione && (
               <div className="rounded-xl bg-amber-50 border border-amber-100 px-4 py-3 text-sm text-amber-800">
-                {focused.service.notes}
+                {focused.service.notes.replace(/\[tariffa_h24:[^\]]*\]/g, "").trim()}
               </div>
             )}
-            <div className="grid grid-cols-2 gap-3">
-              {(["partito", "arrivato", "completato", "problema"] as ServiceStatus[]).map((s) => (
-                <button key={s} type="button" disabled={savingStatus !== null} onClick={() => void handleStatusAction(s)}
-                  className={`rounded-2xl py-4 text-sm font-bold uppercase tracking-wide transition active:scale-95 disabled:opacity-50 ${
-                    s === "problema" ? "border-2 border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
-                    : s === "completato" ? "border-2 border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                    : "border-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                  }`}>
-                  {savingStatus === s ? "..." : s}
+            {/* Disposizione H24 badge + calcolo costo */}
+            {isDisposizione && (
+              <div className="rounded-xl bg-indigo-50 border border-indigo-200 px-4 py-3 space-y-2">
+                <span className="inline-block rounded-full bg-indigo-600 px-3 py-1 text-xs font-bold text-white uppercase tracking-wide">Disposizione H24</span>
+                {h24Rate && (
+                  <p className="text-xs text-indigo-600">Tariffa: €{h24Rate.day}/h diurna · €{h24Rate.night}/h notturna</p>
+                )}
+                {dispoStartEvent && (
+                  <div className="space-y-1 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-indigo-700 font-medium">Inizio:</span>
+                      <span className="font-semibold text-indigo-900">{new Date(dispoStartEvent.at).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}</span>
+                    </div>
+                    {dispoEndEvent && (
+                      <div className="flex justify-between">
+                        <span className="text-indigo-700 font-medium">Fine:</span>
+                        <span className="font-semibold text-indigo-900">{new Date(dispoEndEvent.at).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}</span>
+                      </div>
+                    )}
+                    {dispoCost && (
+                      <div className="mt-1 rounded-lg bg-indigo-100 px-3 py-2 flex items-center justify-between">
+                        <span className="text-sm font-semibold text-indigo-700">{dispoCost.hours.toFixed(2).replace(".", ",")} ore</span>
+                        <span className="text-base font-bold text-indigo-900">€ {dispoCost.cost.toFixed(2).replace(".", ",")}</span>
+                      </div>
+                    )}
+                    {!dispoEndEvent && dispoCost && (
+                      <p className="text-[10px] text-indigo-400 text-center">in corso — aggiornato ogni minuto</p>
+                    )}
+                  </div>
+                )}
+                {focused.service.notes && (() => {
+                  const vis = focused.service.notes.replace(/\[tariffa_h24:[^\]]*\]/g, "").trim();
+                  return vis ? <p className="text-xs text-indigo-700 border-t border-indigo-200 pt-2">{vis}</p> : null;
+                })()}
+              </div>
+            )}
+            {isDisposizione ? (
+              <div className="space-y-2">
+                <button type="button" disabled={savingStatus !== null} onClick={() => void handleStatusAction("partito")}
+                  className="w-full rounded-2xl py-4 text-sm font-bold uppercase tracking-wide border-2 border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition active:scale-95 disabled:opacity-50">
+                  {savingStatus === "partito" ? "..." : "▶ Inizio disposizione"}
                 </button>
-              ))}
-            </div>
+                <button type="button" disabled={savingStatus !== null} onClick={() => void handleStatusAction("completato")}
+                  className="w-full rounded-2xl py-4 text-sm font-bold uppercase tracking-wide border-2 border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition active:scale-95 disabled:opacity-50">
+                  {savingStatus === "completato" ? "..." : "⏹ Fine disposizione"}
+                </button>
+                <button type="button" disabled={savingStatus !== null} onClick={() => void handleStatusAction("problema")}
+                  className="w-full rounded-2xl py-3 text-sm font-bold uppercase tracking-wide border-2 border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition active:scale-95 disabled:opacity-50">
+                  {savingStatus === "problema" ? "..." : "Problema"}
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {(["partito", "arrivato", "completato", "problema"] as ServiceStatus[]).map((s) => (
+                  <button key={s} type="button" disabled={savingStatus !== null} onClick={() => void handleStatusAction(s)}
+                    className={`rounded-2xl py-4 text-sm font-bold uppercase tracking-wide transition active:scale-95 disabled:opacity-50 ${
+                      s === "problema" ? "border-2 border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                      : s === "completato" ? "border-2 border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                      : "border-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                    }`}>
+                    {savingStatus === s ? "..." : s}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex gap-3">
               {customerPhone && (
                 <a href={`tel:${customerPhone}`} className="flex-1 rounded-2xl border-2 border-slate-200 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">
                   📞 Chiama
+                </a>
+              )}
+              {isDisposizione && customerPhone && (
+                <a href={`https://wa.me/${customerPhone.replace(/\D/g, "")}?text=${encodeURIComponent(`Il Suo autista è in arrivo. Può seguire la posizione in tempo reale: ${appOrigin}/track/${focused.service.id}`)}`}
+                  target="_blank" rel="noreferrer"
+                  className="flex-1 rounded-2xl border-2 border-green-200 bg-green-50 py-3 text-center text-sm font-semibold text-green-700 hover:bg-green-100">
+                  📍 WhatsApp
                 </a>
               )}
               <a href={navigationUrl} target="_blank" rel="noreferrer" className="flex-1 rounded-2xl border-2 border-slate-200 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">
@@ -537,47 +747,96 @@ function DriverPageInner() {
           {tab === "oggi" && (
             todayServices.length === 0
               ? <p className="p-4 text-center text-sm text-slate-400">Nessun servizio oggi.</p>
-              : todayServices.map((entry) => {
-                  const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
-                  return (
-                    <button key={entry.service.id} type="button"
-                      onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-                      className={`w-full px-4 py-3 text-left transition hover:bg-slate-50 ${focused?.service.id === entry.service.id ? "bg-blue-50/60" : ""}`}>
-                      <div className="flex items-center justify-between">
-                        <p className="font-semibold text-slate-800">{entry.service.customer_name}</p>
-                        <div className="flex items-center gap-1.5">
-                          {entry.service.linked_service_id && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700">A/R</span>}
-                          <span className="text-xs text-slate-500">{entry.service.time}</span>
-                        </div>
+              : buildGroups(todayServices).map((group) => (
+                  <div key={group.key}>
+                    <button type="button"
+                      onClick={() => setExpandedGroup(expandedGroup === `oggi-${group.key}` ? null : `oggi-${group.key}`)}
+                      className="w-full px-4 py-3 text-left flex items-center justify-between hover:bg-slate-50 transition">
+                      <div>
+                        <p className="font-semibold text-slate-800 text-sm">{group.label}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">{group.entries.length} {group.entries.length === 1 ? "servizio" : "servizi"}</p>
                       </div>
-                      <div className="mt-1 flex items-center gap-2">
-                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusColor(entry.service.status)}`}>{entry.service.status}</span>
-                        <span className="text-xs text-slate-400">{entry.service.direction === "departure" ? "↗ Partenza" : "↙ Arrivo"} · {hotel?.name ?? "N/D"} · {entry.service.pax} pax</span>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
+                        <span className="text-slate-400 text-sm">{expandedGroup === `oggi-${group.key}` ? "▲" : "▼"}</span>
                       </div>
                     </button>
-                  );
-                })
+                    {expandedGroup === `oggi-${group.key}` && (
+                      <div className="bg-slate-50 border-t border-slate-100 divide-y divide-slate-100">
+                        {group.entries.map((entry) => {
+                          const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
+                          const phone = entry.service.phone_e164?.trim() || entry.service.phone?.trim() || "";
+                          return (
+                            <div key={entry.service.id} className="flex items-center gap-2 px-4 py-2.5">
+                              <button type="button"
+                                onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                                className="flex-1 text-left">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusColor(entry.service.status)}`}>{entry.service.status}</span>
+                                </div>
+                                <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax · {entry.service.time}</p>
+                              </button>
+                              {phone && (
+                                <a href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}
+                                  className="shrink-0 rounded-xl bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-600">
+                                  📞
+                                </a>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ))
           )}
           {tab === "prossimi" && (
             nextServices.length === 0
               ? <p className="p-4 text-center text-sm text-slate-400">Nessun servizio futuro.</p>
-              : nextServices.map((entry) => {
-                  const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
-                  return (
-                    <button key={entry.service.id} type="button"
-                      onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-                      className="w-full px-4 py-3 text-left transition hover:bg-slate-50">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5">
-                          <p className="font-semibold text-slate-800">{entry.service.customer_name}</p>
-                          {entry.service.linked_service_id && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700">A/R</span>}
-                        </div>
-                        <span className="text-xs font-semibold text-slate-600">{formatDateLabel(entry.service.date)} {entry.service.time}</span>
+              : buildGroups(nextServices).map((group) => (
+                  <div key={group.key}>
+                    <button type="button"
+                      onClick={() => setExpandedGroup(expandedGroup === `prossimi-${group.key}` ? null : `prossimi-${group.key}`)}
+                      className="w-full px-4 py-3 text-left flex items-center justify-between hover:bg-slate-50 transition">
+                      <div>
+                        <p className="font-semibold text-slate-800 text-sm">{group.label}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">{group.entries.length} {group.entries.length === 1 ? "servizio" : "servizi"}</p>
                       </div>
-                      <p className="mt-1 text-xs text-slate-400">{entry.service.direction === "departure" ? "↗" : "↙"} {hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
+                        <span className="text-slate-400 text-sm">{expandedGroup === `prossimi-${group.key}` ? "▲" : "▼"}</span>
+                      </div>
                     </button>
-                  );
-                })
+                    {expandedGroup === `prossimi-${group.key}` && (
+                      <div className="bg-slate-50 border-t border-slate-100 divide-y divide-slate-100">
+                        {group.entries.map((entry) => {
+                          const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
+                          const phone = entry.service.phone_e164?.trim() || entry.service.phone?.trim() || "";
+                          return (
+                            <div key={entry.service.id} className="flex items-center gap-2 px-4 py-2.5">
+                              <button type="button"
+                                onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                                className="flex-1 text-left">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>
+                                  <span className="text-xs text-slate-500">{formatDateLabel(entry.service.date)} {entry.service.time}</span>
+                                </div>
+                                <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                              </button>
+                              {phone && (
+                                <a href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}
+                                  className="shrink-0 rounded-xl bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-600">
+                                  📞
+                                </a>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ))
           )}
           {tab === "storico" && (
             completedServices.length === 0

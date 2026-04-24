@@ -5,6 +5,7 @@ import type { PricingAuthContext } from "@/lib/server/pricing-auth";
 import { requireQuotesAccess } from "@/lib/server/quotes-access";
 import { emailHtml } from "@/lib/server/email-layout";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
+import { buildDisposizioniEmail, parseDispoData } from "@/lib/server/quotes-disposizioni-email";
 
 export const runtime = "nodejs";
 
@@ -161,8 +162,20 @@ export async function POST(request: NextRequest) {
       const waypointLabels = (wps ?? []).map((w: { label: string }) => w.label);
 
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://ischiatransferservice.it";
-      const responseUrl = `${appUrl}/quote/respond?token=${String(quote.response_token ?? quote.id)}`;
-      const html = buildQuoteEmail(quote as Record<string, unknown>, waypointLabels, responseUrl);
+      const isDispoKind = String(quote.service_kind) === "Disposizione H24";
+      let html: string;
+      let subject: string;
+      if (isDispoKind) {
+        const dispoData = parseDispoData(String(quote.notes ?? ""));
+        html = dispoData
+          ? buildDisposizioniEmail(String(quote.client_name ?? "Cliente"), (quote.price_cents as number) / 100, dispoData)
+          : buildQuoteEmail(quote as Record<string, unknown>, waypointLabels, `${appUrl}/quote/respond?token=${String(quote.response_token ?? quote.id)}`);
+        subject = `Preventivo Disposizione H24 — ${String(quote.route_label)}`;
+      } else {
+        const responseUrl = `${appUrl}/quote/respond?token=${String(quote.response_token ?? quote.id)}`;
+        html = buildQuoteEmail(quote as Record<string, unknown>, waypointLabels, responseUrl);
+        subject = `Preventivo — ${String(quote.route_label)} · ${String(quote.currency)} ${((quote.price_cents as number) / 100).toFixed(2)}`;
+      }
 
       const apiKey = process.env.RESEND_API_KEY;
       const fromEmail = getVerifiedFromEmail();
@@ -170,7 +183,7 @@ export async function POST(request: NextRequest) {
         const res = await resendFetch(apiKey, {
           from: `Ischia Transfer Service <${fromEmail}>`,
           to: [String(quote.client_email)],
-          subject: `Preventivo — ${String(quote.route_label)} · ${String(quote.currency)} ${((quote.price_cents as number) / 100).toFixed(2)}`,
+          subject,
           html,
         });
         if (!res.ok) {

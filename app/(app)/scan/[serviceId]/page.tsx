@@ -19,6 +19,7 @@ type ServiceInfo = {
   hotel_name: string | null;
   meeting_point: string | null;
   outbound_time: string | null;
+  booking_service_kind: string | null;
 };
 
 type AssignmentInfo = {
@@ -69,6 +70,10 @@ export default function ScanPage() {
   const [savingPhone, setSavingPhone] = useState(false);
   const [phoneSaved, setPhoneSaved] = useState(false);
 
+  const [photoInterior, setPhotoInterior] = useState<string | null>(null);
+  const [photoExterior, setPhotoExterior] = useState<string | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState<"interior" | "exterior" | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -105,6 +110,24 @@ export default function ScanPage() {
       setPhoneSaved(true);
     }
   }
+
+  async function uploadPhoto(file: File, kind: "interior" | "exterior") {
+    if (!supabase) return;
+    setUploadingPhoto(kind);
+    const ext = file.type.includes("png") ? "png" : "jpg";
+    const path = `${serviceId}/${kind}.${ext}`;
+    const { error } = await supabase.storage.from("service-photos").upload(path, file, { upsert: true });
+    setUploadingPhoto(null);
+    if (!error) {
+      const preview = URL.createObjectURL(file);
+      if (kind === "interior") setPhotoInterior(preview);
+      else setPhotoExterior(preview);
+    }
+  }
+
+  const isDisposizione = service?.booking_service_kind === "private_island";
+  const photosRequired = isDisposizione && !completedAt && !alreadyCompleted;
+  const photosOk = photoInterior !== null && photoExterior !== null;
 
   async function confirmComplete() {
     setCompleting(true);
@@ -254,6 +277,55 @@ export default function ScanPage() {
           </div>
         )}
 
+        {/* Foto veicolo — obbligatorie per disposizione H24 */}
+        {photosRequired && (
+          <div className="rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-4 space-y-3">
+            <div>
+              <p className="text-sm font-bold text-indigo-800">Foto veicolo obbligatorie</p>
+              <p className="text-xs text-indigo-600 mt-0.5">Scatta esterno e interno del mezzo prima di confermare.</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {/* Esterno */}
+              <label className={`relative flex flex-col items-center justify-center rounded-xl border-2 py-4 cursor-pointer transition ${
+                photoExterior ? "border-emerald-300 bg-emerald-50" : "border-indigo-200 bg-white hover:bg-indigo-50/50"}`}>
+                {photoExterior ? (
+                  <img src={photoExterior} alt="Esterno" className="w-full h-20 object-cover rounded-lg" />
+                ) : uploadingPhoto === "exterior" ? (
+                  <p className="text-xs text-indigo-500 font-medium">Caricamento...</p>
+                ) : (
+                  <>
+                    <span className="text-2xl mb-1">🚌</span>
+                    <span className="text-xs font-semibold text-indigo-700">Esterno</span>
+                  </>
+                )}
+                <input type="file" accept="image/*" capture="environment" className="absolute inset-0 opacity-0 cursor-pointer"
+                  disabled={uploadingPhoto !== null}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadPhoto(f, "exterior"); }} />
+              </label>
+              {/* Interno */}
+              <label className={`relative flex flex-col items-center justify-center rounded-xl border-2 py-4 cursor-pointer transition ${
+                photoInterior ? "border-emerald-300 bg-emerald-50" : "border-indigo-200 bg-white hover:bg-indigo-50/50"}`}>
+                {photoInterior ? (
+                  <img src={photoInterior} alt="Interno" className="w-full h-20 object-cover rounded-lg" />
+                ) : uploadingPhoto === "interior" ? (
+                  <p className="text-xs text-indigo-500 font-medium">Caricamento...</p>
+                ) : (
+                  <>
+                    <span className="text-2xl mb-1">💺</span>
+                    <span className="text-xs font-semibold text-indigo-700">Interno</span>
+                  </>
+                )}
+                <input type="file" accept="image/*" capture="user" className="absolute inset-0 opacity-0 cursor-pointer"
+                  disabled={uploadingPhoto !== null}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadPhoto(f, "interior"); }} />
+              </label>
+            </div>
+            {photosOk && (
+              <p className="text-xs text-emerald-700 font-semibold text-center">✓ Entrambe le foto caricate — puoi confermare</p>
+            )}
+          </div>
+        )}
+
         {/* QR code — per voucher/stampa */}
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-center print:border-0">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-3">QR Servizio</p>
@@ -274,10 +346,11 @@ export default function ScanPage() {
         {!completedAt && !alreadyCompleted && service.status !== "completato" && service.status !== "cancelled" && (
           <button
             type="button"
+            disabled={photosRequired && !photosOk}
             onClick={() => setShowConfirm(true)}
-            className="w-full rounded-2xl bg-emerald-600 py-4 text-base font-bold text-white shadow-md hover:bg-emerald-700 active:scale-95 transition"
+            className="w-full rounded-2xl bg-emerald-600 py-4 text-base font-bold text-white shadow-md hover:bg-emerald-700 active:scale-95 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            CONFERMA SERVIZIO COMPLETATO
+            {photosRequired && !photosOk ? "Carica le foto prima di confermare" : "CONFERMA SERVIZIO COMPLETATO"}
           </button>
         )}
       </div>

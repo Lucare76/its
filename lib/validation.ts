@@ -137,7 +137,7 @@ export const agencyBookingCreateSchema = z
     customer_phone: z.string().min(6).max(30),
     customer_email: z.string().email().max(160).optional().or(z.literal("")),
     pax: z.number().int().min(1).max(16),
-    hotel_id: z.string().uuid(),
+    hotel_id: z.string().uuid().optional().or(z.literal("")),
     booking_service_kind: agencyBookingServiceKindSchema,
     arrival_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     arrival_time: z.string().regex(/^\d{2}:\d{2}$/),
@@ -159,6 +159,13 @@ export const agencyBookingCreateSchema = z
     hotel_dest_id: z.string().uuid().optional().or(z.literal(""))
   })
   .superRefine((value, ctx) => {
+    if (value.booking_service_kind !== "private_island" && (!value.hotel_id || !z.string().uuid().safeParse(value.hotel_id).success)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Seleziona un hotel valido.",
+        path: ["hotel_id"]
+      });
+    }
     if (value.booking_service_kind !== "formula_snav") {
       if (!value.customer_first_name || value.customer_first_name.trim().length < 2) {
         ctx.addIssue({

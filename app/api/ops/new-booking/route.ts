@@ -98,15 +98,19 @@ export async function POST(request: NextRequest) {
       }, { status: 422 });
     }
 
-    // Valida hotel
-    const { data: hotelData } = await auth.admin
-      .from("hotels")
-      .select("id, name")
-      .eq("tenant_id", tenantId)
-      .eq("id", d.hotel_id)
-      .maybeSingle();
-    if (!hotelData?.id) {
-      return NextResponse.json({ error: "Hotel non valido per il tenant corrente." }, { status: 400 });
+    // Valida hotel (non obbligatorio per private_island)
+    let hotelData: { id: string; name: string } | null = null;
+    if (!isPrivateIsland) {
+      const { data: hd } = await auth.admin
+        .from("hotels")
+        .select("id, name")
+        .eq("tenant_id", tenantId)
+        .eq("id", d.hotel_id ?? "")
+        .maybeSingle();
+      if (!hd?.id) {
+        return NextResponse.json({ error: "Hotel non valido per il tenant corrente." }, { status: 400 });
+      }
+      hotelData = hd;
     }
 
     // Risolve agenzia fatturazione (opzionale)
@@ -161,7 +165,7 @@ export async function POST(request: NextRequest) {
         return base;
       })(),
       pax: d.pax,
-      hotel_id: d.hotel_id,
+      hotel_id: d.hotel_id || null,
       customer_name: customerName,
       customer_first_name: (d.customer_first_name ?? "").trim() || null,
       customer_last_name: d.customer_last_name.trim(),
@@ -219,7 +223,7 @@ export async function POST(request: NextRequest) {
           direction: "arrival",
           vessel: vesselFromKind(bookingKind, transportCode, busCityOrigin),
           pax: d.pax,
-          hotel_id: d.hotel_id,
+          hotel_id: d.hotel_id || null,
           customer_name: customerName,
           customer_first_name: (d.customer_first_name ?? "").trim() || null,
           customer_last_name: d.customer_last_name.trim(),

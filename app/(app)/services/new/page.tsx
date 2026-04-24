@@ -510,7 +510,7 @@ export default function OpsNewBookingPage() {
     if (!form.customer_phone.trim()) warnings.push("Inserisci un telefono cliente.");
     const paxNum = Number(form.pax);
     if (!form.pax || isNaN(paxNum) || paxNum < 1) warnings.push("Inserisci il numero di pax (min. 1).");
-    if (!form.hotel_id) warnings.push("Seleziona la struttura.");
+    if (!form.hotel_id && !isPrivateIsland) warnings.push("Seleziona la struttura.");
     if (!form.arrival_date) warnings.push(`${contextLabels.arrivalDateLabel.replace("*", "").trim()} mancante.`);
     if (!form.arrival_time) warnings.push(`${contextLabels.arrivalTimeLabel.replace("*", "").trim()} mancante.`);
     if (!form.departure_date) warnings.push(`${contextLabels.departureDateLabel.replace("*", "").trim()} mancante.`);
@@ -592,7 +592,7 @@ export default function OpsNewBookingPage() {
       }
       if (!form.customer_phone.trim()) errs.customer_phone = "Campo obbligatorio";
       if (!form.pax || isNaN(Number(form.pax)) || Number(form.pax) < 1) errs.pax = "Minimo 1 pax";
-      if (!form.hotel_id) errs.hotel_id = "Seleziona la struttura";
+      if (!form.hotel_id && !isPrivateIsland) errs.hotel_id = "Seleziona la struttura";
       if (!form.arrival_date) errs.arrival_date = "Campo obbligatorio";
       if (!form.arrival_time) errs.arrival_time = "Campo obbligatorio";
       if (!form.departure_date) errs.departure_date = "Campo obbligatorio";
@@ -738,7 +738,7 @@ export default function OpsNewBookingPage() {
         {/* Hotel */}
         <div className="text-sm md:col-span-2">
           <div className="flex items-center justify-between">
-            <span>Hotel / Struttura*</span>
+            <span>Hotel / Struttura{isPrivateIsland ? "" : "*"}</span>
             <button type="button" onClick={() => setAddingHotel((v) => !v)} className="text-xs text-blue-600 hover:underline">
               {addingHotel ? "Annulla" : "+ Nuovo hotel"}
             </button>

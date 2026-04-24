@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Analisi finale stato attuale - Ischia Transfer Service</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #122033;
+      --muted: #5a6878;
+      --line: #dbe4ee;
+      --brand: #173f6b;
+      --ok-bg: #ecfdf3;
+      --ok-border: #abefc6;
+      --ok-text: #027a48;
+      --wait-bg: #fff7ed;
+      --wait-border: #fed7aa;
+      --wait-text: #b54708;
+      --risk-bg: #fef3f2;
+      --risk-border: #fecdca;
+      --risk-text: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .page {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 24px 26px;
+      margin-bottom: 18px;
+    }
+    .eyebrow {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-weight: 700;
+      color: #245fa8;
+      margin-bottom: 10px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 32px;
+      line-height: 1.05;
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 22px;
+      line-height: 1.15;
+    }
+    h3 {
+      margin: 18px 0 10px;
+      font-size: 16px;
+      line-height: 1.2;
+    }
+    p {
+      margin: 0 0 10px;
+      color: var(--muted);
+    }
+    ul {
+      margin: 8px 0 0 20px;
+      padding: 0;
+    }
+    li { margin: 0 0 8px; }
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      background: #eef3f8;
+      border: 1px solid #dbe5f0;
+      border-radius: 6px;
+      padding: 1px 6px;
+      font-size: 0.95em;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .mini {
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: #fbfcfe;
+      padding: 14px 16px;
+    }
+    .mini strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+    .tag {
+      display: inline-block;
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .ok { background: var(--ok-bg); border: 1px solid var(--ok-border); color: var(--ok-text); }
+    .wait { background: var(--wait-bg); border: 1px solid var(--wait-border); color: var(--wait-text); }
+    .risk { background: var(--risk-bg); border: 1px solid var(--risk-border); color: var(--risk-text); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f8fafc;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #667085;
+    }
+    @media print {
+      .page { padding: 0; }
+      .card, .mini { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="card">
+      <div class="eyebrow">Final Project Report</div>
+      <h1>Analisi Finale - Stato Attuale</h1>
+      <p>Fotografia finale del progetto dopo Hardening 1, cleanup lint a basso rischio, Fase 2A riuscita e Fase 2B fermata correttamente per evitare regressioni.</p>
+      <div class="grid" style="margin-top:16px;">
+        <div class="mini">
+          <strong>Stato tecnico</strong>
+          <ul>
+            <li><code>pnpm build</code>: OK</li>
+            <li><code>pnpm typecheck</code>: OK</li>
+            <li><code>pnpm lint</code>: migliorato, non ancora chiuso</li>
+            <li>Lint residuo: <strong>13 errori / 21 warning</strong></li>
+          </ul>
+        </div>
+        <div class="mini">
+          <strong>Messaggio chiave</strong>
+          Il progetto e oggi in una zona stabile: i flussi core testati funzionano, il rischio operativo e sceso, ma restano moduli delicati da affrontare in fasi dedicate.
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>1. Stato attuale</h2>
+      <h3>Aree gia verificate</h3>
+      <ul>
+        <li>login</li>
+        <li>driver app</li>
+        <li>piano giorno</li>
+        <li>import PDF</li>
+        <li>conferma PDF</li>
+        <li>bus network</li>
+        <li>QR code</li>
+      </ul>
+
+      <h3>Cron safe endpoint verificati</h3>
+      <ul>
+        <li><code>vehicle-expiry-check</code> in <code>dry_run</code></li>
+        <li><code>sla-check</code></li>
+        <li><code>push-reminders</code></li>
+      </ul>
+
+      <h3>Aree non ancora validate</h3>
+      <ul>
+        <li><strong>pricing</strong> - listini non disponibili</li>
+        <li><strong>WhatsApp</strong> - API/config non ancora pronte</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>2. Lint / codice residuo</h2>
+      <h3><span class="tag ok">Basso rischio</span></h3>
+      <p>Warning cosmetici o quasi-meccanici, non prioritari.</p>
+      <table>
+        <thead>
+          <tr><th>File</th><th>Issue</th><th>Perche</th><th>Consiglio</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>app/(app)/layout.tsx</code></td><td><code>unused eslint-disable</code>, <code>no-img-element</code></td><td>warning non legati al core business, ma file globale</td><td>rimandare o micro-pass cosmetico</td></tr>
+          <tr><td><code>app/(app)/inbox/fleet-reports/page.tsx</code></td><td><code>no-img-element</code></td><td>pagina secondaria, fix locale possibile</td><td>toccabile in futuro</td></tr>
+          <tr><td><code>app/(app)/liste-bruno/page.tsx</code></td><td><code>no-img-element</code></td><td>warning UI secondario</td><td>toccabile in futuro</td></tr>
+        </tbody>
+      </table>
+
+      <h3><span class="tag wait">Medio rischio</span></h3>
+      <p>Fix possibili, ma non piu automatici: richiedono test pagina per pagina.</p>
+      <table>
+        <thead>
+          <tr><th>File</th><th>Issue</th><th>Perche</th><th>Consiglio</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>app/(app)/arrivals/page.tsx</code></td><td><code>exhaustive-deps</code></td><td>il warning nasconde funzioni non stabili, non basta aggiungere dipendenze</td><td>fase mirata con test</td></tr>
+          <tr><td><code>app/(app)/departures/page.tsx</code></td><td><code>exhaustive-deps</code></td><td>stesso pattern di arrivals, non e piu low-risk</td><td>fase mirata con test</td></tr>
+          <tr><td><code>app/(app)/rete-ischia/page.tsx</code></td><td><code>exhaustive-deps</code></td><td>warning incrociato su callback, fix non banale</td><td>fase mirata con test</td></tr>
+          <tr><td><code>app/(app)/services/new/page.tsx</code></td><td><code>exhaustive-deps</code></td><td>pagina operativa, meglio non toccare senza test</td><td>rimandare</td></tr>
+        </tbody>
+      </table>
+
+      <h3><span class="tag risk">Alto rischio / business-critical</span></h3>
+      <p>Moduli delicati da affrontare solo in fasi dedicate.</p>
+      <table>
+        <thead>
+          <tr><th>File</th><th>Issue</th><th>Perche</th><th>Consiglio</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>app/(app)/agency/new-booking/page.tsx</code></td><td><code>set-state-in-effect</code>, <code>memoization</code></td><td>form business-critical</td><td>rimandare</td></tr>
+          <tr><td><code>app/(app)/dispatch/page.tsx</code></td><td><code>react-hooks/refs</code></td><td>pagina operativa centrale</td><td>rimandare</td></tr>
+          <tr><td><code>app/(app)/medmar-ar/page.tsx</code></td><td>molti <code>set-state-in-effect</code></td><td>modulo ampio e sensibile</td><td>rimandare</td></tr>
+          <tr><td><code>app/(app)/bus-network/page.tsx</code></td><td><code>exhaustive-deps</code></td><td>modulo grande e accoppiato</td><td>rimandare</td></tr>
+          <tr><td><code>app/(app)/bus-network/BusImportModal.tsx</code></td><td><code>exhaustive-deps</code></td><td>flusso import delicato</td><td>rimandare</td></tr>
+          <tr><td><code>app/api/ops/bus-network/route.ts</code></td><td>warning misti</td><td>backend critico e monolitico</td><td>rimandare</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>3. Backlog operativo</h2>
+      <h3>Fix tecnici ancora sensati a breve</h3>
+      <ul>
+        <li>micro-pass cosmetico su warning bassissimo rischio</li>
+        <li>eventuale rimozione di altri <code>unused eslint-disable</code> fuori aree sensibili</li>
+      </ul>
+
+      <h3>Fix che richiedono test mirati</h3>
+      <ul>
+        <li><code>arrivals</code></li>
+        <li><code>departures</code></li>
+        <li><code>rete-ischia</code></li>
+        <li><code>services/new</code></li>
+      </ul>
+
+      <h3>Fix da rimandare a una fase dedicata</h3>
+      <ul>
+        <li><code>agency/new-booking</code></li>
+        <li><code>dispatch</code></li>
+        <li><code>medmar-ar</code></li>
+        <li><code>bus-network</code></li>
+      </ul>
+
+      <h3>Moduli da validare appena ci saranno prerequisiti esterni</h3>
+      <ul>
+        <li><strong>pricing</strong> appena disponibili i listini</li>
+        <li><strong>WhatsApp</strong> appena disponibili API, token e configurazione Meta</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>4. Roadmap consigliata</h2>
+      <ol>
+        <li>Non forzare altro cleanup lint adesso.</li>
+        <li>Validare <strong>pricing</strong> appena ci sono listini reali.</li>
+        <li>Validare <strong>WhatsApp</strong> appena le API/config sono pronte.</li>
+        <li>Aprire solo dopo una fase tecnica mirata su <code>agency/new-booking</code>, <code>dispatch</code>, <code>medmar-ar</code> o <code>bus-network</code>, uno alla volta.</li>
+        <li>Tenere schema / migrazioni / tipi Supabase come fase separata e controllata.</li>
+      </ol>
+    </section>
+
+    <section class="card">
+      <h2>5. Conclusione finale</h2>
+      <p>Siamo arrivati a un punto buono: il progetto builda, typecheck passa, il lint e molto piu sotto controllo e i flussi core testati risultano stabili.</p>
+      <p>Quello che resta da fare non e piu cleanup semplice: da qui in avanti conviene lavorare per blocchi dedicati, partendo dai moduli che oggi aspettano prerequisiti esterni, e lasciando per ultime le aree operative piu delicate.</p>
+      <p><strong>Prossima mossa migliore:</strong> validare pricing appena arrivano i listini, poi validare WhatsApp, e solo dopo aprire una fase tecnica sui moduli business-critical residui.</p>
+    </section>
+  </div>
+</body>
+</html>

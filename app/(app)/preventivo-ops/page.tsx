@@ -50,7 +50,10 @@ const SERVICE_KIND_OPTIONS = [
   "Linea bus - hotel",
   "Escursione",
   "Transfer porto - hotel",
+  "Disposizione H24",
 ] as const;
+
+const DISPO_PREFIX = "__dispo__:";
 
 function normalizeCity(value: string) {
   return value
@@ -87,6 +90,10 @@ function isBusQuote(serviceKind: string) {
   return normalizeCity(serviceKind).includes("linea bus") || normalizeCity(serviceKind) === "bus";
 }
 
+function isDispoQuote(serviceKind: string) {
+  return serviceKind === "Disposizione H24";
+}
+
 async function getToken() {
   if (!hasSupabaseEnv || !supabase) return null;
   const { data } = await supabase.auth.getSession();
@@ -118,6 +125,17 @@ export default function PreventivoOpsPage() {
   const [geoSuggestions, setGeoSuggestions] = useState<CitySuggestion[]>([]);
   const [cityLookupLoading, setCityLookupLoading] = useState(false);
 
+  // Dispo H24 state
+  const [dispoVehicleType, setDispoVehicleType] = useState("Van");
+  const [dispoVehicleCount, setDispoVehicleCount] = useState(2);
+  const [dispoDateFrom, setDispoDateFrom] = useState("");
+  const [dispoDateTo, setDispoDateTo] = useState("");
+  const [dispoTotalDays, setDispoTotalDays] = useState(6);
+  const [dispoRateDay, setDispoRateDay] = useState(50);
+  const [dispoRateNight, setDispoRateNight] = useState(60);
+  const [dispoPricePerVehicle, setDispoPricePerVehicle] = useState(0);
+  const [dispoIncludeAccommodation, setDispoIncludeAccommodation] = useState(false);
+
   const load = useEffectEvent(async () => {
     setLoading(true);
     const token = await getToken();
@@ -143,6 +161,8 @@ export default function PreventivoOpsPage() {
 
   const filtered = filterStatus === "all" ? quotes : quotes.filter((q) => q.status === filterStatus);
   const busSelected = isBusQuote(serviceKind);
+  const dispoSelected = isDispoQuote(serviceKind);
+  const dispoTotalPrice = dispoPricePerVehicle * dispoVehicleCount;
   const localCitySuggestions = useMemo(() => {
     const query = normalizeCity(busCityInput);
     if (query.length < 2) return [];
@@ -225,11 +245,70 @@ export default function PreventivoOpsPage() {
     }
   };
 
+  const resetDispoState = () => {
+    setDispoVehicleType("Van");
+    setDispoVehicleCount(2);
+    setDispoDateFrom("");
+    setDispoDateTo("");
+    setDispoTotalDays(6);
+    setDispoRateDay(50);
+    setDispoRateNight(60);
+    setDispoPricePerVehicle(0);
+    setDispoIncludeAccommodation(false);
+  };
+
   const createQuote = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const token = await getToken();
     if (!token) return;
     const form = new FormData(e.currentTarget);
+
+    if (dispoSelected) {
+      if (dispoTotalPrice <= 0) {
+        setMessage({ type: "err", text: "Inserisci un prezzo per mezzo valido." });
+        return;
+      }
+      const dispoData = {
+        vehicleType: dispoVehicleType.trim() || "Van",
+        vehicleCount: dispoVehicleCount,
+        dateFrom: dispoDateFrom.trim(),
+        dateTo: dispoDateTo.trim(),
+        totalDays: dispoTotalDays,
+        rateDay: dispoRateDay,
+        rateNight: dispoRateNight,
+        pricePerVehicle: dispoPricePerVehicle,
+        includeAccommodation: dispoIncludeAccommodation,
+        customNotes: String(form.get("notes") ?? "").trim() || undefined,
+      };
+      const routeLabelDispo = `${dispoData.dateFrom}–${dispoData.dateTo} · ${dispoData.vehicleCount} ${dispoData.vehicleType} · H24`;
+      const res = await apiCall(token, {
+        action: "create_quote",
+        service_kind: serviceKind,
+        route_label: routeLabelDispo,
+        price_cents: Math.round(dispoTotalPrice * 100),
+        currency: "EUR",
+        passenger_count: dispoVehicleCount,
+        valid_until: String(form.get("valid_until") ?? "") || null,
+        notes: `${DISPO_PREFIX}${JSON.stringify(dispoData)}`,
+        client_name: String(form.get("client_name") ?? "") || null,
+        client_email: String(form.get("client_email") ?? "") || null,
+        hotel_name: null,
+        bus_city_origin: null,
+        bus_city_lat: null,
+        bus_city_lng: null,
+        bus_city_geo_label: null,
+        waypoints: [],
+      });
+      if (!res.ok) { setMessage({ type: "err", text: res.error ?? "Errore." }); return; }
+      setQuotes(res.quotes ?? []);
+      setWaypoints(res.waypoints ?? []);
+      setMessage({ type: "ok", text: "Preventivo creato." });
+      e.currentTarget.reset();
+      setServiceKind("Transfer porto - hotel");
+      resetDispoState();
+      return;
+    }
+
     const busCity = busSelected ? await resolveBusCity() : null;
     if (busSelected && !busCity) {
       setMessage({ type: "err", text: "Inserisci una citta di partenza valida: deve essere selezionata o geolocalizzata." });
@@ -361,20 +440,73 @@ export default function PreventivoOpsPage() {
                     setBusCityInput("");
                     setSelectedBusCity(null);
                   }
+                  if (!isDispoQuote(event.target.value)) resetDispoState();
                 }} className="mt-1 input-saas w-full">
                   {SERVICE_KIND_OPTIONS.map((kind) => (
                     <option key={kind} value={kind}>{kind}</option>
                   ))}
                 </select>
               </label>
-              <label className="text-xs font-medium text-slate-600">
-                Tratta{busSelected ? "" : "*"}
-                <input name="route_label" required={!busSelected} value={routeLabel} onChange={(event) => setRouteLabel(event.target.value)} className="mt-1 input-saas w-full" placeholder={busSelected ? "auto: citta - Ischia" : "es. Napoli - Forio"} />
-              </label>
-              <label className="text-xs font-medium text-slate-600 sm:col-span-2">
-                Hotel / struttura
-                <input name="hotel_name" className="mt-1 input-saas w-full" placeholder="Nome hotel o struttura cliente" />
-              </label>
+              {!dispoSelected && (
+                <label className="text-xs font-medium text-slate-600">
+                  Tratta{busSelected ? "" : "*"}
+                  <input name="route_label" required={!busSelected} value={routeLabel} onChange={(event) => setRouteLabel(event.target.value)} className="mt-1 input-saas w-full" placeholder={busSelected ? "auto: citta - Ischia" : "es. Napoli - Forio"} />
+                </label>
+              )}
+              {!dispoSelected && (
+                <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+                  Hotel / struttura
+                  <input name="hotel_name" className="mt-1 input-saas w-full" placeholder="Nome hotel o struttura cliente" />
+                </label>
+              )}
+              {dispoSelected && (
+                <div className="sm:col-span-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3 space-y-2">
+                  <p className="text-[11px] font-bold text-blue-700 uppercase tracking-wide">Dettaglio disposizione H24</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="text-xs font-medium text-slate-600">
+                      Tipo mezzo*
+                      <input value={dispoVehicleType} onChange={(ev) => setDispoVehicleType(ev.target.value)} className="mt-1 input-saas w-full" placeholder="Van, Minivan, Bus…" required />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">
+                      N. mezzi*
+                      <input type="number" min={1} max={20} value={dispoVehicleCount} onChange={(ev) => setDispoVehicleCount(Number(ev.target.value))} className="mt-1 input-saas w-full" required />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">
+                      Dal (es. 01/06)
+                      <input value={dispoDateFrom} onChange={(ev) => setDispoDateFrom(ev.target.value)} className="mt-1 input-saas w-full" placeholder="01/06" />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">
+                      Al (es. 06/06)
+                      <input value={dispoDateTo} onChange={(ev) => setDispoDateTo(ev.target.value)} className="mt-1 input-saas w-full" placeholder="06/06" />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">
+                      N. giorni*
+                      <input type="number" min={1} value={dispoTotalDays} onChange={(ev) => setDispoTotalDays(Number(ev.target.value))} className="mt-1 input-saas w-full" required />
+                    </label>
+                    <div />
+                    <label className="text-xs font-medium text-slate-600">
+                      Tariffa diurna (€/h)
+                      <input type="number" min={0} step={1} value={dispoRateDay} onChange={(ev) => setDispoRateDay(Number(ev.target.value))} className="mt-1 input-saas w-full" placeholder="50" />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">
+                      Tariffa notturna (€/h)
+                      <input type="number" min={0} step={1} value={dispoRateNight} onChange={(ev) => setDispoRateNight(Number(ev.target.value))} className="mt-1 input-saas w-full" placeholder="60" />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">
+                      Prezzo per 1 mezzo (€)*
+                      <input type="number" min={0} step={0.01} value={dispoPricePerVehicle || ""} onChange={(ev) => setDispoPricePerVehicle(Number(ev.target.value))} className="mt-1 input-saas w-full" placeholder="es. 7500" required />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">
+                      Totale complessivo
+                      <input readOnly value={`€ ${dispoTotalPrice.toLocaleString("it-IT", { minimumFractionDigits: 2 })}`} className="mt-1 input-saas w-full cursor-default opacity-75 font-semibold" tabIndex={-1} />
+                    </label>
+                    <label className="sm:col-span-2 flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer mt-1">
+                      <input type="checkbox" checked={dispoIncludeAccommodation} onChange={(ev) => setDispoIncludeAccommodation(ev.target.checked)} className="rounded" />
+                      Sistemazione autisti inclusa nel preventivo
+                    </label>
+                  </div>
+                </div>
+              )}
               {busSelected && (
                 <label className="relative text-xs font-medium text-slate-600 sm:col-span-2">
                   Citta di partenza*
@@ -430,22 +562,28 @@ export default function PreventivoOpsPage() {
                   </span>
                 </label>
               )}
-              <label className="text-xs font-medium text-slate-600">
-                Prezzo EUR*
-                <input name="price" required className="mt-1 input-saas w-full" placeholder="es. 120.00" />
-              </label>
-              <label className="text-xs font-medium text-slate-600">
-                Pax
-                <input name="passenger_count" type="number" min={1} className="mt-1 input-saas w-full" placeholder="es. 4" />
-              </label>
+              {!dispoSelected && (
+                <label className="text-xs font-medium text-slate-600">
+                  Prezzo EUR*
+                  <input name="price" required className="mt-1 input-saas w-full" placeholder="es. 120.00" />
+                </label>
+              )}
+              {!dispoSelected && (
+                <label className="text-xs font-medium text-slate-600">
+                  Pax
+                  <input name="passenger_count" type="number" min={1} className="mt-1 input-saas w-full" placeholder="es. 4" />
+                </label>
+              )}
               <label className="text-xs font-medium text-slate-600">
                 Validità offerta
                 <input name="valid_until" type="date" className="mt-1 input-saas w-full" />
               </label>
-              <label className="text-xs font-medium text-slate-600">
-                Punti di carico
-                <input name="waypoints" className="mt-1 input-saas w-full" placeholder="Luogo1, Luogo2..." />
-              </label>
+              {!dispoSelected && (
+                <label className="text-xs font-medium text-slate-600">
+                  Punti di carico
+                  <input name="waypoints" className="mt-1 input-saas w-full" placeholder="Luogo1, Luogo2..." />
+                </label>
+              )}
               <label className="text-xs font-medium text-slate-600 sm:col-span-2">
                 Note
                 <textarea name="notes" rows={3} className="mt-1 input-saas w-full resize-none" placeholder="Dettagli aggiuntivi..." />
@@ -506,7 +644,9 @@ export default function PreventivoOpsPage() {
                       {qWaypoints.length > 0 && <span>📍 {qWaypoints.join(" → ")}</span>}
                       <span>Creato {fmtDate(q.created_at)}</span>
                     </div>
-                    {q.notes && <p className="text-xs text-slate-500 italic">{q.notes}</p>}
+                    {q.notes && !q.notes.startsWith(DISPO_PREFIX) && (
+                      <p className="text-xs text-slate-500 italic">{q.notes}</p>
+                    )}
                     <div className="flex flex-wrap gap-2 pt-1">
                       {q.status === "draft" && q.client_email && (
                         <button onClick={() => void sendQuote(q.id)} disabled={sending === q.id}
