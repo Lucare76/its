@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { authorizePricingRequest, type PricingAuthContext } from "@/lib/server/pricing-auth";
 import {
   loadContinentDispatchServices,
   resetContinentDispatchTarget,
@@ -9,15 +9,8 @@ import {
 
 export const runtime = "nodejs";
 
-async function loadSmistamentoData(
-  auth: ReturnType<typeof authorizePricingRequest> extends Promise<infer T> ? T : never,
-  date: string
-) {
-  const data = await loadContinentDispatchServices(
-    // @ts-expect-error auth type resolved at runtime
-    auth,
-    date
-  );
+async function loadSmistamentoData(auth: PricingAuthContext, date: string) {
+  const data = await loadContinentDispatchServices(auth, date);
 
   return {
     services: data.services.filter((service) => service.effective_target === "continent_dispatch"),
