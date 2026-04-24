@@ -674,8 +674,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
   return (
     <>
-      <section className={`grid min-h-[calc(100vh-86px)] grid-cols-1 gap-5 py-4 md:py-6 ${authRole === "driver" ? "" : "md:grid-cols-[auto_1fr] md:gap-6"}`}>
-      <aside className={`sticky top-24 h-fit transition-all duration-200 ${authRole === "driver" ? "hidden" : `hidden md:block ${collapsed ? "w-[72px]" : "w-[280px]"}`}`}>
+      <section className={`grid min-h-[calc(100vh-86px)] grid-cols-1 gap-5 py-4 md:py-6 ${authRole === "driver" || authRole === "autista" ? "" : "md:grid-cols-[auto_1fr] md:gap-6"}`}>
+      <aside className={`sticky top-24 h-fit transition-all duration-200 ${authRole === "driver" || authRole === "autista" ? "hidden" : `hidden md:block ${collapsed ? "w-[72px]" : "w-[280px]"}`}`}>
         <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white p-3 shadow-[0_8px_40px_rgba(15,23,42,0.10)]">
 
           {/* Brand + collapse */}
