@@ -32,6 +32,8 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   if (!url.pathname.startsWith('/driver') && !url.pathname.startsWith('/api/ops/driver-data')) return;
+  // Lascia passare le richieste interne di Next.js (RSC, prefetch, data routes)
+  if (url.pathname.startsWith('/_next/') || url.searchParams.has('_rsc') || url.searchParams.has('__nextSuspense')) return;
 
   event.respondWith(
     fetch(event.request)

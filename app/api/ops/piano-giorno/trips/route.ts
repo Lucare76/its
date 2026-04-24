@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { sendPushToUser } from "@/lib/server/web-push";
 
 export const runtime = "nodejs";
 
@@ -76,6 +77,26 @@ export async function POST(request: NextRequest) {
       // 2. Assignments + status update per ogni servizio
       await _assignServicesToGroup(auth.admin, tenantId, service_ids, groupId, driver_user_id ?? null, vehicle_label ?? null, userId, now);
 
+      // 3. Push all'autista se assegnato
+      if (driver_user_id) {
+        const { data: firstService } = await auth.admin
+          .from("services")
+          .select("time, customer_name, pax")
+          .in("id", service_ids)
+          .order("time")
+          .limit(1)
+          .maybeSingle();
+        const label = firstService
+          ? `${firstService.time.slice(0, 5)} — ${firstService.customer_name} · ${firstService.pax} pax`
+          : `${service_ids.length} servizi`;
+        void sendPushToUser(tenantId, driver_user_id, {
+          title: `🚌 Nuovo giro assegnato — ${date}`,
+          body: label,
+          url: "/driver",
+          tag: `trip-assigned-${groupId}`,
+        });
+      }
+
       return NextResponse.json({ ok: true, group_id: groupId });
     }
 
@@ -108,6 +129,27 @@ export async function POST(request: NextRequest) {
         })
         .eq("group_id", group_id)
         .eq("tenant_id", tenantId);
+
+      // Push all'autista se il driver è stato (ri)assegnato
+      if (driver_user_id) {
+        const { data: firstAssignment } = await auth.admin
+          .from("assignments")
+          .select("services!inner(date, time, customer_name, pax)")
+          .eq("group_id", group_id)
+          .eq("tenant_id", tenantId)
+          .limit(1)
+          .maybeSingle();
+        const svc = (firstAssignment?.services as unknown) as { date: string; time: string; customer_name: string; pax: number } | null;
+        const label = svc
+          ? `${svc.time.slice(0, 5)} — ${svc.customer_name} · ${svc.pax} pax`
+          : "Giro aggiornato";
+        void sendPushToUser(tenantId, driver_user_id, {
+          title: `🚌 Giro aggiornato — ${svc?.date ?? "oggi"}`,
+          body: label,
+          url: "/driver",
+          tag: `trip-updated-${group_id}`,
+        });
+      }
 
       // Se passati nuovi service_ids, riassegna (add/remove dal gruppo)
       if (service_ids !== undefined) {
