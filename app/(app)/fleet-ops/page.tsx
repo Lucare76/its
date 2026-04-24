@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
@@ -8,6 +8,7 @@ type Vehicle = {
   id: string;
   label: string;
   plate?: string | null;
+  license_number?: string | null;
   capacity?: number | null;
   active: boolean;
   vehicle_size?: "small" | "medium" | "large" | "bus" | null;
@@ -113,6 +114,7 @@ const EMPTY_FORM = {
   inspection_expiry: "",
   km: "",
   telaio: "",
+  license_number: "",
 };
 
 function expiryStatus(dateStr: string | null | undefined): "ok" | "soon" | "expired" | "none" {
@@ -178,6 +180,7 @@ export default function FleetOpsPage() {
   const [driverFormOpen, setDriverFormOpen] = useState(false);
   const [editingDriverId, setEditingDriverId] = useState<string | null>(null);
   const [driverForm, setDriverForm] = useState({ full_name: "", phone: "" });
+  const vehicleListRef = useRef<HTMLDivElement | null>(null);
 
   const showToast = useCallback((text: string, ok: boolean) => {
     setToast({ text, ok });
@@ -207,6 +210,7 @@ export default function FleetOpsPage() {
       inspection_expiry: vehicle.inspection_expiry ?? "",
       km: String(vehicle.km ?? ""),
       telaio: vehicle.telaio ?? "",
+      license_number: vehicle.license_number ?? "",
     });
     setShowAnomalyPanel(false);
     setAnomalyForm(EMPTY_ANOMALY);
@@ -269,6 +273,7 @@ export default function FleetOpsPage() {
 
   const fleetStats = useMemo(() => ({
     active: vehicles.filter((vehicle) => vehicle.active).length,
+    inactive: vehicles.filter((vehicle) => !vehicle.active).length,
     blocked: vehicles.filter((vehicle) => vehicle.is_blocked_manual || vehicle.blocked_until).length,
     anomalies: anomalies.filter((anomaly) => anomaly.active).length,
     gpsMissing: vehicles.filter((vehicle) => !vehicle.radius_vehicle_id).length,
@@ -278,20 +283,40 @@ export default function FleetOpsPage() {
     }).length,
   }), [anomalies, vehicles]);
 
+  const urgentVehicles = useMemo(
+    () => vehicles.filter((vehicle) => {
+      const docSummary = getVehicleDocumentSummary(vehicle);
+      return Boolean(vehicle.is_blocked_manual || vehicle.blocked_until)
+        || docSummary.worst === "expired"
+        || anomalies.some((anomaly) => anomaly.vehicle_id === vehicle.id && anomaly.active);
+    }).length,
+    [anomalies, vehicles]
+  );
+
   const filteredVehicles = useMemo(() => {
     return vehicles.filter((vehicle) => {
       const matchesSize = sizeFilter === "all" || vehicle.vehicle_size === sizeFilter;
-      const haystack = `${vehicle.label} ${vehicle.plate ?? ""} ${driverNameById.get(vehicle.habitual_driver_profile_id ?? "") ?? ""} ${vehicle.default_zone ?? ""}`.toLowerCase();
+      const haystack = `${vehicle.label} ${vehicle.plate ?? ""} ${vehicle.license_number ?? ""} ${driverNameById.get(vehicle.habitual_driver_profile_id ?? "") ?? ""} ${vehicle.default_zone ?? ""}`.toLowerCase();
       const matchesSearch = !searchQuery.trim() || haystack.includes(searchQuery.trim().toLowerCase());
       const docSummary = getVehicleDocumentSummary(vehicle);
       const matchesStatus = statusFilter === "all"
         || (statusFilter === "blocked" && Boolean(vehicle.is_blocked_manual || vehicle.blocked_until))
         || (statusFilter === "attention" && (docSummary.worst === "expired" || docSummary.worst === "soon" || anomalies.some((anomaly) => anomaly.vehicle_id === vehicle.id && anomaly.active)))
+        || (statusFilter === "anomalies" && anomalies.some((anomaly) => anomaly.vehicle_id === vehicle.id && anomaly.active))
+        || (statusFilter === "docs" && (docSummary.worst === "expired" || docSummary.worst === "soon"))
+        || (statusFilter === "inactive" && !vehicle.active)
         || (statusFilter === "gpsless" && !vehicle.radius_vehicle_id)
         || (statusFilter === "active" && vehicle.active && !vehicle.is_blocked_manual && !vehicle.blocked_until);
       return matchesSize && matchesSearch && matchesStatus;
     });
   }, [anomalies, driverNameById, searchQuery, sizeFilter, statusFilter, vehicles]);
+
+  const focusProblemArea = useCallback((nextStatus: string) => {
+    setStatusFilter(nextStatus);
+    window.setTimeout(() => {
+      vehicleListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }, []);
 
   if (loading) {
     return (
@@ -305,8 +330,16 @@ export default function FleetOpsPage() {
     <section className="page-section">
       <PageHeader
         title="Gestione Flotta"
-        subtitle="Veicoli, autisti abituali, blocchi e anomalie."
+        subtitle="Control room flotta: mezzi, licenze, documenti, anomalie e accesso rapido ai moduli operativi."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Flotta" }]}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <a href="/fleet-ops/fuel" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100">Rifornimenti</a>
+            <a href="/fleet-ops/maintenance" className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 hover:bg-orange-100">Manutenzioni</a>
+            <a href="/fleet-ops/inventory" className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800 hover:bg-sky-100">Ricambi</a>
+            <a href="/fleet-ops/reports" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">Report costi/km</a>
+          </div>
+        }
       />
 
       {/* Toast */}
@@ -316,24 +349,63 @@ export default function FleetOpsPage() {
         </div>
       ) : null}
 
+      <div className="rounded-2xl border border-slate-200 bg-[linear-gradient(135deg,#f8fafc,#eef6ff)] px-5 py-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Priorita operative</p>
+            <h2 className="mt-1 text-lg font-bold text-slate-950">Focus immediato su alert, blocchi e mezzi da verificare</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {urgentVehicles > 0
+                ? `${urgentVehicles} mezzi richiedono attenzione. Usa i filtri rapidi per risolvere prima blocchi, anomalie e documenti.`
+                : "Nessuna criticita forte in evidenza. Puoi lavorare per eccezione e tenere il pannello dettagli aperto."}
+            </p>
+          </div>
+          <div className="grid min-w-[260px] gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => focusProblemArea("attention")}
+              className="rounded-xl border border-rose-200 bg-white/80 px-3 py-3 text-left transition hover:-translate-y-0.5 hover:bg-rose-50/80"
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-500">Urgenze</p>
+              <p className="mt-1 text-2xl font-bold text-rose-700">{urgentVehicles}</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => focusProblemArea("inactive")}
+              className="rounded-xl border border-slate-200 bg-white/80 px-3 py-3 text-left transition hover:-translate-y-0.5 hover:bg-slate-50/80"
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Inattivi</p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{fleetStats.inactive}</p>
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* Stats */}
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
         {[
-          { label: "Mezzi attivi", value: fleetStats.active, tone: "bg-slate-900", color: "text-slate-900" },
-          { label: "Mezzi bloccati", value: fleetStats.blocked, tone: "bg-rose-500", color: "text-rose-700" },
-          { label: "Anomalie aperte", value: fleetStats.anomalies, tone: "bg-amber-500", color: "text-amber-700" },
-          { label: "Senza GPS", value: fleetStats.gpsMissing, tone: "bg-sky-500", color: "text-sky-700" },
-          { label: "Doc da controllare", value: fleetStats.docsCritical, tone: "bg-fuchsia-500", color: "text-fuchsia-700" },
+          { label: "Mezzi attivi", value: fleetStats.active, tone: "bg-slate-900", color: "text-slate-900", hint: "parco operativo disponibile", status: "active" },
+          { label: "Mezzi inattivi", value: fleetStats.inactive, tone: "bg-slate-400", color: "text-slate-700", hint: "fuori servizio o disattivati", status: "inactive" },
+          { label: "Mezzi bloccati", value: fleetStats.blocked, tone: "bg-rose-500", color: "text-rose-700", hint: "da sbloccare o sostituire", status: "blocked" },
+          { label: "Anomalie aperte", value: fleetStats.anomalies, tone: "bg-amber-500", color: "text-amber-700", hint: "richiedono presa in carico", status: "anomalies" },
+          { label: "Senza GPS", value: fleetStats.gpsMissing, tone: "bg-sky-500", color: "text-sky-700", hint: "mezzi senza tracking live", status: "gpsless" },
+          { label: "Doc da controllare", value: fleetStats.docsCritical, tone: "bg-fuchsia-500", color: "text-fuchsia-700", hint: "scaduti o in scadenza", status: "docs" },
         ].map((stat) => (
-          <div key={stat.label} className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+          <button
+            key={stat.label}
+            type="button"
+            onClick={() => focusProblemArea(stat.status)}
+            className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white px-5 py-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+          >
             <span className={`absolute inset-x-0 top-0 h-1 ${stat.tone}`} />
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{stat.label}</p>
             <p className={`mt-1 text-3xl font-semibold ${stat.color}`}>{stat.value}</p>
-          </div>
+            <p className="mt-1 text-xs text-slate-500">{stat.hint}</p>
+          </button>
         ))}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div ref={vehicleListRef} className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
 
         {/* ── Lista veicoli ───────────────────────────────────────────────── */}
         <SectionCard
@@ -360,11 +432,14 @@ export default function FleetOpsPage() {
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Stato</span>
                   {[
-                    ["all", "Tutti"],
-                    ["active", "Operativi"],
-                    ["blocked", "Bloccati"],
-                    ["attention", "Da controllare"],
-                    ["gpsless", "Senza GPS"],
+                    ["all", `Tutti (${vehicles.length})`],
+                    ["active", `Operativi (${fleetStats.active})`],
+                    ["inactive", `Inattivi (${fleetStats.inactive})`],
+                    ["blocked", `Bloccati (${fleetStats.blocked})`],
+                    ["attention", `Da controllare (${fleetStats.docsCritical + fleetStats.anomalies})`],
+                    ["anomalies", `Anomalie (${fleetStats.anomalies})`],
+                    ["docs", `Documenti (${fleetStats.docsCritical})`],
+                    ["gpsless", `Senza GPS (${fleetStats.gpsMissing})`],
                   ].map(([value, label]) => (
                     <button
                       key={value}
@@ -471,19 +546,8 @@ export default function FleetOpsPage() {
                           type="button"
                           title={vehicle.active ? "Clicca per disattivare" : "Clicca per attivare"}
                           onClick={() => void post({
-                            action: "upsert_vehicle",
+                            action: "toggle_vehicle_active",
                             id: vehicle.id,
-                            label: vehicle.label,
-                            plate: vehicle.plate ?? null,
-                            vehicle_size: vehicle.vehicle_size ?? "medium",
-                            habitual_driver_user_id: vehicle.habitual_driver_profile_id ?? null,
-                            default_zone: vehicle.default_zone ?? null,
-                            blocked_until: vehicle.blocked_until ?? null,
-                            blocked_reason: vehicle.blocked_reason ?? null,
-                            notes: vehicle.notes ?? null,
-                            radius_vehicle_id: vehicle.radius_vehicle_id ?? null,
-                            capacity: vehicle.capacity ?? null,
-                            is_blocked_manual: vehicle.is_blocked_manual ?? false,
                             active: !vehicle.active,
                           })}
                           className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition hover:opacity-80 whitespace-nowrap ${
@@ -519,6 +583,7 @@ export default function FleetOpsPage() {
                       <div>
                         <p className="text-lg font-semibold text-slate-900">{selectedVehicle.label}</p>
                         <p className="mt-1 font-mono text-sm text-slate-500">{selectedVehicle.plate ?? "Targa da inserire"}</p>
+                        <p className="mt-1 text-xs font-medium text-slate-400">Licenza: <span className="font-mono text-slate-500">{selectedVehicle.license_number ?? "da inserire"}</span></p>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${SIZE_BADGE[selectedVehicle.vehicle_size ?? ""] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
@@ -554,6 +619,10 @@ export default function FleetOpsPage() {
                           value: selectedVehicle.default_zone ?? "Non definita",
                         },
                         {
+                          label: "Licenza mezzo",
+                          value: selectedVehicle.license_number ?? "Non inserita",
+                        },
+                        {
                           label: "Operatività",
                           value: selectedAnomalies.length > 0 ? `${selectedAnomalies.length} anomalie aperte` : "Nessuna anomalia aperta",
                         },
@@ -574,6 +643,10 @@ export default function FleetOpsPage() {
                   <label className="text-xs font-semibold text-slate-500">
                     Targa
                     <input className="input-saas mt-1 w-full font-mono" value={form.plate} onChange={(e) => setForm((f) => ({ ...f, plate: e.target.value }))} placeholder="AA123BB" />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-500">
+                    Numero licenza automezzo
+                    <input className="input-saas mt-1 w-full font-mono text-xs" value={form.license_number} onChange={(e) => setForm((f) => ({ ...f, license_number: e.target.value }))} placeholder="es. LIC-2026-015" />
                   </label>
                   <label className="text-xs font-semibold text-slate-500">
                     Taglia
@@ -642,6 +715,7 @@ export default function FleetOpsPage() {
                         inspection_expiry: form.inspection_expiry || null,
                         km: form.km ? Number(form.km) : null,
                         telaio: form.telaio || null,
+                        license_number: form.license_number || null,
                       });
                       if (ok && isNewVehicle) setIsNewVehicle(false);
                     }}
@@ -673,6 +747,15 @@ export default function FleetOpsPage() {
                     </button>
                   ) : null}
                 </div>
+
+                {!isNewVehicle && selectedVehicle ? (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <a href="/fleet-ops/fuel" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100">Apri coda rifornimenti</a>
+                    <a href="/fleet-ops/maintenance" className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 hover:bg-orange-100">Apri registro manutenzioni</a>
+                    <a href="/fleet-ops/inventory" className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800 hover:bg-sky-100">Apri magazzino ricambi</a>
+                    <a href="/fleet-ops/reports" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">Apri report costi/km</a>
+                  </div>
+                ) : null}
 
                 {/* Documenti, blocco e anomalie solo in modifica */}
                 {!isNewVehicle && selectedVehicle ? (
@@ -710,6 +793,22 @@ export default function FleetOpsPage() {
                             </label>
                           );
                         })}
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={saving || !selectedVehicle}
+                            className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                            onClick={() => void post({
+                              action: "set_vehicle_documents",
+                              id: selectedVehicle.id,
+                              insurance_expiry: form.insurance_expiry || null,
+                              road_tax_expiry: form.road_tax_expiry || null,
+                              inspection_expiry: form.inspection_expiry || null,
+                            })}
+                          >
+                            Salva documenti
+                          </button>
+                        </div>
                       </div>
                     </details>
 
@@ -726,6 +825,36 @@ export default function FleetOpsPage() {
                           Bloccato fino a
                           <input type="datetime-local" className="input-saas mt-1 w-full" value={form.blocked_until} onChange={(e) => setForm((f) => ({ ...f, blocked_until: e.target.value }))} />
                         </label>
+                        <div className="col-span-2 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={saving || !selectedVehicle}
+                            className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                            onClick={() => void post({
+                              action: "set_vehicle_block",
+                              id: selectedVehicle.id,
+                              blocked_reason: form.blocked_reason || null,
+                              blocked_until: form.blocked_until ? new Date(form.blocked_until).toISOString() : null,
+                              is_blocked_manual: Boolean(form.blocked_reason || form.blocked_until),
+                            })}
+                          >
+                            Applica blocco
+                          </button>
+                          <button
+                            type="button"
+                            disabled={saving || !selectedVehicle}
+                            className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                            onClick={() => void post({
+                              action: "set_vehicle_block",
+                              id: selectedVehicle.id,
+                              blocked_reason: null,
+                              blocked_until: null,
+                              is_blocked_manual: false,
+                            })}
+                          >
+                            Sblocca mezzo
+                          </button>
+                        </div>
                       </div>
                     </details>
 

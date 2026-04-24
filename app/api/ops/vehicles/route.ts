@@ -1,27 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { vehicleUpsertSchema } from "@/lib/server/fleet-schemas";
 
 export const runtime = "nodejs";
 
-const vehicleSchema = z.object({
-  id: z.string().uuid().optional(),
-  label: z.string().min(2).max(120),
-  plate: z.string().max(32).optional().nullable(),
-  capacity: z.number().int().min(1).max(120).nullable(),
-  vehicle_size: z.enum(["small", "medium", "large", "bus"]).nullable(),
-  habitual_driver_user_id: z.string().uuid().optional().nullable(),
-  default_zone: z.string().max(120).optional().nullable(),
-  blocked_until: z.string().datetime().optional().nullable(),
-  blocked_reason: z.string().max(500).optional().nullable(),
-  notes: z.string().max(2000).optional().nullable(),
-  is_blocked_manual: z.boolean().optional().default(false),
-  active: z.boolean().optional().default(true),
-  radius_vehicle_id: z.string().max(120).optional().nullable(),
-  insurance_expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
-  road_tax_expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
-  inspection_expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable()
-});
+async function runVehicleMutationWithFallback(
+  queryFactory: (payload: Record<string, unknown>) => Promise<{ error: { message: string } | null }>
+) {
+  const run = async (payload: Record<string, unknown>) => {
+    const result = await queryFactory(payload);
+    return result.error;
+  };
+
+  return async (payload: Record<string, unknown>) => {
+    let error = await run(payload);
+    if (!error) return null;
+
+    const message = error.message.toLowerCase();
+    if (message.includes("license_number")) {
+      const fallbackPayload = { ...payload };
+      delete fallbackPayload.license_number;
+      error = await run(fallbackPayload);
+    }
+    return error;
+  };
+}
 
 const anomalySchema = z.object({
   vehicle_id: z.string().uuid(),
@@ -35,6 +39,25 @@ const driverSchema = z.object({
   id: z.string().uuid().optional(),
   full_name: z.string().min(2).max(120),
   phone: z.string().max(32).optional().nullable(),
+});
+
+const toggleVehicleSchema = z.object({
+  id: z.string().uuid(),
+  active: z.boolean(),
+});
+
+const vehicleBlockSchema = z.object({
+  id: z.string().uuid(),
+  blocked_reason: z.string().max(500).nullable().optional(),
+  blocked_until: z.string().datetime().nullable().optional(),
+  is_blocked_manual: z.boolean(),
+});
+
+const vehicleDocumentsSchema = z.object({
+  id: z.string().uuid(),
+  insurance_expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  road_tax_expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  inspection_expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
 });
 
 export async function GET(request: NextRequest) {
@@ -82,7 +105,7 @@ export async function POST(request: NextRequest) {
       if (!["admin", "operator"].includes(auth.membership.role)) {
         return NextResponse.json({ ok: false, error: "Ruolo non autorizzato." }, { status: 403 });
       }
-      const parsed = vehicleSchema.parse(body);
+      const parsed = vehicleUpsertSchema.parse(body);
       const payload = {
         tenant_id: tenantId,
         label: parsed.label,
@@ -99,12 +122,64 @@ export async function POST(request: NextRequest) {
         radius_vehicle_id: parsed.radius_vehicle_id ?? null,
         insurance_expiry: parsed.insurance_expiry ?? null,
         road_tax_expiry: parsed.road_tax_expiry ?? null,
-        inspection_expiry: parsed.inspection_expiry ?? null
+        inspection_expiry: parsed.inspection_expiry ?? null,
+        km: parsed.km ?? null,
+        telaio: parsed.telaio ?? null,
+        license_number: parsed.license_number ?? null,
       };
-      const query = parsed.id
-        ? auth.admin.from("vehicles").update(payload).eq("tenant_id", tenantId).eq("id", parsed.id)
-        : auth.admin.from("vehicles").insert(payload);
-      const { error } = await query;
+      const executeMutation = await runVehicleMutationWithFallback(async (nextPayload) => (
+        await (parsed.id
+          ? auth.admin.from("vehicles").update(nextPayload).eq("tenant_id", tenantId).eq("id", parsed.id)
+          : auth.admin.from("vehicles").insert(nextPayload))
+      ));
+      const error = await executeMutation(payload);
+      if (error) throw new Error(error.message);
+    }
+
+    if (action === "toggle_vehicle_active") {
+      if (!["admin", "operator"].includes(auth.membership.role)) {
+        return NextResponse.json({ ok: false, error: "Ruolo non autorizzato." }, { status: 403 });
+      }
+      const parsed = toggleVehicleSchema.parse(body);
+      const { error } = await auth.admin
+        .from("vehicles")
+        .update({ active: parsed.active })
+        .eq("tenant_id", tenantId)
+        .eq("id", parsed.id);
+      if (error) throw new Error(error.message);
+    }
+
+    if (action === "set_vehicle_block") {
+      if (!["admin", "operator"].includes(auth.membership.role)) {
+        return NextResponse.json({ ok: false, error: "Ruolo non autorizzato." }, { status: 403 });
+      }
+      const parsed = vehicleBlockSchema.parse(body);
+      const { error } = await auth.admin
+        .from("vehicles")
+        .update({
+          blocked_reason: parsed.blocked_reason ?? null,
+          blocked_until: parsed.blocked_until ?? null,
+          is_blocked_manual: parsed.is_blocked_manual,
+        })
+        .eq("tenant_id", tenantId)
+        .eq("id", parsed.id);
+      if (error) throw new Error(error.message);
+    }
+
+    if (action === "set_vehicle_documents") {
+      if (!["admin", "operator"].includes(auth.membership.role)) {
+        return NextResponse.json({ ok: false, error: "Ruolo non autorizzato." }, { status: 403 });
+      }
+      const parsed = vehicleDocumentsSchema.parse(body);
+      const { error } = await auth.admin
+        .from("vehicles")
+        .update({
+          insurance_expiry: parsed.insurance_expiry ?? null,
+          road_tax_expiry: parsed.road_tax_expiry ?? null,
+          inspection_expiry: parsed.inspection_expiry ?? null,
+        })
+        .eq("tenant_id", tenantId)
+        .eq("id", parsed.id);
       if (error) throw new Error(error.message);
     }
 

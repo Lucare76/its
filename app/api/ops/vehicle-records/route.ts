@@ -4,6 +4,11 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import {
+  fuelRecordSchema,
+  maintenanceRecordSchema,
+  sparePartRecordSchema,
+} from "@/lib/server/fleet-schemas";
 
 export const runtime = "nodejs";
 
@@ -24,6 +29,13 @@ const ORDER_MAP: Record<RecordType, string> = {
   qr_reports:  "created_at",
   commitments: "commitment_date",
 };
+
+function validatePayload(type: RecordType, data: Record<string, unknown>) {
+  if (type === "maintenance") return maintenanceRecordSchema.parse(data);
+  if (type === "fuel") return fuelRecordSchema.parse(data);
+  if (type === "spare_parts") return sparePartRecordSchema.parse(data);
+  return data;
+}
 
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
@@ -75,8 +87,9 @@ export async function POST(request: NextRequest) {
 
   if (body.action === "insert") {
     if (!body.vehicle_id || !body.data) return NextResponse.json({ error: "vehicle_id e data richiesti." }, { status: 400 });
+    const parsedData = validatePayload(body.type, body.data);
     const { error } = await auth.admin.from(table).insert({
-      ...body.data,
+      ...parsedData,
       vehicle_id: body.vehicle_id,
       tenant_id:  auth.membership.tenant_id,
       created_by: auth.user.id,
@@ -87,7 +100,8 @@ export async function POST(request: NextRequest) {
 
   if (body.action === "update") {
     if (!body.id || !body.data) return NextResponse.json({ error: "id e data richiesti." }, { status: 400 });
-    const { error } = await auth.admin.from(table).update(body.data).eq("id", body.id);
+    const parsedData = validatePayload(body.type, body.data);
+    const { error } = await auth.admin.from(table).update(parsedData).eq("id", body.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
   }

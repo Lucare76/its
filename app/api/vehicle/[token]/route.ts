@@ -353,6 +353,8 @@ export async function POST(
       km_at_fuel: kmAtFuel,
       fuel_type:  fuelType,
       station,
+      approval_status: "pending",
+      submitted_via_qr: true,
     });
 
     if (err) return NextResponse.json({ error: err.message }, { status: 500 });

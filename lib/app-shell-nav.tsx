@@ -313,6 +313,10 @@ export const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/crm-agencies", label: "Agenzie", icon: "C" },
       { href: "/hotels", label: "Hotel", icon: "H" },
       { href: "/fleet-ops", label: "Flotta e mezzi", icon: "F" },
+      { href: "/fleet-ops/fuel", label: "Rifornimenti", icon: "⛽" },
+      { href: "/fleet-ops/maintenance", label: "Manutenzioni", icon: "🔧" },
+      { href: "/fleet-ops/inventory", label: "Ricambi magazzino", icon: "🔩" },
+      { href: "/fleet-ops/reports", label: "Report veicoli", icon: "📈" },
       { href: "/fleet-ops/drivers", label: "KPI Autisti", icon: "📊" },
       { href: "/settings/tenant", label: "Profilo azienda", icon: "🏢" },
     ]
