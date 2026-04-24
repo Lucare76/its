@@ -46,7 +46,7 @@ function withPhoneE164Fallback(services: DriverServiceRow[]) {
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor", "autista"]);
     if (auth instanceof NextResponse) return auth;
 
     const tenantId = auth.membership.tenant_id;

@@ -238,7 +238,10 @@ function DriverPageInner() {
     mine.filter((x) => x.service.status === "completato").reduce((s, x) => s + x.service.pax, 0),
     [mine]);
 
-  const defaultFocusId = mine.find((x) => x.service.status !== "completato" && x.service.status !== "cancelled")?.service.id ?? mine[0]?.service.id ?? null;
+  const defaultFocusId =
+    mine.find((x) => x.service.status !== "completato" && x.service.status !== "cancelled")?.service.id ??
+    mine.find((x) => x.service.date >= todayIso)?.service.id ??
+    null;
   const effectiveFocusId = focusServiceId && mine.some((x) => x.service.id === focusServiceId) ? focusServiceId : defaultFocusId;
   const focused = mine.find((x) => x.service.id === effectiveFocusId) ?? null;
   const focusedHotel = focused ? data.hotels.find((h) => h.id === focused.service.hotel_id) : null;
@@ -267,15 +270,6 @@ function DriverPageInner() {
     setSavingNote(false);
   };
 
-  /* ---- iOS install hint */
-  const isIos = useMemo(() => {
-    if (typeof navigator === "undefined") return false;
-    return /iphone|ipad|ipod/.test(navigator.userAgent.toLowerCase());
-  }, []);
-  const isAndroid = useMemo(() => {
-    if (typeof navigator === "undefined") return false;
-    return /android/.test(navigator.userAgent.toLowerCase());
-  }, []);
   const isStandalone = useMemo(() => {
     if (typeof window === "undefined") return false;
     return window.matchMedia("(display-mode: standalone)").matches || (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
