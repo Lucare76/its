@@ -11,5 +11,5 @@ test-results
 samples/review-test-*.pdf
 samples/review-test-e2e-*.pdf
 public/maps/*.pmtiles
-
-.vercel
+next-env.d.ts
+tsconfig.tsbuildinfo
