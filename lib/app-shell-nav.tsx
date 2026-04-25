@@ -334,6 +334,7 @@ export const SETTINGS_GROUPS: NavGroup[] = [
     items: [
       { href: "/planning", label: "Pianificazione", icon: "L" },
       { href: "/excel-import", label: "Import Excel", icon: "E" },
+      { href: "/driver-file-import", label: "Import file autista", icon: "R" },
       { href: "/excel-workspace", label: "Excel workspace", icon: "X" },
       { href: "/ops-summary", label: "Riepiloghi", icon: "S" },
       { href: "/ops-rules", label: "Regole operative", icon: "S" },

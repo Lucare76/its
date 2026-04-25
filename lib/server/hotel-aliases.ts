@@ -26,7 +26,7 @@ const SOSANDRA_HOTEL_ALIASES: Array<{ canonical: string; aliases: string[] }> = 
   },
   {
     canonical: "Hotel Cristallo Palace",
-    aliases: ["Hotel Cristallo Palace", "Cristallo Palace", "Hotel Cristallo"]
+    aliases: ["Hotel Cristallo Palace", "Cristallo Palace", "Hotel Cristallo", "Htl Cristallo", "Htl Cristtallo"]
   },
   {
     canonical: "Grand Hotel delle Terme Re Ferdinando",

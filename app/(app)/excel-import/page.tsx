@@ -286,6 +286,15 @@ function parseDirectionCell(value: string): "arrival" | "departure" | null {
   return null;
 }
 
+function normalizeBillingPartyName(value: string) {
+  const raw = value.trim();
+  const normalized = normalizeText(raw);
+  if (normalized === "ischia enjoy" || normalized === "ischia enoy") {
+    return "Aleste Viaggi";
+  }
+  return raw;
+}
+
 function inferDateFromFilename(fileName: string | null) {
   const normalized = String(fileName ?? "")
     .replace(/\.[a-z0-9]+$/i, "")
@@ -539,7 +548,10 @@ export default function ExcelImportPage() {
         if (cells.includes("gg") && cells.includes("flight")) { headerRowIdx = r; break; }
       }
       const headerRow = allRows[headerRowIdx].map((c) => normalize(c));
-      const col = (name: string) => headerRow.findIndex((h) => h === name || h.startsWith(name));
+      const col = (name: string) => {
+        const exact = headerRow.findIndex((h) => h === name);
+        return exact >= 0 ? exact : headerRow.findIndex((h) => h.startsWith(name));
+      };
       const ggIdx = col("gg");
       const mmIdx = col("mm");
       const aaIdx = col("aa");
@@ -548,6 +560,8 @@ export default function ExcelImportPage() {
       const paxIdx = col("pax");
       const clienteIdx = col("cliente");
       const daIdx = col("da");
+      const aIdx = col("a");
+      const autiIdx = col("auti");
       const nominativoIdx = col("nominativo");
 
       // Ricava anno di default: prima cerca nella colonna aa, poi dal nome file, poi anno corrente
@@ -569,23 +583,45 @@ export default function ExcelImportPage() {
         const row = allRows[i];
         const flightRaw = String(row[flightIdx] ?? "").trim();
         const flightNorm = normalizeText(flightRaw);
-
-        // Righe separatore direzione
-        if (flightNorm === "arrivo" || flightNorm === "arrivi") { currentDirection = "arrival"; continue; }
-        if (flightNorm === "partenza" || flightNorm === "partenze") { currentDirection = "departure"; continue; }
-        // Riga separatore con "arrivi" nella colonna gg o in qualsiasi cella
         const rowText = row.map(normalizeText).join(" ");
-        if (/\barrivi\b/.test(rowText) && !flightRaw) { currentDirection = "arrival"; continue; }
-        if (/\bpartenze\b/.test(rowText) && !flightRaw) { currentDirection = "departure"; continue; }
+        const paxRaw = paxIdx >= 0 ? String(row[paxIdx] ?? "").trim() : "";
+        const clienteRaw = clienteIdx >= 0 ? String(row[clienteIdx] ?? "") : "";
+        const daRaw = daIdx >= 0 ? String(row[daIdx] ?? "") : "";
+        const aRaw = aIdx >= 0 ? String(row[aIdx] ?? "") : "";
+        const nominativoCell = nominativoIdx >= 0 ? String(row[nominativoIdx] ?? "") : "";
+        const isHeaderLike = normalizeText(String(row[ggIdx] ?? "")) === "gg" && normalizeText(String(row[mmIdx] ?? "")) === "mm";
+        const isDirectionSeparator =
+          !paxRaw &&
+          !clienteRaw.trim() &&
+          !daRaw.trim() &&
+          !aRaw.trim() &&
+          !nominativoCell.trim() &&
+          (
+            flightNorm === "arrivo" ||
+            flightNorm === "arrivi" ||
+            flightNorm === "partenza" ||
+            flightNorm === "partenze" ||
+            /\barrivi\b/.test(rowText) ||
+            /\bpartenze\b/.test(rowText)
+          );
+
+        if (isHeaderLike) continue;
+        if (isDirectionSeparator) {
+          if (flightNorm === "arrivo" || flightNorm === "arrivi" || /\barrivi\b/.test(rowText)) currentDirection = "arrival";
+          if (flightNorm === "partenza" || flightNorm === "partenze" || /\bpartenze\b/.test(rowText)) currentDirection = "departure";
+          continue;
+        }
+        if (/\bescursioni\b/.test(rowText)) continue;
 
         const gg = ggIdx >= 0 ? String(row[ggIdx] ?? "").trim() : "";
         const mm = mmIdx >= 0 ? String(row[mmIdx] ?? "").trim() : "";
         const aa = aaIdx >= 0 ? String(row[aaIdx] ?? "").trim() : "";
-        const paxRaw = paxIdx >= 0 ? String(row[paxIdx] ?? "").trim() : "";
         const pax = parsePaxCell(paxRaw);
-        const cliente = clienteIdx >= 0 ? String(row[clienteIdx] ?? "").trim() : "";
+        const cliente = clienteIdx >= 0 ? normalizeBillingPartyName(String(row[clienteIdx] ?? "")) : "";
         const da = daIdx >= 0 ? String(row[daIdx] ?? "").trim() : "";
+        const a = aIdx >= 0 ? String(row[aIdx] ?? "").trim() : "";
         const inizio = inizioIdx >= 0 ? parseTimeCell(String(row[inizioIdx] ?? "").trim()) : "";
+        const auti = autiIdx >= 0 ? parseTimeCell(String(row[autiIdx] ?? "").trim()) : "";
 
         // Leggi nominativo-note: "COGNOME NOME 3401234567 TRF TRAGHETTO"
         const nominativoRaw = nominativoIdx >= 0 ? String(row[nominativoIdx] ?? "").trim() : "";
@@ -599,7 +635,7 @@ export default function ExcelImportPage() {
           : "";
 
         // Salta righe vuote
-        if (!gg && !flightRaw && !paxRaw && !cliente && !da) continue;
+        if (!gg && !flightRaw && !paxRaw && !cliente && !da && !a) continue;
 
         // Costruisci data da gg/mm/aa
         let date = inferredFileDate;
@@ -610,7 +646,14 @@ export default function ExcelImportPage() {
           if (dayNum && monNum) date = `${year}-${monNum.padStart(2, "0")}-${dayNum.padStart(2, "0")}`;
         }
 
-        const transport = parseFoglioFlightCell(flightRaw);
+        const explicitDirection =
+          flightNorm === "arrivo" || flightNorm === "arrivi"
+            ? "arrival"
+            : flightNorm === "partenza" || flightNorm === "partenze"
+              ? "departure"
+              : null;
+        const rowDirection = explicitDirection ?? currentDirection;
+        const transport = parseFoglioFlightCell(explicitDirection ? da : flightRaw);
 
         // Etichetta terminale in base al mezzo di trasporto
         const terminalLabel =
@@ -620,25 +663,24 @@ export default function ExcelImportPage() {
           : "";
 
         // Per hotel matching (campo `destination` usato dall'API):
-        //   - arrivo: "da" = hotel destinazione (dove va il cliente)
-        //   - partenza: "da" = hotel origine (da dove parte il cliente)
-        // In entrambi i casi il campo hotel è la colonna "da"
-        // Il terminale (porto/aeroporto/stazione) va nel campo pickup/meeting_point
-        const hotelField = da; // colonna "da" contiene sempre l'hotel
-        const pickup = currentDirection === "arrival"
+        //   - arrivo: l'hotel e nella colonna "a" (es. apt/stz -> hotel)
+        //   - partenza: l'hotel e nella colonna "da" (es. hotel -> apt/stz)
+        // Il terminale/meeting point viene derivato dal tipo trasporto.
+        const hotelField = rowDirection === "arrival" ? a : da;
+        const pickup = rowDirection === "arrival"
           ? (terminalLabel || transport.transportCode)   // da terminale → hotel
           : (hotelField || "");                          // da hotel → terminale
         const destination = hotelField;                  // hotel = sempre "da"
 
         // Per le partenze: imposta departure_date così appaiono nella pagina Partenze
-        const departureDate = currentDirection === "departure" ? date : "";
-        const arrivalDate = currentDirection === "arrival" ? date : "";
+        const departureDate = rowDirection === "departure" ? date : "";
+        const arrivalDate = rowDirection === "arrival" ? date : "";
 
         const base: Omit<CandidateRow, "localIssues"> = {
           row_index: i + 1,
           customer_name: customerName,
           date,
-          time: inizio,
+          time: inizio || auti,
           pickup,
           destination,
           pax,
@@ -646,8 +688,8 @@ export default function ExcelImportPage() {
           phone: extractedPhone,
           notes: [extractedNotes, terminalLabel].filter(Boolean).join(" · "),
           departure_date: departureDate,
-          departure_time: currentDirection === "departure" ? (inizio || transport.ferryTime) : transport.ferryTime,
-          direction: currentDirection,
+          departure_time: rowDirection === "departure" ? (inizio || auti || transport.ferryTime) : transport.ferryTime,
+          direction: rowDirection,
           billing_party_name: cliente,
           bus_city_origin: ""
         };
@@ -784,6 +826,11 @@ export default function ExcelImportPage() {
       skipped: candidateRows.filter((row) => rowDecisions.get(row.row_index) === "skipped").length,
       pending: candidateRows.filter((row) => rowDecisions.get(row.row_index) === "pending").length
     }),
+    [candidateRows, rowDecisions]
+  );
+
+  const pendingValidCount = useMemo(
+    () => candidateRows.filter((row) => row.localIssues.length === 0 && rowDecisions.get(row.row_index) !== "approved").length,
     [candidateRows, rowDecisions]
   );
 
@@ -1129,8 +1176,14 @@ export default function ExcelImportPage() {
                 ) : null}
               </div>
               <div className="ml-auto flex gap-2">
-                <button type="button" className="btn-secondary text-xs py-1 px-3" onClick={approveAllValid}>
-                  Approva valide
+                <button
+                  type="button"
+                  className="btn-secondary text-xs py-1 px-3 disabled:opacity-50"
+                  onClick={approveAllValid}
+                  disabled={pendingValidCount === 0}
+                  title={pendingValidCount === 0 ? "Le righe valide sono gia approvate." : `Approva ${pendingValidCount} righe valide.`}
+                >
+                  {pendingValidCount === 0 ? "Valide gia approvate" : `Approva valide (${pendingValidCount})`}
                 </button>
                 <button type="button" className="btn-secondary text-xs py-1 px-3" onClick={approveAll}>
                   Approva tutte
@@ -1219,8 +1272,8 @@ export default function ExcelImportPage() {
           <EmptyState title="Nessun errore server" description="Esegui un dry run per vedere la validazione finale lato server." compact />
         ) : (
           <div className="space-y-2">
-            {result.errors.map((item) => (
-              <article key={`${item.row_index}-${item.message}`} className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            {result.errors.map((item, index) => (
+              <article key={`${item.row_index}-${item.message}-${index}`} className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                 Riga {item.row_index}: {item.message}
               </article>
             ))}
