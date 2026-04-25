@@ -190,7 +190,10 @@ function DriverPageInner() {
   const refresh = useCallback(async () => {
     const token = await getToken();
     if (!token) { setErrorMessage("Sessione non valida."); setLoading(false); return; }
-    const res = await fetch("/api/ops/driver-data", { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch("/api/ops/driver-data", {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${token}` }
+    });
     const body = await res.json() as {
       ok?: boolean; error?: string;
       tenant_id?: string; user_id?: string;

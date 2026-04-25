@@ -77,6 +77,7 @@ export function PwaInit({ children }: { children?: React.ReactNode }) {
       .register("/sw.js", { scope: "/driver" })
       .then((reg) => {
         swReg.current = reg;
+        void reg.update();
         setSwReady(true);
 
         // Controlla stato push attuale

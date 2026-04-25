@@ -5,7 +5,7 @@
    - Gestione click notifica
 ================================================================ */
 
-const CACHE_NAME = 'its-driver-v1';
+const CACHE_NAME = 'its-driver-v2';
 const OFFLINE_PAGE = '/driver';
 
 // ---------------------------------------------------------------- install
@@ -27,13 +27,18 @@ self.addEventListener('activate', (event) => {
 });
 
 // ---------------------------------------------------------------- fetch
-// Network-first per la sezione driver; cache come fallback offline
+// Network-first per la sezione driver; mai cache fallback per i dati operativi
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   if (!url.pathname.startsWith('/driver') && !url.pathname.startsWith('/api/ops/driver-data')) return;
   // Lascia passare le richieste interne di Next.js (RSC, prefetch, data routes)
   if (url.pathname.startsWith('/_next/') || url.searchParams.has('_rsc') || url.searchParams.has('__nextSuspense')) return;
+
+  if (url.pathname.startsWith('/api/ops/driver-data')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
 
   event.respondWith(
     fetch(event.request)

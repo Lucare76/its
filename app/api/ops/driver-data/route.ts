@@ -12,6 +12,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 const DRIVER_SERVICE_SELECT =
   "id,tenant_id,date,time,service_type,direction,vessel,pax,hotel_id,customer_name,phone,notes,status,meeting_point,pickup_time,linked_service_id,booking_service_kind";
@@ -44,6 +46,14 @@ function withPhoneE164Fallback(services: DriverServiceRow[]) {
   }));
 }
 
+function jsonNoStore(body: unknown, init?: ResponseInit) {
+  const response = NextResponse.json(body, init);
+  response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  response.headers.set("Pragma", "no-cache");
+  response.headers.set("Expires", "0");
+  return response;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor", "autista"]);
@@ -66,7 +76,7 @@ export async function GET(request: NextRequest) {
         .from("hotels")
         .select("id, name, zone, lat, lng")
         .eq("tenant_id", tenantId);
-      return NextResponse.json({
+      return jsonNoStore({
         ok: true,
         tenant_id: tenantId,
         user_id: userId,
@@ -122,7 +132,7 @@ export async function GET(request: NextRequest) {
       linkedServices = withPhoneE164Fallback((linked ?? []) as DriverServiceRow[]);
     }
 
-    return NextResponse.json({
+    return jsonNoStore({
       ok: true,
       tenant_id: tenantId,
       user_id: userId,
@@ -133,7 +143,7 @@ export async function GET(request: NextRequest) {
       hotels: hotelsResult.data ?? [],
     });
   } catch (error) {
-    return NextResponse.json(
+    return jsonNoStore(
       { ok: false, error: error instanceof Error ? error.message : "Errore sconosciuto" },
       { status: 500 }
     );

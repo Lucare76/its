@@ -118,6 +118,14 @@ export default function DriverFileImportPage() {
   );
 
   const resolvedDriverUserId = matchedAppDriver?.user_id ?? "";
+  const actionDisabledReason = useMemo(() => {
+    if (submitting) return "Elaborazione in corso.";
+    if (!file) return "Seleziona un file Excel.";
+    if (!serviceDate) return "Inserisci la data del servizio.";
+    if (!driverProfileId) return "Seleziona un autista.";
+    if (!resolvedDriverUserId) return "L'autista selezionato non e collegato all'app driver.";
+    return "";
+  }, [driverProfileId, file, resolvedDriverUserId, serviceDate, submitting]);
 
   const handleFile = (event: ChangeEvent<HTMLInputElement>) => {
     setFile(event.target.files?.[0] ?? null);
@@ -148,6 +156,7 @@ export default function DriverFileImportPage() {
 
     setSubmitting(true);
     setResult(null);
+    setMessage(dryRun ? "Simulazione in corso..." : "Import in corso...");
     try {
       const session = await supabase.auth.getSession();
       const token = session.data.session?.access_token;
@@ -237,6 +246,7 @@ export default function DriverFileImportPage() {
             <button type="button" className="btn-primary" disabled={submitting || !file || !driverProfileId || !resolvedDriverUserId || !serviceDate} onClick={() => void runImport(false)}>
               {submitting ? "Import in corso..." : "Importa e assegna"}
             </button>
+            <p className="text-xs text-muted">{actionDisabledReason || "Pronto per la simulazione o l'import."}</p>
           </div>
         </SectionCard>
       </div>

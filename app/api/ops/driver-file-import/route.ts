@@ -26,6 +26,12 @@ type ParsedDriverFileRow = {
   destination: string;
   extra_1: string;
   extra_2: string;
+  customer_raw: string;
+};
+
+type ParsedCustomerContact = {
+  customerName: string;
+  phone: string;
 };
 
 type PreviewRow = {
@@ -120,6 +126,74 @@ function buildNotes(row: ParsedDriverFileRow, direction: "arrival" | "departure"
   return parts.join(" | ");
 }
 
+function extractCustomerRaw(row: string[]) {
+  for (let index = row.length - 1; index >= 10; index -= 1) {
+    const value = String(row[index] ?? "").trim();
+    if (!value) continue;
+    if (normalizeText(value) === "its") continue;
+    return value;
+  }
+  return "";
+}
+
+function looksLikeTimeOrCode(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return false;
+  if (/^\d{1,2}:\d{2}$/.test(normalized)) return true;
+  if (/^\d{1,2}:\d{2}\s+[a-z]+/.test(normalized)) return true;
+  if (/^(fr|ic|fb|az|u2|km)\s*\d+/i.test(normalized)) return true;
+  return false;
+}
+
+function parseCustomerContact(value: string): ParsedCustomerContact {
+  const raw = value.trim();
+  if (!raw) return { customerName: "", phone: "" };
+
+  const phoneMatch = raw.match(/(?:\+?\d[\d\s./-]{6,}\d)/);
+  const phone = phoneMatch ? phoneMatch[0].replace(/[^\d+]/g, "") : "";
+  const baseName = phoneMatch
+    ? raw.replace(phoneMatch[0], "").replace(/\s+/g, " ").trim()
+    : raw;
+  const customerName = baseName
+    .replace(/\bTRF\b.*$/i, "")
+    .replace(/\bTRAGHETTO\b.*$/i, "")
+    .replace(/\bTRANSFER\b.*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return { customerName, phone };
+}
+
+function resolveCustomerContact(row: ParsedDriverFileRow): ParsedCustomerContact {
+  const customerRaw = row.customer_raw.trim();
+  if (customerRaw && !looksLikeTimeOrCode(customerRaw)) {
+    const parsed = parseCustomerContact(customerRaw);
+    if (parsed.customerName || parsed.phone) return parsed;
+  }
+
+  const extra2 = row.extra_2.trim();
+  if (extra2 && !looksLikeTimeOrCode(extra2)) {
+    const parsed = parseCustomerContact(extra2);
+    if (parsed.customerName || parsed.phone) return parsed;
+  }
+
+  const extra1 = row.extra_1.trim();
+  if (extra1 && !looksLikeTimeOrCode(extra1)) {
+    const parsed = parseCustomerContact(extra1);
+    if (parsed.customerName || parsed.phone) return parsed;
+  }
+
+  const billingParty = row.billing_party_name.trim();
+  if (billingParty) return { customerName: billingParty, phone: "" };
+
+  const reference = row.reference.trim();
+  if (reference && !looksLikeTimeOrCode(reference) && isMeaningfulReference(reference)) {
+    return { customerName: reference, phone: "" };
+  }
+
+  return { customerName: `Servizio autista riga ${row.row_index}`, phone: "" };
+}
+
 function parseRowsFromSheet(rows: string[][]) {
   return rows
     .map((row, index) => ({
@@ -134,7 +208,8 @@ function parseRowsFromSheet(rows: string[][]) {
       origin: String(row[6] ?? "").trim(),
       destination: String(row[7] ?? "").trim(),
       extra_1: String(row[8] ?? "").trim(),
-      extra_2: String(row[9] ?? "").trim()
+      extra_2: String(row[9] ?? "").trim(),
+      customer_raw: extractCustomerRaw(row)
     }))
     .filter((row) => Object.values(row).some((value) => String(value ?? "").trim()));
 }
@@ -214,6 +289,7 @@ export async function POST(request: NextRequest) {
         ? row.reference
         : (direction === "arrival" ? row.origin : row.destination);
       const notes = buildNotes(row, direction);
+      const customerContact = resolveCustomerContact(row);
       const resolvedHotelId = resolveHotelMatch(hotelRows, hotelName, null);
 
       if (!resolvedHotelId) {
@@ -253,9 +329,9 @@ export async function POST(request: NextRequest) {
         vessel,
         pax,
         hotel_id: resolvedHotelId,
-        customer_name: row.extra_2.trim() || `Servizio autista riga ${row.row_index}`,
+        customer_name: customerContact.customerName,
         billing_party_name: row.billing_party_name || null,
-        phone: "",
+        phone: customerContact.phone,
         notes: notes || null,
         meeting_point: meetingPoint || null,
         booking_service_kind: bookingServiceKind ?? null,
