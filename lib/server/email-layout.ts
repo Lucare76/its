@@ -92,7 +92,7 @@ ${preheader}
 
   <!-- HEADER -->
   <tr>
-    <td class="email-header" style="background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:18px 24px;text-align:center;line-height:0;">
+    <td class="email-header" bgcolor="#1e3a5f" style="background-color:#1e3a5f;background:linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1a4a7a 100%);border-radius:20px 20px 0 0;padding:18px 24px;text-align:center;line-height:0;">
       ${logoBlock}
     </td>
   </tr>
