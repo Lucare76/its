@@ -760,6 +760,14 @@ function DriverPageInner() {
                             {group.direction === "arrival" ? "↓ Arrivo" : "↑ Partenza"}
                           </span>
                           <p className="font-semibold text-slate-800 text-sm truncate">{group.label}</p>
+                          {(() => {
+                            const first = group.entries[0]?.service;
+                            if (!first) return null;
+                            const t = group.direction === "arrival"
+                              ? (getFerryArrivalAtIschia(first.time, first.booking_service_kind) ?? first.time?.slice(0,5))
+                              : (first.pickup_time?.slice(0,5) ?? first.time?.slice(0,5));
+                            return t ? <span className="shrink-0 text-sm font-bold text-slate-900">{t}</span> : null;
+                          })()}
                         </div>
                         <p className="text-xs text-slate-400 mt-0.5 truncate">
                           {group.entries.map((e) => `${e.service.pax} ${e.service.customer_name}`).join(" · ")}
@@ -821,6 +829,14 @@ function DriverPageInner() {
                             {group.direction === "arrival" ? "↓ Arrivo" : "↑ Partenza"}
                           </span>
                           <p className="font-semibold text-slate-800 text-sm truncate">{group.label}</p>
+                          {(() => {
+                            const first = group.entries[0]?.service;
+                            if (!first) return null;
+                            const t = group.direction === "arrival"
+                              ? (getFerryArrivalAtIschia(first.time, first.booking_service_kind) ?? first.time?.slice(0,5))
+                              : (first.pickup_time?.slice(0,5) ?? first.time?.slice(0,5));
+                            return t ? <span className="shrink-0 text-sm font-bold text-slate-900">{t}</span> : null;
+                          })()}
                         </div>
                         <p className="text-xs text-slate-400 mt-0.5 truncate">
                           {group.entries.map((e) => `${e.service.pax} ${e.service.customer_name}`).join(" · ")}
