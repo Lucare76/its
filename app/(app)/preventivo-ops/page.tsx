@@ -703,6 +703,12 @@ export default function PreventivoOpsPage() {
                       )}
                       {q.status === "sent" && (
                         <>
+                          {q.client_email && (
+                            <button onClick={() => void sendQuote(q.id)} disabled={sending === q.id}
+                              className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition">
+                              {sending === q.id ? "Invio..." : "🔁 Reinvia email"}
+                            </button>
+                          )}
                           <button onClick={() => void updateStatus(q.id, "accepted")}
                             className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 transition">
                             ✅ Segna accettato
