@@ -30,6 +30,7 @@ const SERVICE_KEY  = getEnv("SUPABASE_SERVICE_ROLE_KEY");
 
 const isDry   = process.argv.includes("--dry");
 const isClean = process.argv.includes("--clean");
+const driverArg = (() => { const i = process.argv.indexOf("--driver"); return i !== -1 ? process.argv[i + 1]?.toLowerCase() : null; })();
 
 // Domani
 const tomorrow = new Date();
@@ -256,16 +257,45 @@ async function main() {
   console.log(`✅  ${inserted.length} servizi inseriti`);
 
   // ─── ASSIGNMENTS ──────────────────────────────────────────────────────────
-  // Distribuisce i servizi tra gli autisti disponibili (round-robin)
-  const assignments = inserted.map((svc, i) => ({
-    id: uuid(),
-    tenant_id: TENANT_ID,
-    service_id: svc.id,
-    driver_user_id: drivers[i % drivers.length].user_id,
-    vehicle_label: rnd(["Vito", "Sprinter", "Classe E", "Touran"]),
-    group_id: null,
-    created_at: now,
-  }));
+  // Ogni gruppo (stessa nave o stesso hotel) va allo stesso autista,
+  // così ogni driver vede più servizi raggruppati come nella realtà.
+  const vehicles = ["Vito", "Sprinter", "Classe E", "Touran"];
+
+  // Raggruppa i servizi inseriti per chiave (vessel + time oppure hotel_id + time)
+  const groupMap = new Map();
+  for (const svc of inserted) {
+    const key = svc.direction === "arrival"
+      ? `arr_${svc.vessel}_${svc.time}`
+      : `dep_${svc.hotel_id}_${svc.time}`;
+    if (!groupMap.has(key)) groupMap.set(key, []);
+    groupMap.get(key).push(svc);
+  }
+
+  // Se --driver <nome> assegna tutto a quell'autista, altrimenti round-robin
+  const targetDriver = driverArg
+    ? drivers.find((d) => (d.full_name ?? "").toLowerCase().includes(driverArg))
+    : null;
+  if (driverArg && !targetDriver) { console.error(`Autista "${driverArg}" non trovato.`); process.exit(1); }
+  if (targetDriver) console.log(`\n🎯  Tutti i servizi → ${targetDriver.full_name}`);
+
+  const assignments = [];
+  let driverIdx = 0;
+  for (const [, groupServices] of groupMap) {
+    const driver = targetDriver ?? drivers[driverIdx % drivers.length];
+    const vehicle = vehicles[driverIdx % vehicles.length];
+    if (!targetDriver) driverIdx++;
+    for (const svc of groupServices) {
+      assignments.push({
+        id: uuid(),
+        tenant_id: TENANT_ID,
+        service_id: svc.id,
+        driver_user_id: driver.user_id,
+        vehicle_label: vehicle,
+        group_id: null,
+        created_at: now,
+      });
+    }
+  }
 
   await insert("assignments", assignments);
   console.log(`✅  ${assignments.length} assignment creati`);

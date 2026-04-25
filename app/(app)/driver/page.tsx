@@ -124,6 +124,7 @@ function distFromPort(lat: number | null, lng: number | null): number {
 type ServiceGroup = {
   key: string;
   label: string;
+  direction: "arrival" | "departure";
   totalPax: number;
   entries: { service: DriverService; assignment: DriverAssignment }[];
 };
@@ -322,11 +323,11 @@ function DriverPageInner() {
   const buildGroups = useCallback((entries: typeof mine): ServiceGroup[] => {
     const arrivals = entries.filter((e) => e.service.direction !== "departure");
     const departures = entries.filter((e) => e.service.direction === "departure");
-    const makeGroups = (list: typeof mine, keyFn: (e: typeof mine[0]) => string, labelFn: (e: typeof mine[0]) => string) => {
+    const makeGroups = (list: typeof mine, keyFn: (e: typeof mine[0]) => string, labelFn: (e: typeof mine[0]) => string, direction: "arrival" | "departure") => {
       const map = new Map<string, ServiceGroup>();
       for (const entry of list) {
         const k = keyFn(entry);
-        if (!map.has(k)) map.set(k, { key: k, label: labelFn(entry), totalPax: 0, entries: [] });
+        if (!map.has(k)) map.set(k, { key: k, label: labelFn(entry), direction, totalPax: 0, entries: [] });
         const g = map.get(k)!;
         g.totalPax += entry.service.pax;
         g.entries.push(entry);
@@ -336,7 +337,8 @@ function DriverPageInner() {
     const arrGroups = makeGroups(
       arrivals,
       (e) => e.service.vessel || "N/D",
-      (e) => e.service.vessel || "N/D"
+      (e) => e.service.vessel || "N/D",
+      "arrival"
     ).sort((a, b) => {
       const az = zoneRank(data.hotels.find((h) => h.id === a.entries[0]?.service.hotel_id)?.zone ?? null);
       const bz = zoneRank(data.hotels.find((h) => h.id === b.entries[0]?.service.hotel_id)?.zone ?? null);
@@ -345,7 +347,8 @@ function DriverPageInner() {
     const depGroups = makeGroups(
       departures,
       (e) => e.service.hotel_id ?? "none",
-      (e) => data.hotels.find((h) => h.id === e.service.hotel_id)?.name ?? "N/D"
+      (e) => data.hotels.find((h) => h.id === e.service.hotel_id)?.name ?? "N/D",
+      "departure"
     ).sort((a, b) => {
       const ah = data.hotels.find((h) => h.id === a.entries[0]?.service.hotel_id);
       const bh = data.hotels.find((h) => h.id === b.entries[0]?.service.hotel_id);
@@ -751,7 +754,12 @@ function DriverPageInner() {
                       onClick={() => setExpandedGroup(expandedGroup === `oggi-${group.key}` ? null : `oggi-${group.key}`)}
                       className="w-full px-4 py-3 text-left flex items-center justify-between hover:bg-slate-50 transition">
                       <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-slate-800 text-sm">{group.label}</p>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${group.direction === "arrival" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                            {group.direction === "arrival" ? "↓ Arrivo" : "↑ Partenza"}
+                          </span>
+                          <p className="font-semibold text-slate-800 text-sm truncate">{group.label}</p>
+                        </div>
                         <p className="text-xs text-slate-400 mt-0.5 truncate">
                           {group.entries.map((e) => `${e.service.pax} ${e.service.customer_name}`).join(" · ")}
                         </p>
