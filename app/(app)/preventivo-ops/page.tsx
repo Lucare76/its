@@ -328,7 +328,7 @@ export default function PreventivoOpsPage() {
       setQuotes(res.quotes ?? []);
       setWaypoints(res.waypoints ?? []);
       setMessage({ type: "ok", text: "Preventivo creato." });
-      e.currentTarget.reset();
+      formEl.reset();
       setServiceKind("Transfer porto - hotel");
       resetDispoState();
       return;
@@ -366,7 +366,7 @@ export default function PreventivoOpsPage() {
     setQuotes(res.quotes ?? []);
     setWaypoints(res.waypoints ?? []);
     setMessage({ type: "ok", text: "Preventivo creato." });
-    e.currentTarget.reset();
+    formEl.reset();
     setServiceKind("Transfer porto - hotel");
     setRouteLabel("");
     setBusCityInput("");
