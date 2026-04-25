@@ -49,6 +49,15 @@ function uuid() {
 }
 function rnd(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function rndInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function normalizeZona(rawZone) {
+  const z = (rawZone ?? "").toLowerCase().trim();
+  if (z.includes("forio")) return "forio";
+  if (z.includes("lacco")) return "lacco";
+  if (z.includes("casamicciola")) return "casamicciola";
+  if (z.includes("barano")) return "barano";
+  if (z.includes("serrara")) return "serrara";
+  return "ischia";
+}
 
 // ─── Nomi clienti realistici ──────────────────────────────────────────────────
 
@@ -164,27 +173,72 @@ async function main() {
 
   // ─── BUILD SERVICES ───────────────────────────────────────────────────────
 
-  // Corse di arrivo: 3 navi, gruppi da 3-5 clienti ciascuna
+  // Raggruppa hotel per zona (logica geografica realistica)
+  const hotelsByZona = {};
+  for (const h of hotels) {
+    const z = normalizeZona(h.zone);
+    if (!hotelsByZona[z]) hotelsByZona[z] = [];
+    hotelsByZona[z].push(h);
+  }
+  console.log("\n🗺  Hotel per zona nel DB:");
+  for (const [z, hs] of Object.entries(hotelsByZona)) {
+    console.log(`    ${z}: ${hs.map((h) => h.name).join(", ")}`);
+  }
+  const hotelInZona = (z) => hotelsByZona[z]?.length ? rnd(hotelsByZona[z]) : rnd(hotels);
+
+  // Giornata realistica single-driver — zero conflitti orari:
+  //
+  //   Partenza SNAV 09:45 da Casamicciola:
+  //     Leo parte da Forio alle 08:30 (1° stop) → Ischia alle 08:40 (2° stop)
+  //     Gli stop sono su zone DIVERSE → orari prelievo DIVERSI → nessun conflitto
+  //
+  //   Arrivo Medmar 13:30 → 14:30 Ischia Porto:
+  //     Clienti con hotel nella zona Ischia/Barano (stessa area del porto)
+  //     Leo li carica al porto e fa i drop in sequenza nella stessa zona
+  //
+  //   Arrivo SNAV 16:20 → 17:25 Casamicciola:
+  //     Clienti con hotel nella zona Casamicciola/Lacco (stessa area del porto)
+  //     Leo li carica a Casamicciola e fa i drop verso Lacco/Forio
+
   const ARRIVALS = [
-    { time: "09:20", vessel: "SNAV FR9200", meeting_point: "Casamicciola Porto" },
-    { time: "13:30", vessel: "Medmar MN1330", meeting_point: "Ischia Porto" },
-    { time: "16:30", vessel: "Medmar MN1630", meeting_point: "Ischia Porto" },
+    {
+      // Medmar arriva a Ischia Porto → drop solo zona ischia (nord-est porto)
+      time: "13:30", vessel: "Medmar MN1330", meeting_point: "Ischia Porto",
+      kind: "formula_medmar_pozzuoli",
+      hotel_zones: ["ischia"],
+    },
+    {
+      // SNAV arriva a Casamicciola → drop zona nord/ovest (casamicciola, lacco, forio)
+      time: "16:20", vessel: "SNAV FR1620", meeting_point: "Casamicciola",
+      kind: "formula_snav",
+      hotel_zones: ["casamicciola", "lacco", "forio"],
+    },
   ];
 
-  // Hotel di partenza: 2 hotel, gruppi da 2-3 clienti ciascuno
-  const DEP_HOTELS = hotels.slice(0, 2);
+  // Partenza SNAV 09:45: Forio (08:30) → Lacco (08:45) → Casamicciola (imbarco 09:45)
+  // Stessa tratta nord-ovest, 15 min di guida tra i due stop — gap realistico ✓
+  // Ischia esclusa: è 40 min da Forio, impossibile fare entrambi con 10 min di distacco
+  const DEPARTURE_FERRY = {
+    ferry_time: "09:45", porto_ischia: "CASAMICCIOLA", vessel: "SNAV FR9450",
+    booking_kind: "formula_snav", mainland_arr: "10:50",
+    route_zones: ["forio", "lacco"],
+    pickup_by_zona: { ischia: "08:40", lacco: "08:45", casamicciola: "08:45", barano: "08:15", forio: "08:30" },
+  };
 
   const now = new Date().toISOString();
   let customerIdx = 0;
   const services = [];
 
-  // Arrivi
+  // Arrivi: 6 clienti per traghetto, hotel in zona vicina al porto → ~14-16 pax
   for (const arr of ARRIVALS) {
-    const count = rndInt(2, 4);
+    const pool = arr.hotel_zones.flatMap((z) => hotelsByZona[z] ?? []);
+    const safePool = pool.length > 0 ? pool : hotels;
+    const count = 6;
+    const shuffledPool = [...safePool].sort(() => Math.random() - 0.5);
     for (let i = 0; i < count; i++) {
-      const hotel = rnd(hotels);
+      const hotel = shuffledPool[i % shuffledPool.length];
       const customer = pickCustomer(customerIdx++);
-      const pax = rndInt(1, 4);
+      const pax = rndInt(2, 3);
       services.push({
         id: uuid(),
         tenant_id: TENANT_ID,
@@ -200,7 +254,7 @@ async function main() {
         status: "assigned",
         meeting_point: arr.meeting_point,
         pickup_time: null,
-        booking_service_kind: "formula_snav",
+        booking_service_kind: arr.kind,
         arrival_date: TEST_DATE,
         arrival_time: arr.time,
         departure_date: TEST_DATE,
@@ -212,33 +266,34 @@ async function main() {
     }
   }
 
-  // Partenze
-  for (const hotel of DEP_HOTELS) {
-    const count = rndInt(2, 3);
-    const depTime = rnd(["07:30", "08:00", "08:30", "09:00"]);
+  // Partenze: 3 stop (Forio/Ischia/Casamicciola), 2 clienti per stop → ~16 pax totali
+  for (const zona of DEPARTURE_FERRY.route_zones) {
+    const hotel = hotelInZona(zona);
+    const pickupTime = DEPARTURE_FERRY.pickup_by_zona[zona];
+    const count = 2;
     for (let i = 0; i < count; i++) {
       const customer = pickCustomer(customerIdx++);
-      const pax = rndInt(1, 3);
+      const pax = rndInt(2, 3);
       services.push({
         id: uuid(),
         tenant_id: TENANT_ID,
         date: TEST_DATE,
-        time: depTime,
+        time: DEPARTURE_FERRY.ferry_time,
         service_type: "transfer",
         direction: "departure",
-        vessel: "SNAV FR8110",
+        vessel: DEPARTURE_FERRY.vessel,
         pax,
         hotel_id: hotel.id,
         ...customer,
         notes: "",
         status: "assigned",
-        meeting_point: null,
-        pickup_time: depTime,
-        booking_service_kind: "formula_snav",
+        meeting_point: DEPARTURE_FERRY.porto_ischia,
+        pickup_time: pickupTime,
+        booking_service_kind: DEPARTURE_FERRY.booking_kind,
         arrival_date: TEST_DATE,
-        arrival_time: "10:00",
+        arrival_time: DEPARTURE_FERRY.mainland_arr,
         departure_date: TEST_DATE,
-        departure_time: depTime,
+        departure_time: DEPARTURE_FERRY.ferry_time,
         is_test_data: true,
         is_draft: false,
         created_at: now,
@@ -282,7 +337,7 @@ async function main() {
   let driverIdx = 0;
   for (const [, groupServices] of groupMap) {
     const driver = targetDriver ?? drivers[driverIdx % drivers.length];
-    const vehicle = vehicles[driverIdx % vehicles.length];
+    const vehicle = targetDriver ? "Sprinter 16" : vehicles[driverIdx % vehicles.length];
     if (!targetDriver) driverIdx++;
     for (const svc of groupServices) {
       assignments.push({

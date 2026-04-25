@@ -114,10 +114,35 @@ const ZONE_ORDER: Record<string, number> = {
 function zoneRank(zone: string | null): number {
   return ZONE_ORDER[zone?.toLowerCase().trim() ?? ""] ?? 99;
 }
-const PORT_LAT = 40.7448, PORT_LNG = 13.9470;
-function distFromPort(lat: number | null, lng: number | null): number {
-  if (lat == null || lng == null) return 0;
-  return Math.sqrt(Math.pow(lat - PORT_LAT, 2) + Math.pow(lng - PORT_LNG, 2));
+const PORT_COORDS: Record<string, [number, number]> = {
+  casamicciola: [40.7497, 13.9044],
+  default: [40.7448, 13.9470],
+};
+function distFromArrivalPort(lat: number | null, lng: number | null, meetingPoint: string): number {
+  if (lat == null || lng == null) return 9999;
+  const [pLat, pLng] = meetingPoint.toLowerCase().includes("casamicciola")
+    ? PORT_COORDS.casamicciola!
+    : PORT_COORDS.default!;
+  return Math.sqrt(Math.pow(lat - pLat, 2) + Math.pow(lng - pLng, 2));
+}
+function routeZoneRank(zone: string, meetingPoint: string): number {
+  const z = (zone ?? "").toLowerCase();
+  const mp = (meetingPoint ?? "").toLowerCase();
+  if (mp.includes("casamicciola")) {
+    if (z.includes("casamicciola")) return 0;
+    if (z.includes("lacco"))        return 1;
+    if (z.includes("forio"))        return 2;
+    if (z.includes("serrara"))      return 3;
+    return 9;
+  }
+  // Ischia Porto default: prima vicino al porto, poi a scalare
+  if (z.includes("ischia") || z.includes("porto")) return 0;
+  if (z.includes("barano"))    return 1;
+  if (z.includes("serrara"))   return 2;
+  if (z.includes("casamicciola")) return 3;
+  if (z.includes("lacco"))     return 4;
+  if (z.includes("forio"))     return 5;
+  return 9;
 }
 
 /* ------------------------------------------------------------------ group type */
@@ -156,6 +181,7 @@ function DriverPageInner() {
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const [groupEntryOrder, setGroupEntryOrder] = useState<Record<string, string[]>>({});
   const channelRef = useRef<ReturnType<NonNullable<typeof supabase>["channel"]> | null>(null);
   const trackChannelRef = useRef<ReturnType<NonNullable<typeof supabase>["channel"]> | null>(null);
   const geoWatchRef = useRef<number | null>(null);
@@ -333,30 +359,80 @@ function DriverPageInner() {
         g.totalPax += entry.service.pax;
         g.entries.push(entry);
       }
+      if (direction === "arrival") {
+        for (const g of map.values()) {
+          const mp = g.entries[0]?.service.meeting_point ?? "";
+          g.entries.sort((a, b) => {
+            const ah = data.hotels.find((h) => h.id === a.service.hotel_id);
+            const bh = data.hotels.find((h) => h.id === b.service.hotel_id);
+            const rankDiff = routeZoneRank(ah?.zone ?? "", mp) - routeZoneRank(bh?.zone ?? "", mp);
+            if (rankDiff !== 0) return rankDiff;
+            return distFromArrivalPort(ah?.lat ?? null, ah?.lng ?? null, mp)
+                 - distFromArrivalPort(bh?.lat ?? null, bh?.lng ?? null, mp);
+          });
+        }
+      }
       return [...map.values()];
+    };
+    const ferryLabel = (kind: string | null, depTime: string | null) => {
+      const company = (kind ?? "").includes("snav") ? "SNAV" : (kind ?? "").includes("medmar") ? "Medmar" : null;
+      return company ?? null;
     };
     const arrGroups = makeGroups(
       arrivals,
-      (e) => e.service.vessel || "N/D",
-      (e) => e.service.vessel || "N/D",
+      (e) => `${e.service.date}_${e.service.vessel || "N/D"}`,
+      (e) => {
+        const company = ferryLabel(e.service.booking_service_kind, e.service.time);
+        const depTime = e.service.time?.slice(0, 5) ?? "";
+        return company && depTime ? `${company} ${depTime}` : e.service.vessel ?? "N/D";
+      },
       "arrival"
-    ).sort((a, b) => {
-      const az = zoneRank(data.hotels.find((h) => h.id === a.entries[0]?.service.hotel_id)?.zone ?? null);
-      const bz = zoneRank(data.hotels.find((h) => h.id === b.entries[0]?.service.hotel_id)?.zone ?? null);
-      return az - bz;
-    });
+    );
     const depGroups = makeGroups(
       departures,
-      (e) => e.service.hotel_id ?? "none",
-      (e) => data.hotels.find((h) => h.id === e.service.hotel_id)?.name ?? "N/D",
+      (e) => `${e.service.date}_${e.service.hotel_id ?? "none"}_${e.service.time}`,
+      (e) => {
+        const hotelName = data.hotels.find((h) => h.id === e.service.hotel_id)?.name ?? "N/D";
+        const company = ferryLabel(e.service.booking_service_kind, e.service.time);
+        const t = e.service.time?.slice(0, 5) ?? "";
+        return `${company && t ? `${company} ${t} · ` : ""}${hotelName}`;
+      },
       "departure"
-    ).sort((a, b) => {
-      const ah = data.hotels.find((h) => h.id === a.entries[0]?.service.hotel_id);
-      const bh = data.hotels.find((h) => h.id === b.entries[0]?.service.hotel_id);
-      return distFromPort(bh?.lat ?? null, bh?.lng ?? null) - distFromPort(ah?.lat ?? null, ah?.lng ?? null);
+    );
+    return [...arrGroups, ...depGroups].sort((a, b) => {
+      const af = a.entries[0]?.service;
+      const bf = b.entries[0]?.service;
+      if (!af || !bf) return 0;
+      if (af.date !== bf.date) return af.date.localeCompare(bf.date);
+      const at = a.direction === "arrival"
+        ? (getFerryArrivalAtIschia(af.time, af.booking_service_kind) ?? af.time ?? "")
+        : (af.pickup_time ?? af.time ?? "");
+      const bt = b.direction === "arrival"
+        ? (getFerryArrivalAtIschia(bf.time, bf.booking_service_kind) ?? bf.time ?? "")
+        : (bf.pickup_time ?? bf.time ?? "");
+      return at.localeCompare(bt);
     });
-    return [...arrGroups, ...depGroups];
   }, [data.hotels]);
+
+  const getGroupEntries = useCallback((group: ServiceGroup, tabKey: string) => {
+    const customIds = groupEntryOrder[`${tabKey}|${group.key}`];
+    if (!customIds) return group.entries;
+    return customIds.map((id) => group.entries.find((e) => e.service.id === id)).filter((e): e is NonNullable<typeof e> => e != null);
+  }, [groupEntryOrder]);
+
+  const moveGroupEntry = useCallback((group: ServiceGroup, tabKey: string, serviceId: string, dir: -1 | 1) => {
+    const key = `${tabKey}|${group.key}`;
+    setGroupEntryOrder((prev) => {
+      const ids = prev[key] ?? group.entries.map((e) => e.service.id);
+      const idx = ids.indexOf(serviceId);
+      if (idx === -1) return prev;
+      const ni = idx + dir;
+      if (ni < 0 || ni >= ids.length) return prev;
+      const next = [...ids];
+      [next[idx], next[ni]] = [next[ni], next[idx]];
+      return { ...prev, [key]: next };
+    });
+  }, []);
 
   const handleStatusAction = async (status: ServiceStatus) => {
     if (!focused) return;
@@ -756,9 +832,13 @@ function DriverPageInner() {
                       className="w-full px-4 py-3 text-left flex items-center justify-between hover:bg-slate-50 transition">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${group.direction === "arrival" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                            {group.direction === "arrival" ? "↓ Arrivo" : "↑ Partenza"}
-                          </span>
+                          {(() => {
+                            const svc = group.entries[0]?.service;
+                            const isNavetta = svc?.booking_service_kind === "shuttle_hotel" || svc?.service_type === "navetta";
+                            return <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${isNavetta ? "bg-violet-100 text-violet-700" : group.direction === "arrival" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                              {isNavetta ? "⇄ Navetta" : group.direction === "arrival" ? "↓ Arrivo" : "↑ Partenza"}
+                            </span>;
+                          })()}
                           <p className="font-semibold text-slate-800 text-sm truncate">{group.label}</p>
                           {(() => {
                             const first = group.entries[0]?.service;
@@ -780,7 +860,7 @@ function DriverPageInner() {
                     </button>
                     {expandedGroup === `oggi-${group.key}` && (
                       <div className="bg-slate-50 border-t border-slate-100 divide-y divide-slate-100">
-                        {group.entries.map((entry) => {
+                        {getGroupEntries(group, "oggi").map((entry) => {
                           const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
                           const phone = entry.service.phone_e164?.trim() || entry.service.phone?.trim() || "";
                           return (
@@ -807,6 +887,14 @@ function DriverPageInner() {
                                   📞
                                 </a>
                               )}
+                              {group.direction === "arrival" && (
+                                <div className="flex flex-col shrink-0">
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "oggi", entry.service.id, -1); }}
+                                    className="h-5 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 text-xs">↑</button>
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "oggi", entry.service.id, 1); }}
+                                    className="h-5 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 text-xs">↓</button>
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -825,9 +913,13 @@ function DriverPageInner() {
                       className="w-full px-4 py-3 text-left flex items-center justify-between hover:bg-slate-50 transition">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${group.direction === "arrival" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                            {group.direction === "arrival" ? "↓ Arrivo" : "↑ Partenza"}
-                          </span>
+                          {(() => {
+                            const svc = group.entries[0]?.service;
+                            const isNavetta = svc?.booking_service_kind === "shuttle_hotel" || svc?.service_type === "navetta";
+                            return <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${isNavetta ? "bg-violet-100 text-violet-700" : group.direction === "arrival" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                              {isNavetta ? "⇄ Navetta" : group.direction === "arrival" ? "↓ Arrivo" : "↑ Partenza"}
+                            </span>;
+                          })()}
                           <p className="font-semibold text-slate-800 text-sm truncate">{group.label}</p>
                           {(() => {
                             const first = group.entries[0]?.service;
@@ -849,7 +941,7 @@ function DriverPageInner() {
                     </button>
                     {expandedGroup === `prossimi-${group.key}` && (
                       <div className="bg-slate-50 border-t border-slate-100 divide-y divide-slate-100">
-                        {group.entries.map((entry) => {
+                        {getGroupEntries(group, "prossimi").map((entry) => {
                           const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
                           const phone = entry.service.phone_e164?.trim() || entry.service.phone?.trim() || "";
                           return (
@@ -893,6 +985,14 @@ function DriverPageInner() {
                                   className="shrink-0 rounded-xl bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-600">
                                   📞
                                 </a>
+                              )}
+                              {group.direction === "arrival" && (
+                                <div className="flex flex-col shrink-0">
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "prossimi", entry.service.id, -1); }}
+                                    className="h-5 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 text-xs">↑</button>
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "prossimi", entry.service.id, 1); }}
+                                    className="h-5 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 text-xs">↓</button>
+                                </div>
                               )}
                             </div>
                           );
