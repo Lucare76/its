@@ -852,7 +852,7 @@ function DriverPageInner() {
                                 ) : (
                                   <>
                                     <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
-                                    {(entry.service.meeting_point || entry.service.time) ? <p className="text-xs font-medium text-emerald-700 mt-0.5">⚓ {[entry.service.meeting_point, entry.service.time ? `arr. ${entry.service.time}` : null].filter(Boolean).join(" · ")}</p> : null}
+                                    {entry.service.meeting_point ? <p className="text-xs font-medium text-emerald-700 mt-0.5">⚓ {entry.service.meeting_point}</p> : null}
                                   </>
                                 )}
                               </button>
