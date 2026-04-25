@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 
 const TEMPLATES = [
@@ -18,6 +18,26 @@ export default function EmailPreviewPage() {
   const [active, setActive] = useState("quote");
   const [sending, setSending] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string; url?: string } | null>(null);
+  const [previewHtml, setPreviewHtml] = useState<string>("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setPreviewLoading(true);
+      setPreviewHtml("");
+      const { data: { session } } = await supabase!.auth.getSession();
+      const token = session?.access_token;
+      if (!token) { setPreviewHtml("<p style='padding:24px;color:red;'>Sessione scaduta — rieffettua il login.</p>"); setPreviewLoading(false); return; }
+      const res = await fetch(`/api/admin/email-preview?template=${active}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const html = await res.text();
+      if (!cancelled) { setPreviewHtml(html); setPreviewLoading(false); }
+    }
+    void load();
+    return () => { cancelled = true; };
+  }, [active]);
 
   async function sendTestEmail() {
     setSending(true);
@@ -90,22 +110,19 @@ export default function EmailPreviewPage() {
         <div key={t.key} className="space-y-2">
           <p className="text-xs text-slate-500">{t.desc}</p>
           <div className="overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
-            <iframe
-              src={`/api/admin/email-preview?template=${t.key}`}
-              className="w-full"
-              style={{ height: "680px", border: "none" }}
-              title={t.label}
-            />
-          </div>
-          <div className="flex justify-end">
-            <a
-              href={`/api/admin/email-preview?template=${t.key}`}
-              target="_blank"
-              rel="noreferrer"
-              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-            >
-              Apri in nuova scheda →
-            </a>
+            {previewLoading ? (
+              <div className="flex items-center justify-center" style={{ height: "680px" }}>
+                <p className="text-sm text-slate-400">Caricamento anteprima...</p>
+              </div>
+            ) : (
+              <iframe
+                srcDoc={previewHtml}
+                className="w-full"
+                style={{ height: "680px", border: "none" }}
+                title={t.label}
+                sandbox="allow-same-origin"
+              />
+            )}
           </div>
         </div>
       ))}
