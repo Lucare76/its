@@ -144,6 +144,11 @@ export default function PreventivoOpsPage() {
     if (!token) { setLoading(false); return; }
     const res = await fetch("/api/ops/quotes", { headers: { Authorization: `Bearer ${token}` } });
     const body = await res.json() as { ok?: boolean; error?: string; quotes?: Quote[]; waypoints?: QuoteWaypoint[] };
+    if (res.status === 401) {
+      await supabase?.auth.signOut();
+      window.location.href = "/login";
+      return;
+    }
     if (res.status === 403) { setAccessDenied(true); setLoading(false); return; }
     if (!body.ok) { setMessage({ type: "err", text: body.error ?? "Errore caricamento." }); setLoading(false); return; }
     setQuotes(body.quotes ?? []);
