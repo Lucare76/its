@@ -12,6 +12,7 @@ export default function TrackPage({ params }: { params: { serviceId: string } })
   const [position, setPosition] = useState<DriverPosition | null>(null);
   const [connected, setConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const markerRef = useRef<L.Marker | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
 
@@ -63,7 +64,12 @@ export default function TrackPage({ params }: { params: { serviceId: string } })
     return () => { void supabase?.removeChannel(ch); };
   }, [serviceId]);
 
-  const minutesAgo = lastUpdate ? Math.floor((Date.now() - lastUpdate.getTime()) / 60000) : null;
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const minutesAgo = lastUpdate ? Math.floor((nowMs - lastUpdate.getTime()) / 60000) : null;
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-950 text-white">

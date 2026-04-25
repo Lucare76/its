@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
@@ -289,7 +290,7 @@ export default function ScanPage() {
               <label className={`relative flex flex-col items-center justify-center rounded-xl border-2 py-4 cursor-pointer transition ${
                 photoExterior ? "border-emerald-300 bg-emerald-50" : "border-indigo-200 bg-white hover:bg-indigo-50/50"}`}>
                 {photoExterior ? (
-                  <img src={photoExterior} alt="Esterno" className="w-full h-20 object-cover rounded-lg" />
+                  <Image src={photoExterior} alt="Esterno" width={320} height={80} unoptimized className="h-20 w-full rounded-lg object-cover" />
                 ) : uploadingPhoto === "exterior" ? (
                   <p className="text-xs text-indigo-500 font-medium">Caricamento...</p>
                 ) : (
@@ -306,7 +307,7 @@ export default function ScanPage() {
               <label className={`relative flex flex-col items-center justify-center rounded-xl border-2 py-4 cursor-pointer transition ${
                 photoInterior ? "border-emerald-300 bg-emerald-50" : "border-indigo-200 bg-white hover:bg-indigo-50/50"}`}>
                 {photoInterior ? (
-                  <img src={photoInterior} alt="Interno" className="w-full h-20 object-cover rounded-lg" />
+                  <Image src={photoInterior} alt="Interno" width={320} height={80} unoptimized className="h-20 w-full rounded-lg object-cover" />
                 ) : uploadingPhoto === "interior" ? (
                   <p className="text-xs text-indigo-500 font-medium">Caricamento...</p>
                 ) : (

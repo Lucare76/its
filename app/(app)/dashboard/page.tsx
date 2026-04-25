@@ -7,6 +7,7 @@ import { OperationsSuggestions } from "@/components/operations-suggestions";
 import { EmptyState, SidePanel } from "@/components/ui";
 import { needsInboxReview } from "@/lib/inbox-review";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
+import { getInboxPdfParsingSignal } from "@/lib/pdf/parser";
 import { formatServiceSlot, getCustomerFullName, getOutboundTime } from "@/lib/service-display";
 import { getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
 import { supabase } from "@/lib/supabase/client";
@@ -166,6 +167,11 @@ export default function OperatorDashboardPage() {
   const todayArrivals = todayInstances.filter((instance) => instance.direction === "arrival").length;
   const todayDepartures = todayInstances.filter((instance) => instance.direction === "departure").length;
   const todayPdfNeedsAttention = todayServices.filter((service) => getServicePdfOperationalMeta(service, data.inboundEmails).reviewRecommended);
+  const inboxPdfNeedsReview = data.inboundEmails.filter((email) => {
+    const parsedJson = (email.parsed_json ?? null) as Record<string, unknown> | null;
+    const parsing = getInboxPdfParsingSignal(parsedJson);
+    return parsing.hasPdfImport && !parsing.confirmed && (parsing.reviewRecommended || parsing.missingFieldsCount > 0);
+  });
   const inboxToReview = data.inboundEmails.filter((email) => needsInboxReview(email.parsed_json));
   const futureInstances = buildOperationalInstances(data.services).filter((instance) => instance.date > todayIso && instance.date <= next48hIso);
   const nextArrivals48h = futureInstances.filter((instance) => instance.direction === "arrival").slice(0, 6);
@@ -397,7 +403,7 @@ export default function OperatorDashboardPage() {
           { icon: "👥", label: "Passeggeri",      value: totalPax,              color: "#0f766e", bg: "#f0fdfa", href: "/arrivals" },
           { icon: "🚌", label: "Bus attivi GPS",   value: activeBusGps ?? "—",   color: activeBusGps !== null ? "#b45309" : "#94a3b8", bg: "#fffbeb", href: "/mappa-live" },
           { icon: "⚠️", label: "Non assegnati",   value: pending,               color: pending > 0 ? "#dc2626" : "#64748b", bg: pending > 0 ? "#fef2f2" : "#f8fafc", href: "/dispatch" },
-          { icon: "📄", label: "PDF da verificare", value: todayPdfNeedsAttention.length, color: todayPdfNeedsAttention.length > 0 ? "#d97706" : "#64748b", bg: todayPdfNeedsAttention.length > 0 ? "#fffbeb" : "#f8fafc", href: "/pdf-imports" },
+          { icon: "📄", label: "PDF da verificare", value: inboxPdfNeedsReview.length, color: inboxPdfNeedsReview.length > 0 ? "#d97706" : "#64748b", bg: inboxPdfNeedsReview.length > 0 ? "#fffbeb" : "#f8fafc", href: "/inbox" },
           { icon: "📧", label: "Inbox",           value: inboxToReview.length,  color: inboxToReview.length > 0 ? "#dc2626" : "#64748b", bg: inboxToReview.length > 0 ? "#fef2f2" : "#f8fafc", href: "/inbox" },
         ].map(({ icon, label, value, color, bg, href }) => {
           const inner = (

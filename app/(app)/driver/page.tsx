@@ -397,7 +397,6 @@ function DriverPageInner() {
   /* ---- live clock per disposizione in corso */
   const focusedIsDisposizione = focused?.service.booking_service_kind === "private_island";
   const focusedIsRunning = focused?.service.status === "partito";
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
     if (!focusedIsDisposizione || !focusedIsRunning) return;
     const id = setInterval(() => setNow(Date.now()), 60000);
@@ -405,7 +404,6 @@ function DriverPageInner() {
   }, [focusedIsDisposizione, focusedIsRunning]);
 
   /* ---- GPS broadcasting per disposizione avviata */
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
     if (!supabase || !focusedIsDisposizione || !focusedIsRunning || !focused) {
       if (geoWatchRef.current != null && typeof navigator !== "undefined") {

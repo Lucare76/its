@@ -1,3 +1,4 @@
+import { hotelGeoQuality } from "@/lib/hotel-geocoding";
 import type { Assignment, BusLotConfig, Hotel, Service } from "@/lib/types";
 
 export type SuggestionType = "overcapacity" | "geo_issue" | "missing_data" | "imbalance";
@@ -245,7 +246,8 @@ export function generateSuggestions(state: OperationsSuggestionState): Suggestio
 
   for (const service of activeServices) {
     const hotel = hotelsById.get(service.hotel_id);
-    if (hotel && hotel.geo_status !== "verified") {
+    const hotelGeo = hotel ? hotelGeoQuality(hotel) : null;
+    if (hotel && (hotel.geo_status === "missing" || hotel.geo_status === "generic" || hotelGeo?.routeUsable === false)) {
       suggestions.push(makeSuggestion({
         id: stableId(["suggestion", "geo", hotel.id, hotel.geo_status]),
         type: "geo_issue",

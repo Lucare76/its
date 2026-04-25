@@ -1006,6 +1006,7 @@ export default function HotelsPage() {
     if (!tenantId || !supabase || !editDraft) return;
     setSaving(true);
     setError("");
+    const currentHotel = items.find((item) => item.id === hotelId) ?? null;
 
     const parsedLat = parseOptionalCoord(editDraft.lat);
     const parsedLng = parseOptionalCoord(editDraft.lng);
@@ -1020,6 +1021,10 @@ export default function HotelsPage() {
       setError("Il limite posti del bus piccolo deve essere compreso tra 1 e 60.");
       return;
     }
+
+    const sameCoord = (left: number | null, right: number | null) => left === right || (left == null && right == null);
+    const coordsChanged = !sameCoord(parsedLat, currentHotel?.lat ?? null) || !sameCoord(parsedLng, currentHotel?.lng ?? null);
+    const preserveVerifiedGeo = Boolean(currentHotel?.geo_status === "verified" && !coordsChanged);
 
     const payload = {
       name: editDraft.name.trim(),
@@ -1036,22 +1041,34 @@ export default function HotelsPage() {
       phone: editDraft.phone.trim() || null,
       contact_name: editDraft.contact_name.trim() || null,
       ...(() => {
+        if (preserveVerifiedGeo) {
+          return {
+            geo_status: currentHotel?.geo_status ?? "verified",
+            geo_source: currentHotel?.geo_source ?? "manual",
+            geo_accuracy: currentHotel?.geo_accuracy ?? "rooftop",
+            geo_verified_at: currentHotel?.geo_verified_at ?? null,
+            geo_verified_by: currentHotel?.geo_verified_by ?? null,
+            formatted_address: currentHotel?.formatted_address ?? (editDraft.address.trim() || null)
+          };
+        }
         const nextGeoAccuracy: HotelGeoAccuracy = parsedLat == null || parsedLng == null ? "unknown" : "street";
         const evaluation = evaluateHotelGeo({
           address: editDraft.address.trim(),
           zone: editDraft.zone.trim() || "Ischia Porto",
           lat: parsedLat,
           lng: parsedLng,
-          geo_status: "approximate",
+          geo_status: currentHotel?.geo_status ?? "approximate",
           geo_source: "manual",
-          geo_accuracy: nextGeoAccuracy
+          geo_accuracy: nextGeoAccuracy,
+          formatted_address: editDraft.address.trim() || null
         });
         return {
           geo_status: evaluation.status,
           geo_source: "manual" as const,
           geo_accuracy: nextGeoAccuracy,
           geo_verified_at: null,
-          geo_verified_by: null
+          geo_verified_by: null,
+          formatted_address: editDraft.address.trim() || null
         };
       })(),
       updated_at: new Date().toISOString()

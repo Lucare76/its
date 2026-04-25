@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui";
 import { formatIsoDateShort, getCustomerFullName } from "@/lib/service-display";
 import { getE2ETestSessionOverride } from "@/lib/supabase/client-session";
@@ -59,10 +59,7 @@ export default function DispatchPage() {
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [search, setSearch]           = useState("");
   const [dateTab, setDateTab]         = useState<DateTab>("today");
-  const rowStates = useRef<Map<string, RowState>>(new Map());
-  const [, forceRender] = useState(0);
-
-  const rerender = () => forceRender((n) => n + 1);
+  const [rowStates, setRowStates] = useState<Record<string, Partial<RowState>>>({});
 
   useEffect(() => {
     let active = true;
@@ -179,47 +176,48 @@ export default function DispatchPage() {
   const tomorrowPending = baseServices.filter((s) => s.date === tomorrow && !assignmentByServiceId.has(s.id)).length;
   const tomorrowTotal   = baseServices.filter((s) => s.date === tomorrow).length;
 
-  useEffect(() => {
-    for (const svc of filteredServices) {
-      const ex = assignmentByServiceId.get(svc.id);
-      if (!rowStates.current.has(svc.id)) {
-        rowStates.current.set(svc.id, {
-          driverId:     ex?.driver_user_id ?? "",
-          vehicleLabel: ex?.vehicle_label ?? suggestedVehicleByPax(svc.pax),
-          saving: false, saved: false, error: "",
-        });
-      } else if (ex && !rowStates.current.get(svc.id)!.saving) {
-        const state = rowStates.current.get(svc.id)!;
-        state.driverId     = ex.driver_user_id ?? "";
-        state.vehicleLabel = ex.vehicle_label ?? state.vehicleLabel;
-      }
-    }
-  }, [filteredServices, assignmentByServiceId]);
-
   const getRow = (svc: Service): RowState =>
-    rowStates.current.get(svc.id) ?? {
-      driverId: "", vehicleLabel: suggestedVehicleByPax(svc.pax),
-      saving: false, saved: false, error: "",
-    };
+    ({
+      driverId: assignmentByServiceId.get(svc.id)?.driver_user_id ?? "",
+      vehicleLabel: assignmentByServiceId.get(svc.id)?.vehicle_label ?? suggestedVehicleByPax(svc.pax),
+      saving: false,
+      saved: false,
+      error: "",
+      ...rowStates[svc.id],
+    });
 
   const save = async (svc: Service) => {
     if (!tenantId || !actorUserId || !supabase) return;
     const state = getRow(svc);
-    state.saving = true; state.error = ""; state.saved = false;
-    rerender();
+    setRowStates((current) => ({
+      ...current,
+      [svc.id]: { ...state, saving: true, error: "", saved: false },
+    }));
 
     const existing = assignmentByServiceId.get(svc.id);
     if (existing) {
       const { error } = await supabase.from("assignments")
         .update({ driver_user_id: state.driverId || null, vehicle_label: state.vehicleLabel })
         .eq("id", existing.id).eq("tenant_id", tenantId);
-      if (error) { state.error = error.message; state.saving = false; rerender(); return; }
+      if (error) {
+        setRowStates((current) => ({
+          ...current,
+          [svc.id]: { ...getRow(svc), saving: false, error: error.message, saved: false },
+        }));
+        return;
+      }
     } else {
       const { error } = await supabase.from("assignments").insert({
         tenant_id: tenantId, service_id: svc.id,
         driver_user_id: state.driverId || null, vehicle_label: state.vehicleLabel,
       });
-      if (error) { state.error = error.message; state.saving = false; rerender(); return; }
+      if (error) {
+        setRowStates((current) => ({
+          ...current,
+          [svc.id]: { ...getRow(svc), saving: false, error: error.message, saved: false },
+        }));
+        return;
+      }
     }
 
     await supabase.from("services").update({ status: "assigned" }).eq("id", svc.id).eq("tenant_id", tenantId).neq("status", "assigned");
@@ -227,9 +225,20 @@ export default function DispatchPage() {
     const { data: ev } = await supabase.from("status_events").select("id").eq("tenant_id", tenantId).eq("service_id", svc.id).eq("status", "assigned").maybeSingle();
     if (!ev) await supabase.from("status_events").insert({ tenant_id: tenantId, service_id: svc.id, status: "assigned", by_user_id: actorUserId });
 
-    state.saving = false; state.saved = true;
-    rerender();
-    setTimeout(() => { state.saved = false; rerender(); }, 2000);
+    setRowStates((current) => ({
+      ...current,
+      [svc.id]: { ...getRow(svc), saving: false, saved: true, error: "" },
+    }));
+    setTimeout(() => {
+      setRowStates((current) => {
+        const currentRow = current[svc.id];
+        if (!currentRow) return current;
+        return {
+          ...current,
+          [svc.id]: { ...currentRow, saved: false },
+        };
+      });
+    }, 2000);
   };
 
   if (loading) return <div className="card p-4 text-sm text-slate-500">Caricamento assegnazioni...</div>;
@@ -349,7 +358,13 @@ export default function DispatchPage() {
                         {/* Driver */}
                         <select
                           value={state.driverId}
-                          onChange={(e) => { state.driverId = e.target.value; rerender(); }}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setRowStates((current) => ({
+                              ...current,
+                              [svc.id]: { ...getRow(svc), driverId: value },
+                            }));
+                          }}
                           className="input-saas text-sm"
                         >
                           <option value="">— Nessun driver —</option>
@@ -361,7 +376,13 @@ export default function DispatchPage() {
                         {/* Mezzo */}
                         <input
                           value={state.vehicleLabel}
-                          onChange={(e) => { state.vehicleLabel = e.target.value; rerender(); }}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setRowStates((current) => ({
+                              ...current,
+                              [svc.id]: { ...getRow(svc), vehicleLabel: value },
+                            }));
+                          }}
                           placeholder="Mezzo"
                           className="input-saas text-sm"
                         />
