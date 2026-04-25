@@ -9,6 +9,8 @@ export interface DispoData {
   dateFrom: string;
   dateTo: string;
   totalDays: number;
+  timeFrom?: string;
+  timeTo?: string;
   rateDay: number;
   rateNight: number;
   pricePerVehicle: number;
@@ -81,7 +83,7 @@ export function buildDisposizioniEmail(
 
     ${section("Dettaglio del servizio")}
     ${dataTable(`
-      ${row("Disponibilità", "H24 (24 ore su 24)")}
+      ${row("Disponibilità", d.timeFrom && d.timeTo ? `dalle ${escapeHtml(d.timeFrom)} alle ${escapeHtml(d.timeTo)}` : "H24 (24 ore su 24)")}
       ${row("Mezzi impiegati", `n.&nbsp;${escapeHtml(String(d.vehicleCount))} ${escapeHtml(d.vehicleType)}`)}
       ${row("Periodo", `dal ${escapeHtml(d.dateFrom)} al ${escapeHtml(d.dateTo)}`)}
       ${row("Sistemazione autisti", d.includeAccommodation ? "inclusa" : "esclusa", true)}

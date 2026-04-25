@@ -131,6 +131,8 @@ export default function PreventivoOpsPage() {
   const [dispoDateFrom, setDispoDateFrom] = useState("");
   const [dispoDateTo, setDispoDateTo] = useState("");
   const [dispoTotalDays, setDispoTotalDays] = useState(6);
+  const [dispoTimeFrom, setDispoTimeFrom] = useState("");
+  const [dispoTimeTo, setDispoTimeTo] = useState("");
   const [dispoRateDay, setDispoRateDay] = useState(50);
   const [dispoRateNight, setDispoRateNight] = useState(60);
   const [dispoPricePerVehicle, setDispoPricePerVehicle] = useState(0);
@@ -251,11 +253,31 @@ export default function PreventivoOpsPage() {
     setDispoDateFrom("");
     setDispoDateTo("");
     setDispoTotalDays(6);
+    setDispoTimeFrom("");
+    setDispoTimeTo("");
     setDispoRateDay(50);
     setDispoRateNight(60);
     setDispoPricePerVehicle(0);
     setDispoIncludeAccommodation(false);
   };
+
+  // Calcolo automatico prezzo per mezzo da fasce orarie
+  const dispoAutoCalc = useMemo(() => {
+    if (!dispoTimeFrom || !dispoTimeTo || !dispoTotalDays) return null;
+    const [fh = 0, fm = 0] = dispoTimeFrom.split(":").map(Number);
+    const [th = 0, tm = 0] = dispoTimeTo.split(":").map(Number);
+    let start = fh * 60 + fm;
+    let end = th * 60 + tm;
+    if (end <= start) end += 24 * 60;
+    const SLOT = 15;
+    let costPerDay = 0;
+    for (let t = start; t < end; t += SLOT) {
+      const midHour = Math.floor(((t + SLOT / 2) % (24 * 60)) / 60);
+      const isNight = midHour < 7 || midHour >= 22;
+      costPerDay += (isNight ? dispoRateNight : dispoRateDay) * (SLOT / 60);
+    }
+    return Math.round(costPerDay * dispoTotalDays * 100) / 100;
+  }, [dispoTimeFrom, dispoTimeTo, dispoTotalDays, dispoRateDay, dispoRateNight]);
 
   const createQuote = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -274,13 +296,15 @@ export default function PreventivoOpsPage() {
         dateFrom: dispoDateFrom.trim(),
         dateTo: dispoDateTo.trim(),
         totalDays: dispoTotalDays,
+        ...(dispoTimeFrom && dispoTimeTo ? { timeFrom: dispoTimeFrom, timeTo: dispoTimeTo } : {}),
         rateDay: dispoRateDay,
         rateNight: dispoRateNight,
         pricePerVehicle: dispoPricePerVehicle,
         includeAccommodation: dispoIncludeAccommodation,
         customNotes: String(form.get("notes") ?? "").trim() || undefined,
       };
-      const routeLabelDispo = `${dispoData.dateFrom}–${dispoData.dateTo} · ${dispoData.vehicleCount} ${dispoData.vehicleType} · H24`;
+      const timeLabel = dispoTimeFrom && dispoTimeTo ? ` · ${dispoTimeFrom}–${dispoTimeTo}` : " · H24";
+      const routeLabelDispo = `${dispoData.dateFrom}–${dispoData.dateTo} · ${dispoData.vehicleCount} ${dispoData.vehicleType}${timeLabel}`;
       const res = await apiCall(token, {
         action: "create_quote",
         service_kind: serviceKind,
@@ -485,6 +509,14 @@ export default function PreventivoOpsPage() {
                     </label>
                     <div />
                     <label className="text-xs font-medium text-slate-600">
+                      Orario inizio (es. 08:00)
+                      <input type="time" value={dispoTimeFrom} onChange={(ev) => setDispoTimeFrom(ev.target.value)} className="mt-1 input-saas w-full" />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">
+                      Orario fine (es. 22:00)
+                      <input type="time" value={dispoTimeTo} onChange={(ev) => setDispoTimeTo(ev.target.value)} className="mt-1 input-saas w-full" />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">
                       Tariffa diurna (€/h)
                       <input type="number" min={0} step={1} value={dispoRateDay} onChange={(ev) => setDispoRateDay(Number(ev.target.value))} className="mt-1 input-saas w-full" placeholder="50" />
                     </label>
@@ -495,6 +527,12 @@ export default function PreventivoOpsPage() {
                     <label className="text-xs font-medium text-slate-600">
                       Prezzo per 1 mezzo (€)*
                       <input type="number" min={0} step={0.01} value={dispoPricePerVehicle || ""} onChange={(ev) => setDispoPricePerVehicle(Number(ev.target.value))} className="mt-1 input-saas w-full" placeholder="es. 7500" required />
+                      {dispoAutoCalc !== null && dispoAutoCalc !== dispoPricePerVehicle && (
+                        <button type="button" onClick={() => setDispoPricePerVehicle(dispoAutoCalc)}
+                          className="mt-1 text-[11px] text-blue-600 hover:underline">
+                          Usa calcolo automatico: €{dispoAutoCalc.toLocaleString("it-IT", { minimumFractionDigits: 2 })}
+                        </button>
+                      )}
                     </label>
                     <label className="text-xs font-medium text-slate-600">
                       Totale complessivo
