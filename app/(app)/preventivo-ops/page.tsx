@@ -281,9 +281,10 @@ export default function PreventivoOpsPage() {
 
   const createQuote = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    const formEl = e.currentTarget;
     const token = await getToken();
     if (!token) return;
-    const form = new FormData(e.currentTarget);
+    const form = new FormData(formEl);
 
     if (dispoSelected) {
       if (dispoTotalPrice <= 0) {
