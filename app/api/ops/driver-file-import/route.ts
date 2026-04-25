@@ -127,10 +127,11 @@ function buildNotes(row: ParsedDriverFileRow, direction: "arrival" | "departure"
 }
 
 function extractCustomerRaw(row: string[]) {
-  for (let index = row.length - 1; index >= 10; index -= 1) {
+  for (let index = row.length - 1; index >= 0; index -= 1) {
     const value = String(row[index] ?? "").trim();
     if (!value) continue;
-    if (normalizeText(value) === "its") continue;
+    const normalized = normalizeText(value);
+    if (normalized === "its" || normalized === "bruno") continue;
     return value;
   }
   return "";
