@@ -808,7 +808,12 @@ function DriverPageInner() {
                       onClick={() => setExpandedGroup(expandedGroup === `prossimi-${group.key}` ? null : `prossimi-${group.key}`)}
                       className="w-full px-4 py-3 text-left flex items-center justify-between hover:bg-slate-50 transition">
                       <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-slate-800 text-sm">{group.label}</p>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${group.direction === "arrival" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                            {group.direction === "arrival" ? "↓ Arrivo" : "↑ Partenza"}
+                          </span>
+                          <p className="font-semibold text-slate-800 text-sm truncate">{group.label}</p>
+                        </div>
                         <p className="text-xs text-slate-400 mt-0.5 truncate">
                           {group.entries.map((e) => `${e.service.pax} ${e.service.customer_name}`).join(" · ")}
                         </p>
