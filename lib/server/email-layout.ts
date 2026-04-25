@@ -7,9 +7,7 @@ export function emailHtml(body: string, options?: { title?: string; preheader?: 
   // Logo sempre da ischia-transfer.vercel.app: è l'unico dominio che serve i file statici
   // correttamente (ischiatransferservice.it restituisce 403, localhost non è raggiungibile).
   const logoUrl = "https://ischia-transfer.vercel.app/brand/logo-ischia-transfer-email.png";
-  const logoBlock = `<div class="email-logo-crop" style="width:200px;height:64px;overflow:hidden;margin:0 auto;line-height:0;">
-        <img class="email-logo" src="${logoUrl}" alt="Ischia Transfer Service" width="200" style="width:200px;max-width:200px;height:auto;display:block;margin:-113px auto 0;" />
-      </div>`;
+  const logoBlock = `<img src="${logoUrl}" alt="Ischia Transfer Service" width="200" style="display:block;margin:0 auto;max-width:200px;height:auto;border:0;" />`;
 
   const preheader = options?.preheader
     ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${options.preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>`
