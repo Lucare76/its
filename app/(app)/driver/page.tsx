@@ -6,6 +6,7 @@ import type { ServiceStatus } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
 import { usePwa } from "@/components/driver/PwaInit";
 import { DriverSign } from "@/components/driver/DriverSign";
+import { getFerryArrivalAtIschia } from "@/lib/snav-medmar-lookup";
 
 /* ------------------------------------------------------------------ offline queue */
 
@@ -852,7 +853,17 @@ function DriverPageInner() {
                                 ) : (
                                   <>
                                     <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
-                                    {entry.service.meeting_point ? <p className="text-xs font-medium text-emerald-700 mt-0.5">⚓ {entry.service.meeting_point}</p> : null}
+                                    {(() => {
+                                      const arrIschia = getFerryArrivalAtIschia(entry.service.time, entry.service.booking_service_kind);
+                                      return (
+                                        <>
+                                          <p className="text-sm font-bold text-emerald-700 mt-0.5">
+                                            ⚓ {entry.service.meeting_point ?? "Porto N/D"}{arrIschia ? ` · arr. ${arrIschia}` : ""}
+                                          </p>
+                                          {arrIschia && <p className="text-xs text-slate-400">partenza continente {entry.service.time?.slice(0,5)}</p>}
+                                        </>
+                                      );
+                                    })()}
                                   </>
                                 )}
                               </button>

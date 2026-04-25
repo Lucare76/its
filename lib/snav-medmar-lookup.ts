@@ -30,7 +30,8 @@ export interface SnavMedmarRule {
 
 export interface FerryArrival {
   company: "snav" | "medmar";
-  ferry_dep_time: string;
+  ferry_dep_time: string;   // ora partenza dal continente
+  ferry_arr_time: string;   // ora arrivo a Ischia (porto_ischia)
   porto_ischia: string;
   restrictions?: ScheduleRestriction[];
 }
@@ -108,38 +109,41 @@ export const DEPARTURE_RULES: SnavMedmarRule[] = [
 ];
 
 // ── Arrivi Continente → Ischia ────────────────────────────────────────────────
+// ferry_dep_time = ora partenza dal continente
+// ferry_arr_time = ora arrivo a Ischia (porto_ischia)
+// Pozzuoli→Ischia: ~60 min; Napoli→Ischia: ~85 min; SNAV Napoli→Casamicciola: ~85 min
 export const ARRIVAL_SCHEDULES: FerryArrival[] = [
-  // SNAV — tutto l'anno, tutti i giorni
-  { company: "snav", ferry_dep_time: "08:30", porto_ischia: "CASAMICCIOLA" },
-  { company: "snav", ferry_dep_time: "12:30", porto_ischia: "CASAMICCIOLA" },
-  { company: "snav", ferry_dep_time: "16:20", porto_ischia: "CASAMICCIOLA" },
-  { company: "snav", ferry_dep_time: "19:00", porto_ischia: "CASAMICCIOLA" },
+  // SNAV — tutto l'anno, tutti i giorni (~85 min traversata)
+  { company: "snav", ferry_dep_time: "08:30", ferry_arr_time: "09:55", porto_ischia: "CASAMICCIOLA" },
+  { company: "snav", ferry_dep_time: "12:30", ferry_arr_time: "13:55", porto_ischia: "CASAMICCIOLA" },
+  { company: "snav", ferry_dep_time: "16:20", ferry_arr_time: "17:45", porto_ischia: "CASAMICCIOLA" },
+  { company: "snav", ferry_dep_time: "19:00", ferry_arr_time: "20:25", porto_ischia: "CASAMICCIOLA" },
 
   // SNAV — 06/06–13/09, Ven/Sab/Dom/Lun
-  { company: "snav", ferry_dep_time: "08:10", porto_ischia: "CASAMICCIOLA", restrictions: R_GIU_SET_FSDL },
-  { company: "snav", ferry_dep_time: "15:10", porto_ischia: "CASAMICCIOLA", restrictions: R_GIU_SET_FSDL },
+  { company: "snav", ferry_dep_time: "08:10", ferry_arr_time: "09:35", porto_ischia: "CASAMICCIOLA", restrictions: R_GIU_SET_FSDL },
+  { company: "snav", ferry_dep_time: "15:10", ferry_arr_time: "16:35", porto_ischia: "CASAMICCIOLA", restrictions: R_GIU_SET_FSDL },
 
   // SNAV — 01/06–28/09, Ven/Sab/Dom
-  { company: "snav", ferry_dep_time: "09:20", porto_ischia: "CASAMICCIOLA", restrictions: R_GIU_SET_FSD },
-  { company: "snav", ferry_dep_time: "13:55", porto_ischia: "CASAMICCIOLA", restrictions: R_GIU_SET_FSD },
-  { company: "snav", ferry_dep_time: "17:10", porto_ischia: "CASAMICCIOLA", restrictions: R_GIU_SET_FSD },
+  { company: "snav", ferry_dep_time: "09:20", ferry_arr_time: "10:45", porto_ischia: "CASAMICCIOLA", restrictions: R_GIU_SET_FSD },
+  { company: "snav", ferry_dep_time: "13:55", ferry_arr_time: "15:20", porto_ischia: "CASAMICCIOLA", restrictions: R_GIU_SET_FSD },
+  { company: "snav", ferry_dep_time: "17:10", ferry_arr_time: "18:35", porto_ischia: "CASAMICCIOLA", restrictions: R_GIU_SET_FSD },
 
-  // MEDMAR — Pozzuoli → Ischia Porto
-  { company: "medmar", ferry_dep_time: "06:25", porto_ischia: "ISCHIA PORTO" },
-  { company: "medmar", ferry_dep_time: "09:40", porto_ischia: "ISCHIA PORTO" },
-  { company: "medmar", ferry_dep_time: "13:30", porto_ischia: "ISCHIA PORTO" },
-  { company: "medmar", ferry_dep_time: "16:30", porto_ischia: "ISCHIA PORTO" },
+  // MEDMAR — Pozzuoli → Ischia Porto (~60 min traversata)
+  { company: "medmar", ferry_dep_time: "06:25", ferry_arr_time: "07:25", porto_ischia: "ISCHIA PORTO" },
+  { company: "medmar", ferry_dep_time: "09:40", ferry_arr_time: "10:40", porto_ischia: "ISCHIA PORTO" },
+  { company: "medmar", ferry_dep_time: "13:30", ferry_arr_time: "14:30", porto_ischia: "ISCHIA PORTO" },
+  { company: "medmar", ferry_dep_time: "16:30", ferry_arr_time: "17:30", porto_ischia: "ISCHIA PORTO" },
 
-  // MEDMAR — Pozzuoli → Casamicciola
-  { company: "medmar", ferry_dep_time: "08:15", porto_ischia: "CASAMICCIOLA" },
-  { company: "medmar", ferry_dep_time: "12:00", porto_ischia: "CASAMICCIOLA" },
-  { company: "medmar", ferry_dep_time: "15:00", porto_ischia: "CASAMICCIOLA" },
-  { company: "medmar", ferry_dep_time: "18:30", porto_ischia: "CASAMICCIOLA" },
+  // MEDMAR — Pozzuoli → Casamicciola (~60 min traversata)
+  { company: "medmar", ferry_dep_time: "08:15", ferry_arr_time: "09:15", porto_ischia: "CASAMICCIOLA" },
+  { company: "medmar", ferry_dep_time: "12:00", ferry_arr_time: "13:00", porto_ischia: "CASAMICCIOLA" },
+  { company: "medmar", ferry_dep_time: "15:00", ferry_arr_time: "16:00", porto_ischia: "CASAMICCIOLA" },
+  { company: "medmar", ferry_dep_time: "18:30", ferry_arr_time: "19:30", porto_ischia: "CASAMICCIOLA" },
 
-  // MEDMAR — Napoli → Ischia Porto
-  { company: "medmar", ferry_dep_time: "08:40", porto_ischia: "ISCHIA PORTO" },
-  { company: "medmar", ferry_dep_time: "14:20", porto_ischia: "ISCHIA PORTO" },
-  { company: "medmar", ferry_dep_time: "19:00", porto_ischia: "ISCHIA PORTO" },
+  // MEDMAR — Napoli → Ischia Porto (~85 min traversata)
+  { company: "medmar", ferry_dep_time: "08:40", ferry_arr_time: "10:05", porto_ischia: "ISCHIA PORTO" },
+  { company: "medmar", ferry_dep_time: "14:20", ferry_arr_time: "15:45", porto_ischia: "ISCHIA PORTO" },
+  { company: "medmar", ferry_dep_time: "19:00", ferry_arr_time: "20:25", porto_ischia: "ISCHIA PORTO" },
 ];
 
 // ── Funzioni di lookup ────────────────────────────────────────────────────────
@@ -147,6 +151,17 @@ export const ARRIVAL_SCHEDULES: FerryArrival[] = [
 export function getArrivalPorto(company: "snav" | "medmar", depTime: string): string | null {
   const match = ARRIVAL_SCHEDULES.find((s) => s.company === company && s.ferry_dep_time === depTime);
   return match?.porto_ischia ?? null;
+}
+
+export function getFerryArrivalAtIschia(depTime: string | null, bookingKind: string | null): string | null {
+  if (!depTime || !bookingKind) return null;
+  const t = depTime.slice(0, 5);
+  let company: "snav" | "medmar" | null = null;
+  if (bookingKind === "formula_snav") company = "snav";
+  else if (bookingKind === "formula_medmar_napoli" || bookingKind === "formula_medmar_pozzuoli") company = "medmar";
+  if (!company) return null;
+  const match = ARRIVAL_SCHEDULES.find((s) => s.company === company && s.ferry_dep_time === t);
+  return match?.ferry_arr_time ?? null;
 }
 
 export function getDepartureRule(company: "snav" | "medmar", ferryTime: string): SnavMedmarRule | null {
