@@ -794,7 +794,14 @@ export default function OpsNewBookingPage() {
                 <button
                   key={value}
                   type="button"
-                  onClick={() => setTripLeg(value)}
+                  onClick={() => {
+                    setTripLeg(value);
+                    if (value === "outbound_only") {
+                      setForm((prev) => ({ ...prev, departure_date: prev.arrival_date, departure_time: prev.arrival_time }));
+                    } else if (value === "return_only") {
+                      setForm((prev) => ({ ...prev, arrival_date: prev.departure_date, arrival_time: prev.departure_time }));
+                    }
+                  }}
                   className={`flex-1 rounded-xl border py-2 text-xs font-semibold transition ${tripLeg === value ? "bg-slate-900 text-white border-slate-900" : "border-slate-200 text-slate-600 hover:border-slate-400"}`}
                 >
                   {label}
@@ -835,7 +842,7 @@ export default function OpsNewBookingPage() {
         ) : (
           <>
             {/* Date arrivo */}
-            <div className="md:col-span-2 grid grid-cols-2 gap-3">
+            {!(showTripLeg && tripLeg === "return_only") && <div className="md:col-span-2 grid grid-cols-2 gap-3">
               <label className="text-sm">
                 {contextLabels.arrivalDateLabel}
                 <DateInput className={`input-saas mt-1${fieldErrors.arrival_date ? " border-rose-400" : ""}`} value={form.arrival_date}
@@ -871,10 +878,10 @@ export default function OpsNewBookingPage() {
                   </>
                 )}
               </label>
-            </div>
+            </div>}
 
             {/* Date ritorno */}
-            <div className="md:col-span-2 grid grid-cols-2 gap-3">
+            {!(showTripLeg && tripLeg === "outbound_only") && <div className="md:col-span-2 grid grid-cols-2 gap-3">
               <label className="text-sm">
                 {contextLabels.departureDateLabel}
                 <DateInput className={`input-saas mt-1${fieldErrors.departure_date ? " border-rose-400" : selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
@@ -908,7 +915,7 @@ export default function OpsNewBookingPage() {
                   </>
                 )}
               </label>
-            </div>
+            </div>}
           </>
         )}
 
