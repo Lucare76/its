@@ -5,11 +5,12 @@
 
 export function emailHtml(body: string, options?: { title?: string; preheader?: string }): string {
   // Logo come URL pubblico — Gmail e la maggior parte dei client email bloccano le immagini base64.
-  // Usa sempre l'URL di produzione: localhost non è raggiungibile dai client email.
+  // Usa sempre un URL https pubblico: localhost non è raggiungibile dai client email.
+  // ischiatransferservice.it restituisce 403 per i file statici; usare il dominio Vercel.
   const rawUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "";
-  const appUrl = (rawUrl && !rawUrl.includes("localhost") && rawUrl.startsWith("https://"))
+  const appUrl = (rawUrl && !rawUrl.includes("localhost") && rawUrl.startsWith("https://") && !rawUrl.includes("ischiatransferservice.it"))
     ? rawUrl
-    : "https://ischiatransferservice.it";
+    : "https://ischia-transfer.vercel.app";
   const logoUrl = `${appUrl}/brand/logo-ischia-transfer-email.png`;
   const logoBlock = `<div class="email-logo-crop" style="width:200px;height:64px;overflow:hidden;margin:0 auto;line-height:0;">
         <img class="email-logo" src="${logoUrl}" alt="Ischia Transfer Service" width="200" style="width:200px;max-width:200px;height:auto;display:block;margin:-113px auto 0;" />
