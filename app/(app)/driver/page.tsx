@@ -750,11 +750,13 @@ function DriverPageInner() {
                     <button type="button"
                       onClick={() => setExpandedGroup(expandedGroup === `oggi-${group.key}` ? null : `oggi-${group.key}`)}
                       className="w-full px-4 py-3 text-left flex items-center justify-between hover:bg-slate-50 transition">
-                      <div>
+                      <div className="flex-1 min-w-0">
                         <p className="font-semibold text-slate-800 text-sm">{group.label}</p>
-                        <p className="text-xs text-slate-400 mt-0.5">{group.entries.length} {group.entries.length === 1 ? "servizio" : "servizi"}</p>
+                        <p className="text-xs text-slate-400 mt-0.5 truncate">
+                          {group.entries.map((e) => `${e.service.pax} ${e.service.customer_name}`).join(" · ")}
+                        </p>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 shrink-0">
                         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
                         <span className="text-slate-400 text-sm">{expandedGroup === `oggi-${group.key}` ? "▲" : "▼"}</span>
                       </div>
@@ -797,11 +799,13 @@ function DriverPageInner() {
                     <button type="button"
                       onClick={() => setExpandedGroup(expandedGroup === `prossimi-${group.key}` ? null : `prossimi-${group.key}`)}
                       className="w-full px-4 py-3 text-left flex items-center justify-between hover:bg-slate-50 transition">
-                      <div>
+                      <div className="flex-1 min-w-0">
                         <p className="font-semibold text-slate-800 text-sm">{group.label}</p>
-                        <p className="text-xs text-slate-400 mt-0.5">{group.entries.length} {group.entries.length === 1 ? "servizio" : "servizi"}</p>
+                        <p className="text-xs text-slate-400 mt-0.5 truncate">
+                          {group.entries.map((e) => `${e.service.pax} ${e.service.customer_name}`).join(" · ")}
+                        </p>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 shrink-0">
                         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
                         <span className="text-slate-400 text-sm">{expandedGroup === `prossimi-${group.key}` ? "▲" : "▼"}</span>
                       </div>
