@@ -380,11 +380,13 @@ function DriverPageInner() {
     };
     const arrGroups = makeGroups(
       arrivals,
-      (e) => `${e.service.date}_${e.service.vessel || "N/D"}`,
+      (e) => `${e.service.date}_${e.service.vessel || "N/D"}_${e.service.time.slice(0, 5)}`,
       (e) => {
         const company = ferryLabel(e.service.booking_service_kind, e.service.time);
         const depTime = e.service.time?.slice(0, 5) ?? "";
-        return company && depTime ? `${company} ${depTime}` : e.service.vessel ?? "N/D";
+        if (company && depTime) return `${company} ${depTime}`;
+        const vesselLabel = e.service.vessel ?? "N/D";
+        return depTime ? `${vesselLabel} · ${depTime}` : vesselLabel;
       },
       "arrival"
     );
