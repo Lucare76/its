@@ -843,7 +843,12 @@ function DriverPageInner() {
                                 className="flex-1 text-left">
                                 <div className="flex items-center justify-between">
                                   <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>
-                                  <span className="text-xs text-slate-500">{formatDateLabel(entry.service.date)} {entry.service.time}</span>
+                                  <span className="text-xs text-slate-500">
+                                    {formatDateLabel(entry.service.date)}{" "}
+                                    {entry.service.direction !== "departure"
+                                      ? (getFerryArrivalAtIschia(entry.service.time, entry.service.booking_service_kind) ?? entry.service.time?.slice(0,5))
+                                      : entry.service.time?.slice(0,5)}
+                                  </span>
                                 </div>
                                 {entry.service.direction === "departure" ? (
                                   <>
