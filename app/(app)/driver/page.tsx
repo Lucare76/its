@@ -783,7 +783,14 @@ function DriverPageInner() {
                                   <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>
                                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusColor(entry.service.status)}`}>{entry.service.status}</span>
                                 </div>
-                                <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax · {entry.service.time}</p>
+                                {entry.service.direction === "departure" ? (
+                                  <>
+                                    <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    {entry.service.vessel ? <p className="text-xs font-medium text-amber-700 mt-0.5">🚢 {entry.service.vessel}{entry.service.pickup_time ? ` · prelievo ${entry.service.pickup_time}` : ""}</p> : null}
+                                  </>
+                                ) : (
+                                  <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax · {entry.service.time}</p>
+                                )}
                               </button>
                               {phone && (
                                 <a href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}
@@ -837,7 +844,17 @@ function DriverPageInner() {
                                   <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>
                                   <span className="text-xs text-slate-500">{formatDateLabel(entry.service.date)} {entry.service.time}</span>
                                 </div>
-                                <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                {entry.service.direction === "departure" ? (
+                                  <>
+                                    <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    {entry.service.vessel ? <p className="text-xs font-medium text-amber-700 mt-0.5">🚢 {entry.service.vessel}{entry.service.pickup_time ? ` · prelievo ${entry.service.pickup_time}` : ""}</p> : null}
+                                  </>
+                                ) : (
+                                  <>
+                                    <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    {(entry.service.meeting_point || entry.service.time) ? <p className="text-xs font-medium text-emerald-700 mt-0.5">⚓ {[entry.service.meeting_point, entry.service.time ? `arr. ${entry.service.time}` : null].filter(Boolean).join(" · ")}</p> : null}
+                                  </>
+                                )}
                               </button>
                               {phone && (
                                 <a href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}
