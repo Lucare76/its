@@ -255,7 +255,7 @@ export async function POST(request: NextRequest) {
         hotel_id: resolvedHotelId,
         customer_name: row.extra_2.trim() || `Servizio autista riga ${row.row_index}`,
         billing_party_name: row.billing_party_name || null,
-        phone: null,
+        phone: "",
         notes: notes || null,
         meeting_point: meetingPoint || null,
         booking_service_kind: bookingServiceKind ?? null,
