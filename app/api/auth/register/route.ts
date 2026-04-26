@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
   const ipAddress = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown";
 
   // Rate limiting by email
-  const rateLimitCheck = checkRateLimit("register", email, RATE_LIMIT_DEFAULTS.register as RateLimitConfig);
+  const rateLimitCheck = await checkRateLimit("register", email, RATE_LIMIT_DEFAULTS.register as RateLimitConfig);
   
   if (!rateLimitCheck.allowed) {
     await sendSecurityAlert({

@@ -3,9 +3,8 @@
  * PATCH /api/admin/tenant-settings  — aggiorna i dati aziendali del tenant
  * Solo admin e supervisor.
  */
-
-import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -20,39 +19,15 @@ const patchSchema = z.object({
   website_url:    z.string().url().max(200).optional().nullable().or(z.literal("")),
 });
 
-async function resolveAdmin(request: NextRequest) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
-  const auth = request.headers.get("authorization");
-  if (!url || !key) return { error: "Configurazione server mancante.", status: 500 } as const;
-  if (!auth?.startsWith("Bearer ")) return { error: "Non autenticato.", status: 401 } as const;
-
-  const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { data: { user }, error } = await admin.auth.getUser(auth.slice(7));
-  if (error || !user) return { error: "Sessione non valida.", status: 401 } as const;
-
-  const { data: membership } = await admin
-    .from("memberships")
-    .select("tenant_id, role")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (!membership) return { error: "Membership non trovata.", status: 403 } as const;
-  if (membership.role !== "admin" && membership.role !== "supervisor") {
-    return { error: "Ruolo non autorizzato.", status: 403 } as const;
-  }
-
-  return { admin, tenantId: membership.tenant_id as string };
-}
-
 export async function GET(request: NextRequest) {
-  const ctx = await resolveAdmin(request);
-  if ("error" in ctx) return NextResponse.json({ error: ctx.error }, { status: ctx.status });
+  // Solo admin (supervisor auto-aggiunto dal wrapper, operator escluso)
+  const auth = await authorizePricingRequest(request, ["admin"]);
+  if (auth instanceof NextResponse) return auth;
 
-  const { data, error } = await ctx.admin
+  const { data, error } = await auth.admin
     .from("tenants")
     .select("id, name, legal_name, address, vat_number, contact_email, contact_phone, website_url")
-    .eq("id", ctx.tenantId)
+    .eq("id", auth.membership.tenant_id)
     .maybeSingle();
 
   if (error || !data) return NextResponse.json({ error: "Tenant non trovato." }, { status: 404 });
@@ -60,8 +35,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const ctx = await resolveAdmin(request);
-  if ("error" in ctx) return NextResponse.json({ error: ctx.error }, { status: ctx.status });
+  const auth = await authorizePricingRequest(request, ["admin"]);
+  if (auth instanceof NextResponse) return auth;
 
   const body = patchSchema.safeParse(await request.json().catch(() => null));
   if (!body.success) {
@@ -69,13 +44,12 @@ export async function PATCH(request: NextRequest) {
   }
 
   const updates: Record<string, unknown> = { ...body.data, updated_at: new Date().toISOString() };
-  // Converti stringa vuota in null per website_url
   if (updates.website_url === "") updates.website_url = null;
 
-  const { error } = await ctx.admin
+  const { error } = await auth.admin
     .from("tenants")
     .update(updates)
-    .eq("id", ctx.tenantId);
+    .eq("id", auth.membership.tenant_id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });

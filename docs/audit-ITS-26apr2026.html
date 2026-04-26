@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<title>Audit ITS — 26 aprile 2026</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+:root{
+  --navy:#1e3a5f;--navy-dark:#0f2744;--blue:#3b82f6;
+  --green:#16a34a;--green-bg:#f0fdf4;--green-border:#bbf7d0;
+  --red:#dc2626;--red-bg:#fef2f2;--red-border:#fecaca;
+  --orange:#ea580c;--orange-bg:#fff7ed;--orange-border:#fed7aa;
+  --yellow:#ca8a04;--yellow-bg:#fefce8;--yellow-border:#fef08a;
+  --s50:#f8fafc;--s100:#f1f5f9;--s200:#e2e8f0;
+  --s400:#94a3b8;--s500:#64748b;--s600:#475569;
+  --s700:#334155;--s800:#1e293b;--s900:#0f172a;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:11px;line-height:1.6;color:var(--s800);background:white;}
+
+/* ── COVER ── */
+.cover{
+  page-break-after:always;min-height:100vh;display:flex;flex-direction:column;
+  background:linear-gradient(160deg,var(--navy-dark) 0%,var(--navy) 55%,#1a4a7a 100%);
+  color:white;padding:60px 64px;position:relative;overflow:hidden;
+}
+.cover::before{content:'';position:absolute;top:-120px;right:-120px;width:500px;height:500px;border-radius:50%;background:rgba(255,255,255,0.03);}
+.cover-logo{font-size:13px;font-weight:600;opacity:0.7;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:80px;}
+.cover-main{flex:1;display:flex;flex-direction:column;justify-content:center;}
+.cover-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:999px;padding:6px 16px;font-size:11px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:28px;width:fit-content;}
+.cover-title{font-size:46px;font-weight:800;line-height:1.1;margin-bottom:12px;letter-spacing:-0.02em;}
+.cover-subtitle{font-size:20px;font-weight:400;opacity:0.75;margin-bottom:48px;}
+.grade-wrap{display:flex;align-items:center;gap:32px;margin-bottom:48px;}
+.grade-circle{width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,0.12);border:3px solid rgba(255,255,255,0.3);display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;}
+.grade-letter{font-size:52px;font-weight:800;line-height:1;color:#fde68a;}
+.grade-plus{font-size:26px;font-weight:700;color:#fde68a;margin-top:-4px;}
+.grade-score{font-size:36px;font-weight:800;color:#fde68a;line-height:1;}
+.grade-label{font-size:12px;opacity:0.7;font-weight:500;}
+.grade-desc{font-size:14px;font-weight:500;opacity:0.85;max-width:320px;margin-top:8px;}
+.cover-meta{display:flex;gap:32px;border-top:1px solid rgba(255,255,255,0.15);padding-top:24px;margin-top:auto;}
+.cm-label{font-size:10px;text-transform:uppercase;letter-spacing:0.1em;opacity:0.5;}
+.cm-val{font-size:13px;font-weight:600;}
+
+/* ── SECTIONS ── */
+.section{padding:36px 56px;page-break-inside:avoid;}
+.section+.section{border-top:1px solid var(--s200);}
+.sh{display:flex;align-items:center;gap:12px;margin-bottom:16px;}
+.snum{width:32px;height:32px;border-radius:10px;background:var(--navy);color:white;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.stitle{font-size:18px;font-weight:700;color:var(--s900);}
+.sscore{margin-left:auto;padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;}
+.sa{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border);}
+.sb{background:var(--yellow-bg);color:var(--yellow);border:1px solid var(--yellow-border);}
+
+/* ── TABLE ── */
+table{width:100%;border-collapse:collapse;font-size:11px;margin:10px 0;}
+th{background:var(--s800);color:white;font-weight:600;padding:8px 12px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;}
+th:first-child{border-radius:8px 0 0 0;}th:last-child{border-radius:0 8px 0 0;}
+td{padding:8px 12px;border-bottom:1px solid var(--s100);vertical-align:top;}
+tr:nth-child(even) td{background:var(--s50);}
+tr:last-child td{border-bottom:none;}
+tr:last-child td:first-child{border-radius:0 0 0 8px;}
+tr:last-child td:last-child{border-radius:0 0 8px 0;}
+.ok{color:var(--green);font-weight:600;}
+.warn{color:var(--yellow);font-weight:600;}
+.err{color:var(--red);font-weight:600;}
+.pause{color:var(--s500);font-weight:600;}
+
+/* ── BADGES ── */
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;}
+.br{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border);}
+.by{background:var(--yellow-bg);color:var(--yellow);border:1px solid var(--yellow-border);}
+
+/* ── CARDS ── */
+.card-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:12px 0;}
+.card{padding:16px;border-radius:12px;border:1px solid var(--s200);background:var(--s50);}
+.card-v{font-size:28px;font-weight:800;color:var(--navy);line-height:1;}
+.card-l{font-size:10px;color:var(--s500);margin-top:4px;font-weight:500;text-transform:uppercase;letter-spacing:0.05em;}
+
+/* ── SCORE GRID ── */
+.sg{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0;}
+.sc{padding:16px;border-radius:12px;border:1px solid var(--s200);}
+.sc-t{font-size:11px;font-weight:600;color:var(--s600);margin-bottom:6px;}
+.sc-g{font-size:24px;font-weight:800;line-height:1;}
+.sc-d{font-size:10px;color:var(--s500);margin-top:4px;}
+.ga{color:var(--green);}.gb{color:#0ea5e9;}.gbm{color:var(--yellow);}
+
+/* ── ISSUES ── */
+.issue{display:flex;gap:12px;padding:14px 16px;border-radius:12px;margin-bottom:8px;page-break-inside:avoid;}
+.ih{background:var(--red-bg);border:1px solid var(--red-border);}
+.im{background:var(--yellow-bg);border:1px solid var(--yellow-border);}
+.il{background:#f0f9ff;border:1px solid #bae6fd;}
+.ii{font-size:18px;flex-shrink:0;line-height:1.4;}
+.ib{flex:1;}
+.it{font-weight:700;font-size:12px;margin-bottom:3px;}
+.id{font-size:11px;color:var(--s600);line-height:1.5;}
+.if{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--s500);margin-top:4px;}
+
+/* ── RECS ── */
+.recs{list-style:none;display:flex;flex-direction:column;gap:8px;margin-top:12px;}
+.ri{display:flex;align-items:flex-start;gap:10px;padding:12px 14px;background:var(--s50);border:1px solid var(--s200);border-radius:10px;}
+.rn{width:22px;height:22px;border-radius:50%;background:var(--navy);color:white;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;}
+.rt{font-weight:700;font-size:11px;}
+.rd{font-size:10px;color:var(--s500);margin-top:2px;}
+code{font-family:'JetBrains Mono',monospace;font-size:10px;background:var(--s100);padding:1px 5px;border-radius:4px;color:var(--navy);}
+p{margin-bottom:8px;}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.footer{padding:20px 56px;border-top:1px solid var(--s200);display:flex;justify-content:space-between;font-size:10px;color:var(--s400);}
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-logo">Ischia Transfer Service &nbsp;&middot;&nbsp; Internal Audit</div>
+  <div class="cover-main">
+    <div class="cover-badge">&#128203; Codebase Audit Report</div>
+    <div class="cover-title">ITS Platform<br/>Audit Report</div>
+    <div class="cover-subtitle">Analisi completa di qualit&agrave;, sicurezza, architettura e PWA</div>
+    <div class="grade-wrap">
+      <div class="grade-circle">
+        <div class="grade-letter">B</div>
+        <div class="grade-plus">+</div>
+      </div>
+      <div>
+        <div class="grade-score">7.8 / 10</div>
+        <div class="grade-label">Voto complessivo</div>
+        <div class="grade-desc">Piattaforma produzione-pronta con basi solide. Alcuni punti di miglioramento noti non bloccanti.</div>
+      </div>
+    </div>
+  </div>
+  <div class="cover-meta">
+    <div><div class="cm-label">Data</div><div class="cm-val">26 aprile 2026</div></div>
+    <div><div class="cm-label">Branch</div><div class="cm-val">main</div></div>
+    <div><div class="cm-label">Ultimo commit</div><div class="cm-val">995250c</div></div>
+    <div><div class="cm-label">Revisore</div><div class="cm-val">Claude Sonnet 4.6</div></div>
+  </div>
+</div>
+
+<!-- VOTO PER AREA -->
+<div class="section">
+  <div class="sh"><div class="snum">&#9733;</div><div class="stitle">Voto per area</div></div>
+  <div class="sg">
+    <div class="sc"><div class="sc-t">Build &amp; Qualit&agrave;</div><div class="sc-g ga">A+</div><div class="sc-d">Build OK, TypeScript OK, ESLint OK, tutti i test passano</div></div>
+    <div class="sc"><div class="sc-t">Architettura</div><div class="sc-g ga">A&minus;</div><div class="sc-d">Multi-tenant solido, auth centralizzato, moduli ben separati</div></div>
+    <div class="sc"><div class="sc-t">Sicurezza</div><div class="sc-g gb">B+</div><div class="sc-d">JWT validato, HMAC, rate limit presente ma in-memory</div></div>
+    <div class="sc"><div class="sc-t">Dipendenze</div><div class="sc-g gbm">B&minus;</div><div class="sc-d">7 vulnerabilit&agrave; alte, Next.js 16.2.2 &rarr; 16.2.3 non aggiornato</div></div>
+    <div class="sc"><div class="sc-t">Test Coverage</div><div class="sc-g gb">B</div><div class="sc-d">33 unit test ok, 4 e2e spec presenti, no integration test DB</div></div>
+    <div class="sc"><div class="sc-t">PWA</div><div class="sc-g ga">A</div><div class="sc-d">Manifest, SW, push VAPID, install prompt &mdash; tutto funzionante</div></div>
+  </div>
+</div>
+
+<!-- 1. BUILD -->
+<div class="section">
+  <div class="sh"><div class="snum">1</div><div class="stitle">Build &amp; Qualit&agrave; del Codice</div><div class="sscore sa">A+</div></div>
+  <div class="card-grid">
+    <div class="card"><div class="card-v">&#10003;</div><div class="card-l">next build</div></div>
+    <div class="card"><div class="card-v">&#10003;</div><div class="card-l">tsc --noEmit</div></div>
+    <div class="card"><div class="card-v">&#10003;</div><div class="card-l">eslint .</div></div>
+    <div class="card"><div class="card-v">33</div><div class="card-l">Unit test (tutti passano)</div></div>
+  </div>
+  <table>
+    <tr><th>Check</th><th>Risultato</th><th>Note</th></tr>
+    <tr><td><code>next build</code></td><td class="ok">Exit 0</td><td>Nessun errore di compilazione</td></tr>
+    <tr><td><code>tsc --noEmit</code></td><td class="ok">Exit 0</td><td>Strict mode attivo, zero errori di tipo</td></tr>
+    <tr><td><code>eslint .</code></td><td class="ok">Exit 0</td><td>Nessun warning n&eacute; errore</td></tr>
+    <tr><td><code>vitest run</code></td><td class="ok">5 file, 33 test</td><td>Tutti passano in 3.88s</td></tr>
+    <tr><td>E2E Playwright</td><td class="pause">Non eseguiti</td><td>Richiedono server live + credenziali</td></tr>
+  </table>
+  <p style="margin-top:12px;color:var(--s600);"><strong>File pi&ugrave; grandi</strong> (potenziale refactor futuro):</p>
+  <table>
+    <tr><th>File</th><th>Righe</th><th>Area</th></tr>
+    <tr><td><code>app/(app)/settings/bus-network/page.tsx</code></td><td>2807</td><td>UI configurazione rete bus</td></tr>
+    <tr><td><code>app/(app)/settings/pricing/page.tsx</code></td><td>2666</td><td>UI tariffario</td></tr>
+    <tr><td><code>app/(app)/piano-giorno/page.tsx</code></td><td>2361</td><td>UI piano operativo giornaliero</td></tr>
+    <tr><td><code>app/api/settings/bus-network/route.ts</code></td><td>2131</td><td>API rete bus</td></tr>
+  </table>
+</div>
+
+<!-- 2. ARCHITETTURA -->
+<div class="section">
+  <div class="sh"><div class="snum">2</div><div class="stitle">Architettura</div><div class="sscore sa">A&minus;</div></div>
+  <div class="card-grid">
+    <div class="card"><div class="card-v">180</div><div class="card-l">API Routes</div></div>
+    <div class="card"><div class="card-v">155</div><div class="card-l">Migrazioni DB</div></div>
+    <div class="card"><div class="card-v">62</div><div class="card-l">Moduli server-side</div></div>
+    <div class="card"><div class="card-v">113</div><div class="card-l">Route con auth centralizzato</div></div>
+  </div>
+  <table style="margin-top:12px;">
+    <tr><th>Componente</th><th>Tecnologia</th><th>Note</th></tr>
+    <tr><td>Framework</td><td>Next.js 16.2.2 App Router</td><td>TypeScript strict mode</td></tr>
+    <tr><td>Database</td><td>Supabase (PostgreSQL)</td><td>Multi-tenant via <code>memberships.tenant_id</code></td></tr>
+    <tr><td>Auth</td><td>Supabase Auth + JWT</td><td>Wrapper centralizzato <code>authorizePricingRequest</code></td></tr>
+    <tr><td>Email</td><td>Resend API</td><td>Centralizzato via <code>sendEmail()</code> / <code>resendFetch()</code></td></tr>
+    <tr><td>Test unitari</td><td>Vitest 4.1.5</td><td>5 file, 33 test</td></tr>
+    <tr><td>E2E</td><td>Playwright 1.58.2</td><td>4 spec: scan, pdf-ops, pricing, smoke</td></tr>
+    <tr><td>PWA</td><td>SW custom + VAPID</td><td>Solo per sezione /driver</td></tr>
+    <tr><td>Notifiche push</td><td>Web Push API</td><td>VAPID keys, SLA alert con vibrazione</td></tr>
+  </table>
+  <p style="margin-top:14px;color:var(--s600);font-size:11px;">
+    <strong>Pattern di autenticazione:</strong> <code>authorizeServiceRoleRequest()</code> valida il Bearer JWT tramite
+    <code>admin.auth.getUser(token)</code>, recupera la membership, controlla ruolo + sospensione e registra
+    audit log su ogni accesso negato. Il pattern &egrave; applicato a 113/180 route; le restanti usano token-based auth
+    (link email firmati con JWT) o protezione via <code>CRON_SECRET</code>.
+  </p>
+</div>
+
+<!-- 3. SICUREZZA -->
+<div class="section">
+  <div class="sh"><div class="snum">3</div><div class="stitle">Sicurezza</div><div class="sscore sb">B+</div></div>
+  <p style="color:var(--s600);margin-bottom:12px;">Controlli positivi rilevati durante l&apos;analisi:</p>
+  <table>
+    <tr><th>Controllo</th><th>Stato</th><th>Dettaglio</th></tr>
+    <tr><td>JWT validato su API protette</td><td class="ok">OK</td><td>113 route, via Supabase <code>auth.getUser()</code></td></tr>
+    <tr><td>WhatsApp webhook HMAC</td><td class="ok">OK</td><td><code>createHmac</code> + <code>timingSafeEqual</code> da <code>crypto</code></td></tr>
+    <tr><td>Cron jobs protetti</td><td class="ok">OK</td><td><code>CRON_SECRET</code> su tutti i job schedulati</td></tr>
+    <tr><td>Link email firmati</td><td class="ok">OK</td><td><code>verifyAgencyActionToken()</code> &mdash; JWT con scadenza</td></tr>
+    <tr><td>Rate limiting auth</td><td class="ok">OK</td><td>Register 10/h, OTP 3/h, reset 3/h + security alert email</td></tr>
+    <tr><td>Validazione input</td><td class="ok">OK</td><td>Zod schemas su tutti i body in ingresso</td></tr>
+    <tr><td>Multi-tenant isolation</td><td class="ok">OK</td><td><code>tenant_id</code> su ogni query Supabase</td></tr>
+    <tr><td>SQL injection</td><td class="ok">OK</td><td>Supabase client usa query parametrizzate</td></tr>
+    <tr><td>Audit log</td><td class="ok">OK</td><td>Ogni accesso negato loggato con userId e route</td></tr>
+  </table>
+  <p style="margin-top:16px;color:var(--s600);margin-bottom:10px;"><strong>Problemi rilevati:</strong></p>
+  <div class="issue ih">
+    <div class="ii">&#128308;</div>
+    <div class="ib">
+      <div class="it">Password di fallback hardcoded per autisti</div>
+      <div class="id">Quando un autista non ha numero di telefono, la password diventa <code>"Ischia2025!"</code> &mdash; predicibile. Ha <code>force_password_change:true</code> come mitigante, ma la password iniziale &egrave; debole e nota.</div>
+      <div class="if">app/api/ops/departure-bus-assign/route.ts:97</div>
+    </div>
+  </div>
+  <div class="issue im">
+    <div class="ii">&#128993;</div>
+    <div class="ib">
+      <div class="it">Rate limiting in-memory &mdash; non efficace su Vercel</div>
+      <div class="id">Usa <code>Map&lt;string, RateLimitEntry&gt;</code> in-process. Su Vercel serverless ogni istanza ha memoria indipendente e il contatore si azzera a ogni cold start. Il rate limit non funziona in produzione con pi&ugrave; istanze concorrenti.</div>
+      <div class="if">lib/server/rate-limit.ts</div>
+    </div>
+  </div>
+  <div class="issue il">
+    <div class="ii">&#128309;</div>
+    <div class="ib">
+      <div class="it">5 route admin con auth custom anzich&eacute; il wrapper centralizzato</div>
+      <div class="id">La logica &egrave; corretta ma non usa <code>authorizePricingRequest()</code>, quindi pu&ograve; divergere da aggiornamenti futuri del comportamento centrale.</div>
+      <div class="if">app/api/admin/agency-reviews/route.ts, fleet-reports/route.ts, tenant-settings/route.ts ...</div>
+    </div>
+  </div>
+</div>
+
+<!-- 4. DIPENDENZE -->
+<div class="section">
+  <div class="sh"><div class="snum">4</div><div class="stitle">Dipendenze &amp; Vulnerabilit&agrave;</div><div class="sscore sb">B&minus;</div></div>
+  <p style="color:var(--s600);margin-bottom:12px;"><code>pnpm audit</code>: <strong>16 vulnerabilit&agrave;</strong> &mdash; 1 bassa, 8 medie, 7 alte.</p>
+  <table>
+    <tr><th>Pacchetto</th><th>Versione</th><th>Severit&agrave;</th><th>Tipo</th><th>Fix disponibile</th></tr>
+    <tr><td><code>next</code></td><td>16.2.2</td><td><span class="badge br">Alta</span></td><td>DoS con Server Components</td><td class="ok">S&igrave; &rarr; 16.2.3</td></tr>
+    <tr><td><code>xlsx</code></td><td>&mdash;</td><td><span class="badge br">Alta &times;2</span></td><td>Prototype Pollution + ReDoS</td><td class="err">Nessun patch ufficiale</td></tr>
+    <tr><td><code>flatted</code></td><td>&mdash;</td><td><span class="badge br">Alta &times;2</span></td><td>Recursion DoS + Prototype Pollution (transitivo)</td><td class="ok">S&igrave; &rarr; &ge;3.4.2</td></tr>
+    <tr><td><code>picomatch</code></td><td>&mdash;</td><td><span class="badge br">Alta &times;2</span></td><td>ReDoS via extglob (transitivo)</td><td class="ok">S&igrave; &rarr; &ge;2.3.2</td></tr>
+  </table>
+  <div class="issue ih" style="margin-top:14px;">
+    <div class="ii">&#128308;</div>
+    <div class="ib">
+      <div class="it">Next.js 16.2.2 &rarr; aggiornare a 16.2.3 immediatamente</div>
+      <div class="id">Vulnerabilit&agrave; DoS attiva con Server Components. Un solo comando: <code>pnpm update next</code>. Rischio concreto in produzione.</div>
+      <div class="if">package.json &mdash; "next": "^16.2.2"</div>
+    </div>
+  </div>
+</div>
+
+<!-- 5. TEST -->
+<div class="section">
+  <div class="sh"><div class="snum">5</div><div class="stitle">Test Coverage</div><div class="sscore sb">B</div></div>
+  <div class="two-col">
+    <div>
+      <p style="font-weight:600;margin-bottom:8px;">Unit test (Vitest) &mdash; 33/33 OK</p>
+      <table>
+        <tr><th>File</th><th>Area</th></tr>
+        <tr><td><code>rate-limit.test.ts</code></td><td>Sicurezza auth</td></tr>
+        <tr><td><code>otp-utils.test.ts</code></td><td>OTP generation/verify</td></tr>
+        <tr><td><code>email-validation.test.ts</code></td><td>Email domain check</td></tr>
+        <tr><td><code>escape-html.test.ts</code></td><td>XSS escaping</td></tr>
+        <tr><td><code>admin-user-lookup.test.ts</code></td><td>Admin lookup</td></tr>
+      </table>
+    </div>
+    <div>
+      <p style="font-weight:600;margin-bottom:8px;">E2E test (Playwright)</p>
+      <table>
+        <tr><th>File</th><th>Area</th></tr>
+        <tr><td><code>smoke.spec.ts</code></td><td>Login + navigazione base</td></tr>
+        <tr><td><code>pricing.spec.ts</code></td><td>Gestione tariffe</td></tr>
+        <tr><td><code>pdf-ops.spec.ts</code></td><td>Import PDF operativo</td></tr>
+        <tr><td><code>scan.spec.ts</code></td><td>Scan documenti</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="issue im" style="margin-top:12px;">
+    <div class="ii">&#128993;</div>
+    <div class="ib">
+      <div class="it">Nessun integration test con database reale</div>
+      <div class="id">Le route API critiche (auto-assign, calcolo prezzi, creazione servizi) non sono coperte da test che tocchino il DB. I test unitari mockano le dipendenze esterne.</div>
+    </div>
+  </div>
+</div>
+
+<!-- 6. PWA -->
+<div class="section">
+  <div class="sh"><div class="snum">6</div><div class="stitle">PWA (sezione /driver)</div><div class="sscore sa">A</div></div>
+  <table>
+    <tr><th>Check</th><th>Stato</th><th>Dettaglio</th></tr>
+    <tr><td>Manifest (<code>/manifest.json</code>)</td><td class="ok">OK</td><td>name, icons 192/512, start_url, display:standalone, shortcuts</td></tr>
+    <tr><td>Service Worker (<code>/sw.js</code>)</td><td class="ok">OK</td><td>Network-first, cache offline, push handler, SLA BroadcastChannel</td></tr>
+    <tr><td>Icone</td><td class="ok">OK</td><td>icon-192.png, icon-512.png, apple-touch-icon.png presenti</td></tr>
+    <tr><td>Registrazione SW</td><td class="ok">OK</td><td><code>PwaInit</code> component nel layout /driver</td></tr>
+    <tr><td>Push notifications</td><td class="ok">OK</td><td>VAPID keys, subscribe/unsubscribe, SLA alert con vibrazione</td></tr>
+    <tr><td>Install prompt</td><td class="ok">OK</td><td><code>beforeinstallprompt</code> intercettato, <code>triggerInstall()</code> esposto via context</td></tr>
+    <tr><td>Theme color</td><td class="ok">OK</td><td><code>#0f172a</code> in viewport config + manifest</td></tr>
+    <tr><td>Offline fallback</td><td class="ok">OK</td><td>Pagina /driver in cache all&apos;install del SW</td></tr>
+    <tr><td>Maskable icon safe-zone</td><td class="warn">Verifica</td><td>icon-512.png come maskable &mdash; safe-zone (40% centro) non verificata</td></tr>
+  </table>
+</div>
+
+<!-- 7. RACCOMANDAZIONI -->
+<div class="section" style="page-break-before:always;">
+  <div class="sh"><div class="snum">7</div><div class="stitle">Piano d&apos;azione &mdash; Priorit&agrave;</div></div>
+  <ul class="recs">
+    <li class="ri">
+      <div class="rn">1</div>
+      <div><div class="rt">&#128308; Aggiorna Next.js 16.2.2 &rarr; 16.2.3 &nbsp;<span class="badge br">urgente</span></div><div class="rd">Vulnerabilit&agrave; DoS attiva con Server Components. <code>pnpm update next</code> + deploy. 5 minuti.</div></div>
+    </li>
+    <li class="ri">
+      <div class="rn">2</div>
+      <div><div class="rt">&#128308; Sostituisci la password fallback hardcoded con valore random</div><div class="rd">In <code>departure-bus-assign/route.ts:97</code> usa <code>crypto.randomBytes(8).toString('hex')</code> al posto di <code>"Ischia2025!"</code>.</div></div>
+    </li>
+    <li class="ri">
+      <div class="rn">3</div>
+      <div><div class="rt">&#128993; Sostituisci il rate limiter in-memory con Redis/Upstash</div><div class="rd">Non funziona su Vercel serverless multi-istanza. Upstash Redis ha piano gratuito, integrazione in meno di 1 ora.</div></div>
+    </li>
+    <li class="ri">
+      <div class="rn">4</div>
+      <div><div class="rt">&#128993; Unifica auth nelle 5 route admin con auth custom</div><div class="rd">Usa <code>authorizePricingRequest()</code> in <code>admin/agency-reviews</code>, <code>fleet-reports</code>, <code>tenant-settings</code> per consistenza futura.</div></div>
+    </li>
+    <li class="ri">
+      <div class="rn">5</div>
+      <div><div class="rt">&#128309; Valuta alternativa a xlsx (nessun patch ufficiale disponibile)</div><div class="rd">Le vulnerabilit&agrave; Prototype Pollution e ReDoS di <code>xlsx</code> non hanno patch. Considera <code>exceljs</code> se l&apos;input proviene da utenti.</div></div>
+    </li>
+    <li class="ri">
+      <div class="rn">6</div>
+      <div><div class="rt">&#128309; Aggiungi integration test per le route API critiche</div><div class="rd">Auto-assign, calcolo prezzi, creazione servizi &mdash; test con Supabase locale (<code>supabase start</code> + Vitest con client reale).</div></div>
+    </li>
+    <li class="ri">
+      <div class="rn">7</div>
+      <div><div class="rt">&#128309; Verifica safe-zone icona PWA maskable</div><div class="rd">Genera una variante dell&apos;icona con padding per la safe-zone 40% centrale su launcher circolari Android.</div></div>
+    </li>
+    <li class="ri">
+      <div class="rn">8</div>
+      <div><div class="rt">&#9898; Considera il refactor dei 4 file con +2000 righe</div><div class="rd">Non bloccante. <code>bus-network/page.tsx</code> (2807 righe), <code>pricing/page.tsx</code> (2666) &mdash; suddivisione in sotto-componenti per migliore manutenibilit&agrave;.</div></div>
+    </li>
+  </ul>
+</div>
+
+<div class="footer">
+  <span>ITS Platform Audit &mdash; 26 aprile 2026</span>
+  <span>Generato da Claude Sonnet 4.6 &middot; Ischia Transfer Service</span>
+</div>
+
+</body>
+</html>

@@ -234,7 +234,7 @@ function usePianoGiornoData(date: string) {
     return () => { active = false; };
   }, [date, load]);
 
-  // Realtime
+  // Realtime — richiede migration 0158_realtime_publications.sql
   useEffect(() => {
     const client = supabase;
     if (!client || !tenantId || !token) return;
@@ -249,7 +249,10 @@ function usePianoGiornoData(date: string) {
       .on("postgres_changes", { event: "*", schema: "public", table: "trip_groups", filter: `tenant_id=eq.${tenantId}` }, scheduleRefresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "status_events", filter: `tenant_id=eq.${tenantId}` }, scheduleRefresh)
       .subscribe();
-    return () => { void client.removeChannel(channel); };
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      void client.removeChannel(channel);
+    };
   }, [tenantId, token, date, load]);
 
   const reload = useCallback(() => { if (token) void load(token); }, [token, load]);

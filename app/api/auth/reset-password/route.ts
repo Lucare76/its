@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
 
   // Rate limiting by email
   const ipAddress = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown";
-  const rateLimitCheck = checkRateLimit("reset_password", email, RATE_LIMIT_DEFAULTS.resetPassword as RateLimitConfig);
+  const rateLimitCheck = await checkRateLimit("reset_password", email, RATE_LIMIT_DEFAULTS.resetPassword as RateLimitConfig);
   
   if (!rateLimitCheck.allowed) {
     await sendSecurityAlert({

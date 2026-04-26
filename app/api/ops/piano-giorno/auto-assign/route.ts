@@ -10,8 +10,9 @@
  *   - Split batch se pax > max capienza veicoli disponibili
  *
  * Algoritmo partenze:
- *   - Raggruppa per pickup_hotel (o time se non calcolato) + zona hotel
- *   - Split batch per capienza
+ *   - Protegge i blocchi "stesso hotel + stesso pickup + stesso porto"
+ *   - Consente merge tra blocchi diversi solo se il mezzo li assorbe senza spezzare un blocco
+ *   - Non spezza automaticamente un hotel con stesso pickup
  *
  * Regole comuni:
  *   - Autisti distribuiti equamente con verifica conflitto orario (75 min)
@@ -150,10 +151,18 @@ function batchByCapacity(
 }
 
 const ARRIVAL_MERGE_WINDOW_MINUTES = 25;
+const DEPARTURE_SAME_HOTEL_MERGE_WINDOW_MINUTES = 30;
 
 function arrivalMergeKey(service: ServiceRow): string {
   const port = cleanPortName(service.meeting_point) || "Ischia Porto";
   return `${port.toLowerCase()}|${Math.floor(timeToMin(service.time) / ARRIVAL_MERGE_WINDOW_MINUTES)}`;
+}
+
+function departureBaseGroupKey(service: ServiceRow, hotelMap: Map<string, HotelRow>): string {
+  const hotelKey = service.hotel_id ?? `zone:${hotelMap.get(service.hotel_id ?? "")?.zone ?? "Sconosciuto"}`;
+  const pickup = (service.pickup_hotel ?? service.time).slice(0, 5);
+  const port = cleanPortName(service.meeting_point) || "Imbarco da verificare";
+  return `${hotelKey}|${pickup}|${port.toLowerCase()}`;
 }
 
 // ─── Tipi interni ─────────────────────────────────────────────────────────────
@@ -224,6 +233,50 @@ type TripDraft = {
   direction: "arrival" | "departure";
   zoneLabel: string;
 };
+
+type DepartureProtectedBlock = {
+  serviceIds: string[];
+  pax: number;
+  pickup: string;
+  zone: string;
+  port: string;
+};
+
+function batchProtectedBlocksByCapacity(
+  blocks: DepartureProtectedBlock[],
+  capMax: number
+): DepartureProtectedBlock[][] {
+  if (!blocks.length) return [];
+  if (!capMax || capMax <= 0) return [blocks];
+
+  const batches: DepartureProtectedBlock[][] = [];
+  let current: DepartureProtectedBlock[] = [];
+  let currentPax = 0;
+
+  for (const block of blocks) {
+    if (block.pax > capMax) {
+      if (current.length > 0) {
+        batches.push(current);
+        current = [];
+        currentPax = 0;
+      }
+      batches.push([block]);
+      continue;
+    }
+
+    if (currentPax + block.pax > capMax && current.length > 0) {
+      batches.push(current);
+      current = [];
+      currentPax = 0;
+    }
+
+    current.push(block);
+    currentPax += block.pax;
+  }
+
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
 
@@ -440,35 +493,79 @@ export async function POST(request: NextRequest) {
 
     // ── 5. Algoritmo PARTENZE ────────────────────────────────────────────────
 
-    // Raggruppa per pickup_hotel (o time del servizio) + zona hotel
-    const depGroups = new Map<string, ServiceRow[]>();
+    // Protegge i blocchi "stesso hotel + stesso pickup + stesso porto"
+    const depBaseGroups = new Map<string, ServiceRow[]>();
     for (const svc of departures) {
-      const zone = hotelMap.get(svc.hotel_id ?? "")?.zone ?? "Sconosciuto";
-      const pickup = (svc.pickup_hotel ?? svc.time).slice(0, 5);
-      const key = `${pickup}|${zone}`;
-      const list = depGroups.get(key) ?? [];
+      const key = departureBaseGroupKey(svc, hotelMap);
+      const list = depBaseGroups.get(key) ?? [];
       list.push(svc);
-      depGroups.set(key, list);
+      depBaseGroups.set(key, list);
     }
 
-    for (const [key, depSvcs] of depGroups.entries()) {
-      const [pickup, zone] = key.split("|");
-      const sorted = routeSort(depSvcs, hotelMap, portCoords(depSvcs[0]?.meeting_point), "departure");
-      const groupHotelMax = depSvcs.reduce<number | null>((min, s) => {
-        const limit = s.hotel_id ? hotelVehicleLimitMap.get(s.hotel_id) : null;
-        if (limit == null) return min;
-        return min == null ? limit : Math.min(min, limit);
-      }, null);
-      const effectiveCap = groupHotelMax != null ? Math.min(maxCap, groupHotelMax) : maxCap;
-      const batches = batchByCapacity(sorted.map((s) => ({ id: s.id, pax: s.pax })), effectiveCap);
-      for (const batch of batches) {
-        drafts.push({
-          serviceIds: batch.map((b) => b.id),
-          pax: batch.reduce((n, b) => n + b.pax, 0),
-          time: pickup ?? "00:00",
-          direction: "departure",
-          zoneLabel: zone ?? "—",
-        });
+    const protectedBlocks = Array.from(depBaseGroups.values()).map((services) => {
+      const sorted = routeSort(services, hotelMap, portCoords(services[0]?.meeting_point), "departure");
+      const pickup = (sorted[0]?.pickup_hotel ?? sorted[0]?.time ?? "00:00").slice(0, 5);
+      const zone = hotelMap.get(sorted[0]?.hotel_id ?? "")?.zone ?? "Sconosciuto";
+      const port = cleanPortName(sorted[0]?.meeting_point) || "Imbarco da verificare";
+      return {
+        serviceIds: sorted.map((service) => service.id),
+        pax: sorted.reduce((sum, service) => sum + service.pax, 0),
+        pickup,
+        zone,
+        port,
+      } satisfies DepartureProtectedBlock;
+    });
+
+    const departureClusterMap = new Map<string, DepartureProtectedBlock[]>();
+    for (const block of protectedBlocks) {
+      const key = `${block.zone}|${block.port}`;
+      const list = departureClusterMap.get(key) ?? [];
+      list.push(block);
+      departureClusterMap.set(key, list);
+    }
+
+    for (const blocks of departureClusterMap.values()) {
+      const sortedBlocks = [...blocks].sort((a, b) => a.pickup.localeCompare(b.pickup));
+      const pickupClusters: DepartureProtectedBlock[][] = [];
+
+      for (const block of sortedBlocks) {
+        const pickupMin = timeToMin(block.pickup);
+        const current = pickupClusters[pickupClusters.length - 1];
+        if (!current || current.length === 0) {
+          pickupClusters.push([block]);
+          continue;
+        }
+
+        const anchorMin = timeToMin(current[0]?.pickup ?? "00:00");
+        if (pickupMin - anchorMin <= DEPARTURE_SAME_HOTEL_MERGE_WINDOW_MINUTES) {
+          current.push(block);
+        } else {
+          pickupClusters.push([block]);
+        }
+      }
+
+      for (const cluster of pickupClusters) {
+        const hotelIds = cluster
+          .flatMap((block) => block.serviceIds)
+          .map((sid) => allServices.find((s) => s.id === sid)?.hotel_id)
+          .filter((id): id is string => Boolean(id));
+        const groupHotelMax = hotelIds.reduce<number | null>((min, hid) => {
+          const limit = hotelVehicleLimitMap.get(hid);
+          if (limit == null) return min;
+          return min == null ? limit : Math.min(min, limit);
+        }, null);
+        const effectiveCap = groupHotelMax != null ? Math.min(maxCap, groupHotelMax) : maxCap;
+        const batches = batchProtectedBlocksByCapacity(cluster, effectiveCap);
+
+        for (const batch of batches) {
+          drafts.push({
+            serviceIds: batch.flatMap((block) => block.serviceIds),
+            pax: batch.reduce((sum, block) => sum + block.pax, 0),
+            time: batch[0]?.pickup ?? "00:00",
+            direction: "departure",
+            zoneLabel: batch[0]?.zone ?? "—",
+          });
+        }
       }
     }
 

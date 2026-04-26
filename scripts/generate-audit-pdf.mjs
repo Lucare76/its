@@ -3,8 +3,9 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 
 const root = process.cwd();
-const htmlPath = path.join(root, "docs", "audit-tecnico-completo-ischia-transfer.html");
-const pdfPath = path.join(root, "docs", "audit-tecnico-completo-ischia-transfer.pdf");
+const target = process.argv[2] ?? "audit-ITS-26apr2026";
+const htmlPath = path.join(root, "docs", `${target}.html`);
+const pdfPath = path.join(root, "docs", `${target}.pdf`);
 
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1240, height: 1754 } });

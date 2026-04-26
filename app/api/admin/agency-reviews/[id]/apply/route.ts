@@ -3,18 +3,10 @@
  * Applica le modifiche segnalate dall'agenzia ai servizi corrispondenti.
  * Richiede ruolo admin/operator/supervisor.
  */
-import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
-
-function adminClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "")!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "")!,
-    { auth: { persistSession: false, autoRefreshToken: false } },
-  );
-}
 
 // Mappa campo revisione → colonna DB services
 const FIELD_MAP: Record<string, string> = {
@@ -47,28 +39,17 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const admin = adminClient();
-  const authHeader = request.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) return NextResponse.json({ error: "Non autenticato." }, { status: 401 });
+  const auth = await authorizePricingRequest(request, ["admin", "operator"]);
+  if (auth instanceof NextResponse) return auth;
 
-  const { data: { user }, error: authErr } = await admin.auth.getUser(authHeader.slice(7));
-  if (authErr || !user) return NextResponse.json({ error: "Sessione non valida." }, { status: 401 });
-
-  const { data: membership } = await admin
-    .from("memberships")
-    .select("tenant_id, role")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (!membership || !["admin", "operator", "supervisor"].includes(membership.role as string)) {
-    return NextResponse.json({ error: "Non autorizzato." }, { status: 403 });
-  }
+  const tenantId = auth.membership.tenant_id;
 
   // Legge la sessione (incluse le snapshot dei servizi per risolvere i fallback service_id)
-  const { data: session, error: sessionErr } = await admin
+  const { data: session, error: sessionErr } = await auth.admin
     .from("agency_review_sessions")
     .select("id, tenant_id, status, modifications, services")
     .eq("id", id)
-    .eq("tenant_id", membership.tenant_id)
+    .eq("tenant_id", tenantId)
     .maybeSingle();
 
   if (sessionErr || !session) return NextResponse.json({ error: "Sessione non trovata." }, { status: 404 });
@@ -91,8 +72,7 @@ export async function POST(
 
   // Risolve un service_id che potrebbe essere UUID o fallback "row-N"
   const resolveServiceId = (rawId: string): string | null => {
-    if (UUID_RE.test(rawId)) return rawId; // già UUID valido
-    // Prova a interpretare come indice row-N
+    if (UUID_RE.test(rawId)) return rawId;
     const m = rawId.match(/^row-(\d+)$/);
     if (!m) return null;
     const idx = parseInt(m[1], 10);
@@ -133,11 +113,11 @@ export async function POST(
   const errors: string[] = [];
   for (const [serviceId, patch] of byServiceId) {
     if (Object.keys(patch).length === 0) continue;
-    const { error: upErr } = await admin
+    const { error: upErr } = await auth.admin
       .from("services")
       .update(patch)
       .eq("id", serviceId)
-      .eq("tenant_id", membership.tenant_id);
+      .eq("tenant_id", tenantId);
     if (upErr) errors.push(`${serviceId}: ${upErr.message}`);
   }
 
@@ -145,15 +125,13 @@ export async function POST(
     return NextResponse.json({ error: "Errori in aggiornamento servizi.", details: errors }, { status: 500 });
   }
 
-  // Se nessun servizio è stato aggiornato ma ci sono campi skippati per mancanza di ID
   if (byServiceId.size === 0 && skippedNoId.length > 0) {
-    // Marca comunque come applied per non lasciare bloccata la sessione
-    await admin.from("agency_review_sessions").update({ status: "applied" } as never).eq("id", session.id);
+    await auth.admin.from("agency_review_sessions").update({ status: "applied" } as never).eq("id", session.id);
     return NextResponse.json({ ok: true, applied: 0, skipped_fields: [...new Set([...skippedFields, ...skippedNoId])], warning: "I servizi non avevano un ID tracciabile: aggiornamento manuale necessario." });
   }
 
   // Marca la sessione come "applied"
-  await admin
+  await auth.admin
     .from("agency_review_sessions")
     .update({ status: "applied" } as never)
     .eq("id", session.id);

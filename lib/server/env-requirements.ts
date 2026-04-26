@@ -34,7 +34,9 @@ export const ENV_REQUIREMENTS: EnvRequirement[] = [
   { key: "WHATSAPP_REMINDER_WINDOW_MINUTES", requiredForBeta: false, category: "whatsapp", notes: "Optional tuning." },
   { key: "WHATSAPP_REMINDER_2H_ENABLED", requiredForBeta: false, category: "whatsapp", notes: "Optional tuning." },
   { key: "WHATSAPP_TEMPLATE_LANGUAGE", requiredForBeta: false, category: "whatsapp", notes: "Optional tuning." },
-  { key: "WHATSAPP_ALLOW_TEXT_FALLBACK", requiredForBeta: false, category: "whatsapp", notes: "Optional tuning." }
+  { key: "WHATSAPP_ALLOW_TEXT_FALLBACK", requiredForBeta: false, category: "whatsapp", notes: "Optional tuning." },
+  { key: "UPSTASH_REDIS_REST_URL", requiredForBeta: false, category: "ops", notes: "Upstash Redis per rate limiting distribuito. Senza, il rate limit è in-memory (non efficace su Vercel multi-istanza)." },
+  { key: "UPSTASH_REDIS_REST_TOKEN", requiredForBeta: false, category: "ops", notes: "Token Upstash Redis (vedi UPSTASH_REDIS_REST_URL)." }
 ];
 
 export function getEnvStatus() {

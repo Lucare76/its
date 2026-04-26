@@ -316,3 +316,107 @@ export async function sendAgencyRejectedEmail(input: AgencyRejectedInput): Promi
 
   return sendEmail({ to: input.to, subject: `❌ Non disponibile — ${serviceLabelShort}, ${fmtDate(input.arrivalDate)}`, html, text });
 }
+
+// ---------------------------------------------------------------------------
+// Email AGENZIA — correzione prezzo ⚠️
+// ---------------------------------------------------------------------------
+
+export interface AgencyPriceCorrectionInput {
+  to: string | null;
+  customerName: string;
+  agencyName: string | null;
+  serviceCtx: ServiceLabelContext;
+  arrivalDate: string;
+  arrivalTime: string;
+  departureDate: string;
+  departureTime: string;
+  hotelName: string;
+  pax: number;
+  quotedPriceCents: number;
+  correctedPriceCents: number;
+  operatorNotes: string | null;
+}
+
+export async function sendAgencyPriceCorrectionEmail(input: AgencyPriceCorrectionInput): Promise<EmailResult> {
+  if (!input.to) return { status: "skipped", error: "Destinatario non disponibile." };
+
+  const serviceLabel = buildServiceLabel(input.serviceCtx);
+  const serviceLabelShort = buildServiceLabelShort(input.serviceCtx);
+  const greeting = input.agencyName?.trim() || input.customerName;
+  const quotedFormatted = formatPrice(input.quotedPriceCents);
+  const correctedFormatted = formatPrice(input.correctedPriceCents);
+  const diff = input.correctedPriceCents - input.quotedPriceCents;
+  const diffFormatted = `${diff > 0 ? "+" : ""}${formatPrice(Math.abs(diff))}`;
+  const operatorNotes = input.operatorNotes?.trim() || null;
+
+  const html = emailHtml(`
+    <p style="font-size:17px;margin-bottom:6px;">Ciao <strong>${greeting}</strong>,</p>
+    <p style="color:#475569;margin-bottom:24px;">
+      La prenotazione è stata <strong>accettata</strong>, tuttavia il prezzo indicato non corrispondeva al nostro listino tariffario.<br/>
+      Il prezzo è stato corretto come indicato di seguito — la prenotazione procede regolarmente con il prezzo aggiornato.
+    </p>
+
+    <table cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%" style="background:linear-gradient(135deg,#0f2744,#1e3a5f);border-radius:14px;margin-bottom:24px;">
+      <tr><td class="service-box" style="padding:20px 24px;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Servizio prenotato</div>
+        <div class="service-title" style="font-size:20px;font-weight:800;color:#ffffff;line-height:1.3;">${serviceLabel}</div>
+        <div style="font-size:14px;color:rgba(255,255,255,0.7);margin-top:6px;">👤 ${input.customerName}</div>
+      </td></tr>
+    </table>
+
+    ${emailDataTable([
+      ["📅 Arrivo", `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
+      ["📅 Rientro", `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
+      ["🏨 Hotel", input.hotelName],
+      ["👥 Passeggeri", `${input.pax} persone`],
+    ])}
+
+    <table cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%" style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;margin:20px 0;overflow:hidden;">
+      <tr>
+        <td style="padding:14px 18px;border-bottom:1px solid #fcd34d;">
+          <div style="font-size:12px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px;">Prezzo da voi indicato</div>
+          <div style="font-size:20px;color:#92400e;text-decoration:line-through;font-weight:600;">${quotedFormatted}</div>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:14px 18px;background:#f0fdf4;">
+          <div style="font-size:12px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px;">Prezzo corretto (listino ufficiale)</div>
+          <div style="font-size:26px;font-weight:800;color:#15803d;">${correctedFormatted}</div>
+          <div style="font-size:13px;color:#166534;margin-top:4px;">Differenza: <strong>${diffFormatted}</strong></div>
+        </td>
+      </tr>
+    </table>
+
+    ${operatorNotes ? `<div style="background:#f0f6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 18px;margin-top:4px;"><div style="font-size:12px;font-weight:700;color:#1e3a5f;text-transform:uppercase;margin-bottom:4px;">Note operative</div><div style="font-size:14px;color:#1e40af;">${operatorNotes}</div></div>` : ""}
+
+    <p style="color:#475569;margin-top:24px;font-size:14px;">
+      Per qualsiasi chiarimento contattateci a
+      <a href="mailto:info@ischiatransferservice.it" style="color:#1e3a5f;font-weight:600;">info@ischiatransferservice.it</a>.
+    </p>
+  `, { title: "Correzione prezzo prenotazione", preheader: `Prezzo corretto: ${quotedFormatted} → ${correctedFormatted} — ${serviceLabelShort}` });
+
+  const text = [
+    `Ciao ${greeting},`,
+    `La prenotazione è stata accettata con correzione del prezzo.`,
+    ``,
+    `Servizio: ${serviceLabel}`,
+    `Cliente: ${input.customerName}`,
+    `Hotel: ${input.hotelName}`,
+    `Arrivo: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
+    `Rientro: ${fmtDate(input.departureDate)} ${input.departureTime}`,
+    `Passeggeri: ${input.pax}`,
+    ``,
+    `Prezzo da voi indicato: ${quotedFormatted}`,
+    `Prezzo corretto (listino): ${correctedFormatted} (differenza: ${diffFormatted})`,
+    operatorNotes ? `Note: ${operatorNotes}` : null,
+    ``,
+    `Per chiarimenti: info@ischiatransferservice.it`,
+  ].filter(Boolean).join("\n");
+
+  return sendEmail({
+    to: input.to,
+    subject: `⚠️ Prezzo corretto — ${serviceLabelShort}, ${fmtDate(input.arrivalDate)}`,
+    html,
+    text,
+  });
+}

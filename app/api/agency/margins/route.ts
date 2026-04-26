@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { parseRole } from "@/lib/rbac";
+import { findRate } from "@/lib/server/rate-matcher";
 
 export const runtime = "nodejs";
 
@@ -69,18 +70,6 @@ export async function GET(request: NextRequest) {
 
   const agencyMap = Object.fromEntries((agencies ?? []).map((a) => [a.id, a.name]));
 
-  // Helper: trova il prezzo e costo attivi per un servizio alla sua data
-  function findRate(agencyId: string, kind: string, serviceDate: string) {
-    return (rates ?? [])
-      .filter((r) =>
-        r.agency_id === agencyId &&
-        r.booking_service_kind === kind &&
-        r.valid_from <= serviceDate &&
-        (r.valid_to == null || r.valid_to >= serviceDate)
-      )
-      .sort((a, b) => b.valid_from.localeCompare(a.valid_from))[0] ?? null;
-  }
-
   // Costruisci righe con margine
   type MarginRow = {
     serviceId: string;
@@ -97,7 +86,7 @@ export async function GET(request: NextRequest) {
   const rows: MarginRow[] = [];
   for (const svc of services ?? []) {
     if (!svc.agency_id || !svc.booking_service_kind) continue;
-    const rate = findRate(svc.agency_id, svc.booking_service_kind, svc.date);
+    const rate = findRate(rates ?? [], svc.agency_id, svc.booking_service_kind, svc.date);
     const priceCents = rate?.price_cents ?? svc.agency_quoted_price_cents ?? null;
     const costCents  = rate?.cost_cents ?? null;
     const marginCents = priceCents != null && costCents != null ? priceCents - costCents : null;

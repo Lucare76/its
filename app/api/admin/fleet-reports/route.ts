@@ -8,57 +8,24 @@
  *   body.action = "resolve"      → segna come risolta (status: "resolved")
  *   body.id = string             → id del report
  */
-import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
 
-function adminClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "")!;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "")!;
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-}
-
-async function getAuthTenantId(request: NextRequest): Promise<string | null> {
-  const authHeader = request.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) return null;
-  const token = authHeader.slice(7);
-
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "")!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim().replace(/^["']|["']$/g, "")!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
-  const { data: { user }, error } = await supabase.auth.getUser(token);
-  if (error || !user) return null;
-
-  const admin = adminClient();
-  const { data } = await admin
-    .from("memberships")
-    .select("tenant_id, role")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (!data) return null;
-  if (!["admin", "supervisor", "operator"].includes(data.role)) return null;
-  return data.tenant_id as string;
-}
-
 export async function GET(request: NextRequest) {
-  const tenantId = await getAuthTenantId(request);
-  if (!tenantId) return NextResponse.json({ error: "Non autorizzato." }, { status: 401 });
+  const auth = await authorizePricingRequest(request, ["admin", "operator"]);
+  if (auth instanceof NextResponse) return auth;
 
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status") ?? "open";
   const vehicleIdFilter = searchParams.get("vehicle_id");
 
-  const admin = adminClient();
-
   // Recupera veicoli del tenant
-  const { data: vehicles, error: vErr } = await admin
+  const { data: vehicles, error: vErr } = await auth.admin
     .from("vehicles")
     .select("id, label, plate")
-    .eq("tenant_id", tenantId);
+    .eq("tenant_id", auth.membership.tenant_id);
 
   if (vErr || !vehicles?.length) {
     return NextResponse.json({ reports: [], vehicles: [] });
@@ -67,7 +34,7 @@ export async function GET(request: NextRequest) {
   const vehicleIds = vehicles.map((v) => v.id);
   const vehicleMap = Object.fromEntries(vehicles.map((v) => [v.id, v]));
 
-  let query = admin
+  let query = auth.admin
     .from("vehicle_qr_reports")
     .select("id, vehicle_id, reporter_name, description, severity, photo_urls, status, created_at")
     .in("vehicle_id", vehicleIdFilter ? [vehicleIdFilter] : vehicleIds)
@@ -89,8 +56,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const tenantId = await getAuthTenantId(request);
-  if (!tenantId) return NextResponse.json({ error: "Non autorizzato." }, { status: 401 });
+  const auth = await authorizePricingRequest(request, ["admin", "operator"]);
+  if (auth instanceof NextResponse) return auth;
 
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!body) return NextResponse.json({ error: "Body non valido." }, { status: 400 });
@@ -99,10 +66,8 @@ export async function POST(request: NextRequest) {
   const id = body.id as string;
   if (!id) return NextResponse.json({ error: "id obbligatorio." }, { status: 400 });
 
-  const admin = adminClient();
-
   // Verifica che il report appartenga a un veicolo del tenant
-  const { data: report } = await admin
+  const { data: report } = await auth.admin
     .from("vehicle_qr_reports")
     .select("vehicle_id")
     .eq("id", id)
@@ -110,25 +75,24 @@ export async function POST(request: NextRequest) {
 
   if (!report) return NextResponse.json({ error: "Report non trovato." }, { status: 404 });
 
-  const { data: vehicle } = await admin
+  const { data: vehicle } = await auth.admin
     .from("vehicles")
     .select("tenant_id")
     .eq("id", report.vehicle_id)
     .maybeSingle();
 
-  if (vehicle?.tenant_id !== tenantId) {
+  if (vehicle?.tenant_id !== auth.membership.tenant_id) {
     return NextResponse.json({ error: "Non autorizzato." }, { status: 403 });
   }
 
   if (action === "acknowledge") {
-    await admin.from("vehicle_qr_reports").update({ status: "acknowledged" }).eq("id", id);
+    await auth.admin.from("vehicle_qr_reports").update({ status: "acknowledged" }).eq("id", id);
     return NextResponse.json({ ok: true });
   }
 
   if (action === "resolve") {
-    await admin.from("vehicle_qr_reports").update({ status: "resolved" }).eq("id", id);
-    // Risolve anche l'anomalia collegata (se esiste) basandosi su descrizione + vehicle
-    await admin
+    await auth.admin.from("vehicle_qr_reports").update({ status: "resolved" }).eq("id", id);
+    await auth.admin
       .from("vehicle_anomalies")
       .update({ active: false })
       .eq("vehicle_id", report.vehicle_id);

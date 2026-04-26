@@ -3,8 +3,8 @@
  * Invia un'email di test del workflow revisione agenzie a rennasday@gmail.com.
  * Solo admin. Usa dati fittizi per il 10 maggio 2026.
  */
-import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { buildServiceListEmailHtml, buildServiceListPlainText } from "@/lib/server/service-list-email";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
@@ -21,36 +21,19 @@ const TEST_SERVICES = [
   { service_id: "test-004", date: TEST_DATE, time: "16:45", customer_name: "Tour Esposito",    pax: 4, hotel_or_destination: "Hotel San Montano",       direction: "arrival"   as const },
 ];
 
-function adminClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "")!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "")!,
-    { auth: { persistSession: false, autoRefreshToken: false } },
-  );
-}
-
 export async function POST(request: NextRequest) {
-  const admin = adminClient();
-  const authHeader = request.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) return NextResponse.json({ error: "Non autenticato." }, { status: 401 });
-
-  const { data: { user }, error: authErr } = await admin.auth.getUser(authHeader.slice(7));
-  if (authErr || !user) return NextResponse.json({ error: "Sessione non valida." }, { status: 401 });
-
-  const { data: membership } = await admin.from("memberships").select("tenant_id, role").eq("user_id", user.id).maybeSingle();
-  if (!membership || !["admin", "supervisor"].includes(membership.role as string)) {
-    return NextResponse.json({ error: "Non autorizzato." }, { status: 403 });
-  }
+  const auth = await authorizePricingRequest(request, ["admin"]);
+  if (auth instanceof NextResponse) return auth;
 
   const apiKey = process.env.RESEND_API_KEY;
   const from   = getVerifiedFromEmail();
   if (!apiKey || !from) return NextResponse.json({ error: "RESEND_API_KEY o AGENCY_BOOKING_FROM_EMAIL non configurati." }, { status: 500 });
 
   // 1. Crea sessione di revisione
-  const { data: sess, error: sessErr } = await admin
+  const { data: sess, error: sessErr } = await auth.admin
     .from("agency_review_sessions")
     .insert({
-      tenant_id:   membership.tenant_id,
+      tenant_id:   auth.membership.tenant_id,
       agency_name: TEST_AGENCY,
       report_type: "arrivals_48h",
       target_date: TEST_DATE,

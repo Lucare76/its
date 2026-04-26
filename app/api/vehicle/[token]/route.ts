@@ -218,7 +218,7 @@ export async function POST(
     return fail("Azione non riconosciuta.");
   }
 
-  const rateLimit = checkRateLimit("vehicle-qr", buildRateLimitKey(request, token, action), MAX_PUBLIC_ACTIONS_PER_15_MIN);
+  const rateLimit = await checkRateLimit("vehicle-qr", buildRateLimitKey(request, token, action), MAX_PUBLIC_ACTIONS_PER_15_MIN);
   if (!rateLimit.allowed) {
     return fail("Troppi tentativi ravvicinati. Riprova tra qualche minuto.", 429);
   }

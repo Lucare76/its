@@ -481,9 +481,13 @@ export async function POST(request: NextRequest) {
       by_user_id: auth.user.id
     });
 
-    // Segna approval_status
+    // Segna approval_status — price_mismatch se il prezzo dichiarato differisce dal listino (tolleranza ±0,50€)
+    const hasPriceMismatch =
+      quotedPriceCents != null &&
+      catalogPriceCents != null &&
+      Math.abs(quotedPriceCents - catalogPriceCents) > 50;
     await auth.admin.from("services")
-      .update({ approval_status: "pending_operator" })
+      .update({ approval_status: hasPriceMismatch ? "price_mismatch" : "pending_operator" })
       .eq("id", serviceId).eq("tenant_id", auth.membership.tenant_id);
 
     // Genera token approvazione
