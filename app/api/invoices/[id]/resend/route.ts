@@ -15,7 +15,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const { id } = await params;
   const tenantId = auth.membership.tenant_id;
-  const admin = auth.admin as any;
+  const admin = auth.admin;
 
   // Carica l'estratto conto
   const { data: invoice, error } = await admin

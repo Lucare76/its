@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
     };
 
     const { data: pricingRow, error: pricingError } = await (admin
-      .from("service_pricing") as any)
+      .from("service_pricing"))
       .insert(pricingInsert)
       .select("id, service_id, final_price_cents, margin_cents, apply_mode, manual_override")
       .single();
@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { error: updateError } = await (admin
-      .from("services") as any)
+      .from("services"))
       .update({
         internal_cost_cents: internal,
         public_price_cents: publicPrice,

@@ -21,8 +21,8 @@ export async function GET(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
-    const tenantId = (auth as any).membership.tenant_id as string;
-    const admin = (auth as any).admin;
+    const tenantId = auth.membership.tenant_id;
+    const admin = auth.admin;
 
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -115,11 +115,10 @@ export async function POST(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator", "agency"]);
     if (auth instanceof NextResponse) return auth;
-    const a = auth as any;
-    const tenantId = a.membership.tenant_id as string;
-    const role = a.membership.role as string;
-    const userId = a.user.id as string;
-    const admin = a.admin;
+    const { admin, membership, user } = auth;
+    const tenantId = membership.tenant_id;
+    const role = membership.role;
+    const userId = user.id;
 
     const raw = await req.json().catch(() => null);
     const parsed = createSchema.safeParse(raw);

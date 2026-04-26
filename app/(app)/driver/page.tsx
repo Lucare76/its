@@ -80,6 +80,23 @@ function buildWhatsAppUrl(phone: string, message: string) {
   return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
 }
 
+function buildDriverWhatsAppMessage(service: DriverService, appOrigin?: string) {
+  if (service.booking_service_kind === "private_island") {
+    return `Buongiorno, sono il suo autista per Ischia Transfer Service. Può seguire la posizione in tempo reale qui: ${appOrigin ?? "https://ischiatransferservice.it"}/track/${service.id}`;
+  }
+
+  const isExcursion = service.booking_service_kind === "excursion" || service.service_type === "bus_tour";
+  if (isExcursion) {
+    return `Buongiorno, sono il suo autista per l'escursione ${service.customer_name} con Ischia Transfer Service. La contatto per coordinarci sul servizio di oggi.`;
+  }
+
+  if (service.direction === "departure") {
+    return `Buongiorno, sono il suo autista per la partenza ${service.customer_name} con Ischia Transfer Service. La contatto per coordinarci sul trasferimento di oggi.`;
+  }
+
+  return `Buongiorno, sono il suo autista per l'arrivo ${service.customer_name} con Ischia Transfer Service. La contatto per coordinarci sul trasferimento di oggi.`;
+}
+
 function WhatsAppIcon({ className = "h-4 w-4" }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
@@ -370,11 +387,7 @@ function DriverPageInner() {
   const focusedWhatsappUrl = focused && customerPhone
     ? buildWhatsAppUrl(
         customerPhone,
-        `Buongiorno, sono il suo autista per Ischia Transfer Service. ${
-          isDisposizione
-            ? `Può seguire la posizione in tempo reale qui: ${appOrigin}/track/${focused.service.id}`
-            : "La contatto per il servizio in corso."
-        }`
+        buildDriverWhatsAppMessage(focused.service, appOrigin)
       )
     : null;
 
@@ -942,7 +955,7 @@ function DriverPageInner() {
                           const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
                           const phone = entry.service.phone_e164?.trim() || entry.service.phone?.trim() || "";
                           const whatsappUrl = phone
-                            ? buildWhatsAppUrl(phone, `Buongiorno, sono il suo autista per il trasferimento ${entry.service.customer_name}.`)
+                            ? buildWhatsAppUrl(phone, buildDriverWhatsAppMessage(entry.service, appOrigin))
                             : null;
                           return (
                             <div key={entry.service.id} className="flex items-center gap-2 px-4 py-2.5">
@@ -1033,7 +1046,7 @@ function DriverPageInner() {
                           const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
                           const phone = entry.service.phone_e164?.trim() || entry.service.phone?.trim() || "";
                           const whatsappUrl = phone
-                            ? buildWhatsAppUrl(phone, `Buongiorno, sono il suo autista per il trasferimento ${entry.service.customer_name}.`)
+                            ? buildWhatsAppUrl(phone, buildDriverWhatsAppMessage(entry.service, appOrigin))
                             : null;
                           return (
                             <div key={entry.service.id} className="flex items-center gap-2 px-4 py-2.5">

@@ -12,9 +12,8 @@ export async function GET(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
-    const a = auth as any;
-    const tenantId = a.membership.tenant_id as string;
-    const admin    = a.admin;
+    const { admin, membership } = auth;
+    const tenantId = membership.tenant_id;
 
     const { data, error } = await admin
       .from("modification_requests")

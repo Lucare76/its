@@ -18,10 +18,9 @@ export async function POST(
     const { id } = await params;
     const auth = await authorizePricingRequest(req, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
-    const a = auth as any;
-    const tenantId = a.membership.tenant_id as string;
-    const userId   = a.user.id as string;
-    const admin    = a.admin;
+    const { admin, membership, user } = auth;
+    const tenantId = membership.tenant_id;
+    const userId   = user.id;
 
     const { data: cr } = await admin
       .from("cancellation_requests")

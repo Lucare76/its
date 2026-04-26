@@ -7,9 +7,8 @@ export const runtime = "nodejs";
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
   if (auth instanceof NextResponse) return auth;
-  const { membership, admin: authAdmin } = auth as any;
-  const tenantId = membership.tenant_id as string;
-  void authAdmin; // usa admin client con service role per query cross-tenant
+  const { membership } = auth;
+  const tenantId = membership.tenant_id;
 
   let admin: ReturnType<typeof createAdminClient>;
   try { admin = createAdminClient(); } catch {

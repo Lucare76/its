@@ -11,6 +11,20 @@ import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
+type AgencyRow = {
+  id?: string;
+  booking_email?: string | null;
+  booking_emails?: string[] | null;
+  contact_email?: string | null;
+  contact_emails?: string[] | null;
+  invoice_email?: string | null;
+  email?: string | null;
+};
+
+type InvoiceRow = {
+  id: string;
+};
+
 type ServiceRow = {
   id: string;
   date: string | null;
@@ -119,13 +133,14 @@ export async function POST(request: NextRequest) {
     .eq("name", agency_name)
     .maybeSingle();
 
+  const agency = agencyRow as AgencyRow | null;
   const invoiceEmail: string | null =
-    (agencyRow as any)?.booking_email ??
-    (Array.isArray((agencyRow as any)?.booking_emails) && (agencyRow as any).booking_emails.length > 0 ? (agencyRow as any).booking_emails[0] : null) ??
-    (agencyRow as any)?.contact_email ??
-    (Array.isArray((agencyRow as any)?.contact_emails) && (agencyRow as any).contact_emails.length > 0 ? (agencyRow as any).contact_emails[0] : null) ??
-    (agencyRow as any)?.invoice_email ??
-    (agencyRow as any)?.email ??
+    agency?.booking_email ??
+    (Array.isArray(agency?.booking_emails) && (agency?.booking_emails?.length ?? 0) > 0 ? agency!.booking_emails![0] : null) ??
+    agency?.contact_email ??
+    (Array.isArray(agency?.contact_emails) && (agency?.contact_emails?.length ?? 0) > 0 ? agency!.contact_emails![0] : null) ??
+    agency?.invoice_email ??
+    agency?.email ??
     null;
 
   // Risolve i billing_party_name che corrispondono all'agenzia (matching bidirezionale)
@@ -172,7 +187,7 @@ export async function POST(request: NextRequest) {
     .from("agency_invoices")
     .insert({
       tenant_id: tenantId,
-      agency_id: (agencyRow as any)?.id ?? agency_id ?? null,
+      agency_id: agency?.id ?? agency_id ?? null,
       agency_name,
       period_from,
       period_to,
@@ -185,11 +200,11 @@ export async function POST(request: NextRequest) {
     .select("id")
     .single();
 
-  if (insertError || !(invoice as any)?.id) {
+  if (insertError || !(invoice as InvoiceRow)?.id) {
     return NextResponse.json({ ok: false, error: insertError?.message ?? "Errore creazione estratto conto." }, { status: 500 });
   }
 
-  const invoiceId = (invoice as any).id as string;
+  const invoiceId = (invoice as InvoiceRow).id as string;
 
   // Genera HTML
   const html = generateInvoiceHtml({

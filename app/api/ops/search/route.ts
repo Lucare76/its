@@ -7,7 +7,7 @@ export async function GET(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
-    const tenantId = (auth as any).membership.tenant_id as string;
+    const tenantId = auth.membership.tenant_id;
 
     const q = (req.nextUrl.searchParams.get("q") ?? "").trim();
     if (q.length < 2) return NextResponse.json({ ok: true, results: [] });
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
     const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? "30"), 100);
 
     // Cerca per nome cliente o telefono su tutti i servizi non cancellati
-    const { data, error } = await (auth as any).admin
+    const { data, error } = await auth.admin
       .from("services")
       .select(`
         id, date, time, status, direction, pax, customer_name, phone,

@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
 
     if (action === "approve") {
       const { error } = await (admin
-        .from("inbound_booking_imports") as any)
+        .from("inbound_booking_imports"))
         .update({
           review_required: false,
           match_status: "matched",
@@ -87,7 +87,7 @@ export async function POST(request: NextRequest) {
 
     if (action === "reject") {
       const { error } = await (admin
-        .from("inbound_booking_imports") as any)
+        .from("inbound_booking_imports"))
         .update({
           review_required: false,
           match_status: "rejected",
@@ -152,7 +152,7 @@ export async function POST(request: NextRequest) {
       });
 
       await (admin
-        .from("inbound_booking_imports") as any)
+        .from("inbound_booking_imports"))
         .update({
           review_required: false,
           match_status: "applied",

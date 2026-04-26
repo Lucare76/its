@@ -13,7 +13,7 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
 
   const { id } = await params;
   const tenantId = auth.membership.tenant_id;
-  const admin = auth.admin as any;
+  const admin = auth.admin;
 
   // Verifica che esista e sia una bozza
   const { data: invoice } = await admin
