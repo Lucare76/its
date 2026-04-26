@@ -58,6 +58,7 @@ export async function createTestContext(): Promise<TestContext> {
     // FK order: inbound_booking_imports/assignments/trip_groups/status_events → service_pricing → services
     // → pricing_rules → price_lists → vehicles/hotels/routes/agency_aliases/agencies → memberships → tenants → user
     await admin.from("inbound_booking_imports").delete().eq("tenant_id", tenantId);
+    await admin.from("daily_availability_confirmations").delete().eq("tenant_id", tenantId);
     await admin.from("assignments").delete().eq("tenant_id", tenantId);
     await admin.from("trip_groups").delete().eq("tenant_id", tenantId);
     await admin.from("status_events").delete().eq("tenant_id", tenantId);
@@ -271,4 +272,21 @@ export async function seedService(
   });
   if (error) throw new Error(`seedService: ${error.message}`);
   return id;
+}
+
+/** Conferma la disponibilità giornaliera per sbloccare l'auto-assign. */
+export async function seedAvailabilityConfirmation(
+  admin: SupabaseClient,
+  tenantId: string,
+  date: string,
+  confirmedBy: string,
+): Promise<void> {
+  const { error } = await admin.from("daily_availability_confirmations").upsert({
+    tenant_id: tenantId,
+    date,
+    confirmed: true,
+    confirmed_at: new Date().toISOString(),
+    confirmed_by: confirmedBy,
+  }, { onConflict: "tenant_id,date" });
+  if (error) throw new Error(`seedAvailabilityConfirmation: ${error.message}`);
 }

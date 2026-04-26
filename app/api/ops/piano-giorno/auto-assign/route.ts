@@ -296,7 +296,7 @@ export async function POST(request: NextRequest) {
     // ── 1. Carica dati ────────────────────────────────────────────────────────
 
     const [servicesRes, hotelsRes, vehiclesRes, membershipsRes, assignmentsRes, groupsRes,
-           hotelLimitsRes, driverAvailRes, vehicleAvailRes, vehicleBlocksRes] =
+           hotelLimitsRes, driverAvailRes, vehicleAvailRes, vehicleBlocksRes, availabilityConfirmRes] =
       await Promise.all([
         auth.admin.from("services")
           .select("id, time, direction, vessel, hotel_id, pax, status, meeting_point, pickup_hotel")
@@ -332,6 +332,10 @@ export async function POST(request: NextRequest) {
         auth.admin.from("vehicle_time_blocks")
           .select("vehicle_id, block_from, block_to")
           .eq("tenant_id", tenantId).eq("date", date),
+        auth.admin.from("daily_availability_confirmations")
+          .select("confirmed")
+          .eq("tenant_id", tenantId).eq("date", date)
+          .maybeSingle(),
       ]);
 
     if (servicesRes.error || hotelsRes.error)
@@ -427,6 +431,14 @@ export async function POST(request: NextRequest) {
         ok: true, assigned: 0, trips: 0, skipped: 0,
         report: ["Nessun servizio da assegnare per questa data."],
       });
+    }
+
+    const availabilityConfirmed = availabilityConfirmRes.data?.confirmed === true;
+    if (!availabilityConfirmed) {
+      return NextResponse.json({
+        ok: false,
+        error: "Disponibilita del giorno non confermata. Conferma autisti e mezzi prima di lanciare l'auto-assign.",
+      }, { status: 409 });
     }
 
     const arrivals = toAssign.filter((s) => s.direction === "arrival");

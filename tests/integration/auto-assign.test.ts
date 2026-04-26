@@ -13,6 +13,7 @@ import { POST } from "@/app/api/ops/piano-giorno/auto-assign/route";
 import { makeNextRequest, json } from "./helpers/client";
 import {
   createTestContext,
+  seedAvailabilityConfirmation,
   seedHotel,
   seedVehicle,
   seedDriver,
@@ -55,10 +56,44 @@ describe("auto-assign — nessun servizio", () => {
   });
 });
 
+describe("auto-assign — gate disponibilita", () => {
+  let hotelId: string;
+
+  beforeAll(async () => {
+    hotelId = await seedHotel(ctx.admin, ctx.tenantId, {
+      name: "Hotel Gate",
+      zone: "Ischia Porto",
+      lat: 40.7329,
+      lng: 13.9477,
+    });
+    await seedVehicle(ctx.admin, ctx.tenantId, { label: "Car Gate", capacity: 4 });
+    await seedDriver(ctx.admin, ctx.tenantId, additionalUsers);
+    await seedService(ctx.admin, ctx.tenantId, hotelId, {
+      date: "2026-05-11",
+      time: "11:00",
+      direction: "arrival",
+      vessel: "SNAV Gate",
+      pax: 2,
+      meeting_point: "Ischia Porto",
+    });
+  });
+
+  it("blocca l'auto-assign se la disponibilita del giorno non e confermata", async () => {
+    const req = makeNextRequest("POST", { date: "2026-05-11", mode: "unassigned_only" }, ctx.token);
+    const res = await POST(req);
+    const body = await json<{ ok: boolean; error?: string }>(res);
+
+    expect(res.status).toBe(409);
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain("Disponibilita del giorno non confermata");
+  });
+});
+
 describe("auto-assign — assegnazione arrivi", () => {
   let hotelId: string;
 
   beforeAll(async () => {
+    await seedAvailabilityConfirmation(ctx.admin, ctx.tenantId, TEST_DATE, ctx.userId);
     hotelId = await seedHotel(ctx.admin, ctx.tenantId, {
       name: "Hotel Moresco",
       zone: "Forio",
@@ -153,6 +188,7 @@ describe("auto-assign — partenze", () => {
   let hotelId: string;
 
   beforeAll(async () => {
+    await seedAvailabilityConfirmation(ctx.admin, ctx.tenantId, TEST_DATE, ctx.userId);
     hotelId = await seedHotel(ctx.admin, ctx.tenantId, {
       name: "Hotel San Montano",
       zone: "Lacco Ameno",
