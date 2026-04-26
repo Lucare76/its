@@ -238,15 +238,19 @@ export async function POST(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "supervisor"]);
   if (auth instanceof NextResponse) return auth;
 
-  let body: { to?: string; templates?: string[] };
+  let body: { to?: string | string[]; templates?: string[] };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ ok: false, error: "Body JSON non valido" }, { status: 400 });
   }
 
-  const to = body.to?.trim();
-  if (!to) return NextResponse.json({ ok: false, error: "Campo 'to' obbligatorio" }, { status: 400 });
+  const toRaw = body.to;
+  const toList = Array.isArray(toRaw)
+    ? toRaw.map(e => e.trim()).filter(Boolean)
+    : toRaw?.trim() ? [toRaw.trim()] : [];
+  if (!toList.length) return NextResponse.json({ ok: false, error: "Campo 'to' obbligatorio" }, { status: 400 });
+  const to = toList;
 
   const templateKeys = (body.templates?.length ? body.templates : Object.keys(SAMPLES)).filter(k => k in SAMPLES);
 
