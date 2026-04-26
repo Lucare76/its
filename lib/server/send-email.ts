@@ -55,13 +55,16 @@ export function getVerifiedFromEmail(): string {
  * in tutti i file che non passano per sendEmail.
  */
 export async function resendFetch(apiKey: string, payload: Record<string, unknown>): Promise<Response> {
-  const testRedirect = process.env.EMAIL_TEST_REDIRECT?.trim();
+  const testRedirectRaw = process.env.EMAIL_TEST_REDIRECT?.trim();
+  const testRedirectList = testRedirectRaw
+    ? testRedirectRaw.split(/[,;\s]+/).map(e => e.trim()).filter(Boolean)
+    : [];
   let finalPayload = payload;
-  if (testRedirect) {
+  if (testRedirectList.length > 0) {
     const originalTo = Array.isArray(payload.to) ? (payload.to as string[]) : [payload.to as string];
     finalPayload = {
       ...payload,
-      to: [testRedirect],
+      to: testRedirectList,
       subject: `[TEST → ${originalTo.join(", ")}] ${payload.subject as string}`,
       cc: undefined,
       bcc: undefined,
