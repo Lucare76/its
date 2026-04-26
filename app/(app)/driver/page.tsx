@@ -74,6 +74,20 @@ function statusColor(status: ServiceStatus) {
   }
 }
 
+function buildWhatsAppUrl(phone: string, message: string) {
+  const cleanPhone = phone.replace(/\D/g, "");
+  if (!cleanPhone) return null;
+  return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+}
+
+function WhatsAppIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M19.05 4.94A9.84 9.84 0 0 0 12.03 2C6.56 2 2.1 6.45 2.1 11.92c0 1.75.46 3.46 1.33 4.97L2 22l5.24-1.37a9.91 9.91 0 0 0 4.77 1.22h.01c5.47 0 9.93-4.45 9.93-9.92a9.84 9.84 0 0 0-2.9-6.99Zm-7.03 15.23h-.01a8.23 8.23 0 0 1-4.18-1.14l-.3-.18-3.11.81.83-3.03-.2-.31a8.18 8.18 0 0 1-1.26-4.39c0-4.52 3.69-8.21 8.23-8.21 2.2 0 4.26.86 5.82 2.41a8.14 8.14 0 0 1 2.41 5.81c0 4.53-3.69 8.22-8.23 8.22Zm4.5-6.13c-.25-.12-1.48-.73-1.71-.82-.23-.08-.39-.12-.56.12-.16.25-.64.82-.78.98-.14.17-.28.19-.53.06-.25-.12-1.05-.38-1.99-1.22-.74-.65-1.23-1.45-1.37-1.69-.14-.25-.02-.38.11-.5.11-.11.25-.28.37-.42.12-.14.16-.25.25-.41.08-.17.04-.31-.02-.44-.06-.12-.56-1.35-.77-1.85-.2-.47-.4-.41-.56-.41h-.47c-.17 0-.44.06-.67.31-.23.25-.88.86-.88 2.11s.9 2.45 1.02 2.62c.13.16 1.75 2.66 4.23 3.73.59.26 1.05.41 1.41.52.59.19 1.12.16 1.54.1.47-.07 1.48-.6 1.69-1.18.21-.58.21-1.08.15-1.18-.06-.1-.22-.17-.47-.29Z" />
+    </svg>
+  );
+}
+
 async function getToken(): Promise<string | null> {
   if (!supabase) return null;
   const { data } = await supabase.auth.getSession();
@@ -179,6 +193,7 @@ function DriverPageInner() {
   const [tab, setTab] = useState<Tab>("oggi");
   const [showSign, setShowSign] = useState(false);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const [confirmCompleteOpen, setConfirmCompleteOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [groupEntryOrder, setGroupEntryOrder] = useState<Record<string, string[]>>({});
@@ -313,8 +328,12 @@ function DriverPageInner() {
   }, [data, userId]);
 
   const todayIso = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
-  const todayServices    = useMemo(() => mine.filter((x) => x.service.date === todayIso), [mine, todayIso]);
-  const nextServices     = useMemo(() => mine.filter((x) => x.service.date > todayIso), [mine, todayIso]);
+  const activeServices = useMemo(() =>
+    mine.filter((x) => x.service.status !== "completato" && x.service.status !== "cancelled"),
+    [mine]
+  );
+  const todayServices    = useMemo(() => activeServices.filter((x) => x.service.date === todayIso), [activeServices, todayIso]);
+  const nextServices     = useMemo(() => activeServices.filter((x) => x.service.date > todayIso), [activeServices, todayIso]);
   const completedServices = useMemo(() =>
     [...mine].filter((x) => x.service.status === "completato" || x.service.status === "cancelled")
       .sort((a, b) => b.service.date.localeCompare(a.service.date)).slice(0, 20),
@@ -348,6 +367,16 @@ function DriverPageInner() {
     ? calcDispoCost(dispoStartEvent.at, dispoEndEvent?.at ?? null, h24Rate, now)
     : null;
   const appOrigin = typeof window !== "undefined" ? window.location.origin : "https://ischiatransferservice.it";
+  const focusedWhatsappUrl = focused && customerPhone
+    ? buildWhatsAppUrl(
+        customerPhone,
+        `Buongiorno, sono il suo autista per Ischia Transfer Service. ${
+          isDisposizione
+            ? `Può seguire la posizione in tempo reale qui: ${appOrigin}/track/${focused.service.id}`
+            : "La contatto per il servizio in corso."
+        }`
+      )
+    : null;
 
   /* ---- grouping helpers per tab */
   const buildGroups = useCallback((entries: typeof mine): ServiceGroup[] => {
@@ -439,13 +468,26 @@ function DriverPageInner() {
     });
   }, []);
 
-  const handleStatusAction = async (status: ServiceStatus) => {
+  const saveStatus = async (status: ServiceStatus) => {
     if (!focused) return;
     setSavingStatus(status);
     const ok = await persistStatus(focused.service.id, status);
     if (!ok) { enqueueStatus(focused.service.id, status); setMessage("Salvato offline — sincronizzo appena online."); }
     else setMessage(`Stato: ${status.toUpperCase()}`);
     setSavingStatus(null);
+  };
+
+  const handleStatusAction = async (status: ServiceStatus) => {
+    if (status === "completato") {
+      setConfirmCompleteOpen(true);
+      return;
+    }
+    await saveStatus(status);
+  };
+
+  const confirmComplete = async () => {
+    setConfirmCompleteOpen(false);
+    await saveStatus("completato");
   };
 
   const handleDriverNote = async () => {
@@ -598,6 +640,34 @@ function DriverPageInner() {
               className="mt-4 w-full rounded-2xl bg-slate-900 py-3 text-sm font-bold text-white active:scale-95 transition">
               Capito
             </button>
+          </div>
+        </div>
+      )}
+
+      {confirmCompleteOpen && focused && (
+        <div className="fixed inset-0 z-50 flex items-end bg-slate-950/60 px-3 pb-4 sm:items-center sm:justify-center sm:p-4" onClick={() => setConfirmCompleteOpen(false)}>
+          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <p className="text-lg font-black text-slate-900">Conferma completamento</p>
+            <p className="mt-2 text-sm leading-5 text-slate-600">
+              Vuoi davvero segnare <span className="font-bold text-slate-900">{focused.service.customer_name}</span> come completato e spostarlo nello storico?
+            </p>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmCompleteOpen(false)}
+                className="rounded-2xl border border-slate-200 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Annulla
+              </button>
+              <button
+                type="button"
+                disabled={savingStatus !== null}
+                onClick={() => void confirmComplete()}
+                className="rounded-2xl bg-emerald-600 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {savingStatus === "completato" ? "Salvataggio..." : "Conferma"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -771,11 +841,14 @@ function DriverPageInner() {
                   📞 Chiama
                 </a>
               )}
-              {isDisposizione && customerPhone && (
-                <a href={`https://wa.me/${customerPhone.replace(/\D/g, "")}?text=${encodeURIComponent(`Il Suo autista è in arrivo. Può seguire la posizione in tempo reale: ${appOrigin}/track/${focused.service.id}`)}`}
+              {focusedWhatsappUrl && (
+                <a href={focusedWhatsappUrl}
                   target="_blank" rel="noreferrer"
                   className="flex-1 rounded-2xl border-2 border-green-200 bg-green-50 py-3 text-center text-sm font-semibold text-green-700 hover:bg-green-100">
-                  📍 WhatsApp
+                  <span className="inline-flex items-center justify-center gap-2">
+                    <WhatsAppIcon className="h-4 w-4" />
+                    WhatsApp
+                  </span>
                 </a>
               )}
               <a href={navigationUrl} target="_blank" rel="noreferrer" className="flex-1 rounded-2xl border-2 border-slate-200 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">
@@ -868,6 +941,9 @@ function DriverPageInner() {
                         {getGroupEntries(group, "oggi").map((entry) => {
                           const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
                           const phone = entry.service.phone_e164?.trim() || entry.service.phone?.trim() || "";
+                          const whatsappUrl = phone
+                            ? buildWhatsAppUrl(phone, `Buongiorno, sono il suo autista per il trasferimento ${entry.service.customer_name}.`)
+                            : null;
                           return (
                             <div key={entry.service.id} className="flex items-center gap-2 px-4 py-2.5">
                               <button type="button"
@@ -890,6 +966,13 @@ function DriverPageInner() {
                                 <a href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}
                                   className="shrink-0 rounded-xl bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-600">
                                   📞
+                                </a>
+                              )}
+                              {whatsappUrl && (
+                                <a href={whatsappUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+                                  aria-label={`WhatsApp ${entry.service.customer_name}`}
+                                  className="shrink-0 rounded-xl bg-green-50 px-2.5 py-1.5 text-green-700">
+                                  <WhatsAppIcon className="h-4 w-4" />
                                 </a>
                               )}
                               {group.direction === "arrival" && (
@@ -949,6 +1032,9 @@ function DriverPageInner() {
                         {getGroupEntries(group, "prossimi").map((entry) => {
                           const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
                           const phone = entry.service.phone_e164?.trim() || entry.service.phone?.trim() || "";
+                          const whatsappUrl = phone
+                            ? buildWhatsAppUrl(phone, `Buongiorno, sono il suo autista per il trasferimento ${entry.service.customer_name}.`)
+                            : null;
                           return (
                             <div key={entry.service.id} className="flex items-center gap-2 px-4 py-2.5">
                               <button type="button"
@@ -989,6 +1075,13 @@ function DriverPageInner() {
                                 <a href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}
                                   className="shrink-0 rounded-xl bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-600">
                                   📞
+                                </a>
+                              )}
+                              {whatsappUrl && (
+                                <a href={whatsappUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+                                  aria-label={`WhatsApp ${entry.service.customer_name}`}
+                                  className="shrink-0 rounded-xl bg-green-50 px-2.5 py-1.5 text-green-700">
+                                  <WhatsAppIcon className="h-4 w-4" />
                                 </a>
                               )}
                               {group.direction === "arrival" && (
