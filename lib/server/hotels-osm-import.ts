@@ -1,6 +1,7 @@
 import { evaluateHotelGeo, inferZoneFromText, zoneCentroids } from "@/lib/hotel-geocoding";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
-type SupabaseAdminClient = any;
+type SupabaseAdminClient = SupabaseClient;
 
 type OverpassElement = {
   type: "node" | "way" | "relation";
