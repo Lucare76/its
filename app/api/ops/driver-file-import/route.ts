@@ -337,8 +337,8 @@ export async function POST(request: NextRequest) {
         meeting_point: meetingPoint || null,
         booking_service_kind: bookingServiceKind ?? null,
         service_type_code: null,
-        arrival_date: direction === "arrival" ? payload.data.service_date : payload.data.service_date,
-        arrival_time: direction === "arrival" ? row.time : row.time,
+        arrival_date: direction === "arrival" ? payload.data.service_date : null,
+        arrival_time: direction === "arrival" ? row.time : null,
         departure_date: direction === "departure" ? payload.data.service_date : null,
         departure_time: direction === "departure" ? row.time : null,
         transport_code: transportCode.slice(0, 80) || null

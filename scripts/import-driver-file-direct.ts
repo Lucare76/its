@@ -334,8 +334,8 @@ async function main() {
       meeting_point: meetingPoint || null,
       booking_service_kind: bookingServiceKind,
       service_type_code: null,
-      arrival_date: serviceDate,
-      arrival_time: row.time,
+      arrival_date: direction === "arrival" ? serviceDate : null,
+      arrival_time: direction === "arrival" ? row.time : null,
       departure_date: direction === "departure" ? serviceDate : null,
       departure_time: direction === "departure" ? row.time : null,
       transport_code: transportCode.slice(0, 80) || null
