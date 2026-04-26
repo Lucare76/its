@@ -5,6 +5,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { ROUTE_LABELS, type MedmarRoute } from "@/lib/medmar-ar/types";
+import { type SupabaseClient } from "@supabase/supabase-js";
+
+type InsightTicketRow = {
+  id: string;
+  travel_date: string;
+  route: string;
+  pax_count: number;
+  ticket_mode: "round_trip" | "single_outbound" | "single_return";
+  total_price_cents: number;
+  unit_price_cents: number;
+  issuing_operator_id: string | null;
+  created_at: string | null;
+  outbound_time: string | null;
+};
+
+type InsightLegRow = {
+  id: string;
+  ticket_id: string;
+  leg_type: "outbound" | "return";
+  price_per_pax_cents: number;
+  status: string;
+  created_at: string | null;
+};
 
 export const runtime = "nodejs";
 
@@ -42,9 +65,11 @@ export interface InsightsResponse {
 }
 
 export async function GET(request: NextRequest) {
+  try {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
-  const { admin, membership } = auth;
+  const admin = auth.admin as SupabaseClient;
+  const { membership } = auth;
   const tenantId = membership.tenant_id;
 
   const today = new Date().toISOString().slice(0, 10);
@@ -53,15 +78,15 @@ export async function GET(request: NextRequest) {
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
   // ── Dati YTD ─────────────────────────────────────────────────────────────────
-  const { data: tickets } = await (admin as any)
+  const { data: tickets } = await admin
     .from("medmar_ar_tickets")
-    .select("id, travel_date, route, pax_count, ticket_mode, total_price_cents, unit_price_cents, issuing_operator_id, created_at")
+    .select("id, travel_date, route, pax_count, ticket_mode, total_price_cents, unit_price_cents, issuing_operator_id, created_at, outbound_time")
     .eq("tenant_id", tenantId)
     .gte("travel_date", firstOfYear)
     .lte("travel_date", today)
     .eq("is_test_data", false);
 
-  const ticketList: any[] = tickets ?? [];
+  const ticketList = (tickets ?? []) as InsightTicketRow[];
   if (ticketList.length === 0) {
     return NextResponse.json({
       ok: true,
@@ -71,16 +96,16 @@ export async function GET(request: NextRequest) {
     } satisfies InsightsResponse);
   }
 
-  const ticketIds = ticketList.map((t: any) => t.id);
-  const { data: legs } = await (admin as any)
+  const ticketIds = ticketList.map((t) => t.id);
+  const { data: legs } = await admin
     .from("medmar_ar_ticket_legs")
     .select("id, ticket_id, leg_type, price_per_pax_cents, status, created_at")
     .eq("tenant_id", tenantId)
     .in("ticket_id", ticketIds);
-  const legList: any[] = legs ?? [];
+  const legList = (legs ?? []) as InsightLegRow[];
 
   // ── Prezzi attivi ─────────────────────────────────────────────────────────────
-  const { data: priceRows } = await (admin as any)
+  const { data: priceRows } = await admin
     .from("medmar_ar_prices")
     .select("price_type, price_cents")
     .eq("tenant_id", tenantId)
@@ -88,18 +113,22 @@ export async function GET(request: NextRequest) {
     .or(`valid_to.is.null,valid_to.gte.${today}`);
 
   const prices = { round_trip_per_leg: 1025, single_trip_under_12: 1370, single_trip_12_or_more: 1025 };
-  for (const row of priceRows ?? []) (prices as any)[row.price_type] = row.price_cents;
+  for (const row of (priceRows ?? []) as Array<{ price_type: string; price_cents: number }>) {
+    (prices as Record<string, number>)[row.price_type] = row.price_cents;
+  }
 
   // ── Operatori ─────────────────────────────────────────────────────────────────
-  const operatorIds = [...new Set(ticketList.map((t: any) => t.issuing_operator_id).filter(Boolean))];
+  const operatorIds = [...new Set(ticketList.map((t) => t.issuing_operator_id).filter(Boolean))] as string[];
   let operatorNames: Record<string, string> = {};
   if (operatorIds.length > 0) {
-    const { data: members } = await (admin as any)
+    const { data: members } = await admin
       .from("memberships")
       .select("user_id, full_name")
       .eq("tenant_id", tenantId)
       .in("user_id", operatorIds);
-    for (const m of members ?? []) operatorNames[m.user_id] = m.full_name ?? m.user_id;
+    for (const m of (members ?? []) as Array<{ user_id: string; full_name: string | null }>) {
+      operatorNames[m.user_id] = m.full_name ?? m.user_id;
+    }
   }
 
   // ── Aggregati base ────────────────────────────────────────────────────────────
@@ -159,7 +188,7 @@ export async function GET(request: NextRequest) {
 
   // Break-even probability: arLeg + arLeg*p = single → p = (single - arLeg)/arLeg
   const breakEvenProb = (prices.single_trip_under_12 - prices.round_trip_per_leg) / prices.round_trip_per_leg;
-  const arCount = ticketList.filter((t: any) => t.ticket_mode === "round_trip").length;
+  const arCount = ticketList.filter((t) => t.ticket_mode === "round_trip").length;
   const arPct = ticketList.length > 0 ? arCount / ticketList.length : 0;
 
   const insights: StrategicInsight[] = [];
@@ -247,9 +276,9 @@ export async function GET(request: NextRequest) {
   }
 
   // ── INSIGHT 4: Recovery gap (legs perse senza tentativo di recupero) ───────
-  const lostLegs = legList.filter((l: any) => l.status === "lost").length;
-  const recoveredLegs = legList.filter((l: any) => l.status === "reassigned").length;
-  const totalArLegs = legList.filter((l: any) => l.leg_type === "return").length;
+  const lostLegs = legList.filter((l) => l.status === "lost").length;
+  const recoveredLegs = legList.filter((l) => l.status === "reassigned").length;
+  const totalArLegs = legList.filter((l) => l.leg_type === "return").length;
   const recoveryRate = lostLegs + recoveredLegs > 0 ? recoveredLegs / (lostLegs + recoveredLegs) : 0;
 
   if (lostLegs > 5 && recoveryRate < 0.3) {
@@ -268,25 +297,25 @@ export async function GET(request: NextRequest) {
 
   // ── INSIGHT 5: Finestra temporale ottimale ─────────────────────────────────
   // Analizza biglietti emessi con >7gg di anticipo vs ≤7gg
-  const recentTickets = ticketList.filter((t: any) => {
-    const daysAhead = (new Date(t.travel_date).getTime() - new Date(t.created_at).getTime()) / (1000 * 60 * 60 * 24);
+  const recentTickets = ticketList.filter((t) => {
+    const daysAhead = (new Date(t.travel_date).getTime() - new Date(t.created_at ?? t.travel_date).getTime()) / (1000 * 60 * 60 * 24);
     return daysAhead <= 7 && t.ticket_mode === "round_trip";
   });
-  const earlyTickets = ticketList.filter((t: any) => {
-    const daysAhead = (new Date(t.travel_date).getTime() - new Date(t.created_at).getTime()) / (1000 * 60 * 60 * 24);
+  const earlyTickets = ticketList.filter((t) => {
+    const daysAhead = (new Date(t.travel_date).getTime() - new Date(t.created_at ?? t.travel_date).getTime()) / (1000 * 60 * 60 * 24);
     return daysAhead > 7 && t.ticket_mode === "round_trip";
   });
 
   if (earlyTickets.length >= 3 && earlyTickets.length > recentTickets.length * 0.5) {
-    const earlyIds = new Set(earlyTickets.map((t: any) => t.id));
-    const earlyReturnLegs = legList.filter((l: any) => earlyIds.has(l.ticket_id) && l.leg_type === "return");
-    const earlyReturnUsed = earlyReturnLegs.filter((l: any) => l.status === "used" || l.status === "reassigned").length;
+    const earlyIds = new Set(earlyTickets.map((t) => t.id));
+    const earlyReturnLegs = legList.filter((l) => earlyIds.has(l.ticket_id) && l.leg_type === "return");
+    const earlyReturnUsed = earlyReturnLegs.filter((l) => l.status === "used" || l.status === "reassigned").length;
     const earlyReturnProb = earlyReturnLegs.length > 0 ? earlyReturnUsed / earlyReturnLegs.length : 0.5;
 
     if (earlyReturnProb < globalReturnProb - 0.1) {
       const lossFromEarly = earlyReturnLegs
-        .filter((l: any) => l.status === "lost")
-        .reduce((s: number, l: any) => {
+        .filter((l) => l.status === "lost")
+        .reduce((s, l) => {
           const t = ticketById.get(l.ticket_id);
           return s + l.price_per_pax_cents * (t?.pax_count ?? 1);
         }, 0);
@@ -304,7 +333,7 @@ export async function GET(request: NextRequest) {
   }
 
   // ── INSIGHT 6: Opportunità di raggruppamento non sfruttate ─────────────────
-  const smallArTickets = ticketList.filter((t: any) => t.ticket_mode === "round_trip" && t.pax_count < 12);
+  const smallArTickets = ticketList.filter((t) => t.ticket_mode === "round_trip" && t.pax_count < 12);
   const sameRouteDateGroups: Record<string, number> = {};
   for (const t of smallArTickets) {
     const key = `${t.travel_date}|${t.route}|${t.outbound_time ?? ""}`;
@@ -348,4 +377,7 @@ export async function GET(request: NextRequest) {
       current_probability: Math.round(globalReturnProb * 100) / 100,
     },
   } satisfies InsightsResponse);
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }

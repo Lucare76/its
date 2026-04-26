@@ -8,6 +8,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
+import { type SupabaseClient } from "@supabase/supabase-js";
+
+type MedmarServiceRow = {
+  id: string;
+  date: string;
+  time: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  pax: number;
+  hotel_id: string | null;
+  billing_party_name: string | null;
+  notes: string | null;
+  booking_service_kind: string | null;
+  direction: string | null;
+};
 
 export const runtime = "nodejs";
 
@@ -93,6 +108,7 @@ export async function POST(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator"]);
   if (auth instanceof NextResponse) return auth;
 
+  const admin = auth.admin as SupabaseClient;
   const tenantId = auth.membership.tenant_id;
   const userId = auth.user.id;
 
@@ -106,7 +122,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Recupera i servizi
-  const { data: services, error: svcErr } = await (auth.admin as any)
+  const { data: services, error: svcErr } = await admin
     .from("services")
     .select("id, date, time, customer_name, customer_phone, pax, hotel_id, billing_party_name, notes, booking_service_kind, direction")
     .in("id", service_ids)
@@ -116,7 +132,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "Servizi non trovati." }, { status: 404 });
   }
 
-  const first = services[0] as any;
+  const serviceList = (services ?? []) as MedmarServiceRow[];
+  const first = serviceList[0];
   const billingParty = first.billing_party_name ?? "";
 
   // Estrai numero pratica dalle note
@@ -127,30 +144,31 @@ export async function POST(request: NextRequest) {
   const hotelId = first.hotel_id;
   let hotelName = "—";
   if (hotelId) {
-    const { data: hotel } = await (auth.admin as any)
+    const { data: hotel } = await admin
       .from("hotels")
       .select("name")
       .eq("id", hotelId)
       .maybeSingle();
-    hotelName = hotel?.name ?? "—";
+    hotelName = (hotel as { name?: string } | null)?.name ?? "—";
   }
 
   // Recupera email agenzia
   let agencyEmail: string | null = null;
   if (billingParty) {
-    const { data: agency } = await (auth.admin as any)
+    const { data: agency } = await admin
       .from("agencies")
       .select("invoice_email, contact_email, booking_email")
       .eq("tenant_id", tenantId)
       .ilike("name", `%${billingParty}%`)
       .maybeSingle();
-    agencyEmail = agency?.invoice_email ?? agency?.contact_email ?? agency?.booking_email ?? null;
+    const agencyRow = agency as { invoice_email?: string | null; contact_email?: string | null; booking_email?: string | null } | null;
+    agencyEmail = agencyRow?.invoice_email ?? agencyRow?.contact_email ?? agencyRow?.booking_email ?? null;
   }
 
   // Determina andata e ritorno
-  const sorted = [...services].sort((a: any, b: any) => a.date.localeCompare(b.date));
-  const arrivoSvc = sorted.find((s: any) => s.direction === "arrival" || s.booking_service_kind?.includes("port")) ?? sorted[0];
-  const partenzaSvc = sorted.find((s: any) => s.direction === "departure" || (sorted.length > 1 && s.id !== arrivoSvc?.id)) ?? null;
+  const sorted = [...serviceList].sort((a, b) => a.date.localeCompare(b.date));
+  const arrivoSvc = sorted.find((s) => s.direction === "arrival" || s.booking_service_kind?.includes("port")) ?? sorted[0];
+  const partenzaSvc = sorted.find((s) => s.direction === "departure" || (sorted.length > 1 && s.id !== arrivoSvc?.id)) ?? null;
 
   const now = new Date().toISOString();
   const customerName = first.customer_name ?? "Cliente";
@@ -158,7 +176,7 @@ export async function POST(request: NextRequest) {
   const pax = first.pax ?? 1;
 
   // Marca come inviati
-  const { error: updateErr } = await (auth.admin as any)
+  const { error: updateErr } = await admin
     .from("services")
     .update({ medmar_ticket_sent_at: now, medmar_ticket_sent_by: userId })
     .in("id", service_ids)

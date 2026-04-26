@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
@@ -19,7 +20,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   let body: { payment_note?: string } = {};
   try { body = (await request.json()) as typeof body; } catch { /* opzionale */ }
 
-  const { error } = await (auth.admin as any)
+  const admin = auth.admin as SupabaseClient;
+  const { error } = await admin
     .from("agency_invoices")
     .update({
       status: "paid",

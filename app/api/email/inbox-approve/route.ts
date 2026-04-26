@@ -14,6 +14,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 import { autoLinkImportedServices } from "@/lib/server/transfer-ischia-blocks";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
@@ -95,7 +96,7 @@ function tipoToBookingKind(tipo: string): { bookingKind: string; transportMode: 
   return { bookingKind: "transfer_train_hotel", transportMode: "train" };
 }
 
-async function resolveOrCreateHotel(admin: any, tenantId: string, hotelName: string | null) {
+async function resolveOrCreateHotel(admin: SupabaseClient, tenantId: string, hotelName: string | null) {
   const rawName = clean(hotelName);
   const name = canonicalizeKnownHotelName(rawName) ?? rawName ?? "Hotel da verificare";
   const normalizedName = name.toLowerCase();
@@ -133,6 +134,7 @@ export async function POST(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator"]);
   if (auth instanceof NextResponse) return auth;
 
+  const admin = auth.admin as SupabaseClient;
   const tenantId = auth.membership.tenant_id;
   const userId = auth.user?.id ?? null;
 
@@ -204,7 +206,7 @@ export async function POST(request: NextRequest) {
   ].filter(Boolean).join(" | ");
 
   // ── Crea servizio confermato ──────────────────────────────────────────────
-  const { data: service, error: serviceError } = await (auth.admin as any)
+  const { data: service, error: serviceError } = await admin
     .from("services")
     .insert({
       tenant_id: tenantId,
@@ -237,17 +239,17 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Collega automaticamente al blocco traghetto se Medmar/SNAV ───────────
-  await autoLinkImportedServices(auth.admin as any, tenantId, [service.id]);
+  await autoLinkImportedServices(admin, tenantId, [service.id]);
 
   // ── Marca inbound_email come confermata ───────────────────────────────────
-  const { data: emailRow } = await (auth.admin as any)
+  const { data: emailRow } = await admin
     .from("inbound_emails")
     .select("parsed_json")
     .eq("id", inbound_email_id)
     .eq("tenant_id", tenantId)
     .single();
 
-  await (auth.admin as any)
+  await admin
     .from("inbound_emails")
     .update({
       parsed_json: {

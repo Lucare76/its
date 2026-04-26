@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
@@ -94,7 +95,7 @@ function normCity(c: string) {
 }
 
 async function tryAutoAllocateBus(
-  admin: any,
+  admin: SupabaseClient,
   tenantId: string,
   serviceId: string,
   familyCode: string,
@@ -240,7 +241,7 @@ function tipoToBookingKind(tipo: string): { bookingKind: string; transportMode: 
   return { bookingKind: "transfer_train_hotel", transportMode: "train" };
 }
 
-async function resolveOrCreateHotel(admin: any, tenantId: string, hotelName: string | null) {
+async function resolveOrCreateHotel(admin: SupabaseClient, tenantId: string, hotelName: string | null) {
   const rawName = clean(hotelName);
   const name = canonicalizeKnownHotelName(rawName) ?? rawName ?? "Hotel da verificare";
   const normalizedName = name.toLowerCase();
@@ -278,6 +279,7 @@ export async function POST(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator"]);
   if (auth instanceof NextResponse) return auth;
 
+  const admin = auth.admin as SupabaseClient;
   const tenantId = auth.membership.tenant_id;
   const userId = auth.user?.id ?? null;
 
@@ -339,7 +341,7 @@ export async function POST(request: NextRequest) {
 
   // ── Controllo duplicato PDF ───────────────────────────────────────────────
   if (!force) {
-    const { data: dupService } = await (auth.admin as any)
+    const { data: dupService } = await admin
       .from("services")
       .select("id, customer_name, date")
       .eq("tenant_id", tenantId)
@@ -417,7 +419,7 @@ export async function POST(request: NextRequest) {
   };
 
   // ── Inserisci inbound_email ───────────────────────────────────────────────
-  const { data: inboundEmail, error: inboundError } = await (auth.admin as any)
+  const { data: inboundEmail, error: inboundError } = await admin
     .from("inbound_emails")
     .insert({
       tenant_id: tenantId,
@@ -465,7 +467,7 @@ export async function POST(request: NextRequest) {
   ].filter(Boolean).join(" | ");
 
   // ── Crea servizio confermato ──────────────────────────────────────────────
-  const { data: service, error: serviceError } = await (auth.admin as any)
+  const { data: service, error: serviceError } = await admin
     .from("services")
     .insert({
       tenant_id: tenantId,
@@ -506,7 +508,7 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Aggiorna inbound_email con linked_service_id ──────────────────────────
-  await (auth.admin as any)
+  await admin
     .from("inbound_emails")
     .update({ parsed_json: { ...parsedJson, pdf_import: { ...parsedJson.pdf_import, linked_service_id: service.id } } })
     .eq("id", inboundEmail.id);

@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { sendPushToUser } from "@/lib/server/web-push";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
@@ -288,7 +289,7 @@ export async function POST(request: NextRequest) {
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
 async function _assignServicesToGroup(
-  admin: any,
+  admin: SupabaseClient,
   tenantId: string,
   serviceIds: string[],
   groupId: string,
@@ -306,12 +307,12 @@ async function _assignServicesToGroup(
     group_id: groupId,
   }));
 
-  await (admin as any)
+  await admin
     .from("assignments")
     .upsert(assignRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false });
 
   // Status → assigned + status_events
-  await (admin as any).from("services").update({ status: "assigned" }).in("id", serviceIds).eq("tenant_id", tenantId);
+  await admin.from("services").update({ status: "assigned" }).in("id", serviceIds).eq("tenant_id", tenantId);
 
   const statusEventRows = serviceIds.map((sid) => ({
     tenant_id: tenantId,
@@ -320,5 +321,5 @@ async function _assignServicesToGroup(
     at: now,
     by_user_id: byUserId,
   }));
-  await (admin as any).from("status_events").upsert(statusEventRows, { onConflict: "tenant_id,service_id,status", ignoreDuplicates: true });
+  await admin.from("status_events").upsert(statusEventRows, { onConflict: "tenant_id,service_id,status", ignoreDuplicates: true });
 }

@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
@@ -37,7 +38,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return NextResponse.json({ ok: false, error: "Nessun campo da aggiornare." }, { status: 400 });
   }
 
-  const { error } = await (auth.admin as any)
+  const admin = auth.admin as SupabaseClient;
+  const { error } = await admin
     .from("agencies")
     .update(updates)
     .eq("id", id)

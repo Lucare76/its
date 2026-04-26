@@ -6,17 +6,53 @@ import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { ROUTE_LABELS, TICKET_MODE_LABELS, LEG_STATUS_LABELS, type MedmarRoute, type TicketMode } from "@/lib/medmar-ar/types";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
+
+type ExportTicketRow = {
+  id: string;
+  voucher_number: string;
+  travel_date: string;
+  route: string;
+  pax_count: number;
+  ticket_mode: string;
+  outbound_time: string | null;
+  return_time: string | null;
+  total_price_cents: number;
+  unit_price_cents: number;
+  notes: string | null;
+  issuing_operator_id: string | null;
+  created_at: string | null;
+};
+
+type ExportLegRow = {
+  id: string;
+  ticket_id: string;
+  leg_type: "outbound" | "return";
+  leg_time: string | null;
+  leg_route: string;
+  price_per_pax_cents: number;
+  status: string;
+  reassigned_booking_id: string | null;
+  status_changed_at: string | null;
+};
+
+type MemberRow = {
+  user_id: string;
+  full_name: string | null;
+};
 
 function eur(cents: number) {
   return cents / 100;
 }
 
 export async function GET(request: NextRequest) {
+  try {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
-  const { admin, membership } = auth;
+  const admin = auth.admin as SupabaseClient;
+  const { membership } = auth;
   const tenantId = membership.tenant_id;
 
   const url = new URL(request.url);
@@ -25,7 +61,7 @@ export async function GET(request: NextRequest) {
   const dateFrom = url.searchParams.get("date_from") ?? firstOfYear;
   const dateTo = url.searchParams.get("date_to") ?? today;
 
-  const { data: tickets } = await (admin as any)
+  const { data: tickets } = await admin
     .from("medmar_ar_tickets")
     .select("id, voucher_number, travel_date, route, pax_count, ticket_mode, outbound_time, return_time, total_price_cents, unit_price_cents, notes, issuing_operator_id, created_at")
     .eq("tenant_id", tenantId)
@@ -34,28 +70,28 @@ export async function GET(request: NextRequest) {
     .eq("is_test_data", false)
     .order("travel_date");
 
-  const ticketList: any[] = tickets ?? [];
-  const ticketIds = ticketList.map((t: any) => t.id);
+  const ticketList = (tickets ?? []) as ExportTicketRow[];
+  const ticketIds = ticketList.map((t) => t.id);
 
-  let legList: any[] = [];
+  let legList: ExportLegRow[] = [];
   if (ticketIds.length > 0) {
-    const { data: legs } = await (admin as any)
+    const { data: legs } = await admin
       .from("medmar_ar_ticket_legs")
       .select("id, ticket_id, leg_type, leg_time, leg_route, price_per_pax_cents, status, reassigned_booking_id, status_changed_at")
       .eq("tenant_id", tenantId)
       .in("ticket_id", ticketIds);
-    legList = legs ?? [];
+    legList = (legs ?? []) as ExportLegRow[];
   }
 
-  const operatorIds = [...new Set(ticketList.map((t: any) => t.issuing_operator_id).filter(Boolean))];
+  const operatorIds = [...new Set(ticketList.map((t) => t.issuing_operator_id).filter(Boolean))] as string[];
   let operatorNames: Record<string, string> = {};
   if (operatorIds.length > 0) {
-    const { data: members } = await (admin as any)
+    const { data: members } = await admin
       .from("memberships")
       .select("user_id, full_name")
       .eq("tenant_id", tenantId)
       .in("user_id", operatorIds);
-    for (const m of members ?? []) operatorNames[m.user_id] = m.full_name ?? m.user_id;
+    for (const m of (members ?? []) as MemberRow[]) operatorNames[m.user_id] = m.full_name ?? m.user_id;
   }
 
   const wb = new ExcelJS.Workbook();
@@ -92,7 +128,7 @@ export async function GET(request: NextRequest) {
       return:     t.return_time ? String(t.return_time).slice(0, 5) : "",
       unit:       eur(t.unit_price_cents),
       total:      eur(t.total_price_cents),
-      operator:   operatorNames[t.issuing_operator_id] ?? t.issuing_operator_id ?? "",
+      operator:   operatorNames[t.issuing_operator_id ?? ""] ?? t.issuing_operator_id ?? "",
       notes:      t.notes ?? "",
       created_at: t.created_at ? new Date(t.created_at).toLocaleString("it-IT") : "",
     });
@@ -117,7 +153,7 @@ export async function GET(request: NextRequest) {
 
   styleHeader(wsTrotte);
 
-  const ticketById = new Map(ticketList.map((t: any) => [t.id, t]));
+  const ticketById = new Map(ticketList.map((t) => [t.id, t]));
   for (const l of legList) {
     const t = ticketById.get(l.ticket_id);
     wsTrotte.addRow({
@@ -226,6 +262,9 @@ export async function GET(request: NextRequest) {
       "Content-Disposition": `attachment; filename="${filename}"`,
     },
   });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
 
 // ── Helpers stile ─────────────────────────────────────────────────────────────
@@ -241,8 +280,8 @@ function styleHeader(ws: ExcelJS.Worksheet) {
 
 function formatCurrencyCols(ws: ExcelJS.Worksheet, keys: string[]) {
   const colIndexes = keys.map((k) => {
-    const col = ws.columns.find((c: any) => c.key === k);
-    return col ? (col as any).number ?? ws.getColumn(k).number : null;
+    const col = ws.columns.find((c) => c.key === k);
+    return col ? ws.getColumn(k).number : null;
   }).filter(Boolean);
 
   ws.eachRow((row, i) => {

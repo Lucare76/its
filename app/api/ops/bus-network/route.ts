@@ -284,7 +284,7 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
     auth.admin.from("bus_ischia_dist_allocations").select("*").eq("tenant_id", tenantId),
     auth.admin.from("vehicles").select("id, label, plate, capacity").eq("tenant_id", tenantId).order("label"),
     auth.admin.from("driver_profiles").select("id, full_name, phone").eq("tenant_id", tenantId).eq("active", true).order("full_name"),
-    (auth.admin as any).from("bus_line_ferry_config").select("*").eq("tenant_id", tenantId).order("sort_order"),
+    auth.admin.from("bus_line_ferry_config").select("*").eq("tenant_id", tenantId).order("sort_order"),
   ]);
 
   const allDistBuses = (distBusesResult.data ?? []) as Array<Record<string, unknown>>;
@@ -1678,7 +1678,7 @@ export async function POST(request: NextRequest) {
         auth.admin.from("tenant_bus_units").select("id, bus_line_id").eq("tenant_id", tenantId),
         // Mappa line_id → family_code per ordinamento per orario traghetto
         auth.admin.from("tenant_bus_lines").select("id, family_code").eq("tenant_id", tenantId),
-        (auth.admin as any).from("bus_line_ferry_config").select("bus_line_family_code, departure_time, sort_order").eq("tenant_id", tenantId),
+        auth.admin.from("bus_line_ferry_config").select("bus_line_family_code, departure_time, sort_order").eq("tenant_id", tenantId),
       ]);
 
       // ── Step 3: lookup hotel name + zona ───────────────────────────────────

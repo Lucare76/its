@@ -5,8 +5,58 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
+
+type LegWithTicket = {
+  id: string;
+  ticket_id: string;
+  leg_type: "outbound" | "return";
+  leg_time: string | null;
+  leg_route: string;
+  price_per_pax_cents: number;
+  status: string;
+  medmar_ar_tickets: {
+    voucher_number: string;
+    travel_date: string;
+    route: string;
+    pax_count: number;
+    ticket_mode: string;
+  } | Array<{
+    voucher_number: string;
+    travel_date: string;
+    route: string;
+    pax_count: number;
+    ticket_mode: string;
+  }> | null;
+};
+
+type BookingRow = {
+  id: string;
+  customer_name: string | null;
+  phone: string | null;
+  pax: number | null;
+  date: string;
+  time: string | null;
+  vessel: string | null;
+  booking_service_kind: string | null;
+  hotels: { name: string | null } | Array<{ name: string | null }> | null;
+};
+
+type LegVerifyRow = {
+  id: string;
+  tenant_id: string;
+  status: string;
+  price_per_pax_cents: number;
+  ticket_id: string;
+};
+
+type BookingVerifyRow = {
+  id: string;
+  customer_name: string | null;
+  pax: number | null;
+};
 
 export interface MatchOpportunity {
   leg: {
@@ -42,15 +92,17 @@ export interface MatchOpportunity {
 }
 
 export async function GET(request: NextRequest) {
+  try {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
-  const { admin, membership } = auth;
+  const admin = auth.admin as SupabaseClient;
+  const { membership } = auth;
   const tenantId = membership.tenant_id;
 
   const today = new Date().toISOString().slice(0, 10);
 
   // 1. Legs disponibili per riassegnazione con data futura
-  const { data: legs, error: legsErr } = await (admin as any)
+  const { data: legs, error: legsErr } = await admin
     .from("medmar_ar_ticket_legs")
     .select(`
       id, leg_type, leg_time, leg_route, price_per_pax_cents, status,
@@ -68,7 +120,7 @@ export async function GET(request: NextRequest) {
 
   const opportunities: MatchOpportunity[] = [];
 
-  for (const leg of (legs ?? []) as any[]) {
+  for (const leg of (legs ?? []) as LegWithTicket[]) {
     const ticket = Array.isArray(leg.medmar_ar_tickets)
       ? leg.medmar_ar_tickets[0]
       : leg.medmar_ar_tickets;
@@ -91,7 +143,7 @@ export async function GET(request: NextRequest) {
 
     const vesselKeyword = leg.leg_route.includes("napoli") ? "napoli" : "pozzuoli";
 
-    let bookingsQuery = (admin as any)
+    let bookingsQuery = admin
       .from("services")
       .select(`
         id, customer_name, phone, pax, date, time, vessel, booking_service_kind,
@@ -112,18 +164,18 @@ export async function GET(request: NextRequest) {
     const { data: bookings } = await bookingsQuery;
 
     // 3. Filtra prenotazioni già coperte da un leg riassegnato
-    const { data: alreadyAssigned } = await (admin as any)
+    const { data: alreadyAssigned } = await admin
       .from("medmar_ar_ticket_legs")
       .select("reassigned_booking_id")
       .eq("tenant_id", tenantId)
       .eq("status", "reassigned")
       .not("reassigned_booking_id", "is", null);
 
-    const assignedIds = new Set((alreadyAssigned ?? []).map((r: any) => r.reassigned_booking_id));
+    const assignedIds = new Set((alreadyAssigned ?? []).map((r) => r.reassigned_booking_id));
 
-    const matchedBookings = (bookings ?? [])
-      .filter((b: any) => !assignedIds.has(b.id))
-      .map((b: any) => ({
+    const matchedBookings = ((bookings ?? []) as BookingRow[])
+      .filter((b) => !assignedIds.has(b.id))
+      .map((b) => ({
         id: b.id,
         customer_name: b.customer_name,
         phone: b.phone,
@@ -168,6 +220,9 @@ export async function GET(request: NextRequest) {
     total_available: opportunities.length,
     total_value_cents: opportunities.reduce((s, o) => s + o.value_cents, 0),
   });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
 
 const reassignSchema = z.object({
@@ -178,7 +233,8 @@ const reassignSchema = z.object({
 export async function POST(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
-  const { admin, membership, user } = auth;
+  const admin = auth.admin as SupabaseClient;
+  const { membership, user } = auth;
   const tenantId = membership.tenant_id;
 
   let body: unknown;
@@ -189,21 +245,23 @@ export async function POST(request: NextRequest) {
 
   const { leg_id, booking_id } = parsed.data;
 
+  try {
   // Verifica leg
-  const { data: leg } = await (admin as any)
+  const { data: legData } = await admin
     .from("medmar_ar_ticket_legs")
     .select("id, tenant_id, status, price_per_pax_cents, ticket_id")
     .eq("id", leg_id)
     .eq("tenant_id", tenantId)
     .maybeSingle();
 
+  const leg = legData as LegVerifyRow | null;
   if (!leg) return NextResponse.json({ ok: false, error: "Tratta non trovata." }, { status: 404 });
   if (leg.status !== "available_for_reassignment") {
     return NextResponse.json({ ok: false, error: "Tratta non disponibile per riassegnazione." }, { status: 409 });
   }
 
   // Verifica prenotazione
-  const { data: booking } = await (admin as any)
+  const { data: bookingData } = await admin
     .from("services")
     .select("id, customer_name, pax")
     .eq("id", booking_id)
@@ -211,10 +269,11 @@ export async function POST(request: NextRequest) {
     .neq("status", "cancelled")
     .maybeSingle();
 
+  const booking = bookingData as BookingVerifyRow | null;
   if (!booking) return NextResponse.json({ ok: false, error: "Prenotazione non trovata." }, { status: 404 });
 
   // Aggiorna leg
-  const { error: updErr } = await (admin as any)
+  const { error: updErr } = await admin
     .from("medmar_ar_ticket_legs")
     .update({
       status: "reassigned",
@@ -234,4 +293,7 @@ export async function POST(request: NextRequest) {
     customer_name: booking.customer_name,
     value_recovered_cents: leg.price_per_pax_cents * (booking.pax ?? 1),
   });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
