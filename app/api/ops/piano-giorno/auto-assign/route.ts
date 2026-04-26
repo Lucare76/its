@@ -21,6 +21,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { hotelGeoQuality } from "@/lib/hotel-geocoding";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
@@ -664,73 +665,76 @@ export async function POST(request: NextRequest) {
       return fallback ?? null;
     };
 
-    // ── 9. Persisti giri ─────────────────────────────────────────────────────
+    // ── 9. Persisti giri (batch — O(4) invece di O(n×4)) ────────────────────
 
     let assignedCount = 0;
     let tripsCreated = 0;
     const errors: string[] = [];
+    const batchAdmin = auth.admin as SupabaseClient;
 
-    for (const { draft, driverId } of draftAssignments) {
-      const vehicle = pickVehicle(draft.pax, draft, driverId);
+    if (draftAssignments.length > 0) {
+      // Seleziona veicoli per tutti i giri, poi crea tutti i trip_groups in un unico insert
+      const prepared = draftAssignments.map(({ draft, driverId }) => ({
+        draft,
+        driverId,
+        vehicle: pickVehicle(draft.pax, draft, driverId),
+      }));
 
-      const { data: group, error: groupErr } = await auth.admin
-        .from("trip_groups")
-        .insert({
-          tenant_id: tenantId,
-          date,
-          driver_user_id: driverId,
-          vehicle_label: vehicle?.label ?? null,
-          vehicle_capacity: vehicle?.capacity ?? null,
-          notes: null,
-          created_by: userId,
-          created_at: now,
-          updated_at: now,
-        })
-        .select("id")
-        .single();
-
-      if (groupErr || !group?.id) {
-        errors.push(`Giro ${draft.zoneLabel}: ${groupErr?.message ?? "errore"}`);
-        continue;
-      }
-
-      const groupId = group.id as string;
-
-      const assignRows = draft.serviceIds.map((sid) => ({
+      const groupRows = prepared.map(({ draft: _, driverId, vehicle }) => ({
         tenant_id: tenantId,
-        service_id: sid,
+        date,
         driver_user_id: driverId,
-        vehicle_label: vehicle?.label ?? "",
-        group_id: groupId,
+        vehicle_label: vehicle?.label ?? null,
+        vehicle_capacity: vehicle?.capacity ?? null,
+        notes: null,
+        created_by: userId,
+        created_at: now,
+        updated_at: now,
       }));
 
-      const { error: assignErr } = await (auth.admin as any)
-        .from("assignments")
-        .upsert(assignRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false });
-      if (assignErr) {
-        errors.push(`Assignments ${draft.zoneLabel}: ${assignErr.message}`);
-        continue;
+      const { data: groups, error: groupsErr } = await auth.admin
+        .from("trip_groups")
+        .insert(groupRows)
+        .select("id");
+
+      if (groupsErr || !groups?.length) {
+        errors.push(`Errore creazione giri: ${groupsErr?.message ?? "nessun ID restituito"}`);
+      } else {
+        const allAssignRows: Array<{
+          tenant_id: string; service_id: string;
+          driver_user_id: string | null; vehicle_label: string; group_id: string;
+        }> = [];
+        const allServiceIds: string[] = [];
+        const allStatusEvents: Array<{
+          tenant_id: string; service_id: string; status: string; at: string; by_user_id: string;
+        }> = [];
+
+        for (let i = 0; i < groups.length; i++) {
+          const { draft, driverId, vehicle } = prepared[i];
+          const groupId = (groups[i] as { id: string }).id;
+          for (const sid of draft.serviceIds) {
+            allAssignRows.push({
+              tenant_id: tenantId, service_id: sid,
+              driver_user_id: driverId, vehicle_label: vehicle?.label ?? "", group_id: groupId,
+            });
+            allServiceIds.push(sid);
+            allStatusEvents.push({ tenant_id: tenantId, service_id: sid, status: "assigned", at: now, by_user_id: userId });
+          }
+          tripsCreated++;
+          assignedCount += draft.serviceIds.length;
+        }
+
+        // Tutti e tre i write in parallelo
+        const [assignRes, svcRes, statusRes] = await Promise.all([
+          batchAdmin.from("assignments").upsert(allAssignRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false }),
+          auth.admin.from("services").update({ status: "assigned" }).in("id", allServiceIds).eq("tenant_id", tenantId),
+          batchAdmin.from("status_events").upsert(allStatusEvents, { onConflict: "tenant_id,service_id,status", ignoreDuplicates: true }),
+        ]);
+
+        if (assignRes.error) errors.push(`Assignments: ${assignRes.error.message}`);
+        if (svcRes.error) errors.push(`Services update: ${svcRes.error.message}`);
+        if (statusRes.error) errors.push(`Status events: ${statusRes.error.message}`);
       }
-
-      await auth.admin
-        .from("services")
-        .update({ status: "assigned" })
-        .in("id", draft.serviceIds)
-        .eq("tenant_id", tenantId);
-
-      const statusEvents = draft.serviceIds.map((sid) => ({
-        tenant_id: tenantId,
-        service_id: sid,
-        status: "assigned",
-        at: now,
-        by_user_id: userId,
-      }));
-      await (auth.admin as any)
-        .from("status_events")
-        .upsert(statusEvents, { onConflict: "tenant_id,service_id,status", ignoreDuplicates: true });
-
-      assignedCount += draft.serviceIds.length;
-      tripsCreated++;
     }
 
     const unassignedCount = toAssign.length - assignedCount;
