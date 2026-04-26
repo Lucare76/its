@@ -199,53 +199,16 @@ export async function POST(request: NextRequest) {
       ...(isPrivateIsland ? { time_from: d.arrival_time, time_to: d.departure_time } : {}),
     };
 
-    let serviceId: string | null = null;
-
     const { data: firstInsert, error: insertError } = await auth.admin
       .from("services")
       .insert(insert)
       .select("id")
       .single();
 
-    if (!insertError && firstInsert?.id) {
-      serviceId = firstInsert.id;
-    } else {
-      // Fallback senza campi opzionali estesi
-      const { data: fallback, error: fallbackError } = await auth.admin
-        .from("services")
-        .insert({
-          tenant_id: tenantId,
-          is_draft: false,
-          status: "new",
-          date: d.arrival_date,
-          time: d.arrival_time,
-          service_type: bookingKind === "excursion" ? "bus_tour" : "transfer",
-          direction: "arrival",
-          vessel: vesselFromKind(bookingKind, transportCode, busCityOrigin),
-          pax: d.pax,
-          hotel_id: d.hotel_id || null,
-          customer_name: customerName,
-          customer_first_name: (d.customer_first_name ?? "").trim() || null,
-          customer_last_name: d.customer_last_name.trim(),
-          phone: d.customer_phone.trim(),
-          notes,
-          agency_id: agencyId,
-          billing_party_name: billingPartyName,
-          booking_service_kind: bookingKind,
-          arrival_date: d.arrival_date,
-          arrival_time: d.arrival_time,
-          departure_date: d.departure_date,
-          departure_time: d.departure_time,
-          transport_code: transportCode || null,
-          bus_city_origin: busCityOrigin || null,
-        })
-        .select("id")
-        .single();
-      if (fallbackError || !fallback?.id) {
-        return NextResponse.json({ error: fallbackError?.message ?? "Inserimento non riuscito." }, { status: 500 });
-      }
-      serviceId = fallback.id;
+    if (insertError || !firstInsert?.id) {
+      return NextResponse.json({ error: insertError?.message ?? "Inserimento non riuscito." }, { status: 500 });
     }
+    const serviceId: string = firstInsert.id;
 
     await auth.admin.from("status_events").insert({
       tenant_id: tenantId,

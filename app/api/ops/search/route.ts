@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
 
     const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? "30"), 100);
 
-    // Cerca per nome cliente o telefono su tutti i servizi non cancellati
+    // Cerca per nome completo, nome, cognome o telefono su tutti i servizi non cancellati
     const { data, error } = await auth.admin
       .from("services")
       .select(`
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
       .eq("tenant_id", tenantId)
       .eq("is_draft", false)
       .neq("status", "cancelled")
-      .or(`customer_name.ilike.%${q}%,phone.ilike.%${q}%`)
+      .or(`customer_name.ilike.%${q}%,customer_first_name.ilike.%${q}%,customer_last_name.ilike.%${q}%,phone.ilike.%${q}%`)
       .order("date", { ascending: false })
       .limit(limit);
 

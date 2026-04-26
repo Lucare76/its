@@ -1,8 +1,10 @@
 /**
- * Lookup client-side per porto e orario prelevamento SNAV / MEDMAR.
- * Fonte: departure-pickup-rules.ts (SNAV_DIRECT, MEDMAR_DIRECT) e ferry_schedules (DB seed).
+ * Lookup legacy per orari arrivo a Ischia e pickup per zona hotel.
  *
- * Usato nel form prenotazione /services/new per auto-fill senza API call.
+ * Nota:
+ * - i form booking leggono ora porti/orari da `ferry_schedules` via DB
+ * - qui restano solo le pickup rules per zona e il calcolo orario arrivo a Ischia
+ *   usato dal modulo driver
  */
 
 export type PickupZona = "ischia" | "lacco" | "casamicciola" | "barano" | "forio";
@@ -36,27 +38,8 @@ export interface FerryArrival {
   restrictions?: ScheduleRestriction[];
 }
 
-// ── Helper disponibilità ──────────────────────────────────────────────────────
+// ── Restrizioni stagionali legacy ─────────────────────────────────────────────
 
-function mmdd(date: Date): string {
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${m}-${d}`;
-}
-
-export function isAvailableOnDate(restrictions: ScheduleRestriction[] | undefined, isoDate: string): boolean {
-  if (!restrictions || restrictions.length === 0) return true;
-  const d = new Date(isoDate + "T12:00:00");
-  const md = mmdd(d);
-  const dow = d.getDay();
-  return restrictions.some((r) => {
-    if (md < r.from || md > r.to) return false;
-    if (r.days && !r.days.includes(dow)) return false;
-    return true;
-  });
-}
-
-// Shortcuts restrizioni frequenti
 const VEN_SAB_DOM     = [5, 6, 0] as number[]; // Venerdì, Sabato, Domenica
 const VEN_SAB_DOM_LUN = [5, 6, 0, 1] as number[]; // Venerdì, Sabato, Domenica, Lunedì
 const VEN_DOM         = [5, 0] as number[];    // Venerdì, Domenica
@@ -148,11 +131,6 @@ export const ARRIVAL_SCHEDULES: FerryArrival[] = [
 
 // ── Funzioni di lookup ────────────────────────────────────────────────────────
 
-export function getArrivalPorto(company: "snav" | "medmar", depTime: string): string | null {
-  const match = ARRIVAL_SCHEDULES.find((s) => s.company === company && s.ferry_dep_time === depTime);
-  return match?.porto_ischia ?? null;
-}
-
 export function getFerryArrivalAtIschia(depTime: string | null, bookingKind: string | null): string | null {
   if (!depTime || !bookingKind) return null;
   const t = depTime.slice(0, 5);
@@ -180,47 +158,4 @@ export function normalizeZonaToPickup(rawZone: string | null): PickupZona {
   if (z.includes("casamicciola")) return "casamicciola";
   if (z.includes("barano")) return "barano";
   return "ischia";
-}
-
-// Tutti gli orari (statici, senza filtro data)
-export const SNAV_ARRIVAL_TIMES   = ARRIVAL_SCHEDULES.filter((s) => s.company === "snav").map((s) => s.ferry_dep_time);
-export const MEDMAR_ARRIVAL_TIMES = ARRIVAL_SCHEDULES.filter((s) => s.company === "medmar").map((s) => s.ferry_dep_time);
-export const SNAV_DEPARTURE_TIMES   = DEPARTURE_RULES.filter((r) => r.company === "snav").map((r) => r.ferry_time);
-export const MEDMAR_DEPARTURE_TIMES = DEPARTURE_RULES.filter((r) => r.company === "medmar").map((r) => r.ferry_time);
-
-// Orari MEDMAR suddivisi per porto continente
-export const MEDMAR_NAPOLI_ARRIVAL_TIMES   = ARRIVAL_SCHEDULES.filter((s) => s.company === "medmar" && s.porto_ischia === "ISCHIA PORTO" && ["08:40","14:20","19:00"].includes(s.ferry_dep_time)).map((s) => s.ferry_dep_time);
-export const MEDMAR_POZZUOLI_ARRIVAL_TIMES = ARRIVAL_SCHEDULES.filter((s) => s.company === "medmar" && !["08:40","14:20","19:00"].includes(s.ferry_dep_time)).map((s) => s.ferry_dep_time);
-export const MEDMAR_NAPOLI_DEPARTURE_TIMES   = DEPARTURE_RULES.filter((r) => r.company === "medmar" && r.porto_continente === "NAPOLI").map((r) => r.ferry_time);
-export const MEDMAR_POZZUOLI_DEPARTURE_TIMES = DEPARTURE_RULES.filter((r) => r.company === "medmar" && r.porto_continente === "POZZUOLI").map((r) => r.ferry_time);
-
-// Orari MEDMAR con porto ischia (per label nei select)
-export const MEDMAR_NAPOLI_ARRIVALS_WITH_PORTO = ARRIVAL_SCHEDULES
-  .filter((s) => s.company === "medmar" && ["08:40","14:20","19:00"].includes(s.ferry_dep_time))
-  .map((s) => ({ time: s.ferry_dep_time, porto: s.porto_ischia }));
-
-export const MEDMAR_POZZUOLI_ARRIVALS_WITH_PORTO = ARRIVAL_SCHEDULES
-  .filter((s) => s.company === "medmar" && !["08:40","14:20","19:00"].includes(s.ferry_dep_time))
-  .sort((a, b) => a.ferry_dep_time.localeCompare(b.ferry_dep_time))
-  .map((s) => ({ time: s.ferry_dep_time, porto: s.porto_ischia }));
-
-export const MEDMAR_NAPOLI_DEPARTURES_WITH_PORTO = DEPARTURE_RULES
-  .filter((r) => r.company === "medmar" && r.porto_continente === "NAPOLI")
-  .map((r) => ({ time: r.ferry_time, porto: r.porto_ischia }));
-
-export const MEDMAR_POZZUOLI_DEPARTURES_WITH_PORTO = DEPARTURE_RULES
-  .filter((r) => r.company === "medmar" && r.porto_continente === "POZZUOLI")
-  .map((r) => ({ time: r.ferry_time, porto: r.porto_ischia }));
-
-// Orari filtrati per data specifica
-export function getAvailableSnavArrivalTimes(isoDate: string): string[] {
-  return ARRIVAL_SCHEDULES
-    .filter((s) => s.company === "snav" && isAvailableOnDate(s.restrictions, isoDate))
-    .map((s) => s.ferry_dep_time);
-}
-
-export function getAvailableSnavDepartureTimes(isoDate: string): string[] {
-  return DEPARTURE_RULES
-    .filter((r) => r.company === "snav" && isAvailableOnDate(r.restrictions, isoDate))
-    .map((r) => r.ferry_time);
 }
