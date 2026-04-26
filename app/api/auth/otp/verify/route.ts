@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
+import { checkRateLimit, RATE_LIMIT_DEFAULTS } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -14,6 +15,12 @@ export async function POST(request: NextRequest) {
 
   if (!sessionId || !otpCode || otpCode.length !== 6 || !/^\d+$/.test(otpCode)) {
     return NextResponse.json({ error: "OTP non valido" }, { status: 400 });
+  }
+
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const rl = await checkRateLimit("otp_verify", ip, RATE_LIMIT_DEFAULTS.authEndpoints);
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Troppe richieste. Riprova tra qualche minuto." }, { status: 429 });
   }
 
   const admin = createAdminClient();

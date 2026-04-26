@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { generateOtpCode, getOtpExpiration } from "@/lib/server/otp-utils";
 import { sendOtpEmail } from "@/lib/server/otp-email";
+import { checkRateLimit, RATE_LIMIT_DEFAULTS } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -17,6 +18,11 @@ export async function POST(request: NextRequest) {
 
   if (!userId || !email.match(/^[^@\s]+@[^@\s]+\.[^@\s]+$/)) {
     return NextResponse.json({ error: "Dati non validi" }, { status: 400 });
+  }
+
+  const rl = await checkRateLimit("otp_send", userId, RATE_LIMIT_DEFAULTS.authEndpoints);
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Troppe richieste OTP. Riprova tra qualche minuto." }, { status: 429 });
   }
 
   const admin = createAdminClient();

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
+import { checkRateLimit, RATE_LIMIT_DEFAULTS } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -14,6 +15,12 @@ export async function POST(request: NextRequest) {
 
   if (!token || password.length < 8) {
     return NextResponse.json({ error: "Token o password non validi" }, { status: 400 });
+  }
+
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const rl = await checkRateLimit("accept_invite", ip, RATE_LIMIT_DEFAULTS.authEndpoints);
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Troppe richieste. Riprova tra qualche minuto." }, { status: 429 });
   }
 
   const admin = createAdminClient();

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomBytes } from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { sendPushToUser } from "@/lib/server/web-push";
@@ -93,8 +94,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: "Configurazione server mancante" }, { status: 500 });
       }
 
-      // Password = telefono (fallback generico)
-      const password = phone.replace(/\s/g, "") || "Ischia2025!";
+      const password = phone.replace(/\s/g, "") || randomBytes(8).toString("hex");
 
       const { data: newUser, error: createErr } = await adminClient.auth.admin.createUser({
         email,

@@ -1,4 +1,5 @@
-type AdminClient = any;
+import { type SupabaseClient } from "@supabase/supabase-js";
+type AdminClient = SupabaseClient;
 
 type MatchInput = {
   tenantId: string;

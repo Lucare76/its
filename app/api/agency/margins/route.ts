@@ -1,37 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-import { parseRole } from "@/lib/rbac";
 import { findRate } from "@/lib/server/rate-matcher";
+import { authorizeAdmin } from "@/lib/server/make-admin";
 
 export const runtime = "nodejs";
 
-function makeAdmin() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
-  if (!url || !key) return null;
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-}
-
-async function authorizeAdmin(request: NextRequest) {
-  const admin = makeAdmin();
-  if (!admin) return null;
-  const auth = request.headers.get("authorization");
-  if (!auth?.startsWith("Bearer ")) return null;
-  const { data: { user } } = await admin.auth.getUser(auth.slice(7));
-  if (!user) return null;
-  const { data: m } = await admin.from("memberships").select("tenant_id, role").eq("user_id", user.id).maybeSingle();
-  const role = parseRole(m?.role);
-  // Solo admin
-  if (!m?.tenant_id || role !== "admin") return null;
-  return { admin, tenantId: m.tenant_id };
-}
-
-// ---------------------------------------------------------------------------
 // GET /api/agency/margins?year=2026
-// Restituisce dati margini per l'anno richiesto (default anno corrente)
-// Fonte: services con agency_id + agency_rates (cost_cents, price_cents)
-// ---------------------------------------------------------------------------
 export async function GET(request: NextRequest) {
+  try {
   const ctx = await authorizeAdmin(request);
   if (!ctx) return NextResponse.json({ error: "Non autorizzato." }, { status: 403 });
 
@@ -172,4 +147,7 @@ export async function GET(request: NextRequest) {
     byKind,
     totalRows: rows.length,
   });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }

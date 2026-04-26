@@ -1,35 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { parseRole } from "@/lib/rbac";
 import { BUS_LINES_2026 } from "@/lib/server/bus-lines-catalog";
+import { authorizeAdmin } from "@/lib/server/make-admin";
 
 export const runtime = "nodejs";
-
-function makeAdmin() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
-  if (!url || !key) return null;
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-}
-
-async function authorize(request: NextRequest, allowedRoles = ["admin", "operator"]) {
-  const admin = makeAdmin();
-  if (!admin) return null;
-  const authHeader = request.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) return null;
-  const token = authHeader.slice(7);
-  const { data: { user } } = await admin.auth.getUser(token);
-  if (!user) return null;
-  const { data: membership } = await admin
-    .from("memberships")
-    .select("tenant_id, role")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  const role = parseRole(membership?.role);
-  if (!membership?.tenant_id || !role || !allowedRoles.includes(role)) return null;
-  return { admin, tenantId: membership.tenant_id, role };
-}
 
 // Escursioni con costo pre-caricato (da programma 2026)
 export const EXCURSION_DEFAULTS: Record<string, number> = {
@@ -76,7 +50,8 @@ export const EXCURSION_LABELS: Record<string, string> = {
 // GET /api/agency/rates
 // ---------------------------------------------------------------------------
 export async function GET(request: NextRequest) {
-  const ctx = await authorize(request);
+  try {
+  const ctx = await authorizeAdmin(request, ["admin", "operator"]);
   if (!ctx) return NextResponse.json({ error: "Non autorizzato." }, { status: 403 });
 
   const [{ data: rates }, { data: agencies }, { data: customKinds }] = await Promise.all([
@@ -112,6 +87,9 @@ export async function GET(request: NextRequest) {
     excursionDefaults: EXCURSION_DEFAULTS,
     excursionLabels: EXCURSION_LABELS,
   });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +117,8 @@ const customKindSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  const ctx = await authorize(request);
+  try {
+  const ctx = await authorizeAdmin(request, ["admin", "operator"]);
   if (!ctx) return NextResponse.json({ error: "Non autorizzato." }, { status: 403 });
 
   const body = await request.json().catch(() => null);
@@ -231,13 +210,17 @@ export async function POST(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true, id: inserted.id });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
 
 // ---------------------------------------------------------------------------
 // DELETE /api/agency/rates — disattiva una voce
 // ---------------------------------------------------------------------------
 export async function DELETE(request: NextRequest) {
-  const ctx = await authorize(request);
+  try {
+  const ctx = await authorizeAdmin(request, ["admin", "operator"]);
   if (!ctx) return NextResponse.json({ error: "Non autorizzato." }, { status: 403 });
   const body = await request.json().catch(() => null) as { id?: string } | null;
   if (!body?.id) return NextResponse.json({ error: "id mancante." }, { status: 400 });
@@ -248,4 +231,7 @@ export async function DELETE(request: NextRequest) {
     .eq("tenant_id", ctx.tenantId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
