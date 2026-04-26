@@ -5,6 +5,7 @@ import { buildOperationalSummaryPreview } from "@/lib/server/operational-summary
 import { STATEMENT_AGENCY_NAMES } from "@/lib/server/statement-agencies";
 import { sendOperationalReportEmail, type ReportJobType } from "@/lib/server/report-job-email";
 import { auditLog } from "@/lib/server/ops-audit";
+import { type Service } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -72,7 +73,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: servicesError.message }, { status: 500 });
   }
 
-  const preview = buildOperationalSummaryPreview((services ?? []) as any[], today, settings.statement_agencies);
+  const preview = buildOperationalSummaryPreview((services ?? []) as Service[], today, settings.statement_agencies);
   const rows = [
     ...Object.entries(preview.arrivals_48h).flatMap(([owner, lines]) =>
       lines.length === 0
@@ -136,7 +137,7 @@ export async function PATCH(request: NextRequest) {
   }
 
   const limit = Math.min(requestedLimit, settings.report_processing_limit);
-  const preview = buildOperationalSummaryPreview((services ?? []) as any[], today, settings.statement_agencies);
+  const preview = buildOperationalSummaryPreview((services ?? []) as Service[], today, settings.statement_agencies);
   const updates = await Promise.all((((jobs ?? []) as ReportJobRow[]).slice(0, limit)).map(async (job) => {
     const lines =
       job.job_type === "arrivals_48h"

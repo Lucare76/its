@@ -55,13 +55,14 @@ export async function POST(request: NextRequest) {
 
   const emailType = body.report_type as ServiceListEmailType;
   const label = REPORT_LABELS[body.report_type] ?? body.report_type;
-  const lines = (body.services as any[]).map((s) => ({
+  type InputLine = { date: string; time: string; customer_name: string; pax: number; hotel_or_destination?: string | null; direction: "arrival" | "departure"; transport_type?: string | null; transport_time?: string | null };
+  const lines = (body.services as InputLine[]).map((s) => ({
     date:                s.date,
     time:                s.time,
     customer_name:       s.customer_name,
     pax:                 s.pax,
     hotel_or_destination: s.hotel_or_destination ?? null,
-    direction:           s.direction as "arrival" | "departure",
+    direction:           s.direction,
     transport_type:      s.transport_type ?? null,
     transport_time:      s.transport_time ?? null,
   }));

@@ -11,7 +11,8 @@ import {
   getDefaultBusNetworkLines,
   getDefaultBusUnitsForFamily,
   getDefaultStopsForLine,
-  suggestBusRedistribution
+  suggestBusRedistribution,
+  type RawBusUnit
 } from "@/lib/server/bus-network";
 import { findBusStopsByCity } from "@/lib/server/bus-lines-catalog";
 import { geocodeCity, geocodeCityName } from "@/lib/server/geocoding";
@@ -229,7 +230,7 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
       driver_name_return: dayDriver?.driver_name_return ?? null,
       driver_phone_return: dayDriver?.driver_phone_return ?? null,
     };
-  }) as any[];
+  }) as unknown as RawBusUnit[];
 
   const enrichedServices = services.map((service: {
     id: string;
@@ -263,7 +264,7 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
       derived_line_name: identity.lineName,
       suggested_stop_name: identity.stop_name
     };
-  }) as any[];
+  });
 
   const unitLoads = buildBusUnitLoadSummary(units, allocations);
   const stopLoads = buildStopLoadSummary(stops, allocations);

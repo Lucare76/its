@@ -3,6 +3,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { buildOperationalSummaryPreview } from "@/lib/server/operational-summary";
 import type { SummaryPreviewPayload } from "@/lib/server/operational-summary";
 import { STATEMENT_AGENCY_NAMES } from "@/lib/server/statement-agencies";
+import { type Service } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -49,9 +50,9 @@ export async function GET(request: NextRequest) {
     const statementAgencies = (operationalSettings?.statement_agencies as string[] | null) ?? STATEMENT_AGENCY_NAMES;
 
     const payload: SummaryPreviewPayload = {
-      ...buildOperationalSummaryPreview((data ?? []) as any[], today, statementAgencies),
-      export_history: (exportAudits ?? []) as any[],
-      report_jobs: (reportJobs ?? []) as any[]
+      ...buildOperationalSummaryPreview((data ?? []) as Service[], today, statementAgencies),
+      export_history: (exportAudits ?? []) as NonNullable<SummaryPreviewPayload["export_history"]>,
+      report_jobs: (reportJobs ?? []) as NonNullable<SummaryPreviewPayload["report_jobs"]>
     };
 
     return NextResponse.json({ ok: true, payload });

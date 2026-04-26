@@ -30,7 +30,7 @@ export type BusNetworkStop = {
   active: boolean;
 };
 
-type RawBusUnit = {
+export type RawBusUnit = {
   id: string;
   bus_line_id: string;
   label: string;
