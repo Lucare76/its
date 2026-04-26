@@ -572,6 +572,7 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
       date,
       service_ids: [...selectedIds],
       driver_user_id: driverId || null,
+      vehicle_id: vehicle?.id ?? vehicleId ?? null,
       vehicle_label: vehicle?.label ?? vehicleId ?? null,
       vehicle_capacity: vehicle?.capacity ?? null,
       notes: notes || null,
@@ -741,6 +742,7 @@ function DriverPanel({ drivers, tripGroups, tripServices, token, vehicles, onUpd
       action: "update_trip",
       group_id: groupId,
       driver_user_id: editDriver || null,
+      vehicle_id: vehicle?.id ?? editVehicle ?? null,
       vehicle_label: vehicle?.label ?? editVehicle ?? null,
       vehicle_capacity: vehicle?.capacity ?? null,
     });

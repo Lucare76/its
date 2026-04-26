@@ -21,6 +21,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { hotelGeoQuality } from "@/lib/hotel-geocoding";
+import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -296,7 +297,7 @@ export async function POST(request: NextRequest) {
     // ── 1. Carica dati ────────────────────────────────────────────────────────
 
     const [servicesRes, hotelsRes, vehiclesRes, membershipsRes, assignmentsRes, groupsRes,
-           hotelLimitsRes, driverAvailRes, vehicleAvailRes, vehicleBlocksRes, availabilityConfirmRes] =
+           hotelLimitsRes, driverAvailRes, vehicleAvailRes, vehicleBlocksRes, availabilityConfirmRes, commitments] =
       await Promise.all([
         auth.admin.from("services")
           .select("id, time, direction, vessel, hotel_id, pax, status, meeting_point, pickup_hotel")
@@ -336,6 +337,7 @@ export async function POST(request: NextRequest) {
           .select("confirmed")
           .eq("tenant_id", tenantId).eq("date", date)
           .maybeSingle(),
+        loadVehicleCommitmentsForDate(auth.admin, tenantId, date),
       ]);
 
     if (servicesRes.error || hotelsRes.error)
@@ -368,6 +370,9 @@ export async function POST(request: NextRequest) {
     const vehicleAvailByIdMap = new Map(
       (vehicleAvailRes.data ?? []).map((v) => [v.vehicle_id as string, v.available as boolean])
     );
+    for (const vehicleId of commitments.byVehicleId.keys()) {
+      vehicleAvailByIdMap.set(vehicleId, false);
+    }
     // vehicle_id → blocchi orari
     const vehicleBlocksByIdMap = new Map<string, Array<{ block_from: string; block_to: string }>>();
     for (const b of vehicleBlocksRes.data ?? []) {

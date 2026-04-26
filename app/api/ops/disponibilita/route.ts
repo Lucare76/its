@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
 
 export const runtime = "nodejs";
 
@@ -61,7 +62,7 @@ export async function GET(req: NextRequest) {
 
     const date = req.nextUrl.searchParams.get("date")?.trim() || new Date().toISOString().slice(0, 10);
 
-    const [driversRes, vehiclesRes, driverAvailRes, vehicleAvailRes, blocksRes, confirmRes] =
+    const [driversRes, vehiclesRes, driverAvailRes, vehicleAvailRes, blocksRes, confirmRes, commitments] =
       await Promise.all([
         auth.admin.from("memberships")
           .select("user_id, full_name, max_vehicle_capacity")
@@ -91,6 +92,7 @@ export async function GET(req: NextRequest) {
           .eq("tenant_id", tenantId)
           .eq("date", date)
           .maybeSingle(),
+        loadVehicleCommitmentsForDate(auth.admin, tenantId, date),
       ]);
 
     return NextResponse.json({
@@ -101,6 +103,7 @@ export async function GET(req: NextRequest) {
       driver_availability: driverAvailRes.data ?? [],
       vehicle_availability: vehicleAvailRes.data ?? [],
       vehicle_blocks: blocksRes.data ?? [],
+      vehicle_commitments: commitments.rows,
       confirmed: confirmRes.data?.confirmed ?? false,
       confirmed_at: confirmRes.data?.confirmed_at ?? null,
     });
@@ -144,6 +147,16 @@ export async function POST(req: NextRequest) {
       const p = saveVehicleSchema.safeParse(body);
       if (!p.success) return NextResponse.json({ ok: false, error: p.error.issues[0]?.message }, { status: 400 });
       const d = p.data;
+      if (d.available) {
+        const { byVehicleId } = await loadVehicleCommitmentsForDate(auth.admin, tenantId, d.date);
+        const commitment = byVehicleId.get(d.vehicle_id);
+        if (commitment) {
+          return NextResponse.json({
+            ok: false,
+            error: `Mezzo impegnato per ${commitment.commitment_type}. Rimuovi prima l'impegno in Fleet Ops.`,
+          }, { status: 409 });
+        }
+      }
       const { error } = await auth.admin.from("vehicle_daily_availability").upsert({
         tenant_id: tenantId,
         vehicle_id: d.vehicle_id,

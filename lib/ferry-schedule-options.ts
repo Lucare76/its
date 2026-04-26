@@ -1,4 +1,5 @@
 export interface FerryScheduleRow {
+  id?: string;
   company: string;
   departure_port: string;
   arrival_port: string;
@@ -14,8 +15,47 @@ export interface FerryScheduleOption {
   porto: string;
 }
 
+export interface FerryArrivalMatch {
+  departureTime: string;
+  arrivalTime: string;
+  arrivalPort: string;
+  company: string;
+}
+
 function normalizeTime(value: string): string {
   return value.slice(0, 5);
+}
+
+function addMinutesToTime(rawTime: string, minutesToAdd: number): string {
+  const [hoursRaw = "0", minutesRaw = "0"] = normalizeTime(rawTime).split(":");
+  const totalMinutes = Number(hoursRaw) * 60 + Number(minutesRaw) + minutesToAdd;
+  const hours = Math.floor((((totalMinutes % 1440) + 1440) % 1440) / 60);
+  const minutes = (((totalMinutes % 1440) + 1440) % 1440) % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function inferArrivalDurationMinutes(row: FerryScheduleRow): number | null {
+  if (row.company === "snav") return 65;
+  if (row.company === "medmar" && row.departure_port === "napoli_beverello") return 90;
+  if (row.company === "medmar" && row.departure_port === "pozzuoli") return 60;
+  if (row.company === "alilauro") return 70;
+  return null;
+}
+
+function bookingKindToScheduleFilter(bookingKind: string | null): {
+  company?: string;
+  departurePort?: string;
+} {
+  switch (bookingKind) {
+    case "formula_snav":
+      return { company: "snav", departurePort: "napoli_beverello" };
+    case "formula_medmar_napoli":
+      return { company: "medmar", departurePort: "napoli_beverello" };
+    case "formula_medmar_pozzuoli":
+      return { company: "medmar", departurePort: "pozzuoli" };
+    default:
+      return {};
+  }
 }
 
 export function ferryPortLabel(port: string): string {
@@ -71,4 +111,31 @@ export function buildFerryScheduleOptions(
       time: normalizeTime(row.departure_time),
       porto: direction === "mainland_to_ischia" ? row.arrival_port : row.departure_port,
     }));
+}
+
+export function findArrivalScheduleForService(
+  rows: FerryScheduleRow[],
+  isoDate: string,
+  depTime: string | null,
+  bookingKind: string | null
+): FerryArrivalMatch | null {
+  if (!depTime) return null;
+  const filter = bookingKindToScheduleFilter(bookingKind);
+  const time = normalizeTime(depTime);
+  const match = rows.find((row) => {
+    if (row.direction !== "mainland_to_ischia") return false;
+    if (filter.company && row.company !== filter.company) return false;
+    if (filter.departurePort && row.departure_port !== filter.departurePort) return false;
+    if (normalizeTime(row.departure_time) !== time) return false;
+    return isScheduleActiveOnDate(row, isoDate);
+  });
+  if (!match) return null;
+  const durationMinutes = inferArrivalDurationMinutes(match);
+  if (durationMinutes == null) return null;
+  return {
+    departureTime: time,
+    arrivalTime: addMinutesToTime(time, durationMinutes),
+    arrivalPort: match.arrival_port,
+    company: match.company,
+  };
 }

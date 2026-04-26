@@ -11,6 +11,7 @@ type Vehicle = { id: string; label: string; capacity: number | null; vehicle_siz
 type DriverAvail = { driver_user_id: string; available: boolean; available_from: string | null; available_to: string | null; notes: string | null };
 type VehicleAvail = { vehicle_id: string; available: boolean; notes: string | null };
 type TimeBlock = { id: string; vehicle_id: string; block_from: string; block_to: string; reason: string; reason_notes: string | null };
+type VehicleCommitment = { id: string; vehicle_id: string; commitment_date: string; commitment_type: string; notes: string | null };
 
 const BLOCK_REASONS: Record<string, string> = {
   escursione:              "Escursione",
@@ -19,6 +20,12 @@ const BLOCK_REASONS: Record<string, string> = {
   rientro_porto_ischia:    "Rientro porto Ischia",
   rientro_porto_casamicciola: "Rientro porto Casamicciola",
   altro:                   "Altro",
+};
+const COMMITMENT_LABELS: Record<string, string> = {
+  collaudo: "Collaudo",
+  officina: "Officina",
+  fermo_amministrativo: "Fermo amministrativo",
+  altro: "Altro",
 };
 
 function todayIso() { return new Date().toISOString().slice(0, 10); }
@@ -48,6 +55,7 @@ export default function DisponibilitaPage() {
   const [driverAvail, setDriverAvail] = useState<Map<string, DriverAvail>>(new Map());
   const [vehicleAvail, setVehicleAvail] = useState<Map<string, VehicleAvail>>(new Map());
   const [blocks, setBlocks] = useState<TimeBlock[]>([]);
+  const [commitments, setCommitments] = useState<VehicleCommitment[]>([]);
   const [confirmed, setConfirmed] = useState(false);
   const [confirmedAt, setConfirmedAt] = useState<string | null>(null);
 
@@ -74,6 +82,7 @@ export default function DisponibilitaPage() {
         drivers: Driver[]; vehicles: Vehicle[];
         driver_availability: DriverAvail[]; vehicle_availability: VehicleAvail[];
         vehicle_blocks: TimeBlock[];
+        vehicle_commitments: VehicleCommitment[];
         confirmed: boolean; confirmed_at: string | null;
       };
       if (!body.ok) { setError(body.error ?? "Errore"); return; }
@@ -82,6 +91,7 @@ export default function DisponibilitaPage() {
       setDriverAvail(new Map(body.driver_availability.map(a => [a.driver_user_id, a])));
       setVehicleAvail(new Map(body.vehicle_availability.map(a => [a.vehicle_id, a])));
       setBlocks(body.vehicle_blocks);
+      setCommitments(body.vehicle_commitments ?? []);
       setConfirmed(body.confirmed);
       setConfirmedAt(body.confirmed_at);
     } finally {
@@ -168,7 +178,8 @@ export default function DisponibilitaPage() {
   };
 
   const availableDrivers = drivers.filter(d => driverAvail.get(d.user_id)?.available !== false).length;
-  const availableVehicles = vehicles.filter(v => vehicleAvail.get(v.id)?.available !== false).length;
+  const commitmentByVehicleId = new Map(commitments.map((item) => [item.vehicle_id, item]));
+  const availableVehicles = vehicles.filter(v => vehicleAvail.get(v.id)?.available !== false && !commitmentByVehicleId.has(v.id)).length;
 
   return (
     <section className="mx-auto max-w-6xl page-section">
@@ -299,14 +310,15 @@ export default function DisponibilitaPage() {
               <div className="card p-4 text-sm text-slate-400">Nessun mezzo trovato.</div>
             ) : vehicles.map(vehicle => {
               const avail = vehicleAvail.get(vehicle.id);
-              const isAvailable = avail?.available !== false;
+              const commitment = commitmentByVehicleId.get(vehicle.id);
+              const isAvailable = avail?.available !== false && !commitment;
               const vehicleBlocks = blocks.filter(b => b.vehicle_id === vehicle.id);
               return (
                 <div key={vehicle.id} className={`card p-3 transition ${isAvailable ? "" : "opacity-60 bg-slate-50"}`}>
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      disabled={saving === vehicle.id}
+                      disabled={saving === vehicle.id || Boolean(commitment)}
                       onClick={() => void toggleVehicle(vehicle.id, isAvailable)}
                       className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${isAvailable ? "bg-emerald-500" : "bg-slate-300"}`}
                     >
@@ -315,6 +327,12 @@ export default function DisponibilitaPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-slate-800">{vehicle.label}</p>
                       {vehicle.capacity ? <p className="text-xs text-slate-500">{vehicle.capacity} posti</p> : null}
+                      {commitment ? (
+                        <p className="mt-1 text-xs font-semibold text-rose-700">
+                          Impegno: {COMMITMENT_LABELS[commitment.commitment_type] ?? commitment.commitment_type}
+                          {commitment.notes ? ` · ${commitment.notes}` : ""}
+                        </p>
+                      ) : null}
                     </div>
                     {isAvailable ? (
                       <button

@@ -16,6 +16,7 @@ import {
   seedAvailabilityConfirmation,
   seedHotel,
   seedVehicle,
+  seedVehicleCommitment,
   seedDriver,
   seedService,
   type TestContext,
@@ -215,5 +216,50 @@ describe("auto-assign — partenze", () => {
     expect(res.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.assigned).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("auto-assign — impegni mezzi", () => {
+  it("non usa un mezzo impegnato nella data del piano", async () => {
+    const date = "2026-05-12";
+    await seedAvailabilityConfirmation(ctx.admin, ctx.tenantId, date, ctx.userId);
+    const hotelId = await seedHotel(ctx.admin, ctx.tenantId, {
+      name: "Hotel Commitment",
+      zone: "Ischia Porto",
+      lat: 40.7329,
+      lng: 13.9477,
+    });
+    const blockedVehicleId = await seedVehicle(ctx.admin, ctx.tenantId, { label: "Van Officina", capacity: 8 });
+    await seedVehicle(ctx.admin, ctx.tenantId, { label: "Van Libero", capacity: 8 });
+    await seedVehicleCommitment(ctx.admin, ctx.tenantId, blockedVehicleId, date, {
+      commitment_type: "officina",
+      notes: "Revisione freni",
+    });
+    await seedDriver(ctx.admin, ctx.tenantId, additionalUsers);
+    await seedService(ctx.admin, ctx.tenantId, hotelId, {
+      date,
+      time: "10:00",
+      direction: "arrival",
+      vessel: "SNAV Commitment",
+      pax: 4,
+      meeting_point: "Ischia Porto",
+    });
+
+    const req = makeNextRequest("POST", { date, mode: "unassigned_only" }, ctx.token);
+    const res = await POST(req);
+    const body = await json<{ ok: boolean; assigned: number }>(res);
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.assigned).toBeGreaterThanOrEqual(1);
+
+    const { data: groups } = await ctx.admin
+      .from("trip_groups")
+      .select("vehicle_label")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("date", date)
+      .eq("status", "active");
+
+    expect(groups?.some((group) => group.vehicle_label === "Van Officina")).toBe(false);
   });
 });

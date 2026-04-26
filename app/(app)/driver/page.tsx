@@ -6,7 +6,8 @@ import type { ServiceStatus } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
 import { usePwa } from "@/components/driver/PwaInit";
 import { DriverSign } from "@/components/driver/DriverSign";
-import { getFerryArrivalAtIschia } from "@/lib/snav-medmar-lookup";
+import type { FerryScheduleRow } from "@/lib/ferry-schedule-options";
+import { ferryPortLabel, findArrivalScheduleForService } from "@/lib/ferry-schedule-options";
 
 /* ------------------------------------------------------------------ offline queue */
 
@@ -47,12 +48,14 @@ type DriverService = {
 type DriverAssignment = { id: string; service_id: string; driver_user_id: string; vehicle_label: string };
 type DriverHotel = { id: string; name: string; zone: string | null; lat: number | null; lng: number | null };
 type DriverStatusEvent = { id: string; service_id: string; status: string; at: string };
+type DriverFerrySchedule = FerryScheduleRow;
 
 type DriverData = {
   services: DriverService[];
   assignments: DriverAssignment[];
   hotels: DriverHotel[];
   status_events: DriverStatusEvent[];
+  ferry_schedules: DriverFerrySchedule[];
 };
 
 /* ------------------------------------------------------------------ helpers */
@@ -196,7 +199,7 @@ function DriverPageInner() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [driverName, setDriverName] = useState("");
-  const [data, setData] = useState<DriverData>({ services: [], assignments: [], hotels: [], status_events: [] });
+  const [data, setData] = useState<DriverData>({ services: [], assignments: [], hotels: [], status_events: [], ferry_schedules: [] });
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -231,6 +234,7 @@ function DriverPageInner() {
       tenant_id?: string; user_id?: string;
       services?: DriverService[]; assignments?: DriverAssignment[];
       hotels?: DriverHotel[]; status_events?: DriverStatusEvent[];
+      ferry_schedules?: DriverFerrySchedule[];
     };
     if (!body.ok) { setErrorMessage(body.error ?? "Errore caricamento."); setLoading(false); return; }
     setTenantId(body.tenant_id ?? null);
@@ -240,6 +244,7 @@ function DriverPageInner() {
       assignments: body.assignments ?? [],
       hotels: body.hotels ?? [],
       status_events: body.status_events ?? [],
+      ferry_schedules: body.ferry_schedules ?? [],
     });
     setErrorMessage(null);
     setLoading(false);
@@ -384,6 +389,14 @@ function DriverPageInner() {
     ? calcDispoCost(dispoStartEvent.at, dispoEndEvent?.at ?? null, h24Rate, now)
     : null;
   const appOrigin = typeof window !== "undefined" ? window.location.origin : "https://ischiatransferservice.it";
+  const getArrivalSchedule = useCallback((service: DriverService) => {
+    return findArrivalScheduleForService(
+      data.ferry_schedules,
+      service.date,
+      service.time,
+      service.booking_service_kind
+    );
+  }, [data.ferry_schedules]);
   const focusedWhatsappUrl = focused && customerPhone
     ? buildWhatsAppUrl(
         customerPhone,
@@ -452,14 +465,14 @@ function DriverPageInner() {
       if (!af || !bf) return 0;
       if (af.date !== bf.date) return af.date.localeCompare(bf.date);
       const at = a.direction === "arrival"
-        ? (getFerryArrivalAtIschia(af.time, af.booking_service_kind) ?? af.time ?? "")
+        ? (getArrivalSchedule(af)?.arrivalTime ?? af.time ?? "")
         : (af.pickup_time ?? af.time ?? "");
       const bt = b.direction === "arrival"
-        ? (getFerryArrivalAtIschia(bf.time, bf.booking_service_kind) ?? bf.time ?? "")
+        ? (getArrivalSchedule(bf)?.arrivalTime ?? bf.time ?? "")
         : (bf.pickup_time ?? bf.time ?? "");
       return at.localeCompare(bt);
     });
-  }, [data.hotels]);
+  }, [data.hotels, getArrivalSchedule]);
 
   const getGroupEntries = useCallback((group: ServiceGroup, tabKey: string) => {
     const customIds = groupEntryOrder[`${tabKey}|${group.key}`];
@@ -935,7 +948,7 @@ function DriverPageInner() {
                             const first = group.entries[0]?.service;
                             if (!first) return null;
                             const t = group.direction === "arrival"
-                              ? (getFerryArrivalAtIschia(first.time, first.booking_service_kind) ?? first.time?.slice(0,5))
+                              ? (getArrivalSchedule(first)?.arrivalTime ?? first.time?.slice(0,5))
                               : (first.pickup_time?.slice(0,5) ?? first.time?.slice(0,5));
                             return t ? <span className="shrink-0 text-sm font-bold text-slate-900">{t}</span> : null;
                           })()}
@@ -1026,7 +1039,7 @@ function DriverPageInner() {
                             const first = group.entries[0]?.service;
                             if (!first) return null;
                             const t = group.direction === "arrival"
-                              ? (getFerryArrivalAtIschia(first.time, first.booking_service_kind) ?? first.time?.slice(0,5))
+                              ? (getArrivalSchedule(first)?.arrivalTime ?? first.time?.slice(0,5))
                               : (first.pickup_time?.slice(0,5) ?? first.time?.slice(0,5));
                             return t ? <span className="shrink-0 text-sm font-bold text-slate-900">{t}</span> : null;
                           })()}
@@ -1058,7 +1071,7 @@ function DriverPageInner() {
                                   <span className="text-xs text-slate-500">
                                     {formatDateLabel(entry.service.date)}{" "}
                                     {entry.service.direction !== "departure"
-                                      ? (getFerryArrivalAtIschia(entry.service.time, entry.service.booking_service_kind) ?? entry.service.time?.slice(0,5))
+                                      ? (getArrivalSchedule(entry.service)?.arrivalTime ?? entry.service.time?.slice(0,5))
                                       : entry.service.time?.slice(0,5)}
                                   </span>
                                 </div>
@@ -1071,11 +1084,15 @@ function DriverPageInner() {
                                   <>
                                     <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
                                     {(() => {
-                                      const arrIschia = getFerryArrivalAtIschia(entry.service.time, entry.service.booking_service_kind);
+                                      const arrivalSchedule = getArrivalSchedule(entry.service);
+                                      const arrIschia = arrivalSchedule?.arrivalTime ?? null;
+                                      const arrivalPort = arrivalSchedule?.arrivalPort
+                                        ? ferryPortLabel(arrivalSchedule.arrivalPort)
+                                        : entry.service.meeting_point;
                                       return (
                                         <>
                                           <p className="text-sm font-bold text-emerald-700 mt-0.5">
-                                            ⚓ {entry.service.meeting_point ?? "Porto N/D"}{arrIschia ? ` · arr. ${arrIschia}` : ""}
+                                            ⚓ {arrivalPort ?? "Porto N/D"}{arrIschia ? ` · arr. ${arrIschia}` : ""}
                                           </p>
                                           {arrIschia && <p className="text-xs text-slate-400">partenza continente {entry.service.time?.slice(0,5)}</p>}
                                         </>

@@ -59,6 +59,10 @@ export async function createTestContext(): Promise<TestContext> {
     // → pricing_rules → price_lists → vehicles/hotels/routes/agency_aliases/agencies → memberships → tenants → user
     await admin.from("inbound_booking_imports").delete().eq("tenant_id", tenantId);
     await admin.from("daily_availability_confirmations").delete().eq("tenant_id", tenantId);
+    await admin.from("vehicle_commitments").delete().eq("tenant_id", tenantId);
+    await admin.from("vehicle_time_blocks").delete().eq("tenant_id", tenantId);
+    await admin.from("vehicle_daily_availability").delete().eq("tenant_id", tenantId);
+    await admin.from("driver_daily_availability").delete().eq("tenant_id", tenantId);
     await admin.from("assignments").delete().eq("tenant_id", tenantId);
     await admin.from("trip_groups").delete().eq("tenant_id", tenantId);
     await admin.from("status_events").delete().eq("tenant_id", tenantId);
@@ -289,4 +293,25 @@ export async function seedAvailabilityConfirmation(
     confirmed_by: confirmedBy,
   }, { onConflict: "tenant_id,date" });
   if (error) throw new Error(`seedAvailabilityConfirmation: ${error.message}`);
+}
+
+export async function seedVehicleCommitment(
+  admin: SupabaseClient,
+  tenantId: string,
+  vehicleId: string,
+  date: string,
+  overrides: Record<string, unknown> = {}
+): Promise<string> {
+  const id = randomUUID();
+  const { error } = await admin.from("vehicle_commitments").insert({
+    id,
+    tenant_id: tenantId,
+    vehicle_id: vehicleId,
+    commitment_date: date,
+    commitment_type: "officina",
+    notes: "Test impegno",
+    ...overrides,
+  });
+  if (error) throw new Error(`seedVehicleCommitment: ${error.message}`);
+  return id;
 }

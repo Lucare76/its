@@ -18,6 +18,9 @@ export const revalidate = 0;
 const DRIVER_SERVICE_SELECT =
   "id,tenant_id,date,time,service_type,direction,vessel,pax,hotel_id,customer_name,phone,notes,status,meeting_point,pickup_time,linked_service_id,booking_service_kind";
 
+const FERRY_SCHEDULE_SELECT =
+  "id,company,departure_port,arrival_port,departure_time,direction,days_of_week,valid_from,valid_to";
+
 type DriverServiceRow = {
   id: string;
   tenant_id: string;
@@ -85,6 +88,7 @@ export async function GET(request: NextRequest) {
         services: [],
         status_events: [],
         hotels: hotels ?? [],
+        ferry_schedules: [],
       });
     }
 
@@ -95,7 +99,7 @@ export async function GET(request: NextRequest) {
     cutoff.setDate(cutoff.getDate() - 60);
     const cutoffIso = cutoff.toISOString().slice(0, 10);
 
-    const [servicesResult, statusEventsResult, hotelsResult] = await Promise.all([
+    const [servicesResult, statusEventsResult, hotelsResult, ferrySchedulesResult] = await Promise.all([
       auth.admin
         .from("services")
         .select(DRIVER_SERVICE_SELECT)
@@ -111,9 +115,13 @@ export async function GET(request: NextRequest) {
         .from("hotels")
         .select("id, name, zone, lat, lng")
         .eq("tenant_id", tenantId),
+      auth.admin
+        .from("ferry_schedules")
+        .select(FERRY_SCHEDULE_SELECT),
     ]);
 
     if (servicesResult.error) throw new Error(servicesResult.error.message);
+    if (ferrySchedulesResult.error) throw new Error(ferrySchedulesResult.error.message);
 
     // 3. Carica anche i servizi linkati (tratta A/R) non direttamente assegnati
     //    per permettere all'autista di vedere entrambe le tratte in contesto
@@ -141,6 +149,7 @@ export async function GET(request: NextRequest) {
       services: [...services, ...linkedServices],
       status_events: statusEventsResult.data ?? [],
       hotels: hotelsResult.data ?? [],
+      ferry_schedules: ferrySchedulesResult.data ?? [],
     });
   } catch (error) {
     return jsonNoStore(

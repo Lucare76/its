@@ -4,6 +4,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
 
 export const runtime = "nodejs";
 
@@ -70,6 +71,7 @@ export async function GET(request: NextRequest) {
       membershipsResult,
       vehiclesResult,
       ferryResult,
+      commitments,
     ] = await Promise.all([
       todayGroupIds.length > 0
         ? auth.admin
@@ -103,6 +105,7 @@ export async function GET(request: NextRequest) {
         .select("id, company, departure_port, arrival_port, departure_time, direction, days_of_week, valid_from, valid_to, notes")
         .eq("direction", "mainland_to_ischia")
         .order("departure_time"),
+      loadVehicleCommitmentsForDate(auth.admin, tenantId, date),
     ]);
 
     const error =
@@ -114,6 +117,7 @@ export async function GET(request: NextRequest) {
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
     const dayAssignments = assignmentsResult.data ?? [];
+    const committedVehicleIds = new Set(commitments.rows.map((row) => row.vehicle_id));
     const ferrySchedules = ((ferryResult.data ?? []) as FerryScheduleRow[]).filter((schedule) => {
       if (schedule.valid_from && schedule.valid_from > date) return false;
       if (schedule.valid_to && schedule.valid_to < date) return false;
@@ -131,7 +135,8 @@ export async function GET(request: NextRequest) {
       assignments: dayAssignments,
       hotels: hotelsResult.data ?? [],
       memberships: membershipsResult.data ?? [],
-      vehicles: vehiclesResult.data ?? [],
+      vehicles: (vehiclesResult.data ?? []).filter((vehicle) => !committedVehicleIds.has(vehicle.id as string)),
+      vehicle_commitments: commitments.rows,
       ferry_schedules: ferrySchedules,
     });
   } catch (err) {
