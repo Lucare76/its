@@ -89,7 +89,7 @@ export async function GET(request: NextRequest) {
       { status: 200 }
     );
   } catch (error) {
-    console.error("Onboarding tenant GET error", error);
+    console.error("Onboarding tenant GET error", error instanceof Error ? error.message : String(error));
     return NextResponse.json({ error: "Errore interno server." }, { status: 500 });
   }
 }
@@ -176,7 +176,7 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     );
   } catch (error) {
-    console.error("Onboarding tenant POST error", error);
+    console.error("Onboarding tenant POST error", error instanceof Error ? error.message : String(error));
     return NextResponse.json({ error: "Errore interno server." }, { status: 500 });
   }
 }

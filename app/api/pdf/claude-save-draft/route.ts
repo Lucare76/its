@@ -516,7 +516,6 @@ export async function POST(request: NextRequest) {
   // ── Auto-allocazione bus ──────────────────────────────────────────────────
   let autoAllocResult: { allocated: boolean; unit_label?: string; reason?: string } = { allocated: false };
   if (bookingKind === "bus_city_hotel" && busFamilyCode && canonicalBusCity) {
-    console.log("[auto-alloc] Avvio allocazione bus:", { busFamilyCode, canonicalBusCity, passengers, arrivalDate, departureDate });
     autoAllocResult = await tryAutoAllocateBus(
       auth.admin,
       tenantId,
@@ -528,9 +527,7 @@ export async function POST(request: NextRequest) {
       departureDate,
       userId
     ).catch((err) => ({ allocated: false, reason: String(err?.message ?? err) }));
-    console.log("[auto-alloc] Risultato:", autoAllocResult);
   } else {
-    console.log("[auto-alloc] Skip — bookingKind:", bookingKind, "busFamilyCode:", busFamilyCode, "canonicalBusCity:", canonicalBusCity);
   }
 
   return NextResponse.json({

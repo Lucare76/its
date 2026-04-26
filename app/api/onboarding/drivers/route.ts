@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ created, failed }, { status: 200 });
   } catch (error) {
-    console.error("Onboarding drivers POST error", error);
+    console.error("Onboarding drivers POST error", error instanceof Error ? error.message : String(error));
     return NextResponse.json({ error: "Errore interno server." }, { status: 500 });
   }
 }

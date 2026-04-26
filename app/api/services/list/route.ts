@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ services: services ?? [] });
   } catch (error) {
-    console.error("Services list endpoint unexpected error", error);
+    console.error("Services list endpoint unexpected error", error instanceof Error ? error.message : String(error));
     return NextResponse.json({ error: "Errore interno server." }, { status: 500 });
   }
 }

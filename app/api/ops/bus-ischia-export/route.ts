@@ -131,7 +131,7 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("bus-ischia-export error", error);
+    console.error("bus-ischia-export error", error instanceof Error ? error.message : String(error));
     return NextResponse.json({ error: "Errore generazione export." }, { status: 500 });
   }
 }
