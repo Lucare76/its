@@ -3,6 +3,7 @@
 .env
 .env*.local
 supabase/env.txt
+supabase/.temp/
 .next
 node_modules
 playwright-report
