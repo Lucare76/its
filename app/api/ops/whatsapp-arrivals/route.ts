@@ -4,8 +4,15 @@ import { createAdminClient, getTenantWhatsAppSettings, logWhatsAppEvent, sendWha
 
 export const runtime = "nodejs";
 
-function minutesUntilArrival(date: string, time: string) {
-  const target = new Date(`${date}T${time.slice(0, 5)}:00`);
+function normalizeTime(value: string | null | undefined) {
+  if (typeof value !== "string") return "00:00";
+  const trimmed = value.trim();
+  if (!trimmed) return "00:00";
+  return trimmed.length >= 5 ? trimmed.slice(0, 5) : trimmed;
+}
+
+function minutesUntilArrival(date: string, time: string | null | undefined) {
+  const target = new Date(`${date}T${normalizeTime(time)}:00`);
   return Math.round((target.getTime() - Date.now()) / 60000);
 }
 
@@ -34,8 +41,9 @@ export async function GET(request: NextRequest) {
         arrival_template: settings.arrival_template,
         arrival_notice_minutes: settings.arrival_notice_minutes
       },
-      candidates: (data ?? []).map((service: { id: string; customer_name: string; date: string; time: string; phone: string | null; phone_e164: string | null; meeting_point: string | null; vessel: string | null }) => ({
+      candidates: (data ?? []).map((service: { id: string; customer_name: string; date: string; time: string | null; phone: string | null; phone_e164: string | null; meeting_point: string | null; vessel: string | null }) => ({
         ...service,
+        time: normalizeTime(service.time),
         minutes_to_arrival: minutesUntilArrival(service.date, service.time),
         has_phone: Boolean(service.phone_e164 || service.phone)
       }))
@@ -69,7 +77,7 @@ export async function POST(request: NextRequest) {
       template: settings.arrival_template,
       variables: {
         name: service.customer_name,
-        time: service.time.slice(0, 5),
+        time: normalizeTime(service.time),
         meeting_point: service.meeting_point ?? "",
         vessel: service.vessel ?? ""
       }

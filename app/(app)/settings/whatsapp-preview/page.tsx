@@ -227,8 +227,6 @@ function WaText({ text }: { text: string }) {
 
 // ── Bubble WhatsApp ───────────────────────────────────────────────────────────
 function WaBubble({ t }: { t: Template }) {
-  const appUrl = typeof window !== "undefined" ? window.location.origin : "https://app.ischiatransferservice.it";
-
   return (
     <div className="bg-[#e5ddd5] rounded-2xl p-4">
       <div className="flex justify-end">
@@ -237,7 +235,7 @@ function WaBubble({ t }: { t: Template }) {
           {t.hasQr && (
             <div className="rounded-t-2xl overflow-hidden bg-white shadow-sm">
               <Image
-                src={`${appUrl}/api/public/qr/${SAMPLE.serviceId}`}
+                src={`/api/public/qr/${SAMPLE.serviceId}`}
                 alt="QR Code"
                 width={160}
                 height={160}

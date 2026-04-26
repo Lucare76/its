@@ -34,6 +34,7 @@ export async function generateMetadata({ params }: ShareServicePageProps): Promi
   const service = await getSharedServiceByToken(token);
   const base = await appBaseUrl();
   const url = `${base}/share/service/${token}`;
+  const ogImageUrl = `${base}/share/service/${token}/opengraph-image?v=qr-preview-v1`;
 
   if (!service) {
     return {
@@ -44,13 +45,13 @@ export async function generateMetadata({ params }: ShareServicePageProps): Promi
         description: "Questo link non e valido o e scaduto.",
         url,
         type: "website",
-        images: [`${base}/share/service/${token}/opengraph-image`]
+        images: [ogImageUrl]
       },
       twitter: {
         card: "summary_large_image",
         title: "Link non disponibile | Ischia Transfer",
         description: "Questo link non e valido o e scaduto.",
-        images: [`${base}/share/service/${token}/opengraph-image`]
+        images: [ogImageUrl]
       }
     };
   }
@@ -67,13 +68,13 @@ export async function generateMetadata({ params }: ShareServicePageProps): Promi
       description,
       url,
       type: "website",
-      images: [`${base}/share/service/${token}/opengraph-image`]
+      images: [ogImageUrl]
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      images: [`${base}/share/service/${token}/opengraph-image`]
+      images: [ogImageUrl]
     }
   };
 }
@@ -129,4 +130,3 @@ export default async function ShareServicePage({ params }: ShareServicePageProps
     </section>
   );
 }
-
