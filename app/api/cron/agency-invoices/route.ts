@@ -130,7 +130,7 @@ export async function POST(request: NextRequest) {
         .select("id")
         .single();
 
-      const invoiceId = (invoice as any)?.id ?? "N/D";
+      const invoiceId = invoice?.id ?? "N/D";
 
       const html = generateInvoiceHtml({
         agencyName: agency.name,

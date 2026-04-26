@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { buildPdfImportDetail } from "@/lib/server/pdf-imports";
+import { buildPdfImportDetail, type InboundRow, type ServiceRow, type StatusEventRow } from "@/lib/server/pdf-imports";
 
 export const runtime = "nodejs";
 
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ ok: false, error: inboundError.message }, { status: 500 });
     }
 
-    const pdfInboundRows = ((inboundRows ?? []) as Array<Record<string, any>>).filter((row) => Boolean(row.parsed_json?.pdf_import));
+    const pdfInboundRows = ((inboundRows ?? []) as InboundRow[]).filter((row) => Boolean(row.parsed_json?.pdf_import));
     const { data: serviceRows } = await auth.admin
       .from("services")
       .select("id, inbound_email_id, is_draft, status, customer_name, billing_party_name, phone, date, time, notes, created_at, hotels(name)")
@@ -27,8 +27,8 @@ export async function GET(request: NextRequest) {
       .order("created_at", { ascending: false })
       .limit(500);
 
-    const serviceByInbound = new Map<string, Record<string, any>>();
-    for (const service of (serviceRows ?? []) as Array<Record<string, any>>) {
+    const serviceByInbound = new Map<string, ServiceRow>();
+    for (const service of (serviceRows ?? []) as ServiceRow[]) {
       const inboundEmailId = String(service.inbound_email_id ?? "");
       if (!inboundEmailId || serviceByInbound.has(inboundEmailId)) continue;
       serviceByInbound.set(inboundEmailId, service);
@@ -44,8 +44,8 @@ export async function GET(request: NextRequest) {
           .order("at", { ascending: false })
       : { data: [] };
 
-    const eventsByServiceId = new Map<string, Array<Record<string, any>>>();
-    for (const item of (statusRows ?? []) as Array<Record<string, any>>) {
+    const eventsByServiceId = new Map<string, StatusEventRow[]>();
+    for (const item of (statusRows ?? []) as StatusEventRow[]) {
       const key = String(item.service_id);
       const current = eventsByServiceId.get(key) ?? [];
       current.push(item);
@@ -54,9 +54,9 @@ export async function GET(request: NextRequest) {
 
     const rows = pdfInboundRows.map((row) =>
       buildPdfImportDetail(
-        row as any,
-        (serviceByInbound.get(String(row.id)) as any) ?? null,
-        (eventsByServiceId.get(String(serviceByInbound.get(String(row.id))?.id ?? "")) as any) ?? []
+        row,
+        serviceByInbound.get(String(row.id)) ?? null,
+        eventsByServiceId.get(String(serviceByInbound.get(String(row.id))?.id ?? "")) ?? []
       )
     );
 

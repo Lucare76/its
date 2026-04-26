@@ -1,4 +1,4 @@
-type InboundRow = {
+export type InboundRow = {
   id: string;
   tenant_id: string;
   from_email: string | null;
@@ -8,7 +8,7 @@ type InboundRow = {
   created_at: string;
 };
 
-type ServiceRow = {
+export type ServiceRow = {
   id: string;
   inbound_email_id: string | null;
   is_draft: boolean;
@@ -23,7 +23,7 @@ type ServiceRow = {
   hotels?: { name?: string | null } | Array<{ name?: string | null }> | null;
 };
 
-type StatusEventRow = {
+export type StatusEventRow = {
   id: string;
   service_id: string;
   status: string;

@@ -384,7 +384,7 @@ export async function POST(request: NextRequest) {
               stop_name: stop.stop_name,
               city: stop.city,
               pickup_note: stop.pickup_note,
-              pickup_time: (stop as any).pickup_time ?? null,
+              pickup_time: stop.pickup_time ?? null,
               stop_order: stop.stop_order,
               order_index: stop.stop_order,
               lat: stop.lat,

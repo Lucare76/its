@@ -23,6 +23,7 @@ export type BusNetworkStop = {
   stop_name: string;
   city: string;
   pickup_note: string | null;
+  pickup_time?: string | null;
   stop_order: number;
   lat: number | null;
   lng: number | null;

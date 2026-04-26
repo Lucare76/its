@@ -38,7 +38,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invito non trovato o scaduto" }, { status: 404 });
   }
 
-  const invite = inviteLookup.data as any;
+  type InviteRow = { id: string; expires_at: string; email: string; full_name?: string | null; tenant_id: string; agency_id?: string | null; role: string };
+  const invite = inviteLookup.data as InviteRow;
 
   // Check if expired
   if (new Date(invite.expires_at) < new Date()) {
