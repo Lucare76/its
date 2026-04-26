@@ -4,24 +4,16 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createAdminClient } from "@/lib/server/whatsapp";
 
 export const runtime = "nodejs";
-
-function makeAdmin() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
-  if (!url || !key) return null;
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-}
 
 export async function GET(req: NextRequest) {
   try {
     const token = req.nextUrl.searchParams.get("token")?.trim();
     if (!token) return NextResponse.json({ ok: false, error: "Token mancante." }, { status: 400 });
 
-    const admin = makeAdmin();
-    if (!admin) return NextResponse.json({ ok: false, error: "Configurazione server mancante." }, { status: 500 });
+    const admin = createAdminClient();
 
     const { data: cr } = await admin
       .from("cancellation_requests")

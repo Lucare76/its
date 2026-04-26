@@ -20,6 +20,7 @@ const patchSchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
+  try {
   // Solo admin (supervisor auto-aggiunto dal wrapper, operator escluso)
   const auth = await authorizePricingRequest(request, ["admin"]);
   if (auth instanceof NextResponse) return auth;
@@ -32,9 +33,13 @@ export async function GET(request: NextRequest) {
 
   if (error || !data) return NextResponse.json({ error: "Tenant non trovato." }, { status: 404 });
   return NextResponse.json(data);
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
 
 export async function PATCH(request: NextRequest) {
+  try {
   const auth = await authorizePricingRequest(request, ["admin"]);
   if (auth instanceof NextResponse) return auth;
 
@@ -53,4 +58,7 @@ export async function PATCH(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }

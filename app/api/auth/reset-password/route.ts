@@ -1,11 +1,16 @@
 import { randomBytes } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { isDisposableEmail, hasDeliverableEmailDomain } from "@/lib/email-validation";
 import { sendTemporaryPasswordEmail } from "@/lib/server/password-reset-email";
 import { checkRateLimit, RATE_LIMIT_DEFAULTS, type RateLimitConfig } from "@/lib/server/rate-limit";
 import { sendSecurityAlert } from "@/lib/server/security-alert-email";
 import { adminGetUserByEmail } from "@/lib/server/admin-user-lookup";
+
+const bodySchema = z.object({
+  email: z.string().email("Email non valida"),
+});
 
 function generateTemporaryPassword(length = 12) {
   const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
@@ -16,15 +21,11 @@ function generateTemporaryPassword(length = 12) {
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
-  const body = await request.json().catch(() => null);
-  if (!body || typeof body.email !== "string") {
-    return NextResponse.json({ error: "Email richiesta" }, { status: 400 });
+  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Email non valida." }, { status: 400 });
   }
-
-  const email = body.email.trim().toLowerCase();
-  if (!email.match(/^[^@\s]+@[^@\s]+\.[^@\s]+$/)) {
-    return NextResponse.json({ error: "Email non valida" }, { status: 400 });
-  }
+  const email = parsed.data.email.trim().toLowerCase();
 
   // Rate limiting by email
   const ipAddress = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown";
@@ -106,7 +107,7 @@ export async function POST(request: NextRequest) {
 
   const sendResult = await sendTemporaryPasswordEmail({
     to: email,
-    fullName: (existingUser.user_metadata as any)?.full_name ?? email,
+    fullName: (existingUser.user_metadata as { full_name?: string } | null)?.full_name ?? email,
     tempPassword: temporaryPassword
   });
 

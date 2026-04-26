@@ -14,6 +14,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
+  try {
   const auth = await authorizePricingRequest(request, ["admin", "operator"]);
   if (auth instanceof NextResponse) return auth;
 
@@ -53,9 +54,13 @@ export async function GET(request: NextRequest) {
   }));
 
   return NextResponse.json({ reports: enriched, vehicles });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
 
 export async function POST(request: NextRequest) {
+  try {
   const auth = await authorizePricingRequest(request, ["admin", "operator"]);
   if (auth instanceof NextResponse) return auth;
 
@@ -100,4 +105,7 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ error: "Azione non riconosciuta." }, { status: 400 });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }

@@ -13,7 +13,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createClient } from "@supabase/supabase-js";
+import { type SupabaseClient } from "@supabase/supabase-js";
+import { createAdminClient } from "@/lib/server/whatsapp";
 import { sendEmail } from "@/lib/server/send-email";
 import { emailHtml } from "@/lib/server/email-layout";
 import { escapeHtml } from "@/lib/server/escape-html";
@@ -27,13 +28,6 @@ const bodySchema = z.object({
   note:          z.string().max(500).optional(),
 });
 
-function makeAdmin() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
-  if (!url || !key) return null;
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-}
-
 function formatEur(cents: number) {
   return (cents / 100).toLocaleString("it-IT", { style: "currency", currency: "EUR" });
 }
@@ -44,8 +38,7 @@ function formatDate(iso: string): string {
 
 export async function POST(req: NextRequest) {
   try {
-    const admin = makeAdmin();
-    if (!admin) return NextResponse.json({ error: "Configurazione server mancante." }, { status: 500 });
+    const admin = createAdminClient();
 
     const raw = await req.json().catch(() => null);
     const parsed = bodySchema.safeParse(raw);
@@ -184,7 +177,7 @@ export async function POST(req: NextRequest) {
 
 // ── Applica cancellazione finale ──────────────────────────────────────────────
 async function applyFinalCancellation(
-  admin: any,
+  admin: SupabaseClient,
   tenantId: string,
   cr: Record<string, unknown>,
   svc: Record<string, unknown>,

@@ -9,6 +9,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
+  try {
   const auth = await authorizePricingRequest(request, ["admin", "operator"]);
   if (auth instanceof NextResponse) return auth;
 
@@ -29,4 +30,7 @@ export async function GET(request: NextRequest) {
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ sessions: data ?? [] });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }

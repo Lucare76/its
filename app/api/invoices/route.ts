@@ -7,21 +7,39 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { generateInvoiceHtml, type InvoiceLineItem } from "@/lib/server/invoice-pdf";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
+
+type ServiceRow = {
+  id: string;
+  date: string | null;
+  time: string | null;
+  customer_name: string | null;
+  customer_first_name: string | null;
+  customer_last_name: string | null;
+  billing_party_name: string | null;
+  booking_service_kind: string | null;
+  service_type: string | null;
+  notes: string | null;
+  source_total_amount_cents: number | null;
+  pax: number | null;
+};
 
 // ─── GET ────────────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
+  try {
   const auth = await authorizePricingRequest(request, ["admin", "operator"]);
   if (auth instanceof NextResponse) return auth;
 
+  const admin = auth.admin as SupabaseClient;
   const tenantId = auth.membership.tenant_id;
   const url = new URL(request.url);
   const agencyId = url.searchParams.get("agency_id");
   const status = url.searchParams.get("status");
 
-  let query = (auth.admin as any)
+  let query = admin
     .from("agency_invoices")
     .select("*")
     .eq("tenant_id", tenantId)
@@ -34,6 +52,9 @@ export async function GET(request: NextRequest) {
   const { data, error } = await query;
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true, invoices: data ?? [] });
+  } catch (err) {
+    return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -44,11 +65,11 @@ export async function GET(request: NextRequest) {
  * O se il billing_party_name contiene il nome agenzia (es. "SOSANDRA" ↔ "SOSANDRA TOUR BY ROSSELLA…").
  */
 async function resolveBillingNames(
-  admin: ReturnType<typeof import("@supabase/supabase-js").createClient>,
+  admin: SupabaseClient,
   tenantId: string,
   agencyName: string
 ): Promise<string[]> {
-  const { data } = await (admin as any)
+  const { data } = await admin
     .from("services")
     .select("billing_party_name")
     .eq("tenant_id", tenantId)
@@ -74,9 +95,11 @@ async function resolveBillingNames(
 // ─── POST ───────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
+  try {
   const auth = await authorizePricingRequest(request, ["admin", "operator"]);
   if (auth instanceof NextResponse) return auth;
 
+  const admin = auth.admin as SupabaseClient;
   const tenantId = auth.membership.tenant_id;
 
   let body: { agency_id?: string; agency_name?: string; period_from?: string; period_to?: string; send?: boolean };
@@ -89,7 +112,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Recupera agenzia — email priorità: booking > contact > invoice
-  const { data: agencyRow } = await (auth.admin as any)
+  const { data: agencyRow } = await admin
     .from("agencies")
     .select("id, name, booking_email, contact_email, invoice_email, booking_emails, contact_emails, email")
     .eq("tenant_id", tenantId)
@@ -97,18 +120,18 @@ export async function POST(request: NextRequest) {
     .maybeSingle();
 
   const invoiceEmail: string | null =
-    agencyRow?.booking_email ??
-    (Array.isArray(agencyRow?.booking_emails) && agencyRow.booking_emails.length > 0 ? agencyRow.booking_emails[0] : null) ??
-    agencyRow?.contact_email ??
-    (Array.isArray(agencyRow?.contact_emails) && agencyRow.contact_emails.length > 0 ? agencyRow.contact_emails[0] : null) ??
-    agencyRow?.invoice_email ??
-    agencyRow?.email ??
+    (agencyRow as any)?.booking_email ??
+    (Array.isArray((agencyRow as any)?.booking_emails) && (agencyRow as any).booking_emails.length > 0 ? (agencyRow as any).booking_emails[0] : null) ??
+    (agencyRow as any)?.contact_email ??
+    (Array.isArray((agencyRow as any)?.contact_emails) && (agencyRow as any).contact_emails.length > 0 ? (agencyRow as any).contact_emails[0] : null) ??
+    (agencyRow as any)?.invoice_email ??
+    (agencyRow as any)?.email ??
     null;
 
   // Risolve i billing_party_name che corrispondono all'agenzia (matching bidirezionale)
-  const billingNames = await resolveBillingNames(auth.admin as any, tenantId, agency_name);
+  const billingNames = await resolveBillingNames(admin, tenantId, agency_name);
 
-  let serviceQuery = (auth.admin as any)
+  let serviceQuery = admin
     .from("services")
     .select("id, date, time, customer_name, customer_first_name, customer_last_name, billing_party_name, booking_service_kind, service_type, notes, source_total_amount_cents, pax")
     .eq("tenant_id", tenantId)
@@ -127,7 +150,7 @@ export async function POST(request: NextRequest) {
   const { data: services, error: servicesError } = await serviceQuery;
   if (servicesError) return NextResponse.json({ ok: false, error: servicesError.message }, { status: 500 });
 
-  const items: InvoiceLineItem[] = (services ?? []).map((s: any) => {
+  const items: InvoiceLineItem[] = ((services ?? []) as ServiceRow[]).map((s) => {
     const practiceMatch = (s.notes ?? "").match(/\[practice:([^\]]+)\]/);
     const practiceNumber = practiceMatch?.[1] ?? "—";
     const clienteName = [s.customer_first_name, s.customer_last_name].filter(Boolean).join(" ") || s.customer_name || "—";
@@ -145,11 +168,11 @@ export async function POST(request: NextRequest) {
   const createdAt = new Date().toISOString();
 
   // Salva nel DB
-  const { data: invoice, error: insertError } = await (auth.admin as any)
+  const { data: invoice, error: insertError } = await admin
     .from("agency_invoices")
     .insert({
       tenant_id: tenantId,
-      agency_id: agencyRow?.id ?? agency_id ?? null,
+      agency_id: (agencyRow as any)?.id ?? agency_id ?? null,
       agency_name,
       period_from,
       period_to,
@@ -162,11 +185,11 @@ export async function POST(request: NextRequest) {
     .select("id")
     .single();
 
-  if (insertError || !invoice?.id) {
+  if (insertError || !(invoice as any)?.id) {
     return NextResponse.json({ ok: false, error: insertError?.message ?? "Errore creazione estratto conto." }, { status: 500 });
   }
 
-  const invoiceId = invoice.id as string;
+  const invoiceId = (invoice as any).id as string;
 
   // Genera HTML
   const html = generateInvoiceHtml({
@@ -196,11 +219,14 @@ export async function POST(request: NextRequest) {
       html
     });
 
-    await (auth.admin as any)
+    await admin
       .from("agency_invoices")
       .update({ status: "sent", sent_at: new Date().toISOString() })
       .eq("id", invoiceId);
   }
 
   return NextResponse.json({ ok: true, invoice_id: invoiceId, items_count: items.length, total_cents: totalCents, html });
+  } catch (err) {
+    return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+  }
 }
