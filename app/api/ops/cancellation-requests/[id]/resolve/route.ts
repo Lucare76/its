@@ -12,6 +12,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { type SupabaseClient } from "@supabase/supabase-js";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { sendEmail } from "@/lib/server/send-email";
 import { emailHtml } from "@/lib/server/email-layout";
@@ -42,10 +43,10 @@ export async function POST(
     const { id } = await params;
     const auth = await authorizePricingRequest(req, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
-    const a = auth as any;
-    const tenantId = a.membership.tenant_id as string;
-    const userId   = a.user.id as string;
-    const admin    = a.admin;
+    const { membership, user } = auth;
+    const admin = auth.admin as SupabaseClient;
+    const tenantId = membership.tenant_id;
+    const userId = user.id as string;
 
     const raw = await req.json().catch(() => null);
     const parsed = bodySchema.safeParse(raw);
@@ -183,7 +184,7 @@ function formatDate(iso: string): string {
 }
 
 async function applyCancellation(
-  admin: any,
+  admin: SupabaseClient,
   tenantId: string,
   cr: Record<string, unknown>,
   svc: Record<string, unknown>,

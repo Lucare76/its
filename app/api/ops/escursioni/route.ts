@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-async function hasColumn(admin: any, table: string, column: string) {
+async function hasColumn(admin: SupabaseClient, table: string, column: string) {
   const { error } = await admin.from(table).select(column).limit(1);
   if (!error) return true;
   if ((error as { code?: string }).code === "42703") return false;
   throw new Error(`Schema probe failed for ${table}.${column}: ${error.message}`);
 }
 
-async function hasTable(admin: any, table: string) {
+async function hasTable(admin: SupabaseClient, table: string) {
   const { error } = await admin.from(table).select("*").limit(1);
   if (!error) return true;
   if ((error as { code?: string }).code === "42P01") return false;

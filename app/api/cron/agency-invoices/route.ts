@@ -95,7 +95,8 @@ export async function POST(request: NextRequest) {
 
       if ((services ?? []).length === 0) { skipped++; continue; }
 
-      const items: InvoiceLineItem[] = (services ?? []).map((s: any) => {
+      type SvcRow = { id: string; date: string | null; time: string | null; customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; booking_service_kind: string | null; service_type: string | null; notes: string | null; source_total_amount_cents: number | null; };
+      const items: InvoiceLineItem[] = (services ?? []).map((s: SvcRow) => {
         const practiceMatch = (s.notes ?? "").match(/\[practice:([^\]]+)\]/);
         const clienteName = [s.customer_first_name, s.customer_last_name].filter(Boolean).join(" ") || s.customer_name || "—";
         return {

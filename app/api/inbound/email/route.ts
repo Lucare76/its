@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { createDraftFromPdfUpload } from "@/lib/server/agency-pdf-import";
 import { parseInboundEmail } from "@/lib/email-parser";
@@ -98,7 +98,7 @@ function rateLimited(ip: string) {
   return false;
 }
 
-async function resolveTenantId(admin: any) {
+async function resolveTenantId(admin: SupabaseClient) {
   const envTenant = process.env.INBOUND_DEFAULT_TENANT_ID;
   if (envTenant) return envTenant;
 

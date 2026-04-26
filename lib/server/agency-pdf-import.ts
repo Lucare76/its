@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { type SupabaseClient } from "@supabase/supabase-js";
 import { buildAgencyPdfPreview } from "@/lib/server/agency-pdf-preview";
 import { ensureDefaultBusLotConfig } from "@/lib/server/bus-lot-configs";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
@@ -9,7 +10,7 @@ import { extractPdfHeaderTextFromBase64, extractPdfTextFromBase64 } from "@/lib/
 import { tryMatchAndApplyPricing } from "@/lib/server/pricing-matching";
 
 type AuthContext = {
-  admin: any;
+  admin: SupabaseClient;
   user: { id?: string | null };
   membership: { tenant_id: string; role: string };
 };
@@ -503,7 +504,7 @@ function buildEffectiveNormalizedImport(
   return effective;
 }
 
-async function resolveHotelId(admin: any, tenantId: string, hotelName: string | null) {
+async function resolveHotelId(admin: SupabaseClient, tenantId: string, hotelName: string | null) {
   const { data: hotelsData, error: hotelsError } = await admin
     .from("hotels")
     .select("id, name")
@@ -624,7 +625,7 @@ function buildServiceNotes(
     .join(" | ");
 }
 
-async function findServiceByPattern(admin: any, tenantId: string, pattern: string) {
+async function findServiceByPattern(admin: SupabaseClient, tenantId: string, pattern: string) {
   const { data } = await admin
     .from("services")
     .select("id, is_draft, inbound_email_id, status, notes")
@@ -636,7 +637,7 @@ async function findServiceByPattern(admin: any, tenantId: string, pattern: strin
   return data ?? null;
 }
 
-async function findExistingPdfImport(admin: any, tenantId: string, normalized: NormalizedPdfImport) {
+async function findExistingPdfImport(admin: SupabaseClient, tenantId: string, normalized: NormalizedPdfImport) {
   const patterns = [
     normalized.dedupe_components.practice_number ? `[practice:${normalized.dedupe_components.practice_number}]` : null,
     `[pdf_hash:${normalized.pdf_hash}]`,
@@ -654,7 +655,7 @@ async function findExistingPdfImport(admin: any, tenantId: string, normalized: N
   return { service: null, pattern: null };
 }
 
-async function findPotentialExistingMatches(admin: any, tenantId: string, normalized: NormalizedPdfImport): Promise<PossibleExistingMatch[]> {
+async function findPotentialExistingMatches(admin: SupabaseClient, tenantId: string, normalized: NormalizedPdfImport): Promise<PossibleExistingMatch[]> {
   const byId = new Map<string, PossibleExistingMatch>();
 
   const addRows = (rows: Array<Record<string, any>> | null | undefined, reason: PossibleExistingMatch["match_reason"]) => {

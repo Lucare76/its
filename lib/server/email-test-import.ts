@@ -1,10 +1,11 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
+import { type SupabaseClient } from "@supabase/supabase-js";
 import { isPdfAttachment } from "@/lib/server/pdf-text";
 import { claudeEmailExtract } from "@/lib/server/claude-email-extract";
 
 type OperationalImportAuth = {
-  admin: any;
+  admin: SupabaseClient;
   user: { id?: string | null };
   membership: { tenant_id: string; role: string };
 };

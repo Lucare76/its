@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { parseRole } from "@/lib/rbac";
 import { auditLog } from "@/lib/server/ops-audit";
@@ -22,7 +22,7 @@ const bookingPatchSchema = z.object({
   notes: z.string().max(2000).optional()
 });
 
-async function hasColumn(admin: any, table: string, column: string) {
+async function hasColumn(admin: SupabaseClient, table: string, column: string) {
   const { error } = await admin.from(table).select(column).limit(1);
   if (!error) return true;
   if ((error as { code?: string }).code === "42703") return false;

@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { DEFAULT_PRICES_CENTS, type PriceType } from "@/lib/medmar-ar/types";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
@@ -15,7 +16,7 @@ const PRICE_TYPES: PriceType[] = [
   "single_trip_12_or_more",
 ];
 
-async function ensureDefaultPrices(admin: any, tenantId: string, userId: string) {
+async function ensureDefaultPrices(admin: SupabaseClient, tenantId: string, userId: string) {
   const today = new Date().toISOString().slice(0, 10);
   for (const priceType of PRICE_TYPES) {
     const { data: existing } = await admin

@@ -220,7 +220,7 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
   const hotelsById = new Map<string, { id: string; name: string; zone: string }>(hotels.map((hotel: { id: string; name: string; zone: string }) => [hotel.id, hotel]));
 
   // Applica driver per-data alle unità (sovrascrive i campi statici con quelli del giorno)
-  const units = (unitsResult.data ?? []).map((u: any) => {
+  const units = (unitsResult.data ?? []).map((u: Record<string, unknown>) => {
     const dayDriver = driverByUnit.get(u.id as string);
     return {
       ...u,
@@ -263,7 +263,7 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
       derived_line_name: identity.lineName,
       suggested_stop_name: identity.stop_name
     };
-  });
+  }) as any[];
 
   const unitLoads = buildBusUnitLoadSummary(units, allocations);
   const stopLoads = buildStopLoadSummary(stops, allocations);

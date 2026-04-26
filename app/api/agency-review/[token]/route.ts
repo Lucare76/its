@@ -2,7 +2,7 @@
  * GET  /api/agency-review/[token]  — legge la sessione (pubblico, no auth)
  * POST /api/agency-review/[token]  — invia approvazione o modifiche (pubblico)
  */
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
@@ -143,7 +143,7 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 async function sendDiffEmailToOperator(params: {
-  admin: any;
+  admin: SupabaseClient;
   tenantId: string;
   sessionId: string;
   agencyName: string;
@@ -253,7 +253,7 @@ async function sendDiffEmailToOperator(params: {
 /* ─── Email conferma all'agenzia ───────────────────────────────────────────── */
 
 async function sendConfirmationEmailToAgency(params: {
-  admin: any;
+  admin: SupabaseClient;
   tenantId: string;
   agencyName: string;
   targetDate: string;

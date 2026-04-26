@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-async function hasColumn(admin: any, table: string, column: string) {
+async function hasColumn(admin: SupabaseClient, table: string, column: string) {
   const { error } = await admin.from(table).select(column).limit(1);
   if (!error) return true;
   if ((error as { code?: string }).code === "42703") return false;
@@ -34,7 +35,7 @@ const pricingRulePayloadSchema = z.object({
   active: z.boolean().default(true)
 });
 
-async function buildPayload(admin: any, tenantId: string, parsed: z.infer<typeof pricingRulePayloadSchema>) {
+async function buildPayload(admin: SupabaseClient, tenantId: string, parsed: z.infer<typeof pricingRulePayloadSchema>) {
   const payload: Record<string, unknown> = {
     tenant_id: tenantId,
     price_list_id: parsed.price_list_id,

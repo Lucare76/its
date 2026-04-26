@@ -132,7 +132,7 @@ export async function GET(request: NextRequest) {
   }
 
   // ── Aggregati base ────────────────────────────────────────────────────────────
-  const ticketById = new Map(ticketList.map((t: any) => [t.id, t]));
+  const ticketById = new Map(ticketList.map((t) => [t.id, t]));
 
   let totalLost = 0, totalRecovered = 0;
   let returnLegsTotal = 0, returnLegsUsed = 0;

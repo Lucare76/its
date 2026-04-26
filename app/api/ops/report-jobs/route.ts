@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { type SupabaseClient } from "@supabase/supabase-js";
 import { buildOperationalSummaryPreview } from "@/lib/server/operational-summary";
 import { STATEMENT_AGENCY_NAMES } from "@/lib/server/statement-agencies";
 import { sendOperationalReportEmail, type ReportJobType } from "@/lib/server/report-job-email";
@@ -25,7 +26,7 @@ function buildPreviewText(jobType: string, ownerName: string | null, lines: Arra
   return [header, ...body].join("\n");
 }
 
-async function readOperationalSettings(admin: any, tenantId: string) {
+async function readOperationalSettings(admin: SupabaseClient, tenantId: string) {
   const { data } = await admin
     .from("tenant_operational_settings")
     .select("statement_agencies, report_processing_limit")

@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
 
     // Recupera hotel per nome
     const { data: hotels } = await admin.from("hotels").select("id, name").eq("tenant_id", tenantId).limit(500);
-    const hotelsById = new Map((hotels ?? []).map((h: any) => [h.id, h.name]));
+    const hotelsById = new Map((hotels ?? []).map((h: { id: string; name: string }) => [h.id, h.name]));
 
     for (const agency of agencies ?? []) {
       const email = agency.invoice_email ?? agency.contact_email ?? agency.booking_email;
@@ -84,16 +84,16 @@ export async function POST(request: NextRequest) {
 
       if ((services48h ?? []).length > 0) {
         const cancelTokens48: Record<string, string> = {};
-        const serviceList = (services48h ?? []).map((s: any) => {
+        const serviceList = (services48h ?? []).map((s: { id: string; customer_name: string | null; date: string | null; time: string | null; direction: string | null; hotel_id: string | null; pax: number | null }) => {
           const token = generateAgencyActionToken({ sid: s.id, aid: agency.id, tid: tenantId, act: "cancel" });
           cancelTokens48[s.id] = token;
           return {
             service_id: s.id,
-            customer_name: s.customer_name,
-            date: s.date,
-            time: s.time,
+            customer_name: s.customer_name ?? "",
+            date: s.date ?? "",
+            time: s.time ?? "",
             direction: s.direction as "arrival" | "departure",
-            hotel_or_destination: hotelsById.get(s.hotel_id) ?? null,
+            hotel_or_destination: hotelsById.get(s.hotel_id ?? "") ?? null,
             pax: s.pax ?? 1,
           };
         });
@@ -127,16 +127,16 @@ export async function POST(request: NextRequest) {
 
         if ((services24h ?? []).length > 0) {
           const cancelTokens24: Record<string, string> = {};
-          const serviceList = (services24h ?? []).map((s: any) => {
+          const serviceList = (services24h ?? []).map((s: { id: string; customer_name: string | null; date: string | null; time: string | null; direction: string | null; hotel_id: string | null; pax: number | null }) => {
             const token = generateAgencyActionToken({ sid: s.id, aid: agency.id, tid: tenantId, act: "cancel" });
             cancelTokens24[s.id] = token;
             return {
               service_id: s.id,
-              customer_name: s.customer_name,
-              date: s.date,
-              time: s.time,
+              customer_name: s.customer_name ?? "",
+              date: s.date ?? "",
+              time: s.time ?? "",
               direction: s.direction as "arrival" | "departure",
-              hotel_or_destination: hotelsById.get(s.hotel_id) ?? null,
+              hotel_or_destination: hotelsById.get(s.hotel_id ?? "") ?? null,
               pax: s.pax ?? 1,
             };
           });

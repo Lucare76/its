@@ -1,10 +1,7 @@
 import { deriveBusLineIdentity, deriveBusLotTitle } from "@/lib/bus-lot-utils";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
-type AdminClient = {
-  from: (table: string) => {
-    upsert: (payload: unknown, options?: { onConflict?: string }) => Promise<{ error: { message: string } | null }>;
-  };
-};
+type AdminClient = SupabaseClient;
 
 type BusLotSeed = {
   tenantId: string;
