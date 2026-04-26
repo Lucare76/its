@@ -27,6 +27,8 @@
     "bus:import-client-excel": "pnpm exec tsx scripts/import-client-bus-excel.ts",
     "db:bootstrap": "node scripts/db-sql-editor.mjs bootstrap",
     "db:seed": "node scripts/db-sql-editor.mjs seed",
+    "types:supabase:gen": "node scripts/supabase-gen-types.mjs",
+    "types:supabase:check": "node scripts/supabase-gen-types.mjs --check",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
     const auth = await authorizePricingRequest(request, ["admin", "operator"]);
     if (auth instanceof NextResponse) return auth;
 
-    const [servicesResult, assignmentsResult, hotelsResult, membershipsResult, inboundResult] = await Promise.all([
+    const [servicesResult, assignmentsResult, hotelsResult, membershipsResult, inboundResult, vehiclesResult] = await Promise.all([
       auth.admin.from("services").select("*").eq("tenant_id", auth.membership.tenant_id),
       auth.admin.from("assignments").select("*").eq("tenant_id", auth.membership.tenant_id),
       auth.admin.from("hotels").select("*").eq("tenant_id", auth.membership.tenant_id),
@@ -16,7 +16,13 @@ export async function GET(request: NextRequest) {
         .from("memberships")
         .select("user_id, tenant_id, role, full_name")
         .eq("tenant_id", auth.membership.tenant_id),
-      auth.admin.from("inbound_emails").select("*").eq("tenant_id", auth.membership.tenant_id)
+      auth.admin.from("inbound_emails").select("*").eq("tenant_id", auth.membership.tenant_id),
+      auth.admin
+        .from("vehicle_records")
+        .select("id, tenant_id, label, plate, active, habitual_driver_user_id")
+        .eq("tenant_id", auth.membership.tenant_id)
+        .eq("active", true)
+        .order("label")
     ]);
 
     const error =
@@ -24,7 +30,8 @@ export async function GET(request: NextRequest) {
       assignmentsResult.error ??
       hotelsResult.error ??
       membershipsResult.error ??
-      inboundResult.error;
+      inboundResult.error ??
+      vehiclesResult.error;
 
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
@@ -38,7 +45,8 @@ export async function GET(request: NextRequest) {
       assignments: assignmentsResult.data ?? [],
       hotels: hotelsResult.data ?? [],
       memberships: membershipsResult.data ?? [],
-      inbound_emails: inboundResult.data ?? []
+      inbound_emails: inboundResult.data ?? [],
+      vehicles: vehiclesResult.data ?? []
     });
   } catch (error) {
     return NextResponse.json(

@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/ui";
 import { formatIsoDateShort, getCustomerFullName } from "@/lib/service-display";
 import { getE2ETestSessionOverride } from "@/lib/supabase/client-session";
 import { supabase } from "@/lib/supabase/client";
-import type { Assignment, Hotel, Membership, Service } from "@/lib/types";
+import type { Assignment, Hotel, Membership, Service, VehicleRecord } from "@/lib/types";
 
 function suggestedVehicleByPax(pax: number) {
   return pax >= 6 ? "VAN" : "CAR";
@@ -57,6 +57,7 @@ export default function DispatchPage() {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [hotels, setHotels]           = useState<Hotel[]>([]);
   const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [vehicles, setVehicles]       = useState<VehicleRecord[]>([]);
   const [search, setSearch]           = useState("");
   const [dateTab, setDateTab]         = useState<DateTab>("today");
   const [rowStates, setRowStates] = useState<Record<string, Partial<RowState>>>({});
@@ -70,13 +71,14 @@ export default function DispatchPage() {
       });
       const payload = await response.json().catch(() => null) as {
         ok?: boolean; services?: Service[]; assignments?: Assignment[];
-        hotels?: Hotel[]; memberships?: Membership[];
+        hotels?: Hotel[]; memberships?: Membership[]; vehicles?: VehicleRecord[];
       } | null;
       if (!active || !response.ok || !payload?.ok) return false;
       setServices((payload.services ?? []) as Service[]);
       setAssignments((payload.assignments ?? []) as Assignment[]);
       setHotels((payload.hotels ?? []) as Hotel[]);
       setMemberships((payload.memberships ?? []) as Membership[]);
+      setVehicles((payload.vehicles ?? []) as VehicleRecord[]);
       return true;
     };
 
@@ -125,6 +127,7 @@ export default function DispatchPage() {
   const assignmentByServiceId = useMemo(() => new Map(tenantAssignments.map((a) => [a.service_id, a])), [tenantAssignments]);
   const hotelsById            = useMemo(() => new Map((tenantId ? hotels.filter((h) => h.tenant_id === tenantId) : hotels).map((h) => [h.id, h])), [hotels, tenantId]);
   const drivers               = useMemo(() => tenantMemberships.filter((m) => m.role === "driver"), [tenantMemberships]);
+  const tenantVehicles        = useMemo(() => (tenantId ? vehicles.filter((vehicle) => vehicle.tenant_id === tenantId) : vehicles), [vehicles, tenantId]);
 
   const today    = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const tomorrow = useMemo(() => {
@@ -336,8 +339,11 @@ export default function DispatchPage() {
                     const state     = getRow(svc);
                     const hotel     = hotelsById.get(svc.hotel_id);
                     const hasAssign = assignmentByServiceId.has(svc.id);
+                    const vehicleOptions = state.vehicleLabel && !tenantVehicles.some((vehicle) => vehicle.label === state.vehicleLabel)
+                      ? [{ id: `custom-${svc.id}`, label: state.vehicleLabel, plate: null }, ...tenantVehicles]
+                      : tenantVehicles;
                     return (
-                      <div key={svc.id} className={`grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[1fr_180px_130px_90px] sm:items-center transition-colors ${!hasAssign ? "bg-amber-50/40" : ""}`}>
+                      <div key={svc.id} className={`grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[1fr_180px_180px_90px] sm:items-center transition-colors ${!hasAssign ? "bg-amber-50/40" : ""}`}>
 
                         {/* Info servizio */}
                         <div className="min-w-0">
@@ -374,7 +380,7 @@ export default function DispatchPage() {
                         </select>
 
                         {/* Mezzo */}
-                        <input
+                        <select
                           value={state.vehicleLabel}
                           onChange={(e) => {
                             const value = e.target.value;
@@ -383,9 +389,15 @@ export default function DispatchPage() {
                               [svc.id]: { ...getRow(svc), vehicleLabel: value },
                             }));
                           }}
-                          placeholder="Mezzo"
                           className="input-saas text-sm"
-                        />
+                        >
+                          <option value="">— Nessun mezzo —</option>
+                          {vehicleOptions.map((vehicle) => (
+                            <option key={vehicle.id} value={vehicle.label}>
+                              {vehicle.label}{vehicle.plate ? ` · ${vehicle.plate}` : ""}
+                            </option>
+                          ))}
+                        </select>
 
                         {/* Salva */}
                         <button
