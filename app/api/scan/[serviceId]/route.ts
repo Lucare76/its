@@ -1,11 +1,32 @@
 /**
  * GET  /api/scan/[serviceId]  — dettagli servizio per smarcamento porto
- * POST /api/scan/[serviceId]  — azione: "complete" | "log_view"
+ * POST /api/scan/[serviceId]  — azione: "complete" | "update_phone"
+ *
+ * serviceId può essere:
+ *   - UUID (xxxxxxxx-xxxx-…) → lookup diretto in services
+ *   - Token QR (36 hex senza trattini) → risolto via booking_qr_codes → services
  */
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { resolveQrToken, markQrUsed } from "@/lib/server/booking-qr";
 
 export const runtime = "nodejs";
+
+const UUID_RE  = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TOKEN_RE = /^[0-9a-f]{36}$/i;
+
+async function resolveServiceId(
+  admin: Parameters<typeof resolveQrToken>[0],
+  tenantId: string,
+  rawId: string
+): Promise<{ serviceId: string; qrDirection: "outbound" | "return" | null; qrToken: string | null }> {
+  if (TOKEN_RE.test(rawId) && !UUID_RE.test(rawId)) {
+    const resolved = await resolveQrToken(admin, tenantId, rawId);
+    if (!resolved) return { serviceId: rawId, qrDirection: null, qrToken: null };
+    return { serviceId: resolved.bookingId, qrDirection: resolved.direction, qrToken: rawId };
+  }
+  return { serviceId: rawId, qrDirection: null, qrToken: null };
+}
 
 export async function GET(
   request: NextRequest,
@@ -15,8 +36,13 @@ export async function GET(
     const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor", "assistenza"]);
     if (auth instanceof NextResponse) return auth;
 
-    const { serviceId } = await params;
+    const { serviceId: rawId } = await params;
     const tenantId = auth.membership.tenant_id;
+    const { serviceId, qrDirection, qrToken } = await resolveServiceId(auth.admin, tenantId, rawId);
+
+    if (qrToken && !serviceId) {
+      return NextResponse.json({ ok: false, error: "QR non valido o scaduto." }, { status: 404 });
+    }
 
     const [serviceResult, assignmentResult] = await Promise.all([
       auth.admin
@@ -41,7 +67,6 @@ export async function GET(
     const service = serviceResult.data;
     const assignment = assignmentResult.data ?? null;
 
-    // Hotel name
     let hotelName: string | null = null;
     if (service.hotel_id) {
       const { data: hotel } = await auth.admin
@@ -53,7 +78,6 @@ export async function GET(
       hotelName = hotel?.name ?? null;
     }
 
-    // Driver name from memberships
     let driverName: string | null = null;
     if (assignment?.driver_user_id) {
       const { data: membership } = await auth.admin
@@ -65,7 +89,6 @@ export async function GET(
       driverName = membership?.full_name ?? null;
     }
 
-    // Log this view
     await auth.admin.from("service_scan_log").insert({
       tenant_id: tenantId,
       service_id: serviceId,
@@ -78,6 +101,7 @@ export async function GET(
       service: {
         ...service,
         hotel_name: hotelName,
+        qr_direction: qrDirection,
       },
       assignment: assignment
         ? { vehicle_label: assignment.vehicle_label, driver_name: driverName }
@@ -96,8 +120,10 @@ export async function POST(
     const auth = await authorizePricingRequest(request, ["admin", "operator", "driver", "supervisor", "assistenza"]);
     if (auth instanceof NextResponse) return auth;
 
-    const { serviceId } = await params;
+    const { serviceId: rawId } = await params;
     const tenantId = auth.membership.tenant_id;
+    const { serviceId, qrToken } = await resolveServiceId(auth.admin, tenantId, rawId);
+
     const body = await request.json().catch(() => null) as { action?: string; phone?: string } | null;
 
     if (body?.action === "update_phone") {
@@ -115,7 +141,6 @@ export async function POST(
       return NextResponse.json({ ok: false, error: "Azione non valida." }, { status: 400 });
     }
 
-    // Fetch current service status
     const { data: service, error: fetchErr } = await auth.admin
       .from("services")
       .select("id, status")
@@ -128,7 +153,6 @@ export async function POST(
 
     const alreadyDone = service.status === "completato";
 
-    // Log the scan attempt
     await auth.admin.from("service_scan_log").insert({
       tenant_id: tenantId,
       service_id: serviceId,
@@ -140,7 +164,6 @@ export async function POST(
       return NextResponse.json({ ok: true, already_completed: true });
     }
 
-    // Mark service as completato
     const now = new Date().toISOString();
     await Promise.all([
       auth.admin
@@ -156,6 +179,11 @@ export async function POST(
         by_user_id: auth.user.id,
       }),
     ]);
+
+    // Marca il QR come usato se la scansione è avvenuta tramite token
+    if (qrToken) {
+      await markQrUsed(auth.admin, tenantId, qrToken, auth.user.id);
+    }
 
     return NextResponse.json({ ok: true, already_completed: false, completed_at: now });
   } catch (err) {

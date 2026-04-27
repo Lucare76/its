@@ -21,6 +21,7 @@ type ServiceInfo = {
   meeting_point: string | null;
   outbound_time: string | null;
   booking_service_kind: string | null;
+  qr_direction?: "outbound" | "return" | null;
 };
 
 type AssignmentInfo = {
@@ -190,6 +191,11 @@ export default function ScanPage() {
           </span>
         </div>
       </div>
+      {service.qr_direction && (
+        <div className={`px-4 py-2 text-center text-sm font-bold text-white ${service.qr_direction === "outbound" ? "bg-teal-700" : "bg-blue-700"}`}>
+          {service.qr_direction === "outbound" ? "🛳 ANDATA" : "🛳 RITORNO"}
+        </div>
+      )}
 
       <div className="mx-auto max-w-md px-4 py-5 space-y-4">
 

@@ -7,6 +7,7 @@ import { sendOperatorNotifyEmail, sendOperatorDuplicateNotifyEmail, sendAgencyDu
 import { buildServiceLabel, buildServiceLabelShort } from "@/lib/service-label";
 import { auditLog } from "@/lib/server/ops-audit";
 import { authorizeServiceRoleRequest } from "@/lib/server/pricing-auth";
+import { generateBookingQrCodes } from "@/lib/server/booking-qr";
 
 export const runtime = "nodejs";
 
@@ -479,6 +480,17 @@ export async function POST(request: NextRequest) {
       service_id: serviceId,
       status: "new",
       by_user_id: auth.user.id
+    });
+
+    // Genera QR code andata + ritorno (fire-and-forget — non blocca la risposta)
+    void generateBookingQrCodes(
+      auth.admin,
+      auth.membership.tenant_id,
+      serviceId,
+      parsed.data.arrival_date,
+      parsed.data.departure_date ?? null
+    ).catch((e: unknown) => {
+      auditLog({ event: "booking_qr_generate_failed", level: "error", serviceId, details: { message: e instanceof Error ? e.message : "Unknown" } });
     });
 
     // Segna approval_status — price_mismatch se il prezzo dichiarato differisce dal listino (tolleranza ±0,50€)
