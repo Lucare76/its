@@ -436,6 +436,60 @@ export default function AgencyNewBookingPage() {
   const selectedKind = form.booking_service_kind;
   const isSnavKind = selectedKind === "formula_snav";
   const isMedmarKind = selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli";
+  const snavArrivalOptions = useMemo(
+    () => buildFerryScheduleOptions(ferryScheduleRows, "mainland_to_ischia", form.arrival_date, { company: "snav" }),
+    [form.arrival_date, ferryScheduleRows]
+  );
+  const snavDepartureOptions = useMemo(
+    () => buildFerryScheduleOptions(ferryScheduleRows, "ischia_to_mainland", form.departure_date, { company: "snav" }),
+    [form.departure_date, ferryScheduleRows]
+  );
+  const medmarArrivalOptions = useMemo(
+    () => buildFerryScheduleOptions(
+      ferryScheduleRows,
+      "mainland_to_ischia",
+      form.arrival_date,
+      {
+        company: "medmar",
+        departurePort: selectedKind === "formula_medmar_napoli" ? "napoli_beverello" : "pozzuoli",
+      }
+    ),
+    [form.arrival_date, ferryScheduleRows, selectedKind]
+  );
+  const medmarDepartureOptions = useMemo(
+    () => buildFerryScheduleOptions(
+      ferryScheduleRows,
+      "ischia_to_mainland",
+      form.departure_date,
+      {
+        company: "medmar",
+        arrivalPort: selectedKind === "formula_medmar_napoli" ? "napoli_beverello" : "pozzuoli",
+      }
+    ),
+    [form.departure_date, ferryScheduleRows, selectedKind]
+  );
+  const resolvedArrivalTime = useMemo(() => {
+    const available = isSnavKind
+      ? snavArrivalOptions
+      : isMedmarKind
+        ? medmarArrivalOptions
+        : null;
+    if (!available || available.length === 0) return form.arrival_time;
+    return available.some((option) => option.time === form.arrival_time)
+      ? form.arrival_time
+      : (available[0]?.time ?? form.arrival_time);
+  }, [form.arrival_time, isMedmarKind, isSnavKind, medmarArrivalOptions, snavArrivalOptions]);
+  const resolvedDepartureTime = useMemo(() => {
+    const available = isSnavKind
+      ? snavDepartureOptions
+      : isMedmarKind
+        ? medmarDepartureOptions
+        : null;
+    if (!available || available.length === 0) return form.departure_time;
+    return available.some((option) => option.time === form.departure_time)
+      ? form.departure_time
+      : (available[0]?.time ?? form.departure_time);
+  }, [form.departure_time, isMedmarKind, isSnavKind, medmarDepartureOptions, snavDepartureOptions]);
   const isTransportCodeRequired = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_airport_hotel_aliscafo" || selectedKind === "transfer_train_hotel" || selectedKind === "transfer_train_hotel_aliscafo";
   const showTransportCodeField =
     selectedKind === "transfer_airport_hotel" ||
@@ -459,6 +513,8 @@ export default function AgencyNewBookingPage() {
   const normalizedPayload = useMemo(
     () => ({
       ...form,
+      arrival_time: resolvedArrivalTime,
+      departure_time: resolvedDepartureTime,
       pax: Number(form.pax || "0"),
       notes: form.notes.trim(),
       transport_code_return: form.transport_code_return.trim(),
@@ -466,7 +522,7 @@ export default function AgencyNewBookingPage() {
         ? Math.round(Number(form.quoted_price_eur.replace(",", ".")) * 100)
         : null
     }),
-    [form]
+    [form, resolvedArrivalTime, resolvedDepartureTime]
   );
   const parsedPreview = useMemo(() => agencyBookingCreateSchema.safeParse(normalizedPayload), [normalizedPayload]);
   const isFormValid = parsedPreview.success && hasHotels && hasAgenciesIfAdmin;
@@ -896,7 +952,7 @@ export default function AgencyNewBookingPage() {
             {(isSnavKind || selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli") ? (
               <select
                 className="input-saas mt-1"
-                value={form.arrival_time}
+                value={resolvedArrivalTime}
                 onChange={(event) => setForm((prev) => ({ ...prev, arrival_time: event.target.value }))}
               >
                 {arrivalScheduleOptions.map(({ time, porto }) => (
@@ -945,7 +1001,7 @@ export default function AgencyNewBookingPage() {
             {(isSnavKind || selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli") ? (
               <select
                 className="input-saas mt-1"
-                value={form.departure_time}
+                value={resolvedDepartureTime}
                 onChange={(event) => setForm((prev) => ({ ...prev, departure_time: event.target.value }))}
               >
                 {departureScheduleOptions.map(({ time, porto }) => (

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { DateInput, PageHeader } from "@/components/ui";
@@ -25,9 +26,26 @@ type ServiceRow = {
   transport_code: string | null;
   direction: string | null;
   booking_service_kind: string | null;
+  service_type_code: string | null;
 };
 type HotelRow = { id: string; name: string };
 type AgencyRow = { id: string; name: string };
+type BookingQrRow = {
+  id: string;
+  direction: "outbound" | "return";
+  service_date: string;
+  qr_token: string;
+  qr_payload: string;
+  qr_image_url: string;
+  status: "active" | "used" | "cancelled";
+  used_at: string | null;
+};
+type BookingQrSummary = {
+  bookingId: string;
+  customerName: string;
+  phone: string | null;
+  codes: BookingQrRow[];
+};
 
 function isValidTime(t: string) {
   return /^\d{2}:\d{2}$/.test(t.trim());
@@ -63,11 +81,113 @@ export default function ServiceEditPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [qrSummary, setQrSummary] = useState<BookingQrSummary | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrMessage, setQrMessage] = useState<string | null>(null);
+  const [qrBusy, setQrBusy] = useState<"generate" | "pdf" | "whatsapp" | null>(null);
 
   // Inline hotel creation
   const [addingHotel, setAddingHotel] = useState(false);
   const [newHotelName, setNewHotelName] = useState("");
   const [savingHotel, setSavingHotel] = useState(false);
+
+  const isBusBooking = service?.booking_service_kind === "bus_city_hotel" || service?.service_type_code === "bus_line";
+
+  async function loadBusQr(serviceId: string, token: string) {
+    setQrLoading(true);
+    setQrMessage(null);
+    const res = await fetch(`/api/bookings/${serviceId}/qr-codes`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    const body = await res.json().catch(() => null) as (BookingQrSummary & { error?: string }) | null;
+    setQrLoading(false);
+    if (!res.ok || !body) {
+      setQrSummary(null);
+      setQrMessage(body?.error ?? "QR bus non disponibili.");
+      return;
+    }
+    setQrSummary({
+      bookingId: body.bookingId,
+      customerName: body.customerName,
+      phone: body.phone,
+      codes: body.codes,
+    });
+  }
+
+  async function regenerateBusQr() {
+    if (!service?.id || !accessToken) return;
+    setQrBusy("generate");
+    setQrMessage(null);
+    const res = await fetch(`/api/bookings/${service.id}/qr-codes/generate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ force: true }),
+    });
+    const body = await res.json().catch(() => null) as (BookingQrSummary & { error?: string }) | null;
+    setQrBusy(null);
+    if (!res.ok || !body) {
+      setQrMessage(body?.error ?? "Rigenerazione QR non riuscita.");
+      return;
+    }
+    setQrSummary({
+      bookingId: body.bookingId,
+      customerName: body.customerName,
+      phone: body.phone,
+      codes: body.codes,
+    });
+    setQrMessage("QR bus rigenerati con successo.");
+  }
+
+  async function openBusQrPdf() {
+    if (!service?.id || !accessToken) return;
+    setQrBusy("pdf");
+    setQrMessage(null);
+    const res = await fetch(`/api/bookings/${service.id}/qr-codes/pdf`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const html = await res.text();
+    setQrBusy(null);
+    if (!res.ok) {
+      setQrMessage("PDF QR bus non disponibile.");
+      return;
+    }
+    const popup = window.open("", "_blank", "noopener,noreferrer");
+    if (!popup) {
+      setQrMessage("Consenti i popup del browser per aprire il PDF.");
+      return;
+    }
+    popup.document.open();
+    popup.document.write(html);
+    popup.document.close();
+  }
+
+  async function sendBusQrWhatsApp(selection: "outbound" | "return" | "both") {
+    if (!service?.id || !accessToken) return;
+    setQrBusy("whatsapp");
+    setQrMessage(null);
+    const res = await fetch(`/api/bookings/${service.id}/qr-codes/whatsapp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ selection, media_kind: "image" }),
+    });
+    const body = await res.json().catch(() => null) as { errors?: string[]; preview_only?: boolean } | null;
+    setQrBusy(null);
+    if (!res.ok) {
+      setQrMessage(body?.errors?.[0] ?? "Invio WhatsApp non riuscito.");
+      return;
+    }
+    setQrMessage(body?.preview_only
+      ? "Payload WhatsApp pronto. Mancano le credenziali/template live oppure e attiva la modalita anteprima."
+      : "Invio WhatsApp eseguito.");
+  }
 
   useEffect(() => {
     let active = true;
@@ -85,11 +205,14 @@ export default function ServiceEditPage() {
         return;
       }
       setTenantId(session.tenantId);
+      const sessionData = await supabase.auth.getSession();
+      const token = sessionData.data.session?.access_token ?? null;
+      setAccessToken(token);
 
       const [svcRes, hotelsRes, agenciesRes] = await Promise.all([
         supabase
           .from("services")
-          .select("id, customer_name, phone, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, transport_code, direction, booking_service_kind")
+          .select("id, customer_name, phone, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, transport_code, direction, booking_service_kind, service_type_code")
           .eq("id", id)
           .eq("tenant_id", session.tenantId)
           .maybeSingle(),
@@ -131,6 +254,10 @@ export default function ServiceEditPage() {
       setDepartureDate(svc.departure_date ?? "");
       setDepartureTime((svc.departure_time ?? "").slice(0, 5));
       setTransportCode(svc.transport_code ?? "");
+
+      if (token && (svc.booking_service_kind === "bus_city_hotel" || svc.service_type_code === "bus_line")) {
+        await loadBusQr(svc.id, token);
+      }
 
       setLoading(false);
     };
@@ -330,6 +457,96 @@ export default function ServiceEditPage() {
             {saving ? "Salvataggio..." : "Salva modifiche"}
           </button>
         </div>
+
+        {isBusBooking && (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">QR Bus</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Gestione QR andata/ritorno per invio cliente, verifica assistente e stampa PDF.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => void regenerateBusQr()} disabled={qrBusy !== null} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50">
+                  {qrBusy === "generate" ? "Rigenero..." : "Rigenera"}
+                </button>
+                <button type="button" onClick={() => void openBusQrPdf()} disabled={qrBusy !== null} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50">
+                  {qrBusy === "pdf" ? "Apro..." : "Scarica PDF"}
+                </button>
+                <button type="button" onClick={() => void sendBusQrWhatsApp("both")} disabled={qrBusy !== null} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                  {qrBusy === "whatsapp" ? "Invio..." : "Invia entrambi"}
+                </button>
+              </div>
+            </div>
+
+            {qrMessage && <p className="mt-3 text-xs text-slate-600">{qrMessage}</p>}
+
+            {qrLoading ? (
+              <p className="mt-4 text-sm text-slate-500">Caricamento QR bus...</p>
+            ) : qrSummary ? (
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {(["outbound", "return"] as const).map((direction) => {
+                  const qr = qrSummary.codes.find((item) => item.direction === direction);
+                  return (
+                    <div key={direction} className="rounded-2xl border border-slate-200 bg-white p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
+                            {direction === "outbound" ? "ANDATA" : "RITORNO"}
+                          </p>
+                          <p className="mt-1 text-sm font-semibold text-slate-900">{qr?.service_date ?? "Non generato"}</p>
+                        </div>
+                        <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${qr?.status === "used" ? "bg-slate-100 text-slate-700" : qr?.status === "cancelled" ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>
+                          {qr?.status ?? "missing"}
+                        </span>
+                      </div>
+
+                      {qr ? (
+                        <>
+                          <Image
+                            src={qr.qr_image_url}
+                            alt={`QR ${direction}`}
+                            width={176}
+                            height={176}
+                            unoptimized
+                            className="mx-auto mt-3 h-44 w-44 rounded-xl border border-slate-100 object-contain"
+                          />
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <a
+                              href={qr.qr_image_url}
+                              download={`bus-${qrSummary.bookingId}-${direction}.png`}
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                            >
+                              Scarica PNG
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => void sendBusQrWhatsApp(direction)}
+                              disabled={qrBusy !== null}
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50"
+                            >
+                              Invia WhatsApp
+                            </button>
+                          </div>
+                          {qr.used_at && (
+                            <p className="mt-3 text-xs text-slate-500">
+                              Usato il {new Date(qr.used_at).toLocaleString("it-IT")}
+                            </p>
+                          )}
+                        </>
+                      ) : (
+                        <p className="mt-3 text-sm text-slate-500">Nessun QR disponibile per questa tratta.</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-slate-500">I QR verranno creati appena la prenotazione bus viene generata o rigenerata.</p>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );
