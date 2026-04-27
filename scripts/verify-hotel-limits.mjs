@@ -50,8 +50,11 @@ if (!tenants?.length) { console.error("❌  Nessun tenant trovato"); process.exi
 console.log("\n📋  Tenant disponibili:");
 tenants.forEach((t, i) => console.log(`   ${i + 1}. ${t.name} (${t.id})`));
 
-// Usa il primo tenant (o quello con "ischia" nel nome se esiste)
-const tenant = tenants.find((t) => t.name?.toLowerCase().includes("ischia")) ?? tenants[0];
+// Usa il tenant di produzione: esclude "demo", preferisce "transfer"
+const tenant =
+  tenants.find((t) => t.name?.toLowerCase().includes("transfer")) ??
+  tenants.find((t) => !t.name?.toLowerCase().includes("demo") && !t.name?.toLowerCase().includes("test")) ??
+  tenants[0];
 console.log(`\n✅  Tenant selezionato: ${tenant.name} (${tenant.id})\n`);
 
 // ── Query hotel_vehicle_limits ────────────────────────────────────────────────
