@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isBrunoTarget, resolveSuggestedTarget, toBrunoArrival, toBrunoDeparture, type ContinentDispatchService } from "@/lib/server/continent-dispatch";
+import { isBrunoTarget, resolvePlaceType, resolveSuggestedTarget, toBrunoArrival, toBrunoDeparture, type ContinentDispatchService } from "@/lib/server/continent-dispatch";
 
 function makeService(overrides: Partial<ContinentDispatchService>): ContinentDispatchService {
   return {
@@ -119,6 +119,16 @@ describe("continent dispatch Bruno rules", () => {
     ).toBe("continent_dispatch");
   });
 
+  it("esclude le partenze aeroporto standard", () => {
+    expect(
+      resolveSuggestedTarget(
+        { direction: "departure", booking_service_kind: "transfer_airport_hotel", service_type_code: "transfer_airport_hotel" },
+        "airport",
+        "napoli"
+      )
+    ).toBe("continent_dispatch");
+  });
+
   it("espone un mapping coerente per tutti gli output Bruno", () => {
     const arrival = toBrunoArrival(makeService({}));
     const departure = toBrunoDeparture(
@@ -136,5 +146,29 @@ describe("continent dispatch Bruno rules", () => {
     expect(departure.flight_number).toBe("FR4321");
     expect(departure.arrival_at_porto).toBe("15:50");
     expect(departure.porto_bruno).toBe("Napoli Beverello");
+  });
+});
+
+describe("resolvePlaceType", () => {
+  it("restituisce il place_type esplicito se già airport o station", () => {
+    expect(resolvePlaceType({ place_type: "airport", service_type_code: null, booking_service_kind: null })).toBe("airport");
+    expect(resolvePlaceType({ place_type: "station", service_type_code: null, booking_service_kind: null })).toBe("station");
+  });
+
+  it("deduce airport da booking_service_kind transfer_airport_*", () => {
+    expect(resolvePlaceType({ place_type: null, service_type_code: null, booking_service_kind: "transfer_airport_hotel" })).toBe("airport");
+    expect(resolvePlaceType({ place_type: null, service_type_code: null, booking_service_kind: "transfer_airport_hotel_exclusive" })).toBe("airport");
+    expect(resolvePlaceType({ place_type: null, service_type_code: null, booking_service_kind: "transfer_airport_hotel_aliscafo" })).toBe("airport");
+  });
+
+  it("deduce airport da service_type_code transfer_airport_hotel", () => {
+    expect(resolvePlaceType({ place_type: null, service_type_code: "transfer_airport_hotel", booking_service_kind: null })).toBe("airport");
+  });
+
+  it("fallback a station per i transfer treno e qualsiasi altro tipo", () => {
+    expect(resolvePlaceType({ place_type: null, service_type_code: null, booking_service_kind: "transfer_train_hotel" })).toBe("station");
+    expect(resolvePlaceType({ place_type: null, service_type_code: null, booking_service_kind: "transfer_train_hotel_exclusive" })).toBe("station");
+    expect(resolvePlaceType({ place_type: null, service_type_code: "transfer_port_hotel", booking_service_kind: null })).toBe("station");
+    expect(resolvePlaceType({ place_type: null, service_type_code: null, booking_service_kind: null })).toBe("station");
   });
 });
