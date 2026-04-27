@@ -53,6 +53,10 @@ export async function POST(request: NextRequest) {
       if (!date || !service_ids?.length) {
         return NextResponse.json({ ok: false, error: "date e service_ids obbligatori." }, { status: 400 });
       }
+      const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, date);
+      if (confirmationError) {
+        return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
+      }
       const validation = await validateTripPayload(auth.admin, tenantId, {
         date,
         serviceIds: service_ids,
@@ -144,6 +148,10 @@ export async function POST(request: NextRequest) {
       const effectiveServiceIds = service_ids ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
       if (!groupDate) {
         return NextResponse.json({ ok: false, error: "Data giro non trovata." }, { status: 404 });
+      }
+      const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, groupDate);
+      if (confirmationError) {
+        return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
       }
       const validation = await validateTripPayload(auth.admin, tenantId, {
         date: groupDate,
@@ -246,6 +254,19 @@ export async function POST(request: NextRequest) {
       if (!group_id) {
         return NextResponse.json({ ok: false, error: "group_id obbligatorio." }, { status: 400 });
       }
+      const { data: groupMeta } = await auth.admin
+        .from("trip_groups")
+        .select("date")
+        .eq("id", group_id)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      if (!groupMeta?.date) {
+        return NextResponse.json({ ok: false, error: "Data giro non trovata." }, { status: 404 });
+      }
+      const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, groupMeta.date as string);
+      if (confirmationError) {
+        return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
+      }
 
       // Recupera service_ids del gruppo prima di cancellare
       const { data: groupAssignments } = await auth.admin
@@ -280,6 +301,10 @@ export async function POST(request: NextRequest) {
       // Se target_group_id è null → crea un nuovo giro
       if (!destGroupId) {
         if (!date) return NextResponse.json({ ok: false, error: "date obbligatoria per nuovo giro." }, { status: 400 });
+        const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, date);
+        if (confirmationError) {
+          return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
+        }
         const validation = await validateTripPayload(auth.admin, tenantId, {
           date,
           serviceIds: service_ids,
@@ -315,6 +340,23 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ ok: false, error: newGroupErr?.message ?? "Errore creazione giro." }, { status: 500 });
         }
         destGroupId = newGroup.id as string;
+      }
+
+      if (destGroupId) {
+        const { data: destGroupMeta } = await auth.admin
+          .from("trip_groups")
+          .select("date")
+          .eq("id", destGroupId)
+          .eq("tenant_id", tenantId)
+          .maybeSingle();
+        const effectiveDate = (destGroupMeta?.date as string | undefined) ?? date;
+        if (!effectiveDate) {
+          return NextResponse.json({ ok: false, error: "Data giro destinazione non trovata." }, { status: 404 });
+        }
+        const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, effectiveDate);
+        if (confirmationError) {
+          return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
+        }
       }
 
       // Ottieni driver/vehicle del giro destinazione
@@ -441,6 +483,29 @@ async function resolveVehicleAssignment(
   }
 
   return { ok: true, vehicle };
+}
+
+async function ensureAvailabilityConfirmed(
+  admin: SupabaseClient,
+  tenantId: string,
+  date: string
+): Promise<string | null> {
+  const { data, error } = await admin
+    .from("daily_availability_confirmations")
+    .select("confirmed")
+    .eq("tenant_id", tenantId)
+    .eq("date", date)
+    .maybeSingle();
+
+  if (error) {
+    return `Errore verifica disponibilita: ${error.message}`;
+  }
+
+  if (!data?.confirmed) {
+    return "Disponibilita del giorno non confermata. Completa prima la conferma in Disponibilita.";
+  }
+
+  return null;
 }
 
 type ServiceValidationRow = {

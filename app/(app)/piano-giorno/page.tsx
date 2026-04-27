@@ -1172,8 +1172,15 @@ export default function PianoGiornoPage() {
       .catch(() => setAvailConfirmed(null));
   }, [token, date]);
 
+  const availabilityLocked = availConfirmed === false;
+  useEffect(() => {
+    if (availabilityLocked && viewMode !== "plan") {
+      setViewMode("plan");
+    }
+  }, [availabilityLocked, viewMode]);
+
   const runAutoAssign = useCallback(async (mode: "unassigned_only" | "regenerate_all") => {
-    if (!token) return;
+    if (!token || availabilityLocked) return;
     setShowAutoModal(false);
     setAutoAssigning(true);
     setAutoResult(null);
@@ -1195,7 +1202,7 @@ export default function PianoGiornoPage() {
     } finally {
       setAutoAssigning(false);
     }
-  }, [token, date, reload]);
+  }, [availabilityLocked, token, date, reload]);
 
   const runAiPlan = useCallback(async () => {
     if (!token) return;
@@ -1227,9 +1234,10 @@ export default function PianoGiornoPage() {
   }, [token, date]);
 
   const handleAutoAssign = useCallback(() => {
+    if (availabilityLocked) return;
     if (hasGroups) setShowAutoModal(true);
     else void runAutoAssign("unassigned_only");
-  }, [hasGroups, runAutoAssign]);
+  }, [availabilityLocked, hasGroups, runAutoAssign]);
 
   // Maps per lookup O(1)
   const serviceMap = useMemo(() => new Map((data?.services ?? []).map((s) => [s.id, s])), [data]);
@@ -1722,7 +1730,7 @@ export default function PianoGiornoPage() {
             </button>
             <button
               onClick={handleAutoAssign}
-              disabled={autoAssigning || !token || !data}
+              disabled={availabilityLocked || autoAssigning || !token || !data}
               className="btn-primary text-sm px-4 font-semibold disabled:opacity-50"
             >
               {autoAssigning ? "Analisi in corso…" : "Genera proposta automatica"}
@@ -1994,7 +2002,7 @@ export default function PianoGiornoPage() {
                   </div>
                   <button
                     onClick={handleAutoAssign}
-                    disabled={autoAssigning || !token || !data}
+                    disabled={availabilityLocked || autoAssigning || !token || !data}
                     className="btn-primary text-sm disabled:opacity-50"
                   >
                     {autoAssigning ? "Creo la proposta..." : "Crea piano dai servizi non assegnati"}
@@ -2113,8 +2121,9 @@ export default function PianoGiornoPage() {
                     )}
                     {planIssues.length > 8 && (
                       <button
-                        onClick={() => setViewMode("manual")}
-                        className="w-full rounded border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                        onClick={() => { if (!availabilityLocked) setViewMode("manual"); }}
+                        disabled={availabilityLocked}
+                        className="w-full rounded border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                       >
                         Apri strumenti manuali per vedere gli altri {planIssues.length - 8}
                       </button>
@@ -2131,8 +2140,9 @@ export default function PianoGiornoPage() {
                       <p className="text-xs text-slate-500">Lista ordinata per orario, pensata per controllo rapido.</p>
                     </div>
                     <button
-                      onClick={() => setViewMode("manual")}
-                      className="rounded border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                      onClick={() => { if (!availabilityLocked) setViewMode("manual"); }}
+                      disabled={availabilityLocked}
+                      className="rounded border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                     >
                       Modifica piano
                     </button>
@@ -2175,7 +2185,7 @@ export default function PianoGiornoPage() {
                       </p>
                       <button
                         onClick={handleAutoAssign}
-                        disabled={autoAssigning || !token}
+                        disabled={availabilityLocked || autoAssigning || !token}
                         className="btn-primary mt-4 text-sm disabled:opacity-50"
                       >
                         {autoAssigning ? "Analisi in corso..." : "Genera proposta automatica"}

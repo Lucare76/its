@@ -53,16 +53,44 @@ export default function ServiceWorkflowPage() {
   // Carica veicoli attivi del tenant
   useEffect(() => {
     if (!hasSupabaseEnv || !supabase || !tenantId) return;
-    void supabase
-      .from("vehicle_records")
-      .select("id, label, plate, habitual_driver_user_id")
-      .eq("tenant_id", tenantId)
-      .eq("active", true)
-      .order("label")
-      .then(({ data: v }) => {
-        if (v) setVehicles(v as typeof vehicles);
+    void Promise.all([
+      supabase
+        .from("vehicles")
+        .select("id, label, plate, habitual_driver_user_id, habitual_driver_profile_id")
+        .eq("tenant_id", tenantId)
+        .eq("active", true)
+        .order("label"),
+      supabase
+        .from("driver_profiles")
+        .select("id, full_name")
+        .eq("tenant_id", tenantId)
+        .eq("active", true),
+    ]).then(([vehiclesResult, profilesResult]) => {
+      if (!vehiclesResult.data) return;
+      const profileNameById = new Map(
+        (profilesResult.data ?? []).map((profile) => [profile.id, profile.full_name.trim().toLowerCase()])
+      );
+      const membershipUserIdByName = new Map(
+        data.memberships
+          .filter((membership) => membership.role === "driver" || membership.role === "autista")
+          .map((membership) => [membership.full_name.trim().toLowerCase(), membership.user_id])
+      );
+      const nextVehicles = vehiclesResult.data.map((vehicle) => {
+        const profileName = vehicle.habitual_driver_profile_id
+          ? profileNameById.get(vehicle.habitual_driver_profile_id)
+          : null;
+        const habitualDriverUserId = vehicle.habitual_driver_user_id
+          ?? (profileName ? membershipUserIdByName.get(profileName) ?? null : null);
+        return {
+          id: vehicle.id,
+          label: vehicle.label,
+          plate: vehicle.plate,
+          habitual_driver_user_id: habitualDriverUserId,
+        };
       });
-  }, [tenantId]);
+      setVehicles(nextVehicles);
+    });
+  }, [data.memberships, tenantId]);
 
   const workflow = useMemo(() => {
     const counts = new Map<ServiceStatus, number>();
@@ -118,7 +146,7 @@ export default function ServiceWorkflowPage() {
   const selectedService = data.services.find((item) => item.id === selectedServiceId) ?? visibleServices[0] ?? null;
 
   const drivers = useMemo(
-    () => data.memberships.filter((m) => m.role === "driver"),
+    () => data.memberships.filter((m) => m.role === "driver" || m.role === "autista"),
     [data.memberships]
   );
 

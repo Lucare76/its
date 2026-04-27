@@ -126,7 +126,7 @@ export default function DispatchPage() {
   const tenantMemberships = tenantId ? memberships.filter((m) => m.tenant_id === tenantId) : memberships;
   const assignmentByServiceId = useMemo(() => new Map(tenantAssignments.map((a) => [a.service_id, a])), [tenantAssignments]);
   const hotelsById            = useMemo(() => new Map((tenantId ? hotels.filter((h) => h.tenant_id === tenantId) : hotels).map((h) => [h.id, h])), [hotels, tenantId]);
-  const drivers               = useMemo(() => tenantMemberships.filter((m) => m.role === "driver"), [tenantMemberships]);
+  const drivers               = useMemo(() => tenantMemberships.filter((m) => m.role === "driver" || m.role === "autista"), [tenantMemberships]);
   const tenantVehicles        = useMemo(() => (tenantId ? vehicles.filter((vehicle) => vehicle.tenant_id === tenantId) : vehicles), [vehicles, tenantId]);
 
   const today    = useMemo(() => new Date().toISOString().slice(0, 10), []);

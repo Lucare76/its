@@ -28,6 +28,34 @@ afterAll(async () => {
 });
 
 describe("piano-giorno/trips — blocker server-side", () => {
+  it("blocca la creazione di un giro se la disponibilita non e confermata", async () => {
+    const hotelId = await seedHotel(ctx.admin, ctx.tenantId, { name: "Hotel No Confirmation" });
+    const driverId = await seedDriver(ctx.admin, ctx.tenantId, additionalUsers);
+    const vehicleId = await seedVehicle(ctx.admin, ctx.tenantId, { label: "Van No Confirmation", capacity: 8 });
+    const serviceId = await seedService(ctx.admin, ctx.tenantId, hotelId, {
+      date: TEST_DATE,
+      time: "08:30",
+      direction: "arrival",
+      pax: 4,
+    });
+
+    const req = makeNextRequest("POST", {
+      action: "create_trip",
+      date: TEST_DATE,
+      service_ids: [serviceId],
+      driver_user_id: driverId,
+      vehicle_id: vehicleId,
+      vehicle_capacity: 8,
+      vehicle_label: "Van No Confirmation",
+    }, ctx.token);
+    const res = await POST(req);
+    const body = await json<{ ok: boolean; error?: string }>(res);
+
+    expect(res.status).toBe(409);
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain("Disponibilita");
+  });
+
   it("blocca la creazione di un giro senza autista", async () => {
     await seedAvailabilityConfirmation(ctx.admin, ctx.tenantId, TEST_DATE, ctx.userId);
     const hotelId = await seedHotel(ctx.admin, ctx.tenantId, { name: "Hotel No Driver" });

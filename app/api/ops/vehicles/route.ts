@@ -5,28 +5,6 @@ import { vehicleUpsertSchema } from "@/lib/server/fleet-schemas";
 
 export const runtime = "nodejs";
 
-async function runVehicleMutationWithFallback(
-  queryFactory: (payload: Record<string, unknown>) => Promise<{ error: { message: string } | null }>
-) {
-  const run = async (payload: Record<string, unknown>) => {
-    const result = await queryFactory(payload);
-    return result.error;
-  };
-
-  return async (payload: Record<string, unknown>) => {
-    let error = await run(payload);
-    if (!error) return null;
-
-    const message = error.message.toLowerCase();
-    if (message.includes("license_number")) {
-      const fallbackPayload = { ...payload };
-      delete fallbackPayload.license_number;
-      error = await run(fallbackPayload);
-    }
-    return error;
-  };
-}
-
 const anomalySchema = z.object({
   vehicle_id: z.string().uuid(),
   severity: z.enum(["low", "medium", "high", "blocking"]),
@@ -127,12 +105,9 @@ export async function POST(request: NextRequest) {
         telaio: parsed.telaio ?? null,
         license_number: parsed.license_number ?? null,
       };
-      const executeMutation = await runVehicleMutationWithFallback(async (nextPayload) => (
-        await (parsed.id
-          ? auth.admin.from("vehicles").update(nextPayload).eq("tenant_id", tenantId).eq("id", parsed.id)
-          : auth.admin.from("vehicles").insert(nextPayload))
-      ));
-      const error = await executeMutation(payload);
+      const { error } = await (parsed.id
+        ? auth.admin.from("vehicles").update(payload).eq("tenant_id", tenantId).eq("id", parsed.id)
+        : auth.admin.from("vehicles").insert(payload));
       if (error) throw new Error(error.message);
     }
 

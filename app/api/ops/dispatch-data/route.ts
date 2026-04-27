@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { loadOperationalVehicles } from "@/lib/server/vehicle-catalog";
 
 export const runtime = "nodejs";
 
@@ -17,12 +18,7 @@ export async function GET(request: NextRequest) {
         .select("user_id, tenant_id, role, full_name")
         .eq("tenant_id", auth.membership.tenant_id),
       auth.admin.from("inbound_emails").select("*").eq("tenant_id", auth.membership.tenant_id),
-      auth.admin
-        .from("vehicle_records")
-        .select("id, tenant_id, label, plate, active, habitual_driver_user_id")
-        .eq("tenant_id", auth.membership.tenant_id)
-        .eq("active", true)
-        .order("label")
+      loadOperationalVehicles(auth.admin, auth.membership.tenant_id, { activeOnly: true }),
     ]);
 
     const error =
@@ -31,7 +27,7 @@ export async function GET(request: NextRequest) {
       hotelsResult.error ??
       membershipsResult.error ??
       inboundResult.error ??
-      vehiclesResult.error;
+      null;
 
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
@@ -46,7 +42,7 @@ export async function GET(request: NextRequest) {
       hotels: hotelsResult.data ?? [],
       memberships: membershipsResult.data ?? [],
       inbound_emails: inboundResult.data ?? [],
-      vehicles: vehiclesResult.data ?? []
+      vehicles: vehiclesResult ?? []
     });
   } catch (error) {
     return NextResponse.json(
