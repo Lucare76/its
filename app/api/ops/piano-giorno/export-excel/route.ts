@@ -9,7 +9,12 @@
 import ExcelJS from "exceljs";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { getPickupRule, getPickupRuleByRange, getPickupRuleByIslandPickup } from "@/lib/departure-pickup-rules";
+import {
+  isBrunoTarget,
+  loadContinentDispatchServices,
+  toBrunoArrival,
+  toBrunoDeparture,
+} from "@/lib/server/continent-dispatch";
 
 export const runtime = "nodejs";
 
@@ -54,82 +59,9 @@ function setColWidths(ws: ExcelJS.Worksheet, widths: number[]) {
   widths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
 }
 
-// ─── Bruno helpers (stessa logica di liste-bruno/route.ts) ────────────────────
-
-function normalizeZona(raw: string): string {
-  const z = raw.toLowerCase().trim();
-  if (z.includes("forio")) return "forio";
-  if (z.includes("lacco")) return "lacco";
-  if (z.includes("casamicciola")) return "casamicciola";
-  if (z.includes("barano")) return "barano";
-  return "ischia";
-}
-
-function ferryTravelMinutes(boatCo: string, porto: string): number {
-  const co = boatCo.toLowerCase();
-  const p = porto.toLowerCase();
-  if (co.includes("alilauro")) return 50;
-  if (co.includes("snav")) return 65;
-  if (co.includes("medmar") || p.includes("pozzuoli")) return 60;
-  return 95;
-}
-
-function addMinutes(hhmm: string, minutes: number): string {
-  const [h, m] = hhmm.trim().split(":").map(Number);
-  const total = (h ?? 0) * 60 + (m ?? 0) + minutes;
-  return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-}
-
-function computeArrivalAtIschia(vesselField: string): string | null {
-  const timeMatch = vesselField.match(/(\d{2}:\d{2})/);
-  if (!timeMatch) return null;
-  const departureTime = timeMatch[1]!;
-  const v = vesselField.toLowerCase();
-  const co = v.includes("alilauro") ? "alilauro" : v.includes("snav") ? "snav" : v.includes("medmar") ? "medmar" : "";
-  const porto = v.includes("pozzuoli") ? "pozzuoli" : v.includes("napoli") ? "napoli" : "";
-  return addMinutes(departureTime, ferryTravelMinutes(co, porto));
-}
-
-function computeArrivalAtPorto(boatT: string, boatCo: string, porto: string): string {
-  return addMinutes(boatT, ferryTravelMinutes(boatCo, porto));
-}
-
 function cleanNotes(raw: string | null): string {
   if (!raw) return "";
   return raw.includes("[pdf_import]") ? "" : raw;
-}
-
-const AIRPORT_KINDS = [
-  "transfer_airport_hotel",
-  "transfer_airport_hotel_aliscafo",
-  "transfer_airport_hotel_exclusive",
-  "transfer_train_hotel_aliscafo",
-];
-
-const EXCLUSIVE_KINDS = [
-  "transfer_airport_hotel_exclusive",
-  "transfer_train_hotel_exclusive",
-  "transfer_airport_hotel_aliscafo",
-  "transfer_train_hotel_aliscafo",
-];
-
-type BrunoRow = {
-  id: string; customer_name: string; customer_first_name?: string | null; customer_last_name?: string | null;
-  pax: number; time: string; departure_time?: string | null;
-  vessel: string; place_type: string; meeting_point: string | null;
-  phone: string; notes: string; porto_bruno?: string | null;
-  service_type_code?: string | null; booking_service_kind?: string | null;
-  billing_party_name?: string | null;
-  hotels: { name: string; zone?: string | null } | null;
-  train_arrival_number?: string | null;
-  train_departure_number?: string | null;
-};
-
-function resolvePlaceType(r: BrunoRow): "station" | "airport" {
-  if (r.place_type === "station" || r.place_type === "airport") return r.place_type;
-  const kind = r.service_type_code ?? r.booking_service_kind ?? "";
-  if (AIRPORT_KINDS.includes(kind)) return "airport";
-  return "station";
 }
 
 // ─── GET ──────────────────────────────────────────────────────────────────────
@@ -149,8 +81,7 @@ export async function GET(req: NextRequest) {
       hotelsRes,
       membershipsRes,
       vehiclesRes,
-      brunoArrivalsRes,
-      brunoDeparturesRes,
+      brunoData,
     ] = await Promise.all([
       auth.admin
         .from("services")
@@ -179,27 +110,7 @@ export async function GET(req: NextRequest) {
         .eq("tenant_id", tenantId)
         .eq("active", true),
 
-      // Bruno arrivi
-      auth.admin
-        .from("services")
-        .select("id, customer_name, customer_first_name, customer_last_name, pax, time, vessel, place_type, meeting_point, phone, notes, service_type_code, booking_service_kind, train_arrival_number, hotels(name, zone)")
-        .eq("tenant_id", tenantId)
-        .eq("date", date)
-        .eq("direction", "arrival")
-        .eq("is_draft", false)
-        .or(`place_type.eq.airport,service_type_code.in.(${AIRPORT_KINDS.join(",")}),booking_service_kind.in.(${AIRPORT_KINDS.join(",")})`)
-        .order("time"),
-
-      // Bruno partenze
-      auth.admin
-        .from("services")
-        .select("id, customer_name, customer_first_name, customer_last_name, pax, time, departure_time, vessel, place_type, meeting_point, phone, notes, porto_bruno, service_type_code, booking_service_kind, billing_party_name, train_departure_number, hotels(name, zone)")
-        .eq("tenant_id", tenantId)
-        .eq("is_draft", false)
-        .or(`departure_date.eq.${date},and(date.eq.${date},direction.eq.departure,departure_date.is.null)`)
-        .or(`service_type_code.in.(${EXCLUSIVE_KINDS.join(",")}),booking_service_kind.in.(${EXCLUSIVE_KINDS.join(",")})`)
-        .order("vessel")
-        .order("departure_time"),
+      loadContinentDispatchServices(auth, date),
     ]);
 
     if (servicesRes.error) throw new Error(servicesRes.error.message);
@@ -370,17 +281,15 @@ export async function GET(req: NextRequest) {
     const hdr3a = ws3.addRow(["Ora Arrivo", "Nome", "Cognome", "Telefono", "N° Persone", "Hotel", "Note speciali", "Numero volo", "Porto arrivo"]);
     styleHeader(hdr3a, "FF1E40AF");
 
-    const brunoArrivals = (brunoArrivalsRes.data ?? []) as unknown as BrunoRow[];
+    const brunoArrivals = brunoData.arrivals.filter(isBrunoTarget).map(toBrunoArrival);
     let r3 = 0;
     for (const r of brunoArrivals) {
-      const hotels = Array.isArray(r.hotels) ? (r.hotels[0] ?? null) as { name: string; zone?: string | null } | null : r.hotels;
-      const arrivalTime = computeArrivalAtIschia(r.vessel ?? "") ?? fmt5(r.time);
-      const parts = customerFullName(r).split(" ");
+      const arrivalTime = r.arrival_at_ischia ?? fmt5(r.time);
+      const parts = r.customer_name.split(" ");
       const nome = parts[0] ?? "";
       const cognome = parts.slice(1).join(" ");
       const porto = portLabel(r.meeting_point);
-      const flightNum = r.train_arrival_number ?? "";
-      const row = ws3.addRow([arrivalTime, nome, cognome, r.phone ?? "—", r.pax, hotels?.name ?? "—", cleanNotes(r.notes), flightNum, porto]);
+      const row = ws3.addRow([arrivalTime, nome, cognome, r.phone ?? "—", r.pax, r.hotel_name ?? "—", cleanNotes(r.notes), r.flight_number ?? "", porto]);
       styleDataRow(row, r3++ % 2 === 0);
     }
 
@@ -395,59 +304,23 @@ export async function GET(req: NextRequest) {
     const hdr3d = ws3.addRow(["Ora Arrivo Porto", "Nome", "Cognome", "Telefono", "N° Persone", "Hotel", "Note speciali", "Numero volo", "Porto imbarco"]);
     styleHeader(hdr3d, "FF92400E");
 
-    const brunoDepartures = (brunoDeparturesRes.data ?? []) as unknown as BrunoRow[];
+    const brunoDepartures = brunoData.departures.filter(isBrunoTarget).map(toBrunoDeparture);
     let r3d = 0;
     for (const r of brunoDepartures) {
-      const hotels = Array.isArray(r.hotels) ? (r.hotels[0] ?? null) as { name: string; zone?: string | null } | null : r.hotels;
-      const zona = normalizeZona(hotels?.zone ?? "");
-      const kind = r.booking_service_kind ?? r.service_type_code ?? "";
-      const transportTypes: string[] = [];
-      if (kind === "transfer_train_hotel") transportTypes.push("treno_traghetto", "treno_aliscafo");
-      else if (kind === "transfer_airport_hotel" || kind === "transfer_airport_hotel_aliscafo") transportTypes.push("volo_traghetto", "volo_aliscafo");
-      else transportTypes.push("volo_traghetto", "volo_aliscafo", "treno_traghetto", "treno_aliscafo");
-
-      const tFromCandidates = [r.departure_time?.slice(0, 5), r.time?.slice(0, 5)].filter((t): t is string => Boolean(t));
-      let computedBoatT: string | null = null;
-      let computedVessel: string | null = null;
-      let computedPorto: string | null = null;
-
-      outer:
-      for (const tFrom of tFromCandidates) {
-        for (const tt of transportTypes) {
-          const rule = getPickupRule("", tt, tFrom, zona) ?? getPickupRuleByRange("", tt, tFrom, zona);
-          if (rule) { computedVessel = `${rule.boat_co} ${rule.boat_t}`; computedBoatT = rule.boat_t; computedPorto = rule.porto_p; break outer; }
-        }
-      }
-      if (!computedBoatT) {
-        outer2:
-        for (const tFrom of tFromCandidates) {
-          for (const tt of transportTypes) {
-            const rule = getPickupRuleByIslandPickup(tt, tFrom, zona);
-            if (rule) { computedVessel = `${rule.boat_co} ${rule.boat_t}`; computedBoatT = rule.boat_t; computedPorto = rule.porto_p; break outer2; }
-          }
-        }
-      }
-
-      const portoBruno = r.porto_bruno || computedPorto || null;
-      const arrivalAtPorto = computedBoatT && computedVessel
-        ? computeArrivalAtPorto(computedBoatT, computedVessel, portoBruno ?? "")
-        : null;
-
-      const parts = customerFullName(r).split(" ");
+      const parts = r.customer_name.split(" ");
       const nome = parts[0] ?? "";
       const cognome = parts.slice(1).join(" ");
-      const flightNum = r.train_departure_number ?? "";
 
       const row = ws3.addRow([
-        arrivalAtPorto ?? fmt5(r.departure_time ?? r.time),
+        r.arrival_at_porto ?? fmt5(r.time),
         nome,
         cognome,
         r.phone ?? "—",
         r.pax,
-        hotels?.name ?? "—",
+        r.hotel_name ?? "—",
         cleanNotes(r.notes),
-        flightNum,
-        portoBruno ? portLabel(portoBruno) : portLabel(r.meeting_point),
+        r.flight_number ?? "",
+        r.porto_bruno ? portLabel(r.porto_bruno) : portLabel(r.meeting_point),
       ]);
       styleDataRow(row, r3d++ % 2 === 0);
     }

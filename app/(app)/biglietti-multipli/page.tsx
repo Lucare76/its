@@ -3,7 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
-const TARGET_AGENCIES = ["Aleste Viaggi", "Ischia Stars", "Zigolo", "Angelino"];
+const TARGET_AGENCIES = [
+  { label: "Aleste Viaggi", aliases: ["aleste viaggi"] },
+  { label: "Ischia Stars", aliases: ["ischia stars", "ischia star"] },
+  { label: "Zigolo Viaggi", aliases: ["zigolo", "zigoloviaggi"] },
+  { label: "Angelino Tour Operator", aliases: ["angelino tour operator", "angelino tour"] },
+] as const;
 
 type Agency = { id: string; name: string; email: string | null };
 
@@ -167,10 +172,13 @@ export default function BigliettiMultipliPage() {
       // Filtra le 4 agenzie target (case-insensitive) e usa booking_email o contact_email
       const allRows = (rows ?? []) as Array<{ id: string; name: string; booking_email: string | null; contact_email: string | null }>;
       const result: Agency[] = TARGET_AGENCIES.map((target) => {
-        const match = allRows.find((r) => r.name.toLowerCase().includes(target.toLowerCase()) || target.toLowerCase().includes(r.name.toLowerCase()));
+        const match = allRows.find((row) => {
+          const normalized = row.name.toLowerCase();
+          return target.aliases.some((alias) => normalized.includes(alias));
+        });
         return {
-          id: match?.id ?? `missing-${target}`,
-          name: target,
+          id: match?.id ?? `missing-${target.label}`,
+          name: target.label,
           email: match?.booking_email || match?.contact_email || null,
         };
       });

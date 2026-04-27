@@ -394,8 +394,8 @@ function TabArrivi({
   if (arrivals.length === 0) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400">
-        <p className="text-lg font-semibold">Nessun arrivo aeroporto per Bruno</p>
-        <p className="mt-1 text-sm">Qui compaiono gli arrivi aeroporto assegnati al bucket Bruno.</p>
+        <p className="text-lg font-semibold">Nessun arrivo Bruno</p>
+        <p className="mt-1 text-sm">Qui compaiono gli arrivi aeroporto e gli arrivi stazione con aliscafo o esclusivo.</p>
       </div>
     );
   }
@@ -411,7 +411,7 @@ function TabArrivi({
   return (
     <div className="space-y-5">
       <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-        {arrivals.length} servizi · Bruno copre tutti gli arrivi aeroporto
+        {arrivals.length} servizi · Bruno copre gli arrivi aeroporto e gli arrivi stazione con aliscafo o esclusivo
       </p>
       {Object.entries(byVessel).map(([vessel, group]) => {
         const totalPax = group.reduce((s, a) => s + a.pax, 0);
@@ -477,7 +477,7 @@ function TabPartenze({
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400">
         <p className="text-lg font-semibold">Nessuna partenza speciale per Bruno</p>
-        <p className="mt-1 text-sm">Qui compaiono solo le partenze su Napoli esclusive o con aliscafo.</p>
+        <p className="mt-1 text-sm">Qui compaiono le partenze aeroporto o stazione con aliscafo o esclusivo.</p>
       </div>
     );
   }
@@ -490,7 +490,7 @@ function TabPartenze({
   return (
     <div className="space-y-5">
       <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-        {departures.length} servizi · Bruno ritira al porto di Napoli per le partenze speciali
+        {departures.length} servizi · Bruno gestisce le partenze aeroporto o stazione con aliscafo o esclusivo
       </p>
       {Object.entries(byVessel)
         .sort(([a], [b]) => {
@@ -760,7 +760,7 @@ export default function ListeBrunoPage() {
     <div className="flex h-full flex-col">
       <PageHeader
         title="Liste Bruno"
-        subtitle="Arrivi aeroporto e partenze speciali su Napoli"
+        subtitle="Arrivi aeroporto o stazione speciali e partenze aeroporto o stazione con aliscafo o esclusivo"
         actions={
           // eslint-disable-next-line @next/next/no-img-element
           <img src="/brand/logo-ischia-transfer.png" alt="Ischia Transfer" className="h-16 w-auto" />

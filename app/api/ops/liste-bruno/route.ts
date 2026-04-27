@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { sendListeBrunoEmail, type BrunoArrival, type BrunoDeparture } from "@/lib/server/liste-bruno-email";
 import {
+  isBrunoTarget,
   loadContinentDispatchServices,
   resetContinentDispatchTarget,
   setContinentDispatchTarget,
+  toBrunoArrival,
+  toBrunoDeparture,
 } from "@/lib/server/continent-dispatch";
 
 export const runtime = "nodejs";
@@ -17,43 +20,8 @@ async function loadBrunoData(auth: ReturnType<typeof authorizePricingRequest> ex
   );
 
   return {
-    arrivals: data.arrivals
-      .filter((service) => service.effective_target === "bruno")
-      .map((service) => ({
-        id: service.id,
-        customer_name: service.customer_name,
-        pax: service.pax,
-        time: service.time,
-        vessel: service.vessel,
-        arrival_at_ischia: service.arrival_at_ischia,
-        place_type: service.place_type,
-        meeting_point: service.meeting_point,
-        phone: service.phone,
-        hotel_name: service.hotel_name,
-        notes: service.notes,
-        flight_number: service.train_arrival_number,
-        dispatch_source: service.target_source,
-      })),
-    departures: data.departures
-      .filter((service) => service.effective_target === "bruno")
-      .map((service) => ({
-        id: service.id,
-        customer_name: service.customer_name,
-        pax: service.pax,
-        time: service.time,
-        vessel: service.vessel,
-        boat_t: service.boat_t,
-        arrival_at_porto: service.arrival_at_porto,
-        connection_time: service.connection_time,
-        place_type: service.place_type,
-        meeting_point: service.meeting_point,
-        phone: service.phone,
-        porto_bruno: service.porto_bruno,
-        hotel_name: service.hotel_name,
-        notes: service.notes,
-        flight_number: service.train_departure_number,
-        dispatch_source: service.target_source,
-      })),
+    arrivals: data.arrivals.filter(isBrunoTarget).map(toBrunoArrival),
+    departures: data.departures.filter(isBrunoTarget).map(toBrunoDeparture),
     brunoEmail: data.brunoEmail,
   };
 }

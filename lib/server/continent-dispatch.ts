@@ -35,6 +35,41 @@ export type ContinentDispatchService = {
   override_reason: string | null;
 };
 
+export type BrunoArrival = {
+  id: string;
+  customer_name: string;
+  pax: number;
+  time: string;
+  vessel: string;
+  arrival_at_ischia: string | null;
+  place_type: ContinentPlaceType;
+  meeting_point: string | null;
+  phone: string;
+  hotel_name: string | null;
+  notes: string;
+  flight_number: string | null;
+  dispatch_source: ContinentDispatchSource;
+};
+
+export type BrunoDeparture = {
+  id: string;
+  customer_name: string;
+  pax: number;
+  time: string;
+  vessel: string;
+  boat_t: string | null;
+  arrival_at_porto: string | null;
+  connection_time: string | null;
+  place_type: ContinentPlaceType;
+  meeting_point: string | null;
+  phone: string;
+  porto_bruno: string | null;
+  hotel_name: string | null;
+  notes: string;
+  flight_number: string | null;
+  dispatch_source: ContinentDispatchSource;
+};
+
 type ServiceRow = {
   id: string;
   customer_name: string;
@@ -213,12 +248,20 @@ function computeDepartureRouting(row: ServiceRow, placeType: ContinentPlaceType)
   };
 }
 
-function resolveSuggestedTarget(row: ServiceRow, placeType: ContinentPlaceType, continentHub: "napoli" | "pozzuoli" | null): ContinentDispatchTarget {
+export function resolveSuggestedTarget(
+  row: Pick<ServiceRow, "direction" | "booking_service_kind" | "service_type_code">,
+  placeType: ContinentPlaceType,
+  _continentHub: "napoli" | "pozzuoli" | null
+): ContinentDispatchTarget {
   if (row.direction === "arrival" && placeType === "airport") {
     return "bruno";
   }
 
-  if (row.direction === "departure" && continentHub === "napoli" && isExclusiveOrHydrofoilKind(row.booking_service_kind ?? row.service_type_code)) {
+  if (row.direction === "arrival" && placeType === "station" && isExclusiveOrHydrofoilKind(row.booking_service_kind ?? row.service_type_code)) {
+    return "bruno";
+  }
+
+  if (row.direction === "departure" && (placeType === "airport" || placeType === "station") && isExclusiveOrHydrofoilKind(row.booking_service_kind ?? row.service_type_code)) {
     return "bruno";
   }
 
@@ -278,6 +321,49 @@ function mapRow(row: ServiceRow & { direction: "arrival" | "departure" }): Conti
     target_source: manualSource && manualTarget ? "manual" : "rule",
     vendor_name: row.continent_dispatch_vendor?.trim() || null,
     override_reason: row.continent_dispatch_override_reason?.trim() || null,
+  };
+}
+
+export function isBrunoTarget(service: Pick<ContinentDispatchService, "effective_target">) {
+  return service.effective_target === "bruno";
+}
+
+export function toBrunoArrival(service: ContinentDispatchService): BrunoArrival {
+  return {
+    id: service.id,
+    customer_name: service.customer_name,
+    pax: service.pax,
+    time: service.time,
+    vessel: service.vessel,
+    arrival_at_ischia: service.arrival_at_ischia,
+    place_type: service.place_type,
+    meeting_point: service.meeting_point,
+    phone: service.phone,
+    hotel_name: service.hotel_name,
+    notes: service.notes,
+    flight_number: service.train_arrival_number,
+    dispatch_source: service.target_source,
+  };
+}
+
+export function toBrunoDeparture(service: ContinentDispatchService): BrunoDeparture {
+  return {
+    id: service.id,
+    customer_name: service.customer_name,
+    pax: service.pax,
+    time: service.time,
+    vessel: service.vessel,
+    boat_t: service.boat_t,
+    arrival_at_porto: service.arrival_at_porto,
+    connection_time: service.connection_time,
+    place_type: service.place_type,
+    meeting_point: service.meeting_point,
+    phone: service.phone,
+    porto_bruno: service.porto_bruno,
+    hotel_name: service.hotel_name,
+    notes: service.notes,
+    flight_number: service.train_departure_number,
+    dispatch_source: service.target_source,
   };
 }
 
