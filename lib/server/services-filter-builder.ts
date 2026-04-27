@@ -40,7 +40,6 @@ function sanitizeOrValue(raw: string) {
   return raw.replace(/[,%]/g, " ");
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function buildServicesQuery({ admin, filters, select }: BuildServicesQueryArgs): Promise<{ query: any }> {
   const parsed = serviceQueryFiltersSchema.parse(filters);
 

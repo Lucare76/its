@@ -14,6 +14,8 @@ interface OGProps {
   params: Promise<{ token: string }>;
 }
 
+/* eslint-disable @next/next/no-img-element */
+
 export default async function Image({ params }: OGProps) {
   const { token } = await params;
   const service = await getSharedServiceByToken(token);

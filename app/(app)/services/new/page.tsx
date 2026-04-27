@@ -492,15 +492,20 @@ export default function OpsNewBookingPage() {
     ),
     [form.departure_date, ferryScheduleRows, selectedKind]
   );
-  const activeArrivalOptions = isSnavKind ? snavArrivalOptions : isMedmarKind ? medmarArrivalOptions : [];
-  const activeDepartureOptions = isSnavKind ? snavDepartureOptions : isMedmarKind ? medmarDepartureOptions : [];
-
   // Porto arrivo (da orario traghetto arrivo)
   const portoArrivo = useMemo(() => {
     if (!snavMedmarCompany) return null;
+    const activeArrivalOptions = isSnavKind ? snavArrivalOptions : isMedmarKind ? medmarArrivalOptions : [];
     const porto = activeArrivalOptions.find((option) => option.time === form.arrival_time)?.porto ?? null;
     return porto ? ferryPortLabel(porto) : null;
-  }, [activeArrivalOptions, form.arrival_time, snavMedmarCompany]);
+  }, [
+    form.arrival_time,
+    isMedmarKind,
+    isSnavKind,
+    medmarArrivalOptions,
+    snavMedmarCompany,
+    snavArrivalOptions,
+  ]);
 
   // Porto e prelievo partenza (da orario traghetto partenza + zona hotel)
   const hotelZona = useMemo(() => {
@@ -510,6 +515,7 @@ export default function OpsNewBookingPage() {
 
   const depRuleInfo = useMemo(() => {
     if (!snavMedmarCompany) return null;
+    const activeDepartureOptions = isSnavKind ? snavDepartureOptions : isMedmarKind ? medmarDepartureOptions : [];
     const rule = getDepartureRule(snavMedmarCompany, ferryDepTime);
     if (!rule) return null;
     const porto = activeDepartureOptions.find((option) => option.time === ferryDepTime)?.porto ?? rule.porto_ischia;
@@ -517,7 +523,15 @@ export default function OpsNewBookingPage() {
       porto: ferryPortLabel(porto),
       pickup: rule.pickup_by_zona[hotelZona] ?? null,
     };
-  }, [activeDepartureOptions, snavMedmarCompany, ferryDepTime, hotelZona]);
+  }, [
+    ferryDepTime,
+    hotelZona,
+    isMedmarKind,
+    isSnavKind,
+    medmarDepartureOptions,
+    snavDepartureOptions,
+    snavMedmarCompany,
+  ]);
 
   const isTransportCodeRequired = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_airport_hotel_aliscafo" || selectedKind === "transfer_train_hotel" || selectedKind === "transfer_train_hotel_aliscafo";
   const showTransportCodeField =

@@ -386,6 +386,8 @@ export default function MedmarArPage() {
   // Badge recupero
   const criticalOpp = opportunities.filter((o) => o.urgency === "critical").length;
   const highOpp = opportunities.filter((o) => o.urgency !== "normal").length;
+  const canLoadDecisionData = Boolean(token && formRoute && formPax && parseInt(formPax) >= 1);
+  const visibleDecisionData = canLoadDecisionData ? decisionData : null;
 
   // Simulatore: calcolo scenari
   const simProjection = useMemo(() => {
@@ -468,16 +470,14 @@ export default function MedmarArPage() {
 
   // Decision Helper: ricalcola quando cambiano route/pax/date
   useEffect(() => {
-    if (!token || !formRoute || !formPax || parseInt(formPax) < 1) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setDecisionData(null);
-      return;
-    }
+    if (!canLoadDecisionData) return;
     const pax = parseInt(formPax);
     if (isNaN(pax) || pax < 1) return;
 
     const ctrl = new AbortController();
-    setDecisionLoading(true);
+    const loadingTimer = window.setTimeout(() => {
+      if (!ctrl.signal.aborted) setDecisionLoading(true);
+    }, 0);
     (async () => {
       const params = new URLSearchParams({
         route: formRoute,
@@ -506,8 +506,11 @@ export default function MedmarArPage() {
         });
       }
     })().catch(() => setDecisionLoading(false));
-    return () => ctrl.abort();
-  }, [token, formRoute, formPax, formDate, formOutbound]);
+    return () => {
+      ctrl.abort();
+      window.clearTimeout(loadingTimer);
+    };
+  }, [canLoadDecisionData, formDate, formOutbound, formPax, formRoute, token]);
 
   // Carica biglietti
   const loadTickets = useCallback(async () => {
@@ -525,11 +528,6 @@ export default function MedmarArPage() {
     if (res.ok && res.data) setTickets(res.data.tickets);
   }, [token, filterDateFrom, filterDateTo, filterRoute, filterMode, filterSearch]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (tab === "biglietti") void loadTickets();
-  }, [tab, loadTickets]);
-
   // Carica pending groups
   const loadPending = useCallback(async () => {
     if (!token) return;
@@ -538,11 +536,6 @@ export default function MedmarArPage() {
     setPendingLoading(false);
     if (res.ok && res.data) setPendingGroups(res.data.groups);
   }, [token]);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (tab === "pending") void loadPending();
-  }, [tab, loadPending]);
 
   // Carica opportunità di recupero
   const loadOpportunities = useCallback(async () => {
@@ -557,11 +550,6 @@ export default function MedmarArPage() {
     if (res.ok && res.data) setOpportunities(res.data.opportunities);
   }, [token]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (tab === "recupero") void loadOpportunities();
-  }, [tab, loadOpportunities]);
-
   // Carica stats
   const loadStats = useCallback(async () => {
     if (!token) return;
@@ -571,11 +559,6 @@ export default function MedmarArPage() {
     setStatsLoading(false);
     if (res.ok && res.data) setStats(res.data.stats);
   }, [token, statsPeriodFrom, statsPeriodTo]);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (tab === "dashboard") void loadStats();
-  }, [tab, loadStats]);
 
   // Carica base simulatore
   const loadSimulator = useCallback(async () => {
@@ -595,11 +578,6 @@ export default function MedmarArPage() {
     }
   }, [token, simBaseLoaded]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (tab === "simulatore") void loadSimulator();
-  }, [tab, loadSimulator]);
-
   // Carica leve strategiche
   const loadInsights = useCallback(async () => {
     if (!token) return;
@@ -609,10 +587,15 @@ export default function MedmarArPage() {
     if (res.ok && res.data) setInsights(res.data);
   }, [token]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (tab === "leve") void loadInsights();
-  }, [tab, loadInsights]);
+  const handleTabChange = useCallback((nextTab: Tab) => {
+    setTab(nextTab);
+    if (nextTab === "biglietti") void loadTickets();
+    if (nextTab === "pending") void loadPending();
+    if (nextTab === "recupero") void loadOpportunities();
+    if (nextTab === "dashboard") void loadStats();
+    if (nextTab === "simulatore") void loadSimulator();
+    if (nextTab === "leve") void loadInsights();
+  }, [loadInsights, loadOpportunities, loadPending, loadSimulator, loadStats, loadTickets]);
 
   // Submit emissione
   const handleEmit = async (modeOverride?: TicketMode) => {
@@ -754,7 +737,7 @@ export default function MedmarArPage() {
       {criticalOpp > 0 && tab !== "recupero" && (
         <button
           type="button"
-          onClick={() => setTab("recupero")}
+          onClick={() => handleTabChange("recupero")}
           className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-left hover:bg-rose-100 transition"
         >
           <p className="text-sm font-semibold text-rose-800">
@@ -777,7 +760,7 @@ export default function MedmarArPage() {
           <button
             key={t.id}
             type="button"
-            onClick={() => setTab(t.id)}
+            onClick={() => handleTabChange(t.id)}
             className={`shrink-0 px-4 py-2.5 text-sm font-semibold border-b-2 transition ${
               tab === t.id
                 ? "border-indigo-600 text-indigo-600"
@@ -1321,7 +1304,7 @@ export default function MedmarArPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setTab("recupero")}
+                    onClick={() => handleTabChange("recupero")}
                     className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white hover:bg-rose-700"
                   >
                     Gestisci recupero →

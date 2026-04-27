@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Audit Completo Ischia Transfer - 26/04/2026</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --ink: #101828;
+      --muted: #475467;
+      --line: #d0d5dd;
+      --brand: #1d4ed8;
+      --good: #027a48;
+      --warn: #b54708;
+      --bad: #b42318;
+      --dark: #111827;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.5 Arial, Helvetica, sans-serif;
+    }
+    .page {
+      width: 100%;
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 28px 32px 44px;
+    }
+    .hero, .section, .score-grid, .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    }
+    .hero {
+      padding: 28px;
+      margin-bottom: 20px;
+    }
+    .eyebrow {
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 10px 0 8px;
+      font-size: 30px;
+      line-height: 1.15;
+    }
+    .sub {
+      color: var(--muted);
+      margin: 0;
+      font-size: 15px;
+    }
+    .meta {
+      margin-top: 16px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: var(--muted);
+      background: #fff;
+    }
+    .section {
+      padding: 22px 24px;
+      margin-bottom: 18px;
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+    h3 {
+      margin: 18px 0 8px;
+      font-size: 15px;
+    }
+    p { margin: 0 0 10px; }
+    ul, ol { margin: 8px 0 0 18px; padding: 0; }
+    li { margin: 5px 0; }
+    .score-grid {
+      padding: 18px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin: 14px 0;
+    }
+    .score {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      background: #fff;
+    }
+    .score .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
+    }
+    .score .value {
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .final-score {
+      border: 2px solid var(--dark);
+      background: #f8fafc;
+    }
+    .tag {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      vertical-align: middle;
+    }
+    .ok { background: #ecfdf3; color: var(--good); }
+    .ylw { background: #fff7ed; color: var(--warn); }
+    .org { background: #fff7ed; color: #c2410c; }
+    .red { background: #fef3f2; color: var(--bad); }
+    .blk { background: #f2f4f7; color: #344054; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 9px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: #f8fafc;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .small { font-size: 12px; color: var(--muted); }
+    .mono { font-family: "Courier New", monospace; font-size: 12px; }
+    .risk {
+      border-left: 4px solid var(--bad);
+      padding-left: 12px;
+      margin: 14px 0;
+    }
+    .phase {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      margin: 12px 0;
+      background: #fff;
+    }
+    .answer {
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--bad);
+      margin-bottom: 6px;
+    }
+    .footer-note {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 10px;
+    }
+    .break-before { page-break-before: always; }
+    @media print {
+      body { background: #fff; }
+      .page { max-width: none; padding: 0; }
+      .hero, .section, .score-grid, .card, .phase { box-shadow: none; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="eyebrow">Audit Tecnico-Operativo</div>
+      <h1>Ischia Transfer Service<br />Audit Completo e Spietato</h1>
+      <p class="sub">Valutazione del codice, dei moduli operativi, dei rischi di esercizio e della reale prontezza produttiva del progetto alla data del 26/04/2026.</p>
+      <div class="meta">
+        <span class="pill">Repository: <span class="mono">c:\Users\user\Downloads\its</span></span>
+        <span class="pill">Stack: Next.js + TypeScript + Supabase + Vercel</span>
+        <span class="pill">Modalita: lettura diretta del codice e dei test locali</span>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>SEZIONE 1 — EXECUTIVE SUMMARY</h2>
+      <p>Il progetto non e messo male: ha una copertura funzionale ampia, una base tecnica sensata, molte migration e diversi moduli operativi reali. Il problema e che l'affidabilita non e uniforme: alcune parti sono mature, altre sembrano complete ma non garantiscono davvero i vincoli chiesti dal cliente.</p>
+      <p>Funzionano bene il perimetro generale del prodotto, il modulo QR, buona parte del Piano del Giorno, gli export Excel e il modulo Medmar A/R come struttura. Il codice dimostra lavoro serio, velocita di iterazione e una base che si puo ancora salvare senza rifare tutto.</p>
+      <p>Quello che rischia di esplodere in produzione e molto concreto: regole dure che restano avvisi UI, auto-assign con fallback che puo violare i vincoli, editing manuale dei giri troppo permissivo, incoerenza tra lookup hardcoded e dati DB, impegni automezzo non integrati nella pianificazione, modulo Medmar A/R forte in facciata ma non ancora chiuso sui job automatici critici.</p>
+      <p>Stimerei 4-6 settimane uomo per arrivare a un prodotto realmente vendibile e difendibile in esercizio, a patto di fermare il cambio continuo di scope e chiudere prima i buchi server-side piu pericolosi.</p>
+    </section>
+
+    <section class="section">
+      <h2>SEZIONE 2 — VOTO FINALE</h2>
+      <div class="score-grid">
+        <div class="score"><div class="label">Funzionalita</div><div class="value">6.80/10</div></div>
+        <div class="score"><div class="label">Qualita Codice</div><div class="value">5.70/10</div></div>
+        <div class="score"><div class="label">Architettura</div><div class="value">5.90/10</div></div>
+        <div class="score"><div class="label">Sicurezza</div><div class="value">6.20/10</div></div>
+        <div class="score"><div class="label">Test e Affidabilita</div><div class="value">4.90/10</div></div>
+        <div class="score"><div class="label">UX</div><div class="value">7.10/10</div></div>
+        <div class="score final-score" style="grid-column: 1 / -1;">
+          <div class="label">Voto Finale Pesato</div>
+          <div class="value">5.96/10</div>
+        </div>
+      </div>
+      <p>Il voto non e basso perche manca tutto. E basso perche il progetto e gia abbastanza grande da fare danni veri se le parti incomplete sembrano complete. La breadth e sopra la media; l'affidabilita dei vincoli operativi, delle integrazioni e dei calcoli economici non e ancora da produzione tranquilla.</p>
+    </section>
+
+    <section class="section break-before">
+      <h2>SEZIONE 3 — STATO FUNZIONALITA</h2>
+      <p class="small">Legenda: <span class="tag ok">✅ COMPLETATA E TESTATA</span> <span class="tag ylw">🟡 IMPLEMENTATA MA NON TESTATA / CON BUG MINORI</span> <span class="tag org">🟠 IMPLEMENTATA PARZIALMENTE</span> <span class="tag red">🔴 NON IMPLEMENTATA</span> <span class="tag blk">⚫ INFORMAZIONI INSUFFICIENTI</span></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Modulo</th>
+            <th>Funzionalita</th>
+            <th>Stato</th>
+            <th>Cosa manca</th>
+            <th>Effort residuo</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Gestione Prenotazioni</td><td>Ricerca nome/cognome/telefono</td><td><span class="tag org">🟠</span></td><td>La route <span class="mono">app/api/ops/search/route.ts</span> cerca <span class="mono">customer_name</span> e <span class="mono">phone</span>, non nome/cognome separati.</td><td>0.5g</td></tr>
+          <tr><td>Gestione Prenotazioni</td><td>Inserimento manuale prenotazioni</td><td><span class="tag ylw">🟡</span></td><td>Funziona, ma con workaround di schema drift in <span class="mono">app/api/ops/new-booking/route.ts</span> e senza copertura end-to-end robusta.</td><td>1-2g</td></tr>
+          <tr><td>Gestione Prenotazioni</td><td>Campo numero mezzo condizionale</td><td><span class="tag ylw">🟡</span></td><td>Esiste come <span class="mono">transport_code</span> contestuale, non come etichetta esplicita uniforme.</td><td>0.5g</td></tr>
+          <tr><td>Gestione Prenotazioni</td><td>Logica porto SNAV sempre Casamicciola</td><td><span class="tag ylw">🟡</span></td><td>Presente ma hardcoded in <span class="mono">lib/snav-medmar-lookup.ts</span>.</td><td>0.5g</td></tr>
+          <tr><td>Gestione Prenotazioni</td><td>Logica porto Medmar per orario</td><td><span class="tag ylw">🟡</span></td><td>Presente ma hardcoded e non centralizzata sul DB.</td><td>1g</td></tr>
+          <tr><td>Gestione Prenotazioni</td><td>Fix sostituisci duplicato 404</td><td><span class="tag ok">✅</span></td><td>Route presente e test di integrazione dedicato in <span class="mono">tests/integration/service-replace.test.ts</span>.</td><td>0g</td></tr>
+          <tr><td>Gestione Prenotazioni</td><td>Rimozione SNAV 08:10</td><td><span class="tag org">🟠</span></td><td>La migration c'e, ma il codice applicativo e il seed di stress contengono ancora <span class="mono">08:10</span>.</td><td>0.5-1g</td></tr>
+          <tr><td>Biglietteria</td><td>Invio Multiplo Agenzie</td><td><span class="tag ylw">🟡</span></td><td>La pagina esiste; da correggere la lista target: in codice c'e <span class="mono">Ischia Stars</span> al posto di <span class="mono">Sosandra</span>.</td><td>0.5g</td></tr>
+          <tr><td>Biglietteria</td><td>Upload fino a 10 PDF</td><td><span class="tag ylw">🟡</span></td><td>Limite client+server presente, ma senza test automatici mirati.</td><td>0.5g</td></tr>
+          <tr><td>Biglietteria</td><td>Invio massivo con email</td><td><span class="tag ylw">🟡</span></td><td>Implementato con Resend in <span class="mono">app/api/biglietti/send-bulk/route.ts</span>, non testato.</td><td>1g</td></tr>
+          <tr><td>Escursioni</td><td>Capienza automatica e posti realtime</td><td><span class="tag ylw">🟡</span></td><td>Buona UI in <span class="mono">app/(app)/escursioni/page.tsx</span>, ma enforcement server debole.</td><td>1g</td></tr>
+          <tr><td>Escursioni</td><td>Avviso overbooking</td><td><span class="tag ylw">🟡</span></td><td>Presente lato UI, non bloccante lato API.</td><td>0.5-1g</td></tr>
+          <tr><td>Automezzi</td><td>Impegni automezzo</td><td><span class="tag ylw">🟡</span></td><td>Tabelle e UI presenti, ma integrazione operativa incompleta.</td><td>0.5g</td></tr>
+          <tr><td>Automezzi</td><td>Blocco disponibilita da impegno</td><td><span class="tag org">🟠</span></td><td><span class="mono">vehicle_commitments</span> non risultano usati dal motore disponibilita/piano.</td><td>2-3g</td></tr>
+          <tr><td>QR Smarcamento</td><td>QR, vista mobile, conferma, blocco doppio, log</td><td><span class="tag ylw">🟡</span></td><td>Modulo concreto e ben strutturato, ma con poca copertura automatica oltre allo smoke/E2E principale.</td><td>1g</td></tr>
+          <tr><td>Piano del Giorno</td><td>Schermata completa con pool, creazione giri, timeline autisti</td><td><span class="tag ylw">🟡</span></td><td>UI ricca e viva in <span class="mono">app/(app)/piano-giorno/page.tsx</span>.</td><td>0.5g</td></tr>
+          <tr><td>Piano del Giorno</td><td>Validazioni conflitti e capienza</td><td><span class="tag org">🟠</span></td><td>Sono soprattutto segnali UI; la route manuale <span class="mono">app/api/ops/piano-giorno/trips/route.ts</span> non blocca davvero.</td><td>2-4g</td></tr>
+          <tr><td>Piano del Giorno</td><td>Realtime da smarcamenti QR</td><td><span class="tag ylw">🟡</span></td><td>Subscription presente su <span class="mono">services</span>, <span class="mono">assignments</span>, <span class="mono">trip_groups</span>, <span class="mono">status_events</span>.</td><td>0.5g</td></tr>
+          <tr><td>Piano del Giorno</td><td>Stampa piani autista</td><td><span class="tag ylw">🟡</span></td><td>Stampa HTML client-side buona, non PDF server-side nativo.</td><td>1g</td></tr>
+          <tr><td>Semi-Automatica</td><td>Genera proposta automatica</td><td><span class="tag ylw">🟡</span></td><td>Funzione presente e integration test parziale su auto-assign.</td><td>0.5g</td></tr>
+          <tr><td>Semi-Automatica</td><td>Clustering geografico ARRIVI</td><td><span class="tag ylw">🟡</span></td><td>La logica nordovest/estsud c'e in <span class="mono">auto-assign/route.ts</span>, ma non e testata in modo esaustivo.</td><td>1-2g</td></tr>
+          <tr><td>Semi-Automatica</td><td>Vincoli rigidi mai violabili</td><td><span class="tag red">🔴</span></td><td>Falso nello stato attuale: il fallback veicolo puo aggirare i limiti e il fallback driver puo accettare conflitti.</td><td>3-5g</td></tr>
+          <tr><td>Semi-Automatica</td><td>Report non assegnati con motivazioni</td><td><span class="tag org">🟠</span></td><td>Il report e troppo aggregato, non per singolo servizio con causa precisa.</td><td>1-2g</td></tr>
+          <tr><td>Disponibilita</td><td>Schermata giorno prima con conferma</td><td><span class="tag ylw">🟡</span></td><td>Buona base e gate server attivo sull'auto-assign.</td><td>0.5g</td></tr>
+          <tr><td>Disponibilita</td><td>Conferma obbligatoria prima del Piano del Giorno</td><td><span class="tag org">🟠</span></td><td>Blocco server su auto-assign si, blocco totale del workflow piano no.</td><td>1-2g</td></tr>
+          <tr><td>Hotel ↔ Mezzo</td><td>Tabella limiti popolata</td><td><span class="tag ylw">🟡</span></td><td>Seed presente in <span class="mono">0142_hotel_vehicle_limits_seed.sql</span>.</td><td>0.5g</td></tr>
+          <tr><td>Hotel ↔ Mezzo</td><td>Validazione bloccante non aggirabile</td><td><span class="tag red">🔴</span></td><td>Non e garantita su tutte le API; il manuale non la applica e l'auto-assign ha fallback permissivi.</td><td>2-3g</td></tr>
+          <tr><td>Autista ↔ Mezzo</td><td>Campo e seed limiti presenti</td><td><span class="tag ylw">🟡</span></td><td>Migration <span class="mono">0143_driver_max_vehicle_capacity.sql</span> corretta.</td><td>0.5g</td></tr>
+          <tr><td>Autista ↔ Mezzo</td><td>Validazione bloccante</td><td><span class="tag red">🔴</span></td><td>Stesso problema dei limiti hotel: non e centralizzata e non e non-aggirabile.</td><td>2-3g</td></tr>
+          <tr><td>Output</td><td>Fase A assegnazione / Fase B file</td><td><span class="tag ylw">🟡</span></td><td>Export bloccato se mancano giri/assegnazioni, buona idea ma senza garanzia completa lato backend.</td><td>0.5g</td></tr>
+          <tr><td>Output</td><td>Excel multi-foglio</td><td><span class="tag ylw">🟡</span></td><td>Presente e sostanzioso in <span class="mono">app/api/ops/piano-giorno/export-excel/route.ts</span>.</td><td>0.5g</td></tr>
+          <tr><td>Lista Bruno</td><td>Criteri inclusione richiesti</td><td><span class="tag org">🟠</span></td><td>La logica in <span class="mono">lib/server/continent-dispatch.ts</span> e parziale rispetto alle regole cliente piu specifiche.</td><td>2-3g</td></tr>
+          <tr><td>Lista Bruno</td><td>Dati completi e numero volo corretto</td><td><span class="tag ylw">🟡</span></td><td>Meglio di altre aree: route ed export gestiscono arrivo/partenza con campi separati.</td><td>0.5g</td></tr>
+          <tr><td>Medmar A/R</td><td>Tabelle separate + helper + dashboard</td><td><span class="tag ylw">🟡</span></td><td>Modulo ampio e reale, ma non ancora chiuso sul piano operativo notturno e sulle notifiche.</td><td>1-2g</td></tr>
+          <tr><td>Medmar A/R</td><td>Decision Helper 3 scenari</td><td><span class="tag ok">✅</span></td><td>Refactoring e test dedicati presenti.</td><td>0g</td></tr>
+          <tr><td>Medmar A/R</td><td>Job batch scadenza notturna</td><td><span class="tag red">🔴</span></td><td>Nessuna route cron o voce in <span class="mono">vercel.json</span> chiaramente dedicata al processo.</td><td>2-3g</td></tr>
+          <tr><td>Medmar A/R</td><td>Notifiche scadenze 24h</td><td><span class="tag red">🔴</span></td><td>Non trovate nel codice.</td><td>1-2g</td></tr>
+          <tr><td>Medmar A/R</td><td>Matching automatico</td><td><span class="tag org">🟠</span></td><td>C'e, ma e un matching semplice per tratta/data/orario, non un motore particolarmente robusto.</td><td>2-3g</td></tr>
+          <tr><td>Stress Test</td><td>Dataset 500 servizi + cleanup</td><td><span class="tag ylw">🟡</span></td><td>Script reale in <span class="mono">scripts/seed-test-sunday.mjs</span>, ma senza certificazione CI/E2E del flusso completo.</td><td>1-2g</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section break-before">
+      <h2>SEZIONE 4 — PUNTI VERAMENTE CRITICI</h2>
+      <div class="risk">
+        <p><strong>1. BLOCCANTE — I vincoli rigidi non sono davvero rigidi.</strong></p>
+        <p>Le regole hotel ↔ mezzo e autista ↔ mezzo non sono garantite in tutte le API. L'auto-assign tenta di rispettarle, ma ha fallback permissivi. Il flusso manuale dei giri in <span class="mono">app/api/ops/piano-giorno/trips/route.ts</span> e sostanzialmente cieco a questi vincoli.</p>
+      </div>
+      <div class="risk">
+        <p><strong>2. BLOCCANTE — Gli impegni automezzo esistono ma non governano davvero la pianificazione.</strong></p>
+        <p><span class="mono">vehicle_commitments</span> sono visibili da fleet ops, ma non risultano integrati nella disponibilita usata da Piano del Giorno e auto-assign. Operativamente e una bomba a orologeria.</p>
+      </div>
+      <div class="risk">
+        <p><strong>3. ALTA — Drift tra migration e codice su orari SNAV/Medmar.</strong></p>
+        <p>Hai pulito il DB sulla corsa <span class="mono">08:10</span>, ma il codice hardcoded e lo stress seed non sono allineati. Questo e esattamente il tipo di drift che produce prenotazioni giuste nel DB e sbagliate nella UX.</p>
+      </div>
+      <div class="risk">
+        <p><strong>4. ALTA — Il Piano del Giorno segnala problemi che il backend non impedisce.</strong></p>
+        <p>La UI e piena di blocker e warning utili, ma senza equivalenti <span class="mono">409</span> server-side quei blocker sono cosmetica operativa.</p>
+      </div>
+      <div class="risk">
+        <p><strong>5. ALTA — Modulo Medmar A/R forte in facciata, meno forte nella chiusura batch.</strong></p>
+        <p>Helper, KPI, export e simulatore ci sono. Manca la prova di una catena notturna robusta su scadenze e notifiche 24h. Per un modulo economico, questo e troppo pericoloso.</p>
+      </div>
+      <div class="risk">
+        <p><strong>6. ALTA — Type-safety Supabase ancora incompleta.</strong></p>
+        <p><span class="mono">lib/supabase/types.ts</span> non riflette ancora davvero il perimetro delle tabelle operative presenti nelle migration. Hai aggiunto il check CI, ma il file attuale resta incompleto.</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>SEZIONE 5 — DEBITO TECNICO ACCUMULATO</h2>
+      <ul>
+        <li><strong>Lookup traghetti hardcoded.</strong> Debito: il DB evolve e il codice no. Esplode al primo cambio orario. Effort: 2-3g.</li>
+        <li><strong>Schema drift tollerato nel codice.</strong> Debito: fallback applicativi in booking, fleet ed escursioni al posto di ambienti allineati. Esplode ai deploy non perfetti. Effort: 3-5g.</li>
+        <li><strong>Copertura test sbilanciata.</strong> Debito: Vitest misura soprattutto helper in <span class="mono">lib/</span>, non le route operative in <span class="mono">app/</span>. Effort: 4-7g.</li>
+        <li><strong>Doppia sorgente sui mezzi.</strong> Debito: moduli diversi usano <span class="mono">vehicles</span> e <span class="mono">vehicle_records</span>. Effort: 2-3g.</li>
+        <li><strong>Ruoli non armonizzati.</strong> Debito: <span class="mono">lib/rbac.ts</span> e <span class="mono">lib/validation.ts</span> non parlano esattamente la stessa lingua. Effort: 1-2g.</li>
+      </ul>
+    </section>
+
+    <section class="section break-before">
+      <h2>SEZIONE 6 — ROADMAP RACCOMANDATA AL COMPLETAMENTO</h2>
+      <div class="phase">
+        <h3>FASE 1 — STABILIZZAZIONE</h3>
+        <ul>
+          <li>Centralizzare e bloccare lato server i vincoli hotel ↔ mezzo, autista ↔ mezzo, conflitti minimi e disponibilita.</li>
+          <li>Integrare <span class="mono">vehicle_commitments</span> nel motore di disponibilita.</li>
+          <li>Rimuovere il drift SNAV/Medmar tra codice e DB.</li>
+          <li>Rigenerare i tipi Supabase e chiudere le incoerenze di ruoli.</li>
+        </ul>
+        <p><strong>Effort stimato:</strong> 1.5-2.5 settimane</p>
+      </div>
+      <div class="phase">
+        <h3>FASE 2 — COMPLETAMENTO FUNZIONALITA</h3>
+        <ul>
+          <li>Chiudere Bruno sui criteri esatti richiesti e sugli output.</li>
+          <li>Correggere il modulo Invio Multiplo Agenzie.</li>
+          <li>Chiudere Medmar A/R su batch scadenze, notifiche 24h e matching piu robusto.</li>
+          <li>Rendere davvero obbligatoria la conferma disponibilita prima del workflow piano.</li>
+        </ul>
+        <p><strong>Effort stimato:</strong> 2-3 settimane</p>
+      </div>
+      <div class="phase">
+        <h3>FASE 3 — OTTIMIZZAZIONE E HARDENING</h3>
+        <ul>
+          <li>Test integration seri sulle route operative del piano, disponibilita, export, Bruno e Medmar.</li>
+          <li>Stress test eseguibile in modo ripetibile e certificabile.</li>
+          <li>Restore test dei backup, monitoring minimo e politica di rollback/staging.</li>
+        </ul>
+        <p><strong>Effort stimato:</strong> 1.5-2 settimane</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>SEZIONE 7 — RISCHI BUSINESS</h2>
+      <ul>
+        <li><strong>Rischio operativo:</strong> piani generati o modificati che non sono applicabili davvero la mattina successiva.</li>
+        <li><strong>Rischio economico:</strong> dashboard e simulatore Medmar possono guidare decisioni con catena operativa di recupero ancora incompleta.</li>
+        <li><strong>Rischio reputazionale:</strong> porto o orario traghetto incoerente tra codice e DB significa cliente nel posto sbagliato.</li>
+        <li><strong>Rischio commerciale:</strong> il prodotto in demo appare piu maturo di quanto sia nei punti critici di backend.</li>
+        <li><strong>Rischio legale/privacy:</strong> non vedo una falla clamorosa nel repo, ma monitoring, restore testato e audit autorizzativo completo sono ancora deboli.</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>SEZIONE 8 — RACCOMANDAZIONE FINALE</h2>
+      <div class="answer">NO ASSOLUTAMENTE.</div>
+      <p>Non perche il progetto sia scarso, ma perche oggi promette piu controllo operativo di quello che il backend garantisce davvero. Andare live cosi significa affidare una domenica ad alto carico a un software che in alcune aree e convincente in UI ma ancora permissivo nei punti dove dovrebbe dire no.</p>
+      <p class="footer-note">Documento generato da audit locale del repository. I punti classificati come insufficienti o parziali indicano aree non verificabili in modo definitivo dal solo codice presente.</p>
+    </section>
+  </main>
+</body>
+</html>
