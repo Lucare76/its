@@ -750,10 +750,10 @@ function RecordList({ tab, records }: RecordListProps) {
                 )}
               </div>
             </div>
-            {tab === "insurance" && row.policy_number && (
+            {tab === "insurance" && !!row.policy_number && (
               <div className="mt-1 text-xs text-muted">Polizza: {row.policy_number as string}</div>
             )}
-            {tab === "inspection" && row.outcome && (
+            {tab === "inspection" && !!row.outcome && (
               <div className="mt-1 text-xs text-muted">Esito: {row.outcome === "passed" ? "Superato" : row.outcome === "failed" ? "Bocciato" : "In attesa"}</div>
             )}
           </div>
