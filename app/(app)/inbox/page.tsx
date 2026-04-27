@@ -684,11 +684,18 @@ export default function InboxPage() {
                 return (
                   <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm hover:bg-slate-50">
                     <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-slate-900 truncate">{s.customer_name}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold text-slate-900 truncate">{s.customer_name}</p>
+                        <span className="rounded font-mono bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 shrink-0">
+                          #{s.id.slice(0, 8).toUpperCase()}
+                        </span>
+                      </div>
                       <p className="text-xs text-slate-500">
                         {s.phone ?? "—"}
+                        {s.pax ? <span className="ml-2 font-medium text-slate-700">{s.pax} pax</span> : null}
                         {(() => { const ag = s.billing_party_name ?? (s.agency_id ? agenciesMap.get(s.agency_id) : null) ?? null; return ag ? <span className="ml-2 font-medium text-indigo-600">{ag}</span> : null; })()}
                       </p>
+                      {(() => { const h = hotels.find((h) => h.id === s.hotel_id); return h ? <p className="text-xs font-medium text-slate-700 truncate">🏨 {h.name}</p> : null; })()}
                       <p className="text-xs text-slate-500">
                         {arrivo && <span>✈️ Arr: {arrivo}</span>}
                         {arrivo && partenza && <span className="mx-1">·</span>}

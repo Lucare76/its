@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Audit tecnico completo - Ischia Transfer - 27/04/2026</title>
+    <style>
+      :root {
+        --text: #122033;
+        --muted: #526074;
+        --line: #d8dee8;
+        --bg: #f5f7fb;
+        --panel: #ffffff;
+        --danger: #a61b1b;
+        --warn: #9a5c00;
+        --ok: #17603a;
+        --info: #234b8c;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: Arial, Helvetica, sans-serif;
+        color: var(--text);
+        background: var(--bg);
+        line-height: 1.45;
+      }
+
+      main {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 28px;
+      }
+
+      .hero,
+      section,
+      table {
+        background: var(--panel);
+      }
+
+      .hero,
+      section {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 24px;
+        margin-bottom: 18px;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0 0 12px;
+      }
+
+      h1 {
+        font-size: 30px;
+        line-height: 1.15;
+      }
+
+      h2 {
+        font-size: 20px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      p {
+        margin: 0 0 10px;
+      }
+
+      .meta {
+        color: var(--muted);
+        font-size: 13px;
+        margin-top: 10px;
+      }
+
+      .grade-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .grade {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+      }
+
+      .grade strong {
+        display: block;
+        font-size: 19px;
+        margin-bottom: 4px;
+      }
+
+      .badge {
+        display: inline-block;
+        padding: 4px 9px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .danger { background: #fdecec; color: var(--danger); }
+      .warn { background: #fff4e0; color: var(--warn); }
+      .ok { background: #eaf8ef; color: var(--ok); }
+      .info { background: #eaf1ff; color: var(--info); }
+
+      ul,
+      ol {
+        margin: 0;
+        padding-left: 20px;
+      }
+
+      li {
+        margin: 0 0 8px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        overflow: hidden;
+        margin: 14px 0 18px;
+        font-size: 12px;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        border-right: 1px solid var(--line);
+        padding: 9px 10px;
+        vertical-align: top;
+      }
+
+      th:last-child,
+      td:last-child {
+        border-right: 0;
+      }
+
+      thead th {
+        background: #eef3fb;
+        text-align: left;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      tbody tr:nth-child(even) td {
+        background: #fafbfd;
+      }
+
+      .small {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .final {
+        font-size: 22px;
+        font-weight: 700;
+      }
+
+      .page-break {
+        page-break-before: always;
+      }
+
+      @media print {
+        body {
+          background: #fff;
+        }
+
+        main {
+          padding: 0;
+        }
+
+        .hero,
+        section {
+          border-radius: 0;
+          break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="hero">
+        <span class="badge danger">NO ASSOLUTAMENTE</span>
+        <h1>Audit tecnico-operativo completo<br />Ischia Transfer</h1>
+        <p>
+          Valutazione spietata dello stato reale del progetto al 27 aprile 2026,
+          basata sulla lettura della codebase, configurazioni, migrazioni,
+          script, documentazione e test presenti nel repository.
+        </p>
+        <p class="meta">
+          Repository auditato: <code>c:\Users\DELL-DESK\Downloads\its</code>
+        </p>
+      </div>
+
+      <section>
+        <h2>SEZIONE 1 — EXECUTIVE SUMMARY</h2>
+        <p>
+          Il progetto non è un mockup: ci sono moduli concreti, logiche
+          operative già implementate e alcune aree coperte da test. Il problema
+          è che la base non è pronta per una produzione affidabile: oggi la
+          build fallisce, il lint fallisce e i vincoli business dichiarati come
+          “rigidi” non sono davvero rigidi.
+        </p>
+        <p>
+          Le aree meglio messe sono QR smarcamento, disponibilità del giorno
+          prima, buona parte del modulo Medmar A/R, export del Piano del Giorno
+          e fix del bug “sostituisci duplicato”. Le aree che rischiano di
+          esplodere sono sicurezza, assegnazione semi-automatica, coerenza delle
+          regole hotel/autista↔mezzo, backup/restore e qualità di rilascio.
+        </p>
+        <p>
+          Il singolo problema più grave è la presenza di segreti reali nel file
+          <code>.env</code>. Se quel file è stato committato, copiato o
+          sincronizzato, il danno va considerato potenzialmente già in corso.
+        </p>
+        <p>
+          Stima brutale al completamento: 1 settimana per la stabilizzazione
+          minima, 2-3 settimane per chiudere le funzionalità incoerenti, 1-2
+          settimane extra per hardening serio. Ordine di grandezza realistico:
+          4-6 settimane uomo.
+        </p>
+      </section>
+
+      <section>
+        <h2>SEZIONE 2 — VOTO FINALE</h2>
+        <div class="grade-grid">
+          <div class="grade"><strong>6.35/10</strong>Funzionalità</div>
+          <div class="grade"><strong>4.70/10</strong>Qualità codice</div>
+          <div class="grade"><strong>5.80/10</strong>Architettura</div>
+          <div class="grade"><strong>2.10/10</strong>Sicurezza</div>
+          <div class="grade"><strong>4.60/10</strong>Test e affidabilità</div>
+          <div class="grade"><strong>6.60/10</strong>UX</div>
+        </div>
+        <p class="final" style="margin-top: 14px;">VOTO FINALE PESATO: 4.96/10</p>
+        <p>
+          Il voto non è più alto per tre motivi oggettivi: sicurezza
+          compromessa, Definition of Done non rispettata e vincoli business
+          critici non realmente bloccanti. Il progetto ha valore tecnico reale,
+          ma oggi è una beta avanzata, non una beta vendibile affidabile.
+        </p>
+      </section>
+
+      <section class="page-break">
+        <h2>SEZIONE 3 — STATO FUNZIONALITÀ</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Modulo</th>
+              <th>Funzionalità</th>
+              <th>Stato</th>
+              <th>Cosa manca</th>
+              <th>Effort residuo</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Prenotazioni</td><td>Ricerca nome/cognome/telefono</td><td>✅</td><td>API presente e coerente</td><td>0g</td></tr>
+            <tr><td>Prenotazioni</td><td>Inserimento manuale</td><td>🟡</td><td>Funziona ma il progetto non passa lint/build</td><td>1-2g</td></tr>
+            <tr><td>Prenotazioni</td><td>Numero mezzo condizionale</td><td>✅</td><td>Presente nel form servizi</td><td>0g</td></tr>
+            <tr><td>Prenotazioni</td><td>Porto SNAV sempre Casamicciola</td><td>🟡</td><td>Implementato, non trovato test esplicito</td><td>1g</td></tr>
+            <tr><td>Prenotazioni</td><td>Porto Medmar per orario</td><td>🟠</td><td>Logica non centralizzata su tutti i flussi</td><td>2-3g</td></tr>
+            <tr><td>Prenotazioni</td><td>Fix bug 404 sostituisci duplicato</td><td>✅</td><td>Route e test presenti</td><td>0g</td></tr>
+            <tr><td>Prenotazioni</td><td>Rimozione SNAV 08:10</td><td>✅</td><td>Migrazione presente</td><td>0g</td></tr>
+            <tr><td>Prenotazioni</td><td>Aggiornamento arrivi SNAV</td><td>✅</td><td>Coperto da migrazione</td><td>0g</td></tr>
+            <tr><td>Biglietteria</td><td>Invio Multiplo Agenzie</td><td>✅</td><td>Pagina presente</td><td>0g</td></tr>
+            <tr><td>Biglietteria</td><td>4 card agenzie corrette</td><td>🟠</td><td>Manca Sosandra, c'è Ischia Stars</td><td>0.5g</td></tr>
+            <tr><td>Biglietteria</td><td>Upload fino a 10 PDF</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Biglietteria</td><td>Invio massivo con email</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Biglietteria</td><td>Biglietti Medmar separati</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Escursioni</td><td>Capienza automatica mezzo</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Escursioni</td><td>Posti disponibili real-time</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Escursioni</td><td>Avviso overbooking</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Automezzi</td><td>Impegni automezzo</td><td>✅</td><td>Tabella e UI presenti</td><td>0g</td></tr>
+            <tr><td>Automezzi</td><td>Blocco disponibilità nelle date</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Automezzi</td><td>Visibilità tipo + note</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>QR</td><td>QR univoco prenotazione</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>QR</td><td>Vista operatore mobile</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>QR</td><td>Dati cliente completi</td><td>🟡</td><td>Buona copertura, non verificata su ogni campo</td><td>1g</td></tr>
+            <tr><td>QR</td><td>Conferma completato con modale</td><td>✅</td><td>Presente e testato</td><td>0g</td></tr>
+            <tr><td>QR</td><td>Timestamp + ID operatore</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>QR</td><td>Blocco doppio smarcamento</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>QR</td><td>Log scansioni</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Piano Giorno</td><td>Header/progresso/alert</td><td>🟡</td><td>Presente ma poco testato</td><td>1-2g</td></tr>
+            <tr><td>Piano Giorno</td><td>Pool servizi con filtri</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Piano Giorno</td><td>Creazione giro autista + mezzo</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Piano Giorno</td><td>Timeline autisti</td><td>🟡</td><td>Da validare meglio sul campo</td><td>1-2g</td></tr>
+            <tr><td>Piano Giorno</td><td>Validazioni conflitti + capienza</td><td>🟠</td><td>Mancano i vincoli rigidi hotel/autista</td><td>2-3g</td></tr>
+            <tr><td>Piano Giorno</td><td>Integrazione modulo driver</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Piano Giorno</td><td>Real-time da QR</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Piano Giorno</td><td>Modifica piano in giornata</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Piano Giorno</td><td>Stampa piani autista</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Semi-auto</td><td>Pulsante proposta automatica</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Semi-auto</td><td>Clustering geografico arrivi</td><td>🟡</td><td>Implementato, ma non blindato rispetto alle regole cliente</td><td>2g</td></tr>
+            <tr><td>Semi-auto</td><td>Partenze con regole DB</td><td>🟡</td><td>Copertura test limitata</td><td>1-2g</td></tr>
+            <tr><td>Semi-auto</td><td>Vincoli rigidi mai violabili</td><td>🔴</td><td>Fallback li viola esplicitamente</td><td>2g</td></tr>
+            <tr><td>Semi-auto</td><td>Report non assegnati + motivi</td><td>🟡</td><td>Da rendere più robusto</td><td>1g</td></tr>
+            <tr><td>Semi-auto</td><td>Manuale parallela</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Disponibilità</td><td>Schermata del giorno</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Disponibilità</td><td>Autisti checkbox/note/fasce</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Disponibilità</td><td>Mezzi checkbox/blocchi orari</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Disponibilità</td><td>Fuori servizio porto</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Disponibilità</td><td>Conferma obbligatoria</td><td>✅</td><td>Presente e testata</td><td>0g</td></tr>
+            <tr><td>Hotel↔mezzo</td><td>Tabella popolata</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Hotel↔mezzo</td><td>Lista 14 posti</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Hotel↔mezzo</td><td>Lista 40 posti</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Hotel↔mezzo</td><td>Validazione bloccante</td><td>🔴</td><td>Oggi non è realmente non aggirabile</td><td>2-3g</td></tr>
+            <tr><td>Autista↔mezzo</td><td>Campo max_vehicle_capacity</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Autista↔mezzo</td><td>Limiti popolati</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Autista↔mezzo</td><td>Campo editabile per altri autisti</td><td>⚫</td><td>Non verificabile con certezza</td><td>1g</td></tr>
+            <tr><td>Autista↔mezzo</td><td>Validazione bloccante</td><td>🔴</td><td>Non garantita</td><td>2g</td></tr>
+            <tr><td>Output</td><td>Fase A assegnazione</td><td>🟡</td><td>Dipende da controlli incompleti</td><td>1g</td></tr>
+            <tr><td>Output</td><td>Fase B sbloccata dopo fase A</td><td>🟡</td><td>Gate UI presente, da blindare server-side</td><td>1g</td></tr>
+            <tr><td>Output</td><td>PDF B/N un foglio per autista</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Output</td><td>Excel multi-foglio</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Lista Bruno</td><td>Criteri inclusione corretti</td><td>🟠</td><td>Logica semplificata, non allineata pienamente alle regole richieste</td><td>2g</td></tr>
+            <tr><td>Lista Bruno</td><td>Dati completi cliente</td><td>🟡</td><td>Quasi tutti presenti, da testare meglio</td><td>1g</td></tr>
+            <tr><td>Lista Bruno</td><td>Numero volo corretto per direzione</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Lista Bruno</td><td>PDF + Excel + schermo</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Medmar A/R</td><td>Tabelle separate</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Medmar A/R</td><td>Tariffe storicizzate</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Medmar A/R</td><td>Decision helper 3 scenari</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Medmar A/R</td><td>Probabilità ritorno 90gg</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Medmar A/R</td><td>Raccomandazione automatica</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Medmar A/R</td><td>Pending groups</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Medmar A/R</td><td>Stati biglietti</td><td>🟡</td><td>Presente ma naming non perfettamente aderente alla richiesta</td><td>0.5g</td></tr>
+            <tr><td>Medmar A/R</td><td>Batch notturno scadenza</td><td>🔴</td><td>Non trovato</td><td>2g</td></tr>
+            <tr><td>Medmar A/R</td><td>Matching automatico riassegnazioni</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Medmar A/R</td><td>Opportunità di Recupero</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Medmar A/R</td><td>Notifiche scadenze 24h</td><td>🔴</td><td>Non trovate</td><td>1-2g</td></tr>
+            <tr><td>Medmar A/R</td><td>Dashboard perdite/KPI/grafici</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Medmar A/R</td><td>Simulatore fine anno</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Stress test</td><td>Dataset 500 servizi</td><td>✅</td><td>Script presente</td><td>0g</td></tr>
+            <tr><td>Stress test</td><td>Distribuzione realistica</td><td>🟡</td><td>Script buono ma non benchmarkato</td><td>1g</td></tr>
+            <tr><td>Stress test</td><td>Hotel limiti in proporzione</td><td>🟡</td><td>Non validato in output</td><td>1g</td></tr>
+            <tr><td>Stress test</td><td>Pending/reassign/Bruno mix</td><td>🟠</td><td>Solo parzialmente verificabile</td><td>2g</td></tr>
+            <tr><td>Stress test</td><td>Cleanup command</td><td>✅</td><td>Presente</td><td>0g</td></tr>
+            <tr><td>Stress test</td><td>Eseguito e funzionante</td><td>⚫</td><td>Nessuna prova di esecuzione affidabile</td><td>1g</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="page-break">
+        <h2>SEZIONE 4 — PUNTI VERAMENTE CRITICI 🔴</h2>
+        <ol>
+          <li><strong>BLOCCANTE</strong> — Segreti reali in <code>.env</code>. Rotazione chiavi immediata.</li>
+          <li><strong>BLOCCANTE</strong> — <code>pnpm build</code> fallisce per dipendenze mancanti Upstash.</li>
+          <li><strong>BLOCCANTE</strong> — I vincoli rigidi hotel↔mezzo e autista↔mezzo non sono realmente rigidi.</li>
+          <li><strong>ALTA</strong> — L’assegnazione manuale non applica tutti i vincoli business richiesti.</li>
+          <li><strong>ALTA</strong> — Definition of Done non rispettata: lint e build non verdi.</li>
+          <li><strong>ALTA</strong> — RLS presente, ma molte route dipendono dal service role: rischio multi-tenant applicativo.</li>
+          <li><strong>ALTA</strong> — Modulo Medmar A/R incompleto sul lato operativo notturno e reminder.</li>
+          <li><strong>MEDIA</strong> — Backup presente ma senza restore verificato e con copertura non totale.</li>
+          <li><strong>MEDIA</strong> — Pagine operative monolitiche e costose da mantenere.</li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>SEZIONE 5 — DEBITO TECNICO ACCUMULATO</h2>
+        <ul>
+          <li>Legacy `server/` e `client/` ancora nel repo: confusione sulla source of truth. Effort `1-2g`.</li>
+          <li>Pagine da 1.000-2.300 righe: bassa testabilità, alto rischio regressioni. Effort `4-6g`.</li>
+          <li>Uso esteso del service role: il multi-tenant dipende troppo dal codice route. Effort `3-5g`.</li>
+          <li>Documentazione e configurazioni non allineate, inclusa assenza di `.env.example`. Effort `1g`.</li>
+          <li>Copertura test insufficiente sui calcoli e sui vincoli economicamente più sensibili. Effort `3-4g`.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>SEZIONE 6 — ROADMAP RACCOMANDATA AL COMPLETAMENTO</h2>
+        <h3>FASE 1 — STABILIZZAZIONE</h3>
+        <p>
+          Ruotare tutte le chiavi, ripulire la gestione env, ripristinare build
+          e lint, bloccare davvero i vincoli hotel/autista↔mezzo, verificare
+          backup/restore e cron essenziali. Effort totale: <strong>5-7g</strong>.
+        </p>
+        <h3>FASE 2 — COMPLETAMENTO FUNZIONALITÀ</h3>
+        <p>
+          Correggere le card agenzie, blindare la logica Medmar per porto/orari,
+          allineare Lista Bruno alle regole cliente, aggiungere batch e reminder
+          Medmar A/R, validare davvero lo stress test. Effort totale:
+          <strong>7-10g</strong>.
+        </p>
+        <h3>FASE 3 — OTTIMIZZAZIONE E HARDENING</h3>
+        <p>
+          Aggiungere test automatici sui calcoli economici e sui vincoli rigidi,
+          fare refactor dei monoliti, introdurre monitoring, staging e rollback
+          documentato. Effort totale: <strong>6-8g</strong>.
+        </p>
+      </section>
+
+      <section>
+        <h2>SEZIONE 7 — RISCHI BUSINESS</h2>
+        <ul>
+          <li>Rischio operativo: assegnazioni sbagliate nei giorni di picco.</li>
+          <li>Rischio economico: KPI Medmar credibili in dashboard ma deboli in operatività reale.</li>
+          <li>Rischio reputazionale: piani, biglietti o Lista Bruno incoerenti arrivano al cliente finale.</li>
+          <li>Rischio legale: segreti esposti e possibile leakage dati se una route filtra male.</li>
+          <li>Rischio continuità: senza restore testato, un deploy errato può bloccare il servizio.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>SEZIONE 8 — RACCOMANDAZIONE FINALE</h2>
+        <p class="final">NO ASSOLUTAMENTE.</p>
+        <p>
+          Non è una questione di “rifiniture”. Significa andare in produzione
+          con segreti esposti, build rotta e regole business dichiarate come
+          rigide ma in realtà aggirabili. Sarebbe accettare un incidente
+          annunciato.
+        </p>
+        <p class="small">
+          Nota: il report sintetizza il contenuto dell’audit svolto sulla
+          codebase e serve come documento operativo; non sostituisce la
+          rotazione immediata delle credenziali esposte.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

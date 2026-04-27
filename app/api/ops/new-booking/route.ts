@@ -12,6 +12,7 @@ import { agencyBookingCreateSchema } from "@/lib/validation";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { buildServiceLabelShort } from "@/lib/service-label";
 import { auditLog } from "@/lib/server/ops-audit";
+import { appUrlFromRequest, ensureBusBookingQrCodes } from "@/lib/server/bus-booking-qr";
 
 export const runtime = "nodejs";
 
@@ -240,6 +241,15 @@ export async function POST(request: NextRequest) {
           auth.admin.from("services").update({ linked_service_id: serviceId }).eq("id", returnServiceId).eq("tenant_id", tenantId),
         ]).catch(() => {});
       }
+    }
+
+    if (bookingKind === "bus_city_hotel") {
+      await ensureBusBookingQrCodes({
+        admin: auth.admin,
+        tenantId,
+        serviceId,
+        appUrl: appUrlFromRequest(request),
+      });
     }
 
     auditLog({

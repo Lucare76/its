@@ -7,6 +7,7 @@ import { sendOperatorNotifyEmail, sendOperatorDuplicateNotifyEmail, sendAgencyDu
 import { buildServiceLabel, buildServiceLabelShort } from "@/lib/service-label";
 import { auditLog } from "@/lib/server/ops-audit";
 import { authorizeServiceRoleRequest } from "@/lib/server/pricing-auth";
+import { appUrlFromRequest, ensureBusBookingQrCodes } from "@/lib/server/bus-booking-qr";
 
 export const runtime = "nodejs";
 
@@ -480,6 +481,15 @@ export async function POST(request: NextRequest) {
       status: "new",
       by_user_id: auth.user.id
     });
+
+    if (bookingKind === "bus_city_hotel") {
+      await ensureBusBookingQrCodes({
+        admin: auth.admin,
+        tenantId: auth.membership.tenant_id,
+        serviceId,
+        appUrl: appUrlFromRequest(request),
+      });
+    }
 
     // Segna approval_status — price_mismatch se il prezzo dichiarato differisce dal listino (tolleranza ±0,50€)
     const hasPriceMismatch =

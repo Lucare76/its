@@ -64,6 +64,7 @@ export async function createTestContext(): Promise<TestContext> {
     await admin.from("vehicle_daily_availability").delete().eq("tenant_id", tenantId);
     await admin.from("driver_daily_availability").delete().eq("tenant_id", tenantId);
     await admin.from("assignments").delete().eq("tenant_id", tenantId);
+    await admin.from("booking_qr_codes").delete().eq("tenant_id", tenantId);
     await admin.from("trip_groups").delete().eq("tenant_id", tenantId);
     await admin.from("status_events").delete().eq("tenant_id", tenantId);
     await admin.from("service_pricing").delete().eq("tenant_id", tenantId);
