@@ -15,11 +15,17 @@ type ComplianceEntry = {
   count?: number;
 };
 
+type ComplianceOverride = {
+  until: string;
+  reason: string;
+};
+
 type VehicleCompliance = {
   vehicle_id: string;
   label: string;
   plate: string | null;
   active: boolean;
+  compliance_override: ComplianceOverride | null;
   insurance: ComplianceEntry | null;
   inspection: ComplianceEntry | null;
   extinguisher: ComplianceEntry | null;
@@ -138,6 +144,9 @@ export default function ScadenzePage() {
   const [inspectionForm, setInspectionForm] = useState(EMPTY_INSPECTION);
   const [extinguisherForm, setExtinguisherForm] = useState(EMPTY_EXTINGUISHER);
   const [showForm, setShowForm] = useState(false);
+  const [overrideForm, setOverrideForm] = useState({ until: "", reason: "" });
+  const [showOverrideForm, setShowOverrideForm] = useState(false);
+  const [savingOverride, setSavingOverride] = useState(false);
 
   const showToast = useCallback((text: string, ok: boolean) => {
     setToast({ text, ok });
@@ -183,11 +192,38 @@ export default function ScadenzePage() {
   const openPanel = useCallback((v: VehicleCompliance) => {
     setPanel({ vehicleId: v.vehicle_id, label: v.label, plate: v.plate });
     setShowForm(false);
+    setShowOverrideForm(false);
+    setOverrideForm({ until: "", reason: "" });
     setInsuranceForm(EMPTY_INSURANCE);
     setInspectionForm(EMPTY_INSPECTION);
     setExtinguisherForm(EMPTY_EXTINGUISHER);
     void loadPanelRecords(v.vehicle_id);
   }, [loadPanelRecords]);
+
+  const handleOverride = useCallback(async (clear?: boolean) => {
+    if (!panel) return;
+    const token = await getToken();
+    if (!token) return;
+    if (!clear && (!overrideForm.until || !overrideForm.reason.trim())) {
+      showToast("Data limite e motivazione obbligatori", false);
+      return;
+    }
+    setSavingOverride(true);
+    const res = await fetch(`/api/vehicles/${panel.vehicleId}/compliance/override`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(clear ? { clear: true } : { until: overrideForm.until, reason: overrideForm.reason }),
+    });
+    const json = await res.json().catch(() => null) as { error?: string } | null;
+    if (!res.ok) {
+      showToast(json?.error ?? "Errore", false);
+    } else {
+      showToast(clear ? "Override rimosso" : "Override impostato", true);
+      setShowOverrideForm(false);
+      await load();
+    }
+    setSavingOverride(false);
+  }, [panel, overrideForm, showToast, load]);
 
   const handleSave = useCallback(async () => {
     if (!panel) return;
@@ -396,9 +432,16 @@ export default function ScadenzePage() {
                       {item.plate && <div className="text-xs text-muted font-mono">{item.plate}</div>}
                     </td>
                     <td className="py-3 pr-4">
-                      <span className="flex items-center gap-1.5">
-                        <span className={`inline-block h-2 w-2 rounded-full ${STATUS_DOT[item.worst_status]}`} />
-                        <span className="text-xs">{STATUS_LABEL[item.worst_status]}</span>
+                      <span className="flex flex-col gap-1">
+                        <span className="flex items-center gap-1.5">
+                          <span className={`inline-block h-2 w-2 rounded-full ${STATUS_DOT[item.worst_status]}`} />
+                          <span className="text-xs">{STATUS_LABEL[item.worst_status]}</span>
+                        </span>
+                        {item.compliance_override && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700">
+                            Forzato
+                          </span>
+                        )}
                       </span>
                     </td>
                     <td className="py-3 pr-4">{renderCell(item.insurance)}</td>
@@ -421,8 +464,87 @@ export default function ScadenzePage() {
         onClose={() => setPanel(null)}
         widthClassName="max-w-xl"
       >
-        {panel && (
+        {panel && (() => {
+          const panelVehicle = items.find((i) => i.vehicle_id === panel.vehicleId);
+          const activeOverride = panelVehicle?.compliance_override ?? null;
+          return (
           <div className="space-y-5">
+            {/* Override status */}
+            {activeOverride ? (
+              <div className="rounded-xl border border-violet-200 bg-violet-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-semibold text-violet-800">Operatività forzata attiva</div>
+                    <div className="mt-0.5 text-xs text-violet-700">{activeOverride.reason}</div>
+                    <div className="mt-0.5 text-xs text-violet-600">
+                      Scade: {formatDate(activeOverride.until.slice(0, 10))}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleOverride(true)}
+                    disabled={savingOverride}
+                    className="rounded-lg border border-violet-300 bg-white px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50"
+                  >
+                    Rimuovi
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                {!showOverrideForm ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowOverrideForm(true)}
+                    className="w-full rounded-xl border border-dashed border-orange-300 bg-orange-50 py-2 text-xs font-semibold text-orange-700 hover:bg-orange-100"
+                  >
+                    Forza operatività mezzo (override scadenze)
+                  </button>
+                ) : (
+                  <div className="rounded-xl border border-orange-200 bg-orange-50 p-3 space-y-3">
+                    <div className="text-sm font-semibold text-orange-800">Override operativo</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="label text-xs">Valido fino al *</label>
+                        <input
+                          type="date"
+                          className="input text-sm"
+                          value={overrideForm.until}
+                          onChange={(e) => setOverrideForm((f) => ({ ...f, until: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-xs">Motivazione *</label>
+                        <input
+                          className="input text-sm"
+                          placeholder="es. Polizza in rinnovo"
+                          value={overrideForm.reason}
+                          onChange={(e) => setOverrideForm((f) => ({ ...f, reason: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleOverride(false)}
+                        disabled={savingOverride}
+                        className="btn-primary flex-1 text-sm"
+                      >
+                        {savingOverride ? "..." : "Conferma override"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowOverrideForm(false)}
+                        className="btn-secondary text-sm"
+                      >
+                        Annulla
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Tab bar */}
             <div className="flex gap-1 rounded-xl bg-muted/30 p-1">
               {(["insurance", "inspection", "extinguisher"] as const).map((tab) => {
@@ -567,7 +689,8 @@ export default function ScadenzePage() {
               </>
             )}
           </div>
-        )}
+          );
+        })()}
       </SidePanel>
 
       {/* Toast */}

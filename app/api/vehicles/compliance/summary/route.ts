@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
 
   const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes] = await Promise.all([
     admin.from("vehicles")
-      .select("id, label, plate, active, habitual_driver_profile_id")
+      .select("id, label, plate, active, habitual_driver_profile_id, compliance_override_until, compliance_override_reason")
       .eq("tenant_id", tenant_id)
       .order("label"),
     admin.from("vehicle_insurances")
@@ -111,11 +111,22 @@ export async function GET(request: NextRequest) {
     const extDays = ext ? diffDays(today, ext.expiry_date) : null;
     const tachDays = tachExpiry ? diffDays(today, tachExpiry) : null;
 
+    const overrideUntil = v.compliance_override_until
+      ? new Date(v.compliance_override_until)
+      : null;
+    const overrideActive = overrideUntil ? overrideUntil > new Date() : false;
+
     return {
       vehicle_id: v.id,
       label: v.label,
       plate: v.plate,
       active: v.active,
+      compliance_override: overrideActive
+        ? {
+            until: v.compliance_override_until,
+            reason: v.compliance_override_reason,
+          }
+        : null,
       insurance: insurance
         ? {
             expiry_date: insurance.expiry_date,
@@ -147,12 +158,14 @@ export async function GET(request: NextRequest) {
             status: expiryStatus(tachDays),
           }
         : null,
-      worst_status: worstStatus([
-        expiryStatus(insuranceDays),
-        expiryStatus(inspectionDays),
-        expiryStatus(extDays),
-        expiryStatus(tachDays),
-      ]),
+      worst_status: overrideActive
+        ? "ok"
+        : worstStatus([
+            expiryStatus(insuranceDays),
+            expiryStatus(inspectionDays),
+            expiryStatus(extDays),
+            expiryStatus(tachDays),
+          ]),
     };
   });
 
