@@ -39,7 +39,7 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Run smoke e2e
-        run: pnpm e2e
+        run: pnpm e2e:smoke
 
       - name: Upload Playwright report
         if: always()

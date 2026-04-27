@@ -12,6 +12,8 @@ const webServerEnv = useRealAppMode
     }
   : {
       ...process.env,
+      NEXT_PUBLIC_E2E_TEST_MODE: "true",
+      NEXT_PUBLIC_E2E_FORCE_LOGIN_SMOKE: "true",
       NEXT_PUBLIC_DISABLE_SUPABASE: "true",
       NEXT_PUBLIC_SUPABASE_URL: "",
       NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
@@ -41,7 +43,7 @@ export default defineConfig({
   webServer: useExternalBaseUrl
     ? undefined
     : {
-        command: `pnpm dev --port ${port}`,
+        command: `pnpm exec next dev --hostname 0.0.0.0 --port ${port}`,
         port,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
