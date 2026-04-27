@@ -62,7 +62,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   const { id: vehicleId } = use(params);
 
   const [vehicleLabel, setVehicleLabel] = useState<string>("");
-  const [tab, setTab]     = useState<"maintenance" | "fuel" | "spare_parts" | "km_logs">("maintenance");
+  const [tab, setTab]     = useState<"maintenance" | "fuel" | "spare_parts" | "km_logs" | "documenti">("maintenance");
   const [records, setRecords]   = useState<(Maintenance | Fuel | SparePart)[]>([]);
   const [loading, setLoading]   = useState(false);
   const [saving,  setSaving]    = useState(false);
@@ -86,6 +86,10 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   const [fSupplier,    setFSupplier]    = useState("");
   const [fStatus,      setFStatus]      = useState("ordered");
   const [fInstalledAt, setFInstalledAt] = useState("");
+  // libretto
+  const [librettoPath, setLibrettoPath]         = useState<string | null>(null);
+  const [librettoUploadedAt, setLibrettoUploadedAt] = useState<string | null>(null);
+  const [uploadingLibretto, setUploadingLibretto]   = useState(false);
 
   const showMsg = (text: string, ok: boolean) => {
     setToast({ text, ok });
@@ -93,6 +97,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   };
 
   const load = useCallback(async () => {
+    if (tab === "documenti") return;
     setLoading(true);
     if (tab === "km_logs") {
       // Km logs vengono dall'API pubblica del veicolo tramite qr_token
@@ -123,15 +128,19 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     setLoading(false);
   }, [vehicleId, tab]);
 
-  // Carica nome veicolo
+  // Carica nome veicolo + dati libretto
   useEffect(() => {
     getToken().then((token) => {
       if (!token) return;
       fetch("/api/ops/vehicles", { headers: { Authorization: `Bearer ${token}` } })
         .then((r) => r.json())
         .then((d) => {
-          const v = (d.vehicles ?? []).find((x: { id: string; label: string }) => x.id === vehicleId);
-          if (v) setVehicleLabel(v.label);
+          const v = (d.vehicles ?? []).find((x: { id: string; label: string; libretto_document_path?: string | null; libretto_uploaded_at?: string | null }) => x.id === vehicleId);
+          if (v) {
+            setVehicleLabel(v.label);
+            setLibrettoPath(v.libretto_document_path ?? null);
+            setLibrettoUploadedAt(v.libretto_uploaded_at ?? null);
+          }
         });
     });
   }, [vehicleId]);
@@ -197,6 +206,47 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     else showMsg(json.error ?? "Errore.", false);
   }
 
+  async function handleLibrettoUpload(file: File) {
+    if (!supabase) return;
+    if (file.type !== "application/pdf") { showMsg("Solo PDF consentiti", false); return; }
+    if (file.size > 10 * 1024 * 1024) { showMsg("File troppo grande (max 10 MB)", false); return; }
+    setUploadingLibretto(true);
+    const ts = Date.now();
+    const path = `${vehicleId}/libretto_${ts}.pdf`;
+    const { error: uploadError } = await supabase.storage
+      .from("vehicle-documents")
+      .upload(path, file, { upsert: true });
+    if (uploadError) { showMsg(`Errore upload: ${uploadError.message}`, false); setUploadingLibretto(false); return; }
+    const token = await getToken();
+    if (!token) { setUploadingLibretto(false); return; }
+    const res = await fetch(`/api/vehicles/${vehicleId}/libretto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ document_path: path }),
+    });
+    if (res.ok) {
+      setLibrettoPath(path);
+      setLibrettoUploadedAt(new Date().toISOString());
+      showMsg("Libretto caricato.", true);
+    } else {
+      showMsg("Errore salvataggio percorso", false);
+    }
+    setUploadingLibretto(false);
+  }
+
+  async function handleLibrettoDelete() {
+    if (!confirm("Rimuovere il libretto?")) return;
+    const token = await getToken();
+    if (!token) return;
+    await fetch(`/api/vehicles/${vehicleId}/libretto`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    setLibrettoPath(null);
+    setLibrettoUploadedAt(null);
+    showMsg("Libretto rimosso.", true);
+  }
+
   async function handleDelete(id: string) {
     if (!confirm("Eliminare questo record?")) return;
     const token = await getToken();
@@ -215,6 +265,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     { key: "fuel",        label: "⛽ Rifornimenti" },
     { key: "spare_parts", label: "🔩 Ricambi" },
     { key: "km_logs",     label: "🛣 Km turni" },
+    { key: "documenti",   label: "📄 Documenti" },
   ] as const;
 
   return (
@@ -252,8 +303,77 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
         ))}
       </div>
 
+      {/* Documenti tab */}
+      {tab === "documenti" && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <h3 className="text-sm font-bold text-slate-700 mb-1">Libretto di circolazione</h3>
+            <p className="text-xs text-slate-400 mb-4">PDF — max 10 MB</p>
+            {librettoPath ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+                <div>
+                  <div className="text-sm font-semibold text-emerald-800">Documento presente</div>
+                  {librettoUploadedAt && (
+                    <div className="text-xs text-emerald-600 mt-0.5">
+                      Caricato il {new Date(librettoUploadedAt).toLocaleDateString("it-IT")}
+                    </div>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <LibrettoDownloadButton path={librettoPath} />
+                  <button
+                    type="button"
+                    onClick={() => void handleLibrettoDelete()}
+                    className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                  >
+                    Rimuovi
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border-2 border-dashed border-slate-200 p-8 text-center">
+                <div className="text-2xl mb-2">📄</div>
+                <div className="text-sm text-slate-500 mb-4">Nessun libretto caricato</div>
+                <label className="cursor-pointer rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+                  {uploadingLibretto ? "Caricamento..." : "Seleziona PDF"}
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    className="hidden"
+                    disabled={uploadingLibretto}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void handleLibrettoUpload(file);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+            {librettoPath && (
+              <div className="mt-3">
+                <label className="cursor-pointer rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                  {uploadingLibretto ? "Caricamento..." : "Sostituisci PDF"}
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    className="hidden"
+                    disabled={uploadingLibretto}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void handleLibrettoUpload(file);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Add form */}
-      {showForm ? (
+      {tab !== "documenti" && showForm ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 mb-5">
           <h3 className="text-sm font-bold text-slate-700 mb-4">
             {tab === "maintenance" ? "Nuova manutenzione" : tab === "fuel" ? "Nuovo rifornimento" : "Nuovo ricambio"}
@@ -376,7 +496,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
             </button>
           </div>
         </div>
-      ) : tab !== "km_logs" ? (
+      ) : tab !== "km_logs" && tab !== "documenti" ? (
         <button
           type="button"
           onClick={() => setShowForm(true)}
@@ -387,7 +507,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
       ) : null}
 
       {/* Lista record */}
-      {loading ? (
+      {tab !== "documenti" && (loading ? (
         <div className="text-sm text-slate-400 py-8 text-center">Caricamento...</div>
       ) : records.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400 text-sm">
@@ -510,7 +630,24 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
             </tbody>
           </table>
         </div>
-      )}
+      ))}
     </section>
+  );
+}
+
+function LibrettoDownloadButton({ path }: { path: string }) {
+  const handleDownload = async () => {
+    if (!supabase) return;
+    const { data } = await supabase.storage.from("vehicle-documents").createSignedUrl(path, 60);
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+  };
+  return (
+    <button
+      type="button"
+      onClick={() => void handleDownload()}
+      className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+    >
+      Apri PDF
+    </button>
   );
 }
