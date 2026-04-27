@@ -1,8 +1,8 @@
 /**
  * POST /api/cron/vehicle-expiry-check
  *
- * Controlla ogni giorno i veicoli con scadenza assicurazione, bollo o collaudo
- * nella finestra di avviso e invia una email di promemoria.
+ * Controlla ogni giorno i veicoli con scadenza assicurazione, bollo, collaudo,
+ * estintori e carta tachigrafo autisti. Finestra avviso: 60 giorni.
  *
  * Regola business assicurazione:
  * - la data inserita e' la scadenza nominale della polizza
@@ -20,9 +20,9 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const NOTIFY_EMAILS = ["info@ischiatransferservice.it", "luca_renna@hotmail.com"];
-const WARN_DAYS = 7;
+const WARN_DAYS = 60;
 const INSURANCE_GRACE_DAYS = 14;
-const INSURANCE_WARN_WINDOW_DAYS = 8;
+const INSURANCE_WARN_WINDOW_DAYS = 61;
 
 
 type WarningItem = {
@@ -255,22 +255,53 @@ export async function POST(request: NextRequest) {
   const today = isIsoDate(body.today) ? body.today : new Date().toISOString().slice(0, 10);
   const dryRun = body.dry_run === true;
 
-  const { data: vehicles, error } = await admin
-    .from("vehicles")
-    .select("label, plate, insurance_expiry, road_tax_expiry, inspection_expiry")
-    .eq("active", true);
+  const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, driversRes] = await Promise.all([
+    admin.from("vehicles").select("id, label, plate, habitual_driver_profile_id, insurance_expiry, road_tax_expiry, inspection_expiry").eq("active", true),
+    admin.from("vehicle_insurances").select("vehicle_id, expiry_date").eq("is_current", true),
+    admin.from("vehicle_inspections").select("vehicle_id, expiry_date").eq("is_current", true),
+    admin.from("vehicle_extinguishers").select("vehicle_id, expiry_date, serial_number").eq("active", true),
+    admin.from("driver_profiles").select("id, full_name, tachograph_card_expiry").eq("active", true).not("tachograph_card_expiry", "is", null),
+  ]);
 
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  if (vehiclesRes.error) {
+    return NextResponse.json({ ok: false, error: vehiclesRes.error.message }, { status: 500 });
+  }
+
+  const vehicles = vehiclesRes.data ?? [];
+
+  // Build lookup maps for new compliance tables
+  const insuranceMap = new Map<string, string>();
+  for (const ins of insurancesRes.data ?? []) insuranceMap.set(ins.vehicle_id, ins.expiry_date);
+
+  const inspectionMap = new Map<string, string>();
+  for (const ins of inspectionsRes.data ?? []) inspectionMap.set(ins.vehicle_id, ins.expiry_date);
+
+  // Extinguishers: group by vehicle
+  const extMap = new Map<string, { expiry_date: string; serial_number: string | null }[]>();
+  for (const ext of extinguishersRes.data ?? []) {
+    const list = extMap.get(ext.vehicle_id) ?? [];
+    list.push({ expiry_date: ext.expiry_date, serial_number: ext.serial_number });
+    extMap.set(ext.vehicle_id, list);
+  }
+
+  // Driver tachograph map
+  const driverTachMap = new Map<string, { name: string; expiry: string }>();
+  for (const d of driversRes.data ?? []) {
+    if (d.tachograph_card_expiry) driverTachMap.set(d.id, { name: d.full_name, expiry: d.tachograph_card_expiry });
   }
 
   const warnings: WarningItem[] = [];
 
-  for (const vehicle of vehicles ?? []) {
+  for (const vehicle of vehicles) {
+    // Insurance: prefer new table, fallback to legacy
+    const insuranceExpiry = insuranceMap.get(vehicle.id) ?? (vehicle.insurance_expiry as string | null);
+    // Inspection: prefer new table, fallback to legacy
+    const inspectionExpiry = inspectionMap.get(vehicle.id) ?? (vehicle.inspection_expiry as string | null);
+
     const docs = [
-      { docType: "Assicurazione", expiry: vehicle.insurance_expiry as string | null },
+      { docType: "Assicurazione", expiry: insuranceExpiry },
       { docType: "Bollo", expiry: vehicle.road_tax_expiry as string | null },
-      { docType: "Collaudo", expiry: vehicle.inspection_expiry as string | null },
+      { docType: "Collaudo", expiry: inspectionExpiry },
     ];
 
     for (const { docType, expiry } of docs) {
@@ -291,6 +322,41 @@ export async function POST(request: NextRequest) {
               ? `Polizza ${formatDate(expiry)} + proroga 15 giorni => copertura fino al ${formatDate(effectiveExpiryDate)} inclusa`
               : undefined,
         });
+      }
+    }
+
+    // Extinguishers
+    const extList = extMap.get(vehicle.id) ?? [];
+    for (const ext of extList) {
+      const daysLeft = diffDays(today, ext.expiry_date);
+      if (daysLeft <= WARN_DAYS) {
+        warnings.push({
+          label: vehicle.label,
+          plate: vehicle.plate,
+          docType: "Estintore",
+          expiryDate: ext.expiry_date,
+          effectiveExpiryDate: ext.expiry_date,
+          daysLeft,
+          note: ext.serial_number ? `Sn: ${ext.serial_number}` : undefined,
+        });
+      }
+    }
+
+    // Tachograph of habitual driver
+    if (vehicle.habitual_driver_profile_id) {
+      const tacho = driverTachMap.get(vehicle.habitual_driver_profile_id);
+      if (tacho) {
+        const daysLeft = diffDays(today, tacho.expiry);
+        if (daysLeft <= WARN_DAYS) {
+          warnings.push({
+            label: `${vehicle.label} — Autista: ${tacho.name}`,
+            plate: vehicle.plate,
+            docType: "Tachigrafo",
+            expiryDate: tacho.expiry,
+            effectiveExpiryDate: tacho.expiry,
+            daysLeft,
+          });
+        }
       }
     }
   }
