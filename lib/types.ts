@@ -194,6 +194,8 @@ export interface Service {
   excursion_title?: string | null;
   customer_gender?: "male" | "female" | null;
   setup_required?: boolean | null;
+  medmar_ticket_sent_at?: string | null;
+  medmar_ticket_sent_by?: string | null;
 }
 
 export interface Assignment {

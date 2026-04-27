@@ -161,7 +161,7 @@ export default function BigliettiMedmarPage() {
           pratica,
           refDate: s.date ?? "",
           allServiceIds: [],
-          sentAt: (s as any).medmar_ticket_sent_at ?? null,
+          sentAt: s.medmar_ticket_sent_at ?? null,
         });
       }
 
@@ -184,7 +184,7 @@ export default function BigliettiMedmarPage() {
       group.hotel = hotelName;
       group.pax = Math.max(group.pax, s.pax ?? 1);
       // Se almeno un servizio è già inviato, considera il gruppo inviato
-      if ((s as any).medmar_ticket_sent_at) group.sentAt = (s as any).medmar_ticket_sent_at;
+      if (s.medmar_ticket_sent_at) group.sentAt = s.medmar_ticket_sent_at;
     }
 
     return [...map.values()].sort((a, b) => a.refDate.localeCompare(b.refDate));

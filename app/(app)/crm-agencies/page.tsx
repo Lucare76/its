@@ -662,7 +662,7 @@ export default function CrmAgenciesPage() {
       const serviceDate = new Date(`${s.date}T12:00:00`);
       if (sendReportType === "arrivals_48h") return matchAgency && s.direction === "arrival" && Math.abs((serviceDate.getTime() - targetDate.getTime()) / 86400000) <= 2;
       if (sendReportType === "departures_48h") return matchAgency && s.direction === "departure" && Math.abs((serviceDate.getTime() - targetDate.getTime()) / 86400000) <= 2;
-      if (sendReportType === "bus_monday") return matchAgency && (s as any).service_type_code === "bus_line" && s.date === sendReportDate;
+      if (sendReportType === "bus_monday") return matchAgency && s.service_type_code === "bus_line" && s.date === sendReportDate;
       return false;
     });
 
@@ -672,10 +672,10 @@ export default function CrmAgenciesPage() {
       time:                 s.time,
       customer_name:        s.customer_name,
       pax:                  s.pax,
-      hotel_or_destination: (s as any).hotel_name ?? null,
+      hotel_or_destination: tenantData.hotels.find(h => h.id === s.hotel_id)?.name ?? null,
       direction:            s.direction as "arrival" | "departure",
-      transport_type:       (s as any).transport_mode ?? null,
-      transport_time:       (s as any).outbound_time ?? null,
+      transport_type:       s.transport_mode ?? null,
+      transport_time:       s.outbound_time ?? null,
     }));
 
     if (services.length === 0) {
@@ -773,7 +773,7 @@ export default function CrmAgenciesPage() {
             return acc;
           }, {});
           const sorted = [...services].sort((a, b) => b.date.localeCompare(a.date));
-          const revenueTotal = services.reduce((sum, s) => sum + ((s as any).source_total_amount_cents ?? 0), 0);
+          const revenueTotal = services.reduce((sum, s) => sum + (s.source_total_amount_cents ?? 0), 0);
           const thisMonth = services.filter((s) => s.date >= thisMonthStart).length;
           const prevMonth = services.filter((s) => s.date >= prevMonthStart && s.date <= prevMonthEnd).length;
           return {
