@@ -1173,11 +1173,6 @@ export default function PianoGiornoPage() {
   }, [token, date]);
 
   const availabilityLocked = availConfirmed === false;
-  useEffect(() => {
-    if (availabilityLocked && viewMode !== "plan") {
-      setViewMode("plan");
-    }
-  }, [availabilityLocked, viewMode]);
 
   const runAutoAssign = useCallback(async (mode: "unassigned_only" | "regenerate_all") => {
     if (!token || availabilityLocked) return;
@@ -2121,9 +2116,8 @@ export default function PianoGiornoPage() {
                     )}
                     {planIssues.length > 8 && (
                       <button
-                        onClick={() => { if (!availabilityLocked) setViewMode("manual"); }}
-                        disabled={availabilityLocked}
-                        className="w-full rounded border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                        onClick={() => setViewMode("manual")}
+                        className="w-full rounded border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                       >
                         Apri strumenti manuali per vedere gli altri {planIssues.length - 8}
                       </button>
@@ -2140,9 +2134,8 @@ export default function PianoGiornoPage() {
                       <p className="text-xs text-slate-500">Lista ordinata per orario, pensata per controllo rapido.</p>
                     </div>
                     <button
-                      onClick={() => { if (!availabilityLocked) setViewMode("manual"); }}
-                      disabled={availabilityLocked}
-                      className="rounded border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                      onClick={() => setViewMode("manual")}
+                      className="rounded border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                     >
                       Modifica piano
                     </button>
