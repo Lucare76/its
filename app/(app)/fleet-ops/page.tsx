@@ -382,7 +382,7 @@ export default function FleetOpsPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         {[
           { label: "Mezzi attivi", value: fleetStats.active, tone: "bg-slate-900", color: "text-slate-900", hint: "parco operativo disponibile", status: "active" },
           { label: "Mezzi inattivi", value: fleetStats.inactive, tone: "bg-slate-400", color: "text-slate-700", hint: "fuori servizio o disattivati", status: "inactive" },

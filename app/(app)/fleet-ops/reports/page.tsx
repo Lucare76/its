@@ -111,7 +111,7 @@ export default function FleetReportsPage() {
             <p className="text-sm text-slate-400">Caricamento...</p>
           ) : (
             <>
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                   <p className="text-[11px] uppercase tracking-wide text-slate-400">Carburante</p>
                   <p className="mt-1 text-2xl font-bold text-slate-900">€{payload.totals.fuel_cost.toFixed(2)}</p>

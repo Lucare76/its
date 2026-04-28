@@ -370,18 +370,18 @@ export default function ScadenzePage() {
 
       {/* Filters */}
       <SectionCard>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
           <input
             type="text"
             placeholder="Cerca mezzo o targa..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="input w-64"
+            className="input w-full sm:w-64"
           />
           <select
             value={docFilter}
             onChange={(e) => setDocFilter(e.target.value as DocType)}
-            className="input w-44"
+            className="input w-full sm:w-44"
           >
             {(Object.keys(DOC_LABELS) as DocType[]).map((k) => (
               <option key={k} value={k}>{DOC_LABELS[k]}</option>
@@ -390,7 +390,7 @@ export default function ScadenzePage() {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-            className="input w-44"
+            className="input w-full sm:w-44"
           >
             <option value="all">Tutti gli stati</option>
             <option value="expired">Scaduti</option>
@@ -415,9 +415,9 @@ export default function ScadenzePage() {
                   <th className="pb-3 pr-4">Mezzo</th>
                   <th className="pb-3 pr-4">Stato</th>
                   <th className="pb-3 pr-4">Assicurazione</th>
-                  <th className="pb-3 pr-4">Collaudo</th>
-                  <th className="pb-3 pr-4">Estintori</th>
-                  <th className="pb-3">Tachigrafo</th>
+                  <th className="hidden pb-3 pr-4 md:table-cell">Collaudo</th>
+                  <th className="hidden pb-3 pr-4 lg:table-cell">Estintori</th>
+                  <th className="hidden pb-3 lg:table-cell">Tachigrafo</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -445,9 +445,9 @@ export default function ScadenzePage() {
                       </span>
                     </td>
                     <td className="py-3 pr-4">{renderCell(item.insurance)}</td>
-                    <td className="py-3 pr-4">{renderCell(item.inspection)}</td>
-                    <td className="py-3 pr-4">{renderCell(item.extinguisher)}</td>
-                    <td className="py-3">{renderCell(item.tachograph)}</td>
+                    <td className="hidden py-3 pr-4 md:table-cell">{renderCell(item.inspection)}</td>
+                    <td className="hidden py-3 pr-4 lg:table-cell">{renderCell(item.extinguisher)}</td>
+                    <td className="hidden py-3 lg:table-cell">{renderCell(item.tachograph)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -591,7 +591,7 @@ export default function ScadenzePage() {
 
                     {panelTab === "insurance" && (
                       <>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                           <div>
                             <label className="label">Compagnia *</label>
                             <input className="input" value={insuranceForm.company} onChange={(e) => setInsuranceForm((f) => ({ ...f, company: e.target.value }))} />
@@ -601,7 +601,7 @@ export default function ScadenzePage() {
                             <input className="input" value={insuranceForm.policy_number} onChange={(e) => setInsuranceForm((f) => ({ ...f, policy_number: e.target.value }))} />
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                           <div>
                             <label className="label">Scadenza *</label>
                             <input type="date" className="input" value={insuranceForm.expiry_date} onChange={(e) => setInsuranceForm((f) => ({ ...f, expiry_date: e.target.value }))} />
@@ -620,7 +620,7 @@ export default function ScadenzePage() {
 
                     {panelTab === "inspection" && (
                       <>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                           <div>
                             <label className="label">Data collaudo *</label>
                             <input type="date" className="input" value={inspectionForm.inspection_date} onChange={(e) => setInspectionForm((f) => ({ ...f, inspection_date: e.target.value }))} />
@@ -630,7 +630,7 @@ export default function ScadenzePage() {
                             <input type="date" className="input" value={inspectionForm.expiry_date} onChange={(e) => setInspectionForm((f) => ({ ...f, expiry_date: e.target.value }))} />
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                           <div>
                             <label className="label">Centro revisioni</label>
                             <input className="input" value={inspectionForm.inspection_center} onChange={(e) => setInspectionForm((f) => ({ ...f, inspection_center: e.target.value }))} />
@@ -653,7 +653,7 @@ export default function ScadenzePage() {
 
                     {panelTab === "extinguisher" && (
                       <>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                           <div>
                             <label className="label">N. seriale</label>
                             <input className="input" value={extinguisherForm.serial_number} onChange={(e) => setExtinguisherForm((f) => ({ ...f, serial_number: e.target.value }))} />
@@ -663,7 +663,7 @@ export default function ScadenzePage() {
                             <input type="date" className="input" value={extinguisherForm.expiry_date} onChange={(e) => setExtinguisherForm((f) => ({ ...f, expiry_date: e.target.value }))} />
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                           <div>
                             <label className="label">Ultima revisione</label>
                             <input type="date" className="input" value={extinguisherForm.last_revision_date} onChange={(e) => setExtinguisherForm((f) => ({ ...f, last_revision_date: e.target.value }))} />
