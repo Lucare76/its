@@ -63,12 +63,28 @@ const STATUS_CELL: Record<StatusLevel, string> = {
   ok: "bg-emerald-50 text-emerald-700 border border-emerald-200",
 };
 
+const STATUS_ROW_BG: Record<StatusLevel, string> = {
+  expired: "bg-rose-50/50 hover:bg-rose-50",
+  critical: "bg-orange-50/40 hover:bg-orange-50",
+  warning: "bg-amber-50/30 hover:bg-amber-50",
+  missing: "hover:bg-slate-50",
+  ok: "hover:bg-slate-50",
+};
+
 const STATUS_DOT: Record<StatusLevel, string> = {
   expired: "bg-rose-500",
   critical: "bg-orange-500",
   warning: "bg-amber-400",
   missing: "bg-slate-300",
   ok: "bg-emerald-500",
+};
+
+const STATUS_LEFT_BORDER: Record<StatusLevel, string> = {
+  expired: "border-l-4 border-l-rose-400",
+  critical: "border-l-4 border-l-orange-400",
+  warning: "border-l-4 border-l-amber-400",
+  missing: "border-l-4 border-l-slate-200",
+  ok: "border-l-4 border-l-emerald-400",
 };
 
 function formatDate(iso: string): string {
@@ -123,6 +139,53 @@ const EMPTY_EXTINGUISHER = {
   expiry_date: "",
   notes: "",
 };
+
+// Mini compliance pill used in mobile cards
+function CompliancePill({ label, entry }: { label: string; entry: ComplianceEntry | null }) {
+  const status: StatusLevel = entry?.status ?? "missing";
+  return (
+    <div className={`rounded-xl px-3 py-2 text-xs ${STATUS_CELL[status]}`}>
+      <div className="font-semibold opacity-60">{label}</div>
+      {entry ? (
+        <div className="mt-0.5 font-bold">{formatDays(entry.days_left)}</div>
+      ) : (
+        <div className="mt-0.5 font-bold">—</div>
+      )}
+    </div>
+  );
+}
+
+// Compact 4-dot compliance indicator for table view
+function ComplianceDots({ item }: { item: VehicleCompliance }) {
+  const docs: [string, ComplianceEntry | null][] = [
+    ["A", item.insurance],
+    ["C", item.inspection],
+    ["E", item.extinguisher],
+    ["T", item.tachograph],
+  ];
+  return (
+    <div className="flex items-center gap-1">
+      {docs.map(([letter, entry]) => {
+        const s: StatusLevel = entry?.status ?? "missing";
+        return (
+          <span
+            key={letter}
+            title={`${letter === "A" ? "Assicurazione" : letter === "C" ? "Collaudo" : letter === "E" ? "Estintori" : "Tachigrafo"}${entry ? ` · ${formatDays(entry.days_left)}` : " · Non inserito"}`}
+            className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold ${
+              s === "expired" ? "bg-rose-500 text-white" :
+              s === "critical" ? "bg-orange-500 text-white" :
+              s === "warning" ? "bg-amber-400 text-white" :
+              s === "missing" ? "bg-slate-200 text-slate-400" :
+              "bg-emerald-100 text-emerald-700"
+            }`}
+          >
+            {letter}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function ScadenzePage() {
   const [items, setItems] = useState<VehicleCompliance[]>([]);
@@ -297,16 +360,17 @@ export default function ScadenzePage() {
     setSaving(false);
   }, [panel, panelTab, insuranceForm, inspectionForm, extinguisherForm, showToast, loadPanelRecords, load]);
 
-  // Stats
   const stats = useMemo(() => {
-    let expired = 0, critical = 0, warning = 0;
+    let expired = 0, critical = 0, warning = 0, ok = 0;
     for (const item of items) {
+      if (!item.active) continue;
       const s = item.worst_status;
       if (s === "expired") expired++;
       else if (s === "critical") critical++;
       else if (s === "warning") warning++;
+      else ok++;
     }
-    return { expired, critical, warning, total: items.length };
+    return { expired, critical, warning, ok, total: items.filter((i) => i.active).length };
   }, [items]);
 
   const filtered = useMemo(() => {
@@ -330,13 +394,13 @@ export default function ScadenzePage() {
       .sort((a, b) => STATUS_RANK[a.worst_status] - STATUS_RANK[b.worst_status]);
   }, [items, search, docFilter, statusFilter]);
 
-  const renderCell = (entry: ComplianceEntry | null) => {
+  const toggleStatusFilter = (s: StatusFilter) => {
+    setStatusFilter((prev) => prev === s ? "all" : s);
+  };
+
+  const renderTableCell = (entry: ComplianceEntry | null) => {
     if (!entry) {
-      return (
-        <span className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-slate-50 text-slate-400 border border-slate-200">
-          —
-        </span>
-      );
+      return <span className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-slate-50 text-slate-400 border border-slate-200">—</span>;
     }
     return (
       <span className={`inline-flex flex-col gap-0.5 rounded-lg px-2 py-1 text-xs font-medium ${STATUS_CELL[entry.status]}`}>
@@ -347,114 +411,178 @@ export default function ScadenzePage() {
   };
 
   return (
-    <div className="space-y-6">
+    <section className="page-section">
       <PageHeader
-        title="Scadenze Flotta"
-        subtitle="Monitoraggio assicurazioni, collaudi, estintori e tachigrafi"
+        title="Scadenze documenti"
+        subtitle="Assicurazioni, collaudi, estintori e tachigrafi — stato in tempo reale."
+        breadcrumbs={[
+          { label: "Operazioni", href: "/dashboard" },
+          { label: "Flotta", href: "/fleet-ops" },
+          { label: "Scadenze documenti" },
+        ]}
       />
 
-      {/* Stats */}
+      {/* Clickable stat cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {[
-          { label: "Scaduti", value: stats.expired, color: "text-rose-600", bg: "bg-rose-50 border-rose-200" },
-          { label: "Critici (≤7gg)", value: stats.critical, color: "text-orange-600", bg: "bg-orange-50 border-orange-200" },
-          { label: "In scadenza (≤30gg)", value: stats.warning, color: "text-amber-600", bg: "bg-amber-50 border-amber-200" },
-          { label: "Totale veicoli", value: stats.total, color: "text-slate-700", bg: "bg-white border-slate-200" },
-        ].map((stat) => (
-          <div key={stat.label} className={`rounded-2xl border p-4 ${stat.bg}`}>
-            <div className={`text-3xl font-bold ${stat.color}`}>{stat.value}</div>
-            <div className="mt-1 text-xs text-muted">{stat.label}</div>
-          </div>
+        {([
+          { key: "expired" as StatusFilter, label: "Scaduti", value: stats.expired, color: "text-rose-700", bg: "bg-rose-50 border-rose-200", ring: "ring-rose-400" },
+          { key: "critical" as StatusFilter, label: "Critici (≤7 gg)", value: stats.critical, color: "text-orange-700", bg: "bg-orange-50 border-orange-200", ring: "ring-orange-400" },
+          { key: "warning" as StatusFilter, label: "In scadenza (≤30 gg)", value: stats.warning, color: "text-amber-700", bg: "bg-amber-50 border-amber-200", ring: "ring-amber-400" },
+          { key: "ok" as StatusFilter, label: "Validi", value: stats.ok, color: "text-emerald-700", bg: "bg-white border-slate-200", ring: "ring-emerald-400" },
+        ]).map((stat) => (
+          <button
+            key={stat.key}
+            type="button"
+            onClick={() => toggleStatusFilter(stat.key)}
+            className={`rounded-2xl border p-4 text-left transition-all ${stat.bg} ${statusFilter === stat.key ? `ring-2 ${stat.ring}` : "hover:opacity-80"}`}
+          >
+            <div className={`text-3xl font-bold tabular-nums ${stat.color}`}>
+              {loading ? <span className="text-slate-300">…</span> : stat.value}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">{stat.label}</div>
+            {statusFilter === stat.key && (
+              <div className="mt-1.5 text-[10px] font-semibold text-slate-500">Filtro attivo · clicca per rimuovere</div>
+            )}
+          </button>
         ))}
       </div>
 
-      {/* Filters */}
+      {/* Filter bar */}
       <SectionCard>
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <input
             type="text"
-            placeholder="Cerca mezzo o targa..."
+            placeholder="Cerca mezzo o targa…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="input w-full sm:w-64"
+            className="input-saas h-9 w-full sm:w-64"
           />
           <select
             value={docFilter}
             onChange={(e) => setDocFilter(e.target.value as DocType)}
-            className="input w-full sm:w-44"
+            className="input-saas h-9 w-full sm:w-44"
           >
             {(Object.keys(DOC_LABELS) as DocType[]).map((k) => (
               <option key={k} value={k}>{DOC_LABELS[k]}</option>
             ))}
           </select>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-            className="input w-full sm:w-44"
-          >
-            <option value="all">Tutti gli stati</option>
-            <option value="expired">Scaduti</option>
-            <option value="critical">Critici</option>
-            <option value="warning">In scadenza</option>
-            <option value="ok">Validi</option>
-          </select>
+          {(search || statusFilter !== "all" || docFilter !== "all") && (
+            <button
+              type="button"
+              onClick={() => { setSearch(""); setStatusFilter("all"); setDocFilter("all"); }}
+              className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50"
+            >
+              Azzera filtri
+            </button>
+          )}
+          <div className="ml-auto text-xs text-slate-400 shrink-0">
+            {loading ? "Caricamento…" : `${filtered.length} veicol${filtered.length === 1 ? "o" : "i"}`}
+          </div>
         </div>
       </SectionCard>
 
-      {/* Table */}
-      <SectionCard>
-        {loading ? (
-          <div className="py-12 text-center text-muted">Caricamento...</div>
-        ) : filtered.length === 0 ? (
-          <div className="py-12 text-center text-muted">Nessun veicolo trovato</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs font-semibold uppercase tracking-wide text-muted">
-                  <th className="pb-3 pr-4">Mezzo</th>
-                  <th className="pb-3 pr-4">Stato</th>
-                  <th className="pb-3 pr-4">Assicurazione</th>
-                  <th className="hidden pb-3 pr-4 md:table-cell">Collaudo</th>
-                  <th className="hidden pb-3 pr-4 lg:table-cell">Estintori</th>
-                  <th className="hidden pb-3 lg:table-cell">Tachigrafo</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {filtered.map((item) => (
-                  <tr
-                    key={item.vehicle_id}
-                    className="cursor-pointer transition-colors hover:bg-muted/30"
-                    onClick={() => openPanel(item)}
-                  >
-                    <td className="py-3 pr-4">
-                      <div className="font-semibold">{item.label}</div>
-                      {item.plate && <div className="text-xs text-muted font-mono">{item.plate}</div>}
-                    </td>
-                    <td className="py-3 pr-4">
-                      <span className="flex flex-col gap-1">
-                        <span className="flex items-center gap-1.5">
-                          <span className={`inline-block h-2 w-2 rounded-full ${STATUS_DOT[item.worst_status]}`} />
-                          <span className="text-xs">{STATUS_LABEL[item.worst_status]}</span>
-                        </span>
-                        {item.compliance_override && (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700">
-                            Forzato
-                          </span>
-                        )}
+      {loading ? (
+        <SectionCard>
+          <div className="py-12 text-center text-sm text-slate-400">Caricamento...</div>
+        </SectionCard>
+      ) : filtered.length === 0 ? (
+        <SectionCard>
+          <div className="py-12 text-center text-sm text-slate-400">Nessun veicolo trovato per i filtri correnti</div>
+        </SectionCard>
+      ) : (
+        <>
+          {/* Mobile card grid (hidden on sm+) */}
+          <div className="sm:hidden space-y-3">
+            {filtered.map((item) => (
+              <button
+                key={item.vehicle_id}
+                type="button"
+                onClick={() => openPanel(item)}
+                className={`w-full rounded-2xl border bg-white text-left shadow-sm transition-shadow hover:shadow-md ${STATUS_LEFT_BORDER[item.worst_status]}`}
+              >
+                <div className="p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-semibold text-slate-900">{item.label}</div>
+                      {item.plate && <div className="text-xs font-mono text-slate-500">{item.plate}</div>}
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_CELL[item.worst_status]}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[item.worst_status]}`} />
+                        {STATUS_LABEL[item.worst_status]}
                       </span>
-                    </td>
-                    <td className="py-3 pr-4">{renderCell(item.insurance)}</td>
-                    <td className="hidden py-3 pr-4 md:table-cell">{renderCell(item.inspection)}</td>
-                    <td className="hidden py-3 pr-4 lg:table-cell">{renderCell(item.extinguisher)}</td>
-                    <td className="hidden py-3 lg:table-cell">{renderCell(item.tachograph)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      {item.compliance_override && (
+                        <span className="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+                          Forzato
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <CompliancePill label="Assicurazione" entry={item.insurance} />
+                    <CompliancePill label="Collaudo" entry={item.inspection} />
+                    <CompliancePill label="Estintori" entry={item.extinguisher} />
+                    <CompliancePill label="Tachigrafo" entry={item.tachograph} />
+                  </div>
+                </div>
+              </button>
+            ))}
           </div>
-        )}
-      </SectionCard>
+
+          {/* Desktop table (hidden on <sm) */}
+          <SectionCard className="hidden sm:block">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    <th className="pb-3 pr-3">Mezzo</th>
+                    <th className="pb-3 pr-3">Stato</th>
+                    <th className="hidden pb-3 pr-3 md:table-cell">Ind.</th>
+                    <th className="pb-3 pr-3">Assicurazione</th>
+                    <th className="hidden pb-3 pr-3 md:table-cell">Collaudo</th>
+                    <th className="hidden pb-3 pr-3 lg:table-cell">Estintori</th>
+                    <th className="hidden pb-3 lg:table-cell">Tachigrafo</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filtered.map((item) => (
+                    <tr
+                      key={item.vehicle_id}
+                      className={`cursor-pointer transition-colors ${STATUS_ROW_BG[item.worst_status]}`}
+                      onClick={() => openPanel(item)}
+                    >
+                      <td className="py-3 pr-3">
+                        <div className="font-semibold text-slate-800">{item.label}</div>
+                        {item.plate && <div className="text-xs font-mono text-slate-400">{item.plate}</div>}
+                      </td>
+                      <td className="py-3 pr-3">
+                        <div className="flex flex-col gap-1">
+                          <span className={`inline-flex w-fit items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${STATUS_CELL[item.worst_status]}`}>
+                            <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[item.worst_status]}`} />
+                            {STATUS_LABEL[item.worst_status]}
+                          </span>
+                          {item.compliance_override && (
+                            <span className="inline-flex w-fit items-center rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+                              Forzato
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="hidden py-3 pr-3 md:table-cell">
+                        <ComplianceDots item={item} />
+                      </td>
+                      <td className="py-3 pr-3">{renderTableCell(item.insurance)}</td>
+                      <td className="hidden py-3 pr-3 md:table-cell">{renderTableCell(item.inspection)}</td>
+                      <td className="hidden py-3 pr-3 lg:table-cell">{renderTableCell(item.extinguisher)}</td>
+                      <td className="hidden py-3 lg:table-cell">{renderTableCell(item.tachograph)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </SectionCard>
+        </>
+      )}
 
       {/* Side panel */}
       <SidePanel
@@ -468,242 +596,237 @@ export default function ScadenzePage() {
           const panelVehicle = items.find((i) => i.vehicle_id === panel.vehicleId);
           const activeOverride = panelVehicle?.compliance_override ?? null;
           return (
-          <div className="space-y-5">
-            {/* Override status */}
-            {activeOverride ? (
-              <div className="rounded-xl border border-violet-200 bg-violet-50 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-semibold text-violet-800">Operatività forzata attiva</div>
-                    <div className="mt-0.5 text-xs text-violet-700">{activeOverride.reason}</div>
-                    <div className="mt-0.5 text-xs text-violet-600">
-                      Scade: {formatDate(activeOverride.until.slice(0, 10))}
+            <div className="space-y-5">
+              {/* Override status */}
+              {activeOverride ? (
+                <div className="rounded-xl border border-violet-200 bg-violet-50 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold text-violet-800">Operatività forzata attiva</div>
+                      <div className="mt-0.5 text-xs text-violet-700">{activeOverride.reason}</div>
+                      <div className="mt-0.5 text-xs text-violet-600">
+                        Scade: {formatDate(activeOverride.until.slice(0, 10))}
+                      </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleOverride(true)}
+                      disabled={savingOverride}
+                      className="rounded-lg border border-violet-300 bg-white px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50"
+                    >
+                      Rimuovi
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleOverride(true)}
-                    disabled={savingOverride}
-                    className="rounded-lg border border-violet-300 bg-white px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50"
-                  >
-                    Rimuovi
-                  </button>
                 </div>
-              </div>
-            ) : (
-              <div>
-                {!showOverrideForm ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowOverrideForm(true)}
-                    className="w-full rounded-xl border border-dashed border-orange-300 bg-orange-50 py-2 text-xs font-semibold text-orange-700 hover:bg-orange-100"
-                  >
-                    Forza operatività mezzo (override scadenze)
-                  </button>
-                ) : (
-                  <div className="rounded-xl border border-orange-200 bg-orange-50 p-3 space-y-3">
-                    <div className="text-sm font-semibold text-orange-800">Override operativo</div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="label text-xs">Valido fino al *</label>
-                        <input
-                          type="date"
-                          className="input text-sm"
-                          value={overrideForm.until}
-                          onChange={(e) => setOverrideForm((f) => ({ ...f, until: e.target.value }))}
-                        />
-                      </div>
-                      <div>
-                        <label className="label text-xs">Motivazione *</label>
-                        <input
-                          className="input text-sm"
-                          placeholder="es. Polizza in rinnovo"
-                          value={overrideForm.reason}
-                          onChange={(e) => setOverrideForm((f) => ({ ...f, reason: e.target.value }))}
-                        />
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void handleOverride(false)}
-                        disabled={savingOverride}
-                        className="btn-primary flex-1 text-sm"
-                      >
-                        {savingOverride ? "..." : "Conferma override"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowOverrideForm(false)}
-                        className="btn-secondary text-sm"
-                      >
-                        Annulla
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Tab bar */}
-            <div className="flex gap-1 rounded-xl bg-muted/30 p-1">
-              {(["insurance", "inspection", "extinguisher"] as const).map((tab) => {
-                const labels = { insurance: "Assicurazione", inspection: "Collaudo", extinguisher: "Estintori" };
-                return (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => { setPanelTab(tab); setShowForm(false); }}
-                    className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition-colors ${
-                      panelTab === tab ? "bg-white shadow text-foreground" : "text-muted hover:text-foreground"
-                    }`}
-                  >
-                    {labels[tab]}
-                  </button>
-                );
-              })}
-            </div>
-
-            {panelLoading ? (
-              <div className="py-8 text-center text-muted text-sm">Caricamento...</div>
-            ) : (
-              <>
-                {/* Records list */}
-                <RecordList
-                  tab={panelTab}
-                  records={panelRecords}
-                />
-
-                {/* Add form toggle */}
-                {!showForm ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowForm(true)}
-                    className="btn-primary w-full"
-                  >
-                    + Aggiungi / Rinnova
-                  </button>
-                ) : (
-                  <div className="rounded-xl border border-border bg-surface p-4 space-y-3">
-                    <div className="text-sm font-semibold">
-                      {panelTab === "insurance" ? "Nuova assicurazione" : panelTab === "inspection" ? "Nuovo collaudo" : "Nuovo estintore"}
-                    </div>
-
-                    {panelTab === "insurance" && (
-                      <>
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                          <div>
-                            <label className="label">Compagnia *</label>
-                            <input className="input" value={insuranceForm.company} onChange={(e) => setInsuranceForm((f) => ({ ...f, company: e.target.value }))} />
-                          </div>
-                          <div>
-                            <label className="label">N. polizza</label>
-                            <input className="input" value={insuranceForm.policy_number} onChange={(e) => setInsuranceForm((f) => ({ ...f, policy_number: e.target.value }))} />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                          <div>
-                            <label className="label">Scadenza *</label>
-                            <input type="date" className="input" value={insuranceForm.expiry_date} onChange={(e) => setInsuranceForm((f) => ({ ...f, expiry_date: e.target.value }))} />
-                          </div>
-                          <div>
-                            <label className="label">Premio annuo (€)</label>
-                            <input type="number" className="input" value={insuranceForm.annual_amount_cents} onChange={(e) => setInsuranceForm((f) => ({ ...f, annual_amount_cents: e.target.value }))} />
-                          </div>
+              ) : (
+                <div>
+                  {!showOverrideForm ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowOverrideForm(true)}
+                      className="w-full rounded-xl border border-dashed border-orange-300 bg-orange-50 py-2 text-xs font-semibold text-orange-700 hover:bg-orange-100"
+                    >
+                      Forza operatività mezzo (override scadenze)
+                    </button>
+                  ) : (
+                    <div className="rounded-xl border border-orange-200 bg-orange-50 p-3 space-y-3">
+                      <div className="text-sm font-semibold text-orange-800">Override operativo</div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <div>
+                          <label className="label text-xs">Valido fino al *</label>
+                          <input
+                            type="date"
+                            className="input text-sm"
+                            value={overrideForm.until}
+                            onChange={(e) => setOverrideForm((f) => ({ ...f, until: e.target.value }))}
+                          />
                         </div>
                         <div>
-                          <label className="label">Note</label>
-                          <input className="input" value={insuranceForm.notes} onChange={(e) => setInsuranceForm((f) => ({ ...f, notes: e.target.value }))} />
+                          <label className="label text-xs">Motivazione *</label>
+                          <input
+                            className="input text-sm"
+                            placeholder="es. Polizza in rinnovo"
+                            value={overrideForm.reason}
+                            onChange={(e) => setOverrideForm((f) => ({ ...f, reason: e.target.value }))}
+                          />
                         </div>
-                      </>
-                    )}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleOverride(false)}
+                          disabled={savingOverride}
+                          className="btn-primary flex-1 text-sm"
+                        >
+                          {savingOverride ? "..." : "Conferma override"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowOverrideForm(false)}
+                          className="btn-secondary text-sm"
+                        >
+                          Annulla
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
-                    {panelTab === "inspection" && (
-                      <>
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                          <div>
-                            <label className="label">Data collaudo *</label>
-                            <input type="date" className="input" value={inspectionForm.inspection_date} onChange={(e) => setInspectionForm((f) => ({ ...f, inspection_date: e.target.value }))} />
-                          </div>
-                          <div>
-                            <label className="label">Scadenza *</label>
-                            <input type="date" className="input" value={inspectionForm.expiry_date} onChange={(e) => setInspectionForm((f) => ({ ...f, expiry_date: e.target.value }))} />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                          <div>
-                            <label className="label">Centro revisioni</label>
-                            <input className="input" value={inspectionForm.inspection_center} onChange={(e) => setInspectionForm((f) => ({ ...f, inspection_center: e.target.value }))} />
-                          </div>
-                          <div>
-                            <label className="label">Esito</label>
-                            <select className="input" value={inspectionForm.outcome} onChange={(e) => setInspectionForm((f) => ({ ...f, outcome: e.target.value as typeof f.outcome }))}>
-                              <option value="passed">Superato</option>
-                              <option value="pending">In attesa</option>
-                              <option value="failed">Bocciato</option>
-                            </select>
-                          </div>
-                        </div>
-                        <div>
-                          <label className="label">Note</label>
-                          <input className="input" value={inspectionForm.notes} onChange={(e) => setInspectionForm((f) => ({ ...f, notes: e.target.value }))} />
-                        </div>
-                      </>
-                    )}
+              {/* Tab bar */}
+              <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+                {(["insurance", "inspection", "extinguisher"] as const).map((tab) => {
+                  const labels = { insurance: "Assicurazione", inspection: "Collaudo", extinguisher: "Estintori" };
+                  const entry = panelVehicle?.[tab === "insurance" ? "insurance" : tab === "inspection" ? "inspection" : "extinguisher"] ?? null;
+                  const s: StatusLevel = entry?.status ?? "missing";
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => { setPanelTab(tab); setShowForm(false); }}
+                      className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition-colors ${
+                        panelTab === tab ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      <span className="flex items-center justify-center gap-1.5">
+                        <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[s]}`} />
+                        {labels[tab]}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
 
-                    {panelTab === "extinguisher" && (
-                      <>
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                          <div>
-                            <label className="label">N. seriale</label>
-                            <input className="input" value={extinguisherForm.serial_number} onChange={(e) => setExtinguisherForm((f) => ({ ...f, serial_number: e.target.value }))} />
+              {panelLoading ? (
+                <div className="py-8 text-center text-slate-400 text-sm">Caricamento...</div>
+              ) : (
+                <>
+                  <RecordList tab={panelTab} records={panelRecords} />
+
+                  {!showForm ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowForm(true)}
+                      className="btn-primary w-full"
+                    >
+                      + Aggiungi / Rinnova
+                    </button>
+                  ) : (
+                    <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+                      <div className="text-sm font-semibold text-slate-800">
+                        {panelTab === "insurance" ? "Nuova assicurazione" : panelTab === "inspection" ? "Nuovo collaudo" : "Nuovo estintore"}
+                      </div>
+
+                      {panelTab === "insurance" && (
+                        <>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <label className="label">Compagnia *</label>
+                              <input className="input" value={insuranceForm.company} onChange={(e) => setInsuranceForm((f) => ({ ...f, company: e.target.value }))} />
+                            </div>
+                            <div>
+                              <label className="label">N. polizza</label>
+                              <input className="input" value={insuranceForm.policy_number} onChange={(e) => setInsuranceForm((f) => ({ ...f, policy_number: e.target.value }))} />
+                            </div>
                           </div>
-                          <div>
-                            <label className="label">Scadenza *</label>
-                            <input type="date" className="input" value={extinguisherForm.expiry_date} onChange={(e) => setExtinguisherForm((f) => ({ ...f, expiry_date: e.target.value }))} />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                          <div>
-                            <label className="label">Ultima revisione</label>
-                            <input type="date" className="input" value={extinguisherForm.last_revision_date} onChange={(e) => setExtinguisherForm((f) => ({ ...f, last_revision_date: e.target.value }))} />
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <label className="label">Scadenza *</label>
+                              <input type="date" className="input" value={insuranceForm.expiry_date} onChange={(e) => setInsuranceForm((f) => ({ ...f, expiry_date: e.target.value }))} />
+                            </div>
+                            <div>
+                              <label className="label">Premio annuo (€)</label>
+                              <input type="number" className="input" value={insuranceForm.annual_amount_cents} onChange={(e) => setInsuranceForm((f) => ({ ...f, annual_amount_cents: e.target.value }))} />
+                            </div>
                           </div>
                           <div>
                             <label className="label">Note</label>
-                            <input className="input" value={extinguisherForm.notes} onChange={(e) => setExtinguisherForm((f) => ({ ...f, notes: e.target.value }))} />
+                            <input className="input" value={insuranceForm.notes} onChange={(e) => setInsuranceForm((f) => ({ ...f, notes: e.target.value }))} />
                           </div>
-                        </div>
-                      </>
-                    )}
+                        </>
+                      )}
 
-                    <div className="flex gap-2 pt-1">
-                      <button type="button" onClick={handleSave} disabled={saving} className="btn-primary flex-1">
-                        {saving ? "Salvataggio..." : "Salva"}
-                      </button>
-                      <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">
-                        Annulla
-                      </button>
+                      {panelTab === "inspection" && (
+                        <>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <label className="label">Data collaudo *</label>
+                              <input type="date" className="input" value={inspectionForm.inspection_date} onChange={(e) => setInspectionForm((f) => ({ ...f, inspection_date: e.target.value }))} />
+                            </div>
+                            <div>
+                              <label className="label">Scadenza *</label>
+                              <input type="date" className="input" value={inspectionForm.expiry_date} onChange={(e) => setInspectionForm((f) => ({ ...f, expiry_date: e.target.value }))} />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <label className="label">Centro revisioni</label>
+                              <input className="input" value={inspectionForm.inspection_center} onChange={(e) => setInspectionForm((f) => ({ ...f, inspection_center: e.target.value }))} />
+                            </div>
+                            <div>
+                              <label className="label">Esito</label>
+                              <select className="input" value={inspectionForm.outcome} onChange={(e) => setInspectionForm((f) => ({ ...f, outcome: e.target.value as typeof f.outcome }))}>
+                                <option value="passed">Superato</option>
+                                <option value="pending">In attesa</option>
+                                <option value="failed">Bocciato</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div>
+                            <label className="label">Note</label>
+                            <input className="input" value={inspectionForm.notes} onChange={(e) => setInspectionForm((f) => ({ ...f, notes: e.target.value }))} />
+                          </div>
+                        </>
+                      )}
+
+                      {panelTab === "extinguisher" && (
+                        <>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <label className="label">N. seriale</label>
+                              <input className="input" value={extinguisherForm.serial_number} onChange={(e) => setExtinguisherForm((f) => ({ ...f, serial_number: e.target.value }))} />
+                            </div>
+                            <div>
+                              <label className="label">Scadenza *</label>
+                              <input type="date" className="input" value={extinguisherForm.expiry_date} onChange={(e) => setExtinguisherForm((f) => ({ ...f, expiry_date: e.target.value }))} />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <label className="label">Ultima revisione</label>
+                              <input type="date" className="input" value={extinguisherForm.last_revision_date} onChange={(e) => setExtinguisherForm((f) => ({ ...f, last_revision_date: e.target.value }))} />
+                            </div>
+                            <div>
+                              <label className="label">Note</label>
+                              <input className="input" value={extinguisherForm.notes} onChange={(e) => setExtinguisherForm((f) => ({ ...f, notes: e.target.value }))} />
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      <div className="flex gap-2 pt-1">
+                        <button type="button" onClick={handleSave} disabled={saving} className="btn-primary flex-1">
+                          {saving ? "Salvataggio..." : "Salva"}
+                        </button>
+                        <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">
+                          Annulla
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+                  )}
+                </>
+              )}
+            </div>
           );
         })()}
       </SidePanel>
 
-      {/* Toast */}
       {toast && (
-        <div
-          className={`fixed bottom-6 right-6 z-50 rounded-2xl px-5 py-3 text-sm font-semibold text-white shadow-lg ${
-            toast.ok ? "bg-emerald-600" : "bg-rose-600"
-          }`}
-        >
+        <div className={`fixed bottom-6 right-6 z-50 rounded-2xl px-5 py-3 text-sm font-semibold text-white shadow-lg ${toast.ok ? "bg-emerald-600" : "bg-rose-600"}`}>
           {toast.text}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -719,7 +842,7 @@ function RecordList({ tab, records }: RecordListProps) {
     : records.extinguishers;
 
   if (list.length === 0) {
-    return <div className="py-4 text-sm text-muted text-center">Nessun record presente</div>;
+    return <div className="py-4 text-sm text-slate-400 text-center">Nessun record presente</div>;
   }
 
   return (
@@ -732,29 +855,29 @@ function RecordList({ tab, records }: RecordListProps) {
         const status: StatusLevel = !expiry ? "missing" : days! < 0 ? "expired" : days! <= 7 ? "critical" : days! <= 30 ? "warning" : "ok";
 
         return (
-          <div key={row.id as string ?? i} className={`rounded-xl border p-3 text-sm ${isCurrent ? "border-border bg-surface" : "border-border/50 bg-muted/20 opacity-60"}`}>
+          <div key={row.id as string ?? i} className={`rounded-xl border p-3 text-sm ${isCurrent ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50 opacity-60"}`}>
             <div className="flex items-center justify-between gap-2">
-              <div className="font-medium">
+              <div className="font-medium text-slate-800">
                 {tab === "insurance" && (row.company as string)}
                 {tab === "inspection" && `Collaudo ${row.inspection_date ? formatDate(row.inspection_date as string) : ""}`}
                 {tab === "extinguisher" && (row.serial_number ? `Sn: ${row.serial_number}` : "Estintore")}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 {isCurrent && (
                   <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Attivo</span>
                 )}
                 {expiry && (
-                  <span className={`rounded-lg px-2 py-0.5 text-xs font-medium ${STATUS_CELL[status]}`}>
-                    {formatDate(expiry)} ({formatDays(days)})
+                  <span className={`rounded-lg px-2 py-0.5 text-xs font-semibold ${STATUS_CELL[status]}`}>
+                    {formatDate(expiry)} · {formatDays(days)}
                   </span>
                 )}
               </div>
             </div>
             {tab === "insurance" && !!row.policy_number && (
-              <div className="mt-1 text-xs text-muted">Polizza: {row.policy_number as string}</div>
+              <div className="mt-1 text-xs text-slate-400">Polizza: {row.policy_number as string}</div>
             )}
             {tab === "inspection" && !!row.outcome && (
-              <div className="mt-1 text-xs text-muted">Esito: {row.outcome === "passed" ? "Superato" : row.outcome === "failed" ? "Bocciato" : "In attesa"}</div>
+              <div className="mt-1 text-xs text-slate-400">Esito: {row.outcome === "passed" ? "Superato" : row.outcome === "failed" ? "Bocciato" : "In attesa"}</div>
             )}
           </div>
         );
