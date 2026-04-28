@@ -44,8 +44,10 @@ export async function GET(request: NextRequest) {
       .order("time")
       .limit(2000);
 
-    if (servicesResult.error)
-      return NextResponse.json({ ok: false, error: servicesResult.error.message }, { status: 500 });
+    if (servicesResult.error) {
+      console.error("[piano-giorno] services query error:", servicesResult.error.message, servicesResult.error);
+      return NextResponse.json({ ok: false, error: `services: ${servicesResult.error.message}` }, { status: 500 });
+    }
 
     const dayServiceIds = (servicesResult.data ?? []).map((s) => s.id);
 
@@ -58,8 +60,10 @@ export async function GET(request: NextRequest) {
       .eq("status", "active")
       .limit(2000);
 
-    if (tripGroupsResult.error)
-      return NextResponse.json({ ok: false, error: tripGroupsResult.error.message }, { status: 500 });
+    if (tripGroupsResult.error) {
+      console.error("[piano-giorno] trip_groups query error:", tripGroupsResult.error.message, tripGroupsResult.error);
+      return NextResponse.json({ ok: false, error: `trip_groups: ${tripGroupsResult.error.message}` }, { status: 500 });
+    }
 
     const tripGroups = tripGroupsResult.data ?? [];
     const todayGroupIds = tripGroups.map((g) => g.id as string);
@@ -108,13 +112,17 @@ export async function GET(request: NextRequest) {
       loadVehicleCommitmentsForDate(auth.admin, tenantId, date),
     ]);
 
-    const error =
-      assignmentsResult.error ??
-      hotelsResult.error ??
-      membershipsResult.error ??
-      vehiclesResult.error;
+    const errorSources = [
+      assignmentsResult.error ? `assignments: ${assignmentsResult.error.message}` : null,
+      hotelsResult.error ? `hotels: ${hotelsResult.error.message}` : null,
+      membershipsResult.error ? `memberships: ${membershipsResult.error.message}` : null,
+      vehiclesResult.error ? `vehicles: ${vehiclesResult.error.message}` : null,
+    ].filter(Boolean);
 
-    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    if (errorSources.length > 0) {
+      console.error("[piano-giorno] parallel query errors:", errorSources);
+      return NextResponse.json({ ok: false, error: errorSources.join("; ") }, { status: 500 });
+    }
 
     const dayAssignments = assignmentsResult.data ?? [];
     const committedVehicleIds = new Set(commitments.rows.map((row) => row.vehicle_id));
@@ -140,6 +148,7 @@ export async function GET(request: NextRequest) {
       ferry_schedules: ferrySchedules,
     });
   } catch (err) {
+    console.error("[piano-giorno] unhandled exception:", err);
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : "Errore." },
       { status: 500 }
