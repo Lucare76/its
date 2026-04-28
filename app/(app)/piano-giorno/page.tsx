@@ -632,7 +632,7 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
           onChange={(e) => setDriverId(e.target.value)}
         >
           <option value="">— Seleziona autista —</option>
-          {drivers.filter((d) => d.role === "driver").map((d) => {
+          {drivers.filter((d) => d.role === "driver" || d.role === "autista").map((d) => {
             const conflict = driverConflict(d.user_id);
             return (
               <option key={d.user_id} value={d.user_id}>
@@ -718,7 +718,7 @@ function DriverPanel({ drivers, tripGroups, tripServices, token, vehicles, onUpd
   }, [tripGroups]);
 
   const driverList = useMemo(() => {
-    const active = drivers.filter((d) => d.role === "driver");
+    const active = drivers.filter((d) => d.role === "driver" || d.role === "autista");
     // Ordina: chi ha giri assegnati prima
     return active.sort((a, b) => {
       const aTrips = byDriver.get(a.user_id)?.length ?? 0;
@@ -1040,7 +1040,7 @@ function cleanPortName(mp: string | null | undefined): string {
 
 function printDriverPlans(drivers: Member[], tripGroups: TripGroup[], tripServices: Map<string, Service[]>, hotels: Map<string, Hotel>, date: string, ferrySchedules: FerrySchedule[] = []) {
   const pages = drivers
-    .filter((d) => d.role === "driver")
+    .filter((d) => d.role === "driver" || d.role === "autista")
     .map((driver) => {
       const trips = tripGroups.filter((t) => t.driver_user_id === driver.user_id);
       if (!trips.length) return "";
@@ -1238,7 +1238,7 @@ export default function PianoGiornoPage() {
   const serviceMap = useMemo(() => new Map((data?.services ?? []).map((s) => [s.id, s])), [data]);
   const hotelMap = useMemo(() => new Map((data?.hotels ?? []).map((h) => [h.id, h])), [data]);
   const assignmentMap = useMemo(() => new Map((data?.assignments ?? []).map((a) => [a.service_id, a])), [data]);
-  const driversList = useMemo(() => (data?.memberships ?? []).filter((m) => m.role === "driver"), [data]);
+  const driversList = useMemo(() => (data?.memberships ?? []).filter((m) => m.role === "driver" || m.role === "autista"), [data]);
   const driverNameById = useMemo(
     () => new Map((data?.memberships ?? []).map((m) => [m.user_id, m.full_name])),
     [data]

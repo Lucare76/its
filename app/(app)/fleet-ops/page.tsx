@@ -349,142 +349,112 @@ export default function FleetOpsPage() {
         </div>
       ) : null}
 
-      <div className="rounded-2xl border border-slate-200 bg-[linear-gradient(135deg,#f8fafc,#eef6ff)] px-5 py-4 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Priorita operative</p>
-            <h2 className="mt-1 text-lg font-bold text-slate-950">Focus immediato su alert, blocchi e mezzi da verificare</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              {urgentVehicles > 0
-                ? `${urgentVehicles} mezzi richiedono attenzione. Usa i filtri rapidi per risolvere prima blocchi, anomalie e documenti.`
-                : "Nessuna criticita forte in evidenza. Puoi lavorare per eccezione e tenere il pannello dettagli aperto."}
-            </p>
-          </div>
-          <div className="grid min-w-[260px] gap-2 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => focusProblemArea("attention")}
-              className="rounded-xl border border-rose-200 bg-white/80 px-3 py-3 text-left transition hover:-translate-y-0.5 hover:bg-rose-50/80"
-            >
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-500">Urgenze</p>
-              <p className="mt-1 text-2xl font-bold text-rose-700">{urgentVehicles}</p>
-            </button>
-            <button
-              type="button"
-              onClick={() => focusProblemArea("inactive")}
-              className="rounded-xl border border-slate-200 bg-white/80 px-3 py-3 text-left transition hover:-translate-y-0.5 hover:bg-slate-50/80"
-            >
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Inattivi</p>
-              <p className="mt-1 text-2xl font-bold text-slate-900">{fleetStats.inactive}</p>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+      {/* Compact stats strip */}
+      <div className="flex items-stretch gap-2">
         {[
-          { label: "Mezzi attivi", value: fleetStats.active, tone: "bg-slate-900", color: "text-slate-900", hint: "parco operativo disponibile", status: "active" },
-          { label: "Mezzi inattivi", value: fleetStats.inactive, tone: "bg-slate-400", color: "text-slate-700", hint: "fuori servizio o disattivati", status: "inactive" },
-          { label: "Mezzi bloccati", value: fleetStats.blocked, tone: "bg-rose-500", color: "text-rose-700", hint: "da sbloccare o sostituire", status: "blocked" },
-          { label: "Anomalie aperte", value: fleetStats.anomalies, tone: "bg-amber-500", color: "text-amber-700", hint: "richiedono presa in carico", status: "anomalies" },
-          { label: "Senza GPS", value: fleetStats.gpsMissing, tone: "bg-sky-500", color: "text-sky-700", hint: "mezzi senza tracking live", status: "gpsless" },
-          { label: "Doc da controllare", value: fleetStats.docsCritical, tone: "bg-fuchsia-500", color: "text-fuchsia-700", hint: "scaduti o in scadenza", status: "docs" },
+          { label: "Attivi", value: fleetStats.active, accent: "bg-emerald-500", num: fleetStats.active > 0 ? "text-slate-900" : "text-slate-400", status: "active" },
+          { label: "Inattivi", value: fleetStats.inactive, accent: "bg-slate-400", num: "text-slate-700", status: "inactive" },
+          { label: "Bloccati", value: fleetStats.blocked, accent: fleetStats.blocked > 0 ? "bg-rose-500" : "bg-slate-200", num: fleetStats.blocked > 0 ? "text-rose-700" : "text-slate-400", status: "blocked" },
+          { label: "Anomalie", value: fleetStats.anomalies, accent: fleetStats.anomalies > 0 ? "bg-amber-500" : "bg-slate-200", num: fleetStats.anomalies > 0 ? "text-amber-700" : "text-slate-400", status: "anomalies" },
+          { label: "Senza GPS", value: fleetStats.gpsMissing, accent: "bg-sky-400", num: "text-sky-700", status: "gpsless" },
+          { label: "Doc critici", value: fleetStats.docsCritical, accent: fleetStats.docsCritical > 0 ? "bg-fuchsia-500" : "bg-slate-200", num: fleetStats.docsCritical > 0 ? "text-fuchsia-700" : "text-slate-400", status: "docs" },
         ].map((stat) => (
           <button
             key={stat.label}
             type="button"
             onClick={() => focusProblemArea(stat.status)}
-            className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white px-5 py-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+            className={`relative flex flex-1 flex-col overflow-hidden rounded-2xl border bg-white px-4 py-3 text-left transition hover:shadow-sm ${statusFilter === stat.status ? "border-slate-400 ring-1 ring-slate-300" : "border-slate-200 hover:border-slate-300"}`}
           >
-            <span className={`absolute inset-x-0 top-0 h-1 ${stat.tone}`} />
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{stat.label}</p>
-            <p className={`mt-1 text-3xl font-semibold ${stat.color}`}>{stat.value}</p>
-            <p className="mt-1 text-xs text-slate-500">{stat.hint}</p>
+            <span className={`absolute inset-x-0 top-0 h-[3px] ${stat.accent}`} />
+            <span className={`text-2xl font-bold tabular-nums leading-none ${stat.num}`}>{stat.value}</span>
+            <span className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{stat.label}</span>
           </button>
         ))}
+        {urgentVehicles > 0 && (
+          <button
+            type="button"
+            onClick={() => focusProblemArea("attention")}
+            className="relative flex flex-col overflow-hidden rounded-2xl border border-rose-300 bg-rose-50 px-4 py-3 text-left transition hover:bg-rose-100"
+          >
+            <span className="absolute inset-x-0 top-0 h-[3px] bg-rose-600" />
+            <span className="text-2xl font-bold tabular-nums leading-none text-rose-700">{urgentVehicles}</span>
+            <span className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-rose-500">Urgenze</span>
+          </button>
+        )}
       </div>
 
-      <div ref={vehicleListRef} className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div ref={vehicleListRef} className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
 
         {/* ── Lista veicoli ───────────────────────────────────────────────── */}
-        <SectionCard
-          title="Veicoli"
-          subtitle={`${filteredVehicles.length} risultati su ${vehicles.length} mezzi`}
-          actions={
-            <div className="flex min-w-[320px] flex-col items-stretch gap-2">
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <input
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Cerca mezzo, targa, autista..."
-                  className="min-w-[240px] flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
-                />
-                <button
-                  type="button"
-                  onClick={() => { setIsNewVehicle(true); setSelectedVehicleId(""); resetVehicleEditor(); }}
-                  className="rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                >
-                  + Nuovo mezzo
-                </button>
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-3">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Stato</span>
-                  {[
-                    ["all", `Tutti (${vehicles.length})`],
-                    ["active", `Operativi (${fleetStats.active})`],
-                    ["inactive", `Inattivi (${fleetStats.inactive})`],
-                    ["blocked", `Bloccati (${fleetStats.blocked})`],
-                    ["attention", `Da controllare (${fleetStats.docsCritical + fleetStats.anomalies})`],
-                    ["anomalies", `Anomalie (${fleetStats.anomalies})`],
-                    ["docs", `Documenti (${fleetStats.docsCritical})`],
-                    ["gpsless", `Senza GPS (${fleetStats.gpsMissing})`],
-                  ].map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setStatusFilter(value)}
-                      className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-                        statusFilter === value ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Taglia</span>
-                  {["all", "bus", "large", "medium", "small"].map((size) => (
-                    <button
-                      key={size}
-                      type="button"
-                      onClick={() => setSizeFilter(size)}
-                      className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-                        sizeFilter === size ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
-                      }`}
-                    >
-                      {size === "all" ? "Tutti" : SIZE_LABEL[size]}
-                    </button>
-                  ))}
-                </div>
-              </div>
+        <div className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          {/* Toolbar */}
+          <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-3">
+            <div className="flex items-baseline gap-2">
+              <span className="font-semibold text-slate-900">Veicoli</span>
+              <span className="text-xs text-slate-400">{filteredVehicles.length} / {vehicles.length}</span>
             </div>
-          }
-        >
-          <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="min-w-[1040px] table-auto whitespace-nowrap text-sm">
+            <div className="ml-auto flex items-center gap-2">
+              <input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Cerca mezzo, targa, autista..."
+                className="w-56 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-slate-300"
+              />
+              <button
+                type="button"
+                onClick={() => { setIsNewVehicle(true); setSelectedVehicleId(""); resetVehicleEditor(); }}
+                className="whitespace-nowrap rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+              >
+                + Nuovo mezzo
+              </button>
+            </div>
+          </div>
+          {/* Filter bar */}
+          <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-100 px-3 py-2">
+            {[
+              ["all", "Tutti"],
+              ["active", "Operativi"],
+              ["inactive", "Inattivi"],
+              ["blocked", "Bloccati"],
+              ["attention", "Da controllare"],
+              ["anomalies", "Anomalie"],
+              ["docs", "Documenti"],
+              ["gpsless", "Senza GPS"],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setStatusFilter(value)}
+                className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition ${statusFilter === value ? "border-slate-800 bg-slate-800 text-white" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}
+              >
+                {label}
+              </button>
+            ))}
+            <span className="mx-1.5 text-slate-200 select-none">|</span>
+            {["all", "bus", "large", "medium", "small"].map((size) => (
+              <button
+                key={size}
+                type="button"
+                onClick={() => setSizeFilter(size)}
+                className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition ${sizeFilter === size ? "border-blue-400 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}
+              >
+                {size === "all" ? "Tutte taglie" : SIZE_LABEL[size]}
+              </button>
+            ))}
+          </div>
+          {/* Table */}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[800px] table-auto whitespace-nowrap text-sm">
               <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-400">
                 <tr>
-                  <th className="px-3 py-2.5">Veicolo</th>
-                  <th className="px-3 py-2.5">Taglia</th>
-                  <th className="px-3 py-2.5">Targa</th>
-                  <th className="px-3 py-2.5">Posti</th>
-                  <th className="min-w-[140px] px-3 py-2.5">Autista abituale</th>
-                  <th className="px-3 py-2.5">GPS</th>
-                  <th className="px-3 py-2.5">Documenti</th>
-                  <th className="px-3 py-2.5">Impegni</th>
-                  <th className="px-3 py-2.5">Stato</th>
+                  <th className="px-3 py-2">Veicolo</th>
+                  <th className="px-3 py-2">Taglia / Posti</th>
+                  <th className="px-3 py-2">Targa</th>
+                  <th className="min-w-[120px] px-3 py-2">Autista</th>
+                  <th className="px-3 py-2">GPS</th>
+                  <th className="px-3 py-2">Documenti</th>
+                  <th className="px-3 py-2">Oggi</th>
+                  <th className="px-3 py-2">Stato</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -498,27 +468,30 @@ export default function FleetOpsPage() {
                     <tr
                       key={vehicle.id}
                       onClick={() => { setSelectedVehicleId(vehicle.id); setIsNewVehicle(false); populateVehicleEditor(vehicle); }}
-                      className={`cursor-pointer transition ${isSelected ? "bg-blue-50/70" : todayCommitment ? "bg-amber-50/40" : "hover:bg-slate-50/80"}`}
+                      className={`cursor-pointer transition-colors ${isSelected ? "bg-blue-50" : todayCommitment ? "bg-amber-50/40" : "hover:bg-slate-50"}`}
                     >
-                      <td className="px-3 py-2.5">
-                        <span className={`block max-w-[180px] truncate font-medium ${isSelected ? "text-blue-800" : "text-slate-800"}`} title={vehicle.label}>{vehicle.label}</span>
+                      <td className="px-3 py-2">
+                        <span className={`block max-w-[200px] truncate font-semibold ${isSelected ? "text-blue-800" : "text-slate-800"}`} title={vehicle.label}>{vehicle.label}</span>
+                        {vehicle.license_number && <span className="block font-mono text-[10px] text-slate-400">{vehicle.license_number}</span>}
                       </td>
-                      <td className="px-3 py-2.5">
-                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${SIZE_BADGE[vehicle.vehicle_size ?? ""] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
-                          {SIZE_LABEL[vehicle.vehicle_size ?? ""] ?? "N/D"}
-                        </span>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${SIZE_BADGE[vehicle.vehicle_size ?? ""] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
+                            {SIZE_LABEL[vehicle.vehicle_size ?? ""] ?? "N/D"}
+                          </span>
+                          {vehicle.capacity && <span className="text-xs font-semibold text-slate-500">{vehicle.capacity}p</span>}
+                        </div>
                       </td>
-                      <td className="px-3 py-2.5 font-mono text-xs text-slate-600">{vehicle.plate ?? "—"}</td>
-                      <td className="px-3 py-2.5 text-slate-600">{vehicle.capacity ?? "—"}</td>
-                      <td className="px-3 py-2.5 text-slate-600">
-                        <span className="block max-w-[150px] truncate" title={vehicle.habitual_driver_profile_id ? driverNameById.get(vehicle.habitual_driver_profile_id) ?? "" : ""}>
+                      <td className="px-3 py-2 font-mono text-xs text-slate-600">{vehicle.plate ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        <span className="block max-w-[120px] truncate text-xs text-slate-600" title={vehicle.habitual_driver_profile_id ? driverNameById.get(vehicle.habitual_driver_profile_id) ?? "" : ""}>
                           {vehicle.habitual_driver_profile_id ? driverNameById.get(vehicle.habitual_driver_profile_id) ?? "—" : <span className="text-slate-300">—</span>}
                         </span>
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-2">
                         <span className={`inline-block h-2.5 w-2.5 rounded-full ${hasGps ? "bg-emerald-400" : "bg-slate-200"}`} title={hasGps ? vehicle.radius_vehicle_id ?? "" : "Nessun GPS"} />
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-2">
                         {(() => {
                           const docSummary = getVehicleDocumentSummary(vehicle);
                           if (docSummary.worst === "none") return <span className="text-slate-300 text-xs">—</span>;
@@ -529,7 +502,7 @@ export default function FleetOpsPage() {
                           );
                         })()}
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-2">
                         {todayCommitment ? (
                           <span
                             className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${COMMITMENT_BADGE[todayCommitment.commitment_type] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}
@@ -541,7 +514,7 @@ export default function FleetOpsPage() {
                           <span className="text-slate-300 text-xs">—</span>
                         )}
                       </td>
-                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           title={vehicle.active ? "Clicca per disattivare" : "Clicca per attivare"}
@@ -568,7 +541,7 @@ export default function FleetOpsPage() {
               </tbody>
             </table>
           </div>
-        </SectionCard>
+        </div>
 
         {/* ── Pannello modifica ───────────────────────────────────────────── */}
         <div className="space-y-4">

@@ -72,16 +72,28 @@ export function DriverSign({ customerName, hotelName, isExclusive, onClose }: Pr
         </div>
       ) : (
         /* ── Servizio di gruppo ── */
-        <div className="flex flex-col items-center gap-6 px-8 text-center">
+        <div className="flex flex-col items-center gap-5 px-8 text-center">
           <Image
             src="/brand/logo-ischia-transfer.png"
             alt="Ischia Transfer Service"
-            width={280}
-            height={280}
+            width={customerName ? 160 : 260}
+            height={customerName ? 160 : 260}
             className="object-contain"
             priority
           />
-          <p className="text-3xl font-black uppercase tracking-[0.15em] text-slate-800">
+          {customerName && (
+            <div className="rounded-3xl border-4 border-slate-900 px-10 py-6 shadow-2xl">
+              <p className="text-5xl font-black uppercase tracking-widest text-slate-900 leading-tight">
+                {customerName}
+              </p>
+              {hotelName && (
+                <p className="mt-3 text-xl font-semibold text-slate-500 uppercase tracking-wider">
+                  {hotelName}
+                </p>
+              )}
+            </div>
+          )}
+          <p className="text-sm font-semibold uppercase tracking-widest text-slate-400">
             Ischia Transfer Service
           </p>
         </div>
