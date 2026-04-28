@@ -23,7 +23,8 @@ export async function loadVehicleCommitmentsForDate(
     .eq("commitment_date", date);
 
   if (error) {
-    throw new Error(`Errore caricamento impegni mezzi: ${error.message}`);
+    console.error("[vehicle-commitments] query error:", error.message);
+    return { rows: [], byVehicleId: new Map() };
   }
 
   const rows = (data ?? []) as VehicleCommitmentRow[];
