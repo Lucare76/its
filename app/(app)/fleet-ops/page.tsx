@@ -308,7 +308,7 @@ export default function FleetOpsPage() {
         || (statusFilter === "gpsless" && !vehicle.radius_vehicle_id)
         || (statusFilter === "active" && vehicle.active && !vehicle.is_blocked_manual && !vehicle.blocked_until);
       return matchesSize && matchesSearch && matchesStatus;
-    });
+    }).sort((a, b) => (b.capacity ?? 0) - (a.capacity ?? 0));
   }, [anomalies, driverNameById, searchQuery, sizeFilter, statusFilter, vehicles]);
 
   const focusProblemArea = useCallback((nextStatus: string) => {
