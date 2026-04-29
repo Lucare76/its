@@ -35,6 +35,13 @@ function firstOfYear() {
   return `${todayIso().slice(0, 4)}-01-01`;
 }
 
+function isIslandToMainlandRoute(route: MedmarRoute) {
+  return route === "ischia_pozzuoli"
+    || route === "casamicciola_pozzuoli"
+    || route === "ischia_napoli"
+    || route === "casamicciola_napoli";
+}
+
 async function getToken(): Promise<string | null> {
   if (!supabase) return null;
   const { data } = await supabase.auth.getSession();
@@ -311,6 +318,11 @@ export default function MedmarArPage() {
   const [tab, setTab] = useState<Tab>("emissione");
   const [token, setToken] = useState<string | null>(null);
   const [initError, setInitError] = useState("");
+  const [entryMode, setEntryMode] = useState<"ocr" | "manual">("ocr");
+  const [ticketPhoto, setTicketPhoto] = useState<File | null>(null);
+  const [ocrExtracting, setOcrExtracting] = useState(false);
+  const [ocrError, setOcrError] = useState("");
+  const [ocrRawText, setOcrRawText] = useState("");
 
   // Form emissione
   const [formDate, setFormDate] = useState(todayIso());
@@ -386,8 +398,7 @@ export default function MedmarArPage() {
   // Badge recupero
   const criticalOpp = opportunities.filter((o) => o.urgency === "critical").length;
   const highOpp = opportunities.filter((o) => o.urgency !== "normal").length;
-  const canLoadDecisionData = Boolean(token && formRoute && formPax && parseInt(formPax) >= 1);
-  const visibleDecisionData = canLoadDecisionData ? decisionData : null;
+  const canLoadDecisionData = false;
 
   // Simulatore: calcolo scenari
   const simProjection = useMemo(() => {
@@ -597,14 +608,95 @@ export default function MedmarArPage() {
     if (nextTab === "leve") void loadInsights();
   }, [loadInsights, loadOpportunities, loadPending, loadSimulator, loadStats, loadTickets]);
 
+  const handleExtractTicket = async () => {
+    if (!ticketPhoto) {
+      setOcrError("Carica prima la foto del ticket.");
+      return;
+    }
+
+    setOcrExtracting(true);
+    setOcrError("");
+    setSubmitMsg(null);
+
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = typeof reader.result === "string" ? reader.result : "";
+          const encoded = result.includes(",") ? result.split(",")[1] ?? "" : "";
+          if (!encoded) reject(new Error("Impossibile leggere il file selezionato."));
+          else resolve(encoded);
+        };
+        reader.onerror = () => reject(new Error("Errore lettura immagine."));
+        reader.readAsDataURL(ticketPhoto);
+      });
+
+      const res = await api<{
+        extracted: {
+          route_code: MedmarRoute | null;
+          travel_date: string | null;
+          departure_time: string | null;
+          issue_date: string | null;
+          ticket_number: string | null;
+          booking_code: string | null;
+          voucher_label: string | null;
+          tariff_label: string | null;
+          price_cents: number | null;
+          quantity: number | null;
+          raw_text: string;
+        };
+      }>(
+        "/api/medmar-ar/extract",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            image_base64: base64,
+            mime_type: ticketPhoto.type || "image/jpeg",
+          }),
+        },
+        token
+      );
+
+      if (!res.ok || !res.data) {
+        throw new Error(res.error ?? "Estrazione OCR non riuscita.");
+      }
+
+      const extracted = res.data.extracted;
+      if (extracted.route_code) setFormRoute(extracted.route_code);
+      if (extracted.travel_date) setFormDate(extracted.travel_date);
+      if (extracted.departure_time) {
+        setFormOutbound(extracted.departure_time);
+        setFormReturn(extracted.departure_time);
+      }
+      if (extracted.quantity) setFormPax(String(extracted.quantity));
+      setFormVoucher(extracted.voucher_label ?? extracted.ticket_number ?? extracted.booking_code ?? `OCR-${Date.now()}`);
+      setOcrRawText(extracted.raw_text || "");
+
+      const noteParts = [
+        extracted.ticket_number ? `ticket:${extracted.ticket_number}` : null,
+        extracted.booking_code ? `booking:${extracted.booking_code}` : null,
+        extracted.tariff_label ? `tariffa:${extracted.tariff_label}` : null,
+        extracted.issue_date ? `emissione:${extracted.issue_date}` : null,
+        extracted.price_cents !== null ? `prezzo:${(extracted.price_cents / 100).toFixed(2)} EUR` : null,
+      ].filter(Boolean);
+      if (noteParts.length > 0) setFormNotes(noteParts.join(" | "));
+      setSubmitMsg({ type: "ok", text: "Dati ticket estratti. Verifica e conferma il caricamento." });
+    } catch (err) {
+      setOcrError(err instanceof Error ? err.message : "Errore estrazione ticket.");
+    } finally {
+      setOcrExtracting(false);
+    }
+  };
+
   // Submit emissione
-  const handleEmit = async (modeOverride?: TicketMode) => {
-    const mode = modeOverride ?? (formMode as TicketMode);
-    if (!mode) { setSubmitMsg({ type: "err", text: "Seleziona una modalità dal suggerimento economico." }); return; }
+  const handleEmit = async (_modeOverride?: TicketMode) => {
     if (!formVoucher.trim()) { setSubmitMsg({ type: "err", text: "Inserisci il numero voucher." }); return; }
     if (!formPax || parseInt(formPax) < 1) { setSubmitMsg({ type: "err", text: "Inserisci numero passeggeri valido." }); return; }
-    if (mode !== "single_return" && !formOutbound) { setSubmitMsg({ type: "err", text: "Seleziona orario andata." }); return; }
-    if (mode === "round_trip" && !formReturn) { setSubmitMsg({ type: "err", text: "Seleziona orario ritorno per A/R." }); return; }
+    if (!formOutbound) { setSubmitMsg({ type: "err", text: "Inserisci l'orario della tratta da recuperare." }); return; }
+
+    const mode: TicketMode = isIslandToMainlandRoute(formRoute) ? "single_return" : "single_outbound";
+    const outboundTime = mode === "single_outbound" ? formOutbound || null : null;
+    const returnTime = mode === "single_return" ? formOutbound || null : null;
 
     setSubmitting(true);
     setSubmitMsg(null);
@@ -618,19 +710,23 @@ export default function MedmarArPage() {
           route: formRoute,
           pax_count: parseInt(formPax),
           ticket_mode: mode,
-          outbound_time: formOutbound || null,
-          return_time: formReturn || null,
+          outbound_time: outboundTime,
+          return_time: returnTime,
           notes: formNotes.trim() || null,
+          archive_for_recovery: true,
+          source: entryMode,
         }),
       },
       token
     );
     setSubmitting(false);
     if (res.ok && res.data) {
-      setSubmitMsg({ type: "ok", text: `✅ Biglietto emesso — ${formatEur(res.data.total_price_cents)} totale` });
-      setFormVoucher(""); setFormPax(""); setFormOutbound(""); setFormReturn(""); setFormNotes(""); setFormMode("");
+      setSubmitMsg({ type: "ok", text: `Ticket recuperabile caricato - ${formatEur(res.data.total_price_cents)} totale` });
+      setFormVoucher(""); setFormPax(""); setFormOutbound(""); setFormReturn(""); setFormNotes(""); setTicketPhoto(null); setOcrRawText("");
+      void loadTickets();
+      void loadOpportunities();
     } else {
-      setSubmitMsg({ type: "err", text: res.error ?? "Errore emissione biglietto." });
+      setSubmitMsg({ type: "err", text: res.error ?? "Errore caricamento ticket." });
     }
   };
 
@@ -719,7 +815,7 @@ export default function MedmarArPage() {
     <section className="page-section">
       <PageHeader
         title="Medmar A/R"
-        subtitle="Gestione biglietti andata/ritorno con decision helper economico"
+        subtitle="Archivio ticket caricati da operatore per recupero tratte residue, matching e statistiche"
         breadcrumbs={[{ label: "Operativo", href: "/dashboard" }, { label: "Medmar A/R" }]}
       />
 
@@ -749,7 +845,7 @@ export default function MedmarArPage() {
       {/* Tabs */}
       <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
         {([
-          { id: "emissione",  label: "✏️ Emissione" },
+          { id: "emissione",  label: "Carica ticket" },
           { id: "biglietti",  label: "🎫 Biglietti" },
           { id: "pending",    label: `⏳ Gruppi${pendingGroups.length > 0 ? ` (${pendingGroups.length})` : ""}` },
           { id: "recupero",   label: `🎯 Recupero${highOpp > 0 ? ` (${highOpp})` : ""}` },
@@ -777,7 +873,27 @@ export default function MedmarArPage() {
         <div className="grid gap-6 lg:grid-cols-2">
           {/* Form */}
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
-            <h2 className="text-sm font-bold text-slate-900">Dati biglietto</h2>
+            <h2 className="text-sm font-bold text-slate-900">Caricamento ticket recuperabile</h2>
+
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => setEntryMode("ocr")} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${entryMode === "ocr" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600"}`}>
+                Foto + OCR
+              </button>
+              <button type="button" onClick={() => setEntryMode("manual")} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${entryMode === "manual" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600"}`}>
+                Inserimento manuale
+              </button>
+            </div>
+
+            {entryMode === "ocr" && (
+              <div className="rounded-2xl border border-dashed border-indigo-200 bg-indigo-50 p-4 space-y-3">
+                <p className="text-xs text-indigo-700">Carica il ticket non utilizzato e usa l&apos;OCR per precompilare i dati.</p>
+                <input type="file" accept="image/*" onChange={(e) => setTicketPhoto(e.target.files?.[0] ?? null)} className="block w-full text-sm text-slate-600" />
+                {ocrError && <p className="text-xs text-rose-600">{ocrError}</p>}
+                <button type="button" onClick={() => void handleExtractTicket()} disabled={ocrExtracting || !ticketPhoto} className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700 disabled:opacity-50">
+                  {ocrExtracting ? "Estrazione in corso..." : "Estrai dati dal ticket"}
+                </button>
+              </div>
+            )}
 
             {submitMsg && (
               <div className={`rounded-xl px-4 py-3 text-sm font-medium ${
@@ -804,7 +920,7 @@ export default function MedmarArPage() {
                 />
               </label>
               <label className="text-xs font-medium text-slate-600 sm:col-span-2">
-                Tratta *
+                Tratta da recuperare *
                 <select value={formRoute} onChange={(e) => { setFormRoute(e.target.value as MedmarRoute); setFormOutbound(""); setFormReturn(""); }} className="mt-1 input-saas w-full">
                   {(Object.keys(ROUTE_LABELS) as MedmarRoute[]).map((r) => (
                     <option key={r} value={r}>{ROUTE_LABELS[r]}</option>
@@ -823,7 +939,7 @@ export default function MedmarArPage() {
                 />
               </label>
               <label className="text-xs font-medium text-slate-600">
-                Orario andata
+                Orario tratta
                 <select value={formOutbound} onChange={(e) => setFormOutbound(e.target.value)} className="mt-1 input-saas w-full">
                   <option value="">— Seleziona —</option>
                   {availableTimes.map((t) => (
@@ -853,14 +969,14 @@ export default function MedmarArPage() {
               </label>
             </div>
 
-            {formMode && (
+            {true && (
               <button
                 type="button"
                 disabled={submitting}
                 onClick={() => void handleEmit()}
                 className="w-full rounded-xl bg-indigo-600 py-2.5 text-sm font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
               >
-                {submitting ? "Emissione in corso..." : `Conferma: Emetti ${TICKET_MODE_LABELS[formMode as TicketMode]}`}
+                {submitting ? "Caricamento in corso..." : "Salva tra i biglietti da recuperare"}
               </button>
             )}
           </div>
@@ -1643,3 +1759,10 @@ export default function MedmarArPage() {
     </section>
   );
 }
+
+
+
+
+
+
+

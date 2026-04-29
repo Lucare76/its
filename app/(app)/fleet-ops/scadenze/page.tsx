@@ -228,7 +228,10 @@ export default function ScadenzePage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   const loadPanelRecords = useCallback(async (vehicleId: string) => {
     const token = await getToken();

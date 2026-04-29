@@ -1,10 +1,12 @@
-// ─── Tipi Medmar A/R Module ─────────────────────────────────────────────────
-
 export type MedmarRoute =
   | "pozzuoli_ischia"
   | "pozzuoli_casamicciola"
   | "napoli_ischia"
-  | "napoli_casamicciola";
+  | "napoli_casamicciola"
+  | "ischia_pozzuoli"
+  | "casamicciola_pozzuoli"
+  | "ischia_napoli"
+  | "casamicciola_napoli";
 
 export type TicketMode = "round_trip" | "single_outbound" | "single_return";
 
@@ -86,44 +88,47 @@ export interface MedmarArPendingGroup {
   updated_at: string;
 }
 
-// ─── Orari Medmar per tratta ─────────────────────────────────────────────────
-
 export const MEDMAR_TIMES_BY_ROUTE: Record<MedmarRoute, string[]> = {
-  pozzuoli_ischia:       ["07:00","09:30","12:30","15:00","18:00","20:30"],
-  pozzuoli_casamicciola: ["07:00","09:30","12:30","15:00","18:00","20:30"],
-  napoli_ischia:         ["07:15","09:45","13:00","15:15","18:15","20:45"],
-  napoli_casamicciola:   ["07:15","09:45","13:00","15:15","18:15","20:45"],
+  pozzuoli_ischia: ["07:00", "09:30", "12:30", "15:00", "18:00", "20:30"],
+  pozzuoli_casamicciola: ["07:00", "09:30", "12:30", "15:00", "18:00", "20:30"],
+  napoli_ischia: ["07:15", "09:45", "13:00", "15:15", "18:15", "20:45"],
+  napoli_casamicciola: ["07:15", "09:45", "13:00", "15:15", "18:15", "20:45"],
+  ischia_pozzuoli: ["08:10", "11:10", "15:00"],
+  casamicciola_pozzuoli: ["06:20", "10:10", "13:35", "16:50"],
+  ischia_napoli: ["06:25", "10:35", "17:00"],
+  casamicciola_napoli: ["07:10", "09:45", "14:00", "17:40", "20:00"],
 };
 
 export const ROUTE_LABELS: Record<MedmarRoute, string> = {
-  pozzuoli_ischia:       "Pozzuoli → Ischia",
+  pozzuoli_ischia: "Pozzuoli → Ischia",
   pozzuoli_casamicciola: "Pozzuoli → Casamicciola",
-  napoli_ischia:         "Napoli → Ischia",
-  napoli_casamicciola:   "Napoli → Casamicciola",
+  napoli_ischia: "Napoli → Ischia",
+  napoli_casamicciola: "Napoli → Casamicciola",
+  ischia_pozzuoli: "Ischia → Pozzuoli",
+  casamicciola_pozzuoli: "Casamicciola → Pozzuoli",
+  ischia_napoli: "Ischia → Napoli",
+  casamicciola_napoli: "Casamicciola → Napoli",
 };
 
 export const TICKET_MODE_LABELS: Record<TicketMode, string> = {
-  round_trip:       "Andata e Ritorno",
-  single_outbound:  "Solo Andata",
-  single_return:    "Solo Ritorno",
+  round_trip: "Andata e Ritorno",
+  single_outbound: "Solo Andata",
+  single_return: "Solo Ritorno",
 };
 
 export const LEG_STATUS_LABELS: Record<LegStatus, string> = {
-  used:                       "Utilizzato",
+  used: "Utilizzato",
   available_for_reassignment: "Disponibile per riassegnazione",
-  reassigned:                 "Riassegnato",
-  lost:                       "Perso",
-  not_applicable:             "N/A",
+  reassigned: "Riassegnato",
+  lost: "Perso",
+  not_applicable: "N/A",
 };
 
-// ─── Costanti tariffarie (fallback se DB non risponde) ───────────────────────
 export const DEFAULT_PRICES_CENTS: Record<PriceType, number> = {
-  round_trip_per_leg:     1025,  // 10,25 €
-  single_trip_under_12:   1370,  // 13,70 €
-  single_trip_12_or_more: 1025,  // 10,25 €
+  round_trip_per_leg: 1025,
+  single_trip_under_12: 1370,
+  single_trip_12_or_more: 1025,
 };
-
-// ─── Helpers economici ───────────────────────────────────────────────────────
 
 export function formatEur(cents: number): string {
   return (cents / 100).toLocaleString("it-IT", {
@@ -147,32 +152,30 @@ export interface DecisionScenario {
 export function buildDecisionScenarios(
   paxCount: number,
   prices: Record<PriceType, number>,
-  returnUsageProbability: number,  // 0–1
+  returnUsageProbability: number,
   canGroup: boolean,
   groupTargetPax: number
 ): DecisionScenario[] {
   const scenarios: DecisionScenario[] = [];
 
   if (paxCount >= 12) {
-    // Unica opzione disponibile
     const total = prices.single_trip_12_or_more * paxCount;
     scenarios.push({
       mode: "single_outbound",
-      label: "Singola tratta (≥12 pax)",
+      label: "Singola tratta (>=12 pax)",
       totalCents: total,
       perPaxCents: prices.single_trip_12_or_more,
       riskLevel: "none",
       badge: "Unica disponibile",
       details: [
-        `${paxCount} pax × ${formatEur(prices.single_trip_12_or_more)} = ${formatEur(total)}`,
-        "✅ Tariffa scontata gruppo",
+        `${paxCount} pax x ${formatEur(prices.single_trip_12_or_more)} = ${formatEur(total)}`,
+        "Tariffa scontata gruppo",
       ],
       recommended: true,
     });
     return scenarios;
   }
 
-  // Singola andata
   const singleTotal = prices.single_trip_under_12 * paxCount;
   scenarios.push({
     mode: "single_outbound",
@@ -182,14 +185,13 @@ export function buildDecisionScenarios(
     riskLevel: "none",
     badge: "Sicuro",
     details: [
-      `${paxCount} pax × ${formatEur(prices.single_trip_under_12)} = ${formatEur(singleTotal)}`,
-      "✅ Nessun rischio spreco",
-      "⚠️ Costa di più a tratta rispetto all'A/R",
+      `${paxCount} pax x ${formatEur(prices.single_trip_under_12)} = ${formatEur(singleTotal)}`,
+      "Nessun rischio spreco",
+      "Costa di piu a tratta rispetto all'A/R",
     ],
     recommended: false,
   });
 
-  // A/R
   const arPerLeg = prices.round_trip_per_leg;
   const arTotal = arPerLeg * 2 * paxCount;
   const arExpectedCost =
@@ -198,11 +200,18 @@ export function buildDecisionScenarios(
 
   let riskLevel: DecisionScenario["riskLevel"] = "low";
   let badge = "Conveniente";
-  if (returnUsageProbability > 0.66) { riskLevel = "low"; badge = "Conveniente"; }
-  else if (returnUsageProbability > 0.4) { riskLevel = "medium"; badge = "Rischio medio"; }
-  else { riskLevel = "high"; badge = "Alto rischio spreco"; }
+  if (returnUsageProbability > 0.66) {
+    riskLevel = "low";
+    badge = "Conveniente";
+  } else if (returnUsageProbability > 0.4) {
+    riskLevel = "medium";
+    badge = "Rischio medio";
+  } else {
+    riskLevel = "high";
+    badge = "Alto rischio spreco";
+  }
 
-  const wastedCents = arPerLeg * paxCount; // perdita se ritorno non usato
+  const wastedCents = arPerLeg * paxCount;
   scenarios.push({
     mode: "round_trip",
     label: "A/R Medmar",
@@ -211,7 +220,7 @@ export function buildDecisionScenarios(
     riskLevel,
     badge,
     details: [
-      `${paxCount} pax × ${formatEur(arPerLeg * 2)} = ${formatEur(arTotal)}`,
+      `${paxCount} pax x ${formatEur(arPerLeg * 2)} = ${formatEur(arTotal)}`,
       `Prob. ritorno usato: ${Math.round(returnUsageProbability * 100)}%`,
       `Se ritorno usato: ${formatEur(arTotal)} totale`,
       `Se ritorno NON usato: perdita ${formatEur(wastedCents)}`,
@@ -220,7 +229,6 @@ export function buildDecisionScenarios(
     recommended: false,
   });
 
-  // Raggruppamento pending
   if (canGroup) {
     const groupTotal = prices.single_trip_12_or_more * groupTargetPax;
     const savingVsSingle = singleTotal - (groupTotal * paxCount / groupTargetPax);
@@ -230,20 +238,18 @@ export function buildDecisionScenarios(
       totalCents: groupTotal,
       perPaxCents: prices.single_trip_12_or_more,
       riskLevel: "none",
-      badge: "Opportunità",
+      badge: "Opportunita",
       details: [
         `Con ${groupTargetPax} pax totali: ${formatEur(prices.single_trip_12_or_more)}/pax`,
         `Risparmio stimato vs singola: ${formatEur(Math.max(0, Math.round(savingVsSingle)))}`,
-        "⏳ Richiede raccolta pax aggiuntivi",
+        "Richiede raccolta pax aggiuntivi",
       ],
       recommended: false,
     });
   }
 
-  // Scegli la raccomandazione: confronta costo atteso A/R vs singola
   const bestScenario = arExpectedCost < singleTotal ? scenarios[1] : scenarios[0];
   if (canGroup && scenarios[2]) {
-    // Raggruppa se i target sono vicini
     const groupSaving = singleTotal - prices.single_trip_12_or_more * paxCount;
     if (groupSaving > 200) scenarios[2].recommended = true;
     else bestScenario.recommended = true;
