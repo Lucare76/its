@@ -674,10 +674,6 @@ function DriverPageInner() {
 
   return (
     <div className="mx-auto max-w-lg space-y-4 px-2 pb-10 pt-4">
-      <div className="rounded-2xl border-2 border-rose-300 bg-rose-50 px-4 py-3 text-sm font-black uppercase tracking-wide text-rose-700">
-        Debug Driver Build 2026-04-29 Escursioni
-      </div>
-
       {/* Cartello digitale — overlay fullscreen */}
       {showSign && focused && (
         <DriverSign
