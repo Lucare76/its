@@ -534,6 +534,7 @@ export default function OpsNewBookingPage() {
   ]);
 
   const isTransportCodeRequired = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_airport_hotel_aliscafo" || selectedKind === "transfer_train_hotel" || selectedKind === "transfer_train_hotel_aliscafo";
+  const isPhoneRequired = selectedKind !== "shuttle_hotel";
   const showTransportCodeField =
     selectedKind === "transfer_airport_hotel" ||
     selectedKind === "transfer_airport_hotel_exclusive" ||
@@ -574,7 +575,7 @@ export default function OpsNewBookingPage() {
     } else {
       if (!form.customer_first_name.trim() || !form.customer_last_name.trim()) warnings.push("Completa nome e cognome cliente.");
     }
-    if (!form.customer_phone.trim()) warnings.push("Inserisci un telefono cliente.");
+    if (isPhoneRequired && !form.customer_phone.trim()) warnings.push("Inserisci un telefono cliente.");
     const paxNum = Number(form.pax);
     if (!form.pax || isNaN(paxNum) || paxNum < 1) warnings.push("Inserisci il numero di pax (min. 1).");
     if (!form.hotel_id && !isPrivateIsland) warnings.push("Seleziona la struttura.");
@@ -587,7 +588,7 @@ export default function OpsNewBookingPage() {
     if (isBusOriginRequired && !form.bus_city_origin.trim()) warnings.push("Città di partenza bus mancante.");
     if (isExcursionTitleRequired && !form.excursion_title.trim()) warnings.push("Nome escursione mancante.");
     return warnings;
-  }, [contextLabels.arrivalDateLabel, contextLabels.arrivalTimeLabel, contextLabels.departureDateLabel, contextLabels.departureTimeLabel, contextLabels.transportCodeLabel, contextLabels.transportCodeReturnLabel, form.arrival_date, form.arrival_time, form.bus_city_origin, form.customer_first_name, form.customer_last_name, form.customer_phone, form.departure_date, form.departure_time, form.excursion_title, form.hotel_id, form.pax, form.transport_code, form.transport_code_return, isBusOriginRequired, isExcursionTitleRequired, isPrivateIsland, isSnavKind, isTransportCodeRequired]);
+  }, [contextLabels.arrivalDateLabel, contextLabels.arrivalTimeLabel, contextLabels.departureDateLabel, contextLabels.departureTimeLabel, contextLabels.transportCodeLabel, contextLabels.transportCodeReturnLabel, form.arrival_date, form.arrival_time, form.bus_city_origin, form.customer_first_name, form.customer_last_name, form.customer_phone, form.departure_date, form.departure_time, form.excursion_title, form.hotel_id, form.pax, form.transport_code, form.transport_code_return, isBusOriginRequired, isExcursionTitleRequired, isPhoneRequired, isPrivateIsland, isSnavKind, isTransportCodeRequired]);
 
   const doSubmit = async () => {
     if (!accessToken) { setMessage("Sessione non valida. Rifai login."); return; }
@@ -657,7 +658,7 @@ export default function OpsNewBookingPage() {
         if (!form.customer_first_name.trim()) errs.customer_first_name = "Campo obbligatorio";
         if (!form.customer_last_name.trim()) errs.customer_last_name = "Campo obbligatorio";
       }
-      if (!form.customer_phone.trim()) errs.customer_phone = "Campo obbligatorio";
+      if (isPhoneRequired && !form.customer_phone.trim()) errs.customer_phone = "Campo obbligatorio";
       if (!form.pax || isNaN(Number(form.pax)) || Number(form.pax) < 1) errs.pax = "Minimo 1 pax";
       if (!form.hotel_id && !isPrivateIsland) errs.hotel_id = "Seleziona la struttura";
       if (!form.arrival_date) errs.arrival_date = "Campo obbligatorio";
@@ -787,7 +788,7 @@ export default function OpsNewBookingPage() {
         )}
 
         <label className="text-sm">
-          Telefono*
+          {isPhoneRequired ? "Telefono*" : "Telefono"}
           <input className="input-saas mt-1" value={form.customer_phone}
             onChange={(e) => setForm((prev) => ({ ...prev, customer_phone: e.target.value }))}
           />
