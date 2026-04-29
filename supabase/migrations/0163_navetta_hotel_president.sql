@@ -83,7 +83,7 @@ begin
           notes, phone,
           status, is_draft
         ) values (
-          v_tenant, v_date, v_t,
+          v_tenant, v_date, v_t::time,
           'transfer', 'departure',
           'Hotel President', 1,
           v_hotel, 'Navetta',
@@ -104,7 +104,7 @@ begin
           notes, phone,
           status, is_draft
         ) values (
-          v_tenant, v_date, v_rt,
+          v_tenant, v_date, v_rt::time,
           'transfer', 'arrival',
           'Hotel President', 1,
           v_hotel, 'Navetta',

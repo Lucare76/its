@@ -70,7 +70,7 @@ begin
           notes, phone,
           status, is_draft
         ) values (
-          v_tenant, v_date, v_time,
+          v_tenant, v_date, v_time::time,
           'transfer', v_stype,
           'Hotel Cristallo', 1,
           v_hotel, 'Navetta',
