@@ -5,6 +5,12 @@ import { DateInput } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import type { Hotel, Service } from "@/lib/types";
+import {
+  MEDMAR_TICKET_ROUTE_LABELS,
+  MEDMAR_TICKET_ROUTE_OPTIONS,
+  formatSlotLabel,
+  type MedmarTicketRouteCode,
+} from "@/lib/medmar-ticket-memory";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -45,6 +51,16 @@ async function copyText(text: string): Promise<void> {
   try { await navigator.clipboard.writeText(text); } catch { /* ignore */ }
 }
 
+async function fileToBase64(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]!);
+  }
+  return btoa(binary);
+}
+
 // ─── Tipi ────────────────────────────────────────────────────────────────────
 
 type BookingGroup = {
@@ -60,6 +76,68 @@ type BookingGroup = {
   allServiceIds: string[];
   sentAt: string | null; // medmar_ticket_sent_at del primo servizio
 };
+
+type TicketMemoryRecord = {
+  id: string;
+  route_code: MedmarTicketRouteCode;
+  travel_date: string;
+  departure_time: string | null;
+  issue_date: string | null;
+  ticket_number: string | null;
+  booking_code: string | null;
+  voucher_label: string | null;
+  tariff_label: string | null;
+  price_cents: number | null;
+  quantity: number;
+  status: "available" | "matched" | "used" | "expired";
+  matched_service_id: string | null;
+  photo_path: string | null;
+  photo_url: string | null;
+  notes: string | null;
+  created_at: string;
+};
+
+type TicketMemorySlot = {
+  key: string;
+  route_code: MedmarTicketRouteCode;
+  travel_date: string;
+  departure_time: string | null;
+  available_quantity: number;
+  tickets: TicketMemoryRecord[];
+  matched_services: Array<{
+    service_id: string;
+    customer_name: string | null;
+    hotel_name: string | null;
+    pax: number | null;
+    date: string;
+    time: string | null;
+    direction: "arrival" | "departure";
+    vessel: string | null;
+    score: number;
+    reasons: string[];
+  }>;
+};
+
+function formatEur(cents: number | null | undefined) {
+  if (typeof cents !== "number") return "—";
+  return (cents / 100).toLocaleString("it-IT", { style: "currency", currency: "EUR" });
+}
+
+async function apiFetch<T>(path: string, token: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(options?.headers ?? {}),
+    },
+  });
+  const body = await res.json().catch(() => null) as (T & { ok?: boolean; error?: string }) | null;
+  if (!res.ok || !body?.ok) {
+    throw new Error(body?.error ?? `Errore HTTP ${res.status}`);
+  }
+  return body;
+}
 
 // ─── Componente ─────────────────────────────────────────────────────────────
 
@@ -78,6 +156,28 @@ export default function BigliettiMedmarPage() {
   const [showSent, setShowSent] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [sendModal, setSendModal] = useState<{ group: BookingGroup; pdfFile: File | null } | null>(null);
+  const [ticketMemories, setTicketMemories] = useState<TicketMemoryRecord[]>([]);
+  const [ticketSlots, setTicketSlots] = useState<TicketMemorySlot[]>([]);
+  const [memoryError, setMemoryError] = useState<string | null>(null);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memoryModalOpen, setMemoryModalOpen] = useState(false);
+  const [memorySubmitting, setMemorySubmitting] = useState(false);
+  const [memoryExtracting, setMemoryExtracting] = useState(false);
+  const [memoryPhoto, setMemoryPhoto] = useState<File | null>(null);
+  const [memoryRawText, setMemoryRawText] = useState("");
+  const [memoryForm, setMemoryForm] = useState({
+    route_code: "casamicciola_pozzuoli" as MedmarTicketRouteCode,
+    travel_date: todayIso(),
+    departure_time: "",
+    issue_date: todayIso(),
+    ticket_number: "",
+    booking_code: "",
+    voucher_label: "",
+    tariff_label: "ADULTO - TARIFFA SPECIALE AR",
+    price_eur: "10.25",
+    quantity: "1",
+    notes: "",
+  });
 
   const handleDelete = async (g: BookingGroup) => {
     if (!supabase || !tenantId) return;
@@ -115,6 +215,26 @@ export default function BigliettiMedmarPage() {
     setHotels((hotelsRes.data ?? []) as Hotel[]);
   }, []);
 
+  const loadTicketMemory = useCallback(async (accessToken: string, from?: string, to?: string) => {
+    const qFrom = /^\d{4}-\d{2}-\d{2}$/.test(from ?? "") ? from! : todayIso();
+    const qTo = /^\d{4}-\d{2}-\d{2}$/.test(to ?? "") ? to! : addDays(todayIso(), 14);
+    setMemoryLoading(true);
+    setMemoryError(null);
+    try {
+      const params = new URLSearchParams({ date_from: qFrom, date_to: qTo });
+      const data = await apiFetch<{ memories: TicketMemoryRecord[]; slots: TicketMemorySlot[] }>(
+        `/api/medmar-ticket-memory?${params.toString()}`,
+        accessToken,
+      );
+      setTicketMemories(data.memories);
+      setTicketSlots(data.slots);
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : "Errore caricamento memoria ticket.");
+    } finally {
+      setMemoryLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
     const load = async () => {
@@ -126,11 +246,12 @@ export default function BigliettiMedmarPage() {
       setTenantId(session.tenantId);
       setToken(session.accessToken ?? null);
       await loadData(session.tenantId, dateFrom, dateTo);
+      if (session.accessToken) await loadTicketMemory(session.accessToken, dateFrom, dateTo);
       if (active) setLoading(false);
     };
     void load();
     return () => { active = false; };
-  }, [dateFrom, dateTo, loadData]);
+  }, [dateFrom, dateTo, loadData, loadTicketMemory]);
 
   const hotelsById = useMemo(() => new Map(hotels.map((h) => [h.id, h])), [hotels]);
 
@@ -205,6 +326,138 @@ export default function BigliettiMedmarPage() {
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [visibleGroups]);
 
+  const activeTicketSlots = useMemo(
+    () => ticketSlots.filter((slot) => slot.available_quantity > 0),
+    [ticketSlots],
+  );
+
+  const expiredMemoryCount = useMemo(
+    () => ticketMemories.filter((ticket) => ticket.status === "expired").length,
+    [ticketMemories],
+  );
+
+  const handleExtractMemoryFromPhoto = async () => {
+    if (!token || !memoryPhoto) {
+      setMemoryError("Carica prima la foto del biglietto.");
+      return;
+    }
+    setMemoryExtracting(true);
+    setMemoryError(null);
+    try {
+      const imageBase64 = await fileToBase64(memoryPhoto);
+      const data = await apiFetch<{
+        extracted: {
+          route_code: MedmarTicketRouteCode | null;
+          travel_date: string | null;
+          departure_time: string | null;
+          issue_date: string | null;
+          ticket_number: string | null;
+          booking_code: string | null;
+          voucher_label: string | null;
+          tariff_label: string | null;
+          price_cents: number | null;
+          quantity: number | null;
+          raw_text: string;
+        };
+      }>(
+        "/api/medmar-ticket-memory/extract",
+        token,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            image_base64: imageBase64,
+            mime_type: memoryPhoto.type || "image/jpeg",
+          }),
+        },
+      );
+
+      setMemoryRawText(data.extracted.raw_text || "");
+      setMemoryForm((prev) => ({
+        ...prev,
+        route_code: data.extracted.route_code ?? prev.route_code,
+        travel_date: data.extracted.travel_date ?? prev.travel_date,
+        departure_time: data.extracted.departure_time ?? prev.departure_time,
+        issue_date: data.extracted.issue_date ?? prev.issue_date,
+        ticket_number: data.extracted.ticket_number ?? prev.ticket_number,
+        booking_code: data.extracted.booking_code ?? prev.booking_code,
+        voucher_label: data.extracted.voucher_label ?? prev.voucher_label,
+        tariff_label: data.extracted.tariff_label ?? prev.tariff_label,
+        price_eur: typeof data.extracted.price_cents === "number"
+          ? (data.extracted.price_cents / 100).toFixed(2)
+          : prev.price_eur,
+        quantity: data.extracted.quantity ? String(data.extracted.quantity) : prev.quantity,
+      }));
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : "Errore lettura foto ticket.");
+    } finally {
+      setMemoryExtracting(false);
+    }
+  };
+
+  const handleMemorySubmit = async () => {
+    if (!supabase || !tenantId || !token) return;
+    if (!memoryPhoto) {
+      setMemoryError("Carica la foto del biglietto.");
+      return;
+    }
+    setMemorySubmitting(true);
+    setMemoryError(null);
+    try {
+      const safeName = memoryPhoto.name.replace(/[^a-zA-Z0-9._-]+/g, "_");
+      const storagePath = `medmar-ticket-memory/${tenantId}/${Date.now()}-${safeName}`;
+      const upload = await supabase.storage.from("service-photos").upload(storagePath, memoryPhoto, {
+        contentType: memoryPhoto.type,
+        upsert: false,
+      });
+      if (upload.error) throw new Error(upload.error.message);
+      const photoUrl = supabase.storage.from("service-photos").getPublicUrl(storagePath).data.publicUrl;
+      const priceFloat = Number(memoryForm.price_eur.replace(",", "."));
+      await apiFetch(
+        "/api/medmar-ticket-memory",
+        token,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            route_code: memoryForm.route_code,
+            travel_date: memoryForm.travel_date,
+            departure_time: memoryForm.departure_time || null,
+            issue_date: memoryForm.issue_date || null,
+            ticket_number: memoryForm.ticket_number || null,
+            booking_code: memoryForm.booking_code || null,
+            voucher_label: memoryForm.voucher_label || null,
+            tariff_label: memoryForm.tariff_label || null,
+            price_cents: Number.isFinite(priceFloat) ? Math.round(priceFloat * 100) : null,
+            quantity: Math.max(1, Number(memoryForm.quantity) || 1),
+            notes: memoryForm.notes || null,
+            photo_path: storagePath,
+            photo_url: photoUrl,
+          }),
+        },
+      );
+      await loadTicketMemory(token, dateFrom, dateTo);
+      setMemoryModalOpen(false);
+      setMemoryPhoto(null);
+      setMemoryRawText("");
+      setMemoryForm({
+        route_code: "casamicciola_pozzuoli",
+        travel_date: todayIso(),
+        departure_time: "",
+        issue_date: todayIso(),
+        ticket_number: "",
+        booking_code: "",
+        voucher_label: "",
+        tariff_label: "ADULTO - TARIFFA SPECIALE AR",
+        price_eur: "10.25",
+        quantity: "1",
+        notes: "",
+      });
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : "Errore salvataggio ticket.");
+    } finally {
+      setMemorySubmitting(false);
+    }
+  };
+
   const handleSend = async (g: BookingGroup, pdfFile: File | null) => {
     if (!token || sending) return;
     setSendModal(null);
@@ -259,9 +512,18 @@ export default function BigliettiMedmarPage() {
           </label>
           <button
             type="button"
-            onClick={() => { if (tenantId) void loadData(tenantId, dateFrom, dateTo); }}
+            onClick={() => {
+              if (tenantId) void loadData(tenantId, dateFrom, dateTo);
+              if (token) void loadTicketMemory(token, dateFrom, dateTo);
+            }}
             className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700">
             Cerca
+          </button>
+          <button
+            type="button"
+            onClick={() => setMemoryModalOpen(true)}
+            className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">
+            + Memorizza ticket da foto
           </button>
           <button
             type="button"
@@ -274,6 +536,105 @@ export default function BigliettiMedmarPage() {
 
       {loading && <p className="text-sm text-slate-500">Caricamento...</p>}
       {error && <p className="text-sm text-rose-600">{error}</p>}
+
+      <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-indigo-900">Memoria ticket da foto</h2>
+            <p className="text-xs text-indigo-700">
+              Archivia il biglietto fotografato e verifica subito se nel DB esistono arrivi o partenze compatibili.
+            </p>
+          </div>
+          <div className="rounded-xl bg-white/80 px-3 py-2 text-right">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Disponibilità attiva</p>
+            <p className="text-lg font-extrabold text-slate-900">
+              {activeTicketSlots.reduce((sum, slot) => sum + slot.available_quantity, 0)} biglietti
+            </p>
+            <p className="text-[11px] text-slate-500">
+              Storico scaduti: {expiredMemoryCount}
+            </p>
+          </div>
+        </div>
+
+        {memoryLoading && <p className="text-sm text-slate-500">Controllo ticket disponibili...</p>}
+        {memoryError && <p className="text-sm text-rose-600">{memoryError}</p>}
+
+        {!memoryLoading && activeTicketSlots.length === 0 && (
+          <div className="rounded-xl border border-dashed border-indigo-200 bg-white/70 p-4 text-sm text-slate-500">
+            Nessun ticket disponibile memorizzato nel periodo selezionato.
+          </div>
+        )}
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          {activeTicketSlots.map((slot) => (
+            <div key={slot.key} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-slate-900">
+                    {formatSlotLabel({
+                      routeCode: slot.route_code,
+                      travelDate: slot.travel_date,
+                      departureTime: slot.departure_time,
+                    })}
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {slot.tickets.length} memori{slot.tickets.length === 1 ? "a" : "e"} · {slot.available_quantity} posti ticket disponibili
+                  </p>
+                </div>
+                <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-700">
+                  {slot.available_quantity} disp.
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {slot.tickets.map((ticket) => (
+                  <a
+                    key={ticket.id}
+                    href={ticket.photo_url ?? "#"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100"
+                  >
+                    {ticket.ticket_number ?? "Ticket"} · {formatEur(ticket.price_cents)}
+                  </a>
+                ))}
+              </div>
+
+              {slot.matched_services.length > 0 ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                    {slot.available_quantity} bigliett{slot.available_quantity === 1 ? "o" : "i"} disponibili per questa corsa
+                  </p>
+                  <p className="text-sm font-semibold text-slate-800">
+                    Potresti abbinarl{slot.available_quantity === 1 ? "o" : "i"} a:
+                  </p>
+                  <div className="space-y-2">
+                    {slot.matched_services.slice(0, 5).map((service) => (
+                      <div key={service.service_id} className="rounded-lg bg-white px-3 py-2 border border-amber-100">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-900">{service.customer_name ?? "Cliente N/D"}</p>
+                          <span className="text-[10px] font-bold text-amber-700">score {service.score}</span>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          {service.pax ?? "?"} pax
+                          {service.hotel_name ? ` · ${service.hotel_name}` : ""}
+                          {service.time ? ` · ${service.time}` : ""}
+                        </p>
+                        <p className="text-[11px] text-slate-400">{service.vessel ?? "Vessel N/D"}</p>
+                        <p className="text-[10px] text-amber-700">{service.reasons.join(" · ")}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+                  Nessun servizio Medmar compatibile trovato nel DB per questa corsa nel periodo selezionato.
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
 
       {!loading && bookingGroups.length === 0 && (
         <div className="card p-6 text-center text-sm text-slate-500">
@@ -531,6 +892,118 @@ export default function BigliettiMedmarPage() {
             </button>
           </div>
 
+        </div>
+      </div>
+    )}
+    {memoryModalOpen && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl space-y-4 max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-slate-800">Memorizza ticket Medmar da foto</h2>
+            <button type="button" onClick={() => setMemoryModalOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+          </div>
+
+          <p className="text-sm text-slate-500">
+            La foto viene archiviata, il ticket viene letto con OCR classico e poi indicizzato per corsa. Se la data passa, sparisce dalla disponibilità attiva ma resta nello storico.
+          </p>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+              Foto biglietto *
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(event) => {
+                  setMemoryPhoto(event.target.files?.[0] ?? null);
+                  setMemoryRawText("");
+                  setMemoryError(null);
+                }}
+                className="mt-1 block w-full text-sm"
+              />
+            </label>
+            <div className="sm:col-span-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleExtractMemoryFromPhoto()}
+                disabled={!memoryPhoto || memoryExtracting}
+                className="rounded-xl border border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {memoryExtracting ? "Lettura foto..." : "Leggi dati dalla foto"}
+              </button>
+              <p className="text-xs text-slate-500">
+                Nessuna AI generativa: OCR standard + parser dedicato al formato Medmar.
+              </p>
+            </div>
+            <label className="text-xs font-medium text-slate-600">
+              Corsa *
+              <select
+                value={memoryForm.route_code}
+                onChange={(event) => setMemoryForm((prev) => ({ ...prev, route_code: event.target.value as MedmarTicketRouteCode }))}
+                className="mt-1 input-saas w-full"
+              >
+                {MEDMAR_TICKET_ROUTE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              Data corsa *
+              <DateInput value={memoryForm.travel_date} onChange={(value) => setMemoryForm((prev) => ({ ...prev, travel_date: value }))} className="mt-1 input-saas w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              Orario corsa
+              <input type="time" value={memoryForm.departure_time} onChange={(event) => setMemoryForm((prev) => ({ ...prev, departure_time: event.target.value }))} className="mt-1 input-saas w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              Data emissione
+              <DateInput value={memoryForm.issue_date} onChange={(value) => setMemoryForm((prev) => ({ ...prev, issue_date: value }))} className="mt-1 input-saas w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              N. biglietto
+              <input value={memoryForm.ticket_number} onChange={(event) => setMemoryForm((prev) => ({ ...prev, ticket_number: event.target.value }))} className="mt-1 input-saas w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              Booking Medmar
+              <input value={memoryForm.booking_code} onChange={(event) => setMemoryForm((prev) => ({ ...prev, booking_code: event.target.value }))} className="mt-1 input-saas w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              Voucher
+              <input value={memoryForm.voucher_label} onChange={(event) => setMemoryForm((prev) => ({ ...prev, voucher_label: event.target.value }))} className="mt-1 input-saas w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              Prezzo €
+              <input value={memoryForm.price_eur} onChange={(event) => setMemoryForm((prev) => ({ ...prev, price_eur: event.target.value }))} className="mt-1 input-saas w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              Quantità ticket
+              <input type="number" min="1" value={memoryForm.quantity} onChange={(event) => setMemoryForm((prev) => ({ ...prev, quantity: event.target.value }))} className="mt-1 input-saas w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+              Tariffa
+              <input value={memoryForm.tariff_label} onChange={(event) => setMemoryForm((prev) => ({ ...prev, tariff_label: event.target.value }))} className="mt-1 input-saas w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+              Note
+              <textarea value={memoryForm.notes} onChange={(event) => setMemoryForm((prev) => ({ ...prev, notes: event.target.value }))} rows={3} className="mt-1 input-saas w-full resize-none" />
+            </label>
+            {memoryRawText && (
+              <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+                Testo letto dalla foto
+                <textarea value={memoryRawText} readOnly rows={6} className="mt-1 input-saas w-full resize-y bg-slate-50 text-[11px]" />
+              </label>
+            )}
+          </div>
+
+          {memoryError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600">{memoryError}</p>}
+
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={() => setMemoryModalOpen(false)} className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
+              Annulla
+            </button>
+            <button type="button" onClick={() => void handleMemorySubmit()} disabled={memorySubmitting} className="flex-1 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">
+              {memorySubmitting ? "Salvataggio..." : "Salva ticket in memoria"}
+            </button>
+          </div>
         </div>
       </div>
     )}
