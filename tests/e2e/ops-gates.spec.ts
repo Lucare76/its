@@ -9,6 +9,7 @@ const PROTECTED_PAGES = [
   "/liste-bruno",
   "/crm-agencies",
   "/pricing",
+  "/medmar-ar",
 ];
 
 test.describe("Operational pages — auth gates", () => {

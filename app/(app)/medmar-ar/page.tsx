@@ -12,7 +12,6 @@ import {
   ROUTE_LABELS,
   TICKET_MODE_LABELS,
   LEG_STATUS_LABELS,
-  MEDMAR_TIMES_BY_ROUTE,
   formatEur,
   type MedmarRoute,
   type TicketMode,
@@ -20,6 +19,7 @@ import {
   type MedmarArPendingGroup,
   type DecisionScenario,
 } from "@/lib/medmar-ar/types";
+import { buildFerryScheduleOptions, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
 import type { MedmarArStats } from "@/app/api/medmar-ar/stats/route";
 import type { MatchOpportunity } from "@/app/api/medmar-ar/matching/route";
 import type { SimulatorBase } from "@/app/api/medmar-ar/simulator/route";
@@ -40,6 +40,75 @@ function isIslandToMainlandRoute(route: MedmarRoute) {
     || route === "casamicciola_pozzuoli"
     || route === "ischia_napoli"
     || route === "casamicciola_napoli";
+}
+
+function getMedmarScheduleOptionsForRoute(
+  rows: FerryScheduleRow[],
+  route: MedmarRoute,
+  isoDate: string
+): string[] {
+  let options: Array<{ time: string }> = [];
+
+  switch (route) {
+    case "pozzuoli_ischia":
+      options = buildFerryScheduleOptions(rows, "mainland_to_ischia", isoDate, {
+        company: "medmar",
+        departurePort: "pozzuoli",
+        arrivalPort: "ischia_porto",
+      });
+      break;
+    case "pozzuoli_casamicciola":
+      options = buildFerryScheduleOptions(rows, "mainland_to_ischia", isoDate, {
+        company: "medmar",
+        departurePort: "pozzuoli",
+        arrivalPort: "casamicciola",
+      });
+      break;
+    case "napoli_ischia":
+      options = buildFerryScheduleOptions(rows, "mainland_to_ischia", isoDate, {
+        company: "medmar",
+        departurePort: "napoli_beverello",
+        arrivalPort: "ischia_porto",
+      });
+      break;
+    case "napoli_casamicciola":
+      options = buildFerryScheduleOptions(rows, "mainland_to_ischia", isoDate, {
+        company: "medmar",
+        departurePort: "napoli_beverello",
+        arrivalPort: "casamicciola",
+      });
+      break;
+    case "ischia_pozzuoli":
+      options = buildFerryScheduleOptions(rows, "ischia_to_mainland", isoDate, {
+        company: "medmar",
+        departurePort: "ischia_porto",
+        arrivalPort: "pozzuoli",
+      });
+      break;
+    case "casamicciola_pozzuoli":
+      options = buildFerryScheduleOptions(rows, "ischia_to_mainland", isoDate, {
+        company: "medmar",
+        departurePort: "casamicciola",
+        arrivalPort: "pozzuoli",
+      });
+      break;
+    case "ischia_napoli":
+      options = buildFerryScheduleOptions(rows, "ischia_to_mainland", isoDate, {
+        company: "medmar",
+        departurePort: "ischia_porto",
+        arrivalPort: "napoli_beverello",
+      });
+      break;
+    case "casamicciola_napoli":
+      options = buildFerryScheduleOptions(rows, "ischia_to_mainland", isoDate, {
+        company: "medmar",
+        departurePort: "casamicciola",
+        arrivalPort: "napoli_beverello",
+      });
+      break;
+  }
+
+  return Array.from(new Set(options.map((option) => option.time)));
 }
 
 async function getToken(): Promise<string | null> {
@@ -323,6 +392,7 @@ export default function MedmarArPage() {
   const [ocrExtracting, setOcrExtracting] = useState(false);
   const [ocrError, setOcrError] = useState("");
   const [ocrRawText, setOcrRawText] = useState("");
+  const [ferryScheduleRows, setFerryScheduleRows] = useState<FerryScheduleRow[]>([]);
 
   // Form emissione
   const [formDate, setFormDate] = useState(todayIso());
@@ -476,6 +546,21 @@ export default function MedmarArPage() {
       setToken(t);
     };
     void boot();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadFerrySchedules = async () => {
+      if (!supabase) return;
+      const result = await supabase
+        .from("ferry_schedules")
+        .select("company, departure_port, arrival_port, departure_time, direction, days_of_week, valid_from, valid_to")
+        .eq("company", "medmar");
+      if (!active || result.error) return;
+      setFerryScheduleRows((result.data ?? []) as FerryScheduleRow[]);
+    };
+    void loadFerrySchedules();
     return () => { active = false; };
   }, []);
 
@@ -666,10 +751,10 @@ export default function MedmarArPage() {
       if (extracted.travel_date) setFormDate(extracted.travel_date);
       if (extracted.departure_time) {
         setFormOutbound(extracted.departure_time);
-        setFormReturn(extracted.departure_time);
+        setFormReturn("");
       }
       if (extracted.quantity) setFormPax(String(extracted.quantity));
-      setFormVoucher(extracted.voucher_label ?? extracted.ticket_number ?? extracted.booking_code ?? `OCR-${Date.now()}`);
+      setFormVoucher(extracted.ticket_number ?? extracted.voucher_label ?? extracted.booking_code ?? `OCR-${Date.now()}`);
       setOcrRawText(extracted.raw_text || "");
 
       const noteParts = [
@@ -680,7 +765,7 @@ export default function MedmarArPage() {
         extracted.price_cents !== null ? `prezzo:${(extracted.price_cents / 100).toFixed(2)} EUR` : null,
       ].filter(Boolean);
       if (noteParts.length > 0) setFormNotes(noteParts.join(" | "));
-      setSubmitMsg({ type: "ok", text: "Dati ticket estratti. Verifica e conferma il caricamento." });
+      setSubmitMsg({ type: "ok", text: "Dati ticket estratti. La tratta verra caricata direttamente tra quelle da recuperare." });
     } catch (err) {
       setOcrError(err instanceof Error ? err.message : "Errore estrazione ticket.");
     } finally {
@@ -764,6 +849,23 @@ export default function MedmarArPage() {
     if (res.ok) void loadTickets();
   };
 
+  const handleMarkLost = async (legId: string) => {
+    setReassignMsg(null);
+    const res = await api(
+      "/api/medmar-ar/legs",
+      { method: "PATCH", body: JSON.stringify({ leg_id: legId, status: "lost" }) },
+      token
+    );
+    if (res.ok) {
+      setSelectedOpportunity(null);
+      setReassignMsg({ type: "ok", text: "Tratta segnata come persa." });
+      void loadOpportunities();
+      void loadTickets();
+      return;
+    }
+    setReassignMsg({ type: "err", text: res.error ?? "Impossibile segnare la tratta come persa." });
+  };
+
   // Riassegna leg a prenotazione
   const handleReassign = async (legId: string, bookingId: string) => {
     setReassigning(bookingId);
@@ -803,7 +905,13 @@ export default function MedmarArPage() {
     setExportingExcel(false);
   };
 
-  const availableTimes = MEDMAR_TIMES_BY_ROUTE[formRoute] ?? [];
+  const availableTimes = useMemo(() => {
+    const dbTimes = getMedmarScheduleOptionsForRoute(ferryScheduleRows, formRoute, formDate);
+    if (!formOutbound) return dbTimes;
+    return dbTimes.includes(formOutbound)
+      ? dbTimes
+      : [...dbTimes, formOutbound].sort((a, b) => a.localeCompare(b));
+  }, [ferryScheduleRows, formRoute, formDate, formOutbound]);
 
   if (initError) return (
     <section className="page-section">
@@ -1288,6 +1396,13 @@ export default function MedmarArPage() {
                   </div>
                 ) : (
                   <div className="border-t border-slate-200 pt-3">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); void handleMarkLost(opp.leg.id); }}
+                      className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100"
+                    >
+                      Segna come persa
+                    </button>
                     <p className="text-xs text-slate-400">Nessuna prenotazione compatibile trovata — tratta a rischio perdita.</p>
                   </div>
                 )}

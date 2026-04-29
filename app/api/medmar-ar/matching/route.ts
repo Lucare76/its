@@ -71,6 +71,7 @@ type BookingRow = {
   phone: string | null;
   pax: number | null;
   date: string;
+  departure_date: string | null;
   time: string | null;
   departure_time: string | null;
   arrival_time: string | null;
@@ -101,6 +102,7 @@ type BookingVerifyRow = {
   pax: number | null;
   tenant_id: string;
   date: string;
+  departure_date: string | null;
   direction: "arrival" | "departure";
   status: string;
   time: string | null;
@@ -137,11 +139,98 @@ export interface MatchOpportunity {
     date: string;
     time: string | null;
     vessel: string | null;
-    booking_service_kind: string | null;
+  booking_service_kind: string | null;
   }>;
   value_cents: number;
   hours_to_expiry: number;
   urgency: "critical" | "high" | "normal";
+}
+
+function uniqueBookings(rows: BookingRow[]) {
+  const seen = new Set<string>();
+  const result: BookingRow[] = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    result.push(row);
+  }
+  return result;
+}
+
+function getComparableBookingDate(
+  booking: Pick<BookingVerifyRow, "date" | "departure_date" | "direction">,
+  expectedDirection: "arrival" | "departure"
+) {
+  if (expectedDirection === "departure") {
+    return booking.departure_date ?? (booking.direction === "departure" ? booking.date : null);
+  }
+  return booking.date;
+}
+
+async function fetchCandidateBookingsForLeg(
+  admin: SupabaseClient,
+  tenantId: string,
+  travelDate: string,
+  direction: "arrival" | "departure",
+  vesselKeyword: string
+) {
+  const selectClause = `
+    id, customer_name, phone, pax, date, departure_date, time, departure_time, arrival_time, outbound_time, return_time,
+    direction, vessel, booking_service_kind, hotels!left(name)
+  `;
+
+  if (direction === "arrival") {
+    const { data, error } = await admin
+      .from("services")
+      .select(selectClause)
+      .eq("tenant_id", tenantId)
+      .eq("date", travelDate)
+      .eq("direction", "arrival")
+      .neq("status", "cancelled")
+      .eq("is_draft", false)
+      .ilike("vessel", `%medmar%`)
+      .ilike("vessel", `%${vesselKeyword}%`);
+
+    return { data: (data ?? []) as BookingRow[], error };
+  }
+
+  const [explicitDepartureDate, legacyDepartureRows] = await Promise.all([
+    admin
+      .from("services")
+      .select(selectClause)
+      .eq("tenant_id", tenantId)
+      .eq("departure_date", travelDate)
+      .neq("status", "cancelled")
+      .eq("is_draft", false)
+      .ilike("vessel", `%medmar%`)
+      .ilike("vessel", `%${vesselKeyword}%`),
+    admin
+      .from("services")
+      .select(selectClause)
+      .eq("tenant_id", tenantId)
+      .is("departure_date", null)
+      .eq("date", travelDate)
+      .eq("direction", "departure")
+      .neq("status", "cancelled")
+      .eq("is_draft", false)
+      .ilike("vessel", `%medmar%`)
+      .ilike("vessel", `%${vesselKeyword}%`),
+  ]);
+
+  if (explicitDepartureDate.error) {
+    return { data: [] as BookingRow[], error: explicitDepartureDate.error };
+  }
+  if (legacyDepartureRows.error) {
+    return { data: [] as BookingRow[], error: legacyDepartureRows.error };
+  }
+
+  return {
+    data: uniqueBookings([
+      ...((explicitDepartureDate.data ?? []) as BookingRow[]),
+      ...((legacyDepartureRows.data ?? []) as BookingRow[]),
+    ]),
+    error: null,
+  };
 }
 
 export async function GET(request: NextRequest) {
@@ -165,11 +254,20 @@ export async function GET(request: NextRequest) {
       `)
       .eq("tenant_id", tenantId)
       .eq("status", "available_for_reassignment")
-      .gte("medmar_ar_tickets.travel_date", today)
-      .order("medmar_ar_tickets.travel_date");
+      .gte("medmar_ar_tickets.travel_date", today);
 
     if (legsErr) return NextResponse.json({ ok: false, error: legsErr.message }, { status: 500 });
 
+    const { data: alreadyAssigned, error: assignedErr } = await admin
+      .from("medmar_ar_ticket_legs")
+      .select("reassigned_booking_id")
+      .eq("tenant_id", tenantId)
+      .eq("status", "reassigned")
+      .not("reassigned_booking_id", "is", null);
+
+    if (assignedErr) return NextResponse.json({ ok: false, error: assignedErr.message }, { status: 500 });
+
+    const assignedIds = new Set((alreadyAssigned ?? []).map((r) => r.reassigned_booking_id));
     const opportunities: MatchOpportunity[] = [];
 
     for (const leg of (legs ?? []) as LegWithTicket[]) {
@@ -186,30 +284,19 @@ export async function GET(request: NextRequest) {
       const direction = getLegDirection(leg.leg_route);
       const vesselKeyword = getVesselKeyword(leg.leg_route);
 
-      const { data: bookings } = await admin
-        .from("services")
-        .select(`
-          id, customer_name, phone, pax, date, time, departure_time, arrival_time, outbound_time, return_time,
-          direction, vessel, booking_service_kind, hotels!left(name)
-        `)
-        .eq("tenant_id", tenantId)
-        .eq("date", travelDate)
-        .eq("direction", direction)
-        .neq("status", "cancelled")
-        .eq("is_draft", false)
-        .ilike("vessel", `%medmar%`)
-        .ilike("vessel", `%${vesselKeyword}%`);
+      const { data: bookings, error: bookingsErr } = await fetchCandidateBookingsForLeg(
+        admin,
+        tenantId,
+        travelDate,
+        direction,
+        vesselKeyword
+      );
 
-      const { data: alreadyAssigned } = await admin
-        .from("medmar_ar_ticket_legs")
-        .select("reassigned_booking_id")
-        .eq("tenant_id", tenantId)
-        .eq("status", "reassigned")
-        .not("reassigned_booking_id", "is", null);
+      if (bookingsErr) {
+        return NextResponse.json({ ok: false, error: bookingsErr.message }, { status: 500 });
+      }
 
-      const assignedIds = new Set((alreadyAssigned ?? []).map((r) => r.reassigned_booking_id));
-
-      const matchedBookings = ((bookings ?? []) as BookingRow[])
+      const matchedBookings = bookings
         .filter((b) => !assignedIds.has(b.id))
         .filter((b) => {
           if (!legTimeStr) return true;
@@ -314,7 +401,7 @@ export async function POST(request: NextRequest) {
 
     const { data: bookingData } = await admin
       .from("services")
-      .select("id, customer_name, pax, tenant_id, date, direction, status, time, departure_time, arrival_time, outbound_time, return_time, vessel")
+      .select("id, customer_name, pax, tenant_id, date, departure_date, direction, status, time, departure_time, arrival_time, outbound_time, return_time, vessel")
       .eq("id", booking_id)
       .eq("tenant_id", tenantId)
       .neq("status", "cancelled")
@@ -324,7 +411,8 @@ export async function POST(request: NextRequest) {
     if (!booking) return NextResponse.json({ ok: false, error: "Prenotazione non trovata." }, { status: 404 });
 
     const expectedDirection = getLegDirection(leg.leg_route as MedmarRoute);
-    if (booking.date !== ticket.travel_date || booking.direction !== expectedDirection) {
+    const bookingComparableDate = getComparableBookingDate(booking, expectedDirection);
+    if (bookingComparableDate !== ticket.travel_date || booking.direction !== expectedDirection) {
       return NextResponse.json({ ok: false, error: "Prenotazione non compatibile con la tratta da recuperare." }, { status: 409 });
     }
 

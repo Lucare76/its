@@ -18,7 +18,7 @@ export async function createTestContext(): Promise<TestContext> {
   const admin = makeAdminClient();
   const anon = makeAnonClient();
   const tenantId = randomUUID();
-  const email = `integration-test-${Date.now()}@test.invalid`;
+  const email = `integration-test-${Date.now()}-${randomUUID()}@test.invalid`;
   const password = randomUUID();
 
   // 1. Crea tenant
@@ -55,6 +55,10 @@ export async function createTestContext(): Promise<TestContext> {
   const token = session.session.access_token;
 
   const cleanup = async () => {
+    await admin.from("medmar_ar_ticket_legs").delete().eq("tenant_id", tenantId);
+    await admin.from("medmar_ar_pending_groups").delete().eq("tenant_id", tenantId);
+    await admin.from("medmar_ar_tickets").delete().eq("tenant_id", tenantId);
+    await admin.from("medmar_ar_prices").delete().eq("tenant_id", tenantId);
     // FK order: inbound_booking_imports/assignments/trip_groups/status_events → service_pricing → services
     // → pricing_rules → price_lists → vehicles/hotels/routes/agency_aliases/agencies → memberships → tenants → user
     await admin.from("inbound_booking_imports").delete().eq("tenant_id", tenantId);

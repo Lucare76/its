@@ -9,14 +9,14 @@ export type MedmarTicketRouteCode =
   | "casamicciola_napoli";
 
 export const MEDMAR_TICKET_ROUTE_LABELS: Record<MedmarTicketRouteCode, string> = {
-  pozzuoli_ischia: "Pozzuoli → Ischia",
-  pozzuoli_casamicciola: "Pozzuoli → Casamicciola",
-  napoli_ischia: "Napoli → Ischia",
-  napoli_casamicciola: "Napoli → Casamicciola",
-  ischia_pozzuoli: "Ischia → Pozzuoli",
-  casamicciola_pozzuoli: "Casamicciola → Pozzuoli",
-  ischia_napoli: "Ischia → Napoli",
-  casamicciola_napoli: "Casamicciola → Napoli",
+  pozzuoli_ischia: "Pozzuoli -> Ischia",
+  pozzuoli_casamicciola: "Pozzuoli -> Casamicciola",
+  napoli_ischia: "Napoli -> Ischia",
+  napoli_casamicciola: "Napoli -> Casamicciola",
+  ischia_pozzuoli: "Ischia -> Pozzuoli",
+  casamicciola_pozzuoli: "Casamicciola -> Pozzuoli",
+  ischia_napoli: "Ischia -> Napoli",
+  casamicciola_napoli: "Casamicciola -> Napoli",
 };
 
 export const MEDMAR_TICKET_ROUTE_OPTIONS: Array<{ value: MedmarTicketRouteCode; label: string }> = (
@@ -120,7 +120,7 @@ function normalizeOcrText(value: string) {
   return compactWhitespace(
     value
       .replace(/[|]/g, "I")
-      .replace(/€\s+/g, "€ ")
+      .replace(/€/g, "EUR")
       .replace(/([A-Za-z])\s+([0-9])/g, "$1 $2")
   );
 }
@@ -141,6 +141,11 @@ function parsePriceToCents(value: string | null | undefined) {
   const parsed = Number(normalized);
   if (!Number.isFinite(parsed)) return null;
   return Math.round(parsed * 100);
+}
+
+function extractDateFromLine(line: string | null | undefined) {
+  if (!line) return null;
+  return parseItalianDate(line.match(/(\d{2}[\/.-]\d{2}[\/.-]\d{2,4})/)?.[1] ?? null);
 }
 
 function detectRouteCode(text: string): MedmarTicketRouteCode | null {
@@ -168,25 +173,49 @@ function detectRouteCode(text: string): MedmarTicketRouteCode | null {
   return null;
 }
 
+function extractTravelDate(lines: string[], rawText: string, issueDate: string | null, routeLineIndex: number) {
+  const candidates = [
+    extractDateFromLine(routeLineIndex >= 0 ? lines[routeLineIndex + 1] : null),
+    extractDateFromLine(routeLineIndex >= 0 ? lines[routeLineIndex + 2] : null),
+    ...lines
+      .filter((line) => !/EMISSIONE/i.test(line))
+      .map((line) => extractDateFromLine(line)),
+    parseItalianDate(rawText.match(/\b(\d{2}[\/.-]\d{2}[\/.-]\d{2,4})\b/)?.[1] ?? null),
+  ].filter((value): value is string => Boolean(value));
+
+  return candidates.find((value) => value !== issueDate) ?? candidates[0] ?? null;
+}
+
+function extractDepartureTime(lines: string[], rawText: string, routeLineIndex: number) {
+  const chunks = [
+    ...(routeLineIndex >= 0 ? [lines[routeLineIndex + 2] ?? "", lines[routeLineIndex + 3] ?? ""] : []),
+    rawText,
+  ];
+
+  const times = chunks.flatMap((chunk) =>
+    [...chunk.matchAll(/\b([0-2]\d[:.][0-5]\d)\b/g)].map((match) => match[1]!.replace(".", ":"))
+  );
+
+  return normalizeTime(times[0] ?? null);
+}
+
 export function parseMedmarTicketText(input: string): MedmarTicketExtraction {
   const rawText = normalizeOcrText(input);
   const upper = rawText.toUpperCase();
   const lines = rawText.split("\n").map((line) => line.trim()).filter(Boolean);
 
-  const routeLine = lines.find((line) =>
+  const routeLineIndex = lines.findIndex((line) =>
     /(POZZUOLI|NAPOLI|BEVERELLO|ISCHIA|CASAMICCIOLA)\s*[-–]\s*(POZZUOLI|NAPOLI|BEVERELLO|ISCHIA|CASAMICCIOLA)/i.test(line)
-  ) ?? null;
-
+  );
+  const routeLine = routeLineIndex >= 0 ? lines[routeLineIndex] ?? null : null;
   const routeCode = detectRouteCode(routeLine ?? rawText);
-  const travelDate =
-    parseItalianDate(rawText.match(/\b(\d{2}[\/.-]\d{2}[\/.-]\d{2,4})\b/)?.[1] ?? null);
 
   const issueDate =
     parseItalianDate(rawText.match(/DATA\s+EMISSIONE\s+(\d{2}[\/.-]\d{2}[\/.-]\d{2,4})/i)?.[1] ?? null) ??
     parseItalianDate(rawText.match(/EMISSIONE\s+(\d{2}[\/.-]\d{2}[\/.-]\d{2,4})/i)?.[1] ?? null);
 
-  const times = [...rawText.matchAll(/\b([0-2]\d[:.][0-5]\d)\b/g)].map((match) => match[1]!.replace(".", ":"));
-  const departureTime = times[0] ?? null;
+  const travelDate = extractTravelDate(lines, rawText, issueDate, routeLineIndex);
+  const departureTime = extractDepartureTime(lines, rawText, routeLineIndex);
 
   const ticketNumber =
     rawText.match(/BIGLIETTO\s+([A-Z0-9]{8,})/i)?.[1] ??
@@ -200,11 +229,12 @@ export function parseMedmarTicketText(input: string): MedmarTicketExtraction {
 
   const voucherValue =
     rawText.match(/VOUCHER\s*[:|]?\s*0*([0-9]{3,})/i)?.[1] ??
+    rawText.match(/VOUCHERI\s*0*([0-9]{3,})/i)?.[1] ??
     rawText.match(/VOUCHER[| ]0*([0-9]{3,})/i)?.[1] ??
     null;
 
   const tariffLabel =
-    lines.find((line) => /TARIFFA/i.test(line) && /ADULTO|BAMBINO|SPECIAL/i.test(line)) ??
+    lines.find((line) => /TARIFFA/i.test(line) && /ADULTO|BAMBINO|SPECIAL|AR/i.test(line)) ??
     lines.find((line) => /TARIFFA/i.test(line)) ??
     null;
 
@@ -215,7 +245,7 @@ export function parseMedmarTicketText(input: string): MedmarTicketExtraction {
   const quantity = Number(quantityRaw);
 
   const priceCents =
-    parsePriceToCents(rawText.match(/TOTALE\s+BIGLIETTO\s*€?\s*([0-9]+[.,][0-9]{2})/i)?.[1] ?? null) ??
+    parsePriceToCents(rawText.match(/TOTALE\s+BIGLIETTO\s*(?:EUR)?\s*([0-9]+[.,][0-9]{2})/i)?.[1] ?? null) ??
     parsePriceToCents(rawText.match(/\bPREZZO\b\s*([0-9]+[.,][0-9]{2})/i)?.[1] ?? null);
 
   const normalizedVoucher = voucherValue ? voucherValue.replace(/^0+/, "") || "0" : null;
@@ -223,7 +253,7 @@ export function parseMedmarTicketText(input: string): MedmarTicketExtraction {
   return {
     route_code: routeCode,
     travel_date: travelDate,
-    departure_time: normalizeTime(departureTime),
+    departure_time: departureTime,
     issue_date: issueDate,
     ticket_number: ticketNumber ? ticketNumber.trim() : null,
     booking_code: bookingCode ? bookingCode.trim() : null,

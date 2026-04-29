@@ -14,6 +14,17 @@ function isIslandToMainlandRoute(route: MedmarRoute) {
   );
 }
 
+function getReturnRoute(route: MedmarRoute): MedmarRoute {
+  if (isIslandToMainlandRoute(route)) {
+    return route;
+  }
+
+  if (route === "pozzuoli_ischia") return "ischia_pozzuoli";
+  if (route === "pozzuoli_casamicciola") return "casamicciola_pozzuoli";
+  if (route === "napoli_ischia") return "ischia_napoli";
+  return "casamicciola_napoli";
+}
+
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "autista"]);
   if (auth instanceof NextResponse) return auth;
@@ -177,6 +188,7 @@ export async function POST(request: NextRequest) {
   const arPrice = d.pax_count >= 12 ? prices.single_trip_12_or_more : prices.round_trip_per_leg;
   const archivedStatus = d.archive_for_recovery ? "available_for_reassignment" : "used";
   const defaultStatus = d.archive_for_recovery ? "available_for_reassignment" : "used";
+  const returnRoute = getReturnRoute(d.route);
   const legs: Array<Record<string, unknown>> = [];
 
   if (d.ticket_mode === "single_outbound") {
@@ -216,22 +228,12 @@ export async function POST(request: NextRequest) {
       ticket_id: ticket.id,
       leg_type: "return",
       leg_time: d.return_time ?? null,
-      leg_route: d.route,
+      leg_route: returnRoute,
       price_per_pax_cents: singlePrice,
       status: archivedStatus,
       original_booking_id: d.booking_ids[0] ?? null,
     });
   } else {
-    const returnRoute = isIslandToMainlandRoute(d.route)
-      ? d.route
-      : d.route === "pozzuoli_ischia"
-        ? "ischia_pozzuoli"
-        : d.route === "pozzuoli_casamicciola"
-          ? "casamicciola_pozzuoli"
-          : d.route === "napoli_ischia"
-            ? "ischia_napoli"
-            : "casamicciola_napoli";
-
     legs.push({
       tenant_id: tenantId,
       ticket_id: ticket.id,
