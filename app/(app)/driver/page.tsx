@@ -139,7 +139,12 @@ function getDriverServiceChip(service: Pick<DriverService, "booking_service_kind
 }
 
 function getGroupChip(group: Pick<ServiceGroup, "visualKind" | "label" | "entries">) {
-  if (group.entries[0]?.service.booking_service_kind === "navetta") {
+  const firstSvc = group.entries[0]?.service;
+  if (
+    firstSvc?.booking_service_kind === "navetta" ||
+    firstSvc?.booking_service_kind === "shuttle_hotel" ||
+    firstSvc?.vessel?.toLowerCase().trim() === "navetta"
+  ) {
     return { className: "bg-violet-100 text-violet-700", label: "Navetta" };
   }
   const normalizedLabel = group.label.toLowerCase();
@@ -154,6 +159,13 @@ function getGroupChip(group: Pick<ServiceGroup, "visualKind" | "label" | "entrie
   }
   if (group.visualKind === "arrival") return { className: "bg-emerald-100 text-emerald-700", label: "Arrivo" };
   return { className: "bg-amber-100 text-amber-700", label: "Partenza" };
+}
+
+function ferryCompanyLabel(kind: string | null): string | null {
+  if (!kind) return null;
+  if (kind.includes("snav")) return "SNAV";
+  if (kind.includes("medmar")) return "Medmar";
+  return null;
 }
 
 function WhatsAppIcon({ className = "h-4 w-4" }: { className?: string }) {
@@ -464,10 +476,14 @@ function DriverPageInner() {
 
   /* ---- grouping helpers per tab */
   const buildGroups = useCallback((entries: typeof mine): ServiceGroup[] => {
-    const navettas = entries.filter((e) => e.service.booking_service_kind === "navetta");
-    const excursions = entries.filter((e) => e.service.booking_service_kind !== "navetta" && isExcursionService(e.service));
-    const arrivals = entries.filter((e) => e.service.booking_service_kind !== "navetta" && !isExcursionService(e.service) && e.service.direction !== "departure");
-    const departures = entries.filter((e) => e.service.booking_service_kind !== "navetta" && !isExcursionService(e.service) && e.service.direction === "departure");
+    const isNavettaEntry = (e: typeof entries[0]) =>
+      e.service.booking_service_kind === "navetta" ||
+      e.service.booking_service_kind === "shuttle_hotel" ||
+      e.service.vessel?.toLowerCase().trim() === "navetta";
+    const navettas = entries.filter(isNavettaEntry);
+    const excursions = entries.filter((e) => !isNavettaEntry(e) && isExcursionService(e.service));
+    const arrivals = entries.filter((e) => !isNavettaEntry(e) && !isExcursionService(e.service) && e.service.direction !== "departure");
+    const departures = entries.filter((e) => !isNavettaEntry(e) && !isExcursionService(e.service) && e.service.direction === "departure");
     const makeGroups = (
       list: typeof mine,
       keyFn: (e: typeof mine[0]) => string,
@@ -498,15 +514,12 @@ function DriverPageInner() {
       }
       return [...map.values()];
     };
-    const ferryLabel = (kind: string | null, depTime: string | null) => {
-      const company = (kind ?? "").includes("snav") ? "SNAV" : (kind ?? "").includes("medmar") ? "Medmar" : null;
-      return company ?? null;
-    };
+    const ferryLabel = ferryCompanyLabel;
     const arrGroups = makeGroups(
       arrivals,
       (e) => `${e.service.date}_${e.service.vessel || "N/D"}_${e.service.time.slice(0, 5)}`,
       (e) => {
-        const company = ferryLabel(e.service.booking_service_kind, e.service.time);
+        const company = ferryLabel(e.service.booking_service_kind);
         const vesselLabel = e.service.vessel ?? "N/D";
         return company ?? vesselLabel;
       },
@@ -518,7 +531,7 @@ function DriverPageInner() {
       (e) => `${e.service.date}_${e.service.hotel_id ?? "none"}_${e.service.time}`,
       (e) => {
         const hotelName = data.hotels.find((h) => h.id === e.service.hotel_id)?.name ?? "N/D";
-        const company = ferryLabel(e.service.booking_service_kind, e.service.time);
+        const company = ferryLabel(e.service.booking_service_kind);
         const t = e.service.time?.slice(0, 5) ?? "";
         return `${company && t ? `${company} ${t} · ` : ""}${hotelName}`;
       },
@@ -1097,9 +1110,10 @@ function DriverPageInner() {
                                       const arrSched = getArrivalSchedule(entry.service);
                                       const arrIschia = arrSched?.arrivalTime ?? null;
                                       const arrPort = arrSched?.arrivalPort ? ferryPortLabel(arrSched.arrivalPort) : entry.service.meeting_point;
+                                      const company = ferryCompanyLabel(entry.service.booking_service_kind);
                                       return (
                                         <>
-                                          <p className="text-sm font-bold text-emerald-700 mt-0.5">⚓ {arrPort ?? "Porto N/D"}{arrIschia ? ` · arr. ${arrIschia}` : ""}</p>
+                                          <p className="text-sm font-bold text-emerald-700 mt-0.5">⚓ {[company, arrPort].filter(Boolean).join(" · ") || "Porto N/D"}{arrIschia ? ` · arr. ${arrIschia}` : ""}</p>
                                           {arrIschia && <p className="text-xs text-slate-400">partenza continente {entry.service.time?.slice(0,5)}</p>}
                                         </>
                                       );
