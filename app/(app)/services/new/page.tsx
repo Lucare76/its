@@ -50,6 +50,8 @@ function deriveBusLineFamily(lineCode: string): BusLineFamily {
   return "ITALIA";
 }
 
+const EXCURSION_PORTS = ["Casamicciola", "Lacco Ameno", "Forio", "Ischia Porto"] as const;
+
 const kindOptions: Array<{ value: BookingKind; label: string }> = [
   { value: "formula_snav", label: "Formula SNAV" },
   { value: "formula_medmar_napoli", label: "Formula MEDMAR — Napoli" },
@@ -226,6 +228,8 @@ export default function OpsNewBookingPage() {
     transport_code_return: "",
     bus_city_origin: "",
     excursion_title: "",
+    excursion_departure_port: "",
+    excursion_pickup_port: "",
     pickup_time_outbound: "",
     pickup_time_return: "",
     notes: "",
@@ -546,7 +550,7 @@ export default function OpsNewBookingPage() {
   const isExcursionTitleRequired = selectedKind === "excursion";
   const isPrivateIsland = selectedKind === "private_island";
   const isTransferHotelHotel = selectedKind === "transfer_hotel_hotel";
-  const showTripLeg = ["transfer_port_hotel", "transfer_hotel_hotel", "excursion", "shuttle_hotel"].includes(selectedKind);
+  const showTripLeg = ["transfer_port_hotel", "transfer_hotel_hotel", "shuttle_hotel"].includes(selectedKind);
   const isRoundTrip = tripLeg === "round_trip" && showTripLeg;
   const showPickupTime = !isSnavMedmar && !isBusOriginRequired && !isPrivateIsland;
   const hasHotels = hotels.length > 0;
@@ -587,8 +591,10 @@ export default function OpsNewBookingPage() {
     if (isTransportCodeRequired && contextLabels.transportCodeReturnLabel && !form.transport_code_return.trim()) warnings.push(`${contextLabels.transportCodeReturnLabel.replace("*", "")} mancante.`);
     if (isBusOriginRequired && !form.bus_city_origin.trim()) warnings.push("Città di partenza bus mancante.");
     if (isExcursionTitleRequired && !form.excursion_title.trim()) warnings.push("Nome escursione mancante.");
+    if (isExcursionTitleRequired && !form.excursion_departure_port) warnings.push("Seleziona il porto di partenza.");
+    if (isExcursionTitleRequired && !form.excursion_pickup_port) warnings.push("Seleziona il porto di prelevamento.");
     return warnings;
-  }, [contextLabels.arrivalDateLabel, contextLabels.arrivalTimeLabel, contextLabels.departureDateLabel, contextLabels.departureTimeLabel, contextLabels.transportCodeLabel, contextLabels.transportCodeReturnLabel, form.arrival_date, form.arrival_time, form.bus_city_origin, form.customer_first_name, form.customer_last_name, form.customer_phone, form.departure_date, form.departure_time, form.excursion_title, form.hotel_id, form.pax, form.transport_code, form.transport_code_return, isBusOriginRequired, isExcursionTitleRequired, isPhoneRequired, isPrivateIsland, isSnavKind, isTransportCodeRequired]);
+  }, [contextLabels.arrivalDateLabel, contextLabels.arrivalTimeLabel, contextLabels.departureDateLabel, contextLabels.departureTimeLabel, contextLabels.transportCodeLabel, contextLabels.transportCodeReturnLabel, form.arrival_date, form.arrival_time, form.bus_city_origin, form.customer_first_name, form.customer_last_name, form.customer_phone, form.departure_date, form.departure_time, form.excursion_departure_port, form.excursion_pickup_port, form.excursion_title, form.hotel_id, form.pax, form.transport_code, form.transport_code_return, isBusOriginRequired, isExcursionTitleRequired, isPhoneRequired, isPrivateIsland, isSnavKind, isTransportCodeRequired]);
 
   const doSubmit = async () => {
     if (!accessToken) { setMessage("Sessione non valida. Rifai login."); return; }
@@ -611,6 +617,9 @@ export default function OpsNewBookingPage() {
       meeting_point: portoArrivo ?? undefined,
       ferry_dep_time: ferryDepTime,
       porto_partenza: depRuleInfo?.porto ?? undefined,
+    } : isExcursionTitleRequired ? {
+      excursion_departure_port: form.excursion_departure_port || undefined,
+      excursion_pickup_port: form.excursion_pickup_port || undefined,
     } : {};
 
     const response = await fetch("/api/ops/new-booking", {
@@ -641,6 +650,7 @@ export default function OpsNewBookingPage() {
       departure_date: todayIsoDate(), departure_time: "18:00",
       transport_code: "", transport_code_return: "",
       bus_city_origin: "", excursion_title: "",
+      excursion_departure_port: "", excursion_pickup_port: "",
       pickup_time_outbound: "", pickup_time_return: "",
       notes: "", agency_id: "", quoted_price_eur: ""
     });
@@ -669,6 +679,8 @@ export default function OpsNewBookingPage() {
       if (isTransportCodeRequired && contextLabels.transportCodeReturnLabel && !form.transport_code_return.trim()) errs.transport_code_return = "Campo obbligatorio";
       if (isBusOriginRequired && !form.bus_city_origin.trim()) errs.bus_city_origin = "Campo obbligatorio";
       if (isExcursionTitleRequired && !form.excursion_title.trim()) errs.excursion_title = "Campo obbligatorio";
+      if (isExcursionTitleRequired && !form.excursion_departure_port) errs.excursion_departure_port = "Campo obbligatorio";
+      if (isExcursionTitleRequired && !form.excursion_pickup_port) errs.excursion_pickup_port = "Campo obbligatorio";
       setFieldErrors(errs);
       setMessage("Compila tutti i campi obbligatori (*) prima di continuare.");
       return;
@@ -1018,15 +1030,15 @@ export default function OpsNewBookingPage() {
 
         {/* Orario prelevamento hotel */}
         {showPickupTime ? (
-          <div className={`md:col-span-2 grid gap-3 ${isRoundTrip ? "grid-cols-2" : "grid-cols-1"}`}>
+          <div className={`md:col-span-2 grid gap-3 ${isRoundTrip || isExcursionTitleRequired ? "grid-cols-2" : "grid-cols-1"}`}>
             <label className="text-sm">
-              {isRoundTrip ? "Prelevamento andata" : "Orario prelevamento hotel"}
+              {isRoundTrip || isExcursionTitleRequired ? "Prelevamento andata" : "Orario prelevamento hotel"}
               <input type="time" className="input-saas mt-1" value={form.pickup_time_outbound}
                 onChange={(e) => setForm((prev) => ({ ...prev, pickup_time_outbound: e.target.value }))}
               />
               <span className="mt-1 block text-xs text-slate-400">Facoltativo.</span>
             </label>
-            {isRoundTrip ? (
+            {isRoundTrip || isExcursionTitleRequired ? (
               <label className="text-sm">
                 Prelevamento ritorno
                 <input type="time" className="input-saas mt-1" value={form.pickup_time_return}
@@ -1122,6 +1134,36 @@ export default function OpsNewBookingPage() {
             )}
             {fieldErrors.excursion_title ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.excursion_title}</span> : null}
           </label>
+        ) : null}
+
+        {/* Porto di partenza / prelevamento (solo escursioni) */}
+        {isExcursionTitleRequired ? (
+          <div className="md:col-span-2 grid grid-cols-2 gap-3">
+            <label className="text-sm">
+              Porto di partenza*
+              <select
+                className={`input-saas mt-1${fieldErrors.excursion_departure_port ? " border-rose-400" : ""}`}
+                value={form.excursion_departure_port}
+                onChange={(e) => { setForm((prev) => ({ ...prev, excursion_departure_port: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.excursion_departure_port; return n; }); }}
+              >
+                <option value="">— Seleziona porto —</option>
+                {EXCURSION_PORTS.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+              {fieldErrors.excursion_departure_port ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.excursion_departure_port}</span> : null}
+            </label>
+            <label className="text-sm">
+              Porto di prelevamento*
+              <select
+                className={`input-saas mt-1${fieldErrors.excursion_pickup_port ? " border-rose-400" : ""}`}
+                value={form.excursion_pickup_port}
+                onChange={(e) => { setForm((prev) => ({ ...prev, excursion_pickup_port: e.target.value })); setFieldErrors((prev) => { const n = { ...prev }; delete n.excursion_pickup_port; return n; }); }}
+              >
+                <option value="">— Seleziona porto —</option>
+                {EXCURSION_PORTS.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+              {fieldErrors.excursion_pickup_port ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.excursion_pickup_port}</span> : null}
+            </label>
+          </div>
         ) : null}
 
         {/* Agenzia fatturazione */}

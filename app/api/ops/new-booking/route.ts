@@ -66,6 +66,9 @@ export async function POST(request: NextRequest) {
     const meetingPoint = typeof bodyRaw.meeting_point === "string" ? bodyRaw.meeting_point.trim() || null : null;
     const ferryDepTime = typeof bodyRaw.ferry_dep_time === "string" ? bodyRaw.ferry_dep_time.trim() || null : null;
     const portoPartenza = typeof bodyRaw.porto_partenza === "string" ? bodyRaw.porto_partenza.trim() || null : null;
+    // Porti escursione
+    const excursionDeparturePort = typeof bodyRaw.excursion_departure_port === "string" ? bodyRaw.excursion_departure_port.trim() || null : null;
+    const excursionPickupPort = typeof bodyRaw.excursion_pickup_port === "string" ? bodyRaw.excursion_pickup_port.trim() || null : null;
 
     // A/R e pickup_time
     const tripLeg = d.trip_leg ?? "outbound_only";
@@ -184,7 +187,9 @@ export async function POST(request: NextRequest) {
         ? buildServiceLabelShort({ kind: "bus_city_hotel", busCityOrigin: busCityOrigin || null })
         : (bookingKind === "transfer_hotel_hotel" && hotelDestName)
           ? hotelDestName
-          : meetingPoint,
+          : bookingKind === "excursion"
+            ? excursionDeparturePort
+            : meetingPoint,
       // Per SNAV/MEDMAR: orario barca partenza e porto partenza nei campi calcolati
       ...(ferryDepTime ? { orario_barca: ferryDepTime } : {}),
       ...(portoPartenza ? { barca_compagnia: portoPartenza } : {}),
@@ -219,8 +224,9 @@ export async function POST(request: NextRequest) {
     });
 
     // Per A/R: crea la tratta di ritorno e collega i due record
+    // Le escursioni creano sempre la tratta di ritorno (autista A/R separati)
     let returnServiceId: string | null = null;
-    if (tripLeg === "round_trip" && serviceId) {
+    if ((tripLeg === "round_trip" || bookingKind === "excursion") && serviceId) {
       const returnInsert = {
         ...insert,
         date: d.departure_date,
@@ -228,6 +234,7 @@ export async function POST(request: NextRequest) {
         direction: "departure",
         pickup_time: pickupTimeReturn || null,
         linked_service_id: null,
+        ...(bookingKind === "excursion" ? { meeting_point: excursionPickupPort } : {}),
       };
       const { data: retData } = await auth.admin
         .from("services").insert(returnInsert).select("id").single();
