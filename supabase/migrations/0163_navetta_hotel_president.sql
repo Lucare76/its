@@ -6,30 +6,31 @@
 
 -- ── 1. Aggiunge 'navetta' come booking_service_kind valido ────────────────────
 
-do $$ begin
-  if exists (
-    select 1 from pg_constraint
-    where conname = 'services_booking_service_kind_valid'
-  ) then
-    alter table public.services
-      drop constraint services_booking_service_kind_valid;
+do $$
+declare
+  v_vals text;
+begin
+  -- Raccoglie tutti i valori booking_service_kind già presenti nel DB
+  select string_agg(distinct quote_literal(booking_service_kind), ', ')
+  into v_vals
+  from public.services
+  where booking_service_kind is not null;
+
+  -- Aggiunge 'navetta' se non c'è già
+  if v_vals is null then
+    v_vals := '''navetta''';
+  elsif v_vals not like '%''navetta''%' then
+    v_vals := v_vals || ', ''navetta''';
   end if;
 
-  alter table public.services
-    add constraint services_booking_service_kind_valid
-    check (
-      booking_service_kind is null
-      or booking_service_kind in (
-        'transfer_port_hotel',
-        'transfer_airport_hotel',
-        'transfer_train_hotel',
-        'bus_city_hotel',
-        'excursion',
-        'formula_snav',
-        'formula_medmar',
-        'navetta'
-      )
-    );
+  -- Rimuove il vecchio constraint se esiste
+  if exists (select 1 from pg_constraint where conname = 'services_booking_service_kind_valid') then
+    alter table public.services drop constraint services_booking_service_kind_valid;
+  end if;
+
+  -- Ricrea il constraint includendo tutti i valori esistenti + navetta
+  execute 'alter table public.services add constraint services_booking_service_kind_valid '
+       || 'check (booking_service_kind is null or booking_service_kind in (' || v_vals || '))';
 end $$;
 
 -- ── 2. Inserisce i servizi navetta ────────────────────────────────────────────
