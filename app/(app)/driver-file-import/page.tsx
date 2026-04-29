@@ -18,6 +18,7 @@ type ImportResponse = {
     row_index: number;
     time: string;
     direction: "arrival" | "departure";
+    service_visual_kind: "arrival" | "departure" | "excursion";
     service_type_label: string;
     billing_party_name: string;
     hotel_name: string;
@@ -35,6 +36,30 @@ type DriverProfile = {
   full_name: string;
   phone?: string | null;
 };
+
+function getPreviewTone(kind: "arrival" | "departure" | "excursion") {
+  if (kind === "excursion") {
+    return {
+      card: "border-purple-200 bg-purple-50/50",
+      badge: "bg-white text-purple-700",
+      label: "Escursione"
+    };
+  }
+
+  if (kind === "arrival") {
+    return {
+      card: "border-sky-200 bg-sky-50/50",
+      badge: "bg-white text-sky-700",
+      label: "Arrivo"
+    };
+  }
+
+  return {
+    card: "border-amber-200 bg-amber-50/50",
+    badge: "bg-white text-amber-700",
+    label: "Partenza"
+  };
+}
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -280,13 +305,13 @@ export default function DriverFileImportPage() {
             ) : (
               <div className="space-y-3">
                 {safePreview.map((row) => (
-                  <article key={`${row.row_index}-${row.time}-${row.hotel_name}`} className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4">
+                  <article key={`${row.row_index}-${row.time}-${row.hotel_name}`} className={`rounded-2xl border p-4 ${getPreviewTone(row.service_visual_kind).card}`}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="text-sm font-semibold text-text">Riga {row.row_index} — {row.hotel_name}</p>
-                        <p className="text-xs text-muted">{serviceDate} {row.time} · {row.direction} · {row.service_type_label}</p>
+                        <p className="text-xs text-muted">{serviceDate} {row.time} · {getPreviewTone(row.service_visual_kind).label} · {row.service_type_label}</p>
                       </div>
-                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">{row.pax} pax</span>
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${getPreviewTone(row.service_visual_kind).badge}`}>{row.pax} pax</span>
                     </div>
                     <div className="mt-3 grid gap-3 text-sm text-slate-700 md:grid-cols-2 xl:grid-cols-4">
                       <p><span className="font-medium">Agenzia:</span> {row.billing_party_name || "—"}</p>

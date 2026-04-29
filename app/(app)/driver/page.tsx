@@ -66,6 +66,15 @@ function formatDateLabel(dateIso: string) {
   return day && month && year ? `${day} ${months[Number(month) - 1]}` : dateIso;
 }
 
+function normalizeText(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function statusColor(status: ServiceStatus) {
   switch (status) {
     case "completato": return "bg-emerald-100 text-emerald-800";
@@ -88,7 +97,7 @@ function buildDriverWhatsAppMessage(service: DriverService, appOrigin?: string) 
     return `Buongiorno, sono il suo autista per Ischia Transfer Service. Può seguire la posizione in tempo reale qui: ${appOrigin ?? "https://ischiatransferservice.it"}/track/${service.id}`;
   }
 
-  const isExcursion = service.booking_service_kind === "excursion" || service.service_type === "bus_tour";
+  const isExcursion = isExcursionService(service);
   if (isExcursion) {
     return `Buongiorno, sono il suo autista per l'escursione ${service.customer_name} con Ischia Transfer Service. La contatto per coordinarci sul servizio di oggi.`;
   }
@@ -98,6 +107,51 @@ function buildDriverWhatsAppMessage(service: DriverService, appOrigin?: string) 
   }
 
   return `Buongiorno, sono il suo autista per l'arrivo ${service.customer_name} con Ischia Transfer Service. La contatto per coordinarci sul trasferimento di oggi.`;
+}
+
+function isExcursionService(service: Pick<DriverService, "booking_service_kind" | "service_type" | "vessel">) {
+  if (service.booking_service_kind === "excursion" || service.service_type === "bus_tour") return true;
+
+  const vessel = String(service.vessel ?? "").toLowerCase().trim();
+  return /capri|procida|giro\s+isola|escurs|amalfi|positano|pompei|sorrento|caserta|napoli|mortella|nitrodi|castello|crateri|cooking/.test(vessel);
+}
+
+function normalizeDriverService(service: DriverService): DriverService {
+  const source = `${normalizeText(service.vessel)} ${normalizeText(service.notes)} ${normalizeText(service.customer_name)}`.trim();
+  const looksLikeExcursion = isExcursionService(service)
+    || /capri|procida|giro isola|escurs|amalfi|positano|pompei|sorrento|caserta|napoli|mortella|nitrodi|castello|crateri|cooking/.test(source);
+
+  if (!looksLikeExcursion) return service;
+
+  return {
+    ...service,
+    service_type: "bus_tour",
+    booking_service_kind: "excursion",
+    direction: "departure",
+  };
+}
+
+function getDriverServiceChip(service: Pick<DriverService, "booking_service_kind" | "service_type" | "direction" | "vessel">) {
+  const isNavetta = service.booking_service_kind === "shuttle_hotel" || service.service_type === "navetta";
+  if (isNavetta) return { className: "bg-violet-100 text-violet-700", label: "⇄ Navetta" };
+  if (isExcursionService(service)) return { className: "bg-purple-100 text-purple-700", label: "Escursione" };
+  if (service.direction === "arrival") return { className: "bg-emerald-100 text-emerald-700", label: "Arrivo" };
+  return { className: "bg-amber-100 text-amber-700", label: "Partenza" };
+}
+
+function getGroupChip(group: Pick<ServiceGroup, "visualKind" | "label">) {
+  const normalizedLabel = group.label.toLowerCase();
+  if (normalizedLabel.includes("navetta")) {
+    return { className: "bg-violet-100 text-violet-700", label: "Navetta" };
+  }
+  if (
+    group.visualKind === "excursion" ||
+    /capri|procida|giro\s+isola|escurs|amalfi|positano|pompei|sorrento|caserta|napoli|mortella|nitrodi|castello|crateri|cooking/.test(normalizedLabel)
+  ) {
+    return { className: "bg-purple-100 text-purple-700", label: "Escursione" };
+  }
+  if (group.visualKind === "arrival") return { className: "bg-emerald-100 text-emerald-700", label: "Arrivo" };
+  return { className: "bg-amber-100 text-amber-700", label: "Partenza" };
 }
 
 function WhatsAppIcon({ className = "h-4 w-4" }: { className?: string }) {
@@ -185,6 +239,7 @@ type ServiceGroup = {
   key: string;
   label: string;
   direction: "arrival" | "departure";
+  visualKind: "arrival" | "departure" | "excursion";
   totalPax: number;
   entries: { service: DriverService; assignment: DriverAssignment }[];
 };
@@ -237,10 +292,11 @@ function DriverPageInner() {
       ferry_schedules?: DriverFerrySchedule[];
     };
     if (!body.ok) { setErrorMessage(body.error ?? "Errore caricamento."); setLoading(false); return; }
+    const normalizedServices = (body.services ?? []).map((service) => normalizeDriverService(service as DriverService));
     setTenantId(body.tenant_id ?? null);
     setUserId(body.user_id ?? null);
     setData({
-      services: body.services ?? [],
+      services: normalizedServices,
       assignments: body.assignments ?? [],
       hotels: body.hotels ?? [],
       status_events: body.status_events ?? [],
@@ -406,18 +462,25 @@ function DriverPageInner() {
 
   /* ---- grouping helpers per tab */
   const buildGroups = useCallback((entries: typeof mine): ServiceGroup[] => {
-    const arrivals = entries.filter((e) => e.service.direction !== "departure");
-    const departures = entries.filter((e) => e.service.direction === "departure");
-    const makeGroups = (list: typeof mine, keyFn: (e: typeof mine[0]) => string, labelFn: (e: typeof mine[0]) => string, direction: "arrival" | "departure") => {
+    const excursions = entries.filter((e) => isExcursionService(e.service));
+    const arrivals = entries.filter((e) => !isExcursionService(e.service) && e.service.direction !== "departure");
+    const departures = entries.filter((e) => !isExcursionService(e.service) && e.service.direction === "departure");
+    const makeGroups = (
+      list: typeof mine,
+      keyFn: (e: typeof mine[0]) => string,
+      labelFn: (e: typeof mine[0]) => string,
+      direction: "arrival" | "departure",
+      visualKind: "arrival" | "departure" | "excursion"
+    ) => {
       const map = new Map<string, ServiceGroup>();
       for (const entry of list) {
         const k = keyFn(entry);
-        if (!map.has(k)) map.set(k, { key: k, label: labelFn(entry), direction, totalPax: 0, entries: [] });
+        if (!map.has(k)) map.set(k, { key: k, label: labelFn(entry), direction, visualKind, totalPax: 0, entries: [] });
         const g = map.get(k)!;
         g.totalPax += entry.service.pax;
         g.entries.push(entry);
       }
-      if (direction === "arrival") {
+      if (visualKind === "arrival") {
         for (const g of map.values()) {
           const mp = g.entries[0]?.service.meeting_point ?? "";
           g.entries.sort((a, b) => {
@@ -446,6 +509,7 @@ function DriverPageInner() {
         const vesselLabel = e.service.vessel ?? "N/D";
         return depTime ? `${vesselLabel} · ${depTime}` : vesselLabel;
       },
+      "arrival",
       "arrival"
     );
     const depGroups = makeGroups(
@@ -457,17 +521,29 @@ function DriverPageInner() {
         const t = e.service.time?.slice(0, 5) ?? "";
         return `${company && t ? `${company} ${t} · ` : ""}${hotelName}`;
       },
+      "departure",
       "departure"
     );
-    return [...arrGroups, ...depGroups].sort((a, b) => {
+    const excursionGroups = makeGroups(
+      excursions,
+      (e) => `${e.service.date}_${e.service.hotel_id ?? "none"}_${e.service.time}_${e.service.vessel ?? "excursion"}`,
+      (e) => {
+        const title = e.service.vessel?.trim() || "Escursione";
+        const t = e.service.time?.slice(0, 5) ?? "";
+        return t ? `${title} · ${t}` : title;
+      },
+      "departure",
+      "excursion"
+    );
+    return [...arrGroups, ...excursionGroups, ...depGroups].sort((a, b) => {
       const af = a.entries[0]?.service;
       const bf = b.entries[0]?.service;
       if (!af || !bf) return 0;
       if (af.date !== bf.date) return af.date.localeCompare(bf.date);
-      const at = a.direction === "arrival"
+      const at = a.visualKind === "arrival"
         ? (getArrivalSchedule(af)?.arrivalTime ?? af.time ?? "")
         : (af.pickup_time ?? af.time ?? "");
-      const bt = b.direction === "arrival"
+      const bt = b.visualKind === "arrival"
         ? (getArrivalSchedule(bf)?.arrivalTime ?? bf.time ?? "")
         : (bf.pickup_time ?? bf.time ?? "");
       return at.localeCompare(bt);
@@ -598,6 +674,9 @@ function DriverPageInner() {
 
   return (
     <div className="mx-auto max-w-lg space-y-4 px-2 pb-10 pt-4">
+      <div className="rounded-2xl border-2 border-rose-300 bg-rose-50 px-4 py-3 text-sm font-black uppercase tracking-wide text-rose-700">
+        Debug Driver Build 2026-04-29 Escursioni
+      </div>
 
       {/* Cartello digitale — overlay fullscreen */}
       {showSign && focused && (
@@ -767,6 +846,9 @@ function DriverPageInner() {
               <div>
                 <p className="text-2xl font-bold text-slate-900">{focused.service.customer_name}</p>
                 <p className="text-sm text-slate-500 mt-0.5">{formatDateLabel(focused.service.date)} · {focused.service.time} · {focused.service.pax} pax</p>
+                <span className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${getDriverServiceChip(focused.service).className}`}>
+                  {getDriverServiceChip(focused.service).label}
+                </span>
                 {focused.service.pickup_time && (
                   <p className="text-xs font-semibold text-amber-700 mt-0.5">⏱ Prelevamento: {focused.service.pickup_time}</p>
                 )}
@@ -937,10 +1019,9 @@ function DriverPageInner() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
                           {(() => {
-                            const svc = group.entries[0]?.service;
-                            const isNavetta = svc?.booking_service_kind === "shuttle_hotel" || svc?.service_type === "navetta";
-                            return <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${isNavetta ? "bg-violet-100 text-violet-700" : group.direction === "arrival" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                              {isNavetta ? "⇄ Navetta" : group.direction === "arrival" ? "↓ Arrivo" : "↑ Partenza"}
+                            const chip = getGroupChip(group);
+                            return <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${chip.className}`}>
+                              {chip.label}
                             </span>;
                           })()}
                           <p className="font-semibold text-slate-800 text-sm truncate">{group.label}</p>
@@ -979,10 +1060,15 @@ function DriverPageInner() {
                                   <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>
                                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusColor(entry.service.status)}`}>{entry.service.status}</span>
                                 </div>
-                                {entry.service.direction === "departure" ? (
+                                {entry.service.direction === "departure" && !isExcursionService(entry.service) ? (
                                   <>
                                     <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
                                     {entry.service.vessel ? <p className="text-xs font-medium text-amber-700 mt-0.5">🚢 {entry.service.vessel}{entry.service.pickup_time ? ` · prelievo ${entry.service.pickup_time}` : ""}</p> : null}
+                                  </>
+                                ) : isExcursionService(entry.service) ? (
+                                  <>
+                                    <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    {entry.service.vessel ? <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p> : null}
                                   </>
                                 ) : (
                                   <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax · {entry.service.time}</p>
@@ -1001,7 +1087,7 @@ function DriverPageInner() {
                                   <WhatsAppIcon className="h-4 w-4" />
                                 </a>
                               )}
-                              {group.direction === "arrival" && (
+                              {group.visualKind === "arrival" && (
                                 <div className="flex flex-col shrink-0">
                                   <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "oggi", entry.service.id, -1); }}
                                     className="h-5 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 text-xs">↑</button>
@@ -1028,10 +1114,9 @@ function DriverPageInner() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
                           {(() => {
-                            const svc = group.entries[0]?.service;
-                            const isNavetta = svc?.booking_service_kind === "shuttle_hotel" || svc?.service_type === "navetta";
-                            return <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${isNavetta ? "bg-violet-100 text-violet-700" : group.direction === "arrival" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                              {isNavetta ? "⇄ Navetta" : group.direction === "arrival" ? "↓ Arrivo" : "↑ Partenza"}
+                            const chip = getGroupChip(group);
+                            return <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${chip.className}`}>
+                              {chip.label}
                             </span>;
                           })()}
                           <p className="font-semibold text-slate-800 text-sm truncate">{group.label}</p>
@@ -1075,10 +1160,15 @@ function DriverPageInner() {
                                       : entry.service.time?.slice(0,5)}
                                   </span>
                                 </div>
-                                {entry.service.direction === "departure" ? (
+                                {entry.service.direction === "departure" && !isExcursionService(entry.service) ? (
                                   <>
                                     <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
                                     {entry.service.vessel ? <p className="text-xs font-medium text-amber-700 mt-0.5">🚢 {entry.service.vessel}{entry.service.pickup_time ? ` · prelievo ${entry.service.pickup_time}` : ""}</p> : null}
+                                  </>
+                                ) : isExcursionService(entry.service) ? (
+                                  <>
+                                    <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    {entry.service.vessel ? <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p> : null}
                                   </>
                                 ) : (
                                   <>
@@ -1114,7 +1204,7 @@ function DriverPageInner() {
                                   <WhatsAppIcon className="h-4 w-4" />
                                 </a>
                               )}
-                              {group.direction === "arrival" && (
+                              {group.visualKind === "arrival" && (
                                 <div className="flex flex-col shrink-0">
                                   <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "prossimi", entry.service.id, -1); }}
                                     className="h-5 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 text-xs">↑</button>

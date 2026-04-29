@@ -42,9 +42,28 @@ type DriverServiceRow = {
   booking_service_kind: string | null;
 };
 
+function normalizeText(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function isExcursionLikeService(service: Pick<DriverServiceRow, "booking_service_kind" | "service_type" | "vessel" | "notes">) {
+  if (service.booking_service_kind === "excursion" || service.service_type === "bus_tour") return true;
+  const vessel = normalizeText(service.vessel);
+  const notes = normalizeText(service.notes);
+  return /capri|procida|giro isola|escurs|amalfi|positano|pompei|sorrento|caserta|napoli|mortella|nitrodi|castello|crateri|cooking/.test(`${vessel} ${notes}`.trim());
+}
+
 function withPhoneE164Fallback(services: DriverServiceRow[]) {
   return services.map((service) => ({
     ...service,
+    service_type: isExcursionLikeService(service) ? "bus_tour" : (service.service_type ?? "transfer"),
+    booking_service_kind: isExcursionLikeService(service) ? "excursion" : service.booking_service_kind,
+    direction: isExcursionLikeService(service) ? "departure" : service.direction,
     phone_e164: service.phone_e164 ?? null,
   }));
 }

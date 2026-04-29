@@ -38,6 +38,7 @@ type PreviewRow = {
   row_index: number;
   time: string;
   direction: "arrival" | "departure";
+  service_visual_kind: "arrival" | "departure" | "excursion";
   service_type_label: string;
   billing_party_name: string;
   hotel_name: string;
@@ -86,6 +87,30 @@ function normalizeBillingPartyName(value: string) {
   return raw;
 }
 
+function isPortMeetingPoint(value: string) {
+  const normalized = normalizeText(value);
+  return normalized === "casamicciola"
+    || normalized === "porto di casamicciola"
+    || normalized === "porto casamicciola"
+    || normalized === "casamicciola porto";
+}
+
+function normalizeImportedLocationAlias(value: string) {
+  const raw = value.trim();
+  const normalized = normalizeText(raw);
+
+  if (
+    normalized === "porto di casamicciola" ||
+    normalized === "porto casamicciola" ||
+    normalized === "porto di casamicciola terme" ||
+    normalized === "porto casamicciola terme"
+  ) {
+    return "Casamicciola";
+  }
+
+  return raw;
+}
+
 function isMeaningfulReference(value: string) {
   const normalized = normalizeText(value);
   return Boolean(
@@ -93,15 +118,30 @@ function isMeaningfulReference(value: string) {
     normalized !== "arrivo" &&
     normalized !== "partenza" &&
     normalized !== "navetta" &&
-    normalized !== "escursione"
+    normalized !== "escursione" &&
+    normalized !== "escursioni"
   );
 }
 
-function inferDirection(rawType: string, origin: string, destination: string): "arrival" | "departure" {
+function isExcursionRow(rawType: string, reference: string) {
   const type = normalizeText(rawType);
+  const ref = normalizeText(reference);
+
+  if (type.startsWith("escursion")) return true;
+
+  return /capri|procida|giro isola|escurs|amalfi|positano|pompei|sorrento|caserta|napoli|mortella|nitrodi|castello|crateri|cooking/.test(ref);
+}
+
+function inferDirection(rawType: string, reference: string, origin: string, destination: string): "arrival" | "departure" {
+  const type = normalizeText(rawType);
+  if (isExcursionRow(rawType, reference)) return "departure";
   if (type === "arrivo" || type === "arrival") return "arrival";
   if (type === "partenza" || type === "departure") return "departure";
-  if (type === "escursione") return "departure";
+
+  const originIsPortMeetingPoint = isPortMeetingPoint(origin);
+  const destinationIsPortMeetingPoint = isPortMeetingPoint(destination);
+  if (originIsPortMeetingPoint && !destinationIsPortMeetingPoint) return "arrival";
+  if (!originIsPortMeetingPoint && destinationIsPortMeetingPoint) return "departure";
 
   const originNorm = normalizeText(origin);
   const destinationNorm = normalizeText(destination);
@@ -115,13 +155,50 @@ function inferDirection(rawType: string, origin: string, destination: string): "
   return "departure";
 }
 
-function buildNotes(row: ParsedDriverFileRow, direction: "arrival" | "departure") {
+function inferServiceVisualKind(rawType: string, reference: string): "arrival" | "departure" | "excursion" {
+  const type = normalizeText(rawType);
+  if (isExcursionRow(rawType, reference) || type === "excursion") return "excursion";
+  if (type === "arrivo" || type === "arrival") return "arrival";
+  return "departure";
+}
+
+function resolveImportedHotelAndMeetingPoint(
+  direction: "arrival" | "departure",
+  origin: string,
+  destination: string
+) {
+  const normalizedOrigin = normalizeImportedLocationAlias(origin);
+  const normalizedDestination = normalizeImportedLocationAlias(destination);
+  const originIsPort = isPortMeetingPoint(origin);
+  const destinationIsPort = isPortMeetingPoint(destination);
+
+  if (originIsPort && !destinationIsPort) {
+    return {
+      hotelName: normalizedDestination,
+      meetingPoint: origin.trim(),
+    };
+  }
+
+  if (destinationIsPort && !originIsPort) {
+    return {
+      hotelName: normalizedOrigin,
+      meetingPoint: destination.trim(),
+    };
+  }
+
+  return {
+    hotelName: direction === "arrival" ? normalizedDestination : normalizedOrigin,
+    meetingPoint: direction === "arrival" ? origin.trim() : destination.trim(),
+  };
+}
+
+function buildNotes(row: ParsedDriverFileRow, serviceVisualKind: "arrival" | "departure" | "excursion") {
   const parts = [
     row.extra_1.trim(),
     row.extra_2.trim(),
     row.pax_raw.trim() && row.pax === 0 ? `Pax file: ${row.pax_raw.trim()}` : "",
     row.source_driver_name.trim() ? `Autista file: ${row.source_driver_name.trim()}` : "",
-    direction === "departure" && row.service_type_label.trim() ? `Tipo file: ${row.service_type_label.trim()}` : ""
+    serviceVisualKind !== "arrival" && row.service_type_label.trim() ? `Tipo file: ${row.service_type_label.trim()}` : ""
   ].filter(Boolean);
   return parts.join(" | ");
 }
@@ -212,6 +289,26 @@ function parseRowsFromSheet(rows: string[][]) {
       extra_2: String(row[9] ?? "").trim(),
       customer_raw: extractCustomerRaw(row)
     }))
+    .filter((row) => {
+      const joined = normalizeText([
+        row.source_driver_name,
+        row.time,
+        row.reference,
+        row.pax_raw,
+        row.service_type_label,
+        row.billing_party_name,
+        row.origin,
+        row.destination
+      ].join(" "));
+
+      const looksLikeHeader =
+        joined.includes("autista") &&
+        joined.includes("time") &&
+        joined.includes("origine") &&
+        joined.includes("destinazione");
+
+      return !looksLikeHeader;
+    })
     .filter((row) => Object.values(row).some((value) => String(value ?? "").trim()));
 }
 
@@ -283,13 +380,13 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      const direction = inferDirection(row.service_type_label || row.reference, row.origin, row.destination);
-      const hotelName = direction === "arrival" ? row.destination : row.origin;
-      const meetingPoint = direction === "arrival" ? row.origin : row.destination;
+      const direction = inferDirection(row.service_type_label || row.reference, row.reference, row.origin, row.destination);
+      const serviceVisualKind = inferServiceVisualKind(row.service_type_label || row.reference, row.reference);
+      const { hotelName, meetingPoint } = resolveImportedHotelAndMeetingPoint(direction, row.origin, row.destination);
       const transportCode = isMeaningfulReference(row.reference)
         ? row.reference
         : (direction === "arrival" ? row.origin : row.destination);
-      const notes = buildNotes(row, direction);
+      const notes = buildNotes(row, serviceVisualKind);
       const customerContact = resolveCustomerContact(row);
       const resolvedHotelId = resolveHotelMatch(hotelRows, hotelName, null);
 
@@ -300,8 +397,9 @@ export async function POST(request: NextRequest) {
 
       const pax = row.pax > 0 ? row.pax : 1;
       const vessel = (isMeaningfulReference(row.reference) ? row.reference : row.service_type_label || "Servizio autista").slice(0, 80);
+      const isExcursion = serviceVisualKind === "excursion";
       const bookingServiceKind =
-        normalizeText(row.service_type_label) === "escursione" ? "excursion"
+        isExcursion ? "excursion"
         : normalizeText(row.service_type_label) === "navetta" ? "shuttle_hotel"
         : undefined;
 
@@ -309,6 +407,7 @@ export async function POST(request: NextRequest) {
         row_index: row.row_index,
         time: row.time,
         direction,
+        service_visual_kind: serviceVisualKind,
         service_type_label: row.service_type_label || "servizio autista",
         billing_party_name: row.billing_party_name,
         hotel_name: hotelName,
@@ -326,7 +425,7 @@ export async function POST(request: NextRequest) {
         date: payload.data.service_date,
         time: row.time,
         direction,
-        service_type: "transfer",
+        service_type: isExcursion ? "bus_tour" : "transfer",
         vessel,
         pax,
         hotel_id: resolvedHotelId,
@@ -336,7 +435,7 @@ export async function POST(request: NextRequest) {
         notes: notes || null,
         meeting_point: meetingPoint || null,
         booking_service_kind: bookingServiceKind ?? null,
-        service_type_code: null,
+        service_type_code: isExcursion ? "excursion" : null,
         arrival_date: direction === "arrival" ? payload.data.service_date : null,
         arrival_time: direction === "arrival" ? row.time : null,
         departure_date: direction === "departure" ? payload.data.service_date : null,

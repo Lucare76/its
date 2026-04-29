@@ -73,6 +73,25 @@ export function PwaInit({ children }: { children?: React.ReactNode }) {
       return;
     }
 
+    const isLocalDev =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1" ||
+      window.location.hostname === "0.0.0.0";
+
+    if (isLocalDev) {
+      navigator.serviceWorker.getRegistrations().then((registrations) => {
+        registrations
+          .filter((registration) => registration.scope.includes("/driver"))
+          .forEach((registration) => void registration.unregister());
+        setSwReady(false);
+        setPushState("unsupported");
+      });
+      void caches.keys().then((keys) =>
+        Promise.all(keys.filter((key) => key.startsWith("its-driver-")).map((key) => caches.delete(key)))
+      );
+      return;
+    }
+
     navigator.serviceWorker
       .register("/sw.js", { scope: "/driver" })
       .then((reg) => {

@@ -51,6 +51,13 @@ function isUndeliveredReminder(service: Service) {
   return Date.now() - sentAtMs > thresholdMs;
 }
 
+function getServiceTypeBadgeTone(service: Service) {
+  const isExcursion = service.booking_service_kind === "excursion" || service.service_type_code === "excursion";
+  if (isExcursion) return "bg-purple-100 text-purple-700";
+  if ((service.service_type ?? "transfer") === "bus_tour") return "bg-emerald-100 text-emerald-700";
+  return "bg-blue-100 text-blue-700";
+}
+
 export function ServicesTable({ services, hotels, assignments, memberships, statusEvents, inboundEmails }: ServicesTableProps) {
   const [statusFilter, setStatusFilter] = useState<ServiceStatus | "all">("all");
   const [vesselFilter, setVesselFilter] = useState<string>("all");
@@ -510,9 +517,12 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                     <p className="text-sm font-semibold">{formatServiceSlot(service)} - {getCustomerFullName(service)}</p>
                     <span className={statusClass(service.status)}>{SERVICE_STATUS_LABELS[service.status]}</span>
                   </div>
-                  <p className="text-xs text-muted">
-                    {SERVICE_TYPE_LABELS[(service.service_type ?? "transfer") as ServiceType]} | {service.vessel}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                    <span className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getServiceTypeBadgeTone(service)}`}>
+                      {SERVICE_TYPE_LABELS[(service.service_type ?? "transfer") as ServiceType]}
+                    </span>
+                    <span>{service.vessel}</span>
+                  </div>
                   <p className="text-xs text-muted">
                     Hotel: {hotel?.name ?? "N/D"} ({hotel?.zone ?? "N/D"}) | Driver: {driverName}
                   </p>
@@ -580,7 +590,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                         </p>
                       </td>
                       <td className="px-4 py-3">
-                        <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold uppercase tracking-[0.08em] text-blue-700">
+                        <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase tracking-[0.08em] ${getServiceTypeBadgeTone(service)}`}>
                           {SERVICE_TYPE_LABELS[(service.service_type ?? "transfer") as ServiceType]}
                         </span>
                       </td>
