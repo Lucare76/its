@@ -133,7 +133,7 @@ function normalizeDriverService(service: DriverService): DriverService {
 function getDriverServiceChip(service: Pick<DriverService, "booking_service_kind" | "service_type" | "direction" | "vessel">) {
   const isNavetta = service.booking_service_kind === "navetta" || service.booking_service_kind === "shuttle_hotel" || service.service_type === "navetta";
   if (isNavetta) return { className: "bg-violet-100 text-violet-700", label: "⇄ Navetta" };
-  if (isExcursionService(service)) return { className: "bg-purple-100 text-purple-700", label: "Escursione" };
+  if (isExcursionService(service)) return { className: "bg-teal-100 text-teal-700", label: "Escursione" };
   if (service.direction === "arrival") return { className: "bg-emerald-100 text-emerald-700", label: "Arrivo" };
   return { className: "bg-amber-100 text-amber-700", label: "Partenza" };
 }
@@ -155,7 +155,7 @@ function getGroupChip(group: Pick<ServiceGroup, "visualKind" | "label" | "entrie
     group.visualKind === "excursion" ||
     /capri|procida|giro\s+isola|escurs|amalfi|positano|pompei|sorrento|caserta|napoli|mortella|nitrodi|castello|crateri|cooking/.test(normalizedLabel)
   ) {
-    return { className: "bg-purple-100 text-purple-700", label: "Escursione" };
+    return { className: "bg-teal-100 text-teal-700", label: "Escursione" };
   }
   if (group.visualKind === "arrival") return { className: "bg-emerald-100 text-emerald-700", label: "Arrivo" };
   return { className: "bg-amber-100 text-amber-700", label: "Partenza" };
@@ -1094,13 +1094,13 @@ function DriverPageInner() {
                                   entry.service.direction === "arrival" ? (
                                     <>
                                       <p className="text-xs text-slate-400 mt-0.5">{entry.service.pax} pax · ritorno porto</p>
-                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? ""}{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
+                                      <p className="text-xs font-medium text-teal-700 mt-0.5">🟣 {entry.service.vessel ?? ""}{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
                                       {hotel && <p className="text-xs text-slate-500 mt-0.5">→ {hotel.name}</p>}
                                     </>
                                   ) : (
                                     <>
                                       <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
-                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? "Escursione"}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p>
+                                      <p className="text-xs font-medium text-teal-700 mt-0.5">🟣 {entry.service.vessel ?? "Escursione"}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p>
                                     </>
                                   )
                                 ) : (
@@ -1111,10 +1111,11 @@ function DriverPageInner() {
                                       const arrIschia = arrSched?.arrivalTime ?? null;
                                       const arrPort = arrSched?.arrivalPort ? ferryPortLabel(arrSched.arrivalPort) : entry.service.meeting_point;
                                       const company = ferryCompanyLabel(entry.service.booking_service_kind);
+                                      const vesselLabel = !company ? (entry.service.vessel ?? null) : null;
                                       return (
                                         <>
-                                          <p className="text-sm font-bold text-emerald-700 mt-0.5">⚓ {[company, arrPort].filter(Boolean).join(" · ") || "Porto N/D"}{arrIschia ? ` · arr. ${arrIschia}` : ""}</p>
-                                          {arrIschia && <p className="text-xs text-slate-400">partenza continente {entry.service.time?.slice(0,5)}</p>}
+                                          <p className="text-sm font-bold text-emerald-700 mt-0.5">⚓ {[company ?? vesselLabel, arrPort].filter(Boolean).join(" · ") || "Porto N/D"}{arrIschia ? ` · arr. ${arrIschia}` : ""}</p>
+                                          <p className="text-xs text-slate-400">partenza continente {entry.service.time?.slice(0,5)}</p>
                                         </>
                                       );
                                     })()}
@@ -1216,13 +1217,13 @@ function DriverPageInner() {
                                   entry.service.direction === "arrival" ? (
                                     <>
                                       <p className="text-xs text-slate-400 mt-0.5">{entry.service.pax} pax · ritorno porto</p>
-                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? ""}{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
+                                      <p className="text-xs font-medium text-teal-700 mt-0.5">🟣 {entry.service.vessel ?? ""}{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
                                       {hotel && <p className="text-xs text-slate-500 mt-0.5">→ {hotel.name}</p>}
                                     </>
                                   ) : (
                                     <>
                                       <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
-                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? "Escursione"}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p>
+                                      <p className="text-xs font-medium text-teal-700 mt-0.5">🟣 {entry.service.vessel ?? "Escursione"}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p>
                                     </>
                                   )
                                 ) : (
