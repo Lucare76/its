@@ -127,19 +127,21 @@ function normalizeDriverService(service: DriverService): DriverService {
     ...service,
     service_type: "bus_tour",
     booking_service_kind: "excursion",
-    direction: "departure",
   };
 }
 
 function getDriverServiceChip(service: Pick<DriverService, "booking_service_kind" | "service_type" | "direction" | "vessel">) {
-  const isNavetta = service.booking_service_kind === "shuttle_hotel" || service.service_type === "navetta";
+  const isNavetta = service.booking_service_kind === "navetta" || service.booking_service_kind === "shuttle_hotel" || service.service_type === "navetta";
   if (isNavetta) return { className: "bg-violet-100 text-violet-700", label: "⇄ Navetta" };
   if (isExcursionService(service)) return { className: "bg-purple-100 text-purple-700", label: "Escursione" };
   if (service.direction === "arrival") return { className: "bg-emerald-100 text-emerald-700", label: "Arrivo" };
   return { className: "bg-amber-100 text-amber-700", label: "Partenza" };
 }
 
-function getGroupChip(group: Pick<ServiceGroup, "visualKind" | "label">) {
+function getGroupChip(group: Pick<ServiceGroup, "visualKind" | "label" | "entries">) {
+  if (group.entries[0]?.service.booking_service_kind === "navetta") {
+    return { className: "bg-violet-100 text-violet-700", label: "Navetta" };
+  }
   const normalizedLabel = group.label.toLowerCase();
   if (normalizedLabel.includes("navetta")) {
     return { className: "bg-violet-100 text-violet-700", label: "Navetta" };
@@ -462,9 +464,10 @@ function DriverPageInner() {
 
   /* ---- grouping helpers per tab */
   const buildGroups = useCallback((entries: typeof mine): ServiceGroup[] => {
-    const excursions = entries.filter((e) => isExcursionService(e.service));
-    const arrivals = entries.filter((e) => !isExcursionService(e.service) && e.service.direction !== "departure");
-    const departures = entries.filter((e) => !isExcursionService(e.service) && e.service.direction === "departure");
+    const navettas = entries.filter((e) => e.service.booking_service_kind === "navetta");
+    const excursions = entries.filter((e) => e.service.booking_service_kind !== "navetta" && isExcursionService(e.service));
+    const arrivals = entries.filter((e) => e.service.booking_service_kind !== "navetta" && !isExcursionService(e.service) && e.service.direction !== "departure");
+    const departures = entries.filter((e) => e.service.booking_service_kind !== "navetta" && !isExcursionService(e.service) && e.service.direction === "departure");
     const makeGroups = (
       list: typeof mine,
       keyFn: (e: typeof mine[0]) => string,
@@ -504,10 +507,8 @@ function DriverPageInner() {
       (e) => `${e.service.date}_${e.service.vessel || "N/D"}_${e.service.time.slice(0, 5)}`,
       (e) => {
         const company = ferryLabel(e.service.booking_service_kind, e.service.time);
-        const depTime = e.service.time?.slice(0, 5) ?? "";
-        if (company && depTime) return `${company} ${depTime}`;
         const vesselLabel = e.service.vessel ?? "N/D";
-        return depTime ? `${vesselLabel} · ${depTime}` : vesselLabel;
+        return company ?? vesselLabel;
       },
       "arrival",
       "arrival"
@@ -524,18 +525,33 @@ function DriverPageInner() {
       "departure",
       "departure"
     );
+    const navettaGroups = makeGroups(
+      navettas,
+      (e) => `${e.service.date}_${e.service.hotel_id ?? "none"}_${e.service.time}_${e.service.direction}`,
+      (e) => {
+        const hotelName = data.hotels.find((h) => h.id === e.service.hotel_id)?.name ?? "N/D";
+        const t = e.service.time?.slice(0, 5) ?? "";
+        return t ? `${hotelName} ${t}` : hotelName;
+      },
+      "departure",
+      "departure"
+    );
     const excursionGroups = makeGroups(
       excursions,
-      (e) => `${e.service.date}_${e.service.hotel_id ?? "none"}_${e.service.time}_${e.service.vessel ?? "excursion"}`,
+      (e) => e.service.direction === "arrival"
+        ? `${e.service.date}_${e.service.time}_${e.service.vessel ?? "excursion"}_arr`
+        : `${e.service.date}_${e.service.hotel_id ?? "none"}_${e.service.pickup_time ?? e.service.time}_${e.service.vessel ?? "excursion"}_dep`,
       (e) => {
         const title = e.service.vessel?.trim() || "Escursione";
-        const t = e.service.time?.slice(0, 5) ?? "";
+        const t = e.service.direction === "arrival"
+          ? (e.service.time?.slice(0, 5) ?? "")
+          : (e.service.pickup_time?.slice(0, 5) ?? e.service.time?.slice(0, 5) ?? "");
         return t ? `${title} · ${t}` : title;
       },
       "departure",
       "excursion"
     );
-    return [...arrGroups, ...excursionGroups, ...depGroups].sort((a, b) => {
+    return [...arrGroups, ...navettaGroups, ...excursionGroups, ...depGroups].sort((a, b) => {
       const af = a.entries[0]?.service;
       const bf = b.entries[0]?.service;
       if (!af || !bf) return 0;
@@ -1062,12 +1078,33 @@ function DriverPageInner() {
                                     {entry.service.vessel ? <p className="text-xs font-medium text-amber-700 mt-0.5">🚢 {entry.service.vessel}{entry.service.pickup_time ? ` · prelievo ${entry.service.pickup_time}` : ""}</p> : null}
                                   </>
                                 ) : isExcursionService(entry.service) ? (
+                                  entry.service.direction === "arrival" ? (
+                                    <>
+                                      <p className="text-xs text-slate-400 mt-0.5">{entry.service.pax} pax · ritorno porto</p>
+                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? ""}{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
+                                      {hotel && <p className="text-xs text-slate-500 mt-0.5">→ {hotel.name}</p>}
+                                    </>
+                                  ) : (
+                                    <>
+                                      <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? "Escursione"}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p>
+                                    </>
+                                  )
+                                ) : (
                                   <>
                                     <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
-                                    {entry.service.vessel ? <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p> : null}
+                                    {(() => {
+                                      const arrSched = getArrivalSchedule(entry.service);
+                                      const arrIschia = arrSched?.arrivalTime ?? null;
+                                      const arrPort = arrSched?.arrivalPort ? ferryPortLabel(arrSched.arrivalPort) : entry.service.meeting_point;
+                                      return (
+                                        <>
+                                          <p className="text-sm font-bold text-emerald-700 mt-0.5">⚓ {arrPort ?? "Porto N/D"}{arrIschia ? ` · arr. ${arrIschia}` : ""}</p>
+                                          {arrIschia && <p className="text-xs text-slate-400">partenza continente {entry.service.time?.slice(0,5)}</p>}
+                                        </>
+                                      );
+                                    })()}
                                   </>
-                                ) : (
-                                  <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax · {entry.service.time}</p>
                                 )}
                               </button>
                               {phone && (
@@ -1162,10 +1199,18 @@ function DriverPageInner() {
                                     {entry.service.vessel ? <p className="text-xs font-medium text-amber-700 mt-0.5">🚢 {entry.service.vessel}{entry.service.pickup_time ? ` · prelievo ${entry.service.pickup_time}` : ""}</p> : null}
                                   </>
                                 ) : isExcursionService(entry.service) ? (
-                                  <>
-                                    <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
-                                    {entry.service.vessel ? <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p> : null}
-                                  </>
+                                  entry.service.direction === "arrival" ? (
+                                    <>
+                                      <p className="text-xs text-slate-400 mt-0.5">{entry.service.pax} pax · ritorno porto</p>
+                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? ""}{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
+                                      {hotel && <p className="text-xs text-slate-500 mt-0.5">→ {hotel.name}</p>}
+                                    </>
+                                  ) : (
+                                    <>
+                                      <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? "Escursione"}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p>
+                                    </>
+                                  )
                                 ) : (
                                   <>
                                     <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
