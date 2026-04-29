@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { type MedmarRoute } from "@/lib/medmar-ar/types";
+import { expirePastDueRecoverableLegs } from "@/lib/server/medmar-ar-expiry";
 
 export const runtime = "nodejs";
 
@@ -21,6 +22,14 @@ function getVesselKeyword(route: string) {
 
 function normalizeTime(value: string | null | undefined) {
   return value ? value.slice(0, 5) : null;
+}
+
+function extractTaggedPriceCents(notes: string | null | undefined) {
+  if (!notes) return null;
+  const match = notes.match(/prezzo:([0-9]+(?:[.,][0-9]{1,2})?)\s*EUR/i);
+  if (!match?.[1]) return null;
+  const parsed = Number(match[1].replace(",", "."));
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 100) : null;
 }
 
 function bookingCandidateTimes(
@@ -56,12 +65,14 @@ type LegWithTicket = {
     route: string;
     pax_count: number;
     ticket_mode: string;
+    notes?: string | null;
   } | Array<{
     voucher_number: string;
     travel_date: string;
     route: string;
     pax_count: number;
     ticket_mode: string;
+    notes?: string | null;
   }> | null;
 };
 
@@ -241,6 +252,8 @@ export async function GET(request: NextRequest) {
     const { membership } = auth;
     const tenantId = membership.tenant_id;
 
+    await expirePastDueRecoverableLegs(admin, tenantId);
+
     const today = new Date().toISOString().slice(0, 10);
 
     const { data: legs, error: legsErr } = await admin
@@ -249,7 +262,7 @@ export async function GET(request: NextRequest) {
         id, leg_type, leg_time, leg_route, price_per_pax_cents, status,
         ticket_id,
         medmar_ar_tickets!inner (
-          voucher_number, travel_date, route, pax_count, ticket_mode
+          voucher_number, travel_date, route, pax_count, ticket_mode, notes
         )
       `)
       .eq("tenant_id", tenantId)
@@ -273,6 +286,9 @@ export async function GET(request: NextRequest) {
     for (const leg of (legs ?? []) as LegWithTicket[]) {
       const ticket = Array.isArray(leg.medmar_ar_tickets) ? leg.medmar_ar_tickets[0] : leg.medmar_ar_tickets;
       if (!ticket) continue;
+      const ticketTotalOverrideCents = extractTaggedPriceCents(ticket.notes);
+      const fallbackValueCents = leg.price_per_pax_cents * (ticket.pax_count ?? 1);
+      const valueCents = ticketTotalOverrideCents ?? fallbackValueCents;
 
       const travelDate = ticket.travel_date;
       const legTimeStr = normalizeTime(leg.leg_time);
@@ -314,24 +330,22 @@ export async function GET(request: NextRequest) {
           booking_service_kind: b.booking_service_kind,
         }));
 
-      if (matchedBookings.length > 0 || hoursToExpiry < 48) {
-        opportunities.push({
-          leg: {
-            id: leg.id,
-            ticket_id: leg.ticket_id,
-            leg_type: leg.leg_type,
-            leg_time: legTimeStr,
-            leg_route: leg.leg_route,
-            price_per_pax_cents: leg.price_per_pax_cents,
-            status: leg.status,
-            ticket,
-          },
-          matched_bookings: matchedBookings,
-          value_cents: leg.price_per_pax_cents * (ticket.pax_count ?? 1),
-          hours_to_expiry: Math.max(0, hoursToExpiry),
-          urgency,
-        });
-      }
+      opportunities.push({
+        leg: {
+          id: leg.id,
+          ticket_id: leg.ticket_id,
+          leg_type: leg.leg_type,
+          leg_time: legTimeStr,
+          leg_route: leg.leg_route,
+          price_per_pax_cents: leg.price_per_pax_cents,
+          status: leg.status,
+          ticket,
+        },
+        matched_bookings: matchedBookings,
+        value_cents: valueCents,
+        hours_to_expiry: Math.max(0, hoursToExpiry),
+        urgency,
+      });
     }
 
     opportunities.sort((a, b) => {

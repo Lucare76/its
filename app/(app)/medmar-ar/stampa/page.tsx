@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import {
   ROUTE_LABELS,
-  TICKET_MODE_LABELS,
   formatEur,
   type MedmarRoute,
 } from "@/lib/medmar-ar/types";
@@ -31,6 +30,7 @@ function StampaInner() {
   const firstOfYear = `${today.slice(0, 4)}-01-01`;
   const dateFrom = sp.get("date_from") ?? firstOfYear;
   const dateTo = sp.get("date_to") ?? today;
+  const kind = sp.get("kind") === "lost" || sp.get("kind") === "recovered" ? sp.get("kind") : "full";
 
   const [stats, setStats] = useState<MedmarArStats | null>(null);
   const [insights, setInsights] = useState<InsightsResponse | null>(null);
@@ -76,12 +76,14 @@ function StampaInner() {
   if (!stats) return null;
 
   const generatedAt = new Date().toLocaleDateString("it-IT", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const reportTitle = kind === "lost" ? "Report Biglietti Persi" : kind === "recovered" ? "Report Biglietti Recuperati" : "Report Medmar A/R";
+  const reportRows = kind === "lost" ? stats.lost_legs : stats.recovered_legs;
 
   return (
     <div className="report-root">
       {/* Toolbar — nascosta in stampa */}
       <div className="print:hidden fixed top-0 left-0 right-0 z-10 bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between shadow-sm">
-        <p className="text-sm font-semibold text-slate-700">Report Medmar A/R — {dateFrom} / {dateTo}</p>
+        <p className="text-sm font-semibold text-slate-700">{reportTitle} — {dateFrom} / {dateTo}</p>
         <div className="flex gap-2">
           <button
             onClick={() => window.print()}
@@ -105,7 +107,7 @@ function StampaInner() {
         <div className="border-b-2 border-indigo-600 pb-6">
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="text-3xl font-extrabold text-slate-900">Report Medmar A/R</h1>
+              <h1 className="text-3xl font-extrabold text-slate-900">{reportTitle}</h1>
               <p className="mt-1 text-slate-500 text-sm">
                 Periodo: {new Date(`${dateFrom}T00:00:00`).toLocaleDateString("it-IT", { day: "2-digit", month: "long", year: "numeric" })}
                 {" — "}
@@ -119,7 +121,7 @@ function StampaInner() {
           </div>
         </div>
 
-        {/* KPI principali */}
+        {kind === "full" && (
         <section className="space-y-4">
           <h2 className="text-lg font-bold text-slate-900 border-l-4 border-indigo-600 pl-3">KPI Periodo</h2>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -173,9 +175,9 @@ function StampaInner() {
             </div>
           </div>
         </section>
+        )}
 
-        {/* Trend mensile */}
-        {stats.monthly_trend.length > 0 && (
+        {kind === "full" && stats.monthly_trend.length > 0 && (
           <section className="space-y-4">
             <h2 className="text-lg font-bold text-slate-900 border-l-4 border-indigo-600 pl-3">Trend Mensile</h2>
             <table className="w-full text-sm border-collapse">
@@ -212,8 +214,7 @@ function StampaInner() {
           </section>
         )}
 
-        {/* Per tratta */}
-        {stats.by_route.length > 0 && (
+        {kind === "full" && stats.by_route.length > 0 && (
           <section className="space-y-4">
             <h2 className="text-lg font-bold text-slate-900 border-l-4 border-indigo-600 pl-3">Analisi per Tratta</h2>
             <table className="w-full text-sm border-collapse">
@@ -246,8 +247,7 @@ function StampaInner() {
           </section>
         )}
 
-        {/* Per operatore */}
-        {stats.by_operator.length > 0 && (
+        {kind === "full" && stats.by_operator.length > 0 && (
           <section className="space-y-4">
             <h2 className="text-lg font-bold text-slate-900 border-l-4 border-indigo-600 pl-3">Analisi per Operatore</h2>
             <table className="w-full text-sm border-collapse">
@@ -280,8 +280,7 @@ function StampaInner() {
           </section>
         )}
 
-        {/* Leve strategiche */}
-        {insights && insights.insights.length > 0 && (
+        {kind === "full" && insights && insights.insights.length > 0 && (
           <section className="space-y-4">
             <h2 className="text-lg font-bold text-slate-900 border-l-4 border-indigo-600 pl-3">Leve Strategiche</h2>
             <p className="text-sm text-slate-500">
@@ -320,6 +319,67 @@ function StampaInner() {
                 </div>
               ))}
             </div>
+          </section>
+        )}
+
+        {kind !== "full" && (
+          <section className="space-y-4">
+            <h2 className="text-lg font-bold text-slate-900 border-l-4 border-indigo-600 pl-3">
+              {kind === "lost" ? "Dettaglio tratte perse" : "Dettaglio tratte recuperate"}
+            </h2>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <div className="rounded-xl border border-slate-200 p-4">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Tratte</p>
+                <p className="mt-1 text-xl font-extrabold text-slate-900">{reportRows.length}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-4">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Valore totale</p>
+                <p className={`mt-1 text-xl font-extrabold ${kind === "lost" ? "text-rose-600" : "text-emerald-600"}`}>
+                  {formatEur(reportRows.reduce((sum, row) => sum + row.value_cents, 0))}
+                </p>
+              </div>
+            </div>
+
+            {reportRows.length === 0 ? (
+              <div className="rounded-xl border border-slate-200 p-6 text-sm text-slate-500">
+                Nessuna tratta {kind === "lost" ? "persa" : "recuperata"} nel periodo selezionato.
+              </div>
+            ) : (
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="bg-slate-50">
+                    <th className="border border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">Voucher</th>
+                    <th className="border border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">Data</th>
+                    <th className="border border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">Tratta</th>
+                    <th className="border border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">Tariffa</th>
+                    <th className="border border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">Tipo</th>
+                    <th className="border border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">Orario</th>
+                    <th className="border border-slate-200 px-3 py-2 text-right font-semibold text-slate-600">Pax</th>
+                    <th className="border border-slate-200 px-3 py-2 text-right font-semibold text-slate-600">Valore</th>
+                    <th className="border border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">Operatore</th>
+                    {kind === "recovered" && <th className="border border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">Prenotazione</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {reportRows.map((row) => (
+                    <tr key={row.id} className="hover:bg-slate-50">
+                      <td className="border border-slate-200 px-3 py-2">{row.voucher_number || "—"}</td>
+                      <td className="border border-slate-200 px-3 py-2">
+                        {row.travel_date ? new Date(`${row.travel_date}T00:00:00`).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
+                      </td>
+                      <td className="border border-slate-200 px-3 py-2">{ROUTE_LABELS[row.leg_route as MedmarRoute] ?? row.leg_route}</td>
+                      <td className="border border-slate-200 px-3 py-2">{row.tariff_label ?? "—"}</td>
+                      <td className="border border-slate-200 px-3 py-2">{row.leg_type === "outbound" ? "Andata" : "Ritorno"}</td>
+                      <td className="border border-slate-200 px-3 py-2">{row.leg_time ?? "—"}</td>
+                      <td className="border border-slate-200 px-3 py-2 text-right">{row.pax_count}</td>
+                      <td className={`border border-slate-200 px-3 py-2 text-right font-semibold ${kind === "lost" ? "text-rose-600" : "text-emerald-600"}`}>{formatEur(row.value_cents)}</td>
+                      <td className="border border-slate-200 px-3 py-2">{row.operator_name || "—"}</td>
+                      {kind === "recovered" && <td className="border border-slate-200 px-3 py-2">{row.reassigned_booking_id ?? "Manuale"}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </section>
         )}
 

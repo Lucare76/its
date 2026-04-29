@@ -35,6 +35,22 @@ function firstOfYear() {
   return `${todayIso().slice(0, 4)}-01-01`;
 }
 
+function extractTaggedNote(notes: string | null | undefined, tag: string) {
+  if (!notes) return null;
+  const match = notes.match(new RegExp(`${tag}:([^|\\n]+)`, "i"));
+  return match?.[1]?.trim() ?? null;
+}
+
+function upsertTaggedNote(notes: string, tag: string, value: string) {
+  const cleaned = notes
+    .split("|")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !part.toLowerCase().startsWith(`${tag.toLowerCase()}:`));
+  if (value.trim()) cleaned.push(`${tag}:${value.trim()}`);
+  return cleaned.join(" | ");
+}
+
 function isIslandToMainlandRoute(route: MedmarRoute) {
   return route === "ischia_pozzuoli"
     || route === "casamicciola_pozzuoli"
@@ -300,6 +316,7 @@ function TicketCard({
   onStatusChange: (legId: string, status: string) => void;
 }) {
   const legs = ticket.legs ?? [];
+  const tariffLabel = extractTaggedNote(ticket.notes, "tariffa");
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -325,6 +342,7 @@ function TicketCard({
           {ticket.outbound_time && <span>🛳️ Andata {ticket.outbound_time.slice(0, 5)}</span>}
           {ticket.return_time && <span>↩️ Ritorno {ticket.return_time.slice(0, 5)}</span>}
         </div>
+        {tariffLabel && <p className="text-slate-500">Tariffa: {tariffLabel}</p>}
       </div>
 
       <div className="flex items-center justify-between">
@@ -402,6 +420,8 @@ export default function MedmarArPage() {
   const [formMode, setFormMode] = useState<TicketMode | "">("");
   const [formOutbound, setFormOutbound] = useState("");
   const [formReturn, setFormReturn] = useState("");
+  const [formActualPrice, setFormActualPrice] = useState("");
+  const [formTariffLabel, setFormTariffLabel] = useState("");
   const [formNotes, setFormNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitMsg, setSubmitMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -754,6 +774,8 @@ export default function MedmarArPage() {
         setFormReturn("");
       }
       if (extracted.quantity) setFormPax(String(extracted.quantity));
+      if (extracted.price_cents !== null) setFormActualPrice((extracted.price_cents / 100).toFixed(2));
+      if (extracted.tariff_label) setFormTariffLabel(extracted.tariff_label);
       setFormVoucher(extracted.ticket_number ?? extracted.voucher_label ?? extracted.booking_code ?? `OCR-${Date.now()}`);
       setOcrRawText(extracted.raw_text || "");
 
@@ -782,6 +804,12 @@ export default function MedmarArPage() {
     const mode: TicketMode = isIslandToMainlandRoute(formRoute) ? "single_return" : "single_outbound";
     const outboundTime = mode === "single_outbound" ? formOutbound || null : null;
     const returnTime = mode === "single_return" ? formOutbound || null : null;
+    const normalizedActualPrice = formActualPrice.trim().replace(",", ".");
+    const parsedActualPrice = normalizedActualPrice ? Number(normalizedActualPrice) : NaN;
+    const actualTotalPriceCents = Number.isFinite(parsedActualPrice) && parsedActualPrice > 0
+      ? Math.round(parsedActualPrice * 100)
+      : null;
+    const finalNotes = upsertTaggedNote(formNotes.trim(), "tariffa", formTariffLabel);
 
     setSubmitting(true);
     setSubmitMsg(null);
@@ -797,7 +825,8 @@ export default function MedmarArPage() {
           ticket_mode: mode,
           outbound_time: outboundTime,
           return_time: returnTime,
-          notes: formNotes.trim() || null,
+          actual_total_price_cents: actualTotalPriceCents,
+          notes: finalNotes || null,
           archive_for_recovery: true,
           source: entryMode,
         }),
@@ -807,7 +836,7 @@ export default function MedmarArPage() {
     setSubmitting(false);
     if (res.ok && res.data) {
       setSubmitMsg({ type: "ok", text: `Ticket recuperabile caricato - ${formatEur(res.data.total_price_cents)} totale` });
-      setFormVoucher(""); setFormPax(""); setFormOutbound(""); setFormReturn(""); setFormNotes(""); setTicketPhoto(null); setOcrRawText("");
+      setFormVoucher(""); setFormPax(""); setFormOutbound(""); setFormReturn(""); setFormActualPrice(""); setFormTariffLabel(""); setFormNotes(""); setTicketPhoto(null); setOcrRawText("");
       void loadTickets();
       void loadOpportunities();
     } else {
@@ -846,7 +875,10 @@ export default function MedmarArPage() {
       { method: "PATCH", body: JSON.stringify({ leg_id: legId, status }) },
       token
     );
-    if (res.ok) void loadTickets();
+    if (res.ok) {
+      void loadTickets();
+      void loadOpportunities();
+    }
   };
 
   const handleMarkLost = async (legId: string) => {
@@ -886,10 +918,14 @@ export default function MedmarArPage() {
   };
 
   // Export Excel
-  const handleExport = async () => {
+  const handleExport = async (kind: "full" | "lost" | "recovered" = "full") => {
     if (!token) return;
     setExportingExcel(true);
-    const params = new URLSearchParams({ date_from: statsPeriodFrom, date_to: statsPeriodTo });
+    const params = new URLSearchParams({
+      date_from: statsPeriodFrom,
+      date_to: statsPeriodTo,
+      ...(kind !== "full" ? { kind } : {}),
+    });
     const res = await fetch(`/api/medmar-ar/export?${params}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -898,7 +934,11 @@ export default function MedmarArPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `medmar-ar_${statsPeriodFrom}_${statsPeriodTo}.xlsx`;
+      a.download = kind === "lost"
+        ? `medmar-ar_persi_${statsPeriodFrom}_${statsPeriodTo}.xlsx`
+        : kind === "recovered"
+          ? `medmar-ar_recuperati_${statsPeriodFrom}_${statsPeriodTo}.xlsx`
+          : `medmar-ar_${statsPeriodFrom}_${statsPeriodTo}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -1061,6 +1101,27 @@ export default function MedmarArPage() {
                   ))}
                 </select>
               </label>
+              <label className="text-xs font-medium text-slate-600">
+                Prezzo ticket €
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={formActualPrice}
+                  onChange={(e) => setFormActualPrice(e.target.value)}
+                  placeholder="Es. 10,25"
+                  className="mt-1 input-saas w-full"
+                />
+              </label>
+              <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+                Tariffa biglietto
+                <input
+                  type="text"
+                  value={formTariffLabel}
+                  onChange={(e) => setFormTariffLabel(e.target.value)}
+                  placeholder="Es. SPECIALE AR / ADULTO"
+                  className="mt-1 input-saas w-full"
+                />
+              </label>
               {(formMode === "round_trip") && (
                 <label className="text-xs font-medium text-slate-600 sm:col-span-2">
                   Orario ritorno *
@@ -1089,6 +1150,8 @@ export default function MedmarArPage() {
                 <p>Tratta: <span className="font-semibold text-slate-900">{ROUTE_LABELS[formRoute] ?? formRoute}</span></p>
                 <p>Data: <span className="font-semibold text-slate-900">{formDate || "Da compilare"}</span></p>
                 <p>Orario: <span className="font-semibold text-slate-900">{formOutbound || "Da compilare"}</span></p>
+                <p>Prezzo reale: <span className="font-semibold text-slate-900">{formActualPrice ? `€ ${formActualPrice}` : "Tariffa standard"}</span></p>
+                <p>Tariffa: <span className="font-semibold text-slate-900">{formTariffLabel || "Non indicata"}</span></p>
                 <p>Ingresso: <span className="font-semibold text-slate-900">{entryMode === "ocr" ? "Foto + OCR" : "Manuale"}</span></p>
               </div>
             </div>
@@ -1311,7 +1374,7 @@ export default function MedmarArPage() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-slate-600">
-              Tratte disponibili per riassegnazione con prenotazioni compatibili
+              Tutte le tratte disponibili per recupero, con eventuali prenotazioni compatibili
             </p>
             <button type="button" onClick={() => void loadOpportunities()} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
               ↻ Aggiorna
@@ -1393,17 +1456,42 @@ export default function MedmarArPage() {
                         </button>
                       </div>
                     ))}
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); void handleLegStatus(opp.leg.id, "used"); }}
+                        className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
+                      >
+                        Segna come recuperata
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); void handleMarkLost(opp.leg.id); }}
+                        className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100"
+                      >
+                        Segna come persa
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="border-t border-slate-200 pt-3">
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); void handleMarkLost(opp.leg.id); }}
-                      className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100"
-                    >
-                      Segna come persa
-                    </button>
-                    <p className="text-xs text-slate-400">Nessuna prenotazione compatibile trovata — tratta a rischio perdita.</p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); void handleLegStatus(opp.leg.id, "used"); }}
+                        className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
+                      >
+                        Segna come recuperata
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); void handleMarkLost(opp.leg.id); }}
+                        className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100"
+                      >
+                        Segna come persa
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-400">Nessuna prenotazione compatibile trovata: puoi comunque chiudere manualmente la tratta.</p>
                   </div>
                 )}
               </div>
@@ -1431,20 +1519,38 @@ export default function MedmarArPage() {
             <button
               type="button"
               disabled={exportingExcel}
-              onClick={() => void handleExport()}
+              onClick={() => void handleExport("lost")}
+              className="rounded-xl border border-rose-300 px-4 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+            >
+              {exportingExcel ? "Esportando..." : "⬇ Report Persi"}
+            </button>
+            <button
+              type="button"
+              disabled={exportingExcel}
+              onClick={() => void handleExport("recovered")}
               className="rounded-xl border border-emerald-600 px-4 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
             >
-              {exportingExcel ? "Esportando..." : "⬇ Export Excel"}
+              {exportingExcel ? "Esportando..." : "⬇ Report Recuperati"}
             </button>
             <button
               type="button"
               onClick={() => {
-                const params = new URLSearchParams({ date_from: statsPeriodFrom, date_to: statsPeriodTo });
+                const params = new URLSearchParams({ date_from: statsPeriodFrom, date_to: statsPeriodTo, kind: "lost" });
                 window.open(`/medmar-ar/stampa?${params}`, "_blank");
               }}
-              className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+              className="rounded-xl border border-rose-300 px-4 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50"
             >
-              🖨️ Stampa / PDF
+              🖨️ PDF Persi
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const params = new URLSearchParams({ date_from: statsPeriodFrom, date_to: statsPeriodTo, kind: "recovered" });
+                window.open(`/medmar-ar/stampa?${params}`, "_blank");
+              }}
+              className="rounded-xl border border-emerald-300 px-4 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-50"
+            >
+              🖨️ PDF Recuperati
             </button>
           </div>
 

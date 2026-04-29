@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { ROUTE_LABELS, type MedmarRoute } from "@/lib/medmar-ar/types";
 import { type SupabaseClient } from "@supabase/supabase-js";
+import { expirePastDueRecoverableLegs } from "@/lib/server/medmar-ar-expiry";
 
 type InsightTicketRow = {
   id: string;
@@ -71,6 +72,8 @@ export async function GET(request: NextRequest) {
   const admin = auth.admin as SupabaseClient;
   const { membership } = auth;
   const tenantId = membership.tenant_id;
+
+  await expirePastDueRecoverableLegs(admin, tenantId);
 
   const today = new Date().toISOString().slice(0, 10);
   const year = today.slice(0, 4);

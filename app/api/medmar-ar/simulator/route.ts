@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { type SupabaseClient } from "@supabase/supabase-js";
+import { expirePastDueRecoverableLegs } from "@/lib/server/medmar-ar-expiry";
 import {
   aggregateYTD,
   computeReturnUsageProbability,
@@ -64,6 +65,8 @@ export async function GET(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
   const admin = auth.admin as SupabaseClient;
   const tenantId = auth.membership.tenant_id;
+
+  await expirePastDueRecoverableLegs(admin, tenantId);
 
   const today = new Date().toISOString().slice(0, 10);
   const year = parseInt(today.slice(0, 4));

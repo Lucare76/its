@@ -29,6 +29,8 @@ export type ExportLegRow = {
   status_changed_at: string | null;
 };
 
+export type MedmarExportKind = "full" | "lost" | "recovered";
+
 function eur(cents: number) {
   return cents / 100;
 }
@@ -49,6 +51,70 @@ type OperatorSummaryRow = {
   value: number;
   lost: number;
 };
+
+type LegDetailRow = {
+  voucher: string;
+  travel_date: string;
+  route: string;
+  tariff: string;
+  leg_type: string;
+  leg_route: string;
+  leg_time: string;
+  pax: number;
+  value: number;
+  status_changed_at: string;
+  booking_id: string;
+  operator: string;
+};
+
+function buildLegDetails(
+  ticketList: ExportTicketRow[],
+  legList: ExportLegRow[],
+  operatorNames: Record<string, string>,
+  status: "lost" | "reassigned" | "used",
+): LegDetailRow[] {
+  const ticketById = new Map(ticketList.map((ticket) => [ticket.id, ticket]));
+
+  return legList
+    .filter((leg) => leg.status === status)
+    .map((leg) => {
+      const ticket = ticketById.get(leg.ticket_id);
+      const pax = ticket?.pax_count ?? 0;
+      return {
+        voucher: ticket?.voucher_number ?? leg.ticket_id,
+        travel_date: ticket?.travel_date ?? "",
+        route: ROUTE_LABELS[ticket?.route as MedmarRoute] ?? ticket?.route ?? "",
+        tariff: extractTaggedNote(ticket?.notes, "tariffa"),
+        leg_type: leg.leg_type === "outbound" ? "Andata" : "Ritorno",
+        leg_route: ROUTE_LABELS[leg.leg_route as MedmarRoute] ?? leg.leg_route,
+        leg_time: leg.leg_time ? String(leg.leg_time).slice(0, 5) : "",
+        pax,
+        value: eur(leg.price_per_pax_cents * pax),
+        status_changed_at: leg.status_changed_at ? new Date(leg.status_changed_at).toLocaleString("it-IT") : "",
+        booking_id: leg.reassigned_booking_id ?? "",
+        operator: inputOperatorName(ticket?.issuing_operator_id ?? null, operatorNames),
+      };
+    })
+    .sort((a, b) => a.travel_date.localeCompare(b.travel_date) || a.voucher.localeCompare(b.voucher));
+}
+
+function inputOperatorName(
+  operatorId: string | null,
+  operatorNames: Record<string, string>,
+) {
+  if (!operatorId) return "";
+  return operatorNames[operatorId] ?? operatorId;
+}
+
+function extractTaggedNote(notes: string | null | undefined, tag: string) {
+  if (!notes) return "";
+  const match = notes.match(new RegExp(`${tag}:([^|\\n]+)`, "i"));
+  return match?.[1]?.trim() ?? "";
+}
+
+function isRecoveredLeg(leg: ExportLegRow) {
+  return leg.status === "reassigned" || (leg.status === "used" && Boolean(leg.status_changed_at));
+}
 
 export function summarizeRoutes(ticketList: ExportTicketRow[], legList: ExportLegRow[]): RouteSummaryRow[] {
   const routeMap: Record<string, { tickets: number; value: number; lost: number }> = {};
@@ -116,10 +182,63 @@ export function buildMedmarExportWorkbook(input: {
   ticketList: ExportTicketRow[];
   legList: ExportLegRow[];
   operatorNames: Record<string, string>;
+  kind?: MedmarExportKind;
 }) {
   const wb = new ExcelJS.Workbook();
   wb.creator = "ITS Medmar A/R";
   wb.created = new Date();
+  const kind = input.kind ?? "full";
+
+  if (kind === "lost") {
+    const wsPerse = wb.addWorksheet("Perse");
+    wsPerse.columns = [
+      { header: "Voucher", key: "voucher", width: 16 },
+      { header: "Data viaggio", key: "travel_date", width: 14 },
+      { header: "Tratta ticket", key: "route", width: 28 },
+      { header: "Tariffa", key: "tariff", width: 22 },
+      { header: "Tipo tratta", key: "leg_type", width: 14 },
+      { header: "Tratta persa", key: "leg_route", width: 28 },
+      { header: "Orario", key: "leg_time", width: 10 },
+      { header: "Pax", key: "pax", width: 8 },
+      { header: "Valore €", key: "value", width: 12 },
+      { header: "Aggiornata il", key: "status_changed_at", width: 20 },
+      { header: "Operatore", key: "operator", width: 22 },
+    ];
+    styleHeader(wsPerse);
+    for (const row of buildLegDetails(input.ticketList, input.legList, input.operatorNames, "lost")) {
+      wsPerse.addRow(row);
+    }
+    formatCurrencyCols(wsPerse, ["value"]);
+    return wb;
+  }
+
+  if (kind === "recovered") {
+    const wsRecuperate = wb.addWorksheet("Recuperate");
+    wsRecuperate.columns = [
+      { header: "Voucher", key: "voucher", width: 16 },
+      { header: "Data viaggio", key: "travel_date", width: 14 },
+      { header: "Tratta ticket", key: "route", width: 28 },
+      { header: "Tariffa", key: "tariff", width: 22 },
+      { header: "Tipo tratta", key: "leg_type", width: 14 },
+      { header: "Tratta recuperata", key: "leg_route", width: 28 },
+      { header: "Orario", key: "leg_time", width: 10 },
+      { header: "Pax", key: "pax", width: 8 },
+      { header: "Valore €", key: "value", width: 12 },
+      { header: "Prenotazione ass.", key: "booking_id", width: 36 },
+      { header: "Aggiornata il", key: "status_changed_at", width: 20 },
+      { header: "Operatore", key: "operator", width: 22 },
+    ];
+    styleHeader(wsRecuperate);
+    const recoveredLegs = input.legList.filter((leg) => isRecoveredLeg(leg));
+    for (const row of buildLegDetails(input.ticketList, recoveredLegs, input.operatorNames, "reassigned")) {
+      wsRecuperate.addRow(row);
+    }
+    for (const row of buildLegDetails(input.ticketList, recoveredLegs, input.operatorNames, "used")) {
+      wsRecuperate.addRow(row);
+    }
+    formatCurrencyCols(wsRecuperate, ["value"]);
+    return wb;
+  }
 
   const wsBiglietti = wb.addWorksheet("Biglietti");
   wsBiglietti.columns = [

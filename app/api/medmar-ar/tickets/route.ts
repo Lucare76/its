@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { DEFAULT_PRICES_CENTS, type MedmarRoute, type PriceType } from "@/lib/medmar-ar/types";
+import { expirePastDueRecoverableLegs } from "@/lib/server/medmar-ar-expiry";
 
 export const runtime = "nodejs";
 
@@ -30,6 +31,8 @@ export async function GET(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
   const { admin, membership } = auth;
   const tenantId = membership.tenant_id;
+
+  await expirePastDueRecoverableLegs(admin, tenantId);
 
   const url = new URL(request.url);
   const dateFrom = url.searchParams.get("date_from") ?? new Date().toISOString().slice(0, 10);
@@ -83,6 +86,7 @@ const createTicketSchema = z.object({
   return_time: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
   booking_ids: z.array(z.string().uuid()).optional().default([]),
   notes: z.string().max(500).nullable().optional(),
+  actual_total_price_cents: z.number().int().positive().nullable().optional(),
   archive_for_recovery: z.boolean().optional().default(false),
   source: z.enum(["manual", "ocr"]).optional().default("manual"),
 });
@@ -143,8 +147,13 @@ export async function POST(request: NextRequest) {
 
   let unitPriceCents: number;
   let totalCents: number;
+  const legCountPerTicket = d.ticket_mode === "round_trip" ? 2 : 1;
+  const overrideTotalCents = d.actual_total_price_cents ?? null;
 
-  if (d.pax_count >= 12) {
+  if (overrideTotalCents) {
+    totalCents = overrideTotalCents;
+    unitPriceCents = Math.max(1, Math.round(overrideTotalCents / Math.max(1, d.pax_count * legCountPerTicket)));
+  } else if (d.pax_count >= 12) {
     unitPriceCents = prices.single_trip_12_or_more;
     totalCents = unitPriceCents * d.pax_count;
   } else if (d.ticket_mode === "round_trip") {
@@ -184,8 +193,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: ticketErr?.message ?? "Errore creazione biglietto." }, { status: 500 });
   }
 
-  const singlePrice = d.pax_count >= 12 ? prices.single_trip_12_or_more : prices.single_trip_under_12;
-  const arPrice = d.pax_count >= 12 ? prices.single_trip_12_or_more : prices.round_trip_per_leg;
+  const singlePrice = overrideTotalCents
+    ? Math.max(1, Math.round(overrideTotalCents / Math.max(1, d.pax_count)))
+    : d.pax_count >= 12
+      ? prices.single_trip_12_or_more
+      : prices.single_trip_under_12;
+  const arPrice = overrideTotalCents
+    ? Math.max(1, Math.round(overrideTotalCents / Math.max(1, d.pax_count * 2)))
+    : d.pax_count >= 12
+      ? prices.single_trip_12_or_more
+      : prices.round_trip_per_leg;
   const archivedStatus = d.archive_for_recovery ? "available_for_reassignment" : "used";
   const defaultStatus = d.archive_for_recovery ? "available_for_reassignment" : "used";
   const returnRoute = getReturnRoute(d.route);

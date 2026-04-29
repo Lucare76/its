@@ -5,11 +5,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { type SupabaseClient } from "@supabase/supabase-js";
+import { expirePastDueRecoverableLegs } from "@/lib/server/medmar-ar-expiry";
 
 export const runtime = "nodejs";
 
 type TicketRow = {
   id: string;
+  voucher_number: string;
   travel_date: string;
   route: string;
   pax_count: number;
@@ -17,6 +19,7 @@ type TicketRow = {
   total_price_cents: number;
   unit_price_cents: number;
   issuing_operator_id: string | null;
+  notes?: string | null;
 };
 
 type LegRow = {
@@ -28,12 +31,30 @@ type LegRow = {
   price_per_pax_cents: number;
   status: string;
   reassigned_booking_id: string | null;
+  status_changed_at: string | null;
 };
 
 type MemberRow = {
   user_id: string;
   full_name: string | null;
 };
+
+export interface MedmarArLegDetail {
+  id: string;
+  ticket_id: string;
+  voucher_number: string;
+  travel_date: string;
+  route: string;
+  tariff_label: string | null;
+  leg_type: string;
+  leg_route: string;
+  leg_time: string | null;
+  pax_count: number;
+  value_cents: number;
+  operator_name: string;
+  reassigned_booking_id: string | null;
+  status_changed_at: string | null;
+}
 
 export interface MedmarArStats {
   period: { from: string; to: string };
@@ -89,6 +110,18 @@ export interface MedmarArStats {
     has_match: boolean;
     hours_to_expiry: number;
   }>;
+  lost_legs: MedmarArLegDetail[];
+  recovered_legs: MedmarArLegDetail[];
+}
+
+function isRecoveredLeg(leg: Pick<LegRow, "status" | "status_changed_at">) {
+  return leg.status === "reassigned" || (leg.status === "used" && Boolean(leg.status_changed_at));
+}
+
+function extractTaggedNote(notes: string | null | undefined, tag: string) {
+  if (!notes) return null;
+  const match = notes.match(new RegExp(`${tag}:([^|\\n]+)`, "i"));
+  return match?.[1]?.trim() ?? null;
 }
 
 export async function GET(request: NextRequest) {
@@ -97,6 +130,8 @@ export async function GET(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
   const admin = auth.admin as SupabaseClient;
   const tenantId = auth.membership.tenant_id;
+
+  await expirePastDueRecoverableLegs(admin, tenantId);
 
   const url = new URL(request.url);
   const today = new Date().toISOString().slice(0, 10);
@@ -107,13 +142,14 @@ export async function GET(request: NextRequest) {
   // ── Biglietti nel periodo ──────────────────────────────────────────────────
   const { data: tickets } = await admin
     .from("medmar_ar_tickets")
-    .select("id, travel_date, route, pax_count, ticket_mode, total_price_cents, unit_price_cents, issuing_operator_id")
+    .select("id, voucher_number, travel_date, route, pax_count, ticket_mode, total_price_cents, unit_price_cents, issuing_operator_id, notes")
     .eq("tenant_id", tenantId)
     .gte("travel_date", dateFrom)
     .lte("travel_date", dateTo)
     .eq("is_test_data", false);
 
   const ticketList = (tickets ?? []) as TicketRow[];
+  const ticketById = new Map(ticketList.map((ticket) => [ticket.id, ticket]));
 
   // ── Legs nel periodo ──────────────────────────────────────────────────────
   const ticketIds = ticketList.map((t) => t.id);
@@ -121,7 +157,7 @@ export async function GET(request: NextRequest) {
   if (ticketIds.length > 0) {
     const { data: legs } = await admin
       .from("medmar_ar_ticket_legs")
-      .select("id, ticket_id, leg_type, leg_time, leg_route, price_per_pax_cents, status, reassigned_booking_id")
+      .select("id, ticket_id, leg_type, leg_time, leg_route, price_per_pax_cents, status, reassigned_booking_id, status_changed_at")
       .eq("tenant_id", tenantId)
       .in("ticket_id", ticketIds);
     legList = (legs ?? []) as LegRow[];
@@ -139,11 +175,11 @@ export async function GET(request: NextRequest) {
     legsKpi.total++;
     legsKpi[l.status as keyof typeof legsKpi] = (legsKpi[l.status as keyof typeof legsKpi] ?? 0) + 1;
     if (l.status === "lost") {
-      const ticket = ticketList.find((t) => t.id === l.ticket_id);
+      const ticket = ticketById.get(l.ticket_id);
       valueLostCents += l.price_per_pax_cents * (ticket?.pax_count ?? 1);
     }
-    if (l.status === "reassigned") {
-      const ticket = ticketList.find((t) => t.id === l.ticket_id);
+    if (isRecoveredLeg(l)) {
+      const ticket = ticketById.get(l.ticket_id);
       valueRecoveredCents += l.price_per_pax_cents * (ticket?.pax_count ?? 1);
     }
   }
@@ -164,12 +200,12 @@ export async function GET(request: NextRequest) {
     monthMap[m].value += t.total_price_cents;
   }
   for (const l of legList) {
-    const ticket = ticketList.find((t) => t.id === l.ticket_id);
+    const ticket = ticketById.get(l.ticket_id);
     if (!ticket) continue;
     const m = ticket.travel_date.slice(0, 7);
     if (!monthMap[m]) monthMap[m] = { tickets: 0, value: 0, lost: 0, recovered: 0 };
     if (l.status === "lost") monthMap[m].lost += l.price_per_pax_cents * ticket.pax_count;
-    if (l.status === "reassigned") monthMap[m].recovered += l.price_per_pax_cents * ticket.pax_count;
+    if (isRecoveredLeg(l)) monthMap[m].recovered += l.price_per_pax_cents * ticket.pax_count;
   }
   const monthly_trend = Object.entries(monthMap)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -190,7 +226,7 @@ export async function GET(request: NextRequest) {
   }
   for (const l of legList) {
     if (l.status !== "lost") continue;
-    const ticket = ticketList.find((t) => t.id === l.ticket_id);
+    const ticket = ticketById.get(l.ticket_id);
     if (!ticket) continue;
     if (!routeMap[ticket.route]) routeMap[ticket.route] = { tickets: 0, value: 0, lost: 0 };
     routeMap[ticket.route].lost += l.price_per_pax_cents * ticket.pax_count;
@@ -220,7 +256,7 @@ export async function GET(request: NextRequest) {
   }
   for (const l of legList) {
     if (l.status !== "lost") continue;
-    const ticket = ticketList.find((t) => t.id === l.ticket_id);
+    const ticket = ticketById.get(l.ticket_id);
     if (!ticket) continue;
     const oid = ticket.issuing_operator_id ?? "unknown";
     if (!opMap[oid]) opMap[oid] = { tickets: 0, rt: 0, lost: 0 };
@@ -234,11 +270,57 @@ export async function GET(request: NextRequest) {
     lost_cents: d.lost,
   }));
 
+  const lost_legs: MedmarArLegDetail[] = legList
+    .filter((leg) => leg.status === "lost")
+    .map((leg) => {
+      const ticket = ticketById.get(leg.ticket_id);
+      const paxCount = ticket?.pax_count ?? 0;
+      return {
+        id: leg.id,
+        ticket_id: leg.ticket_id,
+        voucher_number: ticket?.voucher_number ?? "",
+        travel_date: ticket?.travel_date ?? "",
+        route: ticket?.route ?? "",
+        tariff_label: extractTaggedNote(ticket?.notes, "tariffa"),
+        leg_type: leg.leg_type,
+        leg_route: leg.leg_route,
+        leg_time: leg.leg_time ? String(leg.leg_time).slice(0, 5) : null,
+        pax_count: paxCount,
+        value_cents: leg.price_per_pax_cents * paxCount,
+        operator_name: operatorNames[ticket?.issuing_operator_id ?? ""] ?? ticket?.issuing_operator_id ?? "",
+        reassigned_booking_id: leg.reassigned_booking_id,
+        status_changed_at: leg.status_changed_at,
+      };
+    });
+
+  const recovered_legs: MedmarArLegDetail[] = legList
+    .filter((leg) => isRecoveredLeg(leg))
+    .map((leg) => {
+      const ticket = ticketById.get(leg.ticket_id);
+      const paxCount = ticket?.pax_count ?? 0;
+      return {
+        id: leg.id,
+        ticket_id: leg.ticket_id,
+        voucher_number: ticket?.voucher_number ?? "",
+        travel_date: ticket?.travel_date ?? "",
+        route: ticket?.route ?? "",
+        tariff_label: extractTaggedNote(ticket?.notes, "tariffa"),
+        leg_type: leg.leg_type,
+        leg_route: leg.leg_route,
+        leg_time: leg.leg_time ? String(leg.leg_time).slice(0, 5) : null,
+        pax_count: paxCount,
+        value_cents: leg.price_per_pax_cents * paxCount,
+        operator_name: operatorNames[ticket?.issuing_operator_id ?? ""] ?? ticket?.issuing_operator_id ?? "",
+        reassigned_booking_id: leg.reassigned_booking_id,
+        status_changed_at: leg.status_changed_at,
+      };
+    });
+
   // ── Legs in scadenza (< 48h, ancora disponibili) ──────────────────────────
   const expiringLegs = legList
     .filter((l) => l.status === "available_for_reassignment")
     .map((l) => {
-      const ticket = ticketList.find((t) => t.id === l.ticket_id);
+      const ticket = ticketById.get(l.ticket_id);
       if (!ticket) return null;
       const travelDt = new Date(`${ticket.travel_date}T${l.leg_time ? String(l.leg_time).slice(0, 5) : "23:59"}:00`);
       const hoursLeft = (travelDt.getTime() - Date.now()) / (1000 * 60 * 60);
@@ -273,6 +355,8 @@ export async function GET(request: NextRequest) {
     by_route,
     by_operator,
     expiring_legs: expiringLegs,
+    lost_legs,
+    recovered_legs,
   };
 
   return NextResponse.json({ ok: true, stats });

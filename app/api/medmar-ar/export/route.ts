@@ -5,7 +5,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { type SupabaseClient } from "@supabase/supabase-js";
-import { buildMedmarExportWorkbook, type ExportLegRow, type ExportTicketRow } from "@/lib/medmar-ar/export-workbook";
+import { buildMedmarExportWorkbook, type ExportLegRow, type ExportTicketRow, type MedmarExportKind } from "@/lib/medmar-ar/export-workbook";
+import { expirePastDueRecoverableLegs } from "@/lib/server/medmar-ar-expiry";
 
 type MemberRow = {
   user_id: string;
@@ -22,11 +23,15 @@ export async function GET(request: NextRequest) {
   const { membership } = auth;
   const tenantId = membership.tenant_id;
 
+  await expirePastDueRecoverableLegs(admin, tenantId);
+
   const url = new URL(request.url);
   const today = new Date().toISOString().slice(0, 10);
   const firstOfYear = `${today.slice(0, 4)}-01-01`;
   const dateFrom = url.searchParams.get("date_from") ?? firstOfYear;
   const dateTo = url.searchParams.get("date_to") ?? today;
+  const kindParam = url.searchParams.get("kind");
+  const kind: MedmarExportKind = kindParam === "lost" || kindParam === "recovered" ? kindParam : "full";
 
   const { data: tickets } = await admin
     .from("medmar_ar_tickets")
@@ -65,11 +70,16 @@ export async function GET(request: NextRequest) {
     ticketList,
     legList,
     operatorNames,
+    kind,
   });
 
   // ── Serializza e restituisce ─────────────────────────────────────────────────
   const buffer = await wb.xlsx.writeBuffer();
-  const filename = `medmar-ar_${dateFrom}_${dateTo}.xlsx`;
+  const filename = kind === "lost"
+    ? `medmar-ar_persi_${dateFrom}_${dateTo}.xlsx`
+    : kind === "recovered"
+      ? `medmar-ar_recuperati_${dateFrom}_${dateTo}.xlsx`
+      : `medmar-ar_${dateFrom}_${dateTo}.xlsx`;
 
   return new NextResponse(buffer as unknown as BodyInit, {
     headers: {
