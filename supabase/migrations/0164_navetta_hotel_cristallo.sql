@@ -71,7 +71,7 @@ begin
           status, is_draft
         ) values (
           v_tenant, v_date, v_time::time,
-          'transfer', v_stype,
+          'transfer'::service_type, v_stype::service_direction,
           'Hotel Cristallo', 1,
           v_hotel, 'Navetta',
           'navetta',
