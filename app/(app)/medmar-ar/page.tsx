@@ -886,9 +886,15 @@ export default function MedmarArPage() {
 
             {entryMode === "ocr" && (
               <div className="rounded-2xl border border-dashed border-indigo-200 bg-indigo-50 p-4 space-y-3">
-                <p className="text-xs text-indigo-700">Carica il ticket non utilizzato e usa l&apos;OCR per precompilare i dati.</p>
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-indigo-900">Foto del ticket non utilizzato</p>
+                  <p className="text-xs text-indigo-700">Carica la foto e usa l&apos;OCR per precompilare i dati. Poi verifica i campi prima del salvataggio.</p>
+                </div>
                 <input type="file" accept="image/*" onChange={(e) => setTicketPhoto(e.target.files?.[0] ?? null)} className="block w-full text-sm text-slate-600" />
                 {ocrError && <p className="text-xs text-rose-600">{ocrError}</p>}
+                {ticketPhoto && !ocrExtracting && (
+                  <p className="text-xs text-emerald-700">Foto pronta: {ticketPhoto.name}</p>
+                )}
                 <button type="button" onClick={() => void handleExtractTicket()} disabled={ocrExtracting || !ticketPhoto} className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700 disabled:opacity-50">
                   {ocrExtracting ? "Estrazione in corso..." : "Estrai dati dal ticket"}
                 </button>
@@ -915,7 +921,7 @@ export default function MedmarArPage() {
                 <input
                   value={formVoucher}
                   onChange={(e) => setFormVoucher(e.target.value)}
-                  placeholder="Es. V2025-001"
+                  placeholder="Es. voucher, ticket number, booking code"
                   className="mt-1 input-saas w-full"
                 />
               </label>
@@ -934,7 +940,7 @@ export default function MedmarArPage() {
                   min="1"
                   value={formPax}
                   onChange={(e) => setFormPax(e.target.value)}
-                  placeholder="Es. 4"
+                  placeholder="Es. 2"
                   className="mt-1 input-saas w-full"
                 />
               </label>
@@ -969,40 +975,86 @@ export default function MedmarArPage() {
               </label>
             </div>
 
-            {true && (
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={() => void handleEmit()}
-                className="w-full rounded-xl bg-indigo-600 py-2.5 text-sm font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {submitting ? "Caricamento in corso..." : "Salva tra i biglietti da recuperare"}
-              </button>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Anteprima archiviazione</p>
+              <div className="mt-2 space-y-1 text-sm text-slate-600">
+                <p>Tratta: <span className="font-semibold text-slate-900">{ROUTE_LABELS[formRoute] ?? formRoute}</span></p>
+                <p>Data: <span className="font-semibold text-slate-900">{formDate || "Da compilare"}</span></p>
+                <p>Orario: <span className="font-semibold text-slate-900">{formOutbound || "Da compilare"}</span></p>
+                <p>Ingresso: <span className="font-semibold text-slate-900">{entryMode === "ocr" ? "Foto + OCR" : "Manuale"}</span></p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => void handleEmit()}
+              className="w-full rounded-xl bg-indigo-600 py-2.5 text-sm font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {submitting ? "Caricamento in corso..." : "Salva tra i biglietti da recuperare"}
+            </button>
+
+            {submitMsg?.type === "ok" && (
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleTabChange("recupero")}
+                  className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                >
+                  Vai a Recupero
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleTabChange("biglietti")}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Vai a Biglietti
+                </button>
+              </div>
             )}
           </div>
 
-          {/* Decision Helper */}
+          {/* Supporto decisionale */}
           <div className="space-y-4">
             {formPax && parseInt(formPax) > 0 ? (
-              <DecisionHelper
-                scenarios={decisionData?.scenarios ?? []}
-                probability={decisionData?.probability ?? 0.5}
-                sampleSize={decisionData?.sampleSize ?? 0}
-                timeSignals={decisionData?.timeSignals ?? []}
-                loading={decisionLoading}
-                onSelect={(mode) => {
-                  if (mode === "pending_group") {
-                    void handlePendingGroup();
-                  } else {
-                    setFormMode(mode);
-                    void handleEmit(mode);
-                  }
-                }}
-              />
+              <>
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <h3 className="text-sm font-bold text-slate-900">Come usare questo tab</h3>
+                  <div className="mt-3 space-y-2 text-sm text-slate-600">
+                    <p>1. Carica la foto oppure inserisci il ticket a mano.</p>
+                    <p>2. Verifica tratta, data, orario e passeggeri.</p>
+                    <p>3. Salva il ticket e passa a Recupero per vedere i clienti compatibili.</p>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+                  <p className="text-sm font-bold text-amber-900">Esito operativo previsto</p>
+                  <p className="mt-2 text-sm text-amber-800">
+                    {isIslandToMainlandRoute(formRoute)
+                      ? "Il ticket verra archiviato come solo ritorno recuperabile."
+                      : "Il ticket verra archiviato come sola andata recuperabile."}
+                  </p>
+                </div>
+
+                <DecisionHelper
+                  scenarios={decisionData?.scenarios ?? []}
+                  probability={decisionData?.probability ?? 0.5}
+                  sampleSize={decisionData?.sampleSize ?? 0}
+                  timeSignals={decisionData?.timeSignals ?? []}
+                  loading={decisionLoading}
+                  onSelect={(mode) => {
+                    if (mode === "pending_group") {
+                      void handlePendingGroup();
+                    } else {
+                      setFormMode(mode);
+                    }
+                  }}
+                />
+              </>
             ) : (
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center">
                 <p className="text-sm text-slate-400">
-                  Inserisci tratta e numero passeggeri per vedere il suggerimento economico
+                  Inserisci tratta e numero passeggeri per vedere il supporto economico e l&apos;esito operativo.
                 </p>
               </div>
             )}
