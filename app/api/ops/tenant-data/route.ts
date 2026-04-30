@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
 
     const [servicesResult, assignmentsResult, busLotConfigsResult, statusEventsResult, hotelsResult, membershipsResult, inboundResult] =
       await Promise.all([
-        auth.admin.from("services").select("*").eq("tenant_id", auth.membership.tenant_id),
+        auth.admin.from("services").select("*").eq("tenant_id", auth.membership.tenant_id).limit(50000),
         auth.admin.from("assignments").select("*").eq("tenant_id", auth.membership.tenant_id),
         (async () => {
           const result = await auth.admin.from("bus_lot_configs").select("*").eq("tenant_id", auth.membership.tenant_id);
