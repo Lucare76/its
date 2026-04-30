@@ -6,6 +6,7 @@ import { STATEMENT_AGENCY_NAMES } from "@/lib/server/statement-agencies";
 import { sendOperationalReportEmail, type ReportJobType } from "@/lib/server/report-job-email";
 import { auditLog } from "@/lib/server/ops-audit";
 import { type Service } from "@/lib/types";
+import { fetchAllServices } from "@/lib/server/fetch-all-services";
 
 export const runtime = "nodejs";
 
@@ -65,7 +66,7 @@ export async function POST(request: NextRequest) {
   const today = body?.today ?? new Date().toISOString().slice(0, 10);
 
   const [{ data: services, error: servicesError }, settings] = await Promise.all([
-    auth.admin.from("services").select("*").eq("tenant_id", auth.membership.tenant_id).limit(2000),
+    fetchAllServices(auth.admin, auth.membership.tenant_id),
     readOperationalSettings(auth.admin, auth.membership.tenant_id)
   ]);
 
@@ -125,7 +126,7 @@ export async function PATCH(request: NextRequest) {
       .eq("status", "planned")
       .order("created_at", { ascending: true })
       .limit(requestedLimit),
-    auth.admin.from("services").select("*").eq("tenant_id", auth.membership.tenant_id).limit(2000),
+    fetchAllServices(auth.admin, auth.membership.tenant_id),
     readOperationalSettings(auth.admin, auth.membership.tenant_id)
   ]);
 

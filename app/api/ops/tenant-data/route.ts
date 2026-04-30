@@ -1,27 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import type { SupabaseClient } from "@supabase/supabase-js";
-
-export const runtime = "nodejs";
-
-async function fetchAllServices(admin: SupabaseClient, tenantId: string) {
-  const PAGE = 1000;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const all: any[] = [];
-  let from = 0;
-  while (true) {
-    const { data, error } = await admin
-      .from("services")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .range(from, from + PAGE - 1);
-    if (error) return { data: null, error };
-    if (data) all.push(...data);
-    if (!data || data.length < PAGE) break;
-    from += PAGE;
-  }
-  return { data: all, error: null };
-}
+import { fetchAllServices } from "@/lib/server/fetch-all-services";
 
 export async function GET(request: NextRequest) {
   try {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { generateSuggestionText, generateSuggestions, type Suggestion, type SuggestionActionPayload } from "@/lib/operations-suggestions";
 import type { Assignment, BusLotConfig, Hotel, Service } from "@/lib/types";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { fetchAllServices } from "@/lib/server/fetch-all-services";
 
 export const runtime = "nodejs";
 
@@ -64,7 +65,7 @@ async function readResolvedIds(auth: Awaited<ReturnType<typeof authorizePricingR
 async function loadState(auth: Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>) {
   const tenantId = auth.membership.tenant_id;
   const [servicesResult, assignmentsResult, hotelsResult, busLotConfigsResult] = await Promise.all([
-    auth.admin.from("services").select("*").eq("tenant_id", tenantId),
+    fetchAllServices(auth.admin, tenantId),
     auth.admin.from("assignments").select("*").eq("tenant_id", tenantId),
     auth.admin.from("hotels").select("*").eq("tenant_id", tenantId),
     auth.admin.from("bus_lot_configs").select("*").eq("tenant_id", tenantId)

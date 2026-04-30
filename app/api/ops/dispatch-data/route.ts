@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { loadOperationalVehicles } from "@/lib/server/vehicle-catalog";
+import { fetchAllServices } from "@/lib/server/fetch-all-services";
 
 export const runtime = "nodejs";
 
@@ -10,7 +11,7 @@ export async function GET(request: NextRequest) {
     if (auth instanceof NextResponse) return auth;
 
     const [servicesResult, assignmentsResult, hotelsResult, membershipsResult, inboundResult, vehiclesResult] = await Promise.all([
-      auth.admin.from("services").select("*").eq("tenant_id", auth.membership.tenant_id),
+      fetchAllServices(auth.admin, auth.membership.tenant_id),
       auth.admin.from("assignments").select("*").eq("tenant_id", auth.membership.tenant_id),
       auth.admin.from("hotels").select("*").eq("tenant_id", auth.membership.tenant_id),
       auth.admin
