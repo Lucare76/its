@@ -347,7 +347,7 @@ export async function POST(request: NextRequest) {
       pax: parsed.data.pax,
       hotel_id: parsed.data.hotel_id,
       customer_name: customerName,
-      phone: parsed.data.customer_phone.trim(),
+      phone: (parsed.data.customer_phone ?? "").trim(),
       notes,
       status: "new"
     };
@@ -548,7 +548,7 @@ export async function POST(request: NextRequest) {
     const operatorResult = await sendOperatorNotifyEmail({
       serviceId,
       customerName,
-      customerPhone: parsed.data.customer_phone.trim(),
+      customerPhone: (parsed.data.customer_phone ?? "").trim(),
       customerEmail: customerEmail || null,
       agencyName: agencyRow?.name ?? null,
       serviceCtx,

@@ -174,7 +174,7 @@ export async function POST(request: NextRequest) {
       customer_first_name: (d.customer_first_name ?? "").trim() || null,
       customer_last_name: d.customer_last_name.trim(),
       customer_email: (d.customer_email ?? "").trim() || null,
-      phone: d.customer_phone.trim(),
+      phone: (d.customer_phone ?? "").trim(),
       notes,
       booking_service_kind: bookingKind,
       arrival_date: d.arrival_date,
