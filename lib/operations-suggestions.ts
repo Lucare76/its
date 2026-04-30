@@ -96,7 +96,7 @@ function busLabelFromLot(lot: BusLotConfig) {
 }
 
 function buildBuses(state: OperationsSuggestionState): OperationBus[] {
-  const services = state.services.filter(isActiveService);
+  const services = state.services.filter((s) => isActiveService(s));
   const buses: OperationBus[] = [...(state.buses ?? [])];
 
   for (const lot of state.busLotConfigs ?? []) {
