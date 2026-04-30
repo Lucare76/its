@@ -259,7 +259,8 @@ export function generateSuggestions(state: OperationsSuggestionState): Suggestio
       }, state));
     }
 
-    if (!service.phone?.trim() && !service.phone_e164?.trim()) {
+    const isNavetta = (service.booking_service_kind as string | null) === "navetta" || service.booking_service_kind === "shuttle_hotel";
+    if (!isNavetta && !service.phone?.trim() && !service.phone_e164?.trim()) {
       suggestions.push(makeSuggestion({
         id: stableId(["suggestion", "missing-phone", service.id]),
         type: "missing_data",
