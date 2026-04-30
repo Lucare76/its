@@ -36,8 +36,8 @@ async function nominatimSearch(query: string): Promise<GeocodeResult | null> {
   url.searchParams.set("format", "json");
   url.searchParams.set("limit", "5");
   url.searchParams.set("countrycodes", "it");
-  // viewbox come suggerimento, senza bounded=1 per non escludere risultati validi
   url.searchParams.set("viewbox", "13.82,40.67,13.98,40.77");
+  url.searchParams.set("bounded", "1");
 
   const res = await fetch(url.toString(), {
     headers: { "User-Agent": "IschiaTransfer/1.0 (info@campanialimousine.com)" }

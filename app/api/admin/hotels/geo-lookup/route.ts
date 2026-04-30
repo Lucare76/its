@@ -142,6 +142,7 @@ async function searchNominatim(query: string) {
   url.searchParams.set("addressdetails", "1");
   url.searchParams.set("namedetails", "1");
   url.searchParams.set("viewbox", "13.82,40.67,13.99,40.77");
+  url.searchParams.set("bounded", "1");
 
   const response = await fetch(url.toString(), {
     headers: {

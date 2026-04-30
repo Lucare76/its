@@ -71,7 +71,7 @@ type HotelEditDraft = {
   contact_name: string;
 };
 
-type HotelListFilter = "all" | "corrections" | "verified" | "missing" | "inactive";
+type HotelListFilter = "all" | "corrections" | "verified" | "missing" | "inactive" | "small_vehicle";
 
 type GeoCorrectionDraft = {
   hotel: HotelListItem;
@@ -86,6 +86,30 @@ type GeoCorrectionDraft = {
 };
 
 const PAGE_SIZE = 20;
+
+function parseCoordinatesFromText(text: string): { lat: number; lng: number } | null {
+  const clean = text.trim();
+  const urlAt = clean.match(/@(-?\d{1,3}\.?\d*),(-?\d{1,3}\.?\d*)/);
+  if (urlAt) {
+    const lat = parseFloat(urlAt[1]);
+    const lng = parseFloat(urlAt[2]);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  }
+  const urlQ = clean.match(/[?&]q=(-?\d{1,3}\.?\d*)[,+](-?\d{1,3}\.?\d*)/);
+  if (urlQ) {
+    const lat = parseFloat(urlQ[1]);
+    const lng = parseFloat(urlQ[2]);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  }
+  // Plain "lat, lng" or "lat lng"
+  const plain = clean.match(/^(-?\d{1,3}(?:[.,]\d+)?)[,;\s]+(-?\d{1,3}(?:[.,]\d+)?)$/);
+  if (plain) {
+    const lat = parseFloat(plain[1].replace(",", "."));
+    const lng = parseFloat(plain[2].replace(",", "."));
+    if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) return { lat, lng };
+  }
+  return null;
+}
 const HOTEL_SELECT_FIELDS =
   "id,name,zone,address,city,lat,lng,small_vehicle_only,small_vehicle_max_pax,source,source_osm_type,source_osm_id,is_active,email,phone,contact_name,geo_status,geo_source,geo_accuracy,geo_verified_at,geo_verified_by,geo_notes,place_id,formatted_address";
 
@@ -399,6 +423,7 @@ export default function HotelsPage() {
       if (listFilter === "verified") return geo.status === "verified";
       if (listFilter === "missing") return geo.status === "missing";
       if (listFilter === "inactive") return !hotel.is_active;
+      if (listFilter === "small_vehicle") return hotel.small_vehicle_only;
       return true;
     });
   }, [allHotelsForMerge, items, listFilter, search]);
@@ -870,6 +895,19 @@ export default function HotelsPage() {
     if (!window.confirm(`Eliminare "${hotelName}"? L'operazione non può essere annullata.`)) return;
     setSaving(true);
     setError("");
+
+    const { count: serviceCount } = await supabase
+      .from("services")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenantId)
+      .eq("hotel_id", hotelId);
+
+    if ((serviceCount ?? 0) > 0) {
+      setSaving(false);
+      setError(`Impossibile eliminare "${hotelName}": ci sono ${serviceCount} servizi collegati. Disattiva l'hotel invece di eliminarlo.`);
+      return;
+    }
+
     const { error: deleteError } = await supabase.from("hotels").delete().eq("id", hotelId).eq("tenant_id", tenantId);
     setSaving(false);
     if (deleteError) {
@@ -909,6 +947,21 @@ export default function HotelsPage() {
 
   const searchGeoCorrectionAddress = useCallback(async (options?: { automatic?: boolean }) => {
     if (!geoCorrection) return;
+
+    // Se la query sembra coordinate o un URL Google Maps, usale direttamente
+    const parsed = parseCoordinatesFromText(geoCorrection.query);
+    if (parsed && !options?.automatic) {
+      setGeoCorrection((current) => current ? {
+        ...current,
+        lat: String(parsed.lat),
+        lng: String(parsed.lng),
+        startedFromGenericCoords: false,
+        autoLookupDone: true,
+        suggestionLabel: `Coordinate: ${parsed.lat}, ${parsed.lng}`
+      } : current);
+      return;
+    }
+
     setGeoSearching(true);
     setError("");
     try {
@@ -1185,26 +1238,42 @@ export default function HotelsPage() {
         </div>
 
         <div className="grid gap-3 md:grid-cols-4">
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+          <button
+            type="button"
+            onClick={() => setListFilter("all")}
+            className={`rounded-2xl border px-4 py-3 text-left transition hover:ring-2 hover:ring-slate-300 ${listFilter === "all" ? "ring-2 ring-slate-400" : "border-slate-200 bg-white"}`}
+          >
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Hotel registrati</p>
             <p className="mt-2 text-3xl font-semibold text-slate-900">{totalCount}</p>
             <p className="mt-1 text-sm text-slate-500">Master list unica del tenant.</p>
-          </div>
-          <div className="rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3">
+          </button>
+          <button
+            type="button"
+            onClick={() => setListFilter("missing")}
+            className={`rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-left transition hover:ring-2 hover:ring-amber-300 ${listFilter === "missing" ? "ring-2 ring-amber-400" : ""}`}
+          >
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">Dati da completare</p>
             <p className="mt-2 text-3xl font-semibold text-amber-900">{missingCoordsCount + incompleteAddressCount}</p>
             <p className="mt-1 text-sm text-amber-800">{geoMissingCount} senza coordinate, {incompleteAddressCount} con indirizzo da completare.</p>
-          </div>
-          <div className="rounded-2xl border border-rose-200 bg-rose-50/70 px-4 py-3">
+          </button>
+          <button
+            type="button"
+            onClick={() => setListFilter("corrections")}
+            className={`rounded-2xl border border-rose-200 bg-rose-50/70 px-4 py-3 text-left transition hover:ring-2 hover:ring-rose-300 ${listFilter === "corrections" ? "ring-2 ring-rose-400" : ""}`}
+          >
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-rose-700">Geo da correggere</p>
             <p className="mt-2 text-3xl font-semibold text-rose-900">{geoToFixCount}</p>
             <p className="mt-1 text-sm text-rose-800">{geoWarningCount} approssimativi, {geoVerifiedCount} già verificati.</p>
-          </div>
-          <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 px-4 py-3">
+          </button>
+          <button
+            type="button"
+            onClick={() => setListFilter("small_vehicle")}
+            className={`rounded-2xl border border-indigo-200 bg-indigo-50/70 px-4 py-3 text-left transition hover:ring-2 hover:ring-indigo-300 ${listFilter === "small_vehicle" ? "ring-2 ring-indigo-400" : ""}`}
+          >
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-indigo-700">Accesso solo bus piccolo</p>
             <p className="mt-2 text-3xl font-semibold text-indigo-900">{smallVehicleOnlyCount}</p>
             <p className="mt-1 text-sm text-indigo-800">Vincolo pronto per l’assegnazione Ischia quando configureremo la flotta.</p>
-          </div>
+          </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
@@ -1212,6 +1281,7 @@ export default function HotelsPage() {
             { key: "corrections", label: `Da correggere (${geoToFixCount})` },
             { key: "verified", label: `Verificati (${geoVerifiedCount})` },
             { key: "missing", label: `Mancanti (${geoMissingCount})` },
+            { key: "small_vehicle", label: `Bus piccolo (${smallVehicleOnlyCount})` },
             { key: "all", label: "Tutti" },
             { key: "inactive", label: "Disattivi" },
           ] as Array<{ key: HotelListFilter; label: string }>).map((filter) => (
@@ -1840,7 +1910,7 @@ export default function HotelsPage() {
                         value={geoCorrection.query}
                         onChange={(event) => setGeoCorrection({ ...geoCorrection, query: event.target.value })}
                         className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                        placeholder="Nome hotel, via, comune"
+                        placeholder="Nome hotel, via, comune — o incolla coordinate da Google Maps"
                       />
                       <button
                         type="button"
@@ -1851,6 +1921,7 @@ export default function HotelsPage() {
                         {geoSearching ? "Cerco..." : "Cerca"}
                       </button>
                     </div>
+                    <p className="mt-1 text-xs font-normal text-slate-400">Puoi incollare direttamente le coordinate (es. <span className="font-mono">40.7405, 13.9438</span>) o un link Google Maps</p>
                   </label>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="block text-xs font-semibold text-slate-600">
