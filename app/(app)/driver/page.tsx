@@ -131,34 +131,25 @@ function normalizeDriverService(service: DriverService): DriverService {
 }
 
 function getDriverServiceChip(service: Pick<DriverService, "booking_service_kind" | "service_type" | "direction" | "vessel">) {
-  const isNavetta = service.booking_service_kind === "navetta" || service.booking_service_kind === "shuttle_hotel" || service.service_type === "navetta";
-  if (isNavetta) return { className: "bg-violet-100 text-violet-700", label: "⇄ Navetta" };
-  if (isExcursionService(service)) return { className: "bg-purple-100 text-purple-700", label: "Escursione" };
-  if (service.direction === "arrival") return { className: "bg-emerald-100 text-emerald-700", label: "Arrivo" };
-  return { className: "bg-amber-100 text-amber-700", label: "Partenza" };
+  const cat = serviceKindCategory(service);
+  const { bg, label } = SERVICE_CHIP[cat] ?? SERVICE_CHIP.partenza!;
+  return { className: bg, label };
 }
 
 function getGroupChip(group: Pick<ServiceGroup, "visualKind" | "label" | "entries">) {
   const firstSvc = group.entries[0]?.service;
-  if (
-    firstSvc?.booking_service_kind === "navetta" ||
-    firstSvc?.booking_service_kind === "shuttle_hotel" ||
-    firstSvc?.vessel?.toLowerCase().trim() === "navetta"
-  ) {
-    return { className: "bg-violet-100 text-violet-700", label: "Navetta" };
+  if (firstSvc) {
+    const cat = serviceKindCategory(firstSvc);
+    const { bg, label } = SERVICE_CHIP[cat] ?? SERVICE_CHIP.partenza!;
+    return { className: bg, label };
   }
   const normalizedLabel = group.label.toLowerCase();
-  if (normalizedLabel.includes("navetta")) {
-    return { className: "bg-violet-100 text-violet-700", label: "Navetta" };
+  if (normalizedLabel.includes("navetta")) return { className: SERVICE_CHIP.navetta!.bg, label: "Navetta" };
+  if (group.visualKind === "excursion" || /capri|procida|giro\s+isola|escurs|amalfi|positano|pompei|sorrento|caserta|napoli|mortella|nitrodi|castello|crateri|cooking/.test(normalizedLabel)) {
+    return { className: SERVICE_CHIP.escursione!.bg, label: "Escursione" };
   }
-  if (
-    group.visualKind === "excursion" ||
-    /capri|procida|giro\s+isola|escurs|amalfi|positano|pompei|sorrento|caserta|napoli|mortella|nitrodi|castello|crateri|cooking/.test(normalizedLabel)
-  ) {
-    return { className: "bg-purple-100 text-purple-700", label: "Escursione" };
-  }
-  if (group.visualKind === "arrival") return { className: "bg-emerald-100 text-emerald-700", label: "Arrivo" };
-  return { className: "bg-amber-100 text-amber-700", label: "Partenza" };
+  if (group.visualKind === "arrival") return { className: SERVICE_CHIP.arrivo!.bg, label: "Arrivo" };
+  return { className: SERVICE_CHIP.partenza!.bg, label: "Partenza" };
 }
 
 function ferryCompanyLabel(kind: string | null): string | null {
@@ -166,6 +157,63 @@ function ferryCompanyLabel(kind: string | null): string | null {
   if (kind.includes("snav")) return "SNAV";
   if (kind.includes("medmar")) return "Medmar";
   return null;
+}
+
+/* ------------------------------------------------------------------ service card helpers */
+
+const SERVICE_CHIP: Record<string, { bg: string; label: string }> = {
+  arrivo:     { bg: "bg-emerald-100 text-emerald-700", label: "Arrivo" },
+  partenza:   { bg: "bg-blue-100 text-blue-700",       label: "Partenza" },
+  escursione: { bg: "bg-orange-100 text-orange-700",   label: "Escursione" },
+  medmar:     { bg: "bg-teal-100 text-teal-700",       label: "Medmar" },
+  snav:       { bg: "bg-sky-100 text-sky-700",         label: "SNAV" },
+  navetta:    { bg: "bg-violet-100 text-violet-700",   label: "Navetta" },
+};
+
+const SERVICE_BORDER: Record<string, string> = {
+  arrivo:     "border-l-4 border-l-emerald-400",
+  partenza:   "border-l-4 border-l-blue-400",
+  escursione: "border-l-4 border-l-orange-400",
+  medmar:     "border-l-4 border-l-teal-400",
+  snav:       "border-l-4 border-l-sky-400",
+  navetta:    "border-l-4 border-l-violet-400",
+};
+
+function serviceKindCategory(service: Pick<DriverService, "booking_service_kind" | "service_type" | "direction" | "vessel">): string {
+  const isNavetta = service.booking_service_kind === "navetta" || service.booking_service_kind === "shuttle_hotel";
+  if (isNavetta) return "navetta";
+  if (isExcursionService(service)) return "escursione";
+  const kind = service.booking_service_kind ?? "";
+  if (kind.includes("medmar")) return "medmar";
+  if (kind.includes("snav")) return "snav";
+  return service.direction === "arrival" ? "arrivo" : "partenza";
+}
+
+function getGroupBorderClass(group: Pick<ServiceGroup, "visualKind" | "entries">): string {
+  const first = group.entries[0]?.service;
+  if (!first) return SERVICE_BORDER[group.visualKind === "arrival" ? "arrivo" : group.visualKind === "excursion" ? "escursione" : "partenza"]!;
+  return SERVICE_BORDER[serviceKindCategory(first)]!;
+}
+
+function getServiceTypeInfo(service: DriverService): { icon: string; label: string } {
+  const kind = service.booking_service_kind ?? "";
+  const vessel = (service.vessel ?? "").trim();
+  if (kind === "formula_snav") return { icon: "🚤", label: "Formula SNAV" };
+  if (kind === "formula_medmar_napoli") return { icon: "🛥", label: "Formula Medmar · Napoli" };
+  if (kind === "formula_medmar_pozzuoli") return { icon: "🛥", label: "Formula Medmar · Pozzuoli" };
+  if (kind === "excursion" || service.service_type === "bus_tour") return { icon: "🎌", label: vessel || "Escursione" };
+  if (kind.includes("airport")) {
+    const code = vessel.replace(/^volo\s+/i, "").trim();
+    return { icon: "✈️", label: code ? `${code} · Aeroporto` : "Aeroporto" };
+  }
+  if (kind.includes("train")) return { icon: "🚆", label: vessel ? `${vessel} · Stazione` : "Stazione" };
+  if (kind === "transfer_port_hotel") return { icon: "🚢", label: "Transfer porto" };
+  if (kind === "bus_city_hotel") return { icon: "🚌", label: vessel || "Bus" };
+  if (kind === "shuttle_hotel" || kind === "navetta") return { icon: "⇄", label: "Navetta" };
+  if (kind === "private_island") return { icon: "🏝", label: "Servizio privato" };
+  if (kind === "transfer_hotel_hotel") return { icon: "🚗", label: vessel || "Transfer" };
+  if (vessel) return { icon: "🚢", label: vessel };
+  return service.direction === "arrival" ? { icon: "⚓", label: "Arrivo" } : { icon: "🚐", label: "Transfer" };
 }
 
 function WhatsAppIcon({ className = "h-4 w-4" }: { className?: string }) {
@@ -519,9 +567,11 @@ function DriverPageInner() {
       arrivals,
       (e) => `${e.service.date}_${e.service.vessel || "N/D"}_${e.service.time.slice(0, 5)}`,
       (e) => {
+        const arrSched = getArrivalSchedule(e.service);
+        const port = arrSched?.arrivalPort ? ferryPortLabel(arrSched.arrivalPort) : e.service.meeting_point;
+        if (port) return port;
         const company = ferryLabel(e.service.booking_service_kind);
-        const vesselLabel = e.service.vessel ?? "N/D";
-        return company ?? vesselLabel;
+        return company ?? e.service.vessel ?? "N/D";
       },
       "arrival",
       "arrival"
@@ -1037,7 +1087,7 @@ function DriverPageInner() {
             todayServices.length === 0
               ? <p className="p-4 text-center text-sm text-slate-400">Nessun servizio oggi.</p>
               : buildGroups(todayServices).map((group) => (
-                  <div key={group.key}>
+                  <div key={group.key} className={getGroupBorderClass(group)}>
                     <button type="button"
                       onClick={() => setExpandedGroup(expandedGroup === `oggi-${group.key}` ? null : `oggi-${group.key}`)}
                       className="w-full px-4 py-3 text-left flex items-center justify-between hover:bg-slate-50 transition">
@@ -1060,7 +1110,7 @@ function DriverPageInner() {
                           })()}
                         </div>
                         <p className="text-xs text-slate-400 mt-0.5 truncate">
-                          {group.entries.map((e) => `${e.service.pax} ${e.service.customer_name}`).join(" · ")}
+                          {group.entries.map((e) => `${e.service.customer_name} ${e.service.pax}`).join(" · ")}
                         </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
@@ -1087,38 +1137,44 @@ function DriverPageInner() {
                                 </div>
                                 {entry.service.direction === "departure" && !isExcursionService(entry.service) ? (
                                   <>
-                                    <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
-                                    {entry.service.vessel ? <p className="text-xs font-medium text-amber-700 mt-0.5">🚢 {entry.service.vessel}{entry.service.pickup_time ? ` · prelievo ${entry.service.pickup_time}` : ""}</p> : null}
+                                    <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    {(() => {
+                                      const { icon, label } = getServiceTypeInfo(entry.service);
+                                      return <p className="text-xs font-medium text-blue-700 mt-0.5">{icon} {label}</p>;
+                                    })()}
                                   </>
                                 ) : isExcursionService(entry.service) ? (
                                   entry.service.direction === "arrival" ? (
                                     <>
-                                      <p className="text-xs text-slate-400 mt-0.5">{entry.service.pax} pax · ritorno porto</p>
-                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? ""}{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
+                                      <p className="text-xs text-slate-500 mt-0.5">{entry.service.pax} pax{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
                                       {hotel && <p className="text-xs text-slate-500 mt-0.5">→ {hotel.name}</p>}
+                                      {(() => {
+                                        const { icon, label } = getServiceTypeInfo(entry.service);
+                                        return <p className="text-xs font-medium text-orange-700 mt-0.5">{icon} {label}</p>;
+                                      })()}
                                     </>
                                   ) : (
                                     <>
-                                      <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
-                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? "Escursione"}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p>
+                                      <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                      {(() => {
+                                        const { icon, label } = getServiceTypeInfo(entry.service);
+                                        const port = entry.service.meeting_point;
+                                        return <p className="text-xs font-medium text-orange-700 mt-0.5">{icon} {label}{port ? ` · ${port}` : ""}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time.slice(0,5)}` : ""}</p>;
+                                      })()}
                                     </>
                                   )
                                 ) : (
                                   <>
-                                    <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
                                     {(() => {
                                       const arrSched = getArrivalSchedule(entry.service);
                                       const arrIschia = arrSched?.arrivalTime ?? null;
                                       const arrPort = arrSched?.arrivalPort ? ferryPortLabel(arrSched.arrivalPort) : entry.service.meeting_point;
-                                      const company = ferryCompanyLabel(entry.service.booking_service_kind);
-                                      const vesselLabel = !company ? (entry.service.vessel ?? null) : null;
-                                      return (
-                                        <>
-                                          <p className="text-sm font-bold text-emerald-700 mt-0.5">⚓ {[company ?? vesselLabel, arrPort].filter(Boolean).join(" · ") || "Porto N/D"}{arrIschia ? ` · arr. ${arrIschia}` : ""}</p>
-                                          <p className="text-xs text-slate-400">partenza continente {entry.service.time?.slice(0,5)}</p>
-                                        </>
-                                      );
+                                      const { icon, label } = getServiceTypeInfo(entry.service);
+                                      const parts = [label, arrPort, arrIschia ? `arr. ${arrIschia}` : null].filter(Boolean).join(" · ");
+                                      return <p className="text-xs font-medium text-emerald-700 mt-0.5">{icon} {parts || "Porto N/D"}</p>;
                                     })()}
+                                    {entry.service.time && <p className="text-xs text-slate-400 mt-0.5">partenza continente {entry.service.time.slice(0,5)}</p>}
                                   </>
                                 )}
                               </button>
@@ -1155,7 +1211,7 @@ function DriverPageInner() {
             nextServices.length === 0
               ? <p className="p-4 text-center text-sm text-slate-400">Nessun servizio futuro.</p>
               : buildGroups(nextServices).map((group) => (
-                  <div key={group.key}>
+                  <div key={group.key} className={getGroupBorderClass(group)}>
                     <button type="button"
                       onClick={() => setExpandedGroup(expandedGroup === `prossimi-${group.key}` ? null : `prossimi-${group.key}`)}
                       className="w-full px-4 py-3 text-left flex items-center justify-between hover:bg-slate-50 transition">
@@ -1178,7 +1234,7 @@ function DriverPageInner() {
                           })()}
                         </div>
                         <p className="text-xs text-slate-400 mt-0.5 truncate">
-                          {group.entries.map((e) => `${e.service.pax} ${e.service.customer_name}`).join(" · ")}
+                          {group.entries.map((e) => `${e.service.customer_name} ${e.service.pax}`).join(" · ")}
                         </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
@@ -1210,40 +1266,44 @@ function DriverPageInner() {
                                 </div>
                                 {entry.service.direction === "departure" && !isExcursionService(entry.service) ? (
                                   <>
-                                    <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
-                                    {entry.service.vessel ? <p className="text-xs font-medium text-amber-700 mt-0.5">🚢 {entry.service.vessel}{entry.service.pickup_time ? ` · prelievo ${entry.service.pickup_time}` : ""}</p> : null}
+                                    <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    {(() => {
+                                      const { icon, label } = getServiceTypeInfo(entry.service);
+                                      return <p className="text-xs font-medium text-blue-700 mt-0.5">{icon} {label}</p>;
+                                    })()}
                                   </>
                                 ) : isExcursionService(entry.service) ? (
                                   entry.service.direction === "arrival" ? (
                                     <>
-                                      <p className="text-xs text-slate-400 mt-0.5">{entry.service.pax} pax · ritorno porto</p>
-                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? ""}{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
+                                      <p className="text-xs text-slate-500 mt-0.5">{entry.service.pax} pax{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
                                       {hotel && <p className="text-xs text-slate-500 mt-0.5">→ {hotel.name}</p>}
+                                      {(() => {
+                                        const { icon, label } = getServiceTypeInfo(entry.service);
+                                        return <p className="text-xs font-medium text-orange-700 mt-0.5">{icon} {label}</p>;
+                                      })()}
                                     </>
                                   ) : (
                                     <>
-                                      <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
-                                      <p className="text-xs font-medium text-purple-700 mt-0.5">🟣 {entry.service.vessel ?? "Escursione"}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time}` : ""}</p>
+                                      <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                      {(() => {
+                                        const { icon, label } = getServiceTypeInfo(entry.service);
+                                        const port = entry.service.meeting_point;
+                                        return <p className="text-xs font-medium text-orange-700 mt-0.5">{icon} {label}{port ? ` · ${port}` : ""}{entry.service.pickup_time ? ` · ritrovo ${entry.service.pickup_time.slice(0,5)}` : ""}</p>;
+                                      })()}
                                     </>
                                   )
                                 ) : (
                                   <>
-                                    <p className="text-xs text-slate-400 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
                                     {(() => {
                                       const arrivalSchedule = getArrivalSchedule(entry.service);
                                       const arrIschia = arrivalSchedule?.arrivalTime ?? null;
-                                      const arrivalPort = arrivalSchedule?.arrivalPort
-                                        ? ferryPortLabel(arrivalSchedule.arrivalPort)
-                                        : entry.service.meeting_point;
-                                      return (
-                                        <>
-                                          <p className="text-sm font-bold text-emerald-700 mt-0.5">
-                                            ⚓ {arrivalPort ?? "Porto N/D"}{arrIschia ? ` · arr. ${arrIschia}` : ""}
-                                          </p>
-                                          {arrIschia && <p className="text-xs text-slate-400">partenza continente {entry.service.time?.slice(0,5)}</p>}
-                                        </>
-                                      );
+                                      const arrivalPort = arrivalSchedule?.arrivalPort ? ferryPortLabel(arrivalSchedule.arrivalPort) : entry.service.meeting_point;
+                                      const { icon, label } = getServiceTypeInfo(entry.service);
+                                      const parts = [label, arrivalPort, arrIschia ? `arr. ${arrIschia}` : null].filter(Boolean).join(" · ");
+                                      return <p className="text-xs font-medium text-emerald-700 mt-0.5">{icon} {parts || "Porto N/D"}</p>;
                                     })()}
+                                    {entry.service.time && <p className="text-xs text-slate-400 mt-0.5">partenza continente {entry.service.time.slice(0,5)}</p>}
                                   </>
                                 )}
                               </button>
