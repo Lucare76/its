@@ -378,7 +378,12 @@ export default function OpsNewBookingPage() {
 
   // Escursioni
   useEffect(() => {
-    if (form.booking_service_kind !== "excursion" || !supabase || !tenantId || excursionLines.length > 0) return;
+    if (form.booking_service_kind !== "excursion" || !supabase || !tenantId) return;
+    if (excursionLines.length > 0) {
+      // Linee già caricate: assicura che il titolo sia impostato se vuoto (es. dopo reset form)
+      setForm((prev) => prev.excursion_title ? prev : { ...prev, excursion_title: excursionLines[0]?.name || "" });
+      return;
+    }
     supabase.from("excursion_lines").select("id, name").eq("tenant_id", tenantId).eq("active", true).order("sort_order")
       .then(({ data }) => {
         if (data?.length) {
