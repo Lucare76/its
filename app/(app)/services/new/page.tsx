@@ -538,7 +538,7 @@ export default function OpsNewBookingPage() {
   ]);
 
   const isTransportCodeRequired = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_airport_hotel_aliscafo" || selectedKind === "transfer_train_hotel" || selectedKind === "transfer_train_hotel_aliscafo";
-  const isPhoneRequired = selectedKind !== "shuttle_hotel";
+  const isPhoneRequired = selectedKind !== "shuttle_hotel" && selectedKind !== "excursion";
   const showTransportCodeField =
     selectedKind === "transfer_airport_hotel" ||
     selectedKind === "transfer_airport_hotel_exclusive" ||

@@ -134,7 +134,7 @@ export const agencyBookingCreateSchema = z
   .object({
     customer_first_name: z.string().max(80).optional().or(z.literal("")),
     customer_last_name: z.string().min(2).max(80),
-    customer_phone: z.string().min(6).max(30),
+    customer_phone: z.string().max(30).optional().or(z.literal("")),
     customer_email: z.string().email().max(160).optional().or(z.literal("")),
     pax: z.number().int().min(1).max(16),
     hotel_id: z.string().uuid().optional().or(z.literal("")),
@@ -159,6 +159,14 @@ export const agencyBookingCreateSchema = z
     hotel_dest_id: z.string().uuid().optional().or(z.literal(""))
   })
   .superRefine((value, ctx) => {
+    const phoneOptionalKinds = new Set(["excursion", "navetta", "shuttle_hotel"]);
+    if (!phoneOptionalKinds.has(value.booking_service_kind) && (!value.customer_phone || value.customer_phone.trim().length < 6)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Telefono cliente obbligatorio (min 6 caratteri).",
+        path: ["customer_phone"]
+      });
+    }
     if (value.booking_service_kind !== "private_island" && (!value.hotel_id || !z.string().uuid().safeParse(value.hotel_id).success)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
