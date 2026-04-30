@@ -71,7 +71,7 @@ type HotelEditDraft = {
   contact_name: string;
 };
 
-type HotelListFilter = "all" | "corrections" | "verified" | "missing" | "inactive" | "small_vehicle";
+type HotelListFilter = "all" | "corrections" | "verified" | "missing" | "data_missing" | "inactive" | "small_vehicle";
 
 type GeoCorrectionDraft = {
   hotel: HotelListItem;
@@ -422,6 +422,7 @@ export default function HotelsPage() {
       if (listFilter === "corrections") return geo.status === "generic" || geo.status === "approximate" || geo.status === "missing";
       if (listFilter === "verified") return geo.status === "verified";
       if (listFilter === "missing") return geo.status === "missing";
+      if (listFilter === "data_missing") return isMissingCoordinates(hotel.lat, hotel.lng) || isIncompleteHotelAddress(hotel.address);
       if (listFilter === "inactive") return !hotel.is_active;
       if (listFilter === "small_vehicle") return hotel.small_vehicle_only;
       return true;
@@ -1249,8 +1250,8 @@ export default function HotelsPage() {
           </button>
           <button
             type="button"
-            onClick={() => setListFilter("missing")}
-            className={`rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-left transition hover:ring-2 hover:ring-amber-300 ${listFilter === "missing" ? "ring-2 ring-amber-400" : ""}`}
+            onClick={() => setListFilter("data_missing")}
+            className={`rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-left transition hover:ring-2 hover:ring-amber-300 ${listFilter === "data_missing" ? "ring-2 ring-amber-400" : ""}`}
           >
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">Dati da completare</p>
             <p className="mt-2 text-3xl font-semibold text-amber-900">{missingCoordsCount + incompleteAddressCount}</p>
