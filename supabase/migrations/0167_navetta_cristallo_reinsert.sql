@@ -17,7 +17,8 @@ declare
   v_hotel  uuid;
   v_date   date  := '2026-04-29';
   v_end    date  := '2026-12-08';
-  v_piazza text  := 'Piazza Marina, Casamicciola';
+  v_departure_meeting_point text := 'Htl Cristallo';
+  v_arrival_meeting_point   text := 'Piazza Marina Casamicciola';
 
   -- Ogni elemento: orario|direzione  (dep=hotel→piazza, arr=piazza→hotel)
   v_runs   text[] := ARRAY[
@@ -84,7 +85,10 @@ begin
           'Hotel Cristallo', 1,
           v_hotel, 'Navetta',
           'navetta',
-          v_piazza,
+          case
+            when v_stype = 'departure' then v_departure_meeting_point
+            else v_arrival_meeting_point
+          end,
           '', '',
           'new', false
         );
