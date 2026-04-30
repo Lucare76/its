@@ -1,7 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
+
+async function fetchAllServices(admin: SupabaseClient, tenantId: string) {
+  const PAGE = 1000;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const all: any[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await admin
+      .from("services")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .range(from, from + PAGE - 1);
+    if (error) return { data: null, error };
+    if (data) all.push(...data);
+    if (!data || data.length < PAGE) break;
+    from += PAGE;
+  }
+  return { data: all, error: null };
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,7 +32,7 @@ export async function GET(request: NextRequest) {
 
     const [servicesResult, assignmentsResult, busLotConfigsResult, statusEventsResult, hotelsResult, membershipsResult, inboundResult] =
       await Promise.all([
-        auth.admin.from("services").select("*").eq("tenant_id", auth.membership.tenant_id).limit(50000),
+        fetchAllServices(auth.admin, auth.membership.tenant_id),
         auth.admin.from("assignments").select("*").eq("tenant_id", auth.membership.tenant_id),
         (async () => {
           const result = await auth.admin.from("bus_lot_configs").select("*").eq("tenant_id", auth.membership.tenant_id);
