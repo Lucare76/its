@@ -270,8 +270,13 @@ export function generateSuggestions(state: OperationsSuggestionState): Suggestio
     const isNavetta =
       (service.booking_service_kind as string | null) === "navetta" ||
       service.booking_service_kind === "shuttle_hotel" ||
-      (service.vessel as string | null)?.toLowerCase().trim() === "navetta";
-    if (!isNavetta && !service.phone?.trim() && !service.phone_e164?.trim()) {
+      (service.vessel as string | null)?.toLowerCase().trim() === "navetta" ||
+      (service.customer_name as string | null)?.toLowerCase().trim() === "navetta";
+    const isExcursion =
+      service.booking_service_kind === "excursion" ||
+      (service.service_type_code as string | null) === "excursion" ||
+      service.service_type === "bus_tour";
+    if (!isNavetta && !isExcursion && !service.phone?.trim() && !service.phone_e164?.trim()) {
       suggestions.push(makeSuggestion({
         id: stableId(["suggestion", "missing-phone", service.id]),
         type: "missing_data",
