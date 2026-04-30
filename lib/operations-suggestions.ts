@@ -74,8 +74,13 @@ function normalizeText(value: string | null | undefined) {
   return (value ?? "").trim().toLowerCase();
 }
 
-function isActiveService(service: Service) {
-  return service.status !== "cancelled" && service.status !== "completato" && service.is_draft !== true;
+function isActiveService(service: Service, horizon?: Date) {
+  if (service.status === "cancelled" || service.status === "completato" || service.is_draft === true) return false;
+  if (horizon && service.date) {
+    const serviceDate = new Date(service.date);
+    if (serviceDate > horizon) return false;
+  }
+  return true;
 }
 
 function matchesBusLot(service: Service, lot: BusLotConfig) {
@@ -183,8 +188,11 @@ function makeSuggestion(input: Omit<Suggestion, "created_at" | "resolved">, stat
 
 export function generateSuggestions(state: OperationsSuggestionState): Suggestion[] {
   const suggestions: Suggestion[] = [];
+  const now = state.now ?? new Date();
+  const horizon = new Date(now);
+  horizon.setDate(horizon.getDate() + 30);
   const buses = buildBuses(state);
-  const activeServices = state.services.filter(isActiveService);
+  const activeServices = state.services.filter((s) => isActiveService(s, horizon));
   const hotelsById = new Map(state.hotels.map((hotel) => [hotel.id, hotel]));
 
   for (const bus of buses) {
@@ -259,7 +267,10 @@ export function generateSuggestions(state: OperationsSuggestionState): Suggestio
       }, state));
     }
 
-    const isNavetta = (service.booking_service_kind as string | null) === "navetta" || service.booking_service_kind === "shuttle_hotel";
+    const isNavetta =
+      (service.booking_service_kind as string | null) === "navetta" ||
+      service.booking_service_kind === "shuttle_hotel" ||
+      (service.vessel as string | null)?.toLowerCase().trim() === "navetta";
     if (!isNavetta && !service.phone?.trim() && !service.phone_e164?.trim()) {
       suggestions.push(makeSuggestion({
         id: stableId(["suggestion", "missing-phone", service.id]),
