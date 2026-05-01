@@ -7,7 +7,7 @@ import { supabase } from "@/lib/supabase/client";
 import { usePwa } from "@/components/driver/PwaInit";
 import { DriverSign } from "@/components/driver/DriverSign";
 import type { FerryScheduleRow } from "@/lib/ferry-schedule-options";
-import { ferryPortLabel, findArrivalScheduleForService } from "@/lib/ferry-schedule-options";
+import { ferryPortLabel, findArrivalScheduleForService, findDepartureScheduleForService } from "@/lib/ferry-schedule-options";
 
 /* ------------------------------------------------------------------ offline queue */
 
@@ -143,6 +143,16 @@ function isFerryFormulaService(service: Pick<DriverService, "booking_service_kin
   return /\bmedmar\b|\bsnav\b/.test(vessel);
 }
 
+function inferFerryBookingKind(service: Pick<DriverService, "booking_service_kind" | "vessel">): string | null {
+  const kind = service.booking_service_kind ?? "";
+  if (kind === "formula_snav" || kind === "formula_medmar_napoli" || kind === "formula_medmar_pozzuoli") return kind;
+  const vessel = normalizeText(service.vessel);
+  if (/\bsnav\b/.test(vessel)) return "formula_snav";
+  if (/\bmedmar\b/.test(vessel) && /\bpozzuoli\b/.test(vessel)) return "formula_medmar_pozzuoli";
+  if (/\bmedmar\b/.test(vessel) && /\bnapoli\b/.test(vessel)) return "formula_medmar_napoli";
+  return null;
+}
+
 function operationalServiceInstances(service: DriverService): DriverService[] {
   if (!isFerryFormulaService(service) || !service.departure_date || !service.departure_time || service.direction === "departure") {
     return [{ ...service, _instance_key: `${service.id}:base`, _instance_direction: service.direction === "departure" ? "departure" : "arrival" }];
@@ -219,6 +229,11 @@ function ferryCompanyLabel(kind: string | null): string | null {
   return null;
 }
 
+function ferryCompanyDisplayLabel(company: string | null | undefined, kind: string | null): string | null {
+  if (company) return company.toUpperCase();
+  return ferryCompanyLabel(kind)?.toUpperCase() ?? null;
+}
+
 /* ------------------------------------------------------------------ service card helpers */
 
 const SERVICE_CHIP: Record<string, { bg: string; label: string }> = {
@@ -250,14 +265,14 @@ function serviceKindCategory(service: Pick<DriverService, "booking_service_kind"
   return service.direction === "arrival" ? "arrivo" : "partenza";
 }
 
-function getGroupBorderClass(group: Pick<ServiceGroup, "visualKind" | "entries">): string {
+function getGroupBorderClass(group: Pick<ServiceGroup, "direction" | "visualKind" | "entries">): string {
   const first = group.entries[0]?.service;
   if (!first) return SERVICE_BORDER[group.direction === "arrival" ? "arrivo" : group.visualKind === "excursion" ? "escursione" : "partenza"]!;
   return SERVICE_BORDER[serviceKindCategory(first)]!;
 }
 
 function getServiceTypeInfo(service: DriverService): { icon: string; label: string } {
-  const ferryTime = service.time?.slice(0, 5);
+  const ferryTime = service.direction === "arrival" ? service.time?.slice(0, 5) : null;
   if (service.booking_service_kind === "formula_snav") return { icon: "ðŸš¤", label: `SNAV${ferryTime ? ` ${ferryTime}` : ""}` };
   if (service.booking_service_kind === "formula_medmar_napoli") return { icon: "ðŸ›¥", label: `MEDMAR Napoli${ferryTime ? ` ${ferryTime}` : ""}` };
   if (service.booking_service_kind === "formula_medmar_pozzuoli") return { icon: "ðŸ›¥", label: `MEDMAR Pozzuoli${ferryTime ? ` ${ferryTime}` : ""}` };
@@ -600,6 +615,14 @@ function DriverPageInner() {
       service.booking_service_kind
     );
   }, [data.ferry_schedules]);
+  const getDepartureSchedule = useCallback((service: DriverService) => {
+    return findDepartureScheduleForService(
+      data.ferry_schedules,
+      service.date,
+      service.time,
+      inferFerryBookingKind(service)
+    );
+  }, [data.ferry_schedules]);
   const focusedWhatsappUrl = focused && customerPhone
     ? buildWhatsAppUrl(
         customerPhone,
@@ -666,9 +689,7 @@ function DriverPageInner() {
       (e) => `${e.service.date}_${e.service.hotel_id ?? "none"}_${e.service.time}`,
       (e) => {
         const hotelName = data.hotels.find((h) => h.id === e.service.hotel_id)?.name ?? "N/D";
-        const company = ferryLabel(e.service.booking_service_kind);
-        const t = e.service.time?.slice(0, 5) ?? "";
-        return `${company && t ? `${company} ${t} · ` : ""}${hotelName}`;
+        return hotelName.toUpperCase();
       },
       "departure",
       "departure"
@@ -1258,10 +1279,14 @@ function DriverPageInner() {
                                     {(() => {
                                       const { icon, label } = getServiceTypeInfo(entry.service);
                                       if (isFerryFormulaService(entry.service)) {
+                                        const depSched = getDepartureSchedule(entry.service);
+                                        const departurePort = depSched?.departurePort ? ferryPortLabel(depSched.departurePort) : null;
+                                        const company = ferryCompanyDisplayLabel(depSched?.company, inferFerryBookingKind(entry.service));
+                                        const parts = [company, departurePort, depSched?.departureTime].filter(Boolean).join(" ");
                                         return (
                                           <p className="mt-0.5 flex items-center gap-1 text-xs font-medium text-blue-700">
                                             <FerryIcon />
-                                            <span>{label}</span>
+                                            <span>{parts || label}</span>
                                           </p>
                                         );
                                       }
@@ -1404,10 +1429,14 @@ function DriverPageInner() {
                                     {(() => {
                                       const { icon, label } = getServiceTypeInfo(entry.service);
                                       if (isFerryFormulaService(entry.service)) {
+                                        const depSched = getDepartureSchedule(entry.service);
+                                        const departurePort = depSched?.departurePort ? ferryPortLabel(depSched.departurePort) : null;
+                                        const company = ferryCompanyDisplayLabel(depSched?.company, inferFerryBookingKind(entry.service));
+                                        const parts = [company, departurePort, depSched?.departureTime].filter(Boolean).join(" ");
                                         return (
                                           <p className="mt-0.5 flex items-center gap-1 text-xs font-medium text-blue-700">
                                             <FerryIcon />
-                                            <span>{label}</span>
+                                            <span>{parts || label}</span>
                                           </p>
                                         );
                                       }

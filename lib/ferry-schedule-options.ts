@@ -22,6 +22,13 @@ export interface FerryArrivalMatch {
   company: string;
 }
 
+export interface FerryDepartureMatch {
+  departureTime: string;
+  departurePort: string;
+  arrivalPort: string;
+  company: string;
+}
+
 function normalizeTime(value: string): string {
   return value.slice(0, 5);
 }
@@ -53,6 +60,22 @@ function bookingKindToScheduleFilter(bookingKind: string | null): {
       return { company: "medmar", departurePort: "napoli_beverello" };
     case "formula_medmar_pozzuoli":
       return { company: "medmar", departurePort: "pozzuoli" };
+    default:
+      return {};
+  }
+}
+
+function bookingKindToReturnScheduleFilter(bookingKind: string | null): {
+  company?: string;
+  arrivalPort?: string;
+} {
+  switch (bookingKind) {
+    case "formula_snav":
+      return { company: "snav", arrivalPort: "napoli_beverello" };
+    case "formula_medmar_napoli":
+      return { company: "medmar", arrivalPort: "napoli_beverello" };
+    case "formula_medmar_pozzuoli":
+      return { company: "medmar", arrivalPort: "pozzuoli" };
     default:
       return {};
   }
@@ -135,6 +158,36 @@ export function findArrivalScheduleForService(
   return {
     departureTime: time,
     arrivalTime: addMinutesToTime(time, durationMinutes),
+    arrivalPort: match.arrival_port,
+    company: match.company,
+  };
+}
+
+export function findDepartureScheduleForService(
+  rows: FerryScheduleRow[],
+  isoDate: string,
+  pickupOrDepartureTime: string | null,
+  bookingKind: string | null
+): FerryDepartureMatch | null {
+  if (!pickupOrDepartureTime) return null;
+  const filter = bookingKindToReturnScheduleFilter(bookingKind);
+  const time = normalizeTime(pickupOrDepartureTime);
+  const candidates = rows
+    .filter((row) => row.direction === "ischia_to_mainland")
+    .filter((row) => !filter.company || row.company === filter.company)
+    .filter((row) => !filter.arrivalPort || row.arrival_port === filter.arrivalPort)
+    .filter((row) => isScheduleActiveOnDate(row, isoDate))
+    .sort((a, b) => normalizeTime(a.departure_time).localeCompare(normalizeTime(b.departure_time)));
+
+  const match =
+    candidates.find((row) => normalizeTime(row.departure_time) === time) ??
+    candidates.find((row) => normalizeTime(row.departure_time) >= time) ??
+    null;
+
+  if (!match) return null;
+  return {
+    departureTime: normalizeTime(match.departure_time),
+    departurePort: match.departure_port,
     arrivalPort: match.arrival_port,
     company: match.company,
   };

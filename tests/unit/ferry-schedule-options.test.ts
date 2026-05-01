@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findArrivalScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
+import { findArrivalScheduleForService, findDepartureScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
 
 const rows: FerryScheduleRow[] = [
   {
@@ -32,6 +32,26 @@ const rows: FerryScheduleRow[] = [
     valid_from: null,
     valid_to: null,
   },
+  {
+    company: "medmar",
+    departure_port: "ischia_porto",
+    arrival_port: "napoli_beverello",
+    departure_time: "17:00:00",
+    direction: "ischia_to_mainland",
+    days_of_week: null,
+    valid_from: null,
+    valid_to: null,
+  },
+  {
+    company: "medmar",
+    departure_port: "casamicciola",
+    arrival_port: "pozzuoli",
+    departure_time: "16:50:00",
+    direction: "ischia_to_mainland",
+    days_of_week: null,
+    valid_from: null,
+    valid_to: null,
+  },
 ];
 
 describe("findArrivalScheduleForService", () => {
@@ -53,5 +73,26 @@ describe("findArrivalScheduleForService", () => {
     expect(fromNaples?.arrivalPort).toBe("ischia_porto");
     expect(fromPozzuoli?.arrivalTime).toBe("13:00");
     expect(fromPozzuoli?.arrivalPort).toBe("casamicciola");
+  });
+});
+
+describe("findDepartureScheduleForService", () => {
+  it("per una partenza usa il primo traghetto utile dopo il prelievo hotel", () => {
+    const result = findDepartureScheduleForService(rows, "2026-05-02", "15:30", "formula_medmar_napoli");
+
+    expect(result).toEqual({
+      company: "medmar",
+      departureTime: "17:00",
+      departurePort: "ischia_porto",
+      arrivalPort: "napoli_beverello",
+    });
+  });
+
+  it("distingue il porto di partenza in base alla destinazione mainland", () => {
+    const result = findDepartureScheduleForService(rows, "2026-05-02", "15:30", "formula_medmar_pozzuoli");
+
+    expect(result?.departureTime).toBe("16:50");
+    expect(result?.departurePort).toBe("casamicciola");
+    expect(result?.arrivalPort).toBe("pozzuoli");
   });
 });

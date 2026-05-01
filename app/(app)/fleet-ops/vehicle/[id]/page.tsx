@@ -175,7 +175,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     const data = await res.json();
     setRecords(data.records ?? []);
     setLoading(false);
-  }, [vehicleId, tab]);
+  }, [loadCosts, vehicleId, tab]);
 
   // Carica nome veicolo + dati libretto + impostazioni compliance
   useEffect(() => {

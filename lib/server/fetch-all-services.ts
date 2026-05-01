@@ -1,10 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Service } from "@/lib/types";
 
 const PAGE = 1000;
 
 export async function fetchAllServices(admin: SupabaseClient, tenantId: string) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const all: any[] = [];
+  const all: Service[] = [];
   let from = 0;
   while (true) {
     const { data, error } = await admin
@@ -13,7 +13,7 @@ export async function fetchAllServices(admin: SupabaseClient, tenantId: string) 
       .eq("tenant_id", tenantId)
       .range(from, from + PAGE - 1);
     if (error) return { data: null, error };
-    if (data) all.push(...data);
+    if (data) all.push(...(data as Service[]));
     if (!data || data.length < PAGE) break;
     from += PAGE;
   }

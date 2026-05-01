@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { supabase } from "@/lib/supabase/client";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -336,7 +336,11 @@ function TabBiglietti({
   const [fPriceLoading, setFPriceLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const headers = useMemo<Record<string, string>>(() => {
+    const next: Record<string, string> = {};
+    if (token) next.Authorization = `Bearer ${token}`;
+    return next;
+  }, [token]);
 
   const loadTickets = useCallback(async () => {
     if (!token) return;
@@ -348,7 +352,7 @@ function TabBiglietti({
     } finally {
       setLoading(false);
     }
-  }, [token, date]);
+  }, [headers, token, date]);
 
   const loadVehicles = useCallback(async () => {
     if (!token) return;
@@ -361,7 +365,7 @@ function TabBiglietti({
         )
       );
     }
-  }, [token]);
+  }, [headers, token]);
 
   useEffect(() => {
     loadTickets();
@@ -398,7 +402,7 @@ function TabBiglietti({
         }
       })
       .finally(() => setFPriceLoading(false));
-  }, [fVehicleId, fRoute, fMode, vehicles, token]);
+  }, [fVehicleId, fRoute, fMode, headers, vehicles, token]);
 
   async function handleAction(id: string, action: string, extra?: Record<string, unknown>) {
     if (!token) return;
@@ -675,7 +679,11 @@ function TabPrezzario({
   const [fNotes, setFNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const headers = useMemo<Record<string, string>>(() => {
+    const next: Record<string, string> = {};
+    if (token) next.Authorization = `Bearer ${token}`;
+    return next;
+  }, [token]);
 
   const loadPrices = useCallback(async () => {
     if (!token) return;
@@ -687,7 +695,7 @@ function TabPrezzario({
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [headers, token]);
 
   useEffect(() => {
     loadPrices();
@@ -898,7 +906,11 @@ function TabReport({ token }: { token: string | null }) {
   } | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const headers = useMemo<Record<string, string>>(() => {
+    const next: Record<string, string> = {};
+    if (token) next.Authorization = `Bearer ${token}`;
+    return next;
+  }, [token]);
 
   const loadReport = useCallback(async () => {
     if (!token) return;
@@ -910,7 +922,7 @@ function TabReport({ token }: { token: string | null }) {
     } finally {
       setLoading(false);
     }
-  }, [token, weekStart]);
+  }, [headers, token, weekStart]);
 
   useEffect(() => {
     loadReport();
