@@ -270,6 +270,7 @@ export const OPERATIVO_GROUP: NavMainGroup = {
     { href: "/foglio-viaggio", label: "Foglio di viaggio", icon: "📋" },
     { href: "/biglietti-medmar", label: "Biglietti MEDMAR", icon: "⚓" },
     { href: "/medmar-ar", label: "Medmar A/R", icon: "🎫" },
+    { href: "/medmar-fleet", label: "Medmar Flotta", icon: "🚗" },
     { href: "/inbox/fleet-reports", label: "Segnalazioni veicoli", icon: "🚨" },
     { href: "/biglietti-multipli", label: "Invio Multiplo Agenzie", icon: "📎" },
   ]

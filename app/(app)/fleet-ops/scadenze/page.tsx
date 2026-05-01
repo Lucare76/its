@@ -107,6 +107,19 @@ async function getToken(): Promise<string | null> {
 
 type DocType = "all" | "insurance" | "inspection" | "extinguisher" | "tachograph";
 type StatusFilter = "all" | "expired" | "critical" | "warning" | "ok";
+type ViewMode = "list" | "calendar";
+
+type GracePeriod = {
+  compliance_type: string;
+  grace_days: number;
+};
+
+const COMPLIANCE_TYPE_LABELS: Record<string, string> = {
+  insurance: "Assicurazione",
+  inspection: "Collaudo",
+  tachograph: "Tachigrafo",
+  extinguisher: "Estintore",
+};
 
 const DOC_LABELS: Record<DocType, string> = {
   all: "Tutti",
@@ -210,6 +223,20 @@ export default function ScadenzePage() {
   const [overrideForm, setOverrideForm] = useState({ until: "", reason: "" });
   const [showOverrideForm, setShowOverrideForm] = useState(false);
   const [savingOverride, setSavingOverride] = useState(false);
+
+  // Calendar view
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() };
+  });
+  const [calendarDay, setCalendarDay] = useState<number | null>(null);
+
+  // Grace periods modal
+  const [showGraceModal, setShowGraceModal] = useState(false);
+  const [gracePeriods, setGracePeriods] = useState<GracePeriod[]>([]);
+  const [graceLoading, setGraceLoading] = useState(false);
+  const [graceSaving, setGraceSaving] = useState(false);
 
   const showToast = useCallback((text: string, ok: boolean) => {
     setToast({ text, ok });
@@ -401,6 +428,72 @@ export default function ScadenzePage() {
     setStatusFilter((prev) => prev === s ? "all" : s);
   };
 
+  const loadGracePeriods = useCallback(async () => {
+    if (!supabase) return;
+    setGraceLoading(true);
+    const { data } = await supabase
+      .from("vehicle_compliance_grace_periods")
+      .select("compliance_type, grace_days");
+    const defaults: GracePeriod[] = (["insurance", "inspection", "tachograph", "extinguisher"] as const).map((t) => ({
+      compliance_type: t,
+      grace_days: (data as GracePeriod[] | null)?.find((r) => r.compliance_type === t)?.grace_days ?? 0,
+    }));
+    setGracePeriods(defaults);
+    setGraceLoading(false);
+  }, []);
+
+  const openGraceModal = useCallback(() => {
+    setShowGraceModal(true);
+    void loadGracePeriods();
+  }, [loadGracePeriods]);
+
+  const saveGracePeriods = useCallback(async () => {
+    if (!supabase) return;
+    setGraceSaving(true);
+    const { data: session } = await supabase.auth.getSession();
+    const userId = session.session?.user?.id ?? null;
+    for (const gp of gracePeriods) {
+      await supabase.from("vehicle_compliance_grace_periods").upsert(
+        { compliance_type: gp.compliance_type, grace_days: gp.grace_days, updated_by: userId },
+        { onConflict: "tenant_id,compliance_type" }
+      );
+    }
+    setGraceSaving(false);
+    setShowGraceModal(false);
+    showToast("Proroghe salvate", true);
+  }, [gracePeriods, showToast]);
+
+  // Calendar data: list of {day, vehicleLabel, complianceType, status} for current month
+  const calendarData = useMemo(() => {
+    const { year, month } = calendarMonth;
+    const map: Record<number, { label: string; plate: string | null; type: string; status: StatusLevel }[]> = {};
+    for (const item of filtered) {
+      const types: [string, ComplianceEntry | null][] = [
+        ["insurance", item.insurance],
+        ["inspection", item.inspection],
+        ["extinguisher", item.extinguisher],
+        ["tachograph", item.tachograph],
+      ];
+      for (const [type, entry] of types) {
+        if (!entry?.expiry_date) continue;
+        const d = new Date(entry.expiry_date + "T00:00:00Z");
+        if (d.getFullYear() === year && d.getMonth() === month) {
+          const day = d.getDate();
+          if (!map[day]) map[day] = [];
+          map[day].push({ label: item.label, plate: item.plate, type, status: entry.status });
+        }
+      }
+    }
+    return map;
+  }, [filtered, calendarMonth]);
+
+  const CAL_TYPE_COLOR: Record<string, string> = {
+    insurance: "bg-rose-400",
+    inspection: "bg-blue-400",
+    extinguisher: "bg-orange-400",
+    tachograph: "bg-emerald-500",
+  };
+
   const renderTableCell = (entry: ComplianceEntry | null) => {
     if (!entry) {
       return <span className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-slate-50 text-slate-400 border border-slate-200">—</span>;
@@ -478,21 +571,163 @@ export default function ScadenzePage() {
               Azzera filtri
             </button>
           )}
-          <div className="ml-auto text-xs text-slate-400 shrink-0">
-            {loading ? "Caricamento…" : `${filtered.length} veicol${filtered.length === 1 ? "o" : "i"}`}
+          <div className="ml-auto flex items-center gap-2 shrink-0">
+            <div className="text-xs text-slate-400">
+              {loading ? "Caricamento…" : `${filtered.length} veicol${filtered.length === 1 ? "o" : "i"}`}
+            </div>
+            {/* View toggle */}
+            <div className="flex rounded-lg border border-slate-200 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setViewMode("list")}
+                className={`px-3 py-1.5 text-xs font-semibold transition-colors ${viewMode === "list" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}
+              >
+                Lista
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("calendar")}
+                className={`px-3 py-1.5 text-xs font-semibold transition-colors border-l border-slate-200 ${viewMode === "calendar" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}
+              >
+                Calendario
+              </button>
+            </div>
+            {/* Grace periods button */}
+            <button
+              type="button"
+              onClick={openGraceModal}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              ⚙ Proroghe
+            </button>
           </div>
         </div>
       </SectionCard>
 
-      {loading ? (
+      {/* Calendar view */}
+      {viewMode === "calendar" && !loading && (
+        <SectionCard>
+          {(() => {
+            const { year, month } = calendarMonth;
+            const monthName = new Date(year, month, 1).toLocaleDateString("it-IT", { month: "long", year: "numeric" });
+            const firstDow = new Date(year, month, 1).getDay(); // 0=Sun
+            const startOffset = (firstDow + 6) % 7; // Mon=0
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const cells: (number | null)[] = [
+              ...Array(startOffset).fill(null),
+              ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+            ];
+            const today = new Date();
+            const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
+            return (
+              <>
+                <div className="flex items-center justify-between mb-4">
+                  <button
+                    type="button"
+                    onClick={() => setCalendarMonth((m) => {
+                      const d = new Date(m.year, m.month - 1, 1);
+                      return { year: d.getFullYear(), month: d.getMonth() };
+                    })}
+                    className="rounded-lg border border-slate-200 px-3 py-1 text-sm text-slate-600 hover:bg-slate-50"
+                  >
+                    ‹
+                  </button>
+                  <div className="text-sm font-bold text-slate-800 capitalize">{monthName}</div>
+                  <button
+                    type="button"
+                    onClick={() => setCalendarMonth((m) => {
+                      const d = new Date(m.year, m.month + 1, 1);
+                      return { year: d.getFullYear(), month: d.getMonth() };
+                    })}
+                    className="rounded-lg border border-slate-200 px-3 py-1 text-sm text-slate-600 hover:bg-slate-50"
+                  >
+                    ›
+                  </button>
+                </div>
+                <div className="grid grid-cols-7 gap-1 mb-1">
+                  {["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"].map((d) => (
+                    <div key={d} className="text-center text-[10px] font-bold text-slate-400 uppercase">{d}</div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-7 gap-1">
+                  {cells.map((day, i) => {
+                    if (!day) return <div key={`e-${i}`} />;
+                    const entries = calendarData[day] ?? [];
+                    const isToday = isCurrentMonth && today.getDate() === day;
+                    const isSelected = calendarDay === day;
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => setCalendarDay((prev) => prev === day ? null : day)}
+                        className={`rounded-lg p-1 text-center min-h-[52px] border transition-colors ${
+                          isSelected ? "border-blue-400 bg-blue-50" :
+                          isToday ? "border-blue-200 bg-blue-50/40" :
+                          entries.length > 0 ? "border-slate-200 bg-white hover:bg-slate-50" :
+                          "border-transparent hover:bg-slate-50"
+                        }`}
+                      >
+                        <div className={`text-xs font-semibold mb-1 ${isToday ? "text-blue-600" : "text-slate-700"}`}>{day}</div>
+                        <div className="flex flex-wrap justify-center gap-0.5">
+                          {entries.slice(0, 4).map((e, ei) => (
+                            <span
+                              key={ei}
+                              title={`${e.label} — ${COMPLIANCE_TYPE_LABELS[e.type] ?? e.type}`}
+                              className={`inline-block h-2 w-2 rounded-full ${CAL_TYPE_COLOR[e.type] ?? "bg-slate-400"}`}
+                            />
+                          ))}
+                          {entries.length > 4 && <span className="text-[9px] text-slate-400">+{entries.length - 4}</span>}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* Legend */}
+                <div className="flex flex-wrap gap-3 mt-4 pt-3 border-t border-slate-100">
+                  {Object.entries(CAL_TYPE_COLOR).map(([type, color]) => (
+                    <div key={type} className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <span className={`inline-block h-2.5 w-2.5 rounded-full ${color}`} />
+                      {COMPLIANCE_TYPE_LABELS[type]}
+                    </div>
+                  ))}
+                </div>
+                {/* Day detail */}
+                {calendarDay !== null && (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="text-sm font-bold text-slate-700 mb-3">
+                      Scadenze del {calendarDay} {new Date(year, month, 1).toLocaleDateString("it-IT", { month: "long" })}
+                    </div>
+                    {(calendarData[calendarDay] ?? []).length === 0 ? (
+                      <div className="text-sm text-slate-400">Nessuna scadenza</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {(calendarData[calendarDay] ?? []).map((e, i) => (
+                          <div key={i} className="flex items-center gap-2 text-sm">
+                            <span className={`inline-block h-2.5 w-2.5 rounded-full shrink-0 ${CAL_TYPE_COLOR[e.type] ?? "bg-slate-400"}`} />
+                            <span className="font-medium text-slate-800">{e.label}</span>
+                            {e.plate && <span className="text-xs font-mono text-slate-400">{e.plate}</span>}
+                            <span className="text-xs text-slate-500 ml-auto">{COMPLIANCE_TYPE_LABELS[e.type] ?? e.type}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </SectionCard>
+      )}
+
+      {viewMode === "list" && loading ? (
         <SectionCard>
           <div className="py-12 text-center text-sm text-slate-400">Caricamento...</div>
         </SectionCard>
-      ) : filtered.length === 0 ? (
+      ) : viewMode === "list" && filtered.length === 0 && !loading ? (
         <SectionCard>
           <div className="py-12 text-center text-sm text-slate-400">Nessun veicolo trovato per i filtri correnti</div>
         </SectionCard>
-      ) : (
+      ) : viewMode === "list" ? (
         <>
           {/* Mobile card grid (hidden on sm+) */}
           <div className="sm:hidden space-y-3">
@@ -585,6 +820,57 @@ export default function ScadenzePage() {
             </div>
           </SectionCard>
         </>
+      ) : null}
+
+      {/* Grace periods modal */}
+      {showGraceModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="text-base font-bold text-slate-900 mb-1">Proroghe scadenze</h2>
+            <p className="text-xs text-slate-500 mb-5">Giorni di tolleranza dopo la scadenza per ciascun documento.</p>
+            {graceLoading ? (
+              <div className="py-8 text-center text-sm text-slate-400">Caricamento...</div>
+            ) : (
+              <div className="space-y-3">
+                {gracePeriods.map((gp) => (
+                  <div key={gp.compliance_type} className="flex items-center justify-between gap-4">
+                    <label className="text-sm font-medium text-slate-700 w-36">
+                      {COMPLIANCE_TYPE_LABELS[gp.compliance_type] ?? gp.compliance_type}
+                      <span className="ml-1 text-xs text-slate-400">(+{gp.grace_days} giorni)</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="365"
+                      value={gp.grace_days}
+                      onChange={(e) => setGracePeriods((prev) =>
+                        prev.map((p) => p.compliance_type === gp.compliance_type ? { ...p, grace_days: Number(e.target.value) } : p)
+                      )}
+                      className="input-saas w-24 text-right"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2 mt-6">
+              <button
+                type="button"
+                onClick={() => void saveGracePeriods()}
+                disabled={graceSaving || graceLoading}
+                className="btn-primary flex-1 disabled:opacity-50"
+              >
+                {graceSaving ? "Salvataggio..." : "Salva"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowGraceModal(false)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-500 hover:bg-slate-50"
+              >
+                Annulla
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Side panel */}

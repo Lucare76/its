@@ -48,6 +48,25 @@ type SparePart = {
   installed_at?: string | null;
 };
 
+type ComplianceCost = {
+  id: string;
+  compliance_type: string;
+  amount_cents: number;
+  duration_months: number | null;
+  paid_at: string;
+  provider: string | null;
+  notes: string | null;
+};
+
+const COST_TYPE_LABELS: Record<string, string> = {
+  insurance: "Assicurazione",
+  inspection: "Collaudo",
+  tachograph: "Tachigrafo",
+  extinguisher: "Estintore",
+  bollo: "Bollo",
+  altro: "Altro",
+};
+
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
 
 async function getToken() {
@@ -62,7 +81,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   const { id: vehicleId } = use(params);
 
   const [vehicleLabel, setVehicleLabel] = useState<string>("");
-  const [tab, setTab]     = useState<"maintenance" | "fuel" | "spare_parts" | "km_logs" | "documenti">("maintenance");
+  const [tab, setTab]     = useState<"maintenance" | "fuel" | "spare_parts" | "km_logs" | "documenti" | "costi">("maintenance");
   const [records, setRecords]   = useState<(Maintenance | Fuel | SparePart)[]>([]);
   const [loading, setLoading]   = useState(false);
   const [saving,  setSaving]    = useState(false);
@@ -91,13 +110,43 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   const [librettoUploadedAt, setLibrettoUploadedAt] = useState<string | null>(null);
   const [uploadingLibretto, setUploadingLibretto]   = useState(false);
 
+  // compliance settings
+  const [tachographEnabled, setTachographEnabled] = useState(false);
+  const [extinguisherEnabled, setExtinguisherEnabled] = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  // costi
+  const [costs, setCosts] = useState<ComplianceCost[]>([]);
+  const [costsLoading, setCostsLoading] = useState(false);
+  const [showCostForm, setShowCostForm] = useState(false);
+  const [savingCost, setSavingCost] = useState(false);
+  const [costType, setCostType] = useState("insurance");
+  const [costAmount, setCostAmount] = useState("");
+  const [costPaidAt, setCostPaidAt] = useState("");
+  const [costDuration, setCostDuration] = useState("");
+  const [costProvider, setCostProvider] = useState("");
+  const [costNotes, setCostNotes] = useState("");
+
   const showMsg = (text: string, ok: boolean) => {
     setToast({ text, ok });
     setTimeout(() => setToast(null), 3000);
   };
 
+  const loadCosts = useCallback(async () => {
+    if (!supabase) return;
+    setCostsLoading(true);
+    const { data } = await supabase
+      .from("vehicle_compliance_costs")
+      .select("*")
+      .eq("vehicle_id", vehicleId)
+      .order("paid_at", { ascending: false });
+    setCosts((data as ComplianceCost[]) ?? []);
+    setCostsLoading(false);
+  }, [vehicleId]);
+
   const load = useCallback(async () => {
     if (tab === "documenti") return;
+    if (tab === "costi") { void loadCosts(); return; }
     setLoading(true);
     if (tab === "km_logs") {
       // Km logs vengono dall'API pubblica del veicolo tramite qr_token
@@ -128,18 +177,20 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     setLoading(false);
   }, [vehicleId, tab]);
 
-  // Carica nome veicolo + dati libretto
+  // Carica nome veicolo + dati libretto + impostazioni compliance
   useEffect(() => {
     getToken().then((token) => {
       if (!token) return;
       fetch("/api/ops/vehicles", { headers: { Authorization: `Bearer ${token}` } })
         .then((r) => r.json())
         .then((d) => {
-          const v = (d.vehicles ?? []).find((x: { id: string; label: string; libretto_document_path?: string | null; libretto_uploaded_at?: string | null }) => x.id === vehicleId);
+          const v = (d.vehicles ?? []).find((x: { id: string; label: string; libretto_document_path?: string | null; libretto_uploaded_at?: string | null; tachograph_enabled?: boolean; extinguisher_enabled?: boolean }) => x.id === vehicleId);
           if (v) {
             setVehicleLabel(v.label);
             setLibrettoPath(v.libretto_document_path ?? null);
             setLibrettoUploadedAt(v.libretto_uploaded_at ?? null);
+            setTachographEnabled(v.tachograph_enabled ?? false);
+            setExtinguisherEnabled(v.extinguisher_enabled ?? true);
           }
         });
     });
@@ -260,12 +311,64 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     showMsg("Eliminato.", true);
   }
 
+  async function handleToggleSetting(field: "tachograph_enabled" | "extinguisher_enabled", value: boolean) {
+    const token = await getToken();
+    if (!token) return;
+    setSavingSettings(true);
+    if (field === "tachograph_enabled") setTachographEnabled(value);
+    else setExtinguisherEnabled(value);
+    const res = await fetch("/api/ops/vehicles/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ vehicle_id: vehicleId, [field]: value }),
+    });
+    const json = await res.json() as { ok: boolean; error?: string };
+    setSavingSettings(false);
+    if (!json.ok) {
+      showMsg(json.error ?? "Errore salvataggio impostazione", false);
+      // revert
+      if (field === "tachograph_enabled") setTachographEnabled(!value);
+      else setExtinguisherEnabled(!value);
+    } else {
+      showMsg("Impostazione salvata", true);
+    }
+  }
+
+  function resetCostForm() {
+    setCostType("insurance"); setCostAmount(""); setCostPaidAt("");
+    setCostDuration(""); setCostProvider(""); setCostNotes("");
+    setShowCostForm(false);
+  }
+
+  async function handleAddCost() {
+    if (!supabase || !costPaidAt || !costAmount) return;
+    setSavingCost(true);
+    const { data: session } = await supabase.auth.getSession();
+    const userId = session.session?.user?.id ?? null;
+    const { error } = await supabase.from("vehicle_compliance_costs").insert({
+      vehicle_id: vehicleId,
+      compliance_type: costType,
+      amount_cents: Math.round(parseFloat(costAmount) * 100),
+      paid_at: costPaidAt,
+      duration_months: costDuration ? Number(costDuration) : null,
+      provider: costProvider || null,
+      notes: costNotes || null,
+      created_by: userId,
+    });
+    setSavingCost(false);
+    if (error) { showMsg(error.message, false); return; }
+    showMsg("Costo aggiunto.", true);
+    resetCostForm();
+    void loadCosts();
+  }
+
   const TABS = [
     { key: "maintenance", label: "🔧 Manutenzioni" },
     { key: "fuel",        label: "⛽ Rifornimenti" },
     { key: "spare_parts", label: "🔩 Ricambi" },
     { key: "km_logs",     label: "🛣 Km turni" },
     { key: "documenti",   label: "📄 Documenti" },
+    { key: "costi",       label: "💶 Costi" },
   ] as const;
 
   return (
@@ -277,6 +380,35 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
         </Link>
         <h1 className="text-2xl font-bold text-slate-900">{vehicleLabel || "Scheda veicolo"}</h1>
         <p className="text-sm text-slate-500">Gestisci manutenzioni, rifornimenti e ricambi del mezzo</p>
+      </div>
+
+      {/* Settings card */}
+      <div className="mb-5 rounded-xl border border-slate-200 bg-white px-5 py-4">
+        <div className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Impostazioni monitoraggio</div>
+        <div className="flex flex-wrap gap-6">
+          <label className="flex items-center gap-3 cursor-pointer select-none">
+            <button
+              type="button"
+              disabled={savingSettings}
+              onClick={() => void handleToggleSetting("tachograph_enabled", !tachographEnabled)}
+              className={`relative inline-flex h-5 w-9 cursor-pointer rounded-full transition-colors disabled:opacity-50 ${tachographEnabled ? "bg-blue-500" : "bg-slate-200"}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${tachographEnabled ? "translate-x-4" : ""}`} />
+            </button>
+            <span className="text-sm font-medium text-slate-700">Monitoraggio cronotachigrafo</span>
+          </label>
+          <label className="flex items-center gap-3 cursor-pointer select-none">
+            <button
+              type="button"
+              disabled={savingSettings}
+              onClick={() => void handleToggleSetting("extinguisher_enabled", !extinguisherEnabled)}
+              className={`relative inline-flex h-5 w-9 cursor-pointer rounded-full transition-colors disabled:opacity-50 ${extinguisherEnabled ? "bg-blue-500" : "bg-slate-200"}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${extinguisherEnabled ? "translate-x-4" : ""}`} />
+            </button>
+            <span className="text-sm font-medium text-slate-700">Monitoraggio estintore</span>
+          </label>
+        </div>
       </div>
 
       {/* Toast */}
@@ -372,8 +504,132 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
         </div>
       )}
 
+      {/* Costi tab */}
+      {tab === "costi" && (
+        <div className="space-y-4">
+          {/* Nuovo costo form */}
+          {showCostForm ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+              <h3 className="text-sm font-bold text-slate-700 mb-4">Nuovo costo</h3>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <label className="text-xs font-semibold text-slate-500">
+                  Tipo *
+                  <select value={costType} onChange={(e) => setCostType(e.target.value)} className="input-saas mt-1 w-full">
+                    {Object.entries(COST_TYPE_LABELS).map(([k, v]) => (
+                      <option key={k} value={k}>{v}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs font-semibold text-slate-500">
+                  Importo (€) *
+                  <input type="number" value={costAmount} onChange={(e) => setCostAmount(e.target.value)} className="input-saas mt-1 w-full" placeholder="0.00" />
+                </label>
+                <label className="text-xs font-semibold text-slate-500">
+                  Data pagamento *
+                  <input type="date" value={costPaidAt} onChange={(e) => setCostPaidAt(e.target.value)} className="input-saas mt-1 w-full" />
+                </label>
+                <label className="text-xs font-semibold text-slate-500">
+                  Durata (mesi)
+                  <input type="number" value={costDuration} onChange={(e) => setCostDuration(e.target.value)} className="input-saas mt-1 w-full" placeholder="es. 12" />
+                </label>
+                <label className="text-xs font-semibold text-slate-500">
+                  Fornitore
+                  <input value={costProvider} onChange={(e) => setCostProvider(e.target.value)} className="input-saas mt-1 w-full" placeholder="es. Sara Assicurazioni" />
+                </label>
+                <label className="text-xs font-semibold text-slate-500 col-span-2 sm:col-span-1">
+                  Note
+                  <input value={costNotes} onChange={(e) => setCostNotes(e.target.value)} className="input-saas mt-1 w-full" />
+                </label>
+              </div>
+              <div className="flex gap-2 mt-4">
+                <button
+                  type="button"
+                  disabled={savingCost || !costAmount || !costPaidAt}
+                  onClick={() => void handleAddCost()}
+                  className="btn-primary px-5 py-2 text-sm disabled:opacity-50"
+                >
+                  {savingCost ? "Salvataggio..." : "Salva"}
+                </button>
+                <button type="button" onClick={resetCostForm} className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-500 hover:bg-slate-50">
+                  Annulla
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowCostForm(true)}
+              className="rounded-xl border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+            >
+              + Nuovo costo
+            </button>
+          )}
+
+          {/* Lista costi */}
+          {costsLoading ? (
+            <div className="text-sm text-slate-400 py-8 text-center">Caricamento...</div>
+          ) : costs.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400 text-sm">
+              Nessun costo registrato.
+            </div>
+          ) : (
+            <>
+              <div className="rounded-xl border border-slate-200 overflow-hidden">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
+                    <tr>
+                      <th className="px-4 py-3 text-left">Data</th>
+                      <th className="px-4 py-3 text-left">Tipo</th>
+                      <th className="px-4 py-3 text-left">Fornitore</th>
+                      <th className="px-4 py-3 text-right">Durata</th>
+                      <th className="px-4 py-3 text-right">Importo</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {costs.map((c) => (
+                      <tr key={c.id} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{new Date(c.paid_at).toLocaleDateString("it-IT")}</td>
+                        <td className="px-4 py-3 font-medium text-slate-800">
+                          {COST_TYPE_LABELS[c.compliance_type] ?? c.compliance_type}
+                          {c.notes && <span className="text-xs text-slate-400 ml-1">({c.notes})</span>}
+                        </td>
+                        <td className="px-4 py-3 text-slate-500">{c.provider ?? "—"}</td>
+                        <td className="px-4 py-3 text-right text-slate-500">{c.duration_months != null ? `${c.duration_months} mesi` : "—"}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-emerald-700">
+                          {(c.amount_cents / 100).toLocaleString("it-IT", { style: "currency", currency: "EUR" })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Totale per tipo */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Totale per tipo</div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {Object.entries(
+                    costs.reduce<Record<string, number>>((acc, c) => {
+                      acc[c.compliance_type] = (acc[c.compliance_type] ?? 0) + c.amount_cents;
+                      return acc;
+                    }, {})
+                  ).map(([type, total]) => (
+                    <div key={type} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-xs text-slate-500">{COST_TYPE_LABELS[type] ?? type}</div>
+                      <div className="font-bold text-slate-800 mt-0.5">
+                        {(total / 100).toLocaleString("it-IT", { style: "currency", currency: "EUR" })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Add form */}
-      {tab !== "documenti" && showForm ? (
+      {tab !== "documenti" && tab !== "costi" && showForm ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 mb-5">
           <h3 className="text-sm font-bold text-slate-700 mb-4">
             {tab === "maintenance" ? "Nuova manutenzione" : tab === "fuel" ? "Nuovo rifornimento" : "Nuovo ricambio"}
@@ -496,7 +752,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
             </button>
           </div>
         </div>
-      ) : tab !== "km_logs" && tab !== "documenti" ? (
+      ) : tab !== "km_logs" && tab !== "documenti" && tab !== "costi" ? (
         <button
           type="button"
           onClick={() => setShowForm(true)}
@@ -507,7 +763,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
       ) : null}
 
       {/* Lista record */}
-      {tab !== "documenti" && (loading ? (
+      {tab !== "documenti" && tab !== "costi" && (loading ? (
         <div className="text-sm text-slate-400 py-8 text-center">Caricamento...</div>
       ) : records.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400 text-sm">
