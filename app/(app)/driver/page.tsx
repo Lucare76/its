@@ -116,6 +116,13 @@ function isExcursionService(service: Pick<DriverService, "booking_service_kind" 
   return /capri|procida|giro\s+isola|escurs|amalfi|positano|pompei|sorrento|caserta|napoli|mortella|nitrodi|castello|crateri|cooking/.test(vessel);
 }
 
+function isNavettaService(service: Pick<DriverService, "booking_service_kind" | "vessel" | "customer_name">) {
+  if ((service.booking_service_kind as string | null) === "navetta" || service.booking_service_kind === "shuttle_hotel") return true;
+  if ((service.vessel as string | null)?.toLowerCase().trim() === "navetta") return true;
+  if ((service.customer_name as string | null)?.toLowerCase().trim() === "navetta") return true;
+  return false;
+}
+
 function normalizeDriverService(service: DriverService): DriverService {
   const source = `${normalizeText(service.vessel)} ${normalizeText(service.notes)} ${normalizeText(service.customer_name)}`.trim();
   const looksLikeExcursion = isExcursionService(service)
@@ -1109,12 +1116,16 @@ function DriverPageInner() {
                             return t ? <span className="shrink-0 text-sm font-bold text-slate-900">{t}</span> : null;
                           })()}
                         </div>
-                        <p className="text-xs text-slate-400 mt-0.5 truncate">
-                          {group.entries.map((e) => `${e.service.customer_name} ${e.service.pax}`).join(" · ")}
-                        </p>
+                        {!isNavettaService(group.entries[0]!.service) && (
+                          <p className="text-xs text-slate-400 mt-0.5 truncate">
+                            {group.entries.map((e) => `${e.service.customer_name} ${e.service.pax}`).join(" · ")}
+                          </p>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
+                        {!isNavettaService(group.entries[0]!.service) && (
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
+                        )}
                         <span className="text-slate-400 text-sm">{expandedGroup === `oggi-${group.key}` ? "▲" : "▼"}</span>
                       </div>
                     </button>
@@ -1132,10 +1143,15 @@ function DriverPageInner() {
                                 onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                                 className="flex-1 text-left">
                                 <div className="flex items-center justify-between">
-                                  <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>
+                                  {!isNavettaService(entry.service) && <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>}
                                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusColor(entry.service.status)}`}>{entry.service.status}</span>
                                 </div>
-                                {entry.service.direction === "departure" && !isExcursionService(entry.service) ? (
+                                {isNavettaService(entry.service) ? (
+                                  <p className="text-xs text-slate-500 mt-0.5">
+                                    {entry.service.meeting_point || hotel?.name || ""}
+                                    {entry.service.time ? ` · ${entry.service.time.slice(0, 5)}` : ""}
+                                  </p>
+                                ) : entry.service.direction === "departure" && !isExcursionService(entry.service) ? (
                                   <>
                                     <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
                                     {(() => {
@@ -1238,7 +1254,9 @@ function DriverPageInner() {
                         </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
+                        {!isNavettaService(group.entries[0]!.service) && (
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
+                        )}
                         <span className="text-slate-400 text-sm">{expandedGroup === `prossimi-${group.key}` ? "▲" : "▼"}</span>
                       </div>
                     </button>
@@ -1256,7 +1274,7 @@ function DriverPageInner() {
                                 onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                                 className="flex-1 text-left">
                                 <div className="flex items-center justify-between">
-                                  <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>
+                                  {!isNavettaService(entry.service) && <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>}
                                   <span className="text-xs text-slate-500">
                                     {formatDateLabel(entry.service.date)}{" "}
                                     {entry.service.direction !== "departure"
@@ -1264,7 +1282,12 @@ function DriverPageInner() {
                                       : entry.service.time?.slice(0,5)}
                                   </span>
                                 </div>
-                                {entry.service.direction === "departure" && !isExcursionService(entry.service) ? (
+                                {isNavettaService(entry.service) ? (
+                                  <p className="text-xs text-slate-500 mt-0.5">
+                                    {entry.service.meeting_point || hotel?.name || ""}
+                                    {entry.service.time ? ` · ${entry.service.time.slice(0, 5)}` : ""}
+                                  </p>
+                                ) : entry.service.direction === "departure" && !isExcursionService(entry.service) ? (
                                   <>
                                     <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
                                     {(() => {
