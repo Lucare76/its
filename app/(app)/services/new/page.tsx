@@ -1200,7 +1200,7 @@ export default function OpsNewBookingPage() {
           Prezzo concordato (€)
           <div className="mt-1 flex items-center gap-0 rounded-xl border border-slate-200 bg-white focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition-all min-h-[42px] overflow-hidden">
             <span className="px-3 text-slate-500 font-semibold text-sm shrink-0 select-none">€</span>
-            <input type="text" inputMode="decimal" placeholder="0.00" className="flex-1 bg-transparent outline-none text-sm py-2 pr-3 min-w-0"
+            <input type="text" inputMode="decimal" placeholder="0.00" className="flex-1 bg-transparent outline-none text-sm py-2 pr-3 min-w-0" data-no-uppercase
               value={form.quoted_price_eur}
               onChange={(e) => { const v = e.target.value.replace(",", ".").replace(/[^0-9.]/g, ""); setForm((prev) => ({ ...prev, quoted_price_eur: v })); }}
             />

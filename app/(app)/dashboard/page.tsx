@@ -238,7 +238,9 @@ export default function OperatorDashboardPage() {
     return nowMs - sentAtMs > reminderAlertThresholdMs;
   });
   const pending = todayServices.filter((service) => service.status === "new").length;
-  const totalPax = todayServices.reduce((sum, service) => sum + service.pax, 0);
+  const totalPax = todayServices
+    .filter((service) => (service.booking_service_kind as string | null) !== "navetta" && service.booking_service_kind !== "shuttle_hotel" && service.vessel?.toLowerCase().trim() !== "navetta")
+    .reduce((sum, service) => sum + service.pax, 0);
   const sortedDates = [...new Set(todayServices.map((service) => service.date))].sort();
   const defaultDateFrom = sortedDates[0] ?? todayIso;
   const defaultDateTo = sortedDates[sortedDates.length - 1] ?? defaultDateFrom;

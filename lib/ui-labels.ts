@@ -11,6 +11,8 @@ export const SERVICE_STATUS_LABELS: Record<ServiceStatus, string> = {
   assigned: "Assegnato",
   partito: "Partito",
   arrivato: "Arrivato",
+  caricato: "Caricato",
+  scaricato: "Scaricato",
   completato: "Completato",
   problema: "Problema",
   cancelled: "Annullato",

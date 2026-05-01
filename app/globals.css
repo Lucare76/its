@@ -127,6 +127,13 @@ button {
   @apply text-sm leading-5;
 }
 
+input:not([type="password"]):not([type="email"]):not([type="number"]):not([type="date"]):not([type="time"]):not([type="datetime-local"]):not([type="color"]):not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([data-no-uppercase]),
+textarea:not([data-no-uppercase]),
+select:not([data-no-uppercase]),
+option {
+  text-transform: uppercase;
+}
+
 .card {
   @apply rounded-2xl border;
   border-color: var(--color-border);

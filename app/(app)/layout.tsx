@@ -369,6 +369,39 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     } catch { /* AudioContext non disponibile */ }
   };
 
+  // Trasforma in maiuscolo tutti i campi testo mentre si digita
+  useEffect(() => {
+    const SKIP_TYPES = new Set(["password", "email", "number", "date", "time", "datetime-local", "range", "color", "checkbox", "radio", "file", "hidden", "submit", "button", "reset", "image", "url"]);
+    const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+
+    const handleInput = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (target instanceof HTMLInputElement) {
+        if (SKIP_TYPES.has(target.type) || target.dataset.noUppercase) return;
+        const upper = target.value.toUpperCase();
+        if (upper === target.value) return;
+        const start = target.selectionStart;
+        const end = target.selectionEnd;
+        inputSetter?.call(target, upper);
+        target.setSelectionRange(start, end);
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+      } else if (target instanceof HTMLTextAreaElement) {
+        if (target.dataset.noUppercase) return;
+        const upper = target.value.toUpperCase();
+        if (upper === target.value) return;
+        const start = target.selectionStart;
+        const end = target.selectionEnd;
+        textareaSetter?.call(target, upper);
+        target.setSelectionRange(start, end);
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    };
+
+    document.addEventListener("input", handleInput, true);
+    return () => document.removeEventListener("input", handleInput, true);
+  }, []);
+
   // Ascolta alert SLA dal service worker via BroadcastChannel
   useEffect(() => {
     if (typeof window === "undefined") return;

@@ -298,6 +298,7 @@ function AgencyModal({
                 <textarea
                   rows={2}
                   className="input-saas mt-1 w-full resize-none font-mono text-xs"
+                  data-no-uppercase
                   value={form.sender_domains}
                   onChange={set("sender_domains")}
                   placeholder={"alesteviaggi.it\naleste.it"}

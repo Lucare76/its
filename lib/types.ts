@@ -29,7 +29,7 @@ export type OperationalServiceType =
   | "bus_line";
 export type TransportMode = "train" | "hydrofoil" | "ferry" | "road_transfer" | "bus" | "unknown";
 
-export type ServiceStatus = "needs_review" | "new" | "assigned" | "partito" | "arrivato" | "completato" | "problema" | "cancelled" | "pending_cancellation";
+export type ServiceStatus = "needs_review" | "new" | "assigned" | "partito" | "arrivato" | "caricato" | "scaricato" | "completato" | "problema" | "cancelled" | "pending_cancellation";
 export type ReminderStatus = "pending" | "sent" | "delivered" | "read" | "failed";
 export type HotelGeoStatus = "missing" | "generic" | "approximate" | "verified";
 export type HotelGeoSource = "manual" | "google" | "nominatim" | "import" | "unknown";

@@ -80,6 +80,8 @@ function statusColor(status: ServiceStatus) {
     case "completato": return "bg-emerald-100 text-emerald-800";
     case "partito":    return "bg-blue-100 text-blue-800";
     case "arrivato":   return "bg-indigo-100 text-indigo-800";
+    case "caricato":   return "bg-cyan-100 text-cyan-800";
+    case "scaricato":  return "bg-teal-100 text-teal-800";
     case "problema":   return "bg-rose-100 text-rose-800";
     case "cancelled":  return "bg-slate-100 text-slate-500";
     default:           return "bg-amber-100 text-amber-800";
@@ -428,12 +430,33 @@ function DriverPageInner() {
   }, [message]);
 
 
-  /* ---- persist status */
-  const persistStatus = useCallback(async (serviceId: string, status: ServiceStatus, tid = tenantId): Promise<boolean> => {
-    if (!supabase || !tid || !isOnline || !userId) return false;
-    const { error } = await supabase.from("services").update({ status }).eq("id", serviceId).eq("tenant_id", tid);
-    if (error) return false;
-    await supabase.from("status_events").insert({ tenant_id: tid, service_id: serviceId, status, by_user_id: userId });
+  /* ---- persist status (server API: aggiorna stato + cattura GPS Radius) */
+  const persistStatus = useCallback(async (serviceId: string, status: ServiceStatus, _tid = tenantId): Promise<boolean> => {
+    if (!isOnline || !userId) return false;
+    const token = await getToken();
+    if (!token) return false;
+
+    // Cattura posizione browser come fallback se GPS browser disponibile
+    let browserLat: number | null = null;
+    let browserLng: number | null = null;
+    if (navigator.geolocation) {
+      try {
+        const pos = await new Promise<GeolocationPosition>((res, rej) =>
+          navigator.geolocation.getCurrentPosition(res, rej, { timeout: 4000, maximumAge: 30000 })
+        );
+        browserLat = pos.coords.latitude;
+        browserLng = pos.coords.longitude;
+      } catch { /* GPS non disponibile o negato */ }
+    }
+
+    const res = await fetch("/api/ops/driver-status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ service_id: serviceId, status, browser_lat: browserLat, browser_lng: browserLng }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json() as { ok?: boolean };
+    if (!data.ok) return false;
     await refresh();
     return true;
   }, [isOnline, refresh, tenantId, userId]);
@@ -1013,16 +1036,32 @@ function DriverPageInner() {
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">
-                {(["partito", "arrivato", "completato", "problema"] as ServiceStatus[]).map((s) => (
-                  <button key={s} type="button" disabled={savingStatus !== null} onClick={() => void handleStatusAction(s)}
-                    className={`rounded-2xl py-4 text-sm font-bold uppercase tracking-wide transition active:scale-95 disabled:opacity-50 ${
-                      s === "problema" ? "border-2 border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
-                      : s === "completato" ? "border-2 border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                      : "border-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                    }`}>
-                    {savingStatus === s ? "..." : s}
-                  </button>
-                ))}
+                {(focused.service.direction === "arrival"
+                  ? (["caricato", "scaricato", "completato", "problema"] as ServiceStatus[])
+                  : (["partito", "arrivato", "completato", "problema"] as ServiceStatus[])
+                ).map((s) => {
+                  const isActive = focused.service.status === s;
+                  const btnClass =
+                    s === "problema"   ? "border-2 border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100" :
+                    s === "completato" ? "border-2 border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" :
+                    s === "caricato"   ? "border-2 border-cyan-200 bg-cyan-50 text-cyan-700 hover:bg-cyan-100" :
+                    s === "scaricato"  ? "border-2 border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100" :
+                    "border-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100";
+                  const label =
+                    s === "caricato"  ? "✅ Caricato" :
+                    s === "scaricato" ? "🏨 Scaricato" :
+                    s === "partito"   ? "▶ Partito" :
+                    s === "arrivato"  ? "⚓ Arrivato" :
+                    s === "completato"? "✓ Completato" : s;
+                  return (
+                    <button key={s} type="button"
+                      disabled={savingStatus !== null || isActive}
+                      onClick={() => void handleStatusAction(s)}
+                      className={`rounded-2xl py-4 text-sm font-bold uppercase tracking-wide transition active:scale-95 disabled:opacity-50 ${btnClass} ${isActive ? "ring-2 ring-offset-1 ring-current" : ""}`}>
+                      {savingStatus === s ? "..." : label}
+                    </button>
+                  );
+                })}
               </div>
             )}
             <div className="flex gap-3">
