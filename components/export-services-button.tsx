@@ -108,15 +108,15 @@ export function ExportServicesButton({ defaultDateFrom, defaultDateTo, className
         Esporta
       </button>
       {isOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="card w-full max-w-3xl space-y-4 p-4">
+        <div className="modal-overlay">
+          <div className="card modal-card modal-card-xl space-y-4">
             <div className="flex items-center justify-between border-b border-border pb-2">
               <h3 className="text-base font-semibold text-text">Esporta Excel (.xlsx)</h3>
               <button type="button" onClick={() => setIsOpen(false)} className="btn-secondary px-3 py-1 text-sm">
                 Chiudi
               </button>
             </div>
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 lg:grid-cols-3">
               <label className="text-xs text-muted">
                 Data da
                 <input
@@ -137,7 +137,7 @@ export function ExportServicesButton({ defaultDateFrom, defaultDateTo, className
               </label>
               <div className="text-xs text-muted md:col-span-3">
                 Stato (multi)
-                <div className="mt-1 grid grid-cols-2 gap-1 rounded-xl border border-border bg-surface-2 p-2 md:grid-cols-4">
+                <div className="mt-1 grid grid-cols-1 gap-1 rounded-xl border border-border bg-surface-2 p-2 sm:grid-cols-2 lg:grid-cols-4">
                   {statusOptions.map((option) => (
                     <label key={option} className="flex items-center gap-2 text-xs text-text">
                       <input
@@ -190,7 +190,7 @@ export function ExportServicesButton({ defaultDateFrom, defaultDateTo, className
                 />
               </label>
             </div>
-            <div className="flex items-center justify-end gap-2">
+            <div className="modal-actions justify-end">
               <button
                 type="button"
                 onClick={() => void handleExport()}

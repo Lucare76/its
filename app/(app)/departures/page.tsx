@@ -76,8 +76,8 @@ function EditDepartureModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl space-y-4 overflow-y-auto max-h-[90vh]">
+    <div className="modal-overlay">
+      <div className="modal-card modal-card-lg space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-slate-800">Modifica partenza</h2>
           <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
@@ -113,7 +113,7 @@ function EditDepartureModal({
           {/* Date prenotazione */}
           <div className="sm:col-span-2">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Date prenotazione</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-xs font-medium text-slate-600">
                 Data arrivo
                 <DateInput value={arrivalDate} onChange={(iso) => setArrivalDate(iso)} className="mt-1 input-saas w-full" />
@@ -143,7 +143,7 @@ function EditDepartureModal({
           </label>
         </div>
 
-        <div className="flex gap-2 justify-end">
+        <div className="modal-actions justify-end">
           <button type="button" onClick={onClose} className="btn-secondary px-4 py-2 text-sm">Annulla</button>
           <button type="button" onClick={() => void save()} disabled={saving} className="btn-primary px-5 py-2 text-sm disabled:opacity-50">
             {saving ? "Salvataggio..." : "Salva"}
@@ -612,14 +612,14 @@ export default function DeparturesPage() {
         subtitle="Vista dedicata alle partenze operative della giornata selezionata."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Partenze" }]}
         actions={
-          <div className="flex flex-wrap gap-3">
+          <div className="grid w-full gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <label className="text-sm">
               Data
-              <DateInput value={selectedDate} onChange={(iso) => setSelectedDate(iso)} className="input-saas mt-1 min-w-40" />
+              <DateInput value={selectedDate} onChange={(iso) => setSelectedDate(iso)} className="input-saas mt-1 w-full" />
             </label>
             <label className="text-sm">
               Agenzia
-              <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)} className="input-saas mt-1 min-w-44">
+              <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)} className="input-saas mt-1 w-full">
                 {agencyNames.map((name) => (
                   <option key={name} value={name}>{name === "all" ? "Tutte le agenzie" : name}</option>
                 ))}
@@ -632,7 +632,7 @@ export default function DeparturesPage() {
                 placeholder="Nome, cognome o telefono..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="input-saas mt-1 min-w-52"
+                className="input-saas mt-1 w-full"
               />
             </label>
           </div>
@@ -676,7 +676,55 @@ export default function DeparturesPage() {
         {departures.length === 0 ? (
           <p className="text-sm text-muted">Nessuna partenza operativa per la data selezionata.</p>
         ) : (
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <>
+          <div className="space-y-2 md:hidden">
+            {departures.map((item) => {
+              const hotelName = resolveHotelName(item.service);
+              const meetingPoint = item.service.meeting_point ?? null;
+              const riferimento = getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
+              const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
+              const hint = pickupHints.get(item.service.id);
+              return (
+                <article key={`mobile-${item.instanceId}`} className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-sm ${selectedDepIds.has(item.service.id) ? "ring-2 ring-indigo-100" : ""}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold uppercase text-slate-800">{getCustomerFullName(item.service)}</p>
+                      <p className="mt-1 text-xs text-slate-500">{hotelName}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-slate-300 accent-indigo-600"
+                        checked={selectedDepIds.has(item.service.id)}
+                        onChange={() => toggleDepSelect(item.service.id)}
+                      />
+                      <span className="inline-flex min-w-[56px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-bold text-slate-800">
+                        {item.time}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
+                    <p>Pax: <span className="font-semibold text-slate-800">{item.service.pax}</span></p>
+                    <p>Tipo: {tipoLabel}</p>
+                  </div>
+                  {hint && (
+                    <p className="mt-2 text-xs font-medium text-amber-600">
+                      Pickup suggerito: {hint.pickup} · {hint.label}
+                    </p>
+                  )}
+                  {meetingPoint ? <p className="mt-2 text-xs uppercase text-slate-400">{meetingPoint}</p> : null}
+                  {riferimento ? <p className="mt-1 text-xs text-slate-500">{riferimento}</p> : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => setQrServiceId(item.service.id)} className="btn-secondary px-3 py-1.5 text-xs">QR</button>
+                    <button type="button" onClick={() => setEditingService(item.service)} className="btn-secondary px-3 py-1.5 text-xs">Modifica</button>
+                    <button type="button" onClick={() => openCancelModal(item.service)} className="btn-secondary border-rose-200 bg-rose-50 px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-100">Cancella</button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          <div className="table-card-scroll hidden md:block">
+          <div className="min-w-[760px] rounded-2xl border border-slate-200 bg-white shadow-sm">
             {/* Header */}
             <div className="grid items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500 grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]">
               <div>
@@ -797,6 +845,8 @@ export default function DeparturesPage() {
               })}
             </div>
           </div>
+          </div>
+          </>
         )}
         {/* Toolbar assegnazione bulk */}
         {selectedDepIds.size > 0 && (
@@ -807,7 +857,7 @@ export default function DeparturesPage() {
             <select
               value={bulkDepDriverId}
               onChange={(e) => setBulkDepDriverId(e.target.value)}
-              className="input-saas min-w-44"
+              className="input-saas w-full sm:min-w-44 sm:w-auto"
             >
               <option value="">Scegli autista…</option>
               {depDrivers.map((d) => (
@@ -847,8 +897,8 @@ export default function DeparturesPage() {
       )}
 
       {qrServiceId && appOrigin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setQrServiceId(null)}>
-          <div className="w-full max-w-xs rounded-2xl bg-white p-6 shadow-xl text-center space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => setQrServiceId(null)}>
+          <div className="modal-card modal-card-sm text-center space-y-4" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-sm font-semibold text-slate-700">Scansiona per smarcamento</h2>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -879,8 +929,8 @@ export default function DeparturesPage() {
 
       {/* Modale cancellazione */}
       {cancelModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!cancelSubmitting) setCancelModal(null); }}>
-          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => { if (!cancelSubmitting) setCancelModal(null); }}>
+          <div className="modal-card modal-card-sm space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold text-slate-800">Richiesta cancellazione</h2>
               {!cancelSubmitting && (
@@ -893,7 +943,7 @@ export default function DeparturesPage() {
             {cancelSuccess ? (
               <div className="space-y-3">
                 <p className={`text-sm ${cancelSuccess.startsWith("Errore") ? "text-rose-600" : "text-emerald-600"}`}>{cancelSuccess}</p>
-                <div className="flex gap-2">
+                <div className="modal-actions">
                   <button type="button" onClick={() => setCancelModal(null)} className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Chiudi</button>
                   {!cancelSuccess.startsWith("Errore") && (
                     <a href="/cancellazioni" className="flex-1 rounded-xl bg-slate-800 px-4 py-2.5 text-center text-sm font-semibold text-white hover:bg-slate-700">Vai a Cancellazioni →</a>
@@ -922,7 +972,7 @@ export default function DeparturesPage() {
                   )}
                 </div>
                 <p className="text-xs text-slate-400">La richiesta sarà inviata all&apos;admin/operatore per decidere l&apos;eventuale penale.</p>
-                <div className="flex gap-2 pt-1">
+                <div className="modal-actions pt-1">
                   <button type="button" onClick={() => setCancelModal(null)} className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Annulla</button>
                   <button type="button" onClick={() => void submitCancelRequest()} disabled={cancelSubmitting}
                     className="flex-1 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-40">
@@ -937,14 +987,14 @@ export default function DeparturesPage() {
 
       {/* Modale aggiungi partenza */}
       {addModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setAddModal(false)}>
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => setAddModal(false)}>
+          <div className="modal-card modal-card-md space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold text-slate-800">Aggiungi partenza</h2>
               <button type="button" onClick={() => setAddModal(false)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
             </div>
             {addError && <p className="text-sm text-rose-600">{addError}</p>}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <label className="col-span-2 text-xs text-slate-600 font-medium">
                 Cliente*
                 <input className="input-saas mt-1" value={addForm.customer_name} onChange={(e) => setAddForm((f) => ({ ...f, customer_name: e.target.value }))} placeholder="Nome e cognome" />
@@ -997,7 +1047,7 @@ export default function DeparturesPage() {
                   {calcLoading ? "⏳ Calcolo in corso..." : "🤖 Pickup calcolato automaticamente"}
                 </p>
                 {!calcLoading && (
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid gap-2 sm:grid-cols-2">
                     <label className="text-xs text-slate-600 font-medium">
                       Prelevamento hotel
                       <input
@@ -1029,7 +1079,7 @@ export default function DeparturesPage() {
               </div>
             )}
 
-            <div className="flex gap-2 pt-1">
+            <div className="modal-actions pt-1">
               <button type="button" onClick={() => setAddModal(false)} className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Annulla</button>
               <button type="button" onClick={() => void addService()} disabled={addSaving || !addForm.customer_name.trim() || !addForm.date || !addForm.time}
                 className="flex-1 rounded-xl bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-40">

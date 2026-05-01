@@ -5,6 +5,29 @@ function clean(value?: string | null) {
   return normalized.length > 0 ? normalized : null;
 }
 
+function isEmailLike(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(value);
+}
+
+function isDomainLike(value: string) {
+  return /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?:\/[^\s]*)?$/i.test(value);
+}
+
+function isUrlLike(value: string) {
+  return /^(?:https?:\/\/|www\.)/i.test(value);
+}
+
+function uppercasePreservingEmailAndDomains(value: string) {
+  return value.replace(/\S+/g, (token) => {
+    const match = token.match(/^([^\p{L}\p{N}@]+)?(.+?)([^\p{L}\p{N}.\/]+)?$/u);
+    if (!match) return token.toLocaleUpperCase("it-IT");
+
+    const [, leading = "", core = token, trailing = ""] = match;
+    if (isEmailLike(core) || isDomainLike(core) || isUrlLike(core)) return token;
+    return `${leading}${core.toLocaleUpperCase("it-IT")}${trailing}`;
+  });
+}
+
 export function formatIsoDateShort(value?: string | null) {
   const normalized = clean(value);
   if (!normalized) return "N/D";
@@ -26,7 +49,13 @@ export function formatIsoDateTimeShort(value?: string | null) {
 }
 
 export function getCustomerFullName(service: Pick<Service, "customer_name"> & Partial<Service>) {
-  return clean(service.customer_name) ?? "Cliente da verificare";
+  const normalized = clean(service.customer_name);
+  return normalized ? uppercasePreservingEmailAndDomains(normalized) : "CLIENTE DA VERIFICARE";
+}
+
+export function formatDisplayUppercase(value?: string | null, fallback = "N/D") {
+  const normalized = clean(value);
+  return normalized ? uppercasePreservingEmailAndDomains(normalized) : fallback;
 }
 
 export function getOutboundTime(service: Partial<Service>) {

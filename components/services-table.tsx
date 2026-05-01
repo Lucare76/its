@@ -411,7 +411,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
           <p className="mt-1 text-xs text-muted">Promemoria inviati ma ancora non consegnati.</p>
         </div>
       </div>
-      <FilterBar colsClassName="md:grid-cols-9">
+      <FilterBar colsClassName="lg:grid-cols-4 xl:grid-cols-9">
         <select
           value={statusFilter}
           onChange={(event) => setStatusFilter(event.target.value as ServiceStatus | "all")}

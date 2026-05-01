@@ -40,7 +40,7 @@ export function PageHeader({ title, subtitle, badge, actions, breadcrumbs, class
         </div>
         {subtitle ? <p className="section-subtitle">{subtitle}</p> : null}
       </div>
-      {actions ? <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">{actions}</div> : null}
+      {actions ? <div className="flex w-full flex-wrap items-stretch gap-2 sm:w-auto sm:items-center sm:justify-end">{actions}</div> : null}
     </header>
   );
 }

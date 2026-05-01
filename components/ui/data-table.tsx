@@ -39,12 +39,12 @@ export function DataTable({
 }: DataTableProps) {
   return (
     <div className={`premium-table ${className ?? ""}`.trim()}>
-      {toolbar ? <div className="border-b border-border px-3 py-3">{toolbar}</div> : null}
+      {toolbar ? <div className="border-b border-border px-3 py-3 md:px-4">{toolbar}</div> : null}
       <table className={`${minWidthClassName ?? "min-w-full"} text-sm`}>{loading ? <TableSkeleton rows={loadingRows} /> : children}</table>
       {!loading && !children && empty ? <div className="p-3">{empty}</div> : null}
-      {footer ? <div className="border-t border-border px-3 py-3">{footer}</div> : null}
+      {footer ? <div className="border-t border-border px-3 py-3 md:px-4">{footer}</div> : null}
       {stickyActions ? (
-        <div className="sticky bottom-0 z-10 border-t border-border bg-surface px-3 py-2 shadow-[0_-4px_20px_rgba(15,23,42,0.06)]">
+        <div className="sticky bottom-0 z-10 border-t border-border bg-surface/95 px-3 py-2 backdrop-blur md:px-4 shadow-[0_-4px_20px_rgba(15,23,42,0.06)]">
           {stickyActions}
         </div>
       ) : null}

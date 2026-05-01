@@ -707,7 +707,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
   return (
     <>
-      <section className={`grid min-h-[calc(100vh-86px)] grid-cols-1 gap-5 py-4 md:py-6 ${authRole === "driver" || authRole === "autista" ? "" : "md:grid-cols-[auto_1fr] md:gap-6"}`}>
+      <section className={`mx-auto grid min-h-[calc(100vh-86px)] w-full max-w-[1680px] grid-cols-1 gap-5 px-3 py-4 sm:px-4 md:py-6 lg:px-5 xl:px-6 ${authRole === "driver" || authRole === "autista" ? "" : "md:grid-cols-[auto_minmax(0,1fr)] md:gap-6"}`}>
       <aside className={`sticky top-24 h-fit transition-all duration-200 ${authRole === "driver" || authRole === "autista" ? "hidden" : `hidden md:block ${collapsed ? "w-[72px]" : "w-[280px]"}`}`}>
         <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white p-3 shadow-[0_8px_40px_rgba(15,23,42,0.10)]">
 
@@ -1239,7 +1239,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         </div>
       </aside>
 
-      <div className="space-y-4">
+      <div className="min-w-0 space-y-4">
         <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
@@ -1368,7 +1368,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             </div>
           </div>
           </div>
-          <div className="mobile-nav-strip">
+          <div className="mt-3 mobile-nav-strip">
             {mainNav.map((item) => {
               const active = pathname.startsWith(item.href);
               return (
@@ -1394,7 +1394,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             ) : null}
           </div>
           {isSettingsExpanded && settingsGroups.length > 0 ? (
-            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 md:hidden">
+            <div className="mt-3 space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 md:hidden">
               {settingsGroups.map((group) => (
                 <div key={`mobile-${group.title}`} className="space-y-2">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">{group.title}</p>

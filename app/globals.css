@@ -24,6 +24,12 @@
   --color-danger: #ef4444;
 }
 
+html {
+  min-width: 320px;
+  overflow-x: clip;
+  scroll-padding-top: 96px;
+}
+
 .dark {
   color-scheme: dark;
   --color-bg: #020817;
@@ -47,6 +53,7 @@ body {
     radial-gradient(900px 320px at 100% -10%, rgba(250, 212, 192, 0.24) 0%, transparent 70%),
     linear-gradient(180deg, #fdfefe 0%, #f8fbff 100%);
   min-height: 100vh;
+  overflow-x: clip;
 }
 
 .dark body {
@@ -125,6 +132,14 @@ select,
 textarea,
 button {
   @apply text-sm leading-5;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  touch-action: manipulation;
 }
 
 input:not([type="password"]):not([type="email"]):not([type="number"]):not([type="date"]):not([type="time"]):not([type="datetime-local"]):not([type="color"]):not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([data-no-uppercase]),
@@ -225,6 +240,10 @@ option {
 .input-saas:focus {
   border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.input-saas::placeholder {
+  text-transform: none;
 }
 
 .btn-primary {
@@ -331,15 +350,22 @@ td {
 }
 
 .toolbar {
-  @apply card flex flex-wrap items-end gap-2 p-3 md:p-4;
+  @apply card flex flex-wrap items-stretch gap-2 p-3 sm:items-end md:p-4;
 }
 
 .filters-grid {
-  @apply card grid gap-3 p-3 md:p-4;
+  @apply card grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 md:p-4;
+}
+
+.toolbar > *,
+.filters-grid > * {
+  min-width: 0;
 }
 
 .premium-table {
   @apply card overflow-x-auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .premium-table table {
@@ -383,17 +409,73 @@ td {
 }
 
 .app-sidebar-scroll {
-  max-height: calc(100vh - 180px);
+  max-height: calc(100dvh - 180px);
   overflow-y: auto;
 }
 
 .mobile-nav-strip {
   @apply md:hidden -mx-1 flex gap-2 overflow-x-auto px-1 pb-1;
   scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
 }
 
 .mobile-nav-strip a {
   @apply whitespace-nowrap;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.modal-card {
+  width: min(100%, 960px);
+  max-height: min(92dvh, 100%);
+  overflow-y: auto;
+  border-radius: 1.5rem;
+  background: #fff;
+  padding: 1.25rem;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+}
+
+.modal-card-sm {
+  max-width: 24rem;
+}
+
+.modal-card-md {
+  max-width: 32rem;
+}
+
+.modal-card-lg {
+  max-width: 40rem;
+}
+
+.modal-card-xl {
+  max-width: 48rem;
+}
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.touch-scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.table-card-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 @media (max-width: 1024px) {
@@ -415,6 +497,11 @@ td {
     font-size: 10px;
   }
 
+  .btn-primary,
+  .btn-secondary {
+    min-height: 40px;
+  }
+
   .toolbar {
     @apply p-3;
   }
@@ -425,6 +512,24 @@ td {
 
   .premium-table table {
     min-width: 680px;
+  }
+
+  .modal-overlay {
+    padding: 8px;
+  }
+
+  .modal-card {
+    width: 100%;
+    max-height: min(94dvh, 100%);
+    border-radius: 1.25rem;
+    padding: 1rem;
+  }
+}
+
+@media (min-width: 640px) {
+  .modal-overlay {
+    align-items: center;
+    padding: 16px;
   }
 }
 

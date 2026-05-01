@@ -8,7 +8,7 @@ import { EmptyState, SidePanel } from "@/components/ui";
 import { needsInboxReview } from "@/lib/inbox-review";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { getInboxPdfParsingSignal } from "@/lib/pdf/parser";
-import { formatServiceSlot, getCustomerFullName, getOutboundTime } from "@/lib/service-display";
+import { formatDisplayUppercase, formatServiceSlot, getCustomerFullName, getOutboundTime } from "@/lib/service-display";
 import { getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
 import { supabase } from "@/lib/supabase/client";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
@@ -338,7 +338,7 @@ export default function OperatorDashboardPage() {
     <section className="page-section">
 
       {/* ── Hero strip ─────────────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden rounded-3xl px-8 py-7 text-white" style={{ background: "linear-gradient(135deg,#1e3a8a 0%,#4338ca 50%,#7c3aed 100%)" }}>
+      <div className="relative overflow-hidden rounded-3xl px-4 py-5 text-white sm:px-6 sm:py-6 lg:px-8 lg:py-7" style={{ background: "linear-gradient(135deg,#1e3a8a 0%,#4338ca 50%,#7c3aed 100%)" }}>
         <div className="absolute -top-16 -right-16 h-56 w-56 rounded-full bg-white/5" />
         <div className="absolute -bottom-10 -left-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="relative flex flex-wrap items-center justify-between gap-4">
@@ -352,18 +352,18 @@ export default function OperatorDashboardPage() {
               </span>
             </div>
           </div>
-          <div className="flex flex-wrap gap-3">
-            <ExportServicesButton defaultDateFrom={defaultDateFrom} defaultDateTo={defaultDateTo} />
+          <div className="flex w-full flex-wrap gap-3 lg:w-auto lg:justify-end">
+            <ExportServicesButton defaultDateFrom={defaultDateFrom} defaultDateTo={defaultDateTo} className="w-full sm:w-auto" />
             <button type="button" onClick={() => setIsSuggestionsOpen(true)}
-              className="rounded-xl border border-white/25 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur hover:bg-white/20 transition">
+              className="w-full rounded-xl border border-white/25 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/20 sm:w-auto">
               Supporto assegnazioni
             </button>
             <Link href="/services/new"
-              className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-indigo-700 shadow hover:bg-white/90 transition">
+              className="w-full rounded-xl bg-white px-4 py-2 text-center text-sm font-bold text-indigo-700 shadow transition hover:bg-white/90 sm:w-auto">
               + Nuova prenotazione
             </Link>
             <Link href="/dispatch"
-              className="rounded-xl border border-white/25 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur hover:bg-white/20 transition">
+              className="w-full rounded-xl border border-white/25 bg-white/10 px-4 py-2 text-center text-sm font-semibold text-white backdrop-blur transition hover:bg-white/20 sm:w-auto">
               Assegnazioni
             </Link>
           </div>
@@ -397,7 +397,7 @@ export default function OperatorDashboardPage() {
       )}
 
       {/* ── KPI grid ────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-6">
         {[
           { icon: "⚡", label: "Operativo oggi", value: todayInstances.length, color: "#4338ca", bg: "#eef2ff", href: "/arrivals" },
           { icon: "✈️", label: "Arrivi oggi",     value: todayArrivals,         color: "#0369a1", bg: "#e0f2fe", href: "/arrivals" },
@@ -489,7 +489,7 @@ export default function OperatorDashboardPage() {
                 <div className="mt-0.5 h-2 w-2 flex-shrink-0 rounded-full bg-blue-400 mt-1.5" />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-slate-800 truncate">{getCustomerFullName(instance.service)}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">{instance.service.meeting_point?.trim() || "Meeting point N/D"}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{formatDisplayUppercase(instance.service.meeting_point, "MEETING POINT N/D")}</p>
                 </div>
                 <span className="text-xs font-semibold text-blue-600 whitespace-nowrap">{formatServiceSlot({ arrival_date: instance.date, outbound_time: instance.time })}</span>
               </div>
@@ -513,7 +513,7 @@ export default function OperatorDashboardPage() {
                 <div className="mt-0.5 h-2 w-2 flex-shrink-0 rounded-full bg-violet-400 mt-1.5" />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-slate-800 truncate">{getCustomerFullName(instance.service)}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">{instance.service.meeting_point?.trim() || "Meeting point N/D"}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{formatDisplayUppercase(instance.service.meeting_point, "MEETING POINT N/D")}</p>
                 </div>
                 <span className="text-xs font-semibold text-violet-600 whitespace-nowrap">{formatServiceSlot({ arrival_date: instance.date, outbound_time: instance.time })}</span>
               </div>
@@ -552,7 +552,7 @@ export default function OperatorDashboardPage() {
                         );
                       })}
                     </ul>
-                    <div className="flex gap-2 pt-1">
+                    <div className="flex flex-wrap gap-2 pt-1">
                       <button type="button" onClick={() => void applySuggestion(group)} disabled={isApplied || isSkipped || applyingGroupId === group.id} className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50">
                         {applyingGroupId === group.id ? "Applicazione..." : isApplied ? "Applicato" : "Applica suggerimento"}
                       </button>

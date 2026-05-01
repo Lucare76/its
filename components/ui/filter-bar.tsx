@@ -7,5 +7,5 @@ type FilterBarProps = {
 };
 
 export function FilterBar({ children, colsClassName, className }: FilterBarProps) {
-  return <div className={`filters-grid ${colsClassName ?? ""} ${className ?? ""}`.trim()}>{children}</div>;
+  return <div className={`filters-grid items-end ${colsClassName ?? ""} ${className ?? ""}`.trim()}>{children}</div>;
 }

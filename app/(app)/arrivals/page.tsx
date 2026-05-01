@@ -187,8 +187,8 @@ function EditServiceModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl space-y-4 overflow-y-auto max-h-[90vh]">
+    <div className="modal-overlay">
+      <div className="modal-card modal-card-lg space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-slate-800">Modifica servizio</h2>
           <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
@@ -209,7 +209,7 @@ function EditServiceModal({
               </button>
             </div>
             {addingHotel ? (
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <input
                   autoFocus
                   value={newHotelName}
@@ -262,7 +262,7 @@ function EditServiceModal({
           {/* Date prenotazione */}
           <div className="sm:col-span-2">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Date prenotazione</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-xs font-medium text-slate-600">
                 Data arrivo
                 <DateInput value={arrivalDate} onChange={(iso) => setArrivalDate(iso)} className="mt-1 input-saas w-full" />
@@ -333,7 +333,7 @@ function EditServiceModal({
                     <input value={newAgency.notes} onChange={(e) => setNewAgency((f) => ({ ...f, notes: e.target.value }))} className="mt-1 input-saas w-full" />
                   </label>
                 </div>
-                <div className="flex justify-end gap-2 pt-1">
+                <div className="modal-actions justify-end pt-1">
                   <button type="button" onClick={() => setAddingAgency(false)} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">Annulla</button>
                   <button type="button" onClick={() => void createAgency()} disabled={savingAgency || !newAgency.name.trim()} className="btn-primary px-4 py-1.5 text-xs disabled:opacity-50">
                     {savingAgency ? "Salvataggio..." : "Crea e seleziona"}
@@ -357,11 +357,11 @@ function EditServiceModal({
           {/* Provenienza — Liste Bruno */}
           <div className="sm:col-span-2">
             <p className="mb-1 text-xs font-medium text-slate-600">Provenienza <span className="font-normal text-slate-400">(Liste Bruno)</span></p>
-            <div className="flex gap-2">
+            <div className="modal-actions">
               <select
                 value={placeType}
                 onChange={(e) => setPlaceType(e.target.value as "hotel" | "station" | "airport")}
-                className="input-saas w-36 shrink-0">
+                className="input-saas w-full sm:w-36 sm:shrink-0">
                 <option value="hotel">🏨 Hotel</option>
                 <option value="station">🚂 Stazione</option>
                 <option value="airport">✈️ Aeroporto</option>
@@ -378,7 +378,7 @@ function EditServiceModal({
           </div>
         </div>
 
-        <div className="flex gap-2 justify-end">
+        <div className="modal-actions justify-end">
           <button type="button" onClick={onClose} className="btn-secondary px-4 py-2 text-sm">Annulla</button>
           <button type="button" onClick={() => void save()} disabled={saving} className="btn-primary px-5 py-2 text-sm disabled:opacity-50">
             {saving ? "Salvataggio..." : "Salva"}
@@ -781,10 +781,10 @@ export default function ArrivalsPage() {
         subtitle="Vista dedicata agli arrivi operativi della giornata selezionata."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Arrivi" }]}
         actions={
-          <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white/80 px-3 py-3 shadow-sm backdrop-blur-sm">
+          <div className="grid w-full gap-3 rounded-2xl border border-slate-200 bg-white/80 px-3 py-3 shadow-sm backdrop-blur-sm sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_160px_minmax(0,1fr)_160px_auto]">
             <label className="text-sm">
               <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Data</span>
-              <DateInput value={selectedDate} onChange={(iso) => { setSelectedDate(iso); setShowAllDates(false); }} className="input-saas mt-1 min-w-40" disabled={showAllDates} />
+              <DateInput value={selectedDate} onChange={(iso) => { setSelectedDate(iso); setShowAllDates(false); }} className="input-saas mt-1 w-full" disabled={showAllDates} />
             </label>
             <div className="flex flex-col gap-1 self-end">
               <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Visualizza</span>
@@ -798,7 +798,7 @@ export default function ArrivalsPage() {
             </div>
             <label className="text-sm">
               <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Agenzia</span>
-              <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)} className="input-saas mt-1 min-w-44">
+              <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)} className="input-saas mt-1 w-full">
                 <option value="all">Tutte le agenzie</option>
                 {agencyOptions.map((a) => (
                   <option key={a.id} value={a.id}>{a.name}</option>
@@ -812,7 +812,7 @@ export default function ArrivalsPage() {
                 placeholder="Nome, cognome o telefono..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="input-saas mt-1 min-w-52"
+                className="input-saas mt-1 w-full"
               />
             </label>
             <label className="text-sm">
@@ -823,7 +823,7 @@ export default function ArrivalsPage() {
                 <option value="agency">Agenzia</option>
               </select>
             </label>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 xl:self-end">
               <span className="font-semibold text-slate-700">{formatIsoDateShort(selectedDate)}</span>
               <span className="mx-1.5 text-slate-300">•</span>
               <span>{agencyFilter === "all" ? "Tutte le agenzie" : (agencyOptions.find((a) => a.id === agencyFilter)?.name ?? agencyFilter)}</span>
@@ -903,7 +903,49 @@ export default function ArrivalsPage() {
             )}
           </div>
         ) : (
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <>
+          <div className="space-y-2 md:hidden">
+            {arrivals.map((item) => {
+              const hotelName = resolveHotelName(item.service);
+              const meetingPoint = item.service.meeting_point ?? item.service.vessel ?? null;
+              const riferimento = getTransportReferenceOutward(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
+              const tipoLabel = formatArrivalServiceTypeLabel(item.service);
+              return (
+                <article key={`mobile-${item.instanceId}`} className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-sm ${selectedIds.has(item.service.id) ? "ring-2 ring-indigo-100" : ""}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold uppercase text-slate-800">{getCustomerFullName(item.service)}</p>
+                      <p className="mt-1 text-xs text-slate-500">{hotelName}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-slate-300 accent-indigo-600"
+                        checked={selectedIds.has(item.service.id)}
+                        onChange={() => toggleSelect(item.service.id)}
+                      />
+                      <span className="inline-flex min-w-[56px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-bold text-slate-800">
+                        {item.time}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
+                    <p>Pax: <span className="font-semibold text-slate-800">{item.service.pax}</span></p>
+                    <p>{showAllDates ? `Data: ${formatIsoDateShort(item.date)}` : `Tipo: ${tipoLabel}`}</p>
+                  </div>
+                  {meetingPoint ? <p className="mt-2 text-xs uppercase text-slate-400">{meetingPoint}</p> : null}
+                  {riferimento ? <p className="mt-1 text-xs text-slate-500">{riferimento}</p> : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => setQrServiceId(item.service.id)} className="btn-secondary px-3 py-1.5 text-xs">QR</button>
+                    <button type="button" onClick={() => setEditingService(item.service)} className="btn-secondary px-3 py-1.5 text-xs">Modifica</button>
+                    <button type="button" onClick={() => openCancelModal(item.service)} className="btn-secondary border-rose-200 bg-rose-50 px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-100">Elimina</button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          <div className="table-card-scroll hidden md:block">
+          <div className="min-w-[760px] rounded-2xl border border-slate-200 bg-white shadow-sm">
             {/* Header */}
             <div className={`grid items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500 ${showAllDates ? "grid-cols-[28px_68px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]" : "grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]"}`}>
               <div>
@@ -1020,6 +1062,8 @@ export default function ArrivalsPage() {
               })}
             </div>
           </div>
+          </div>
+          </>
         )}
         {/* Toolbar assegnazione bulk */}
         {selectedIds.size > 0 && (
@@ -1030,7 +1074,7 @@ export default function ArrivalsPage() {
             <select
               value={bulkDriverId}
               onChange={(e) => setBulkDriverId(e.target.value)}
-              className="input-saas min-w-44"
+              className="input-saas w-full sm:min-w-44 sm:w-auto"
             >
               <option value="">Scegli autista…</option>
               {drivers.map((d) => (
@@ -1071,8 +1115,8 @@ export default function ArrivalsPage() {
       )}
 
       {qrServiceId && appOrigin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setQrServiceId(null)}>
-          <div className="w-full max-w-xs rounded-2xl bg-white p-6 shadow-xl text-center space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => setQrServiceId(null)}>
+          <div className="modal-card modal-card-sm text-center space-y-4" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-sm font-semibold text-slate-700">Scansiona per smarcamento</h2>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -1103,8 +1147,8 @@ export default function ArrivalsPage() {
 
       {/* Modale cancellazione */}
       {cancelModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setCancelModal(null)}>
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => setCancelModal(null)}>
+          <div className="modal-card modal-card-md space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold text-slate-800">Richiesta cancellazione</h2>
               <button type="button" onClick={() => setCancelModal(null)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
@@ -1147,7 +1191,7 @@ export default function ArrivalsPage() {
 
                 {deleteError && <p className="text-sm text-rose-600">{deleteError}</p>}
 
-                <div className="flex gap-2 pt-1">
+                <div className="modal-actions pt-1">
                   <button type="button" onClick={() => setCancelModal(null)} className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50">Annulla</button>
                   <button type="button" onClick={() => void submitCancelRequest()} disabled={cancelSubmitting}
                     className="flex-1 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50">
@@ -1162,14 +1206,14 @@ export default function ArrivalsPage() {
 
       {/* Modale aggiungi arrivo */}
       {addModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setAddModal(false)}>
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => setAddModal(false)}>
+          <div className="modal-card modal-card-md space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold text-slate-800">Aggiungi arrivo</h2>
               <button type="button" onClick={() => setAddModal(false)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
             </div>
             {addError && <p className="text-sm text-rose-600">{addError}</p>}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <label className="col-span-2 text-xs text-slate-600 font-medium">
                 Cliente*
                 <input className="input-saas mt-1" value={addForm.customer_name} onChange={(e) => setAddForm((f) => ({ ...f, customer_name: e.target.value }))} placeholder="Nome e cognome" />
@@ -1195,7 +1239,7 @@ export default function ArrivalsPage() {
                 <input className="input-saas mt-1" value={addForm.notes} onChange={(e) => setAddForm((f) => ({ ...f, notes: e.target.value }))} />
               </label>
             </div>
-            <div className="flex gap-2 pt-1">
+            <div className="modal-actions pt-1">
               <button type="button" onClick={() => setAddModal(false)} className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Annulla</button>
               <button type="button" onClick={() => void addService()} disabled={addSaving || !addForm.customer_name.trim() || !addForm.date || !addForm.time}
                 className="flex-1 rounded-xl bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-40">

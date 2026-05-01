@@ -238,7 +238,7 @@ export default function PlanningPage() {
             <option value="bus_tour">bus_tour</option>
           </select>
         </label>
-        <div className="flex items-end text-xs text-muted">Trascina una card e rilasciala in un altro slot per cambiare l&apos;orario del servizio.</div>
+        <div className="text-xs text-muted md:col-span-4 xl:col-span-1 xl:flex xl:items-end">Trascina una card e rilasciala in un altro slot per cambiare l&apos;orario del servizio.</div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -313,15 +313,15 @@ export default function PlanningPage() {
       </div>
 
       {viewMode === "day" ? (
-        <div className="card overflow-x-auto p-2 md:p-3">
-          <div className="grid min-w-[760px] grid-cols-[80px_1fr]">
+        <div className="card touch-scroll-x p-2 md:p-3">
+          <div className="grid min-w-[640px] grid-cols-[72px_1fr] lg:min-w-[760px] lg:grid-cols-[80px_1fr]">
             {slots.map((slot) => {
               const dayKey = `${effectiveSelectedDate}|${slot}`;
               const servicesAtSlot = servicesByDayAndSlot.get(dayKey) ?? [];
               return (
                 <div key={`${dayKey}-day`} className="contents">
                   <div className="border-t border-border px-2 py-3 text-xs text-muted">{slot}</div>
-                  <div className="min-h-14 border-t border-border px-2 py-2 hover:bg-blue-50/50" onDragOver={(event) => event.preventDefault()} onDrop={(event) => void onDropSlot(effectiveSelectedDate, slot, event)}>
+                  <div className="min-h-16 border-t border-border px-2 py-2 hover:bg-blue-50/50" onDragOver={(event) => event.preventDefault()} onDrop={(event) => void onDropSlot(effectiveSelectedDate, slot, event)}>
                     <div className="flex flex-wrap gap-2">
                       {servicesAtSlot.map((instance) => {
                         const service = instance.service;
@@ -332,7 +332,7 @@ export default function PlanningPage() {
                             key={instance.instanceId}
                             draggable
                             onDragStart={(event) => onDragStart(instance.instanceId, event)}
-                            className="cursor-grab rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs shadow-sm"
+                            className="w-full max-w-[260px] cursor-grab rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs shadow-sm"
                           >
                             <p className="line-clamp-2 text-safe-wrap font-semibold">{service.customer_name}</p>
                             <p className="line-clamp-1 text-muted">
@@ -351,8 +351,8 @@ export default function PlanningPage() {
           {dayInstances.length === 0 ? <p className="p-3 text-sm text-muted">Nessuna istanza operativa per il giorno e i filtri selezionati.</p> : null}
         </div>
       ) : (
-        <div className="card overflow-x-auto p-2 md:p-3">
-          <div className="grid min-w-[1120px] grid-cols-[80px_repeat(7,minmax(150px,1fr))]">
+        <div className="card touch-scroll-x p-2 md:p-3">
+          <div className="grid min-w-[860px] grid-cols-[72px_repeat(7,minmax(110px,1fr))] xl:min-w-[1120px] xl:grid-cols-[80px_repeat(7,minmax(150px,1fr))]">
             <div />
             {weekDates.map((date) => (
               <div key={date} className="border-b border-border px-2 py-2 text-xs font-semibold text-text">
@@ -366,7 +366,7 @@ export default function PlanningPage() {
                   const key = `${date}|${slot}`;
                   const servicesAtSlot = servicesByDayAndSlot.get(key) ?? [];
                   return (
-                    <div key={key} className="min-h-14 border-t border-border px-1.5 py-2 hover:bg-blue-50/40" onDragOver={(event) => event.preventDefault()} onDrop={(event) => void onDropSlot(date, slot, event)}>
+                    <div key={key} className="min-h-16 border-t border-border px-1.5 py-2 hover:bg-blue-50/40" onDragOver={(event) => event.preventDefault()} onDrop={(event) => void onDropSlot(date, slot, event)}>
                       <div className="space-y-1">
                         {servicesAtSlot.map((instance) => (
                           <article
