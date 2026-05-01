@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { auditLog } from "@/lib/server/ops-audit";
-import { resolvePreferredMembership } from "@/lib/tenant-preference";
+import { getRequestedTenantFromRequest, hasMembershipForTenant, resolvePreferredMembership } from "@/lib/tenant-preference";
 
 type BaseMembershipRow = {
   tenant_id: string;
@@ -59,10 +59,20 @@ export async function authorizeServiceRoleRequest<TRole extends string, TExtra e
     .select(requestedFields.join(", "))
     .eq("user_id", user.id);
   const membershipRows = (memberships ?? []) as unknown as Array<BaseMembershipRow & TExtra>;
-  const membership = resolvePreferredMembership(membershipRows);
+  const tenantContext = getRequestedTenantFromRequest(request);
+  const membership = resolvePreferredMembership(membershipRows, tenantContext.preferredTenantId);
   if (membershipError || !membership?.tenant_id) {
     auditLog({ event: `${auditPrefix}_membership_missing`, level: "warn", userId: user.id, details: { route: request.nextUrl.pathname } });
     return NextResponse.json({ error: "Membership non trovata." }, { status: 403 });
+  }
+  if (tenantContext.strictTenantId && !hasMembershipForTenant(membershipRows, tenantContext.strictTenantId)) {
+    auditLog({
+      event: `${auditPrefix}_tenant_denied`,
+      level: "warn",
+      userId: user.id,
+      details: { route: request.nextUrl.pathname, requested_tenant_id: tenantContext.strictTenantId }
+    });
+    return NextResponse.json({ error: "Tenant non autorizzato." }, { status: 403 });
   }
   const allowedRoles = options.roles.includes("admin" as TRole) && !options.roles.includes("supervisor" as TRole)
     ? [...options.roles, "supervisor" as TRole]

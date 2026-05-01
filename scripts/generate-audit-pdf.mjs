@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+import { chromium } from "@playwright/test";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 

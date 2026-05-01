@@ -5,7 +5,7 @@ import * as XLSX from "xlsx";
 import { z } from "zod";
 import { formatIsoDateShort } from "@/lib/service-display";
 import { buildServicesQuery } from "@/lib/server/services-filter-builder";
-import { resolvePreferredMembership } from "@/lib/tenant-preference";
+import { getRequestedTenantFromRequest, hasMembershipForTenant, resolvePreferredMembership } from "@/lib/tenant-preference";
 
 const statusEnum = z.enum(["new", "assigned", "partito", "arrivato", "completato", "problema", "cancelled", "needs_review"]);
 
@@ -582,9 +582,14 @@ export async function buildServicesExportXlsx(request: NextRequest) {
       return NextResponse.json({ error: "Membership non trovata." }, { status: 403 });
     }
 
-    const membership = resolvePreferredMembership(memberships as Array<{ tenant_id: string; role: string; agency_id?: string | null }>) as { tenant_id: string; role: Role; agency_id?: string | null } | null;
+    const membershipRows = memberships as Array<{ tenant_id: string; role: string; agency_id?: string | null }>;
+    const tenantContext = getRequestedTenantFromRequest(request);
+    const membership = resolvePreferredMembership(membershipRows, tenantContext.preferredTenantId) as { tenant_id: string; role: Role; agency_id?: string | null } | null;
     if (!membership) {
       return NextResponse.json({ error: "Membership non trovata." }, { status: 403 });
+    }
+    if (tenantContext.strictTenantId && !hasMembershipForTenant(membershipRows, tenantContext.strictTenantId)) {
+      return NextResponse.json({ error: "Tenant non autorizzato." }, { status: 403 });
     }
 
     const { tenant_id: tenantId, role } = membership;

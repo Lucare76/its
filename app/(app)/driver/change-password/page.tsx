@@ -26,7 +26,10 @@ export default function ChangePasswordPage() {
 
     setSaving(true);
     try {
-      if (!supabase) { setError("Errore di configurazione."); return; }
+      if (!supabase) {
+        setError("Errore di configurazione.");
+        return;
+      }
 
       const userResponse = await supabase.auth.getUser();
       const currentMetadata = (userResponse.data.user?.user_metadata ?? {}) as Record<string, unknown>;
@@ -35,8 +38,8 @@ export default function ChangePasswordPage() {
         data: {
           ...currentMetadata,
           force_password_change: false,
-          password_change_required: false,
-        },
+          password_change_required: false
+        }
       });
 
       if (updateErr) {
@@ -54,10 +57,10 @@ export default function ChangePasswordPage() {
     <div className="flex min-h-screen items-center justify-center bg-slate-900 p-4">
       <div className="w-full max-w-sm space-y-6 rounded-2xl bg-white p-8 shadow-2xl">
         <div className="text-center">
-          <div className="mb-2 text-3xl">🔑</div>
+          <div className="mb-2 text-3xl">Reset</div>
           <h1 className="text-xl font-bold text-slate-900">Imposta la tua password</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Al primo accesso è richiesto cambiare la password temporanea.
+            Al primo accesso e richiesto impostare una password personale.
           </p>
         </div>
 
@@ -89,9 +92,9 @@ export default function ChangePasswordPage() {
             />
           </div>
 
-          {error && (
+          {error ? (
             <p className="rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-700">{error}</p>
-          )}
+          ) : null}
 
           <button
             type="submit"

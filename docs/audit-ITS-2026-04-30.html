@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audit ITS 2026-04-30</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --text: #10233f;
+      --muted: #5b6b82;
+      --line: #d8e0ea;
+      --accent: #0f4c81;
+      --high: #9f1239;
+      --medium: #b45309;
+      --low: #1d4ed8;
+      --ok: #166534;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .page {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 36px 28px 56px;
+    }
+
+    .hero, .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 10px 30px rgba(16, 35, 63, 0.06);
+    }
+
+    .hero {
+      padding: 32px;
+      margin-bottom: 24px;
+      background: linear-gradient(135deg, #ffffff 0%, #eef4fb 100%);
+    }
+
+    .eyebrow {
+      font-size: 12px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--accent);
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    h1, h2, h3 {
+      margin: 0 0 12px;
+      line-height: 1.15;
+    }
+
+    h1 { font-size: 34px; }
+    h2 { font-size: 22px; }
+    h3 { font-size: 18px; }
+
+    p { margin: 0 0 12px; }
+    .muted { color: var(--muted); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin: 24px 0;
+    }
+
+    .stat {
+      padding: 18px;
+      border-radius: 16px;
+      background: #f8fbff;
+      border: 1px solid var(--line);
+    }
+
+    .stat .label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+
+    .stat .value {
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    .card {
+      padding: 26px 28px;
+      margin-bottom: 18px;
+    }
+
+    .finding {
+      border-top: 1px solid var(--line);
+      padding-top: 18px;
+      margin-top: 18px;
+    }
+
+    .finding:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+      margin-top: 0;
+    }
+
+    .sev {
+      display: inline-block;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .sev.high { background: #ffe4ea; color: var(--high); }
+    .sev.medium { background: #fff1dc; color: var(--medium); }
+    .sev.low { background: #e5efff; color: var(--low); }
+    .sev.ok { background: #dcfce7; color: var(--ok); }
+
+    ul {
+      margin: 10px 0 0 20px;
+      padding: 0;
+    }
+
+    li { margin-bottom: 8px; }
+
+    code {
+      font-family: "Courier New", monospace;
+      font-size: 0.94em;
+      background: #eef3f8;
+      border-radius: 6px;
+      padding: 1px 6px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    th {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+    }
+
+    .footer-note {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 12px;
+    }
+
+    @media print {
+      body { background: #fff; }
+      .page { max-width: none; padding: 0; }
+      .hero, .card { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="eyebrow">Ischia Transfer Service</div>
+      <h1>Audit Tecnico Completo</h1>
+      <p class="muted">
+        Audit del programma eseguito il 30 aprile 2026 sul repository operativo Next.js + Supabase.
+        Focus: sicurezza, multi-tenant, qualità eseguibile e aderenza alla Definition of Done.
+      </p>
+
+      <div class="grid">
+        <div class="stat">
+          <div class="label">Esito Test</div>
+          <div class="value">138 / 138 OK</div>
+        </div>
+        <div class="stat">
+          <div class="label">Lint</div>
+          <div class="value">2 warning</div>
+        </div>
+        <div class="stat">
+          <div class="label">Build</div>
+          <div class="value">Non certificato</div>
+        </div>
+      </div>
+
+      <p>
+        Stato sintetico: il progetto ha una base concreta e una copertura test incoraggiante, ma oggi non può essere
+        considerato pienamente "beta vendibile" senza correggere alcuni rischi strutturali, soprattutto su reset password,
+        selezione tenant e gestione del materiale legacy nel repository.
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>Findings Principali</h2>
+
+      <article class="finding">
+        <div class="sev high">High</div>
+        <h3>Reset password fragile e insicuro</h3>
+        <p>
+          L’endpoint <code>app/api/auth/reset-password/route.ts</code> cambia subito la password dell’utente e poi prova a
+          inviarla via email in chiaro. Se l’invio fallisce, l’account resta comunque alterato e l’utente può rimanere bloccato.
+        </p>
+        <ul>
+          <li>Riferimento principale: <code>app/api/auth/reset-password/route.ts:77</code>.</li>
+          <li>Invio credenziale temporanea in plain text: <code>lib/server/password-reset-email.ts:82</code>.</li>
+          <li>Impatto: rischio lockout, cattiva UX e modello di recovery non allineato a una beta commerciale.</li>
+          <li>Priorità: sostituire con link di recovery one-time e invalidazione controllata.</li>
+        </ul>
+      </article>
+
+      <article class="finding">
+        <div class="sev high">High</div>
+        <h3>Risoluzione tenant hardcoded e multi-tenant non rigoroso</h3>
+        <p>
+          La logica di scelta del tenant attivo usa un <code>PRIMARY_TENANT_ID</code> fisso. Questo introduce il rischio
+          che utenti con più membership operino sul tenant sbagliato nelle route server-side che lavorano con <code>service_role</code>.
+        </p>
+        <ul>
+          <li>Costante hardcoded: <code>lib/tenant-preference.ts:3</code>.</li>
+          <li>Uso nel path di autorizzazione: <code>lib/server/pricing-auth.ts:56</code>.</li>
+          <li>Impatto: possibile mismatch tenant in letture e scritture protette.</li>
+          <li>Priorità: tenant esplicito per request o contesto sessione persistito per utente.</li>
+        </ul>
+      </article>
+
+      <article class="finding">
+        <div class="sev medium">Medium</div>
+        <h3>Materiale legacy e backup versionati nel repository</h3>
+        <p>
+          Nel repo risultano tracciati file come <code>server/prisma/dev.db</code> e vari backup in <code>server/backups/</code>,
+          nonostante l’area legacy sia dichiarata read-only e fuori dallo stack ufficiale.
+        </p>
+        <ul>
+          <li>Contrasto con policy locale: <code>AGENTS.md:11</code>.</li>
+          <li>Cartelle dichiarate legacy: <code>server/LEGACY_READONLY.md</code>, <code>client/LEGACY_READONLY.md</code>.</li>
+          <li>Impatto: rischio dati sensibili, confusione architetturale e repository più pesante.</li>
+          <li>Priorità: rimuovere i dump dal versionamento e tenerli fuori dal perimetro operativo.</li>
+        </ul>
+      </article>
+
+      <article class="finding">
+        <div class="sev medium">Medium</div>
+        <h3>Endpoint tenant-data troppo pesante</h3>
+        <p>
+          <code>app/api/ops/tenant-data/route.ts</code> restituisce dataset completi del tenant con più <code>select("*")</code>,
+          compresi servizi, eventi, hotel e opzionalmente inbound emails.
+        </p>
+        <ul>
+          <li>Riferimento: <code>app/api/ops/tenant-data/route.ts:7</code>.</li>
+          <li>Impatto: payload ampi, latency crescente e stress inutile lato browser/server.</li>
+          <li>Priorità: endpoint specializzati, filtri, projection fields e paginazione reale.</li>
+        </ul>
+      </article>
+
+      <article class="finding">
+        <div class="sev low">Low</div>
+        <h3>OTP generato con random non crittografico</h3>
+        <p>
+          Il codice OTP viene generato con <code>Math.random()</code>, soluzione debole per un fattore di autenticazione.
+        </p>
+        <ul>
+          <li>Riferimento: <code>lib/server/otp-utils.ts:1</code>.</li>
+          <li>Uso nel flusso: <code>app/api/auth/otp/send/route.ts</code> e <code>app/api/auth/otp/verify/route.ts</code>.</li>
+          <li>Priorità: passare a <code>crypto.randomInt</code> e, se possibile, hashare il codice a database.</li>
+        </ul>
+      </article>
+
+      <article class="finding">
+        <div class="sev low">Low</div>
+        <h3>Deriva operativa nella gestione degli env locali</h3>
+        <p>
+          La regola di progetto richiede solo <code>.env.local</code>, ma nel workspace è presente anche <code>.env</code>.
+        </p>
+        <ul>
+          <li>Regola dichiarata: <code>AGENTS.md:12</code>.</li>
+          <li>Git ignore permissivo: <code>.gitignore:3</code>.</li>
+          <li>Impatto: rischio operativo, non leak confermato nel repository.</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Verifica Eseguibile</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Check</th>
+            <th>Esito</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>pnpm.cmd test</code></td>
+            <td><span class="sev ok">OK</span></td>
+            <td>14 test files, 138 test superati.</td>
+          </tr>
+          <tr>
+            <td><code>pnpm.cmd lint</code></td>
+            <td><span class="sev medium">Warning</span></td>
+            <td>2 warning residui, quindi la DoD “lint ok” non è ancora pienamente chiusa.</td>
+          </tr>
+          <tr>
+            <td><code>pnpm.cmd build</code></td>
+            <td><span class="sev medium">Bloccato</span></td>
+            <td>Build non certificato: Next ha segnalato un altro processo/build state già attivo in <code>.next</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="footer-note">
+        Nota: il mancato esito finale del build non equivale a bug applicativo provato, ma oggi impedisce di dichiarare la
+        voce “<code>pnpm build</code> ok” come soddisfatta.
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>Valutazione Finale</h2>
+      <p>
+        La piattaforma è già ampia, concreta e con segnali positivi sul fronte test e copertura funzionale. Però la beta
+        ha ancora alcuni difetti strutturali che pesano più dei warning cosmetici.
+      </p>
+      <ul>
+        <li>Pronto per continuare l’hardening: sì.</li>
+        <li>Pronto per demo commerciale guidata: sì, con cautela.</li>
+        <li>Pronto per dichiararlo “vendibile” senza riserve: non ancora.</li>
+      </ul>
+      <p>
+        Le tre correzioni prioritarie sono:
+      </p>
+      <ul>
+        <li>rifare il reset password con recovery link;</li>
+        <li>eliminare la risoluzione tenant hardcoded;</li>
+        <li>ripulire i backup/database legacy dal repository operativo.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

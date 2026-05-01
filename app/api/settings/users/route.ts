@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/server/whatsapp";
 import { sendAccessApprovalEmail } from "@/lib/server/access-approval-email";
 import { sendPasswordResetEmail } from "@/lib/server/password-reset-email";
 import { capabilityRoleMap, type AppCapability } from "@/lib/rbac";
-import { resolvePreferredMembership } from "@/lib/tenant-preference";
+import { getRequestedTenantFromRequest, hasMembershipForTenant, resolvePreferredMembership } from "@/lib/tenant-preference";
 import { hasDeliverableEmailDomain, isDisposableEmail } from "@/lib/email-validation";
 import { adminGetUserByEmail } from "@/lib/server/admin-user-lookup";
 import type { UserRole } from "@/lib/types";
@@ -148,10 +148,14 @@ async function requireAdminMembership(request: NextRequest) {
     .eq("user_id", user.id);
 
   const membershipRows = (memberships ?? []) as Array<{ tenant_id: string; role: UserRole; full_name: string; suspended?: boolean | null }>;
-  const membership = resolvePreferredMembership(membershipRows);
+  const tenantContext = getRequestedTenantFromRequest(request);
+  const membership = resolvePreferredMembership(membershipRows, tenantContext.preferredTenantId);
 
   if (membershipError || !membership?.tenant_id) {
     return { error: NextResponse.json({ error: "Tenant not found" }, { status: 404 }) };
+  }
+  if (tenantContext.strictTenantId && !hasMembershipForTenant(membershipRows, tenantContext.strictTenantId)) {
+    return { error: NextResponse.json({ error: "Tenant non autorizzato." }, { status: 403 }) };
   }
 
   if (membership.role !== "admin" && membership.role !== "supervisor") {

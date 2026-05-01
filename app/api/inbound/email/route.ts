@@ -39,6 +39,7 @@ const attachmentSchema = z
   }));
 
 const inboundEmailPayloadSchema = z.object({
+  tenant_id: z.string().uuid().optional(),
   subject: z.string().min(1).max(240),
   from: z.string().email().max(240),
   body_text: z.string().min(1).max(400_000),
@@ -98,18 +99,27 @@ function rateLimited(ip: string) {
   return false;
 }
 
-async function resolveTenantId(admin: SupabaseClient) {
-  const envTenant = process.env.INBOUND_DEFAULT_TENANT_ID;
-  if (envTenant) return envTenant;
-
-  const { data: firstTenant, error: firstTenantError } = (await admin.from("tenants").select("id").limit(1).maybeSingle()) as {
-    data: { id?: string } | null;
-    error?: { message?: string } | null;
-  };
-  if (firstTenantError) {
-    throw new Error(`Tenant lookup failed: ${firstTenantError.message ?? "unknown error"}`);
+async function resolveTenantId(admin: SupabaseClient, payloadTenantId?: string) {
+  const resolvedTenantId = payloadTenantId?.trim() || process.env.INBOUND_DEFAULT_TENANT_ID?.trim() || null;
+  if (!resolvedTenantId) {
+    throw new Error("Missing inbound tenant context. Provide tenant_id in payload or configure INBOUND_DEFAULT_TENANT_ID.");
   }
-  return firstTenant?.id ?? null;
+
+  const { data: tenant, error: tenantError } = await admin
+    .from("tenants")
+    .select("id")
+    .eq("id", resolvedTenantId)
+    .maybeSingle();
+
+  if (tenantError) {
+    throw new Error(`Tenant lookup failed: ${tenantError.message ?? "unknown error"}`);
+  }
+
+  if (!tenant?.id) {
+    throw new Error(`Inbound tenant not found: ${resolvedTenantId}`);
+  }
+
+  return tenant.id;
 }
 
 export async function POST(request: NextRequest) {
@@ -167,10 +177,7 @@ export async function POST(request: NextRequest) {
     auth: { persistSession: false, autoRefreshToken: false }
   });
 
-  const tenantId = await resolveTenantId(admin);
-  if (!tenantId) {
-    return NextResponse.json({ ok: false, error: "No tenant available" }, { status: 400 });
-  }
+  const tenantId = await resolveTenantId(admin, parsed.data.tenant_id);
 
   const firstPdfAttachment = parsed.data.attachments.find((attachment) => isPdfAttachment(attachment.filename, attachment.mimetype));
   if (firstPdfAttachment) {

@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { z } from "zod";
-import { resolvePreferredMembership } from "@/lib/tenant-preference";
+import { getRequestedTenantFromRequest, hasMembershipForTenant, resolvePreferredMembership } from "@/lib/tenant-preference";
 
 type Role = "admin" | "operator" | "driver" | "agency" | "supervisor";
 
@@ -227,9 +227,14 @@ async function resolveContext(request: NextRequest): Promise<AnalyticsContext | 
     return NextResponse.json({ error: "Membership non trovata." }, { status: 403 });
   }
 
-  const membership = resolvePreferredMembership(memberships as Array<{ tenant_id: string; role: string }>) as { tenant_id: string; role: Role } | null;
+  const membershipRows = memberships as Array<{ tenant_id: string; role: string }>;
+  const tenantContext = getRequestedTenantFromRequest(request);
+  const membership = resolvePreferredMembership(membershipRows, tenantContext.preferredTenantId) as { tenant_id: string; role: Role } | null;
   if (!membership) {
     return NextResponse.json({ error: "Membership non trovata." }, { status: 403 });
+  }
+  if (tenantContext.strictTenantId && !hasMembershipForTenant(membershipRows, tenantContext.strictTenantId)) {
+    return NextResponse.json({ error: "Tenant non autorizzato." }, { status: 403 });
   }
 
   if (membership.role !== "admin" && membership.role !== "operator") {

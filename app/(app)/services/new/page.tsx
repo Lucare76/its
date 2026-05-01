@@ -391,7 +391,7 @@ export default function OpsNewBookingPage() {
           setForm((prev) => ({ ...prev, excursion_title: prev.excursion_title || data[0]?.name || "" }));
         }
       });
-  }, [form.booking_service_kind, tenantId, excursionLines.length]);
+  }, [form.booking_service_kind, tenantId, excursionLines]);
 
   // Bus catalog
   useEffect(() => {

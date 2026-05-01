@@ -6,6 +6,8 @@ supabase/env.txt
 supabase/.temp/
 .next
 node_modules
+server/backups/
+server/prisma/dev.db
 playwright-report
 test-results
 *.log

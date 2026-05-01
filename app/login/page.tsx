@@ -103,7 +103,7 @@ export default function LoginPage() {
   const handleResetPassword = async () => {
     if (loading) return;
     setLoading(true);
-    setMessage("Invio password temporanea...");
+    setMessage("Invio link di reset...");
     try {
       const response = await fetch("/api/auth/reset-password", {
         method: "POST",
@@ -115,7 +115,7 @@ export default function LoginPage() {
         setMessage(body?.error ?? "Richiesta reset non riuscita.");
         return;
       }
-      setMessage(body?.message ?? "Email inviata con password temporanea. Controlla la casella.");
+      setMessage(body?.message ?? "Se l'account esiste, abbiamo inviato un link di reset. Controlla la casella.");
       setMode("login");
     } catch (error) {
       setMessage(error instanceof Error ? `Errore reset: ${error.message}` : "Errore reset inatteso.");
@@ -241,7 +241,7 @@ export default function LoginPage() {
             ? "Accedi all'area riservata"
             : mode === "register"
             ? "Invia richiesta accesso"
-            : "Invia password temporanea"}
+            : "Invia link di reset"}
         </button>
         {mode === "login" ? (
           <button type="button" onClick={handleMagicLink} disabled={loading} className="btn-secondary w-full disabled:opacity-60">
@@ -249,7 +249,7 @@ export default function LoginPage() {
           </button>
         ) : null}
         {mode === "reset" ? (
-          <p className="text-xs text-blue-700">Abbiamo generato una password temporanea se l&apos;account esiste. Controlla la tua casella email (anche spam). Il codice scade in 30 minuti.</p>
+          <p className="text-xs text-blue-700">Se l&apos;account esiste, riceverai un link per scegliere una nuova password. Controlla anche la cartella spam.</p>
         ) : null}
         <p data-testid="login-message" className="text-sm text-slate-600">{message}</p>
         <p className="text-xs text-slate-500">Riceverai una risposta o un link di accesso in breve tempo, quando previsto.</p>

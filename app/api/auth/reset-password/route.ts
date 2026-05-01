@@ -1,9 +1,8 @@
-import { randomBytes } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { isDisposableEmail, hasDeliverableEmailDomain } from "@/lib/email-validation";
-import { sendTemporaryPasswordEmail } from "@/lib/server/password-reset-email";
+import { sendPasswordResetEmail } from "@/lib/server/password-reset-email";
 import { checkRateLimit, RATE_LIMIT_DEFAULTS, type RateLimitConfig } from "@/lib/server/rate-limit";
 import { sendSecurityAlert } from "@/lib/server/security-alert-email";
 import { adminGetUserByEmail } from "@/lib/server/admin-user-lookup";
@@ -11,12 +10,6 @@ import { adminGetUserByEmail } from "@/lib/server/admin-user-lookup";
 const bodySchema = z.object({
   email: z.string().email("Email non valida"),
 });
-
-function generateTemporaryPassword(length = 12) {
-  const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
-  const bytes = randomBytes(length);
-  return Array.from(bytes, (b) => charset[b % charset.length]).join("");
-}
 
 export const runtime = "nodejs";
 
@@ -74,23 +67,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, message: "Controlla la tua casella di posta per le istruzioni." }, { status: 200 });
   }
 
-  const temporaryPassword = generateTemporaryPassword(14);
-  const membershipResult = await admin
-    .from("memberships")
-    .select("role")
-    .eq("user_id", existingUser.id);
-  const isDriver = (membershipResult.data ?? []).some((membership: { role?: string | null }) => membership.role === "driver");
-
-  const updateResult = await admin.auth.admin.updateUserById(existingUser.id, {
-    password: temporaryPassword,
-    user_metadata: {
-      ...((existingUser.user_metadata ?? {}) as Record<string, unknown>),
-      password_change_required: true,
-      ...(isDriver ? { force_password_change: true } : {})
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || request.nextUrl.origin;
+  const redirectTo = `${appUrl.replace(/\/$/, "")}/auth/update-password`;
+  const linkResult = await admin.auth.admin.generateLink({
+    type: "recovery",
+    email,
+    options: {
+      redirectTo
     }
   });
 
-  if (updateResult.error) {
+  const resetUrl = linkResult.data?.properties?.action_link ?? null;
+  if (linkResult.error || !resetUrl) {
     await admin
       .from("auth_audit_log")
       .insert({
@@ -98,20 +86,20 @@ export async function POST(request: NextRequest) {
         event_type: "reset_password_requested",
         status: "failed",
         ip_address: ipAddress,
-        details: { email, error: updateResult.error.message }
+        details: { email, error: linkResult.error?.message ?? "Reset link generation failed" }
       })
       .then(() => undefined, () => undefined);
 
-    return NextResponse.json({ error: "Impossibile generare password temporanea." }, { status: 500 });
+    return NextResponse.json({ error: "Impossibile generare il link di reset." }, { status: 500 });
   }
 
-  const sendResult = await sendTemporaryPasswordEmail({
+  const sendResult = await sendPasswordResetEmail({
     to: email,
     fullName: (existingUser.user_metadata as { full_name?: string } | null)?.full_name ?? email,
-    tempPassword: temporaryPassword
+    resetUrl
   });
 
-  if (sendResult.status === "failed") {
+  if (sendResult.status !== "sent") {
     await admin
       .from("auth_audit_log")
       .insert({
@@ -119,11 +107,11 @@ export async function POST(request: NextRequest) {
         event_type: "reset_password_requested",
         status: "failed",
         ip_address: ipAddress,
-        details: { email, error: `Email send failed: ${sendResult.error}` }
+        details: { email, error: `Reset email send failed: ${sendResult.error}` }
       })
       .then(() => undefined, () => undefined);
 
-    return NextResponse.json({ error: sendResult.error ?? "Invio email temporanea fallito." }, { status: 500 });
+    return NextResponse.json({ error: sendResult.error ?? "Invio email reset fallito." }, { status: 500 });
   }
 
   await admin
@@ -137,5 +125,5 @@ export async function POST(request: NextRequest) {
     })
     .then(() => undefined, () => undefined);
 
-  return NextResponse.json({ ok: true, message: "Email con password temporanea inviata." }, { status: 200 });
+  return NextResponse.json({ ok: true, message: "Se l'account esiste, abbiamo inviato un link per reimpostare la password." }, { status: 200 });
 }

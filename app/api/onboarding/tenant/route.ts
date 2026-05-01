@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseRole, type AppCapability } from "@/lib/rbac";
-import { resolvePreferredMembership } from "@/lib/tenant-preference";
+import { ACTIVE_TENANT_COOKIE, getRequestedTenantFromRequest, resolvePreferredMembership } from "@/lib/tenant-preference";
 import { onboardingTenantSchema } from "@/lib/validation";
 import { createAdminClient } from "@/lib/server/supabase-admin";
 
@@ -50,7 +50,8 @@ export async function GET(request: NextRequest) {
     }
 
     const membershipRows = memberships as Array<{ tenant_id: string | null; role: string | null; suspended?: boolean | null }>;
-    const membership = resolvePreferredMembership(membershipRows);
+    const tenantContext = getRequestedTenantFromRequest(request);
+    const membership = resolvePreferredMembership(membershipRows, tenantContext.preferredTenantId);
     if (!membership?.tenant_id) {
       const hasSuspendedMembership = membershipRows.some(
         (item) => Boolean(item.tenant_id) && parseRole(item.role ?? undefined) !== null && item.suspended === true
@@ -79,7 +80,7 @@ export async function GET(request: NextRequest) {
       ((capabilityOverrides ?? []) as Array<{ capability: AppCapability; enabled: boolean }>).map((item) => [item.capability, item.enabled])
     );
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       {
         hasTenant: true,
         tenant: tenant ?? { id: membership.tenant_id, name: "" },
@@ -88,6 +89,14 @@ export async function GET(request: NextRequest) {
       },
       { status: 200 }
     );
+    response.cookies.set(ACTIVE_TENANT_COOKIE, membership.tenant_id, {
+      httpOnly: false,
+      sameSite: "lax",
+      secure: request.nextUrl.protocol === "https:",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30
+    });
+    return response;
   } catch (error) {
     console.error("Onboarding tenant GET error", error instanceof Error ? error.message : String(error));
     return NextResponse.json({ error: "Errore interno server." }, { status: 500 });
@@ -116,14 +125,15 @@ export async function POST(request: NextRequest) {
     }
 
     const membershipRows = (existingMemberships ?? []) as Array<{ tenant_id: string | null; role: string | null; suspended?: boolean | null }>;
-    const existingValidMembership = resolvePreferredMembership(membershipRows);
+    const tenantContext = getRequestedTenantFromRequest(request);
+    const existingValidMembership = resolvePreferredMembership(membershipRows, tenantContext.preferredTenantId);
 
     if (existingValidMembership?.tenant_id) {
       if (existingValidMembership.suspended === true) {
         return NextResponse.json({ error: "Accesso sospeso per questo tenant." }, { status: 403 });
       }
       const { data: tenant } = await admin!.from("tenants").select("id, name").eq("id", existingValidMembership.tenant_id).maybeSingle();
-      return NextResponse.json(
+      const response = NextResponse.json(
         {
           created: false,
           tenant: tenant ?? { id: existingValidMembership.tenant_id, name: parsed.data.company_name },
@@ -131,6 +141,14 @@ export async function POST(request: NextRequest) {
         },
         { status: 200 }
       );
+      response.cookies.set(ACTIVE_TENANT_COOKIE, existingValidMembership.tenant_id, {
+        httpOnly: false,
+        sameSite: "lax",
+        secure: request.nextUrl.protocol === "https:",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 30
+      });
+      return response;
     }
 
     const { data: pendingRequest } = await admin!
@@ -167,7 +185,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: membershipInsertError.message }, { status: 500 });
     }
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       {
         created: true,
         tenant,
@@ -175,6 +193,14 @@ export async function POST(request: NextRequest) {
       },
       { status: 201 }
     );
+    response.cookies.set(ACTIVE_TENANT_COOKIE, tenant.id, {
+      httpOnly: false,
+      sameSite: "lax",
+      secure: request.nextUrl.protocol === "https:",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30
+    });
+    return response;
   } catch (error) {
     console.error("Onboarding tenant POST error", error instanceof Error ? error.message : String(error));
     return NextResponse.json({ error: "Errore interno server." }, { status: 500 });
