@@ -44,6 +44,12 @@ type DriverService = {
   meeting_point: string | null; pickup_time: string | null;
   linked_service_id: string | null;
   booking_service_kind: string | null;
+  arrival_date?: string | null;
+  arrival_time?: string | null;
+  departure_date?: string | null;
+  departure_time?: string | null;
+  _instance_key?: string;
+  _instance_direction?: "arrival" | "departure";
 };
 type DriverAssignment = { id: string; service_id: string; driver_user_id: string; vehicle_label: string };
 type DriverHotel = { id: string; name: string; zone: string | null; lat: number | null; lng: number | null };
@@ -64,6 +70,25 @@ function formatDateLabel(dateIso: string) {
   const [year, month, day] = dateIso.split("-");
   const months = ["gen","feb","mar","apr","mag","giu","lug","ago","set","ott","nov","dic"];
   return day && month && year ? `${day} ${months[Number(month) - 1]}` : dateIso;
+}
+
+function upperHotelName(hotel: DriverHotel | null | undefined) {
+  return hotel?.name ? hotel.name.toUpperCase() : "N/D";
+}
+
+function upperCustomerName(name: string | null | undefined) {
+  return name ? name.toUpperCase() : "";
+}
+
+function FerryIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className={className}>
+      <path d="M4 13.5h16l-2 5H6l-2-5Z" fill="currentColor" opacity="0.9" />
+      <path d="M7 9.5h10v4H7v-4Z" fill="currentColor" opacity="0.65" />
+      <path d="M9 6h6v3.5H9V6Z" fill="currentColor" opacity="0.45" />
+      <path d="M3 20.5c2 0 2-1 4-1s2 1 4 1 2-1 4-1 2 1 4 1 2-1 3-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 function normalizeText(value: string | null | undefined) {
@@ -111,7 +136,33 @@ function buildDriverWhatsAppMessage(service: DriverService, appOrigin?: string) 
   return `Buongiorno, sono il suo autista per l'arrivo ${service.customer_name} con Ischia Transfer Service. La contatto per coordinarci sul trasferimento di oggi.`;
 }
 
+function isFerryFormulaService(service: Pick<DriverService, "booking_service_kind" | "vessel">) {
+  const kind = service.booking_service_kind ?? "";
+  if (kind === "formula_snav" || kind === "formula_medmar_napoli" || kind === "formula_medmar_pozzuoli") return true;
+  const vessel = normalizeText(service.vessel);
+  return /\bmedmar\b|\bsnav\b/.test(vessel);
+}
+
+function operationalServiceInstances(service: DriverService): DriverService[] {
+  if (!isFerryFormulaService(service) || !service.departure_date || !service.departure_time || service.direction === "departure") {
+    return [{ ...service, _instance_key: `${service.id}:base`, _instance_direction: service.direction === "departure" ? "departure" : "arrival" }];
+  }
+  return [
+    { ...service, _instance_key: `${service.id}:arrival`, _instance_direction: "arrival" },
+    {
+      ...service,
+      date: service.departure_date,
+      time: service.departure_time,
+      direction: "departure",
+      pickup_time: service.pickup_time ?? service.departure_time,
+      _instance_key: `${service.id}:departure`,
+      _instance_direction: "departure",
+    },
+  ];
+}
+
 function isExcursionService(service: Pick<DriverService, "booking_service_kind" | "service_type" | "vessel">) {
+  if (isFerryFormulaService(service)) return false;
   if (service.booking_service_kind === "excursion" || service.service_type === "bus_tour") return true;
 
   const vessel = String(service.vessel ?? "").toLowerCase().trim();
@@ -191,6 +242,7 @@ const SERVICE_BORDER: Record<string, string> = {
 function serviceKindCategory(service: Pick<DriverService, "booking_service_kind" | "service_type" | "direction" | "vessel">): string {
   const isNavetta = service.booking_service_kind === "navetta" || service.booking_service_kind === "shuttle_hotel";
   if (isNavetta) return "navetta";
+  if (isFerryFormulaService(service)) return service.direction === "arrival" ? "arrivo" : "partenza";
   if (isExcursionService(service)) return "escursione";
   const kind = service.booking_service_kind ?? "";
   if (kind.includes("medmar")) return "medmar";
@@ -200,11 +252,15 @@ function serviceKindCategory(service: Pick<DriverService, "booking_service_kind"
 
 function getGroupBorderClass(group: Pick<ServiceGroup, "visualKind" | "entries">): string {
   const first = group.entries[0]?.service;
-  if (!first) return SERVICE_BORDER[group.visualKind === "arrival" ? "arrivo" : group.visualKind === "excursion" ? "escursione" : "partenza"]!;
+  if (!first) return SERVICE_BORDER[group.direction === "arrival" ? "arrivo" : group.visualKind === "excursion" ? "escursione" : "partenza"]!;
   return SERVICE_BORDER[serviceKindCategory(first)]!;
 }
 
 function getServiceTypeInfo(service: DriverService): { icon: string; label: string } {
+  const ferryTime = service.time?.slice(0, 5);
+  if (service.booking_service_kind === "formula_snav") return { icon: "ðŸš¤", label: `SNAV${ferryTime ? ` ${ferryTime}` : ""}` };
+  if (service.booking_service_kind === "formula_medmar_napoli") return { icon: "ðŸ›¥", label: `MEDMAR Napoli${ferryTime ? ` ${ferryTime}` : ""}` };
+  if (service.booking_service_kind === "formula_medmar_pozzuoli") return { icon: "ðŸ›¥", label: `MEDMAR Pozzuoli${ferryTime ? ` ${ferryTime}` : ""}` };
   const kind = service.booking_service_kind ?? "";
   const vessel = (service.vessel ?? "").trim();
   if (kind === "formula_snav") return { icon: "🚤", label: "Formula SNAV" };
@@ -487,11 +543,10 @@ function DriverPageInner() {
     if (!userId) return [];
     return data.assignments
       .filter((a) => a.driver_user_id === userId)
-      .map((a) => {
+      .flatMap((a) => {
         const service = data.services.find((s) => s.id === a.service_id);
-        return service ? { service, assignment: a } : null;
+        return service ? operationalServiceInstances(service).map((instance) => ({ service: instance, assignment: a })) : [];
       })
-      .filter((x): x is NonNullable<typeof x> => x !== null)
       .sort((a, b) => a.service.date !== b.service.date
         ? a.service.date.localeCompare(b.service.date)
         : a.service.time.localeCompare(b.service.time));
@@ -513,11 +568,11 @@ function DriverPageInner() {
     [mine]);
 
   const defaultFocusId =
-    mine.find((x) => x.service.status !== "completato" && x.service.status !== "cancelled")?.service.id ??
-    mine.find((x) => x.service.date >= todayIso)?.service.id ??
+    mine.find((x) => x.service.status !== "completato" && x.service.status !== "cancelled")?.service._instance_key ??
+    mine.find((x) => x.service.date >= todayIso)?.service._instance_key ??
     null;
-  const effectiveFocusId = focusServiceId && mine.some((x) => x.service.id === focusServiceId) ? focusServiceId : defaultFocusId;
-  const focused = mine.find((x) => x.service.id === effectiveFocusId) ?? null;
+  const effectiveFocusId = focusServiceId && mine.some((x) => (x.service._instance_key ?? x.service.id) === focusServiceId) ? focusServiceId : defaultFocusId;
+  const focused = mine.find((x) => (x.service._instance_key ?? x.service.id) === effectiveFocusId) ?? null;
   const focusedHotel = focused ? data.hotels.find((h) => h.id === focused.service.hotel_id) : null;
   const navigationUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${focusedHotel?.lat ?? 40.74},${focusedHotel?.lng ?? 13.9}`)}&travelmode=driving`;
   const customerPhone = focused?.service.phone_e164?.trim() || focused?.service.phone?.trim() || "";
@@ -618,13 +673,24 @@ function DriverPageInner() {
       "departure",
       "departure"
     );
-    const navettaGroups = makeGroups(
-      navettas,
+    const navettaArrivalGroups = makeGroups(
+      navettas.filter((e) => e.service.direction === "arrival"),
       (e) => `${e.service.date}_${e.service.hotel_id ?? "none"}_${e.service.time}_${e.service.direction}`,
       (e) => {
         const hotelName = data.hotels.find((h) => h.id === e.service.hotel_id)?.name ?? "N/D";
         const t = e.service.time?.slice(0, 5) ?? "";
-        return t ? `${hotelName} ${t}` : hotelName;
+        return t ? `${hotelName.toUpperCase()} ${t}` : hotelName.toUpperCase();
+      },
+      "arrival",
+      "arrival"
+    );
+    const navettaDepartureGroups = makeGroups(
+      navettas.filter((e) => e.service.direction === "departure"),
+      (e) => `${e.service.date}_${e.service.hotel_id ?? "none"}_${e.service.time}_${e.service.direction}`,
+      (e) => {
+        const hotelName = data.hotels.find((h) => h.id === e.service.hotel_id)?.name ?? "N/D";
+        const t = e.service.time?.slice(0, 5) ?? "";
+        return t ? `${hotelName.toUpperCase()} ${t}` : hotelName.toUpperCase();
       },
       "departure",
       "departure"
@@ -644,7 +710,7 @@ function DriverPageInner() {
       "departure",
       "excursion"
     );
-    return [...arrGroups, ...navettaGroups, ...excursionGroups, ...depGroups].sort((a, b) => {
+    return [...arrGroups, ...navettaArrivalGroups, ...navettaDepartureGroups, ...excursionGroups, ...depGroups].sort((a, b) => {
       const af = a.entries[0]?.service;
       const bf = b.entries[0]?.service;
       if (!af || !bf) return 0;
@@ -662,13 +728,13 @@ function DriverPageInner() {
   const getGroupEntries = useCallback((group: ServiceGroup, tabKey: string) => {
     const customIds = groupEntryOrder[`${tabKey}|${group.key}`];
     if (!customIds) return group.entries;
-    return customIds.map((id) => group.entries.find((e) => e.service.id === id)).filter((e): e is NonNullable<typeof e> => e != null);
+    return customIds.map((id) => group.entries.find((e) => (e.service._instance_key ?? e.service.id) === id)).filter((e): e is NonNullable<typeof e> => e != null);
   }, [groupEntryOrder]);
 
   const moveGroupEntry = useCallback((group: ServiceGroup, tabKey: string, serviceId: string, dir: -1 | 1) => {
     const key = `${tabKey}|${group.key}`;
     setGroupEntryOrder((prev) => {
-      const ids = prev[key] ?? group.entries.map((e) => e.service.id);
+      const ids = prev[key] ?? group.entries.map((e) => e.service._instance_key ?? e.service.id);
       const idx = ids.indexOf(serviceId);
       if (idx === -1) return prev;
       const ni = idx + dir;
@@ -972,7 +1038,7 @@ function DriverPageInner() {
               </div>
             </div>
             <div className="rounded-xl bg-slate-50 px-4 py-3 space-y-1">
-              <p className="font-semibold text-slate-800">{focusedHotel?.name ?? focused.service.meeting_point ?? "Destinazione N/D"}</p>
+              <p className="font-semibold text-slate-800">{focusedHotel?.name ? focusedHotel.name.toUpperCase() : focused.service.meeting_point ?? "Destinazione N/D"}</p>
               <p className="text-sm text-slate-500">{focusedHotel?.zone ?? ""}</p>
               {focused.assignment.vehicle_label && (
                 <p className="text-xs font-mono text-slate-400">{focused.assignment.vehicle_label}</p>
@@ -1155,16 +1221,12 @@ function DriverPageInner() {
                             return t ? <span className="shrink-0 text-sm font-bold text-slate-900">{t}</span> : null;
                           })()}
                         </div>
-                        {!isNavettaService(group.entries[0]!.service) && (
-                          <p className="text-xs text-slate-400 mt-0.5 truncate">
-                            {group.entries.map((e) => `${e.service.customer_name} ${e.service.pax}`).join(" · ")}
-                          </p>
-                        )}
+                        <p className="text-xs text-slate-400 mt-0.5 truncate">
+                          {group.entries.map((e) => `${upperCustomerName(e.service.customer_name)} ${e.service.pax}`).join(" · ")}
+                        </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        {!isNavettaService(group.entries[0]!.service) && (
-                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
-                        )}
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
                         <span className="text-slate-400 text-sm">{expandedGroup === `oggi-${group.key}` ? "▲" : "▼"}</span>
                       </div>
                     </button>
@@ -1177,24 +1239,32 @@ function DriverPageInner() {
                             ? buildWhatsAppUrl(phone, buildDriverWhatsAppMessage(entry.service, appOrigin))
                             : null;
                           return (
-                            <div key={entry.service.id} className="flex items-center gap-2 px-4 py-2.5">
+                            <div key={entry.service._instance_key ?? entry.service.id} className="flex items-center gap-2 px-4 py-2.5">
                               <button type="button"
-                                onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                                onClick={() => { setFocusServiceId(entry.service._instance_key ?? entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                                 className="flex-1 text-left">
                                 <div className="flex items-center justify-between">
-                                  {!isNavettaService(entry.service) && <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>}
+                                  <p className="text-sm font-semibold text-slate-700">{upperCustomerName(entry.service.customer_name)}</p>
                                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusColor(entry.service.status)}`}>{entry.service.status}</span>
                                 </div>
                                 {isNavettaService(entry.service) ? (
                                   <p className="text-xs text-slate-500 mt-0.5">
-                                    {entry.service.meeting_point || hotel?.name || ""}
+                                    {entry.service.meeting_point || upperHotelName(hotel)}
                                     {entry.service.time ? ` · ${entry.service.time.slice(0, 5)}` : ""}
                                   </p>
                                 ) : entry.service.direction === "departure" && !isExcursionService(entry.service) ? (
                                   <>
-                                    <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    <p className="text-xs text-slate-500 mt-0.5">{upperHotelName(hotel)} · {entry.service.pax} pax</p>
                                     {(() => {
                                       const { icon, label } = getServiceTypeInfo(entry.service);
+                                      if (isFerryFormulaService(entry.service)) {
+                                        return (
+                                          <p className="mt-0.5 flex items-center gap-1 text-xs font-medium text-blue-700">
+                                            <FerryIcon />
+                                            <span>{label}</span>
+                                          </p>
+                                        );
+                                      }
                                       return <p className="text-xs font-medium text-blue-700 mt-0.5">{icon} {label}</p>;
                                     })()}
                                   </>
@@ -1202,7 +1272,7 @@ function DriverPageInner() {
                                   entry.service.direction === "arrival" ? (
                                     <>
                                       <p className="text-xs text-slate-500 mt-0.5">{entry.service.pax} pax{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
-                                      {hotel && <p className="text-xs text-slate-500 mt-0.5">→ {hotel.name}</p>}
+                                      {hotel && <p className="text-xs text-slate-500 mt-0.5">→ {upperHotelName(hotel)}</p>}
                                       {(() => {
                                         const { icon, label } = getServiceTypeInfo(entry.service);
                                         return <p className="text-xs font-medium text-orange-700 mt-0.5">{icon} {label}</p>;
@@ -1210,7 +1280,7 @@ function DriverPageInner() {
                                     </>
                                   ) : (
                                     <>
-                                      <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                      <p className="text-xs text-slate-500 mt-0.5">{upperHotelName(hotel)} · {entry.service.pax} pax</p>
                                       {(() => {
                                         const { icon, label } = getServiceTypeInfo(entry.service);
                                         const port = entry.service.meeting_point;
@@ -1220,16 +1290,20 @@ function DriverPageInner() {
                                   )
                                 ) : (
                                   <>
-                                    <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    <p className="text-xs text-slate-500 mt-0.5">{upperHotelName(hotel)} · {entry.service.pax} pax</p>
                                     {(() => {
                                       const arrSched = getArrivalSchedule(entry.service);
                                       const arrIschia = arrSched?.arrivalTime ?? null;
                                       const arrPort = arrSched?.arrivalPort ? ferryPortLabel(arrSched.arrivalPort) : entry.service.meeting_point;
-                                      const { icon, label } = getServiceTypeInfo(entry.service);
+                                      const { label } = getServiceTypeInfo(entry.service);
                                       const parts = [label, arrPort, arrIschia ? `arr. ${arrIschia}` : null].filter(Boolean).join(" · ");
-                                      return <p className="text-xs font-medium text-emerald-700 mt-0.5">{icon} {parts || "Porto N/D"}</p>;
+                                      return (
+                                        <p className="mt-0.5 flex items-center gap-1 text-xs font-medium text-emerald-700">
+                                          <FerryIcon />
+                                          <span>{parts || "Porto N/D"}</span>
+                                        </p>
+                                      );
                                     })()}
-                                    {entry.service.time && <p className="text-xs text-slate-400 mt-0.5">partenza continente {entry.service.time.slice(0,5)}</p>}
                                   </>
                                 )}
                               </button>
@@ -1248,9 +1322,9 @@ function DriverPageInner() {
                               )}
                               {group.visualKind === "arrival" && (
                                 <div className="flex flex-col shrink-0">
-                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "oggi", entry.service.id, -1); }}
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "oggi", entry.service._instance_key ?? entry.service.id, -1); }}
                                     className="h-5 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 text-xs">↑</button>
-                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "oggi", entry.service.id, 1); }}
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "oggi", entry.service._instance_key ?? entry.service.id, 1); }}
                                     className="h-5 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 text-xs">↓</button>
                                 </div>
                               )}
@@ -1289,13 +1363,11 @@ function DriverPageInner() {
                           })()}
                         </div>
                         <p className="text-xs text-slate-400 mt-0.5 truncate">
-                          {group.entries.map((e) => `${e.service.customer_name} ${e.service.pax}`).join(" · ")}
+                          {group.entries.map((e) => `${upperCustomerName(e.service.customer_name)} ${e.service.pax}`).join(" · ")}
                         </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        {!isNavettaService(group.entries[0]!.service) && (
-                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
-                        )}
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{group.totalPax} pax</span>
                         <span className="text-slate-400 text-sm">{expandedGroup === `prossimi-${group.key}` ? "▲" : "▼"}</span>
                       </div>
                     </button>
@@ -1308,12 +1380,12 @@ function DriverPageInner() {
                             ? buildWhatsAppUrl(phone, buildDriverWhatsAppMessage(entry.service, appOrigin))
                             : null;
                           return (
-                            <div key={entry.service.id} className="flex items-center gap-2 px-4 py-2.5">
+                            <div key={entry.service._instance_key ?? entry.service.id} className="flex items-center gap-2 px-4 py-2.5">
                               <button type="button"
-                                onClick={() => { setFocusServiceId(entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                                onClick={() => { setFocusServiceId(entry.service._instance_key ?? entry.service.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                                 className="flex-1 text-left">
                                 <div className="flex items-center justify-between">
-                                  {!isNavettaService(entry.service) && <p className="text-sm font-semibold text-slate-700">{entry.service.customer_name}</p>}
+                                  <p className="text-sm font-semibold text-slate-700">{upperCustomerName(entry.service.customer_name)}</p>
                                   <span className="text-xs text-slate-500">
                                     {formatDateLabel(entry.service.date)}{" "}
                                     {entry.service.direction !== "departure"
@@ -1323,14 +1395,22 @@ function DriverPageInner() {
                                 </div>
                                 {isNavettaService(entry.service) ? (
                                   <p className="text-xs text-slate-500 mt-0.5">
-                                    {entry.service.meeting_point || hotel?.name || ""}
+                                    {entry.service.meeting_point || upperHotelName(hotel)}
                                     {entry.service.time ? ` · ${entry.service.time.slice(0, 5)}` : ""}
                                   </p>
                                 ) : entry.service.direction === "departure" && !isExcursionService(entry.service) ? (
                                   <>
-                                    <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    <p className="text-xs text-slate-500 mt-0.5">{upperHotelName(hotel)} · {entry.service.pax} pax</p>
                                     {(() => {
                                       const { icon, label } = getServiceTypeInfo(entry.service);
+                                      if (isFerryFormulaService(entry.service)) {
+                                        return (
+                                          <p className="mt-0.5 flex items-center gap-1 text-xs font-medium text-blue-700">
+                                            <FerryIcon />
+                                            <span>{label}</span>
+                                          </p>
+                                        );
+                                      }
                                       return <p className="text-xs font-medium text-blue-700 mt-0.5">{icon} {label}</p>;
                                     })()}
                                   </>
@@ -1338,7 +1418,7 @@ function DriverPageInner() {
                                   entry.service.direction === "arrival" ? (
                                     <>
                                       <p className="text-xs text-slate-500 mt-0.5">{entry.service.pax} pax{entry.service.meeting_point ? ` · ${entry.service.meeting_point}` : ""}</p>
-                                      {hotel && <p className="text-xs text-slate-500 mt-0.5">→ {hotel.name}</p>}
+                                      {hotel && <p className="text-xs text-slate-500 mt-0.5">→ {upperHotelName(hotel)}</p>}
                                       {(() => {
                                         const { icon, label } = getServiceTypeInfo(entry.service);
                                         return <p className="text-xs font-medium text-orange-700 mt-0.5">{icon} {label}</p>;
@@ -1346,7 +1426,7 @@ function DriverPageInner() {
                                     </>
                                   ) : (
                                     <>
-                                      <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                      <p className="text-xs text-slate-500 mt-0.5">{upperHotelName(hotel)} · {entry.service.pax} pax</p>
                                       {(() => {
                                         const { icon, label } = getServiceTypeInfo(entry.service);
                                         const port = entry.service.meeting_point;
@@ -1356,16 +1436,20 @@ function DriverPageInner() {
                                   )
                                 ) : (
                                   <>
-                                    <p className="text-xs text-slate-500 mt-0.5">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</p>
+                                    <p className="text-xs text-slate-500 mt-0.5">{upperHotelName(hotel)} · {entry.service.pax} pax</p>
                                     {(() => {
                                       const arrivalSchedule = getArrivalSchedule(entry.service);
                                       const arrIschia = arrivalSchedule?.arrivalTime ?? null;
                                       const arrivalPort = arrivalSchedule?.arrivalPort ? ferryPortLabel(arrivalSchedule.arrivalPort) : entry.service.meeting_point;
-                                      const { icon, label } = getServiceTypeInfo(entry.service);
+                                      const { label } = getServiceTypeInfo(entry.service);
                                       const parts = [label, arrivalPort, arrIschia ? `arr. ${arrIschia}` : null].filter(Boolean).join(" · ");
-                                      return <p className="text-xs font-medium text-emerald-700 mt-0.5">{icon} {parts || "Porto N/D"}</p>;
+                                      return (
+                                        <p className="mt-0.5 flex items-center gap-1 text-xs font-medium text-emerald-700">
+                                          <FerryIcon />
+                                          <span>{parts || "Porto N/D"}</span>
+                                        </p>
+                                      );
                                     })()}
-                                    {entry.service.time && <p className="text-xs text-slate-400 mt-0.5">partenza continente {entry.service.time.slice(0,5)}</p>}
                                   </>
                                 )}
                               </button>
@@ -1384,9 +1468,9 @@ function DriverPageInner() {
                               )}
                               {group.visualKind === "arrival" && (
                                 <div className="flex flex-col shrink-0">
-                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "prossimi", entry.service.id, -1); }}
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "prossimi", entry.service._instance_key ?? entry.service.id, -1); }}
                                     className="h-5 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 text-xs">↑</button>
-                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "prossimi", entry.service.id, 1); }}
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); moveGroupEntry(group, "prossimi", entry.service._instance_key ?? entry.service.id, 1); }}
                                     className="h-5 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 text-xs">↓</button>
                                 </div>
                               )}
@@ -1404,14 +1488,14 @@ function DriverPageInner() {
               : completedServices.map((entry) => {
                   const hotel = data.hotels.find((h) => h.id === entry.service.hotel_id);
                   return (
-                    <div key={entry.service.id} className="px-4 py-3">
+                    <div key={entry.service._instance_key ?? entry.service.id} className="px-4 py-3">
                       <div className="flex items-center justify-between">
-                        <p className="font-semibold text-slate-700">{entry.service.customer_name}</p>
+                        <p className="font-semibold text-slate-700">{upperCustomerName(entry.service.customer_name)}</p>
                         <span className="text-xs text-slate-400">{formatDateLabel(entry.service.date)}</span>
                       </div>
                       <div className="mt-1 flex items-center gap-2">
                         <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusColor(entry.service.status)}`}>{entry.service.status}</span>
-                        <span className="text-xs text-slate-400">{hotel?.name ?? "N/D"} · {entry.service.pax} pax</span>
+                        <span className="text-xs text-slate-400">{upperHotelName(hotel)} · {entry.service.pax} pax</span>
                       </div>
                     </div>
                   );

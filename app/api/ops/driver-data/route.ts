@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const DRIVER_SERVICE_SELECT =
-  "id,tenant_id,date,time,service_type,direction,vessel,pax,hotel_id,customer_name,phone,notes,status,meeting_point,pickup_time,linked_service_id,booking_service_kind";
+  "id,tenant_id,date,time,service_type,direction,vessel,pax,hotel_id,customer_name,phone,notes,status,meeting_point,pickup_time,linked_service_id,booking_service_kind,arrival_date,arrival_time,departure_date,departure_time";
 
 const FERRY_SCHEDULE_SELECT =
   "id,company,departure_port,arrival_port,departure_time,direction,days_of_week,valid_from,valid_to";
@@ -40,6 +40,10 @@ type DriverServiceRow = {
   pickup_time: string | null;
   linked_service_id: string | null;
   booking_service_kind: string | null;
+  arrival_date: string | null;
+  arrival_time: string | null;
+  departure_date: string | null;
+  departure_time: string | null;
 };
 
 function normalizeText(value: string | null | undefined) {
@@ -51,7 +55,14 @@ function normalizeText(value: string | null | undefined) {
     .trim();
 }
 
+function isFerryFormulaLikeService(service: Pick<DriverServiceRow, "booking_service_kind" | "vessel">) {
+  const kind = service.booking_service_kind ?? "";
+  if (kind === "formula_snav" || kind === "formula_medmar_napoli" || kind === "formula_medmar_pozzuoli") return true;
+  return /\bmedmar\b|\bsnav\b/.test(normalizeText(service.vessel));
+}
+
 function isExcursionLikeService(service: Pick<DriverServiceRow, "booking_service_kind" | "service_type" | "vessel" | "notes">) {
+  if (isFerryFormulaLikeService(service)) return false;
   if (service.booking_service_kind === "excursion" || service.service_type === "bus_tour") return true;
   const vessel = normalizeText(service.vessel);
   const notes = normalizeText(service.notes);
