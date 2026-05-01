@@ -58,6 +58,7 @@ export default function DispatchPage() {
   const [hotels, setHotels]           = useState<Hotel[]>([]);
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [vehicles, setVehicles]       = useState<VehicleRecord[]>([]);
+  const [token, setToken]             = useState<string | null>(null);
   const [search, setSearch]           = useState("");
   const [dateTab, setDateTab]         = useState<DateTab>("today");
   const [rowStates, setRowStates] = useState<Record<string, Partial<RowState>>>({});
@@ -94,6 +95,7 @@ export default function DispatchPage() {
       const resolvedUserId  = e2eOverride?.userId ?? userId;
       if (!resolvedUserId || !accessToken) { setMessage("Sessione non valida."); setLoading(false); return; }
       setActorUserId(resolvedUserId);
+      setToken(accessToken);
 
       const tenantResponse = await fetch("/api/onboarding/tenant", { headers: { Authorization: `Bearer ${accessToken}` } });
       const tenantBody = await tenantResponse.json().catch(() => null) as { hasTenant?: boolean; tenant?: { id?: string | null } } | null;
@@ -190,43 +192,32 @@ export default function DispatchPage() {
     });
 
   const save = async (svc: Service) => {
-    if (!tenantId || !actorUserId || !supabase) return;
+    if (!token) return;
     const state = getRow(svc);
     setRowStates((current) => ({
       ...current,
       [svc.id]: { ...state, saving: true, error: "", saved: false },
     }));
 
-    const existing = assignmentByServiceId.get(svc.id);
-    if (existing) {
-      const { error } = await supabase.from("assignments")
-        .update({ driver_user_id: state.driverId || null, vehicle_label: state.vehicleLabel })
-        .eq("id", existing.id).eq("tenant_id", tenantId);
-      if (error) {
-        setRowStates((current) => ({
-          ...current,
-          [svc.id]: { ...getRow(svc), saving: false, error: error.message, saved: false },
-        }));
-        return;
-      }
-    } else {
-      const { error } = await supabase.from("assignments").insert({
-        tenant_id: tenantId, service_id: svc.id,
-        driver_user_id: state.driverId || null, vehicle_label: state.vehicleLabel,
-      });
-      if (error) {
-        setRowStates((current) => ({
-          ...current,
-          [svc.id]: { ...getRow(svc), saving: false, error: error.message, saved: false },
-        }));
-        return;
-      }
+    const res = await fetch("/api/ops/assign-service", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        service_id: svc.id,
+        driver_user_id: state.driverId || null,
+        vehicle_label: state.vehicleLabel,
+        action: "assign",
+      }),
+    });
+    const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+
+    if (!res.ok || !json?.ok) {
+      setRowStates((current) => ({
+        ...current,
+        [svc.id]: { ...getRow(svc), saving: false, error: json?.error ?? "Errore salvataggio.", saved: false },
+      }));
+      return;
     }
-
-    await supabase.from("services").update({ status: "assigned" }).eq("id", svc.id).eq("tenant_id", tenantId).neq("status", "assigned");
-
-    const { data: ev } = await supabase.from("status_events").select("id").eq("tenant_id", tenantId).eq("service_id", svc.id).eq("status", "assigned").maybeSingle();
-    if (!ev) await supabase.from("status_events").insert({ tenant_id: tenantId, service_id: svc.id, status: "assigned", by_user_id: actorUserId });
 
     setRowStates((current) => ({
       ...current,
@@ -236,10 +227,7 @@ export default function DispatchPage() {
       setRowStates((current) => {
         const currentRow = current[svc.id];
         if (!currentRow) return current;
-        return {
-          ...current,
-          [svc.id]: { ...currentRow, saved: false },
-        };
+        return { ...current, [svc.id]: { ...currentRow, saved: false } };
       });
     }, 2000);
   };

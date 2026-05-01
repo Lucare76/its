@@ -25,8 +25,8 @@ export async function POST(request: NextRequest) {
     const userId = auth.user.id;
 
     type Body = {
-      action: "create_trip" | "update_trip" | "delete_trip" | "move_services";
-      // create_trip
+      action: "create_trip" | "update_trip" | "delete_trip" | "move_services" | "swap_driver" | "swap_vehicle" | "delay_vessel";
+      // create_trip / common
       date?: string;
       service_ids?: string[];
       driver_user_id?: string | null;
@@ -37,7 +37,17 @@ export async function POST(request: NextRequest) {
       // update_trip / delete_trip / move_services
       group_id?: string;
       // move_services
-      target_group_id?: string | null; // null = crea nuovo giro
+      target_group_id?: string | null;
+      // swap_driver
+      from_driver_id?: string;
+      to_driver_id?: string;
+      // swap_vehicle
+      from_vehicle_label?: string;
+      to_vehicle_label?: string;
+      // delay_vessel
+      vessel?: string;
+      original_time?: string;
+      delay_minutes?: number;
     };
 
     const body = (await request.json().catch(() => null)) as Body | null;
@@ -390,6 +400,147 @@ export async function POST(request: NextRequest) {
       }
 
       return NextResponse.json({ ok: true, group_id: destGroupId });
+    }
+
+    // ─── SWAP DRIVER ─────────────────────────────────────────────────────────────
+    if (body.action === "swap_driver") {
+      const { date, from_driver_id, to_driver_id } = body;
+      if (!date || !from_driver_id || !to_driver_id) {
+        return NextResponse.json({ ok: false, error: "date, from_driver_id e to_driver_id obbligatori." }, { status: 400 });
+      }
+
+      const { data: groups, error: groupsErr } = await auth.admin
+        .from("trip_groups")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("date", date)
+        .eq("driver_user_id", from_driver_id)
+        .eq("status", "active");
+
+      if (groupsErr) {
+        return NextResponse.json({ ok: false, error: groupsErr.message }, { status: 500 });
+      }
+
+      const groupIds = (groups ?? []).map((g) => g.id as string);
+      if (!groupIds.length) {
+        return NextResponse.json({ ok: true, affected: 0 });
+      }
+
+      await Promise.all([
+        auth.admin.from("trip_groups").update({ driver_user_id: to_driver_id, updated_at: now }).in("id", groupIds).eq("tenant_id", tenantId),
+        auth.admin.from("assignments").update({ driver_user_id: to_driver_id }).in("group_id", groupIds).eq("tenant_id", tenantId),
+      ]);
+
+      void sendPushToUser(tenantId, to_driver_id, {
+        title: `🔄 Giri riassegnati — ${date}`,
+        body: `${groupIds.length} giro/i trasferiti dal collega`,
+        url: "/driver",
+        tag: `trip-swap-driver-${date}`,
+      });
+
+      return NextResponse.json({ ok: true, affected: groupIds.length });
+    }
+
+    // ─── SWAP VEHICLE ─────────────────────────────────────────────────────────────
+    if (body.action === "swap_vehicle") {
+      const { date, from_vehicle_label, to_vehicle_label } = body;
+      if (!date || !from_vehicle_label || !to_vehicle_label) {
+        return NextResponse.json({ ok: false, error: "date, from_vehicle_label e to_vehicle_label obbligatori." }, { status: 400 });
+      }
+
+      const warnings: string[] = [];
+      const vehicleCheck = await resolveVehicleAssignment(auth.admin, tenantId, date, null, to_vehicle_label);
+      if (!vehicleCheck.ok) warnings.push(vehicleCheck.error);
+
+      const { data: groups, error: groupsErr } = await auth.admin
+        .from("trip_groups")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("date", date)
+        .eq("vehicle_label", from_vehicle_label)
+        .eq("status", "active");
+
+      if (groupsErr) {
+        return NextResponse.json({ ok: false, error: groupsErr.message }, { status: 500 });
+      }
+
+      const groupIds = (groups ?? []).map((g) => g.id as string);
+      if (!groupIds.length) {
+        return NextResponse.json({ ok: true, affected: 0, warnings });
+      }
+
+      await Promise.all([
+        auth.admin.from("trip_groups").update({ vehicle_label: to_vehicle_label, updated_at: now }).in("id", groupIds).eq("tenant_id", tenantId),
+        auth.admin.from("assignments").update({ vehicle_label: to_vehicle_label }).in("group_id", groupIds).eq("tenant_id", tenantId),
+      ]);
+
+      return NextResponse.json({ ok: true, affected: groupIds.length, warnings });
+    }
+
+    // ─── DELAY VESSEL ─────────────────────────────────────────────────────────────
+    if (body.action === "delay_vessel") {
+      const { date, vessel, original_time, delay_minutes } = body;
+      if (!date || !vessel || !original_time || delay_minutes == null) {
+        return NextResponse.json({ ok: false, error: "date, vessel, original_time e delay_minutes obbligatori." }, { status: 400 });
+      }
+
+      const origMinutes = toMinutes(original_time);
+
+      const { data: affectedServices, error: servicesErr } = await auth.admin
+        .from("services")
+        .select("id, time, vessel")
+        .eq("tenant_id", tenantId)
+        .eq("date", date)
+        .ilike("vessel", `%${vessel}%`)
+        .neq("status", "cancelled");
+
+      if (servicesErr) {
+        return NextResponse.json({ ok: false, error: servicesErr.message }, { status: 500 });
+      }
+
+      const matched = (affectedServices ?? []).filter((s) => Math.abs(toMinutes(s.time as string) - origMinutes) <= 10);
+
+      if (!matched.length) {
+        return NextResponse.json({ ok: true, affected: 0, new_time: null, warnings: ["Nessun servizio trovato per questa corsa."] });
+      }
+
+      const newTotalMinutes = origMinutes + Number(delay_minutes);
+      const newH = String(Math.floor(newTotalMinutes / 60) % 24).padStart(2, "0");
+      const newM = String(newTotalMinutes % 60).padStart(2, "0");
+      const newTimeStr = `${newH}:${newM}:00`;
+      const matchedIds = matched.map((s) => s.id as string);
+
+      await auth.admin.from("services").update({ time: newTimeStr }).in("id", matchedIds).eq("tenant_id", tenantId);
+
+      // Notifica autisti dei giri coinvolti
+      const { data: assignedRows } = await auth.admin
+        .from("assignments")
+        .select("group_id")
+        .in("service_id", matchedIds)
+        .eq("tenant_id", tenantId)
+        .not("group_id", "is", null);
+
+      const affectedGroupIds = [...new Set((assignedRows ?? []).map((a) => a.group_id as string))];
+      if (affectedGroupIds.length) {
+        const { data: driverRows } = await auth.admin
+          .from("trip_groups")
+          .select("driver_user_id")
+          .in("id", affectedGroupIds)
+          .eq("tenant_id", tenantId)
+          .not("driver_user_id", "is", null);
+
+        const driverIds = [...new Set((driverRows ?? []).map((g) => g.driver_user_id as string))];
+        for (const driverId of driverIds) {
+          void sendPushToUser(tenantId, driverId, {
+            title: `⚠️ Ritardo corsa — ${date}`,
+            body: `${vessel}: ritardo ${delay_minutes} min. Nuovo orario: ${newH}:${newM}`,
+            url: "/driver",
+            tag: `delay-vessel-${date}-${vessel}`,
+          });
+        }
+      }
+
+      return NextResponse.json({ ok: true, affected: matchedIds.length, new_time: `${newH}:${newM}` });
     }
 
     return NextResponse.json({ ok: false, error: "Azione non riconosciuta." }, { status: 400 });

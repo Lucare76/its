@@ -162,27 +162,30 @@ export default function ServiceWorkflowPage() {
   }, [currentAssignment]);
 
   const assignDriver = async () => {
-    if (!selectedService || !tenantId || !hasSupabaseEnv || !supabase) return;
+    if (!selectedService || !hasSupabaseEnv || !supabase) return;
     setAssigningDriver(true);
     setMessage("Salvataggio assegnazione...");
     try {
-      if (!driverSelectId) {
-        await supabase.from("assignments").delete().eq("service_id", selectedService.id).eq("tenant_id", tenantId);
-        setMessage("Assegnazione rimossa.");
-      } else if (currentAssignment) {
-        await supabase.from("assignments")
-          .update({ driver_user_id: driverSelectId, vehicle_label: vehicleSelectLabel })
-          .eq("id", currentAssignment.id).eq("tenant_id", tenantId);
-        setMessage("Assegnazione aggiornata.");
-      } else {
-        await supabase.from("assignments").insert({
-          tenant_id: tenantId,
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) { setMessage("Sessione scaduta. Rifai login."); return; }
+
+      const res = await fetch("/api/ops/assign-service", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({
           service_id: selectedService.id,
-          driver_user_id: driverSelectId,
-          vehicle_label: vehicleSelectLabel,
-        });
-        setMessage("Autista assegnato.");
+          driver_user_id: driverSelectId || null,
+          vehicle_label: vehicleSelectLabel || null,
+          action: driverSelectId ? "assign" : "remove",
+        }),
+      });
+      const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!json?.ok) {
+        setMessage(json?.error ?? "Errore durante l'assegnazione.");
+        return;
       }
+      setMessage(driverSelectId ? "Assegnazione salvata." : "Assegnazione rimossa.");
       await refresh();
     } catch {
       setMessage("Errore durante l'assegnazione.");

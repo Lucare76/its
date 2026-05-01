@@ -1160,6 +1160,52 @@ export default function PianoGiornoPage() {
   const [expandedTripId, setExpandedTripId] = useState<string | null>(null);
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
 
+  // ─── Pannello imprevisti ───────────────────────────────────────────────────
+  const [showImprevisti, setShowImprevisti] = useState(false);
+  const [imprevistiTab, setImprevistiTab] = useState<"driver" | "vehicle" | "vessel">("driver");
+  const [impSwapFromDriver, setImpSwapFromDriver] = useState("");
+  const [impSwapToDriver, setImpSwapToDriver] = useState("");
+  const [impSwapFromVehicle, setImpSwapFromVehicle] = useState("");
+  const [impSwapToVehicle, setImpSwapToVehicle] = useState("");
+  const [impVessel, setImpVessel] = useState("");
+  const [impOriginalTime, setImpOriginalTime] = useState("");
+  const [impDelayMinutes, setImpDelayMinutes] = useState("");
+  const [impSaving, setImpSaving] = useState(false);
+  const [impResult, setImpResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const runImprevisto = async (action: "swap_driver" | "swap_vehicle" | "delay_vessel") => {
+    if (!token) return;
+    setImpSaving(true); setImpResult(null);
+    const payload: Record<string, unknown> = { action, date };
+    if (action === "swap_driver") {
+      payload.from_driver_id = impSwapFromDriver;
+      payload.to_driver_id = impSwapToDriver;
+    } else if (action === "swap_vehicle") {
+      payload.from_vehicle_label = impSwapFromVehicle;
+      payload.to_vehicle_label = impSwapToVehicle;
+    } else {
+      payload.vessel = impVessel;
+      payload.original_time = impOriginalTime;
+      payload.delay_minutes = Number(impDelayMinutes);
+    }
+    const res = await fetch("/api/ops/piano-giorno/trips", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json() as { ok?: boolean; error?: string; affected?: number; warnings?: string[]; new_time?: string };
+    setImpSaving(false);
+    if (!json.ok) { setImpResult({ ok: false, text: json.error ?? "Errore." }); return; }
+    const warnings = json.warnings?.length ? ` Attenzione: ${json.warnings.join("; ")}` : "";
+    const detail = action === "swap_driver"
+      ? `${json.affected ?? 0} giri riassegnati.`
+      : action === "swap_vehicle"
+      ? `${json.affected ?? 0} giri aggiornati.${warnings}`
+      : `${json.affected ?? 0} giri segnalati. Nuovo orario stimato: ${json.new_time ?? "—"}.`;
+    setImpResult({ ok: true, text: detail });
+    void reload();
+  };
+
   const hasGroups = (data?.trip_groups.length ?? 0) > 0;
 
   // Check disponibilità confermata per la data
@@ -1588,6 +1634,116 @@ export default function PianoGiornoPage() {
       {/* Stile stampa */}
       <style>{`@media print { .no-print { display: none !important; } }`}</style>
 
+      {/* Modal imprevisti */}
+      {showImprevisti && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center no-print p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-slate-800">⚠️ Gestione imprevisti</h3>
+              <button onClick={() => { setShowImprevisti(false); setImpResult(null); }} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+            </div>
+            <div className="flex border-b border-slate-100">
+              {(["driver", "vehicle", "vessel"] as const).map((tab) => (
+                <button key={tab} onClick={() => { setImprevistiTab(tab); setImpResult(null); }}
+                  className={`flex-1 py-2.5 text-xs font-semibold transition-colors ${imprevistiTab === tab ? "border-b-2 border-blue-500 text-blue-600" : "text-slate-500 hover:text-slate-700"}`}>
+                  {tab === "driver" ? "👤 Autista" : tab === "vehicle" ? "🚐 Mezzo" : "🚢 Ritardo corsa"}
+                </button>
+              ))}
+            </div>
+            <div className="p-5 space-y-3">
+              {imprevistiTab === "driver" && (
+                <>
+                  <p className="text-xs text-slate-500">Tutti i giri dell&apos;autista selezionato verranno riassegnati al sostituto.</p>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">Autista da sostituire</label>
+                    <select value={impSwapFromDriver} onChange={e => setImpSwapFromDriver(e.target.value)} className="input-saas w-full text-sm" data-no-uppercase>
+                      <option value="">— Seleziona —</option>
+                      {(data?.memberships ?? []).filter(m => m.role === "driver" || m.role === "autista").map(m => (
+                        <option key={m.user_id} value={m.user_id}>{m.full_name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">Sostituto</label>
+                    <select value={impSwapToDriver} onChange={e => setImpSwapToDriver(e.target.value)} className="input-saas w-full text-sm" data-no-uppercase>
+                      <option value="">— Seleziona —</option>
+                      {(data?.memberships ?? []).filter(m => (m.role === "driver" || m.role === "autista") && m.user_id !== impSwapFromDriver).map(m => (
+                        <option key={m.user_id} value={m.user_id}>{m.full_name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <button onClick={() => void runImprevisto("swap_driver")} disabled={!impSwapFromDriver || !impSwapToDriver || impSaving}
+                    className="btn-primary w-full text-sm disabled:opacity-50">
+                    {impSaving ? "Applicazione…" : "Applica sostituzione"}
+                  </button>
+                </>
+              )}
+              {imprevistiTab === "vehicle" && (
+                <>
+                  <p className="text-xs text-slate-500">Tutti i giri con il mezzo selezionato verranno riassegnati al mezzo sostituto.</p>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">Mezzo da sostituire</label>
+                    <select value={impSwapFromVehicle} onChange={e => setImpSwapFromVehicle(e.target.value)} className="input-saas w-full text-sm" data-no-uppercase>
+                      <option value="">— Seleziona —</option>
+                      {[...new Set((data?.trip_groups ?? []).map(g => g.vehicle_label).filter(Boolean))].map(v => (
+                        <option key={v!} value={v!}>{v}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">Mezzo sostituto</label>
+                    <select value={impSwapToVehicle} onChange={e => setImpSwapToVehicle(e.target.value)} className="input-saas w-full text-sm" data-no-uppercase>
+                      <option value="">— Seleziona —</option>
+                      {(data?.vehicles ?? []).filter(v => v.label !== impSwapFromVehicle).map(v => (
+                        <option key={v.id} value={v.label}>{v.label} ({v.capacity ?? "?"}pax)</option>
+                      ))}
+                    </select>
+                  </div>
+                  <button onClick={() => void runImprevisto("swap_vehicle")} disabled={!impSwapFromVehicle || !impSwapToVehicle || impSaving}
+                    className="btn-primary w-full text-sm disabled:opacity-50">
+                    {impSaving ? "Applicazione…" : "Applica sostituzione"}
+                  </button>
+                </>
+              )}
+              {imprevistiTab === "vessel" && (
+                <>
+                  <p className="text-xs text-slate-500">Segnala il ritardo ai giri collegati e notifica gli autisti.</p>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">Corsa in ritardo</label>
+                    <select value={impVessel} onChange={e => { const v = e.target.value; setImpVessel(v); const fs = (data?.ferry_schedules ?? []).find(f => f.company + "|" + f.departure_time === v); if (fs) setImpOriginalTime(fs.departure_time.slice(0,5)); }} className="input-saas w-full text-sm" data-no-uppercase>
+                      <option value="">— Seleziona corsa —</option>
+                      {(data?.ferry_schedules ?? []).map(fs => (
+                        <option key={fs.id} value={fs.company + "|" + fs.departure_time}>{companyLabel(fs.company)} {fs.departure_time.slice(0,5)} ({portLabel(fs.departure_port)}→{portLabel(fs.arrival_port)})</option>
+                      ))}
+                    </select>
+                    <input placeholder="oppure scrivi il nome traghetto" value={impVessel.includes("|") ? "" : impVessel} onChange={e => { setImpVessel(e.target.value); }} className="input-saas w-full text-sm mt-1" />
+                  </div>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <label className="text-xs font-semibold text-slate-600 block mb-1">Orario previsto</label>
+                      <input type="time" value={impOriginalTime} onChange={e => setImpOriginalTime(e.target.value)} className="input-saas w-full text-sm" />
+                    </div>
+                    <div className="w-28">
+                      <label className="text-xs font-semibold text-slate-600 block mb-1">Ritardo (min)</label>
+                      <input type="number" min="1" max="300" value={impDelayMinutes} onChange={e => setImpDelayMinutes(e.target.value)} className="input-saas w-full text-sm" data-no-uppercase placeholder="es. 40" />
+                    </div>
+                  </div>
+                  <button onClick={() => void runImprevisto("delay_vessel")} disabled={!impVessel || !impOriginalTime || !impDelayMinutes || impSaving}
+                    className="btn-primary w-full text-sm disabled:opacity-50">
+                    {impSaving ? "Applicazione…" : "Segnala ritardo"}
+                  </button>
+                </>
+              )}
+              {impResult && (
+                <div className={`rounded-xl px-3 py-2 text-sm font-medium ${impResult.ok ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                  {impResult.ok ? "✓ " : "✗ "}{impResult.text}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal conferma secondo click */}
       {showAutoModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center no-print">
@@ -1728,7 +1884,15 @@ export default function PianoGiornoPage() {
               disabled={availabilityLocked || autoAssigning || !token || !data}
               className="btn-primary text-sm px-4 font-semibold disabled:opacity-50"
             >
-              {autoAssigning ? "Analisi in corso…" : "Genera proposta automatica"}
+              {autoAssigning ? "Generazione giri…" : "Applica piano automatico"}
+            </button>
+            <button
+              onClick={() => { setShowImprevisti(true); setImpResult(null); }}
+              disabled={!token || !data}
+              className="btn-secondary text-sm px-3 disabled:opacity-50"
+              title="Gestisci imprevisti: sostituzione autista/mezzo o ritardo corsa"
+            >
+              ⚠ Imprevisto
             </button>
             <button
               className="btn-secondary text-xs"
@@ -2181,7 +2345,7 @@ export default function PianoGiornoPage() {
                         disabled={availabilityLocked || autoAssigning || !token}
                         className="btn-primary mt-4 text-sm disabled:opacity-50"
                       >
-                        {autoAssigning ? "Analisi in corso..." : "Genera proposta automatica"}
+                        {autoAssigning ? "Generazione giri…" : "Applica piano automatico"}
                       </button>
                     </div>
                   ) : filteredTripRows.length === 0 ? (

@@ -246,80 +246,35 @@ export default function OperatorDashboardPage() {
   const defaultDateTo = sortedDates[sortedDates.length - 1] ?? defaultDateFrom;
 
   const applySuggestion = async (group: SuggestedGroup) => {
-    if (!supabase || !tenantId || !userId || applyingGroupId || appliedGroupIds.includes(group.id) || skippedGroupIds.includes(group.id)) return;
+    if (!supabase || applyingGroupId || appliedGroupIds.includes(group.id) || skippedGroupIds.includes(group.id)) return;
 
-    const serviceIds = group.services.map((service) => service.id);
     setApplyingGroupId(group.id);
 
-    const { data: existingAssignments, error: readAssignmentsError } = await supabase
-      .from("assignments")
-      .select("id, service_id, driver_user_id")
-      .eq("tenant_id", tenantId)
-      .in("service_id", serviceIds);
-
-    if (readAssignmentsError) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) {
       setApplyingGroupId(null);
-      setToastMessage("Applicazione fallita: errore lettura assegnazioni");
+      setToastMessage("Sessione scaduta. Rifai login.");
       return;
     }
 
-    const existingByService = new Map((existingAssignments ?? []).map((row) => [row.service_id, row]));
-    for (const serviceId of serviceIds) {
-      const existing = existingByService.get(serviceId);
-      if (!existing) continue;
-      const { error: updateError } = await supabase
-        .from("assignments")
-        .update({ vehicle_label: group.suggestedVehicle, driver_user_id: existing.driver_user_id })
-        .eq("id", existing.id)
-        .eq("tenant_id", tenantId);
-      if (updateError) {
+    for (const service of group.services) {
+      const res = await fetch("/api/ops/assign-service", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({
+          service_id: service.id,
+          vehicle_label: group.suggestedVehicle,
+          driver_user_id: null,
+          action: "assign",
+        }),
+      });
+      const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!json?.ok) {
         setApplyingGroupId(null);
-        setToastMessage("Applicazione fallita: errore aggiornamento assegnazione");
+        setToastMessage(json?.error ?? "Applicazione fallita.");
         return;
       }
-    }
-
-    const inserts = serviceIds
-      .filter((serviceId) => !existingByService.has(serviceId))
-      .map((serviceId) => ({
-        tenant_id: tenantId,
-        service_id: serviceId,
-        vehicle_label: group.suggestedVehicle,
-        driver_user_id: null as string | null
-      }));
-    if (inserts.length > 0) {
-      const { error: insertError } = await supabase.from("assignments").insert(inserts);
-      if (insertError) {
-        setApplyingGroupId(null);
-        setToastMessage(`Applicazione fallita: ${insertError.message}`);
-        return;
-      }
-    }
-
-    const { error: serviceUpdateError } = await supabase.from("services").update({ status: "assigned" }).eq("tenant_id", tenantId).in("id", serviceIds).neq("status", "assigned");
-    if (serviceUpdateError) {
-      setApplyingGroupId(null);
-      setToastMessage("Applicazione fallita: errore aggiornamento servizio");
-      return;
-    }
-
-    const { data: existingAssignedEvents } = await supabase
-      .from("status_events")
-      .select("service_id")
-      .eq("tenant_id", tenantId)
-      .eq("status", "assigned")
-      .in("service_id", serviceIds);
-    const existingEventServiceIds = new Set((existingAssignedEvents ?? []).map((row) => row.service_id));
-    const statusEventsToInsert = serviceIds
-      .filter((serviceId) => !existingEventServiceIds.has(serviceId))
-      .map((serviceId) => ({
-        tenant_id: tenantId,
-        service_id: serviceId,
-        status: "assigned" as const,
-        by_user_id: userId
-      }));
-    if (statusEventsToInsert.length > 0) {
-      await supabase.from("status_events").insert(statusEventsToInsert);
     }
 
     await refresh();

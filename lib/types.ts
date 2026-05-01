@@ -204,6 +204,7 @@ export interface Assignment {
   service_id: string;
   driver_user_id: string | null;
   vehicle_label: string;
+  group_id?: string | null;
   created_at?: string;
 }
 

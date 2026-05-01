@@ -69,6 +69,9 @@ type VehicleRow = { id: string; label: string; capacity: number | null; vehicle_
 type DriverRow = { user_id: string; full_name: string | null; role: string };
 type AssignmentRow = { service_id: string; group_id: string | null; driver_user_id: string | null };
 type TripGroupRow = { id: string; driver_user_id: string | null; vehicle_label: string | null; vehicle_capacity: number | null; status: string | null };
+type DriverAvailRow = { driver_user_id: string; available: boolean; note: string | null };
+type VehicleAvailRow = { vehicle_id: string; available: boolean; note: string | null };
+type VehicleTimeBlockRow = { vehicle_id: string; blocked_from: string; blocked_until: string; reason: string | null };
 
 function minutesFromTime(value: string | null | undefined) {
   const [h, m] = String(value ?? "").slice(0, 5).split(":").map((part) => Number.parseInt(part, 10));
@@ -164,9 +167,11 @@ async function callAnthropic(input: unknown) {
 }
 
 Regole:
+- Usa solo autisti in available_drivers e mezzi in available_vehicles per i suggerimenti.
 - Stesso porto: arrivi entro 20/25 minuti possono essere accorpati se non generano attese eccessive.
 - Non fidarti di hotel con geo_issues: vanno corretti prima di usare percorso geografico.
 - Per partenze, considera pickup hotel/zone e porto di imbarco.
+- Segnala in warnings se il numero di autisti/mezzi disponibili sembra insufficiente per il volume.
 - Dai massimo 8 azioni prioritarie e massimo 12 batch.
 - Linguaggio semplice per operatore, non tecnico.
 
@@ -205,7 +210,7 @@ export async function POST(request: NextRequest) {
     const tenantId = auth.membership.tenant_id;
     const date = parsed.data.date;
 
-    const [servicesRes, hotelsRes, vehiclesRes, driversRes, assignmentsRes, groupsRes] = await Promise.all([
+    const [servicesRes, hotelsRes, vehiclesRes, driversRes, assignmentsRes, groupsRes, driverAvailRes, vehicleAvailRes, vehicleBlocksRes] = await Promise.all([
       auth.admin
         .from("services")
         .select("id,time,direction,vessel,hotel_id,pax,status,meeting_point,pickup_hotel,customer_name")
@@ -236,7 +241,22 @@ export async function POST(request: NextRequest) {
         .select("id,driver_user_id,vehicle_label,vehicle_capacity,status")
         .eq("tenant_id", tenantId)
         .eq("date", date)
-        .eq("status", "active")
+        .eq("status", "active"),
+      auth.admin
+        .from("driver_daily_availability")
+        .select("driver_user_id,available,note")
+        .eq("tenant_id", tenantId)
+        .eq("date", date),
+      auth.admin
+        .from("vehicle_daily_availability")
+        .select("vehicle_id,available,note")
+        .eq("tenant_id", tenantId)
+        .eq("date", date),
+      auth.admin
+        .from("vehicle_time_blocks")
+        .select("vehicle_id,blocked_from,blocked_until,reason")
+        .eq("tenant_id", tenantId)
+        .eq("date", date),
     ]);
 
     if (servicesRes.error || hotelsRes.error || vehiclesRes.error || driversRes.error || assignmentsRes.error || groupsRes.error) {
@@ -249,6 +269,32 @@ export async function POST(request: NextRequest) {
     const drivers = (driversRes.data ?? []) as DriverRow[];
     const assignments = (assignmentsRes.data ?? []) as AssignmentRow[];
     const groups = (groupsRes.data ?? []) as TripGroupRow[];
+
+    const driverAvailByUserId = new Map((driverAvailRes.data ?? [] as DriverAvailRow[]).map((r) => [r.driver_user_id, r]));
+    const vehicleAvailByVehicleId = new Map((vehicleAvailRes.data ?? [] as VehicleAvailRow[]).map((r) => [r.vehicle_id, r]));
+    const blockedVehicleIds = new Set((vehicleBlocksRes.data ?? [] as VehicleTimeBlockRow[]).map((r) => r.vehicle_id));
+
+    const availableDrivers = drivers
+      .filter((d) => {
+        const avail = driverAvailByUserId.get(d.user_id);
+        return !avail || avail.available !== false;
+      })
+      .map((d) => ({
+        name: d.full_name ?? d.user_id,
+        note: driverAvailByUserId.get(d.user_id)?.note ?? null,
+      }));
+
+    const availableVehicles = vehicles
+      .filter((v) => {
+        const avail = vehicleAvailByVehicleId.get(v.id);
+        return !blockedVehicleIds.has(v.id) && (!avail || avail.available !== false);
+      })
+      .map((v) => ({
+        label: v.label,
+        capacity: v.capacity,
+        size: v.vehicle_size,
+        note: vehicleAvailByVehicleId.get(v.id)?.note ?? null,
+      }));
     const hotelById = new Map(hotels.map((hotel) => [hotel.id, hotel]));
     const assignedServiceIds = new Set(assignments.filter((row) => row.group_id).map((row) => row.service_id));
     const unassigned = services.filter((service) => !assignedServiceIds.has(service.id));
@@ -334,15 +380,14 @@ export async function POST(request: NextRequest) {
         active_trips: groupStats.total,
         trips_without_driver: groupStats.without_driver,
         trips_without_vehicle: groupStats.without_vehicle,
-        drivers: drivers.length,
-        vehicles: vehicles.length,
-        max_vehicle_capacity: vehicles.reduce((max, vehicle) => Math.max(max, vehicle.capacity ?? 0), 0)
+        drivers_total: drivers.length,
+        drivers_available: availableDrivers.length,
+        vehicles_total: vehicles.length,
+        vehicles_available: availableVehicles.length,
+        max_vehicle_capacity: availableVehicles.reduce((max, v) => Math.max(max, v.capacity ?? 0), 0)
       },
-      vehicles: vehicles.slice(0, 20).map((vehicle) => ({
-        label: vehicle.label,
-        capacity: vehicle.capacity,
-        size: vehicle.vehicle_size
-      })),
+      available_drivers: availableDrivers.slice(0, 30),
+      available_vehicles: availableVehicles.slice(0, 20),
       unassigned_clusters: clusters,
       hotel_geo_issues: geoIssues
     };
