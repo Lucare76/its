@@ -283,7 +283,11 @@ export default function DeparturesPage() {
 
   const resolvePickupNote = useCallback((service: Service): string | null => {
     const hotel = hotelsById.get(service.hotel_id);
-    return hotel?.pickup_note ?? service.meeting_point ?? null;
+    if (hotel?.pickup_note) return hotel.pickup_note;
+    const isFormula = ["formula_snav","formula_medmar_napoli","formula_medmar_pozzuoli"]
+      .includes(service.booking_service_kind ?? "");
+    if (isFormula) return hotel?.name ?? null;
+    return service.meeting_point ?? hotel?.name ?? null;
   }, [hotelsById]);
   const tenantId = data.services[0]?.tenant_id ?? "";
 
