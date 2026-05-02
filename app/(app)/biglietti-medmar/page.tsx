@@ -205,6 +205,8 @@ export default function BigliettiMedmarPage() {
         .select("*, medmar_ticket_sent_at, medmar_ticket_sent_by")
         .eq("tenant_id", tid)
         .eq("is_draft", false)
+        .neq("status", "cancelled")
+        .neq("status", "pending_cancellation")
         .gte("date", qFrom)
         .lte("date", qTo)
         .order("date")
