@@ -312,7 +312,7 @@ export default function OpsNewBookingPage() {
         supabase.from("agencies").select("id, name").eq("tenant_id", session.tenantId).eq("active", true).order("name"),
         supabase
           .from("ferry_schedules")
-          .select("company, departure_port, arrival_port, departure_time, direction, days_of_week, valid_from, valid_to")
+          .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to")
           .in("company", ["snav", "medmar"])
       ]);
 

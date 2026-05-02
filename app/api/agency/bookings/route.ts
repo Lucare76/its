@@ -8,6 +8,7 @@ import { buildServiceLabel, buildServiceLabelShort } from "@/lib/service-label";
 import { auditLog } from "@/lib/server/ops-audit";
 import { authorizeServiceRoleRequest } from "@/lib/server/pricing-auth";
 import { appUrlFromRequest, ensureBusBookingQrCodes } from "@/lib/server/bus-booking-qr";
+import { computeIschiaArrivalTime } from "@/lib/ferry-schedule-options";
 
 export const runtime = "nodejs";
 
@@ -387,7 +388,7 @@ export async function POST(request: NextRequest) {
       customer_last_name: parsed.data.customer_last_name.trim(),
       customer_email: customerEmail || null,
       arrival_date: parsed.data.arrival_date,
-      arrival_time: parsed.data.arrival_time,
+      arrival_time: computeIschiaArrivalTime(bookingKind, parsed.data.arrival_time ?? "") ?? parsed.data.arrival_time,
       departure_date: parsed.data.departure_date,
       departure_time: parsed.data.departure_time,
       transport_code: transportCode || null,
