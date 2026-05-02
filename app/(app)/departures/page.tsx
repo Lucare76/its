@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 
-import { formatIsoDateShort, getCustomerFullName, getDepartureFerryLabel, getDepartureIschiaPort, getTransportReferenceReturn } from "@/lib/service-display";
+import { formatIsoDateShort, getCustomerFullName, getDepartureFerryLabel, getTransportReferenceReturn } from "@/lib/service-display";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import { supabase } from "@/lib/supabase/client";
 import type { Service, Hotel } from "@/lib/types";
@@ -575,7 +575,10 @@ export default function DeparturesPage() {
       Cliente: getCustomerFullName(item.service),
       Pax: item.service.pax,
       "Origine/Hotel": resolveHotelName(item.service),
-      "Meeting point": getDepartureIschiaPort(item.service) ?? item.service.meeting_point ?? item.service.vessel ?? "",
+      "Meeting point": (() => {
+        const isFormula = ["formula_snav","formula_medmar_napoli","formula_medmar_pozzuoli"].includes(item.service.booking_service_kind ?? "");
+        return isFormula ? resolveHotelName(item.service) : (item.service.meeting_point ?? resolveHotelName(item.service));
+      })(),
       Riferimento: getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? "",
       Tipo: item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "",
       Agenzia: item.service.billing_party_name ?? "",
@@ -680,7 +683,8 @@ export default function DeparturesPage() {
           <div className="space-y-2 md:hidden">
             {departures.map((item) => {
               const hotelName = resolveHotelName(item.service);
-              const meetingPoint = getDepartureIschiaPort(item.service) ?? item.service.meeting_point ?? null;
+              const isFormula = ["formula_snav","formula_medmar_napoli","formula_medmar_pozzuoli"].includes(item.service.booking_service_kind ?? "");
+              const meetingPoint = isFormula ? null : (item.service.meeting_point ?? null);
               const riferimento = getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
               const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
               const hint = pickupHints.get(item.service.id);
@@ -749,7 +753,8 @@ export default function DeparturesPage() {
             <div className="divide-y divide-slate-100">
               {departures.map((item) => {
                 const hotelName = resolveHotelName(item.service);
-                const meetingPoint = getDepartureIschiaPort(item.service) ?? item.service.meeting_point ?? null;
+                const isFormula = ["formula_snav","formula_medmar_napoli","formula_medmar_pozzuoli"].includes(item.service.booking_service_kind ?? "");
+              const meetingPoint = isFormula ? null : (item.service.meeting_point ?? null);
                 const riferimento = getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
                 const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
                 const hint = pickupHints.get(item.service.id);
