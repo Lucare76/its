@@ -45,6 +45,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/pricing", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/richieste-modifica", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/whatsapp-log",      roles: ["admin", "operator", "supervisor"] },
+  { prefix: "/whatsapp", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/settings/users", roles: ["admin", "supervisor"] },
   { prefix: "/settings/whatsapp", roles: ["admin", "supervisor"] },
   { prefix: "/settings/tenant", roles: ["admin", "supervisor"] },
@@ -158,6 +159,7 @@ export const routeCapabilityMap: Array<{ prefix: string; capability: AppCapabili
   { prefix: "/mappa-live", capability: "control_room:view" },
   { prefix: "/preventivo-ops", capability: "quotes:view" },
   { prefix: "/inbox", capability: "inbox:manage" },
+  { prefix: "/whatsapp", capability: "inbox:manage" },
   { prefix: "/pricing/margins", capability: "pricing:view" },
   { prefix: "/pricing", capability: "pricing:view" }
 ];

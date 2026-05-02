@@ -10,6 +10,7 @@ import { createTestContext, seedHotel, seedService, type TestContext } from "./h
 
 let ctx: TestContext;
 let hotelId: string;
+let roundTripBookingId = "";
 
 const BUS_PAYLOAD = {
   customer_first_name: "Lucia",
@@ -70,6 +71,7 @@ describe("bus booking qr codes", () => {
     expect(data).toHaveLength(2);
     expect(data?.map((row) => row.direction).sort()).toEqual(["outbound", "return"]);
     expect(data?.every((row) => row.qr_token && row.status === "active")).toBe(true);
+    roundTripBookingId = body.id!;
   });
 
   it("non crea il QR return se manca la tratta di ritorno", async () => {
@@ -119,24 +121,20 @@ describe("bus booking qr codes", () => {
   });
 
   it("non duplica i QR quando rilancio la generazione", async () => {
-    const { data: rootQr } = await ctx.admin
-      .from("booking_qr_codes")
-      .select("booking_id")
-      .eq("tenant_id", ctx.tenantId)
-      .eq("direction", "outbound")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // Usa la prenotazione A/R creata nel primo test (che ha outbound + return)
+    // Non si usa "latest outbound by created_at" perché test precedenti creano QR
+    // di servizi solo-andata, inquinando l'ordinamento temporale.
+    expect(roundTripBookingId).toBeTruthy();
 
-    const req = makeNextRequest("POST", {}, ctx.token, `http://localhost:3010/api/bookings/${rootQr!.booking_id}/qr-codes/generate`);
-    const res = await generateBookingQr(req, { params: Promise.resolve({ id: rootQr!.booking_id }) });
+    const req = makeNextRequest("POST", {}, ctx.token, `http://localhost:3010/api/bookings/${roundTripBookingId}/qr-codes/generate`);
+    const res = await generateBookingQr(req, { params: Promise.resolve({ id: roundTripBookingId }) });
     expect(res.status).toBe(200);
 
     const { data, error } = await ctx.admin
       .from("booking_qr_codes")
       .select("id")
       .eq("tenant_id", ctx.tenantId)
-      .eq("booking_id", rootQr!.booking_id);
+      .eq("booking_id", roundTripBookingId);
 
     expect(error).toBeNull();
     expect(data).toHaveLength(2);

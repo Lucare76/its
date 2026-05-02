@@ -77,6 +77,10 @@ function mustEnv(name: string) {
   return value;
 }
 
+function whatsappAccessToken() {
+  return process.env.WHATSAPP_ACCESS_TOKEN?.trim().replace(/^["']|["']$/g, "") || mustEnv("WHATSAPP_TOKEN");
+}
+
 export function createAdminClient() {
   const supabaseUrl = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
   const serviceRole = mustEnv("SUPABASE_SERVICE_ROLE_KEY");
@@ -201,7 +205,7 @@ async function sendTemplateMessage(phoneNumberId: string, accessToken: string, t
 
 export async function sendWhatsAppMessage(input: SendWhatsAppMessageInput) {
   const phoneNumberId = mustEnv("WHATSAPP_PHONE_NUMBER_ID");
-  const accessToken = mustEnv("WHATSAPP_TOKEN");
+  const accessToken = whatsappAccessToken();
   const toPhone = normalizeE164(input.to);
   const languageCode = normalizeLanguageCode(input.languageCode ?? process.env.WHATSAPP_TEMPLATE_LANGUAGE ?? "it");
   const parameters = Object.values(input.variables).map((value) => ({
@@ -261,7 +265,7 @@ export async function sendWhatsAppReminder(
   options?: SendReminderOptions
 ) {
   const phoneNumberId = mustEnv("WHATSAPP_PHONE_NUMBER_ID");
-  const accessToken = mustEnv("WHATSAPP_TOKEN");
+  const accessToken = whatsappAccessToken();
   const templateName = options?.templateName ?? process.env.WHATSAPP_TEMPLATE_NAME ?? "transfer_reminder";
   const languageCode = normalizeLanguageCode(options?.languageCode ?? process.env.WHATSAPP_TEMPLATE_LANGUAGE ?? "it");
   const allowTextFallback = Boolean(options?.allowTextFallback);

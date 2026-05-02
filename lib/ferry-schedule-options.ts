@@ -44,7 +44,7 @@ function addMinutesToTime(rawTime: string, minutesToAdd: number): string {
 function inferArrivalDurationMinutes(row: FerryScheduleRow): number | null {
   if (row.company === "snav") return 65;
   if (row.company === "medmar" && row.departure_port === "napoli_beverello") return 90;
-  if (row.company === "medmar" && row.departure_port === "pozzuoli") return 65;
+  if (row.company === "medmar" && row.departure_port === "pozzuoli") return 60;
   if (row.company === "alilauro") return 70;
   return null;
 }
@@ -53,7 +53,7 @@ export function computeIschiaArrivalTime(bookingKind: string | null, ferryDepart
   let minutes: number;
   if (bookingKind === "formula_snav") minutes = 65;
   else if (bookingKind === "formula_medmar_napoli") minutes = 90;
-  else if (bookingKind === "formula_medmar_pozzuoli") minutes = 65;
+  else if (bookingKind === "formula_medmar_pozzuoli") minutes = 60;
   else return null;
   return addMinutesToTime(ferryDepartureTime, minutes);
 }

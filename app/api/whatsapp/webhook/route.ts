@@ -1,7 +1,13 @@
-import { createHmac, timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createAdminClient, logWhatsAppEvent, mapWebhookStatus } from "@/lib/server/whatsapp";
+import { createAdminClient } from "@/lib/server/whatsapp";
+import { verifyMetaSignature } from "@/lib/server/whatsapp/signature";
+import {
+  extractWebhookDedupeKey,
+  extractWebhookEventType,
+  processWhatsAppWebhook
+} from "@/lib/server/whatsapp/webhook-processing";
+import type { MetaWebhookPayload } from "@/lib/server/whatsapp/types";
 
 export const runtime = "nodejs";
 
@@ -11,33 +17,10 @@ const verifyModeSchema = z.object({
   challenge: z.string().optional()
 });
 
-const webhookSchema = z.object({
-  entry: z
-    .array(
-      z.object({
-        changes: z
-          .array(
-            z.object({
-              value: z.object({
-                statuses: z
-                  .array(
-                    z.object({
-                      id: z.string(),
-                      status: z.string(),
-                      timestamp: z.string().optional(),
-                      recipient_id: z.string().optional(),
-                      errors: z.array(z.record(z.unknown())).optional()
-                    })
-                  )
-                  .optional()
-              })
-            })
-          )
-          .optional()
-      })
-    )
-    .optional()
-});
+const webhookPayloadSchema = z.object({
+  object: z.string().optional(),
+  entry: z.array(z.unknown()).optional()
+}).passthrough();
 
 export async function GET(request: NextRequest) {
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
@@ -56,36 +39,35 @@ export async function GET(request: NextRequest) {
   }
 
   if (params.data.mode === "subscribe" && params.data.token === verifyToken) {
-    return new NextResponse(params.data.challenge ?? "", { status: 200 });
+    return new NextResponse(params.data.challenge ?? "", {
+      status: 200,
+      headers: { "Content-Type": "text/plain; charset=utf-8" }
+    });
   }
 
   return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 }
 
 export async function POST(request: NextRequest) {
-  const rawBody = await request.text();
-
-  // Verifica firma HMAC-SHA256 Meta (X-Hub-Signature-256)
-  const appSecret = process.env.WHATSAPP_APP_SECRET;
-  if (appSecret) {
-    const signature = request.headers.get("x-hub-signature-256");
-    if (!signature) {
-      return NextResponse.json({ error: "Missing signature" }, { status: 401 });
-    }
-    const expectedSig = "sha256=" + createHmac("sha256", appSecret).update(rawBody).digest("hex");
-    const sigBuf = Buffer.from(signature);
-    const expBuf = Buffer.from(expectedSig);
-    const valid = sigBuf.length === expBuf.length && timingSafeEqual(sigBuf, expBuf);
-    if (!valid) {
-      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
-    }
-  } else {
-    console.warn("[whatsapp/webhook] WHATSAPP_APP_SECRET non configurato – verifica firma saltata");
+  const appSecret = process.env.WHATSAPP_APP_SECRET?.trim().replace(/^["']|["']$/g, "");
+  if (!appSecret) {
+    return NextResponse.json({ error: "Server env missing" }, { status: 500 });
   }
 
-  let bodyJson: unknown;
-  try { bodyJson = JSON.parse(rawBody); } catch { bodyJson = null; }
-  const parsed = webhookSchema.safeParse(bodyJson);
+  const rawBody = await request.text();
+  const signature = request.headers.get("x-hub-signature-256");
+  if (!verifyMetaSignature(rawBody, signature, appSecret)) {
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  }
+
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(rawBody);
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const parsed = webhookPayloadSchema.safeParse(parsedJson);
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid webhook payload" }, { status: 400 });
   }
@@ -97,61 +79,32 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Server env missing" }, { status: 500 });
   }
 
-  const statuses =
-    parsed.data.entry?.flatMap((entry) => entry.changes?.flatMap((change) => change.value.statuses ?? []) ?? []) ?? [];
+  const payload = parsed.data as MetaWebhookPayload;
+  const dedupeKey = extractWebhookDedupeKey(payload);
+  const eventType = extractWebhookEventType(payload);
 
-  let updated = 0;
-  let logged = 0;
-  for (const statusUpdate of statuses) {
-    const mappedStatus = mapWebhookStatus(statusUpdate.status);
-    if (!mappedStatus) continue;
+  const { data: eventRow, error: insertError } = await admin
+    .from("whatsapp_webhook_events")
+    .insert({
+      provider: "meta",
+      event_type: eventType,
+      object: payload.object ?? null,
+      raw_payload: payload,
+      signature_valid: true,
+      dedupe_key: dedupeKey
+    })
+    .select("id")
+    .single();
 
-    const statusTimestampMs = Number(statusUpdate.timestamp) * 1000;
-    const happenedAt =
-      Number.isFinite(statusTimestampMs) && statusTimestampMs > 0
-        ? new Date(statusTimestampMs).toISOString()
-        : new Date().toISOString();
-
-    const { data: serviceHit } = await admin
-      .from("services")
-      .select("id, tenant_id")
-      .eq("message_id", statusUpdate.id)
-      .maybeSingle();
-
-    const patch: { reminder_status: string; sent_at?: string } = {
-      reminder_status: mappedStatus
-    };
-
-    if (mappedStatus === "sent") {
-      patch.sent_at = happenedAt;
+  if (insertError) {
+    const duplicate = insertError.code === "23505";
+    if (duplicate) {
+      return NextResponse.json({ ok: true, duplicate: true });
     }
-
-    const updateQuery = admin.from("services").update(patch).eq("message_id", statusUpdate.id);
-    if (serviceHit?.tenant_id) {
-      updateQuery.eq("tenant_id", serviceHit.tenant_id);
-    }
-    const { error } = await updateQuery;
-    if (!error) updated += 1;
-
-    if (serviceHit?.tenant_id) {
-      await logWhatsAppEvent(admin, {
-        tenant_id: serviceHit.tenant_id,
-        service_id: serviceHit.id,
-        to_phone: statusUpdate.recipient_id ?? "unknown",
-        kind: "webhook",
-        template: process.env.WHATSAPP_TEMPLATE_NAME ?? null,
-        status: mappedStatus,
-        provider_message_id: statusUpdate.id,
-        happened_at: happenedAt,
-        payload_json: {
-          source: "api/whatsapp/webhook",
-          raw_status: statusUpdate.status,
-          errors: statusUpdate.errors ?? []
-        }
-      });
-      logged += 1;
-    }
+    return NextResponse.json({ error: "Webhook archive failed" }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true, processed: statuses.length, updated, logged });
+  const result = await processWhatsAppWebhook(admin, payload, eventRow?.id);
+  return NextResponse.json({ ok: true, ...result });
 }
+

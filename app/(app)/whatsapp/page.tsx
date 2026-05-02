@@ -1,0 +1,313 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { PageHeader } from "@/components/ui";
+import { supabase } from "@/lib/supabase/client";
+
+type ThreadRow = {
+  id: string;
+  wa_id: string;
+  phone_e164: string | null;
+  booking_id: string | null;
+  transfer_id: string | null;
+  last_message_at: string | null;
+  last_message_preview: string | null;
+  unread_count: number;
+  status: "open" | "needs_review" | "closed";
+  match_status: "matched" | "unmatched" | "ambiguous" | "needs_review";
+  match_suggestions: Array<Record<string, unknown>>;
+  whatsapp_contacts?: { profile_name?: string | null } | null;
+  service?: {
+    id: string;
+    customer_name?: string | null;
+    phone?: string | null;
+    phone_e164?: string | null;
+    date?: string | null;
+    time?: string | null;
+    booking_service_kind?: string | null;
+    hotels?: { name?: string | null } | null;
+  } | null;
+};
+
+type MessageRow = {
+  id: string;
+  wa_message_id: string | null;
+  direction: "inbound" | "outbound";
+  message_type: string | null;
+  text_body: string | null;
+  media_id: string | null;
+  media_mime_type: string | null;
+  status: string | null;
+  timestamp: string | null;
+  created_at: string;
+  booking_id: string | null;
+};
+
+type InboxPayload = {
+  ok?: boolean;
+  threads?: ThreadRow[];
+  selected_thread_id?: string | null;
+  messages?: MessageRow[];
+  error?: string;
+};
+
+const filters = [
+  { value: "open", label: "Aperte" },
+  { value: "needs_review", label: "Da rivedere" },
+  { value: "associated", label: "Associate" },
+  { value: "unassociated", label: "Non associate" },
+  { value: "closed", label: "Chiuse" }
+] as const;
+
+function formatDate(value: string | null) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat("it-IT", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+async function getAccessToken() {
+  if (!supabase) return null;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
+}
+
+export default function WhatsAppInboxPage() {
+  const [threads, setThreads] = useState<ThreadRow[]>([]);
+  const [messages, setMessages] = useState<MessageRow[]>([]);
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<(typeof filters)[number]["value"]>("open");
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+
+  const selectedThread = useMemo(
+    () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
+    [threads, selectedThreadId]
+  );
+
+  const load = useCallback(async (nextThreadId?: string | null) => {
+    setLoading(true);
+    setError("");
+    const token = await getAccessToken();
+    if (!token) {
+      setError("Sessione non disponibile.");
+      setLoading(false);
+      return;
+    }
+    const params = new URLSearchParams({ filter, q: search });
+    if (nextThreadId) params.set("thread_id", nextThreadId);
+    const response = await fetch(`/api/ops/whatsapp-inbox?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const body = (await response.json().catch(() => null)) as InboxPayload | null;
+    if (!response.ok || !body?.ok) {
+      setError(body?.error ?? "Errore caricamento WhatsApp Inbox.");
+      setLoading(false);
+      return;
+    }
+    setThreads(body.threads ?? []);
+    setMessages(body.messages ?? []);
+    setSelectedThreadId(body.selected_thread_id ?? null);
+    setLoading(false);
+  }, [filter, search]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => void load(selectedThreadId), 250);
+    return () => window.clearTimeout(timeout);
+  }, [filter, search, selectedThreadId, load]);
+
+  const runAction = async (action: "mark_read" | "close" | "reopen") => {
+    if (!selectedThreadId) return;
+    const token = await getAccessToken();
+    if (!token) return;
+    setBusyAction(action);
+    setError("");
+    const response = await fetch("/api/ops/whatsapp-inbox", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ thread_id: selectedThreadId, action })
+    });
+    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    if (!response.ok || !body?.ok) {
+      setError(body?.error ?? "Azione non riuscita.");
+    } else {
+      await load(selectedThreadId);
+    }
+    setBusyAction(null);
+  };
+
+  return (
+    <section className="page-section">
+      <PageHeader
+        title="Inbox WhatsApp"
+        subtitle="Risposte clienti ricevute da WhatsApp Business Platform."
+        breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "WhatsApp" }]}
+      />
+
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap gap-2">
+          {filters.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              onClick={() => setFilter(item.value)}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+                filter === item.value
+                  ? "border-slate-900 bg-slate-900 text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          className="input-saas w-full lg:w-80"
+          placeholder="Cerca nome, telefono, pratica, hotel"
+        />
+      </div>
+
+      {error ? (
+        <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
+      ) : null}
+
+      <div className="grid min-h-[640px] gap-4 lg:grid-cols-[360px_1fr]">
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <p className="text-sm font-semibold text-slate-900">Conversazioni</p>
+            <p className="text-xs text-slate-400">{loading ? "Caricamento..." : `${threads.length} thread`}</p>
+          </div>
+          <div className="max-h-[580px] overflow-y-auto">
+            {threads.map((thread) => {
+              const active = thread.id === selectedThreadId;
+              const name = thread.whatsapp_contacts?.profile_name || thread.service?.customer_name || thread.phone_e164 || thread.wa_id;
+              return (
+                <button
+                  key={thread.id}
+                  type="button"
+                  onClick={() => void load(thread.id)}
+                  className={`block w-full border-b border-slate-100 px-4 py-3 text-left transition ${
+                    active ? "bg-slate-900 text-white" : "bg-white hover:bg-slate-50"
+                  }`}
+                >
+                  <span className="flex items-start justify-between gap-3">
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold">{name}</span>
+                      <span className={`mt-0.5 block truncate text-xs ${active ? "text-slate-300" : "text-slate-500"}`}>
+                        {thread.last_message_preview ?? "Nessun messaggio"}
+                      </span>
+                    </span>
+                    {thread.unread_count > 0 ? (
+                      <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                        {thread.unread_count > 99 ? "99+" : thread.unread_count}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className={`mt-2 flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase ${active ? "text-slate-300" : "text-slate-400"}`}>
+                    <span>{thread.match_status === "matched" ? "Associata" : "Da verificare"}</span>
+                    <span>{formatDate(thread.last_message_at)}</span>
+                  </span>
+                </button>
+              );
+            })}
+            {!loading && threads.length === 0 ? (
+              <div className="px-4 py-10 text-center text-sm text-slate-400">Nessuna conversazione per questo filtro.</div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          {selectedThread ? (
+            <>
+              <div className="border-b border-slate-100 px-4 py-3">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">
+                      {selectedThread.whatsapp_contacts?.profile_name || selectedThread.phone_e164 || selectedThread.wa_id}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {selectedThread.service
+                        ? `${selectedThread.service.customer_name ?? "Cliente"} · ${selectedThread.service.date ?? ""} ${String(selectedThread.service.time ?? "").slice(0, 5)}`
+                        : "Nessuna prenotazione associata"}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void runAction("mark_read")}
+                      disabled={busyAction !== null}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Segna come letto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void runAction(selectedThread.status === "closed" ? "reopen" : "close")}
+                      disabled={busyAction !== null}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      {selectedThread.status === "closed" ? "Riapri" : "Chiudi"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled
+                      title="TODO: associazione manuale in step successivo"
+                      className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 opacity-70"
+                    >
+                      Associa a prenotazione
+                    </button>
+                  </div>
+                </div>
+                {selectedThread.match_status !== "matched" ? (
+                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    Messaggio non associato con certezza. Suggerimenti: {selectedThread.match_suggestions?.length ?? 0}.
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4">
+                {messages.map((message) => {
+                  const inbound = message.direction === "inbound";
+                  return (
+                    <div key={message.id} className={`flex ${inbound ? "justify-start" : "justify-end"}`}>
+                      <div className={`max-w-[82%] rounded-2xl border px-3 py-2 shadow-sm ${
+                        inbound ? "border-slate-200 bg-white text-slate-800" : "border-emerald-200 bg-emerald-50 text-emerald-900"
+                      }`}>
+                        <p className="whitespace-pre-wrap text-sm">{message.text_body || `[${message.message_type ?? "messaggio"}]`}</p>
+                        {message.media_id ? (
+                          <p className="mt-1 text-[11px] text-slate-400">Allegato: {message.media_mime_type ?? message.media_id}</p>
+                        ) : null}
+                        <p className="mt-1 text-[10px] text-slate-400">{formatDate(message.timestamp ?? message.created_at)}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+                {messages.length === 0 ? (
+                  <div className="py-16 text-center text-sm text-slate-400">Seleziona una conversazione.</div>
+                ) : null}
+              </div>
+
+              <div className="border-t border-slate-100 px-4 py-3 text-xs text-slate-400">
+                Invio manuale messaggi non attivo in questa fase.
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-1 items-center justify-center text-sm text-slate-400">
+              Nessuna conversazione selezionata.
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}

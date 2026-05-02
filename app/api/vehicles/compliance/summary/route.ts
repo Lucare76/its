@@ -1,38 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { diffDays, expiryStatus, worstStatus } from "@/lib/vehicle-compliance";
 
 export const runtime = "nodejs";
-
-type StatusLevel = "expired" | "critical" | "warning" | "missing" | "ok";
-
-const STATUS_RANK: Record<StatusLevel, number> = {
-  expired: 0,
-  critical: 1,
-  warning: 2,
-  missing: 3,
-  ok: 4,
-};
-
-function diffDays(from: string, to: string): number {
-  const a = new Date(`${from}T00:00:00Z`);
-  const b = new Date(`${to}T00:00:00Z`);
-  return Math.floor((b.getTime() - a.getTime()) / 86400000);
-}
-
-function expiryStatus(daysLeft: number | null): StatusLevel {
-  if (daysLeft === null) return "missing";
-  if (daysLeft < 0) return "expired";
-  if (daysLeft <= 7) return "critical";
-  if (daysLeft <= 30) return "warning";
-  return "ok";
-}
-
-function worstStatus(statuses: StatusLevel[]): StatusLevel {
-  return statuses.reduce<StatusLevel>(
-    (worst, s) => (STATUS_RANK[s] < STATUS_RANK[worst] ? s : worst),
-    "ok"
-  );
-}
 
 export async function GET(request: NextRequest) {
   const ctx = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);

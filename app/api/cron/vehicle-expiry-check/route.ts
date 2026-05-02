@@ -15,15 +15,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendEmail as sendEmailBase } from "@/lib/server/send-email";
 import { getLogoDataUri } from "@/lib/server/logo";
+import {
+  diffDays,
+  getEffectiveExpiry,
+  getWarnWindowDays,
+  buildStatusLabel,
+  WARN_DAYS,
+} from "@/lib/vehicle-compliance";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const NOTIFY_EMAILS = ["info@ischiatransferservice.it", "luca_renna@hotmail.com"];
-const WARN_DAYS = 60;
-const INSURANCE_GRACE_DAYS = 14;
-const INSURANCE_WARN_WINDOW_DAYS = 61;
-
 
 type WarningItem = {
   label: string;
@@ -35,38 +38,14 @@ type WarningItem = {
   note?: string;
 };
 
-function addDays(iso: string, n: number): string {
-  const d = new Date(`${iso}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-
 function formatDate(iso: string): string {
   const [y, m, d] = iso.split("-");
   return `${d}/${m}/${y}`;
 }
 
-function diffDays(from: string, to: string): number {
-  const a = new Date(`${from}T00:00:00Z`);
-  const b = new Date(`${to}T00:00:00Z`);
-  return Math.floor((b.getTime() - a.getTime()) / 86400000);
-}
-
 function isIsoDate(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
-
-function getEffectiveExpiry(docType: string, expiry: string): string {
-  if (docType === "Assicurazione") {
-    return addDays(expiry, INSURANCE_GRACE_DAYS);
-  }
-  return expiry;
-}
-
-function getWarnWindowDays(docType: string): number {
-  return docType === "Assicurazione" ? INSURANCE_WARN_WINDOW_DAYS : WARN_DAYS;
-}
-
 
 async function sendEmail(subject: string, html: string) {
   const result = await sendEmailBase({ to: NOTIFY_EMAILS, subject, html });
@@ -74,12 +53,6 @@ async function sendEmail(subject: string, html: string) {
     return { ok: false, error: result.error ?? "Errore invio" } as const;
   }
   return { ok: true } as const;
-}
-
-function buildStatusLabel(daysLeft: number) {
-  if (daysLeft < 0) return `SCADUTO da ${Math.abs(daysLeft)} giorni`;
-  if (daysLeft === 0) return "SCADE OGGI";
-  return `Scade tra ${daysLeft} giorn${daysLeft === 1 ? "o" : "i"}`;
 }
 
 function buildEmailHtml(warnings: WarningItem[]): string {

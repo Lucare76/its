@@ -33,10 +33,13 @@
     "types:supabase:gen": "node scripts/supabase-gen-types.mjs",
     "types:supabase:check": "node scripts/supabase-gen-types.mjs --check",
     "test": "vitest run",
+    "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:integration:watch": "vitest --config vitest.integration.config.ts"
+    "test:integration:watch": "vitest --config vitest.integration.config.ts",
+    "test:e2e": "pnpm exec playwright test",
+    "test:report": "vitest run --reporter=html && pnpm exec playwright test --reporter=html"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

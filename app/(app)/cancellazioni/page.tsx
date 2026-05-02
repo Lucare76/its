@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { getClientSessionContext } from "@/lib/supabase/client-session";
 
 type CancellationRequest = {
   id: string;
@@ -59,6 +60,10 @@ export default function CancellazioniPage() {
   const [error, setError] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ serviceId: string; customerName: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Modale penale
   const [modal, setModal] = useState<CancellationRequest | null>(null);
@@ -71,8 +76,9 @@ export default function CancellazioniPage() {
     setLoading(true);
     setError(null);
     try {
-      const session = await supabase?.auth.getSession();
-      const token = session?.data.session?.access_token;
+      const ctx = await getClientSessionContext();
+      setIsAdmin(ctx.role === "admin");
+      const token = ctx.accessToken ?? (await supabase?.auth.getSession())?.data.session?.access_token;
       if (!token) { setError("Sessione scaduta."); return; }
       const res = await fetch("/api/ops/cancellation-requests", {
         headers: { Authorization: `Bearer ${token}` },
@@ -100,6 +106,32 @@ export default function CancellazioniPage() {
       void load();
     } finally {
       setRestoring(null);
+    }
+  };
+
+  const confirmDelete = (serviceId: string, customerName: string) => {
+    setDeleteTarget({ serviceId, customerName });
+    setDeleteError(null);
+  };
+
+  const executeDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const session = await supabase?.auth.getSession();
+      const token = session?.data.session?.access_token;
+      if (!token) { setDeleteError("Sessione scaduta."); return; }
+      const res = await fetch(`/api/ops/services/${deleteTarget.serviceId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await res.json() as { ok?: boolean; error?: string };
+      if (!body.ok) { setDeleteError(body.error ?? "Errore eliminazione."); return; }
+      setDeleteTarget(null);
+      void load();
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -152,9 +184,6 @@ export default function CancellazioniPage() {
   const archived = requests
     .filter((r) => r.status === "closed" || r.status === "approved")
     .filter(matchesSearch);
-  const hasAgencyResponse = (r: CancellationRequest) =>
-    r.status === "pending_agency_approval" && r.agency_response !== null;
-
   return (
     <section className="page-section">
       <div className="section-head">
@@ -232,6 +261,14 @@ export default function CancellazioniPage() {
                     >
                       {restoring === req.id ? "..." : "Ripristina"}
                     </button>
+                    {isAdmin && (
+                      <button
+                        onClick={() => confirmDelete(svc.id, svc.customer_name)}
+                        className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition"
+                      >
+                        Elimina
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -298,10 +335,50 @@ export default function CancellazioniPage() {
                     <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-500">
                       {req.id.startsWith("direct_") ? "Cancellata direttamente" : "Chiusa"} · {new Date(req.created_at).toLocaleDateString("it-IT")}
                     </span>
+                    {isAdmin && (
+                      <button
+                        onClick={() => confirmDelete(svc.id, svc.customer_name ?? "—")}
+                        className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition"
+                      >
+                        Elimina
+                      </button>
+                    )}
                   </div>
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Modale conferma eliminazione definitiva */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !deleting && setDeleteTarget(null)}>
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">⚠️</span>
+              <h2 className="text-base font-semibold text-slate-800">Eliminazione definitiva</h2>
+            </div>
+            <p className="text-sm text-slate-600">
+              Stai per eliminare <span className="font-semibold uppercase">{deleteTarget.customerName}</span> in modo permanente. L&apos;operazione non è reversibile e lascerà traccia nel log di sistema con il tuo nome e l&apos;orario.
+            </p>
+            {deleteError && <p className="text-sm text-rose-600">{deleteError}</p>}
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Annulla
+              </button>
+              <button
+                onClick={() => void executeDelete()}
+                disabled={deleting}
+                className="flex-1 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50 transition"
+              >
+                {deleting ? "Eliminazione..." : "Elimina definitivamente"}
+              </button>
+            </div>
           </div>
         </div>
       )}
