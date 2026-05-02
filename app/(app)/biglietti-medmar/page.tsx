@@ -5,6 +5,7 @@ import { DateInput } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import type { Hotel, Service } from "@/lib/types";
+import { getDepartureFerryLabel } from "@/lib/service-display";
 import {
   MEDMAR_TICKET_ROUTE_LABELS,
   MEDMAR_TICKET_ROUTE_OPTIONS,
@@ -704,8 +705,15 @@ export default function BigliettiMedmarPage() {
                   {(() => {
                     // Partenza può venire da: servizio separato, oppure departure_date/return_time sul servizio arrivo
                     const partenzaDate = g.partenza?.date ?? g.arrivo?.departure_date ?? null;
-                    const partenzaTime = g.partenza?.time ?? g.arrivo?.departure_time ?? g.arrivo?.return_time ?? null;
-                    const partenzaVessel = g.partenza?.vessel ?? g.arrivo?.vessel ?? "MEDMAR";
+                    // Per servizi formula (SNAV/MEDMAR), mostra orario traghetto da Ischia (orario_barca), non il pickup hotel
+                    const ferrySource = g.partenza ?? g.arrivo ?? null;
+                    const departureFerryLabel = ferrySource ? getDepartureFerryLabel(ferrySource) : null;
+                    const partenzaTime = g.partenza?.orario_barca?.slice(0, 5)
+                      ?? g.partenza?.time
+                      ?? g.arrivo?.departure_time
+                      ?? g.arrivo?.return_time
+                      ?? null;
+                    const partenzaVessel = departureFerryLabel ?? g.partenza?.vessel ?? "MEDMAR";
                     const hasPartenza = !!(partenzaDate || partenzaTime);
                     return (
                       <div className="border-t border-slate-100 divide-y divide-slate-100">
