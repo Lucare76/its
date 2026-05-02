@@ -777,7 +777,7 @@ export default function BigliettiMedmarPage() {
                       </button>
                     )}
                     <button type="button" disabled={deleting === g.key} onClick={() => void handleDelete(g)}
-                      className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-medium text-rose-600 hover:bg-rose-100 disabled:opacity-50">
+                      className="flex-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-medium text-rose-600 hover:bg-rose-100 disabled:opacity-50">
                       {deleting === g.key ? "..." : "Elimina"}
                     </button>
                   </div>
