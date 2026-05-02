@@ -707,15 +707,12 @@ export default function BigliettiMedmarPage() {
                   {(() => {
                     // Partenza può venire da: servizio separato, oppure departure_date/return_time sul servizio arrivo
                     const partenzaDate = g.partenza?.date ?? g.arrivo?.departure_date ?? null;
-                    // Per servizi formula (SNAV/MEDMAR), mostra orario traghetto da Ischia (orario_barca), non il pickup hotel
                     const ferrySource = g.partenza ?? g.arrivo ?? null;
                     const departureFerryLabel = ferrySource ? getDepartureFerryLabel(ferrySource) : null;
-                    const partenzaTime = g.partenza?.orario_barca?.slice(0, 5)
-                      ?? g.partenza?.time
-                      ?? g.arrivo?.departure_time
-                      ?? g.arrivo?.return_time
-                      ?? null;
                     const partenzaVessel = departureFerryLabel ?? g.partenza?.vessel ?? "MEDMAR";
+                    // Orario traghetto da Ischia: orario_barca → estratto dal vessel → mai pickup hotel
+                    const timeFromVessel = partenzaVessel?.match(/(\d{1,2}:\d{2})$/)?.[1] ?? null;
+                    const partenzaTime = g.partenza?.orario_barca?.slice(0, 5) ?? timeFromVessel ?? null;
                     const hasPartenza = !!(partenzaDate || partenzaTime);
                     return (
                       <div className="border-t border-slate-100 divide-y divide-slate-100">
