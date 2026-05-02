@@ -7,7 +7,6 @@ import { getClientSessionContext } from "@/lib/supabase/client-session";
 import type { Hotel, Service } from "@/lib/types";
 import { getDepartureFerryLabel } from "@/lib/service-display";
 import {
-  MEDMAR_TICKET_ROUTE_LABELS,
   MEDMAR_TICKET_ROUTE_OPTIONS,
   formatSlotLabel,
   type MedmarTicketRouteCode,
@@ -742,8 +741,8 @@ export default function BigliettiMedmarPage() {
                     <div className="flex flex-wrap gap-1">
                       {cognomeLast && (
                         <button type="button" onClick={() => handleCopy(cognomeLast, `cgn-${g.key}`)}
-                          className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-100">
-                          {copied === `cgn-${g.key}` ? "✓" : "⎘"} Cgn
+                          className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-100 whitespace-nowrap">
+                          {copied === `cgn-${g.key}` ? "✓" : "⎘"} Cognome
                         </button>
                       )}
                       <button type="button" onClick={() => handleCopy(nomeFirst, `nome-${g.key}`)}
