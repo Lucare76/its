@@ -676,160 +676,110 @@ export default function BigliettiMedmarPage() {
           </div>
 
           {/* Cards */}
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {groups.map((g) => {
               const isSent = g.sentAt != null || sentKeys.has(g.key);
               const isSending = sending === g.key;
+              const nameParts = g.customerName.trim().split(/\s+/);
+              const nomeFirst = nameParts[0] ?? "";
+              const cognomeLast = nameParts.slice(1).join(" ");
+              const tel = g.phone ?? "";
+              const email = "info@ischiatransferservice.it";
+              const medmarClipboard = [cognomeLast || nomeFirst, cognomeLast ? nomeFirst : "", tel, email].join("\t");
+              const partenzaDate = g.partenza?.date ?? g.arrivo?.departure_date ?? null;
+              const ferrySource = g.partenza ?? g.arrivo ?? null;
+              const departureFerryLabel = ferrySource ? getDepartureFerryLabel(ferrySource) : null;
+              const partenzaVessel = departureFerryLabel ?? g.partenza?.vessel ?? "MEDMAR";
+              const timeFromVessel = partenzaVessel?.match(/(\d{1,2}:\d{2})$/)?.[1] ?? null;
+              const partenzaTime = g.partenza?.orario_barca?.slice(0, 5) ?? timeFromVessel ?? null;
+              const hasPartenza = !!(partenzaDate || partenzaTime);
               return (
-                <div key={g.key} className={`card overflow-hidden ${isSent ? "ring-1 ring-emerald-300" : ""}`}>
-                  {/* Header card */}
-                  <div className="flex items-start justify-between gap-2 p-4 pb-3">
+                <div key={g.key} className={`flex flex-col rounded-xl border bg-white shadow-sm overflow-hidden ${isSent ? "border-emerald-300" : "border-slate-200"}`}>
+                  {/* Header */}
+                  <div className="flex items-start justify-between gap-1.5 px-3 pt-2.5 pb-1.5">
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-bold text-slate-800 uppercase truncate">{g.customerName}</p>
-                        {isSent && (
-                          <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                            ✓ Inviato
-                          </span>
-                        )}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="text-[13px] font-bold text-slate-800 uppercase leading-tight truncate">{g.customerName}</p>
+                        {isSent && <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700">✓</span>}
                       </div>
-                      <p className="text-xs text-slate-500 truncate">{g.hotel}</p>
-                      {g.pratica && (
-                        <p className="text-[11px] text-slate-400 font-mono">Pratica: {g.pratica}</p>
-                      )}
+                      <p className="text-[11px] text-slate-400 truncate leading-tight">{g.hotel}</p>
+                      {g.pratica && <p className="text-[10px] text-slate-300 font-mono leading-tight">{g.pratica}</p>}
                     </div>
-                    <span className="shrink-0 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-bold text-blue-700">
-                      {g.pax} pax
-                    </span>
+                    <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-bold text-blue-700">{g.pax}p</span>
                   </div>
 
-                  {/* Arrivo + Partenza */}
-                  {(() => {
-                    // Partenza può venire da: servizio separato, oppure departure_date/return_time sul servizio arrivo
-                    const partenzaDate = g.partenza?.date ?? g.arrivo?.departure_date ?? null;
-                    const ferrySource = g.partenza ?? g.arrivo ?? null;
-                    const departureFerryLabel = ferrySource ? getDepartureFerryLabel(ferrySource) : null;
-                    const partenzaVessel = departureFerryLabel ?? g.partenza?.vessel ?? "MEDMAR";
-                    // Orario traghetto da Ischia: orario_barca → estratto dal vessel → mai pickup hotel
-                    const timeFromVessel = partenzaVessel?.match(/(\d{1,2}:\d{2})$/)?.[1] ?? null;
-                    const partenzaTime = g.partenza?.orario_barca?.slice(0, 5) ?? timeFromVessel ?? null;
-                    const hasPartenza = !!(partenzaDate || partenzaTime);
-                    return (
-                      <div className="border-t border-slate-100 divide-y divide-slate-100">
-                        <div className="flex items-center gap-3 px-4 py-2.5">
-                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">A</div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs font-semibold text-slate-700">
-                              {g.arrivo ? `${formatDate(g.arrivo.date ?? "")} · ${g.arrivo.time ?? "orario N/D"}` : "—"}
-                            </p>
-                            <p className="text-[11px] text-slate-400">
-                              {g.arrivo ? (g.arrivo.vessel ?? g.arrivo.booking_service_kind ?? "porto N/D") : "nessun arrivo"}
-                            </p>
-                          </div>
-                          {g.arrivo && (
-                            <button type="button"
-                              onClick={() => handleCopy(`Arrivo ${g.arrivo!.date} ${g.arrivo!.time ?? ""}`, `arr-${g.key}`)}
-                              className="shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50">
-                              {copied === `arr-${g.key}` ? "✓" : "⎘"}
-                            </button>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-3 px-4 py-2.5">
-                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-700">P</div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs font-semibold text-slate-700">
-                              {hasPartenza
-                                ? `${partenzaDate ? formatDate(partenzaDate) : "data N/D"} · ${partenzaTime ?? "orario N/D"}`
-                                : "—"}
-                            </p>
-                            <p className="text-[11px] text-slate-400">
-                              {hasPartenza ? partenzaVessel : "nessuna partenza"}
-                            </p>
-                          </div>
-                          {hasPartenza && (
-                            <button type="button"
-                              onClick={() => handleCopy(`Partenza ${partenzaDate ?? ""} ${partenzaTime ?? ""}`.trim(), `par-${g.key}`)}
-                              className="shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50">
-                              {copied === `par-${g.key}` ? "✓" : "⎘"}
-                            </button>
-                          )}
-                        </div>
+                  {/* Arrivo + Partenza compatti */}
+                  <div className="border-t border-slate-100 divide-y divide-slate-100">
+                    <div className="flex items-center gap-2 px-3 py-1.5">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-700">A</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-semibold text-slate-700 truncate leading-tight">
+                          {g.arrivo ? `${g.arrivo.date?.slice(5).split("-").reverse().join("/")} · ${(g.arrivo.time ?? "").slice(0,5)}` : "—"}
+                        </p>
+                        <p className="text-[10px] text-slate-400 truncate leading-tight">
+                          {g.arrivo?.vessel ?? "N/D"}
+                        </p>
                       </div>
-                    );
-                  })()}
+                    </div>
+                    <div className="flex items-center gap-2 px-3 py-1.5">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-[10px] font-bold text-amber-700">P</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-semibold text-slate-700 truncate leading-tight">
+                          {hasPartenza ? `${partenzaDate?.slice(5).split("-").reverse().join("/") ?? "—"} · ${partenzaTime ?? "—"}` : "—"}
+                        </p>
+                        <p className="text-[10px] text-slate-400 truncate leading-tight">{hasPartenza ? partenzaVessel : "nessuna partenza"}</p>
+                      </div>
+                    </div>
+                  </div>
 
-                  {/* Bottoni copia — campi form MEDMAR (uno per campo) */}
-                  {(() => {
-                    // Split nome → cognome (tutto tranne prima parola) + nome (prima parola)
-                    const nameParts = g.customerName.trim().split(/\s+/);
-                    const nomeFirst = nameParts[0] ?? "";
-                    const cognomeLast = nameParts.slice(1).join(" ");
-                    const tel = g.phone ?? "";
-                    const email = "info@ischiatransferservice.it";
-                    // Formato per bookmarklet: COGNOME\tNOME\tTEL\tEMAIL
-                    const medmarClipboard = [cognomeLast || nomeFirst, cognomeLast ? nomeFirst : "", tel, email].join("\t");
-                    return (
-                      <div className="border-t border-slate-100 bg-slate-50 px-4 py-3 space-y-2">
-                        <button type="button"
-                          onClick={() => handleCopy(medmarClipboard, `medmar-${g.key}`)}
-                          className="w-full rounded-lg border border-indigo-300 bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 text-center">
-                          {copied === `medmar-${g.key}` ? "✓ Pronto! Vai su MEDMAR e clicca il bookmark" : "⎘ Copia per MEDMAR (usa con bookmark)"}
+                  {/* Copia MEDMAR */}
+                  <div className="border-t border-slate-100 bg-slate-50 px-3 py-2 space-y-1.5">
+                    <button type="button"
+                      onClick={() => handleCopy(medmarClipboard, `medmar-${g.key}`)}
+                      className="w-full rounded-lg border border-indigo-300 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 text-center">
+                      {copied === `medmar-${g.key}` ? "✓ Pronto!" : "⎘ Copia per MEDMAR"}
+                    </button>
+                    <div className="flex flex-wrap gap-1">
+                      {cognomeLast && (
+                        <button type="button" onClick={() => handleCopy(cognomeLast, `cgn-${g.key}`)}
+                          className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-100">
+                          {copied === `cgn-${g.key}` ? "✓" : "⎘"} Cgn
                         </button>
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">oppure campo per campo →</p>
-                        <div className="flex flex-wrap gap-2">
-                          {cognomeLast && (
-                            <button type="button"
-                              onClick={() => handleCopy(cognomeLast, `cgn-${g.key}`)}
-                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
-                              {copied === `cgn-${g.key}` ? "✓" : "⎘"} Cognome
-                            </button>
-                          )}
-                          <button type="button"
-                            onClick={() => handleCopy(nomeFirst, `nome-${g.key}`)}
-                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
-                            {copied === `nome-${g.key}` ? "✓" : "⎘"} Nome
-                          </button>
-                          {tel && (
-                            <button type="button"
-                              onClick={() => handleCopy(tel, `tel-${g.key}`)}
-                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
-                              {copied === `tel-${g.key}` ? "✓" : "⎘"} {tel}
-                            </button>
-                          )}
-                          <button type="button"
-                            onClick={() => handleCopy(email, `email-${g.key}`)}
-                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
-                            {copied === `email-${g.key}` ? "✓ Email" : "⎘ Email"}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })()}
+                      )}
+                      <button type="button" onClick={() => handleCopy(nomeFirst, `nome-${g.key}`)}
+                        className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-100">
+                        {copied === `nome-${g.key}` ? "✓" : "⎘"} Nome
+                      </button>
+                      {tel && (
+                        <button type="button" onClick={() => handleCopy(tel, `tel-${g.key}`)}
+                          className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-100">
+                          {copied === `tel-${g.key}` ? "✓" : "⎘"} {tel}
+                        </button>
+                      )}
+                      <button type="button" onClick={() => handleCopy(email, `email-${g.key}`)}
+                        className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-100">
+                        {copied === `email-${g.key}` ? "✓" : "⎘"} Email
+                      </button>
+                    </div>
+                  </div>
 
-                  {/* Bottone Fatto e invia + Elimina */}
-                  <div className="px-4 pb-4 pt-2 space-y-2">
+                  {/* Azioni */}
+                  <div className="border-t border-slate-100 px-3 py-2 flex gap-1.5">
                     {isSent ? (
-                      <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2">
-                        <span className="text-xs text-emerald-700 font-semibold">✓ Email inviata all&apos;agenzia</span>
-                        <button type="button"
-                          onClick={() => setSendModal({ group: g, pdfFile: null })}
-                          className="ml-auto text-[10px] text-emerald-600 underline hover:no-underline">
-                          Reinvia
-                        </button>
+                      <div className="flex flex-1 items-center gap-1.5 rounded-lg bg-emerald-50 border border-emerald-200 px-2 py-1">
+                        <span className="text-[11px] text-emerald-700 font-semibold flex-1">✓ Inviato</span>
+                        <button type="button" onClick={() => setSendModal({ group: g, pdfFile: null })}
+                          className="text-[10px] text-emerald-600 underline hover:no-underline">Reinvia</button>
                       </div>
                     ) : (
-                      <button type="button"
-                        disabled={isSending}
-                        onClick={() => setSendModal({ group: g, pdfFile: null })}
-                        className="w-full rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
-                        {isSending ? "Invio in corso..." : "✓ Fatto e invia all'agenzia"}
+                      <button type="button" disabled={isSending} onClick={() => setSendModal({ group: g, pdfFile: null })}
+                        className="flex-1 rounded-lg bg-blue-600 px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+                        {isSending ? "Invio..." : "✓ Fatto e invia"}
                       </button>
                     )}
-                    <button type="button"
-                      disabled={deleting === g.key}
-                      onClick={() => void handleDelete(g)}
-                      className="w-full rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed">
-                      {deleting === g.key ? "Eliminazione..." : "Elimina prenotazione"}
+                    <button type="button" disabled={deleting === g.key} onClick={() => void handleDelete(g)}
+                      className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-medium text-rose-600 hover:bg-rose-100 disabled:opacity-50">
+                      {deleting === g.key ? "..." : "Elimina"}
                     </button>
                   </div>
                 </div>
