@@ -280,6 +280,11 @@ export default function DeparturesPage() {
   const [search, setSearch] = useState("");
 
   const hotelsById = useMemo(() => new Map(data.hotels.map((hotel) => [hotel.id, hotel])), [data.hotels]);
+
+  const resolvePickupNote = useCallback((service: Service): string | null => {
+    const hotel = hotelsById.get(service.hotel_id);
+    return hotel?.pickup_note ?? service.meeting_point ?? null;
+  }, [hotelsById]);
   const tenantId = data.services[0]?.tenant_id ?? "";
 
   const resolveHotelName = useCallback((service: Service): string => {
@@ -575,10 +580,7 @@ export default function DeparturesPage() {
       Cliente: getCustomerFullName(item.service),
       Pax: item.service.pax,
       "Origine/Hotel": resolveHotelName(item.service),
-      "Meeting point": (() => {
-        const isFormula = ["formula_snav","formula_medmar_napoli","formula_medmar_pozzuoli"].includes(item.service.booking_service_kind ?? "");
-        return isFormula ? resolveHotelName(item.service) : (item.service.meeting_point ?? resolveHotelName(item.service));
-      })(),
+      "Meeting point": resolvePickupNote(item.service) ?? resolveHotelName(item.service),
       Riferimento: getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? "",
       Tipo: item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "",
       Agenzia: item.service.billing_party_name ?? "",
@@ -683,8 +685,7 @@ export default function DeparturesPage() {
           <div className="space-y-2 md:hidden">
             {departures.map((item) => {
               const hotelName = resolveHotelName(item.service);
-              const isFormula = ["formula_snav","formula_medmar_napoli","formula_medmar_pozzuoli"].includes(item.service.booking_service_kind ?? "");
-              const meetingPoint = isFormula ? null : (item.service.meeting_point ?? null);
+              const meetingPoint = resolvePickupNote(item.service);
               const riferimento = getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
               const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
               const hint = pickupHints.get(item.service.id);
@@ -753,8 +754,7 @@ export default function DeparturesPage() {
             <div className="divide-y divide-slate-100">
               {departures.map((item) => {
                 const hotelName = resolveHotelName(item.service);
-                const isFormula = ["formula_snav","formula_medmar_napoli","formula_medmar_pozzuoli"].includes(item.service.booking_service_kind ?? "");
-              const meetingPoint = isFormula ? null : (item.service.meeting_point ?? null);
+                const meetingPoint = resolvePickupNote(item.service);
                 const riferimento = getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
                 const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
                 const hint = pickupHints.get(item.service.id);

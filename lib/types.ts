@@ -94,6 +94,7 @@ export interface Hotel {
   geo_notes?: string | null;
   place_id?: string | null;
   formatted_address?: string | null;
+  pickup_note?: string | null;
 }
 
 export interface Service {
