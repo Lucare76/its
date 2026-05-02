@@ -167,6 +167,32 @@ export function getReturnReferenceLabel(service: Partial<Service> & {
   return `${transportLabel(mode).slice(0, 1).toUpperCase()}${transportLabel(mode).slice(1)} ritorno`;
 }
 
+const FERRY_DEPARTURE_PORT: Record<string, string> = {
+  formula_medmar_pozzuoli: "Pozzuoli",
+  formula_medmar_napoli: "Napoli Beverello",
+  formula_snav: "Casamicciola",
+};
+
+export function getDepartureIschiaPort(service: Partial<Service>): string | null {
+  const kind = service.booking_service_kind;
+  if (!kind) return null;
+  // Per SNAV: partenza sempre da Casamicciola. Per MEDMAR: dal meeting_point se è un porto Ischia, altrimenti default.
+  if (kind === "formula_snav") return "Casamicciola";
+  if (kind === "formula_medmar_napoli") return "Ischia Porto";
+  if (kind === "formula_medmar_pozzuoli") {
+    const mp = clean(service.meeting_point)?.toLowerCase();
+    if (mp?.includes("casamicciola")) return "Casamicciola";
+    return "Ischia Porto";
+  }
+  return null;
+}
+
+export function getDepartureDestinationPort(service: Partial<Service>): string | null {
+  const kind = service.booking_service_kind;
+  if (!kind) return null;
+  return FERRY_DEPARTURE_PORT[kind] ?? null;
+}
+
 export function getDepartureFerryLabel(service: Partial<Service>): string | null {
   const time = clean(service.orario_barca);
   if (!time) return null;
