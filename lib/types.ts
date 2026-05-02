@@ -168,6 +168,8 @@ export interface Service {
   train_departure_number?: string | null;
   train_departure_time?: string | null;
   bus_city_origin?: string | null;
+  orario_barca?: string | null;
+  barca_compagnia?: string | null;
   include_ferry_tickets?: boolean | null;
   continent_dispatch_target?: "bruno" | "continent_dispatch" | null;
   continent_dispatch_source?: "rule" | "manual" | null;

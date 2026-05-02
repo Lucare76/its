@@ -167,6 +167,16 @@ export function getReturnReferenceLabel(service: Partial<Service> & {
   return `${transportLabel(mode).slice(0, 1).toUpperCase()}${transportLabel(mode).slice(1)} ritorno`;
 }
 
+export function getDepartureFerryLabel(service: Partial<Service>): string | null {
+  const time = clean(service.orario_barca);
+  if (!time) return null;
+  const kind = service.booking_service_kind;
+  if (kind === "formula_medmar_pozzuoli") return `MEDMAR Pozzuoli ${time}`;
+  if (kind === "formula_medmar_napoli") return `MEDMAR Napoli ${time}`;
+  if (kind === "formula_snav") return `SNAV ${time}`;
+  return time;
+}
+
 export function formatServiceSlot(service: Partial<Service>) {
   const date = formatIsoDateShort(getOutboundDate(service));
   const outboundTime = getOutboundTime(service) ?? "N/D";

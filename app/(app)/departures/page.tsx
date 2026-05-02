@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 
-import { formatIsoDateShort, getCustomerFullName, getTransportReferenceReturn } from "@/lib/service-display";
+import { formatIsoDateShort, getCustomerFullName, getDepartureFerryLabel, getTransportReferenceReturn } from "@/lib/service-display";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import { supabase } from "@/lib/supabase/client";
 import type { Service, Hotel } from "@/lib/types";
@@ -576,7 +576,7 @@ export default function DeparturesPage() {
       Pax: item.service.pax,
       "Origine/Hotel": resolveHotelName(item.service),
       "Meeting point": item.service.meeting_point ?? item.service.vessel ?? "",
-      Riferimento: getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? "",
+      Riferimento: getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? "",
       Tipo: item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "",
       Agenzia: item.service.billing_party_name ?? "",
     }))
@@ -681,7 +681,7 @@ export default function DeparturesPage() {
             {departures.map((item) => {
               const hotelName = resolveHotelName(item.service);
               const meetingPoint = item.service.meeting_point ?? null;
-              const riferimento = getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
+              const riferimento = getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
               const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
               const hint = pickupHints.get(item.service.id);
               return (
@@ -750,7 +750,7 @@ export default function DeparturesPage() {
               {departures.map((item) => {
                 const hotelName = resolveHotelName(item.service);
                 const meetingPoint = item.service.meeting_point ?? null;
-                const riferimento = getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
+                const riferimento = getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
                 const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
                 const hint = pickupHints.get(item.service.id);
                 return (
