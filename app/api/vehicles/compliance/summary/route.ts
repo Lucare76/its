@@ -82,6 +82,7 @@ export async function GET(request: NextRequest) {
       vehicle_id: v.id,
       label: v.label,
       plate: v.plate,
+      capacity: v.capacity,
       active: v.active,
       compliance_override: overrideActive
         ? {

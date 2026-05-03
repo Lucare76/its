@@ -24,6 +24,7 @@ type VehicleCompliance = {
   vehicle_id: string;
   label: string;
   plate: string | null;
+  capacity: number | null;
   active: boolean;
   compliance_override: ComplianceOverride | null;
   insurance: ComplianceEntry | null;
@@ -450,7 +451,10 @@ export default function ScadenzePage() {
         }
         return true;
       })
-      .sort((a, b) => STATUS_RANK[a.worst_status] - STATUS_RANK[b.worst_status]);
+      .sort((a, b) =>
+        (b.capacity ?? 0) - (a.capacity ?? 0)
+        || a.label.localeCompare(b.label, "it", { numeric: true, sensitivity: "base" })
+      );
   }, [items, search, docFilter, statusFilter]);
 
   const toggleStatusFilter = (s: StatusFilter) => {
