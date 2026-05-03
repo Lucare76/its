@@ -38,6 +38,7 @@ type MessageRow = {
   media_id: string | null;
   media_mime_type: string | null;
   status: string | null;
+  failure_reason?: string | null;
   timestamp: string | null;
   created_at: string;
   booking_id: string | null;
@@ -60,6 +61,13 @@ const filters = [
 ] as const;
 
 const quickEmojis = ["👍", "🙏", "😊", "🎉", "🚐", "📍", "⏰", "☎️"] as const;
+const quickReplies = [
+  "Arriviamo tra 5 minuti.",
+  "Siamo al punto d'incontro indicato.",
+  "Puoi inviarci la tua posizione?",
+  "Ci chiami a questo numero, grazie.",
+  "Perfetto, ti aspettiamo."
+] as const;
 
 function formatDate(value: string | null) {
   if (!value) return "";
@@ -69,6 +77,23 @@ function formatDate(value: string | null) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function messageStatusTone(status: string | null) {
+  if (status === "read") return "bg-emerald-100 text-emerald-700";
+  if (status === "delivered") return "bg-sky-100 text-sky-700";
+  if (status === "sent") return "bg-slate-200 text-slate-700";
+  if (status === "failed") return "bg-rose-100 text-rose-700";
+  return "bg-slate-100 text-slate-500";
+}
+
+function messageStatusLabel(status: string | null) {
+  if (status === "read") return "Letto";
+  if (status === "delivered") return "Consegnato";
+  if (status === "sent") return "Inviato";
+  if (status === "failed") return "Fallito";
+  if (status === "received") return "Ricevuto";
+  return "In coda";
 }
 
 async function getAccessToken() {
@@ -91,6 +116,13 @@ export default function WhatsAppInboxPage() {
   const selectedThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
     [threads, selectedThreadId]
+  );
+  const latestFailedOutbound = useMemo(
+    () =>
+      [...messages]
+        .reverse()
+        .find((message) => message.direction === "outbound" && message.status === "failed") ?? null,
+    [messages]
   );
 
   const load = useCallback(async (nextThreadId?: string | null) => {
@@ -127,6 +159,14 @@ export default function WhatsAppInboxPage() {
     const timeout = window.setTimeout(() => void load(selectedThreadId), 250);
     return () => window.clearTimeout(timeout);
   }, [filter, search, selectedThreadId, load]);
+
+  useEffect(() => {
+    if (!selectedThreadId) return;
+    const interval = window.setInterval(() => {
+      void load(selectedThreadId);
+    }, 12000);
+    return () => window.clearInterval(interval);
+  }, [selectedThreadId, load]);
 
   const runAction = async (action: "mark_read" | "close" | "reopen") => {
     if (!selectedThreadId) return;
@@ -185,6 +225,10 @@ export default function WhatsAppInboxPage() {
 
   const appendEmoji = (emoji: (typeof quickEmojis)[number]) => {
     setDraft((current) => `${current}${emoji}`);
+  };
+
+  const applyQuickReply = (text: (typeof quickReplies)[number]) => {
+    setDraft(text);
   };
 
   return (
@@ -330,7 +374,19 @@ export default function WhatsAppInboxPage() {
                         {message.media_id ? (
                           <p className="mt-1 text-[11px] text-slate-400">Allegato: {message.media_mime_type ?? message.media_id}</p>
                         ) : null}
-                        <p className="mt-1 text-[10px] text-slate-400">{formatDate(message.timestamp ?? message.created_at)}</p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <p className="text-[10px] text-slate-400">{formatDate(message.timestamp ?? message.created_at)}</p>
+                          {!inbound ? (
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${messageStatusTone(message.status)}`}>
+                              {messageStatusLabel(message.status)}
+                            </span>
+                          ) : null}
+                        </div>
+                        {!inbound && message.status === "failed" ? (
+                          <p className="mt-1 text-[11px] text-rose-600">
+                            {message.failure_reason ?? "Messaggio non consegnato. Verifica il numero o i permessi WhatsApp."}
+                          </p>
+                        ) : null}
                       </div>
                     </div>
                   );
@@ -342,6 +398,11 @@ export default function WhatsAppInboxPage() {
 
               <div className="border-t border-slate-100 bg-white px-4 py-3">
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  {latestFailedOutbound ? (
+                    <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                      Ultima risposta non consegnata: {latestFailedOutbound.failure_reason ?? "verifica numero o configurazione WhatsApp."}
+                    </div>
+                  ) : null}
                   <label htmlFor="whatsapp-reply" className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
                     Rispondi su WhatsApp
                   </label>
@@ -358,6 +419,19 @@ export default function WhatsAppInboxPage() {
                     spellCheck
                     className="min-h-[104px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100"
                   />
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {quickReplies.map((reply) => (
+                      <button
+                        key={reply}
+                        type="button"
+                        onClick={() => applyQuickReply(reply)}
+                        disabled={busyAction === "reply"}
+                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                      >
+                        {reply}
+                      </button>
+                    ))}
+                  </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {quickEmojis.map((emoji) => (
                       <button

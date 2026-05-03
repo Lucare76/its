@@ -15,6 +15,14 @@ const postSchema = z.object({
   text: z.string().trim().min(1, "Inserisci un messaggio").max(4096, "Messaggio troppo lungo")
 });
 
+function extractStatusFailureReason(rawStatus: unknown) {
+  const payload = rawStatus as { errors?: Array<{ title?: string; message?: string; code?: number | string }> } | null;
+  const error = payload?.errors?.[0];
+  if (!error) return null;
+  const parts = [error.title, error.message, error.code != null ? `code ${error.code}` : null].filter(Boolean);
+  return parts.length > 0 ? parts.join(" - ") : "Invio non consegnato";
+}
+
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
   if (auth instanceof NextResponse) return auth;
@@ -82,11 +90,40 @@ export async function GET(request: NextRequest) {
     : { data: [], error: null };
   if (messageError) return NextResponse.json({ error: messageError.message }, { status: 500 });
 
+  const waMessageIds = Array.from(new Set((messages ?? []).map((message) => message.wa_message_id).filter(Boolean) as string[]));
+  const { data: messageStatuses, error: statusError } = waMessageIds.length
+    ? await auth.admin
+      .from("whatsapp_message_statuses")
+      .select("wa_message_id, status, created_at, raw_status")
+      .eq("tenant_id", tenantId)
+      .in("wa_message_id", waMessageIds)
+      .order("created_at", { ascending: false })
+    : { data: [], error: null };
+  if (statusError) return NextResponse.json({ error: statusError.message }, { status: 500 });
+
+  const latestStatusByMessageId = new Map<string, { status: string; failure_reason: string | null }>();
+  for (const statusRow of messageStatuses ?? []) {
+    if (!statusRow.wa_message_id || latestStatusByMessageId.has(statusRow.wa_message_id)) continue;
+    latestStatusByMessageId.set(statusRow.wa_message_id, {
+      status: statusRow.status,
+      failure_reason: extractStatusFailureReason(statusRow.raw_status)
+    });
+  }
+
+  const enrichedMessages = (messages ?? []).map((message) => {
+    const latestStatus = message.wa_message_id ? latestStatusByMessageId.get(message.wa_message_id) : null;
+    return {
+      ...message,
+      status: latestStatus?.status ?? message.status,
+      failure_reason: latestStatus?.status === "failed" ? latestStatus.failure_reason : null
+    };
+  });
+
   return NextResponse.json({
     ok: true,
     threads: enrichedThreads,
     selected_thread_id: selectedId ?? null,
-    messages: messages ?? []
+    messages: enrichedMessages
   });
 }
 
