@@ -96,6 +96,13 @@ export interface SyncedWhatsAppTemplateRow {
   created_at: string;
 }
 
+export interface WhatsAppGraphResult<T = unknown> {
+  ok: boolean;
+  status: number;
+  data: T | null;
+  error: string | null;
+}
+
 export interface WhatsAppEventInsert {
   tenant_id: string;
   service_id: string | null;
@@ -120,6 +127,14 @@ function whatsappAccessToken() {
 
 function whatsappGraphVersion() {
   return process.env.WHATSAPP_GRAPH_API_VERSION?.trim().replace(/^["']|["']$/g, "") || "v23.0";
+}
+
+export function getWhatsAppBusinessAccountId() {
+  return mustEnv("WHATSAPP_BUSINESS_ACCOUNT_ID");
+}
+
+export function getWhatsAppPhoneNumberId() {
+  return mustEnv("WHATSAPP_PHONE_NUMBER_ID");
 }
 
 export function createAdminClient() {
@@ -309,7 +324,7 @@ async function sendTextMessage(phoneNumberId: string, accessToken: string, toPho
 }
 
 export async function listMetaWhatsAppTemplates() {
-  const businessAccountId = mustEnv("WHATSAPP_BUSINESS_ACCOUNT_ID");
+  const businessAccountId = getWhatsAppBusinessAccountId();
   const accessToken = whatsappAccessToken();
   const graphVersion = whatsappGraphVersion();
 
@@ -360,6 +375,32 @@ export async function listMetaWhatsAppTemplates() {
   }
 
   return templates;
+}
+
+export async function fetchWhatsAppGraph<T = unknown>(pathOrUrl: string) {
+  const accessToken = whatsappAccessToken();
+  const graphVersion = whatsappGraphVersion();
+  const url = pathOrUrl.startsWith("https://")
+    ? pathOrUrl
+    : `https://graph.facebook.com/${graphVersion}/${pathOrUrl.replace(/^\//, "")}`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    },
+    cache: "no-store"
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | (T & { error?: { message?: string } })
+    | null;
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    data: response.ok ? ((payload as T | null) ?? null) : null,
+    error: response.ok ? null : payload?.error?.message ?? `Graph API error (${response.status})`
+  } satisfies WhatsAppGraphResult<T>;
 }
 
 export function countMetaBodyParameters(components: MetaWhatsAppTemplateComponent[]) {

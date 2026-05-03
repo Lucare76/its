@@ -28,6 +28,8 @@ export default function WhatsAppSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncingTemplates, setSyncingTemplates] = useState(false);
+  const [discoveringTemplates, setDiscoveringTemplates] = useState(false);
+  const [discoverySummary, setDiscoverySummary] = useState("");
   const [message, setMessage] = useState("Caricamento configurazione...");
 
   useEffect(() => {
@@ -147,6 +149,49 @@ export default function WhatsAppSettingsPage() {
     setMessage(`Template Meta sincronizzati: ${body?.imported ?? 0}.`);
   };
 
+  const discoverTemplates = async () => {
+    if (!hasSupabaseEnv || !supabase) return;
+    setDiscoveringTemplates(true);
+    setDiscoverySummary("");
+    setMessage("Diagnostica Meta in corso...");
+
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      setDiscoveringTemplates(false);
+      setMessage("Sessione non valida.");
+      return;
+    }
+
+    const response = await fetch("/api/whatsapp/templates/discovery", {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+      configured_business_account_id?: string;
+      configured_phone_number_id?: string;
+      steps?: Array<{ label: string; ok: boolean; status: number; error: string | null; data: unknown }>;
+    } | null;
+    setDiscoveringTemplates(false);
+
+    if (!response.ok || !body) {
+      setMessage(body?.error ?? "Diagnostica Meta fallita.");
+      return;
+    }
+
+    const lines = [
+      `WABA configurato: ${body.configured_business_account_id ?? "-"}`,
+      `Phone Number ID configurato: ${body.configured_phone_number_id ?? "-"}`
+    ];
+    for (const step of body.steps ?? []) {
+      lines.push(`${step.label}: ${step.ok ? "OK" : `ERRORE ${step.status}`} ${step.error ?? ""}`.trim());
+    }
+    setDiscoverySummary(lines.join("\n"));
+    setMessage("Diagnostica Meta completata.");
+  };
+
   return (
     <section className="space-y-4">
       <h1 className="text-2xl font-semibold">Impostazioni WhatsApp (Admin)</h1>
@@ -161,10 +206,18 @@ export default function WhatsAppSettingsPage() {
               <p className="text-sm font-semibold text-text">Template live da Meta</p>
               <p className="text-xs text-muted">Importa nel database i template approvati del tuo WhatsApp Business Account.</p>
             </div>
-            <button type="button" onClick={() => void syncTemplates()} className="btn-secondary" disabled={syncingTemplates}>
-              {syncingTemplates ? "Sincronizzazione..." : "Sincronizza template Meta"}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => void discoverTemplates()} className="btn-secondary" disabled={discoveringTemplates}>
+                {discoveringTemplates ? "Diagnostica..." : "Diagnostica Meta"}
+              </button>
+              <button type="button" onClick={() => void syncTemplates()} className="btn-secondary" disabled={syncingTemplates}>
+                {syncingTemplates ? "Sincronizzazione..." : "Sincronizza template Meta"}
+              </button>
+            </div>
           </div>
+          {discoverySummary ? (
+            <pre className="overflow-x-auto rounded-xl border border-slate-200 bg-slate-950 px-4 py-3 text-xs text-slate-100 whitespace-pre-wrap">{discoverySummary}</pre>
+          ) : null}
 
           <label className="grid gap-1">
             <span className="text-sm font-medium text-text">Template di default</span>
