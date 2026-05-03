@@ -252,14 +252,19 @@ async function sendTextMessage(phoneNumberId: string, accessToken: string, toPho
   const payload = (await response.json().catch(() => null)) as
     | {
         messages?: Array<{ id: string }>;
-        error?: { message?: string };
+        error?: { message?: string; code?: number; error_subcode?: number };
       }
     | null;
+
+  let formattedError = payload?.error?.message ?? (response.ok ? null : `WhatsApp API error (${response.status})`);
+  if (!response.ok && payload?.error?.message?.includes("Unsupported post request")) {
+    formattedError = "Configurazione WhatsApp non valida: verifica WHATSAPP_PHONE_NUMBER_ID su Vercel.";
+  }
 
   return {
     ok: response.ok,
     messageId: payload?.messages?.[0]?.id ?? null,
-    error: payload?.error?.message ?? (response.ok ? null : `WhatsApp API error (${response.status})`)
+    error: formattedError
   };
 }
 

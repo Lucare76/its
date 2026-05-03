@@ -347,11 +347,15 @@ export default function WhatsAppInboxPage() {
                   </label>
                   <textarea
                     id="whatsapp-reply"
+                    data-no-uppercase
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
                     placeholder="Scrivi la risposta al cliente..."
                     rows={4}
                     disabled={busyAction === "reply"}
+                    autoCapitalize="sentences"
+                    autoCorrect="on"
+                    spellCheck
                     className="min-h-[104px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100"
                   />
                   <div className="mt-3 flex flex-wrap gap-2">
