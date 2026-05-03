@@ -59,6 +59,11 @@ export interface SendWhatsAppMessageInput {
   languageCode?: string;
 }
 
+export interface SendWhatsAppTextInput {
+  to: string;
+  text: string;
+}
+
 export interface WhatsAppEventInsert {
   tenant_id: string;
   service_id: string | null;
@@ -255,6 +260,36 @@ async function sendTextMessage(phoneNumberId: string, accessToken: string, toPho
     ok: response.ok,
     messageId: payload?.messages?.[0]?.id ?? null,
     error: payload?.error?.message ?? (response.ok ? null : `WhatsApp API error (${response.status})`)
+  };
+}
+
+export async function sendWhatsAppTextMessage(input: SendWhatsAppTextInput) {
+  const phoneNumberId = mustEnv("WHATSAPP_PHONE_NUMBER_ID");
+  const accessToken = whatsappAccessToken();
+  const toPhone = normalizeE164(input.to);
+  const textBody = String(input.text ?? "").trim().slice(0, 4096);
+
+  if (!textBody) {
+    return {
+      ok: false as const,
+      error: "Testo messaggio vuoto",
+      phoneE164: toPhone
+    };
+  }
+
+  const response = await sendTextMessage(phoneNumberId, accessToken, toPhone, textBody);
+  if (!response.ok) {
+    return {
+      ok: false as const,
+      error: response.error ?? "WhatsApp text send failed",
+      phoneE164: toPhone
+    };
+  }
+
+  return {
+    ok: true as const,
+    messageId: response.messageId,
+    phoneE164: toPhone
   };
 }
 

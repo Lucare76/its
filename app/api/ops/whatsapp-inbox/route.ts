@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { logWhatsAppEvent, normalizeE164, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
 
 export const runtime = "nodejs";
 
 const patchSchema = z.object({
   thread_id: z.string().uuid(),
   action: z.enum(["mark_read", "close", "reopen"])
+});
+
+const postSchema = z.object({
+  thread_id: z.string().uuid(),
+  text: z.string().trim().min(1, "Inserisci un messaggio").max(4096, "Messaggio troppo lungo")
 });
 
 export async function GET(request: NextRequest) {
@@ -108,4 +114,131 @@ export async function PATCH(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
+}
+
+export async function POST(request: NextRequest) {
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
+  if (auth instanceof NextResponse) return auth;
+
+  const parsed = postSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid payload" }, { status: 400 });
+  }
+
+  const tenantId = auth.membership.tenant_id;
+  const nowIso = new Date().toISOString();
+  const text = parsed.data.text.trim();
+
+  const { data: thread, error: threadError } = await auth.admin
+    .from("whatsapp_threads")
+    .select("id, tenant_id, wa_id, phone_e164, contact_id, customer_id, booking_id, transfer_id, match_status")
+    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+    .eq("id", parsed.data.thread_id)
+    .maybeSingle();
+
+  if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
+  if (!thread?.wa_id) {
+    return NextResponse.json({ error: "Conversazione non trovata" }, { status: 404 });
+  }
+
+  const sendResult = await sendWhatsAppTextMessage({
+    to: thread.phone_e164 ?? normalizeE164(thread.wa_id),
+    text
+  });
+
+  if (!sendResult.ok) {
+    console.error("WhatsApp inbox reply failed", {
+      hasWaId: Boolean(thread.wa_id),
+      normalizedPhonePresent: Boolean(sendResult.phoneE164),
+      error: sendResult.error ?? "unknown"
+    });
+    return NextResponse.json({ error: sendResult.error ?? "Invio WhatsApp non riuscito" }, { status: 502 });
+  }
+
+  const messagePayload = {
+    tenant_id: thread.tenant_id ?? tenantId,
+    wa_message_id: sendResult.messageId ?? null,
+    direction: "outbound" as const,
+    wa_id: thread.wa_id,
+    phone_e164: sendResult.phoneE164,
+    contact_id: thread.contact_id ?? null,
+    thread_id: thread.id,
+    customer_id: thread.customer_id ?? null,
+    booking_id: thread.booking_id ?? null,
+    transfer_id: thread.transfer_id ?? null,
+    message_type: "text",
+    text_body: text,
+    media_id: null,
+    media_mime_type: null,
+    media_sha256: null,
+    status: "sent",
+    timestamp: nowIso,
+    raw_message: {
+      id: sendResult.messageId ?? null,
+      type: "text",
+      text: { body: text },
+      source: "manual_reply"
+    }
+  };
+
+  const { error: insertError } = await auth.admin.from("whatsapp_messages").insert(messagePayload);
+  if (insertError) {
+    console.error("WhatsApp inbox reply message persist failed", {
+      hasWaId: Boolean(thread.wa_id),
+      normalizedPhonePresent: Boolean(sendResult.phoneE164),
+      error: insertError.message
+    });
+    return NextResponse.json({ error: "Messaggio inviato ma non salvato in archivio" }, { status: 500 });
+  }
+
+  const { error: updateError } = await auth.admin
+    .from("whatsapp_threads")
+    .update({
+      phone_e164: sendResult.phoneE164,
+      last_message_at: nowIso,
+      last_message_preview: text.slice(0, 240),
+      unread_count: 0,
+      status: "open",
+      match_status: thread.match_status === "matched" ? "matched" : "needs_review",
+      updated_at: nowIso
+    })
+    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+    .eq("id", thread.id);
+
+  if (updateError) {
+    console.error("WhatsApp inbox reply thread update failed", {
+      hasWaId: Boolean(thread.wa_id),
+      normalizedPhonePresent: Boolean(sendResult.phoneE164),
+      error: updateError.message
+    });
+    return NextResponse.json({ error: "Messaggio inviato ma thread non aggiornato" }, { status: 500 });
+  }
+
+  await logWhatsAppEvent(auth.admin, {
+    tenant_id: tenantId,
+    service_id: thread.booking_id ?? null,
+    to_phone: sendResult.phoneE164,
+    kind: "manual",
+    template: null,
+    status: "sent",
+    provider_message_id: sendResult.messageId ?? null,
+    happened_at: nowIso,
+    payload_json: {
+      source: "api/ops/whatsapp-inbox",
+      mode: "manual_reply",
+      thread_id: thread.id
+    }
+  });
+
+  console.info("WhatsApp inbox reply sent", {
+    hasWaId: Boolean(thread.wa_id),
+    normalizedPhonePresent: Boolean(sendResult.phoneE164),
+    threadId: thread.id
+  });
+
+  return NextResponse.json({
+    ok: true,
+    message_id: sendResult.messageId ?? null,
+    phone_e164: sendResult.phoneE164
+  });
 }

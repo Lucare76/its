@@ -81,6 +81,7 @@ export default function WhatsAppInboxPage() {
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [filter, setFilter] = useState<(typeof filters)[number]["value"]>("open");
   const [search, setSearch] = useState("");
+  const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -110,11 +111,15 @@ export default function WhatsAppInboxPage() {
       setLoading(false);
       return;
     }
+    const nextSelectedThreadId = body.selected_thread_id ?? null;
     setThreads(body.threads ?? []);
     setMessages(body.messages ?? []);
-    setSelectedThreadId(body.selected_thread_id ?? null);
+    setSelectedThreadId(nextSelectedThreadId);
+    if (nextSelectedThreadId !== selectedThreadId) {
+      setDraft("");
+    }
     setLoading(false);
-  }, [filter, search]);
+  }, [filter, search, selectedThreadId]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(selectedThreadId), 250);
@@ -139,6 +144,38 @@ export default function WhatsAppInboxPage() {
     if (!response.ok || !body?.ok) {
       setError(body?.error ?? "Azione non riuscita.");
     } else {
+      await load(selectedThreadId);
+    }
+    setBusyAction(null);
+  };
+
+  const sendReply = async () => {
+    if (!selectedThreadId) return;
+    const text = draft.trim();
+    if (!text) {
+      setError("Inserisci un messaggio prima di inviare.");
+      return;
+    }
+    const token = await getAccessToken();
+    if (!token) {
+      setError("Sessione non disponibile.");
+      return;
+    }
+    setBusyAction("reply");
+    setError("");
+    const response = await fetch("/api/ops/whatsapp-inbox", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ thread_id: selectedThreadId, text })
+    });
+    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    if (!response.ok || !body?.ok) {
+      setError(body?.error ?? "Invio messaggio non riuscito.");
+    } else {
+      setDraft("");
       await load(selectedThreadId);
     }
     setBusyAction(null);
@@ -297,8 +334,34 @@ export default function WhatsAppInboxPage() {
                 ) : null}
               </div>
 
-              <div className="border-t border-slate-100 px-4 py-3 text-xs text-slate-400">
-                Invio manuale messaggi non attivo in questa fase.
+              <div className="border-t border-slate-100 bg-white px-4 py-3">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <label htmlFor="whatsapp-reply" className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                    Rispondi su WhatsApp
+                  </label>
+                  <textarea
+                    id="whatsapp-reply"
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    placeholder="Scrivi la risposta al cliente..."
+                    rows={4}
+                    disabled={busyAction === "reply"}
+                    className="min-h-[104px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                  />
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs text-slate-500">
+                      Il messaggio viene inviato al numero WhatsApp della conversazione e salvato nello storico.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void sendReply()}
+                      disabled={busyAction !== null || !draft.trim()}
+                      className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      {busyAction === "reply" ? "Invio..." : "Invia risposta"}
+                    </button>
+                  </div>
+                </div>
               </div>
             </>
           ) : (
