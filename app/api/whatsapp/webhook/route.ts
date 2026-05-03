@@ -25,6 +25,7 @@ const webhookPayloadSchema = z.object({
 export async function GET(request: NextRequest) {
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
   if (!verifyToken) {
+    console.error("WhatsApp webhook GET missing verify token env");
     return NextResponse.json({ error: "Server env missing" }, { status: 500 });
   }
 
@@ -35,28 +36,38 @@ export async function GET(request: NextRequest) {
   });
 
   if (!params.success) {
+    console.warn("WhatsApp webhook GET invalid verify payload");
     return NextResponse.json({ error: "Invalid verify payload" }, { status: 400 });
   }
 
   if (params.data.mode === "subscribe" && params.data.token === verifyToken) {
+    console.info("WhatsApp webhook GET verified");
     return new NextResponse(params.data.challenge ?? "", {
       status: 200,
       headers: { "Content-Type": "text/plain; charset=utf-8" }
     });
   }
 
+  console.warn("WhatsApp webhook GET forbidden");
   return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 }
 
 export async function POST(request: NextRequest) {
+  const rawBody = await request.text();
+  const signature = request.headers.get("x-hub-signature-256");
+  console.info("WhatsApp webhook POST received", {
+    hasSignature: Boolean(signature),
+    contentLength: rawBody.length
+  });
+
   const appSecret = process.env.WHATSAPP_APP_SECRET?.trim().replace(/^["']|["']$/g, "");
   if (!appSecret) {
+    console.error("WhatsApp webhook POST missing app secret env");
     return NextResponse.json({ error: "Server env missing" }, { status: 500 });
   }
 
-  const rawBody = await request.text();
-  const signature = request.headers.get("x-hub-signature-256");
   if (!verifyMetaSignature(rawBody, signature, appSecret)) {
+    console.warn("WhatsApp webhook POST invalid signature");
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
@@ -64,24 +75,33 @@ export async function POST(request: NextRequest) {
   try {
     parsedJson = JSON.parse(rawBody);
   } catch {
+    console.warn("WhatsApp webhook POST invalid JSON");
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
   const parsed = webhookPayloadSchema.safeParse(parsedJson);
   if (!parsed.success) {
+    console.warn("WhatsApp webhook POST invalid payload schema");
     return NextResponse.json({ error: "Invalid webhook payload" }, { status: 400 });
-  }
-
-  let admin: ReturnType<typeof createAdminClient>;
-  try {
-    admin = createAdminClient();
-  } catch {
-    return NextResponse.json({ error: "Server env missing" }, { status: 500 });
   }
 
   const payload = parsed.data as MetaWebhookPayload;
   const dedupeKey = extractWebhookDedupeKey(payload);
   const eventType = extractWebhookEventType(payload);
+  console.info("WhatsApp webhook POST accepted", {
+    object: payload.object ?? null,
+    entryCount: payload.entry?.length ?? 0,
+    eventType,
+    hasDedupeKey: Boolean(dedupeKey)
+  });
+
+  let admin: ReturnType<typeof createAdminClient>;
+  try {
+    admin = createAdminClient();
+  } catch {
+    console.error("WhatsApp webhook POST admin client init failed");
+    return NextResponse.json({ ok: true, accepted: true, processed: false, reason: "admin_client_init_failed" });
+  }
 
   const { data: eventRow, error: insertError } = await admin
     .from("whatsapp_webhook_events")
@@ -99,12 +119,38 @@ export async function POST(request: NextRequest) {
   if (insertError) {
     const duplicate = insertError.code === "23505";
     if (duplicate) {
+      console.info("WhatsApp webhook POST duplicate event");
       return NextResponse.json({ ok: true, duplicate: true });
     }
-    return NextResponse.json({ error: "Webhook archive failed" }, { status: 500 });
+    console.error("WhatsApp webhook POST archive failed", {
+      code: insertError.code ?? null,
+      message: insertError.message
+    });
+    return NextResponse.json({ ok: true, accepted: true, processed: false, reason: "archive_failed" });
   }
 
-  const result = await processWhatsAppWebhook(admin, payload, eventRow?.id);
-  return NextResponse.json({ ok: true, ...result });
+  try {
+    const result = await processWhatsAppWebhook(admin, payload, eventRow?.id);
+    console.info("WhatsApp webhook POST processed", {
+      messages: result.messages,
+      statuses: result.statuses,
+      contacts: result.contacts,
+      errors: result.errors.length
+    });
+    return NextResponse.json({ ok: true, accepted: true, ...result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown processing error";
+    console.error("WhatsApp webhook POST processing failed", { message });
+    if (eventRow?.id) {
+      await admin
+        .from("whatsapp_webhook_events")
+        .update({
+          processed_at: new Date().toISOString(),
+          processing_error: message.slice(0, 2000)
+        })
+        .eq("id", eventRow.id);
+    }
+    return NextResponse.json({ ok: true, accepted: true, processed: false, reason: "processing_failed" });
+  }
 }
 
