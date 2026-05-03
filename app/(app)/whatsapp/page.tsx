@@ -59,6 +59,8 @@ const filters = [
   { value: "closed", label: "Chiuse" }
 ] as const;
 
+const quickEmojis = ["👍", "🙏", "😊", "🎉", "🚐", "📍", "⏰", "☎️"] as const;
+
 function formatDate(value: string | null) {
   if (!value) return "";
   return new Intl.DateTimeFormat("it-IT", {
@@ -179,6 +181,10 @@ export default function WhatsAppInboxPage() {
       await load(selectedThreadId);
     }
     setBusyAction(null);
+  };
+
+  const appendEmoji = (emoji: (typeof quickEmojis)[number]) => {
+    setDraft((current) => `${current}${emoji}`);
   };
 
   return (
@@ -348,6 +354,20 @@ export default function WhatsAppInboxPage() {
                     disabled={busyAction === "reply"}
                     className="min-h-[104px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100"
                   />
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {quickEmojis.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => appendEmoji(emoji)}
+                        disabled={busyAction === "reply"}
+                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-base transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        aria-label={`Inserisci ${emoji}`}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <p className="text-xs text-slate-500">
                       Il messaggio viene inviato al numero WhatsApp della conversazione e salvato nello storico.
