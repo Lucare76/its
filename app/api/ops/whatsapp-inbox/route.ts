@@ -1,21 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { getTenantWhatsAppSettings, listMetaWhatsAppTemplates, logWhatsAppEvent, normalizeE164, sendWhatsAppMessage, sendWhatsAppTextMessage, type MetaWhatsAppTemplateComponent } from "@/lib/server/whatsapp";
+import { getTenantWhatsAppSettings, loadSyncedWhatsAppTemplates, logWhatsAppEvent, normalizeE164, sendWhatsAppMessage, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
 import { matchWhatsAppInboundMessage } from "@/lib/server/whatsapp/matching";
 
 export const runtime = "nodejs";
 
 type AuthorizedPricingRequest = Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>;
-
-function extractBodyParameterCount(components: MetaWhatsAppTemplateComponent[]) {
-  const bodyText = components.find((component) => component.type?.toUpperCase() === "BODY")?.text ?? "";
-  const matches = Array.from(bodyText.matchAll(/\{\{(\d+)\}\}/g));
-  const indexes = matches
-    .map((match) => Number(match[1]))
-    .filter((value) => Number.isFinite(value) && value > 0);
-  return indexes.length > 0 ? Math.max(...indexes) : 0;
-}
 
 const patchSchema = z.object({
   thread_id: z.string().uuid(),
@@ -141,12 +132,12 @@ export async function GET(request: NextRequest) {
 
   const tenantId = auth.membership.tenant_id;
   const settings = await getTenantWhatsAppSettings(auth.admin, tenantId);
-  let metaTemplates: Awaited<ReturnType<typeof listMetaWhatsAppTemplates>> = [];
-  let metaTemplateError: string | null = null;
+  let syncedTemplates = [] as Awaited<ReturnType<typeof loadSyncedWhatsAppTemplates>>;
+  let templateFetchError: string | null = null;
   try {
-    metaTemplates = await listMetaWhatsAppTemplates();
+    syncedTemplates = await loadSyncedWhatsAppTemplates(auth.admin, tenantId);
   } catch (error) {
-    metaTemplateError = error instanceof Error ? error.message : "Impossibile caricare i template Meta.";
+    templateFetchError = error instanceof Error ? error.message : "Impossibile caricare i template sincronizzati.";
   }
   const url = new URL(request.url);
   const filter = url.searchParams.get("filter") ?? "open";
@@ -244,22 +235,22 @@ export async function GET(request: NextRequest) {
     threads: enrichedThreads,
     selected_thread_id: selectedId ?? null,
     messages: enrichedMessages,
-    template_options: metaTemplates.map((template) => ({
-      key: template.id,
+    template_options: syncedTemplates.map((template) => ({
+      key: template.meta_template_id,
       label: template.name,
       template: template.name,
-      language_code: template.language,
+      language_code: template.language_code,
       status: template.status,
       category: template.category,
-      body_parameter_count: extractBodyParameterCount(template.components),
-      body_text: template.components.find((component) => component.type?.toUpperCase() === "BODY")?.text ?? null,
-      header_format: template.components.find((component) => component.type?.toUpperCase() === "HEADER")?.format ?? null,
+      body_parameter_count: template.body_parameter_count,
+      body_text: template.body_text,
+      header_format: template.header_format,
       is_tenant_default:
-        template.name === settings.default_template && template.language === settings.template_language,
+        template.name === settings.default_template && template.language_code === settings.template_language,
       is_tenant_arrival:
-        template.name === settings.arrival_template && template.language === settings.template_language
+        template.name === settings.arrival_template && template.language_code === settings.template_language
     })),
-    template_fetch_error: metaTemplateError
+    template_fetch_error: templateFetchError
   });
 }
 

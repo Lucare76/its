@@ -79,6 +79,23 @@ export interface MetaWhatsAppTemplateSummary {
   components: MetaWhatsAppTemplateComponent[];
 }
 
+export interface SyncedWhatsAppTemplateRow {
+  id: string;
+  tenant_id: string;
+  meta_template_id: string;
+  name: string;
+  language_code: string;
+  status: string;
+  category: string | null;
+  header_format: string | null;
+  body_text: string | null;
+  body_parameter_count: number;
+  raw_json: Record<string, unknown>;
+  synced_at: string;
+  updated_at: string;
+  created_at: string;
+}
+
 export interface WhatsAppEventInsert {
   tenant_id: string;
   service_id: string | null;
@@ -343,6 +360,71 @@ export async function listMetaWhatsAppTemplates() {
   }
 
   return templates;
+}
+
+export function countMetaBodyParameters(components: MetaWhatsAppTemplateComponent[]) {
+  const bodyText = components.find((component) => component.type?.toUpperCase() === "BODY")?.text ?? "";
+  const matches = Array.from(bodyText.matchAll(/\{\{(\d+)\}\}/g));
+  const indexes = matches
+    .map((match) => Number(match[1]))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return indexes.length > 0 ? Math.max(...indexes) : 0;
+}
+
+export async function loadSyncedWhatsAppTemplates(admin: ReturnType<typeof createAdminClient>, tenantId: string) {
+  const { data, error } = await admin
+    .from("whatsapp_templates")
+    .select("id, tenant_id, meta_template_id, name, language_code, status, category, header_format, body_text, body_parameter_count, raw_json, synced_at, updated_at, created_at")
+    .eq("tenant_id", tenantId)
+    .order("name", { ascending: true })
+    .order("language_code", { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []) as SyncedWhatsAppTemplateRow[];
+}
+
+export async function syncMetaWhatsAppTemplates(admin: ReturnType<typeof createAdminClient>, tenantId: string) {
+  const templates = await listMetaWhatsAppTemplates();
+  const nowIso = new Date().toISOString();
+  const rows = templates.map((template) => ({
+    tenant_id: tenantId,
+    meta_template_id: template.id,
+    name: template.name,
+    language_code: template.language,
+    status: template.status,
+    category: template.category,
+    header_format: template.components.find((component) => component.type?.toUpperCase() === "HEADER")?.format ?? null,
+    body_text: template.components.find((component) => component.type?.toUpperCase() === "BODY")?.text ?? null,
+    body_parameter_count: countMetaBodyParameters(template.components),
+    raw_json: {
+      id: template.id,
+      name: template.name,
+      language: template.language,
+      status: template.status,
+      category: template.category,
+      components: template.components
+    },
+    synced_at: nowIso,
+    updated_at: nowIso
+  }));
+
+  const { error } = await admin.from("whatsapp_templates").upsert(rows, {
+    onConflict: "tenant_id,meta_template_id"
+  });
+  if (error) throw error;
+
+  const remoteIds = templates.map((template) => template.id);
+  const cleanupQuery = admin
+    .from("whatsapp_templates")
+    .delete()
+    .eq("tenant_id", tenantId);
+
+  const { error: cleanupError } = remoteIds.length > 0
+    ? await cleanupQuery.not("meta_template_id", "in", `(${remoteIds.map((id) => `"${id}"`).join(",")})`)
+    : await cleanupQuery;
+  if (cleanupError) throw cleanupError;
+
+  return loadSyncedWhatsAppTemplates(admin, tenantId);
 }
 
 export async function sendWhatsAppTextMessage(input: SendWhatsAppTextInput) {

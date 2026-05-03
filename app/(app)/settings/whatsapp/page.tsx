@@ -27,6 +27,7 @@ export default function WhatsAppSettingsPage() {
   const [settings, setSettings] = useState<WhatsAppSettings>(defaultSettings);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [syncingTemplates, setSyncingTemplates] = useState(false);
   const [message, setMessage] = useState("Caricamento configurazione...");
 
   useEffect(() => {
@@ -117,6 +118,35 @@ export default function WhatsAppSettingsPage() {
     setMessage("Configurazione salvata.");
   };
 
+  const syncTemplates = async () => {
+    if (!hasSupabaseEnv || !supabase) return;
+    setSyncingTemplates(true);
+    setMessage("Sincronizzazione template Meta in corso...");
+
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      setSyncingTemplates(false);
+      setMessage("Sessione non valida.");
+      return;
+    }
+
+    const response = await fetch("/api/whatsapp/templates/sync", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    const body = (await response.json().catch(() => null)) as { error?: string; imported?: number } | null;
+    setSyncingTemplates(false);
+    if (!response.ok) {
+      setMessage(body?.error ?? "Sincronizzazione template fallita.");
+      return;
+    }
+    setMessage(`Template Meta sincronizzati: ${body?.imported ?? 0}.`);
+  };
+
   return (
     <section className="space-y-4">
       <h1 className="text-2xl font-semibold">Impostazioni WhatsApp (Admin)</h1>
@@ -126,6 +156,16 @@ export default function WhatsAppSettingsPage() {
         <article className="card p-4 text-sm text-muted">Caricamento...</article>
       ) : (
         <form onSubmit={onSubmit} className="card grid gap-4 p-4 md:max-w-2xl">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold text-text">Template live da Meta</p>
+              <p className="text-xs text-muted">Importa nel database i template approvati del tuo WhatsApp Business Account.</p>
+            </div>
+            <button type="button" onClick={() => void syncTemplates()} className="btn-secondary" disabled={syncingTemplates}>
+              {syncingTemplates ? "Sincronizzazione..." : "Sincronizza template Meta"}
+            </button>
+          </div>
+
           <label className="grid gap-1">
             <span className="text-sm font-medium text-text">Template di default</span>
             <input
