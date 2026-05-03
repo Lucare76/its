@@ -8,6 +8,7 @@ type ProcessResult = {
   statuses: number;
   contacts: number;
   errors: string[];
+  tenantsResolved: number;
 };
 
 function unixToIso(timestamp: string | undefined) {
@@ -69,18 +70,49 @@ export function extractWebhookEventType(payload: MetaWebhookPayload) {
 
 async function upsertContact(
   admin: SupabaseClient,
-  input: { tenantId: string; contact: MetaContact | undefined; waId: string; phoneE164: string | null }
+  input: { tenantId: string | null; contact: MetaContact | undefined; waId: string; phoneE164: string | null }
 ) {
   const profileName = input.contact?.profile?.name ?? null;
+  const payload = {
+    tenant_id: input.tenantId,
+    wa_id: input.waId,
+    phone_e164: input.phoneE164,
+    profile_name: profileName,
+    updated_at: new Date().toISOString()
+  };
+  if (input.tenantId) {
+    const { data, error } = await admin
+      .from("whatsapp_contacts")
+      .upsert(payload, { onConflict: "tenant_id,wa_id" })
+      .select("id")
+      .single();
+    if (error) throw error;
+    return data as { id: string };
+  }
+
+  const { data: existing, error: existingError } = await admin
+    .from("whatsapp_contacts")
+    .select("id")
+    .is("tenant_id", null)
+    .eq("wa_id", input.waId)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  if (existing?.id) {
+    const { data, error } = await admin
+      .from("whatsapp_contacts")
+      .update(payload)
+      .eq("id", existing.id)
+      .select("id")
+      .single();
+    if (error) throw error;
+    return data as { id: string };
+  }
   const { data, error } = await admin
     .from("whatsapp_contacts")
-    .upsert({
-      tenant_id: input.tenantId,
-      wa_id: input.waId,
-      phone_e164: input.phoneE164,
-      profile_name: profileName,
-      updated_at: new Date().toISOString()
-    }, { onConflict: "tenant_id,wa_id" })
+    .insert({
+      ...payload,
+      created_at: new Date().toISOString()
+    })
     .select("id")
     .single();
   if (error) throw error;
@@ -90,7 +122,7 @@ async function upsertContact(
 async function upsertThread(
   admin: SupabaseClient,
   input: {
-    tenantId: string;
+    tenantId: string | null;
     waId: string;
     phoneE164: string | null;
     contactId: string | null;
@@ -104,12 +136,14 @@ async function upsertThread(
   }
 ) {
   const status = input.matchStatus === "matched" ? "open" : "needs_review";
-  const { data: existing } = await admin
+  const existingQuery = admin
     .from("whatsapp_threads")
-    .select("id, unread_count")
-    .eq("tenant_id", input.tenantId)
-    .eq("wa_id", input.waId)
-    .maybeSingle();
+    .select("id, unread_count");
+
+  const { data: existing, error: existingError } = input.tenantId
+    ? await existingQuery.eq("tenant_id", input.tenantId).eq("wa_id", input.waId).maybeSingle()
+    : await existingQuery.is("tenant_id", null).eq("wa_id", input.waId).maybeSingle();
+  if (existingError) throw existingError;
 
   const row = {
     tenant_id: input.tenantId,
@@ -128,9 +162,33 @@ async function upsertThread(
     updated_at: new Date().toISOString()
   };
 
+  if (input.tenantId) {
+    const { data, error } = await admin
+      .from("whatsapp_threads")
+      .upsert(row, { onConflict: "tenant_id,wa_id" })
+      .select("id")
+      .single();
+    if (error) throw error;
+    return data as { id: string };
+  }
+
+  if (existing?.id) {
+    const { data, error } = await admin
+      .from("whatsapp_threads")
+      .update(row)
+      .eq("id", existing.id)
+      .select("id")
+      .single();
+    if (error) throw error;
+    return data as { id: string };
+  }
+
   const { data, error } = await admin
     .from("whatsapp_threads")
-    .upsert(row, { onConflict: "tenant_id,wa_id" })
+    .insert({
+      ...row,
+      created_at: new Date().toISOString()
+    })
     .select("id")
     .single();
   if (error) throw error;
@@ -138,9 +196,13 @@ async function upsertThread(
 }
 
 async function processMessage(admin: SupabaseClient, value: MetaChangeValue, message: MetaMessage) {
-  if (!message.id || !message.from) return;
+  if (!message.id || !message.from) return null;
   const contact = value.contacts?.find((item) => item.wa_id === message.from) ?? value.contacts?.[0];
   const phoneE164 = normalizeE164(message.from);
+  console.info("WhatsApp inbound message received", {
+    hasWaId: Boolean(message.from),
+    normalizedPhonePresent: Boolean(phoneE164)
+  });
   const textBody = messageText(message);
   const match = await matchWhatsAppInboundMessage(admin, {
     waId: message.from,
@@ -148,9 +210,7 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
     textBody,
     timestamp: message.timestamp
   });
-  if (!match.tenantId) {
-    throw new Error("Unable to resolve tenant for inbound WhatsApp message");
-  }
+  const effectiveMatchStatus = match.tenantId ? match.status : "needs_review";
 
   const contactRow = await upsertContact(admin, { tenantId: match.tenantId, contact, waId: message.from, phoneE164 });
   const timestamp = unixToIso(message.timestamp);
@@ -162,16 +222,16 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
     bookingId: match.bookingId,
     transferId: match.transferId,
     customerId: match.customerId,
-    matchStatus: match.status,
+    matchStatus: effectiveMatchStatus,
     matchSuggestions: match.suggestions,
     lastMessageAt: timestamp,
     preview: previewForMessage(message)
   });
 
-  const { error } = await admin.from("whatsapp_messages").upsert({
+  const messagePayload = {
     tenant_id: match.tenantId,
     wa_message_id: message.id,
-    direction: "inbound",
+    direction: "inbound" as const,
     wa_id: message.from,
     phone_e164: phoneE164,
     contact_id: contactRow.id,
@@ -185,8 +245,28 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
     status: "received",
     timestamp,
     raw_message: message
-  }, { onConflict: "tenant_id,wa_message_id", ignoreDuplicates: true });
-  if (error) throw error;
+  };
+
+  if (match.tenantId) {
+    const { error } = await admin.from("whatsapp_messages").upsert(
+      messagePayload,
+      { onConflict: "tenant_id,wa_message_id", ignoreDuplicates: true }
+    );
+    if (error) throw error;
+  } else {
+    const { data: existing, error: existingError } = await admin
+      .from("whatsapp_messages")
+      .select("id")
+      .is("tenant_id", null)
+      .eq("wa_message_id", message.id)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing?.id) {
+      const { error } = await admin.from("whatsapp_messages").insert(messagePayload);
+      if (error) throw error;
+    }
+  }
+  return { tenantId: match.tenantId, phoneE164 };
 }
 
 async function resolveStatusTenant(admin: SupabaseClient, status: MetaStatus) {
@@ -248,18 +328,29 @@ async function processStatus(admin: SupabaseClient, status: MetaStatus) {
 }
 
 export async function processWhatsAppWebhook(admin: SupabaseClient, payload: MetaWebhookPayload, webhookEventId?: string): Promise<ProcessResult> {
-  const result: ProcessResult = { messages: 0, statuses: 0, contacts: 0, errors: [] };
+  const result: ProcessResult = { messages: 0, statuses: 0, contacts: 0, errors: [], tenantsResolved: 0 };
+  const resolvedTenantIds = new Set<string>();
 
   for (const entry of payload.entry ?? []) {
     for (const change of entry.changes ?? []) {
       const value = change.value;
       if (!value) continue;
+      console.info("WhatsApp webhook change received", {
+        field: change.field ?? null,
+        messagesCount: value.messages?.length ?? 0,
+        statusesCount: value.statuses?.length ?? 0,
+        hasWaId: Boolean(value.contacts?.[0]?.wa_id ?? value.messages?.[0]?.from ?? value.statuses?.[0]?.recipient_id)
+      });
       for (const message of value.messages ?? []) {
         try {
-          await processMessage(admin, value, message);
+          const processed = await processMessage(admin, value, message);
           result.messages += 1;
+          if (processed?.tenantId) resolvedTenantIds.add(processed.tenantId);
         } catch (error) {
           result.errors.push(error instanceof Error ? error.message : "message processing failed");
+          console.error("WhatsApp inbound message persistence failed", {
+            message: error instanceof Error ? error.message : "message processing failed"
+          });
         }
       }
       for (const status of value.statuses ?? []) {
@@ -268,16 +359,21 @@ export async function processWhatsAppWebhook(admin: SupabaseClient, payload: Met
           result.statuses += 1;
         } catch (error) {
           result.errors.push(error instanceof Error ? error.message : "status processing failed");
+          console.error("WhatsApp status persistence failed", {
+            message: error instanceof Error ? error.message : "status processing failed"
+          });
         }
       }
       result.contacts += value.contacts?.length ?? 0;
     }
   }
+  result.tenantsResolved = resolvedTenantIds.size;
 
   if (webhookEventId) {
     await admin
       .from("whatsapp_webhook_events")
       .update({
+        tenant_id: resolvedTenantIds.values().next().value ?? null,
         processed_at: new Date().toISOString(),
         processing_error: result.errors.length ? result.errors.join("\n").slice(0, 2000) : null
       })

@@ -88,10 +88,24 @@ export async function POST(request: NextRequest) {
   const payload = parsed.data as MetaWebhookPayload;
   const dedupeKey = extractWebhookDedupeKey(payload);
   const eventType = extractWebhookEventType(payload);
+  const fields = Array.from(new Set(
+    (payload.entry ?? []).flatMap((entry) => (entry.changes ?? []).map((change) => change.field ?? "unknown"))
+  ));
+  const messagesCount = (payload.entry ?? []).reduce(
+    (sum, entry) => sum + (entry.changes ?? []).reduce((inner, change) => inner + (change.value?.messages?.length ?? 0), 0),
+    0
+  );
+  const statusesCount = (payload.entry ?? []).reduce(
+    (sum, entry) => sum + (entry.changes ?? []).reduce((inner, change) => inner + (change.value?.statuses?.length ?? 0), 0),
+    0
+  );
   console.info("WhatsApp webhook POST accepted", {
     object: payload.object ?? null,
     entryCount: payload.entry?.length ?? 0,
     eventType,
+    field: fields.join(","),
+    messagesCount,
+    statusesCount,
     hasDedupeKey: Boolean(dedupeKey)
   });
 
@@ -135,6 +149,7 @@ export async function POST(request: NextRequest) {
       messages: result.messages,
       statuses: result.statuses,
       contacts: result.contacts,
+      tenantsResolved: result.tenantsResolved,
       errors: result.errors.length
     });
     return NextResponse.json({ ok: true, accepted: true, ...result });

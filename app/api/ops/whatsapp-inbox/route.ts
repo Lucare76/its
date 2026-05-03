@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
   let threadQuery = auth.admin
     .from("whatsapp_threads")
     .select("id, wa_id, phone_e164, customer_id, booking_id, transfer_id, last_message_at, last_message_preview, unread_count, assigned_to, status, match_status, match_suggestions, created_at, updated_at, whatsapp_contacts(profile_name)")
-    .eq("tenant_id", tenantId)
+    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .limit(100);
 
@@ -69,7 +69,7 @@ export async function GET(request: NextRequest) {
     ? await auth.admin
       .from("whatsapp_messages")
       .select("id, wa_message_id, direction, wa_id, phone_e164, message_type, text_body, media_id, media_mime_type, status, timestamp, created_at, booking_id, transfer_id")
-      .eq("tenant_id", tenantId)
+      .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
       .eq("thread_id", selectedId)
       .order("timestamp", { ascending: true, nullsFirst: true })
       .limit(500)
@@ -103,7 +103,7 @@ export async function PATCH(request: NextRequest) {
   const { error } = await auth.admin
     .from("whatsapp_threads")
     .update(update)
-    .eq("tenant_id", auth.membership.tenant_id)
+    .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
     .eq("id", parsed.data.thread_id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

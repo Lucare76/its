@@ -67,7 +67,14 @@ function isUuid(value: string) {
 }
 
 async function resolveSingleTenant(admin: SupabaseClient) {
-  const { data } = await admin.from("tenants").select("id").limit(2);
+  const { data, error } = await admin.from("tenants").select("id").limit(2);
+  if (error) {
+    console.error("WhatsApp inbound tenant lookup failed", {
+      code: error.code ?? null,
+      message: error.message
+    });
+    return null;
+  }
   return data?.length === 1 ? String(data[0].id) : null;
 }
 
@@ -103,26 +110,42 @@ export async function matchWhatsAppInboundMessage(
 ): Promise<WhatsAppMatchResult> {
   const normalizedPhone = input.phoneE164 ?? normalizeE164(input.waId);
   const exactPhones = Array.from(new Set([input.waId, normalizedPhone].filter(Boolean)));
+  const serviceColumns = "id, tenant_id, customer_name, phone, phone_e164, date, time, notes, message_id, external_code, source_quote_id, booking_service_kind, hotel_id";
+  const [exactPhone, exactPhoneE164] = await Promise.all([
+    exactPhones.length
+      ? admin.from("services").select(serviceColumns).in("phone", exactPhones).order("date", { ascending: true }).limit(20)
+      : Promise.resolve({ data: [], error: null }),
+    exactPhones.length
+      ? admin.from("services").select(serviceColumns).in("phone_e164", exactPhones).order("date", { ascending: true }).limit(20)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (exactPhone.error || exactPhoneE164.error) {
+    console.error("WhatsApp inbound exact service lookup failed", {
+      phoneError: exactPhone.error?.message ?? null,
+      phoneE164Error: exactPhoneE164.error?.message ?? null
+    });
+  }
 
-  const exact = await admin
-    .from("services")
-    .select("id, tenant_id, customer_name, phone, phone_e164, date, time, notes, message_id, external_code, source_quote_id, booking_service_kind, hotel_id")
-    .or(exactPhones.map((phone) => `phone.eq.${phone},phone_e164.eq.${phone}`).join(","))
-    .order("date", { ascending: true })
-    .limit(20);
-
-  const exactSuggestions = ((exact.data ?? []) as ServiceRow[]).map((row) => toSuggestion(row, "phone_exact"));
+  const exactSuggestions = uniqueServices(
+    ([...(exactPhone.data ?? []), ...(exactPhoneE164.data ?? [])] as ServiceRow[]).map((row) => toSuggestion(row, "phone_exact"))
+  );
   const exactResult = resolveFromSuggestions(exactSuggestions);
   if (exactResult.status === "matched") return exactResult;
 
   const comparable = phoneComparable(normalizedPhone);
   if (comparable.length >= 7) {
-    const { data: recentRows } = await admin
+    const { data: recentRows, error: recentError } = await admin
       .from("services")
-      .select("id, tenant_id, customer_name, phone, phone_e164, date, time, notes, message_id, external_code, source_quote_id, booking_service_kind, hotel_id")
+      .select(serviceColumns)
       .gte("date", new Date(Date.now() - 14 * 86_400_000).toISOString().slice(0, 10))
       .order("date", { ascending: true })
       .limit(1000);
+    if (recentError) {
+      console.error("WhatsApp inbound normalized service lookup failed", {
+        code: recentError.code ?? null,
+        message: recentError.message
+      });
+    }
 
     const normalizedMatches = ((recentRows ?? []) as ServiceRow[])
       .filter((row) => phoneComparable(row.phone_e164) === comparable || phoneComparable(row.phone) === comparable)
@@ -138,22 +161,34 @@ export async function matchWhatsAppInboundMessage(
 
   const tokens = extractPracticeTokens(input.textBody);
   if (tokens.length > 0) {
-    const { data: tokenRows } = await admin
+    const { data: tokenRows, error: tokenError } = await admin
       .from("services")
-      .select("id, tenant_id, customer_name, phone, phone_e164, date, time, notes, message_id, external_code, source_quote_id, booking_service_kind, hotel_id")
-      .or(
-        tokens
-          .flatMap((token) => [
-            `external_code.ilike.%${token}%`,
-            `notes.ilike.%${token}%`,
-            `message_id.ilike.%${token}%`,
-            ...(isUuid(token) ? [`source_quote_id.eq.${token}`] : [])
-          ])
-          .join(",")
-      )
+      .select(serviceColumns)
+      .gte("date", new Date(Date.now() - 60 * 86_400_000).toISOString().slice(0, 10))
       .order("date", { ascending: true })
-      .limit(20);
-    const tokenResult = resolveFromSuggestions(((tokenRows ?? []) as ServiceRow[]).map((row) => toSuggestion(row, "practice_token")));
+      .limit(1000);
+    if (tokenError) {
+      console.error("WhatsApp inbound token service lookup failed", {
+        code: tokenError.code ?? null,
+        message: tokenError.message
+      });
+    }
+    const upperTokens = tokens.map((token) => token.toUpperCase());
+    const tokenMatches = ((tokenRows ?? []) as ServiceRow[])
+      .filter((row) => {
+        const notes = (row.notes ?? "").toUpperCase();
+        const externalCode = (row.external_code ?? "").toUpperCase();
+        const messageId = (row.message_id ?? "").toUpperCase();
+        const sourceQuoteId = (row.source_quote_id ?? "").toUpperCase();
+        return upperTokens.some((token) =>
+          externalCode.includes(token)
+          || notes.includes(token)
+          || messageId.includes(token)
+          || sourceQuoteId === token
+        );
+      })
+      .map((row) => toSuggestion(row, "practice_token"));
+    const tokenResult = resolveFromSuggestions(tokenMatches);
     if (tokenResult.status !== "unmatched") return tokenResult;
   }
 
