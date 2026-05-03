@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     admin.from("vehicles")
       .select("id, label, plate, active, capacity, compliance_override_until, compliance_override_reason")
       .eq("tenant_id", tenant_id)
-      .order("capacity", { ascending: false, nullsFirst: false })
+      .order("capacity", { ascending: false })
       .order("label"),
     admin.from("vehicle_insurances")
       .select("vehicle_id, expiry_date, company, policy_number")
