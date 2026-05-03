@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { logWhatsAppEvent, normalizeE164, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
+import { getTenantWhatsAppSettings, logWhatsAppEvent, normalizeE164, sendWhatsAppMessage, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
 import { matchWhatsAppInboundMessage } from "@/lib/server/whatsapp/matching";
 
 export const runtime = "nodejs";
@@ -14,15 +14,31 @@ const patchSchema = z.object({
 });
 
 const postSchema = z.object({
+  mode: z.enum(["text", "template"]).default("text"),
   thread_id: z.string().uuid().optional(),
   phone: z.string().trim().optional(),
   profile_name: z.string().trim().max(120, "Nome troppo lungo").optional(),
-  text: z.string().trim().min(1, "Inserisci un messaggio").max(4096, "Messaggio troppo lungo")
+  text: z.string().trim().max(4096, "Messaggio troppo lungo").optional(),
+  template_name: z.string().trim().max(120, "Nome template troppo lungo").optional(),
+  template_language: z.string().trim().max(20, "Lingua template non valida").optional(),
+  template_variables: z.array(z.string().trim().max(1024, "Variabile template troppo lunga")).max(20, "Troppe variabili template").optional()
 }).superRefine((value, ctx) => {
   if (!value.thread_id && !value.phone) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: "Seleziona una conversazione o inserisci un numero."
+    });
+  }
+  if (value.mode === "text" && !value.text?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Inserisci un messaggio."
+    });
+  }
+  if (value.mode === "template" && !value.template_name?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Seleziona un template WhatsApp."
     });
   }
 });
@@ -115,6 +131,7 @@ export async function GET(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
 
   const tenantId = auth.membership.tenant_id;
+  const settings = await getTenantWhatsAppSettings(auth.admin, tenantId);
   const url = new URL(request.url);
   const filter = url.searchParams.get("filter") ?? "open";
   const search = (url.searchParams.get("q") ?? "").trim();
@@ -210,7 +227,27 @@ export async function GET(request: NextRequest) {
     ok: true,
     threads: enrichedThreads,
     selected_thread_id: selectedId ?? null,
-    messages: enrichedMessages
+    messages: enrichedMessages,
+    template_options: [
+      {
+        key: "default",
+        label: "Template default tenant",
+        template: settings.default_template,
+        language_code: settings.template_language,
+        kind: "default",
+        description: "Template principale configurato per il tenant."
+      },
+      ...(settings.arrival_template && settings.arrival_template !== settings.default_template
+        ? [{
+            key: "arrival",
+            label: "Template arrivi",
+            template: settings.arrival_template,
+            language_code: settings.template_language,
+            kind: "arrival",
+            description: "Template usato per comunicazioni clienti in arrivo."
+          }]
+        : [])
+    ]
   });
 }
 
@@ -295,7 +332,9 @@ export async function POST(request: NextRequest) {
 
   const tenantId = auth.membership.tenant_id;
   const nowIso = new Date().toISOString();
-  const text = parsed.data.text.trim();
+  const text = parsed.data.text?.trim() ?? "";
+  const sendMode = parsed.data.mode;
+  const settings = await getTenantWhatsAppSettings(auth.admin, tenantId);
 
   let thread:
     | {
@@ -351,19 +390,35 @@ export async function POST(request: NextRequest) {
   }
 
   const targetPhone = normalizeE164(thread.wa_id);
-  const sendResult = await sendWhatsAppTextMessage({
-    to: targetPhone,
-    text
-  });
+  const sendResult = sendMode === "template"
+    ? await sendWhatsAppMessage({
+        to: targetPhone,
+        template: parsed.data.template_name!.trim(),
+        languageCode: parsed.data.template_language?.trim() || settings.template_language,
+        variables: Object.fromEntries(
+          (parsed.data.template_variables ?? []).map((value, index) => [String(index + 1), value])
+        )
+      })
+    : await sendWhatsAppTextMessage({
+        to: targetPhone,
+        text
+      });
 
   if (!sendResult.ok) {
     console.error("WhatsApp inbox reply failed", {
       hasWaId: Boolean(thread.wa_id),
       normalizedPhonePresent: Boolean(sendResult.phoneE164),
-      error: sendResult.error ?? "unknown"
+      error: sendResult.error ?? "unknown",
+      mode: sendMode
     });
     return NextResponse.json({ error: sendResult.error ?? "Invio WhatsApp non riuscito" }, { status: 502 });
   }
+
+  const templateName = sendMode === "template" ? parsed.data.template_name!.trim() : null;
+  const templateVariables = sendMode === "template" ? parsed.data.template_variables ?? [] : [];
+  const previewText = sendMode === "template"
+    ? `[Template] ${templateName}${templateVariables.length ? ` · ${templateVariables.join(" | ").slice(0, 180)}` : ""}`.slice(0, 240)
+    : text.slice(0, 240);
 
   const messagePayload = {
     tenant_id: thread.tenant_id ?? tenantId,
@@ -376,8 +431,8 @@ export async function POST(request: NextRequest) {
     customer_id: thread.customer_id ?? null,
     booking_id: thread.booking_id ?? null,
     transfer_id: thread.transfer_id ?? null,
-    message_type: "text",
-    text_body: text,
+    message_type: sendMode === "template" ? "template" : "text",
+    text_body: sendMode === "template" ? previewText : text,
     media_id: null,
     media_mime_type: null,
     media_sha256: null,
@@ -385,9 +440,19 @@ export async function POST(request: NextRequest) {
     timestamp: nowIso,
     raw_message: {
       id: sendResult.messageId ?? null,
-      type: "text",
-      text: { body: text },
-      source: "manual_reply"
+      type: sendMode,
+      ...(sendMode === "template"
+        ? {
+            template: {
+              name: templateName,
+              language: { code: parsed.data.template_language?.trim() || settings.template_language },
+              parameters: templateVariables
+            }
+          }
+        : {
+            text: { body: text }
+          }),
+      source: sendMode === "template" ? "manual_template" : "manual_reply"
     }
   };
 
@@ -406,7 +471,7 @@ export async function POST(request: NextRequest) {
     .update({
       phone_e164: sendResult.phoneE164,
       last_message_at: nowIso,
-      last_message_preview: text.slice(0, 240),
+      last_message_preview: previewText,
       unread_count: 0,
       status: "open",
       match_status: thread.match_status === "matched" ? "matched" : "needs_review",
@@ -429,13 +494,15 @@ export async function POST(request: NextRequest) {
     service_id: thread.booking_id ?? null,
     to_phone: sendResult.phoneE164,
     kind: "manual",
-    template: null,
+    template: templateName,
     status: "sent",
     provider_message_id: sendResult.messageId ?? null,
     happened_at: nowIso,
     payload_json: {
       source: "api/ops/whatsapp-inbox",
-      mode: "manual_reply",
+      mode: sendMode === "template" ? "manual_template" : "manual_reply",
+      template_language: sendMode === "template" ? parsed.data.template_language?.trim() || settings.template_language : null,
+      template_variables: sendMode === "template" ? templateVariables : [],
       thread_id: thread.id
     }
   });

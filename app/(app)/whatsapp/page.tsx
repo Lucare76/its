@@ -49,7 +49,17 @@ type InboxPayload = {
   threads?: ThreadRow[];
   selected_thread_id?: string | null;
   messages?: MessageRow[];
+  template_options?: TemplateOption[];
   error?: string;
+};
+
+type TemplateOption = {
+  key: string;
+  label: string;
+  template: string;
+  language_code: string;
+  kind: "default" | "arrival";
+  description?: string;
 };
 
 const filters = [
@@ -96,6 +106,21 @@ function messageStatusLabel(status: string | null) {
   return "In coda";
 }
 
+function buildSuggestedTemplateVariables(thread: ThreadRow | null, template: TemplateOption | null) {
+  if (!thread || !template) return [];
+  const customer = thread.service?.customer_name ?? thread.whatsapp_contacts?.profile_name ?? thread.phone_e164 ?? thread.wa_id;
+  const date = thread.service?.date ?? "";
+  const time = String(thread.service?.time ?? "").slice(0, 5);
+  const hotel = thread.service?.hotels?.name ?? "";
+  const vessel = thread.service?.booking_service_kind ?? "";
+
+  if (template.kind === "arrival") {
+    return [customer, date, time, hotel].filter(Boolean);
+  }
+
+  return [customer, date, time, hotel, vessel].filter(Boolean);
+}
+
 async function getAccessToken() {
   if (!supabase) return null;
   const { data } = await supabase.auth.getSession();
@@ -105,10 +130,14 @@ async function getAccessToken() {
 export default function WhatsAppInboxPage() {
   const [threads, setThreads] = useState<ThreadRow[]>([]);
   const [messages, setMessages] = useState<MessageRow[]>([]);
+  const [templateOptions, setTemplateOptions] = useState<TemplateOption[]>([]);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [filter, setFilter] = useState<(typeof filters)[number]["value"]>("open");
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
+  const [composerMode, setComposerMode] = useState<"text" | "template">("text");
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>("");
+  const [templateVariablesText, setTemplateVariablesText] = useState("");
   const [newChatMode, setNewChatMode] = useState(false);
   const [newChatPhone, setNewChatPhone] = useState("");
   const [newChatName, setNewChatName] = useState("");
@@ -127,7 +156,19 @@ export default function WhatsAppInboxPage() {
         .find((message) => message.direction === "outbound" && message.status === "failed") ?? null,
     [messages]
   );
+  const selectedTemplate = useMemo(
+    () => templateOptions.find((option) => option.key === selectedTemplateKey) ?? templateOptions[0] ?? null,
+    [selectedTemplateKey, templateOptions]
+  );
   const composerEnabled = Boolean(selectedThreadId) || newChatMode;
+  const templateVariables = useMemo(
+    () => templateVariablesText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+    [templateVariablesText]
+  );
+  const lastFailureRequiresTemplate = useMemo(() => {
+    const reason = (latestFailedOutbound?.failure_reason ?? "").toLowerCase();
+    return reason.includes("131047") || reason.includes("re-engagement");
+  }, [latestFailedOutbound]);
 
   const load = useCallback(async (nextThreadId?: string | null) => {
     setLoading(true);
@@ -152,12 +193,28 @@ export default function WhatsAppInboxPage() {
     const nextSelectedThreadId = body.selected_thread_id ?? null;
     setThreads(body.threads ?? []);
     setMessages(body.messages ?? []);
+    setTemplateOptions(body.template_options ?? []);
+    setSelectedTemplateKey((current) => {
+      const available = body.template_options ?? [];
+      if (available.some((item) => item.key === current)) return current;
+      return available[0]?.key ?? "";
+    });
     setSelectedThreadId(nextSelectedThreadId);
     if (nextSelectedThreadId !== selectedThreadId) {
       setDraft("");
+      setTemplateVariablesText("");
     }
     setLoading(false);
   }, [filter, search, selectedThreadId]);
+
+  useEffect(() => {
+    if (composerMode !== "template") return;
+    if (!selectedTemplate || templateVariablesText.trim()) return;
+    const suggested = buildSuggestedTemplateVariables(selectedThread, selectedTemplate);
+    if (suggested.length > 0) {
+      setTemplateVariablesText(suggested.join("\n"));
+    }
+  }, [composerMode, selectedTemplate, selectedThread, templateVariablesText]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(selectedThreadId), 250);
@@ -225,8 +282,12 @@ export default function WhatsAppInboxPage() {
   const sendReply = async () => {
     if (!composerEnabled) return;
     const text = draft.trim();
-    if (!text) {
+    if (composerMode === "text" && !text) {
       setError("Inserisci un messaggio prima di inviare.");
+      return;
+    }
+    if (composerMode === "template" && !selectedTemplate) {
+      setError("Seleziona un template prima di inviare.");
       return;
     }
     const token = await getAccessToken();
@@ -244,8 +305,25 @@ export default function WhatsAppInboxPage() {
       },
       body: JSON.stringify(
         newChatMode
-          ? { phone: newChatPhone, profile_name: newChatName, text }
-          : { thread_id: selectedThreadId, text }
+          ? composerMode === "template"
+            ? {
+                mode: "template",
+                phone: newChatPhone,
+                profile_name: newChatName,
+                template_name: selectedTemplate?.template,
+                template_language: selectedTemplate?.language_code,
+                template_variables: templateVariables
+              }
+            : { mode: "text", phone: newChatPhone, profile_name: newChatName, text }
+          : composerMode === "template"
+            ? {
+                mode: "template",
+                thread_id: selectedThreadId,
+                template_name: selectedTemplate?.template,
+                template_language: selectedTemplate?.language_code,
+                template_variables: templateVariables
+              }
+            : { mode: "text", thread_id: selectedThreadId, text }
       )
     });
     const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
@@ -253,6 +331,7 @@ export default function WhatsAppInboxPage() {
       setError(body?.error ?? "Invio messaggio non riuscito.");
     } else {
       setDraft("");
+      setTemplateVariablesText("");
       if (newChatMode) {
         setNewChatMode(false);
         setNewChatPhone("");
@@ -271,6 +350,16 @@ export default function WhatsAppInboxPage() {
 
   const applyQuickReply = (text: (typeof quickReplies)[number]) => {
     setDraft(text);
+  };
+
+  const loadSuggestedTemplateVariables = () => {
+    const suggested = buildSuggestedTemplateVariables(selectedThread, selectedTemplate);
+    if (suggested.length === 0) {
+      setError("Nessun suggerimento disponibile per questa conversazione.");
+      return;
+    }
+    setError("");
+    setTemplateVariablesText(suggested.join("\n"));
   };
 
   return (
@@ -311,6 +400,8 @@ export default function WhatsAppInboxPage() {
               setNewChatMode(true);
               setSelectedThreadId(null);
               setDraft("");
+              setComposerMode("text");
+              setTemplateVariablesText("");
               setError("");
             }}
             className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
@@ -434,6 +525,7 @@ export default function WhatsAppInboxPage() {
                         setNewChatPhone("");
                         setNewChatName("");
                         setDraft("");
+                        setTemplateVariablesText("");
                       }}
                       className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                     >
@@ -513,62 +605,165 @@ export default function WhatsAppInboxPage() {
                   {latestFailedOutbound ? (
                     <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
                       Ultima risposta non consegnata: {latestFailedOutbound.failure_reason ?? "verifica numero o configurazione WhatsApp."}
+                      {lastFailureRequiresTemplate ? (
+                        <button
+                          type="button"
+                          onClick={() => setComposerMode("template")}
+                          className="ml-2 rounded-full border border-rose-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-rose-700"
+                        >
+                          Usa template
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
-                  <label htmlFor="whatsapp-reply" className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Rispondi su WhatsApp
-                  </label>
-                  <textarea
-                    id="whatsapp-reply"
-                    data-no-uppercase
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    placeholder="Scrivi la risposta al cliente..."
-                    rows={4}
-                    disabled={busyAction === "reply"}
-                    autoCapitalize="sentences"
-                    autoCorrect="on"
-                    spellCheck
-                    className="min-h-[104px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100"
-                  />
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {quickReplies.map((reply) => (
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    {[
+                      { value: "text", label: "Messaggio" },
+                      { value: "template", label: "Template" }
+                    ].map((mode) => (
                       <button
-                        key={reply}
+                        key={mode.value}
                         type="button"
-                        onClick={() => applyQuickReply(reply)}
+                        onClick={() => setComposerMode(mode.value as "text" | "template")}
                         disabled={busyAction === "reply"}
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:bg-slate-100 ${
+                          composerMode === mode.value
+                            ? "border-emerald-600 bg-emerald-600 text-white"
+                            : "border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-emerald-50"
+                        }`}
                       >
-                        {reply}
+                        {mode.label}
                       </button>
                     ))}
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {quickEmojis.map((emoji) => (
-                      <button
-                        key={emoji}
-                        type="button"
-                        onClick={() => appendEmoji(emoji)}
+                  {composerMode === "template" ? (
+                    <div className="space-y-3">
+                      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
+                        <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                          Template WhatsApp
+                          <select
+                            value={selectedTemplate?.key ?? ""}
+                            onChange={(event) => setSelectedTemplateKey(event.target.value)}
+                            disabled={busyAction === "reply" || templateOptions.length === 0}
+                            className="input-saas mt-2 w-full"
+                          >
+                            {templateOptions.map((option) => (
+                              <option key={option.key} value={option.key}>
+                                {option.label} · {option.template}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                          Lingua
+                          <input
+                            value={selectedTemplate?.language_code ?? ""}
+                            readOnly
+                            className="input-saas mt-2 w-full bg-slate-100"
+                          />
+                        </label>
+                      </div>
+                      {selectedTemplate ? (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                          {selectedTemplate.description ?? "Template del tenant selezionato."} Inserisci sotto le variabili nell'ordine richiesto da Meta, una per riga.
+                        </div>
+                      ) : null}
+                      <label htmlFor="whatsapp-template-vars" className="block text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        Variabili template
+                      </label>
+                      <textarea
+                        id="whatsapp-template-vars"
+                        data-no-uppercase
+                        value={templateVariablesText}
+                        onChange={(event) => setTemplateVariablesText(event.target.value)}
+                        placeholder={"Una variabile per riga\nMario Rossi\n2026-05-03\n14:30"}
+                        rows={5}
                         disabled={busyAction === "reply"}
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-base transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
-                        aria-label={`Inserisci ${emoji}`}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
+                        className="min-h-[120px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={loadSuggestedTemplateVariables}
+                          disabled={busyAction === "reply" || !selectedThread}
+                          className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        >
+                          Compila suggerite
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTemplateVariablesText("")}
+                          disabled={busyAction === "reply"}
+                          className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        >
+                          Svuota variabili
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <label htmlFor="whatsapp-reply" className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        Rispondi su WhatsApp
+                      </label>
+                      <textarea
+                        id="whatsapp-reply"
+                        data-no-uppercase
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        placeholder="Scrivi la risposta al cliente..."
+                        rows={4}
+                        disabled={busyAction === "reply"}
+                        autoCapitalize="sentences"
+                        autoCorrect="on"
+                        spellCheck
+                        className="min-h-[104px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                      />
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {quickReplies.map((reply) => (
+                          <button
+                            key={reply}
+                            type="button"
+                            onClick={() => applyQuickReply(reply)}
+                            disabled={busyAction === "reply"}
+                            className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                          >
+                            {reply}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {quickEmojis.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            onClick={() => appendEmoji(emoji)}
+                            disabled={busyAction === "reply"}
+                            className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-base transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                            aria-label={`Inserisci ${emoji}`}
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <p className="text-xs text-slate-500">
-                      Il messaggio viene inviato al numero WhatsApp della conversazione e salvato nello storico.
+                      {composerMode === "template"
+                        ? "Il template viene inviato al numero WhatsApp della conversazione e salvato nello storico."
+                        : "Il messaggio viene inviato al numero WhatsApp della conversazione e salvato nello storico."}
                     </p>
                     <button
                       type="button"
                       onClick={() => void sendReply()}
-                      disabled={busyAction !== null || !draft.trim() || (newChatMode && !newChatPhone.trim())}
+                      disabled={
+                        busyAction !== null
+                        || (composerMode === "text" ? !draft.trim() : !selectedTemplate)
+                        || (newChatMode && !newChatPhone.trim())
+                      }
                       className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                     >
-                      {busyAction === "reply" ? "Invio..." : "Invia risposta"}
+                      {busyAction === "reply" ? "Invio..." : composerMode === "template" ? "Invia template" : "Invia risposta"}
                     </button>
                   </div>
                 </div>
