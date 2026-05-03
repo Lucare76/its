@@ -639,6 +639,7 @@ small{font-size:9px;opacity:.75}
     const { data: session } = await supabase.auth.getSession();
     const userId = session.session?.user?.id ?? null;
     for (const gp of gracePeriods) {
+      if (gp.compliance_type === "inspection") continue;
       await supabase.from("vehicle_compliance_grace_periods").upsert(
         { compliance_type: gp.compliance_type, grace_days: gp.grace_days, updated_by: userId },
         { onConflict: "tenant_id,compliance_type" }
@@ -1032,7 +1033,7 @@ small{font-size:9px;opacity:.75}
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
             <h2 className="text-base font-bold text-slate-900 mb-1">Esporta scadenze</h2>
-            <p className="text-xs text-slate-500 mb-4">Seleziona i mezzi e l'intervallo di scadenza da esportare.</p>
+            <p className="text-xs text-slate-500 mb-4">Seleziona i mezzi e l&apos;intervallo di scadenza da esportare.</p>
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div>
                 <label className="label text-xs">Scadenza dal</label>
@@ -1107,7 +1108,7 @@ small{font-size:9px;opacity:.75}
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
             <h2 className="text-base font-bold text-slate-900 mb-1">Proroghe scadenze</h2>
-            <p className="text-xs text-slate-500 mb-5">Giorni di tolleranza dopo la scadenza per ciascun documento.</p>
+            <p className="text-xs text-slate-500 mb-5">Giorni di tolleranza dopo la scadenza dove previsti. Il collaudo segue la regola fissa entro fine mese.</p>
             {graceLoading ? (
               <div className="py-8 text-center text-sm text-slate-400">Caricamento...</div>
             ) : (
@@ -1116,18 +1117,26 @@ small{font-size:9px;opacity:.75}
                   <div key={gp.compliance_type} className="flex items-center justify-between gap-4">
                     <label className="text-sm font-medium text-slate-700 w-36">
                       {COMPLIANCE_TYPE_LABELS[gp.compliance_type] ?? gp.compliance_type}
-                      <span className="ml-1 text-xs text-slate-400">(+{gp.grace_days} giorni)</span>
+                      <span className="ml-1 text-xs text-slate-400">
+                        {gp.compliance_type === "inspection" ? "(entro fine mese)" : `(+${gp.grace_days} giorni)`}
+                      </span>
                     </label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="365"
-                      value={gp.grace_days}
-                      onChange={(e) => setGracePeriods((prev) =>
-                        prev.map((p) => p.compliance_type === gp.compliance_type ? { ...p, grace_days: Number(e.target.value) } : p)
-                      )}
-                      className="input-saas w-24 text-right"
-                    />
+                    {gp.compliance_type === "inspection" ? (
+                      <div className="input-saas flex w-24 items-center justify-end bg-slate-50 text-right text-slate-400">
+                        Regola fissa
+                      </div>
+                    ) : (
+                      <input
+                        type="number"
+                        min="0"
+                        max="365"
+                        value={gp.grace_days}
+                        onChange={(e) => setGracePeriods((prev) =>
+                          prev.map((p) => p.compliance_type === gp.compliance_type ? { ...p, grace_days: Number(e.target.value) } : p)
+                        )}
+                        className="input-saas w-24 text-right"
+                      />
+                    )}
                   </div>
                 ))}
               </div>
