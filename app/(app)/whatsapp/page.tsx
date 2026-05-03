@@ -50,6 +50,7 @@ type InboxPayload = {
   selected_thread_id?: string | null;
   messages?: MessageRow[];
   template_options?: TemplateOption[];
+  template_fetch_error?: string | null;
   error?: string;
 };
 
@@ -58,8 +59,13 @@ type TemplateOption = {
   label: string;
   template: string;
   language_code: string;
-  kind: "default" | "arrival";
-  description?: string;
+  status: string;
+  category: string | null;
+  body_parameter_count: number;
+  body_text?: string | null;
+  header_format?: string | null;
+  is_tenant_default?: boolean;
+  is_tenant_arrival?: boolean;
 };
 
 const filters = [
@@ -113,12 +119,9 @@ function buildSuggestedTemplateVariables(thread: ThreadRow | null, template: Tem
   const time = String(thread.service?.time ?? "").slice(0, 5);
   const hotel = thread.service?.hotels?.name ?? "";
   const vessel = thread.service?.booking_service_kind ?? "";
-
-  if (template.kind === "arrival") {
-    return [customer, date, time, hotel].filter(Boolean);
-  }
-
-  return [customer, date, time, hotel, vessel].filter(Boolean);
+  const base = [customer, date, time, hotel, vessel].filter(Boolean);
+  const count = template.body_parameter_count > 0 ? template.body_parameter_count : base.length;
+  return base.slice(0, count);
 }
 
 async function getAccessToken() {
@@ -131,6 +134,7 @@ export default function WhatsAppInboxPage() {
   const [threads, setThreads] = useState<ThreadRow[]>([]);
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [templateOptions, setTemplateOptions] = useState<TemplateOption[]>([]);
+  const [templateFetchError, setTemplateFetchError] = useState<string>("");
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [filter, setFilter] = useState<(typeof filters)[number]["value"]>("open");
   const [search, setSearch] = useState("");
@@ -194,6 +198,7 @@ export default function WhatsAppInboxPage() {
     setThreads(body.threads ?? []);
     setMessages(body.messages ?? []);
     setTemplateOptions(body.template_options ?? []);
+    setTemplateFetchError(body.template_fetch_error ?? "");
     setSelectedTemplateKey((current) => {
       const available = body.template_options ?? [];
       if (available.some((item) => item.key === current)) return current;
@@ -649,7 +654,7 @@ export default function WhatsAppInboxPage() {
                           >
                             {templateOptions.map((option) => (
                               <option key={option.key} value={option.key}>
-                                {option.label} · {option.template}
+                                {option.template} · {option.language_code}
                               </option>
                             ))}
                           </select>
@@ -663,9 +668,28 @@ export default function WhatsAppInboxPage() {
                           />
                         </label>
                       </div>
+                      {templateFetchError ? (
+                        <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                          Template Meta non caricati: {templateFetchError}
+                        </div>
+                      ) : null}
                       {selectedTemplate ? (
                         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                          {selectedTemplate.description ?? "Template del tenant selezionato."} Inserisci sotto le variabili nell'ordine richiesto da Meta, una per riga.
+                          <p>
+                            Template Meta live. Stato: <span className="font-semibold">{selectedTemplate.status}</span>
+                            {selectedTemplate.category ? ` · Categoria: ${selectedTemplate.category}` : ""}
+                            {selectedTemplate.is_tenant_default ? " · Default tenant" : ""}
+                            {selectedTemplate.is_tenant_arrival ? " · Template arrivi tenant" : ""}
+                          </p>
+                          <p className="mt-1">
+                            Variabili BODY richieste: <span className="font-semibold">{selectedTemplate.body_parameter_count}</span>
+                            {selectedTemplate.header_format ? ` · Header: ${selectedTemplate.header_format}` : ""}
+                          </p>
+                          {selectedTemplate.body_text ? (
+                            <p className="mt-1 whitespace-pre-wrap text-[11px] text-amber-900">
+                              BODY: {selectedTemplate.body_text}
+                            </p>
+                          ) : null}
                         </div>
                       ) : null}
                       <label htmlFor="whatsapp-template-vars" className="block text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">

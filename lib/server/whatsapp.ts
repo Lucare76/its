@@ -64,6 +64,21 @@ export interface SendWhatsAppTextInput {
   text: string;
 }
 
+export interface MetaWhatsAppTemplateComponent {
+  type?: string;
+  format?: string | null;
+  text?: string | null;
+}
+
+export interface MetaWhatsAppTemplateSummary {
+  id: string;
+  name: string;
+  language: string;
+  status: string;
+  category: string | null;
+  components: MetaWhatsAppTemplateComponent[];
+}
+
 export interface WhatsAppEventInsert {
   tenant_id: string;
   service_id: string | null;
@@ -84,6 +99,10 @@ function mustEnv(name: string) {
 
 function whatsappAccessToken() {
   return process.env.WHATSAPP_ACCESS_TOKEN?.trim().replace(/^["']|["']$/g, "") || mustEnv("WHATSAPP_TOKEN");
+}
+
+function whatsappGraphVersion() {
+  return process.env.WHATSAPP_GRAPH_API_VERSION?.trim().replace(/^["']|["']$/g, "") || "v23.0";
 }
 
 export function createAdminClient() {
@@ -270,6 +289,60 @@ async function sendTextMessage(phoneNumberId: string, accessToken: string, toPho
     messageId: payload?.messages?.[0]?.id ?? null,
     error: formattedError
   };
+}
+
+export async function listMetaWhatsAppTemplates() {
+  const businessAccountId = mustEnv("WHATSAPP_BUSINESS_ACCOUNT_ID");
+  const accessToken = whatsappAccessToken();
+  const graphVersion = whatsappGraphVersion();
+
+  const templates: MetaWhatsAppTemplateSummary[] = [];
+  let nextUrl: string | null =
+    `https://graph.facebook.com/${graphVersion}/${businessAccountId}/message_templates?fields=name,status,category,language,components&limit=100`;
+
+  while (nextUrl) {
+    const response = await fetch(nextUrl, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      },
+      cache: "no-store"
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          data?: Array<{
+            id?: string;
+            name?: string;
+            language?: string;
+            status?: string;
+            category?: string | null;
+            components?: MetaWhatsAppTemplateComponent[];
+          }>;
+          paging?: { next?: string };
+          error?: { message?: string };
+        }
+      | null;
+
+    if (!response.ok) {
+      throw new Error(payload?.error?.message ?? `WhatsApp template list failed (${response.status})`);
+    }
+
+    for (const item of payload?.data ?? []) {
+      if (!item.id || !item.name || !item.language || !item.status) continue;
+      templates.push({
+        id: item.id,
+        name: item.name,
+        language: item.language,
+        status: item.status,
+        category: item.category ?? null,
+        components: item.components ?? []
+      });
+    }
+
+    nextUrl = payload?.paging?.next ?? null;
+  }
+
+  return templates;
 }
 
 export async function sendWhatsAppTextMessage(input: SendWhatsAppTextInput) {
