@@ -2,17 +2,27 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { logWhatsAppEvent, normalizeE164, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
+import { matchWhatsAppInboundMessage } from "@/lib/server/whatsapp/matching";
 
 export const runtime = "nodejs";
 
 const patchSchema = z.object({
   thread_id: z.string().uuid(),
-  action: z.enum(["mark_read", "close", "reopen"])
+  action: z.enum(["mark_read", "close", "reopen", "delete"])
 });
 
 const postSchema = z.object({
-  thread_id: z.string().uuid(),
+  thread_id: z.string().uuid().optional(),
+  phone: z.string().trim().optional(),
+  profile_name: z.string().trim().max(120, "Nome troppo lungo").optional(),
   text: z.string().trim().min(1, "Inserisci un messaggio").max(4096, "Messaggio troppo lungo")
+}).superRefine((value, ctx) => {
+  if (!value.thread_id && !value.phone) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Seleziona una conversazione o inserisci un numero."
+    });
+  }
 });
 
 function extractStatusFailureReason(rawStatus: unknown) {
@@ -21,6 +31,81 @@ function extractStatusFailureReason(rawStatus: unknown) {
   if (!error) return null;
   const parts = [error.title, error.message, error.code != null ? `code ${error.code}` : null].filter(Boolean);
   return parts.length > 0 ? parts.join(" - ") : "Invio non consegnato";
+}
+
+async function upsertManualContact(
+  admin: Awaited<ReturnType<typeof authorizePricingRequest>>["admin"],
+  input: { tenantId: string; waId: string; phoneE164: string; profileName: string | null }
+) {
+  const payload = {
+    tenant_id: input.tenantId,
+    wa_id: input.waId,
+    phone_e164: input.phoneE164,
+    profile_name: input.profileName,
+    updated_at: new Date().toISOString()
+  };
+  const { data, error } = await admin
+    .from("whatsapp_contacts")
+    .upsert(payload, { onConflict: "tenant_id,wa_id" })
+    .select("id")
+    .single();
+  if (error) throw error;
+  return data as { id: string };
+}
+
+async function upsertManualThread(
+  admin: Awaited<ReturnType<typeof authorizePricingRequest>>["admin"],
+  input: {
+    tenantId: string;
+    waId: string;
+    phoneE164: string;
+    contactId: string;
+    customerId: string | null;
+    bookingId: string | null;
+    transferId: string | null;
+    matchStatus: "matched" | "needs_review";
+  }
+) {
+  const { data: existing, error: existingError } = await admin
+    .from("whatsapp_threads")
+    .select("id, unread_count")
+    .eq("tenant_id", input.tenantId)
+    .eq("wa_id", input.waId)
+    .maybeSingle();
+  if (existingError) throw existingError;
+
+  const payload = {
+    tenant_id: input.tenantId,
+    wa_id: input.waId,
+    phone_e164: input.phoneE164,
+    contact_id: input.contactId,
+    customer_id: input.customerId,
+    booking_id: input.bookingId,
+    transfer_id: input.transferId,
+    unread_count: Number(existing?.unread_count ?? 0),
+    status: input.matchStatus === "matched" ? "open" : "needs_review",
+    match_status: input.matchStatus,
+    match_suggestions: [],
+    updated_at: new Date().toISOString()
+  };
+
+  const { data, error } = await admin
+    .from("whatsapp_threads")
+    .upsert(payload, { onConflict: "tenant_id,wa_id" })
+    .select("id, tenant_id, wa_id, phone_e164, contact_id, customer_id, booking_id, transfer_id, match_status")
+    .single();
+  if (error) throw error;
+  return data as {
+    id: string;
+    tenant_id: string | null;
+    wa_id: string;
+    phone_e164: string | null;
+    contact_id: string | null;
+    customer_id: string | null;
+    booking_id: string | null;
+    transfer_id: string | null;
+    match_status: string;
+  };
 }
 
 export async function GET(request: NextRequest) {
@@ -136,6 +221,50 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid payload" }, { status: 400 });
   }
 
+  if (parsed.data.action === "delete") {
+    const { data: thread, error: threadError } = await auth.admin
+      .from("whatsapp_threads")
+      .select("id, tenant_id")
+      .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
+      .eq("id", parsed.data.thread_id)
+      .maybeSingle();
+    if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
+    if (!thread?.id) return NextResponse.json({ error: "Conversazione non trovata" }, { status: 404 });
+
+    const { data: messageRows, error: messageRowsError } = await auth.admin
+      .from("whatsapp_messages")
+      .select("wa_message_id")
+      .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
+      .eq("thread_id", thread.id);
+    if (messageRowsError) return NextResponse.json({ error: messageRowsError.message }, { status: 500 });
+
+    const waMessageIds = Array.from(new Set((messageRows ?? []).map((row) => row.wa_message_id).filter(Boolean) as string[]));
+    if (waMessageIds.length > 0) {
+      const { error: statusDeleteError } = await auth.admin
+        .from("whatsapp_message_statuses")
+        .delete()
+        .eq("tenant_id", auth.membership.tenant_id)
+        .in("wa_message_id", waMessageIds);
+      if (statusDeleteError) return NextResponse.json({ error: statusDeleteError.message }, { status: 500 });
+    }
+
+    const { error: messagesDeleteError } = await auth.admin
+      .from("whatsapp_messages")
+      .delete()
+      .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
+      .eq("thread_id", thread.id);
+    if (messagesDeleteError) return NextResponse.json({ error: messagesDeleteError.message }, { status: 500 });
+
+    const { error: threadDeleteError } = await auth.admin
+      .from("whatsapp_threads")
+      .delete()
+      .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
+      .eq("id", thread.id);
+    if (threadDeleteError) return NextResponse.json({ error: threadDeleteError.message }, { status: 500 });
+
+    return NextResponse.json({ ok: true });
+  }
+
   const update =
     parsed.data.action === "mark_read"
       ? { unread_count: 0, updated_at: new Date().toISOString() }
@@ -166,16 +295,57 @@ export async function POST(request: NextRequest) {
   const nowIso = new Date().toISOString();
   const text = parsed.data.text.trim();
 
-  const { data: thread, error: threadError } = await auth.admin
-    .from("whatsapp_threads")
-    .select("id, tenant_id, wa_id, phone_e164, contact_id, customer_id, booking_id, transfer_id, match_status")
-    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
-    .eq("id", parsed.data.thread_id)
-    .maybeSingle();
+  let thread:
+    | {
+        id: string;
+        tenant_id: string | null;
+        wa_id: string;
+        phone_e164: string | null;
+        contact_id: string | null;
+        customer_id: string | null;
+        booking_id: string | null;
+        transfer_id: string | null;
+        match_status: string;
+      }
+    | null = null;
 
-  if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
-  if (!thread?.wa_id) {
-    return NextResponse.json({ error: "Conversazione non trovata" }, { status: 404 });
+  if (parsed.data.thread_id) {
+    const { data: existingThread, error: threadError } = await auth.admin
+      .from("whatsapp_threads")
+      .select("id, tenant_id, wa_id, phone_e164, contact_id, customer_id, booking_id, transfer_id, match_status")
+      .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+      .eq("id", parsed.data.thread_id)
+      .maybeSingle();
+    if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
+    if (!existingThread?.wa_id) {
+      return NextResponse.json({ error: "Conversazione non trovata" }, { status: 404 });
+    }
+    thread = existingThread;
+  } else {
+    const normalizedPhone = normalizeE164(parsed.data.phone ?? "");
+    const waId = normalizedPhone.replace(/^\+/, "");
+    const match = await matchWhatsAppInboundMessage(auth.admin, {
+      waId,
+      phoneE164: normalizedPhone,
+      textBody: text,
+      timestamp: null
+    });
+    const contact = await upsertManualContact(auth.admin, {
+      tenantId,
+      waId,
+      phoneE164: normalizedPhone,
+      profileName: parsed.data.profile_name ?? null
+    });
+    thread = await upsertManualThread(auth.admin, {
+      tenantId,
+      waId,
+      phoneE164: normalizedPhone,
+      contactId: contact.id,
+      customerId: match.tenantId === tenantId ? match.customerId : null,
+      bookingId: match.tenantId === tenantId ? match.bookingId : null,
+      transferId: match.tenantId === tenantId ? match.transferId : null,
+      matchStatus: match.tenantId === tenantId && match.status === "matched" ? "matched" : "needs_review"
+    });
   }
 
   const targetPhone = normalizeE164(thread.wa_id);

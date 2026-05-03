@@ -109,6 +109,9 @@ export default function WhatsAppInboxPage() {
   const [filter, setFilter] = useState<(typeof filters)[number]["value"]>("open");
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
+  const [newChatMode, setNewChatMode] = useState(false);
+  const [newChatPhone, setNewChatPhone] = useState("");
+  const [newChatName, setNewChatName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -124,6 +127,7 @@ export default function WhatsAppInboxPage() {
         .find((message) => message.direction === "outbound" && message.status === "failed") ?? null,
     [messages]
   );
+  const composerEnabled = Boolean(selectedThreadId) || newChatMode;
 
   const load = useCallback(async (nextThreadId?: string | null) => {
     setLoading(true);
@@ -191,8 +195,35 @@ export default function WhatsAppInboxPage() {
     setBusyAction(null);
   };
 
-  const sendReply = async () => {
+  const deleteChat = async () => {
     if (!selectedThreadId) return;
+    const confirmed = window.confirm("Vuoi eliminare questa chat? Verranno rimossi thread e messaggi dallo storico.");
+    if (!confirmed) return;
+    const token = await getAccessToken();
+    if (!token) return;
+    setBusyAction("delete");
+    setError("");
+    const response = await fetch("/api/ops/whatsapp-inbox", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ thread_id: selectedThreadId, action: "delete" })
+    });
+    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    if (!response.ok || !body?.ok) {
+      setError(body?.error ?? "Eliminazione chat non riuscita.");
+    } else {
+      setDraft("");
+      setSelectedThreadId(null);
+      await load(null);
+    }
+    setBusyAction(null);
+  };
+
+  const sendReply = async () => {
+    if (!composerEnabled) return;
     const text = draft.trim();
     if (!text) {
       setError("Inserisci un messaggio prima di inviare.");
@@ -211,14 +242,25 @@ export default function WhatsAppInboxPage() {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ thread_id: selectedThreadId, text })
+      body: JSON.stringify(
+        newChatMode
+          ? { phone: newChatPhone, profile_name: newChatName, text }
+          : { thread_id: selectedThreadId, text }
+      )
     });
     const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
     if (!response.ok || !body?.ok) {
       setError(body?.error ?? "Invio messaggio non riuscito.");
     } else {
       setDraft("");
-      await load(selectedThreadId);
+      if (newChatMode) {
+        setNewChatMode(false);
+        setNewChatPhone("");
+        setNewChatName("");
+        await load(null);
+      } else {
+        await load(selectedThreadId);
+      }
     }
     setBusyAction(null);
   };
@@ -256,12 +298,26 @@ export default function WhatsAppInboxPage() {
             </button>
           ))}
         </div>
-        <input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          className="input-saas w-full lg:w-80"
-          placeholder="Cerca nome, telefono, pratica, hotel"
-        />
+        <div className="flex w-full flex-col gap-2 lg:w-auto lg:flex-row">
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            className="input-saas w-full lg:w-80"
+            placeholder="Cerca nome, telefono, pratica, hotel"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setNewChatMode(true);
+              setSelectedThreadId(null);
+              setDraft("");
+              setError("");
+            }}
+            className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
+          >
+            Nuovo messaggio
+          </button>
+        </div>
       </div>
 
       {error ? (
@@ -282,7 +338,10 @@ export default function WhatsAppInboxPage() {
                 <button
                   key={thread.id}
                   type="button"
-                  onClick={() => void load(thread.id)}
+                  onClick={() => {
+                    setNewChatMode(false);
+                    void load(thread.id);
+                  }}
                   className={`block w-full border-b border-slate-100 px-4 py-3 text-left transition ${
                     active ? "bg-slate-900 text-white" : "bg-white hover:bg-slate-50"
                   }`}
@@ -314,50 +373,77 @@ export default function WhatsAppInboxPage() {
         </div>
 
         <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          {selectedThread ? (
+          {selectedThread || newChatMode ? (
             <>
               <div className="border-b border-slate-100 px-4 py-3">
                 <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                   <div>
                     <p className="text-sm font-semibold text-slate-900">
-                      {selectedThread.whatsapp_contacts?.profile_name || selectedThread.phone_e164 || selectedThread.wa_id}
+                      {newChatMode
+                        ? "Nuovo messaggio WhatsApp"
+                        : selectedThread?.whatsapp_contacts?.profile_name || selectedThread?.phone_e164 || selectedThread?.wa_id}
                     </p>
                     <p className="text-xs text-slate-500">
-                      {selectedThread.service
-                        ? `${selectedThread.service.customer_name ?? "Cliente"} · ${selectedThread.service.date ?? ""} ${String(selectedThread.service.time ?? "").slice(0, 5)}`
-                        : "Nessuna prenotazione associata"}
+                      {newChatMode
+                        ? "Invia un messaggio a un numero che non ha ancora scritto in chat."
+                        : selectedThread?.service
+                          ? `${selectedThread.service.customer_name ?? "Cliente"} · ${selectedThread.service.date ?? ""} ${String(selectedThread.service.time ?? "").slice(0, 5)}`
+                          : "Nessuna prenotazione associata"}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  {!newChatMode && selectedThread ? (
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void runAction("mark_read")}
+                        disabled={busyAction !== null}
+                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Segna come letto
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void runAction(selectedThread.status === "closed" ? "reopen" : "close")}
+                        disabled={busyAction !== null}
+                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        {selectedThread.status === "closed" ? "Riapri" : "Chiudi"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void deleteChat()}
+                        disabled={busyAction !== null}
+                        className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                      >
+                        Elimina chat
+                      </button>
+                      <button
+                        type="button"
+                        disabled
+                        title="TODO: associazione manuale in step successivo"
+                        className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 opacity-70"
+                      >
+                        Associa a prenotazione
+                      </button>
+                    </div>
+                  ) : (
                     <button
                       type="button"
-                      onClick={() => void runAction("mark_read")}
-                      disabled={busyAction !== null}
-                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                      onClick={() => {
+                        setNewChatMode(false);
+                        setNewChatPhone("");
+                        setNewChatName("");
+                        setDraft("");
+                      }}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                     >
-                      Segna come letto
+                      Annulla nuovo
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => void runAction(selectedThread.status === "closed" ? "reopen" : "close")}
-                      disabled={busyAction !== null}
-                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                    >
-                      {selectedThread.status === "closed" ? "Riapri" : "Chiudi"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled
-                      title="TODO: associazione manuale in step successivo"
-                      className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 opacity-70"
-                    >
-                      Associa a prenotazione
-                    </button>
-                  </div>
+                  )}
                 </div>
-                {selectedThread.match_status !== "matched" ? (
+                {!newChatMode && selectedThread?.match_status !== "matched" ? (
                   <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    Messaggio non associato con certezza. Suggerimenti: {selectedThread.match_suggestions?.length ?? 0}.
+                    Messaggio non associato con certezza. Suggerimenti: {selectedThread?.match_suggestions?.length ?? 0}.
                   </div>
                 ) : null}
               </div>
@@ -392,12 +478,38 @@ export default function WhatsAppInboxPage() {
                   );
                 })}
                 {messages.length === 0 ? (
-                  <div className="py-16 text-center text-sm text-slate-400">Seleziona una conversazione.</div>
+                  <div className="py-16 text-center text-sm text-slate-400">
+                    {newChatMode ? "La nuova conversazione apparira qui dopo il primo invio." : "Seleziona una conversazione."}
+                  </div>
                 ) : null}
               </div>
 
               <div className="border-t border-slate-100 bg-white px-4 py-3">
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  {newChatMode ? (
+                    <div className="mb-3 grid gap-3 md:grid-cols-2">
+                      <label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        Numero WhatsApp
+                        <input
+                          data-no-uppercase
+                          value={newChatPhone}
+                          onChange={(event) => setNewChatPhone(event.target.value)}
+                          placeholder="+39 333 1234567"
+                          className="input-saas mt-2 w-full"
+                        />
+                      </label>
+                      <label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        Nome contatto
+                        <input
+                          data-no-uppercase
+                          value={newChatName}
+                          onChange={(event) => setNewChatName(event.target.value)}
+                          placeholder="Nome cliente"
+                          className="input-saas mt-2 w-full"
+                        />
+                      </label>
+                    </div>
+                  ) : null}
                   {latestFailedOutbound ? (
                     <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
                       Ultima risposta non consegnata: {latestFailedOutbound.failure_reason ?? "verifica numero o configurazione WhatsApp."}
@@ -453,7 +565,7 @@ export default function WhatsAppInboxPage() {
                     <button
                       type="button"
                       onClick={() => void sendReply()}
-                      disabled={busyAction !== null || !draft.trim()}
+                      disabled={busyAction !== null || !draft.trim() || (newChatMode && !newChatPhone.trim())}
                       className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                     >
                       {busyAction === "reply" ? "Invio..." : "Invia risposta"}
@@ -463,8 +575,8 @@ export default function WhatsAppInboxPage() {
               </div>
             </>
           ) : (
-            <div className="flex flex-1 items-center justify-center text-sm text-slate-400">
-              Nessuna conversazione selezionata.
+            <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-slate-400">
+              {newChatMode ? "Inserisci numero e messaggio per avviare una nuova conversazione WhatsApp." : "Nessuna conversazione selezionata."}
             </div>
           )}
         </div>

@@ -11,6 +11,7 @@ type ServiceRow = {
   id: string;
   customer_name: string | null;
   phone: string | null;
+  phone_e164: string | null;
   pax: number | null;
   time: string | null;
   notes: string | null;
@@ -27,6 +28,8 @@ type ServiceRow = {
   direction: string | null;
   booking_service_kind: string | null;
   service_type_code: string | null;
+  reminder_status?: string | null;
+  sent_at?: string | null;
 };
 type HotelRow = { id: string; name: string };
 type AgencyRow = { id: string; name: string };
@@ -86,6 +89,8 @@ export default function ServiceEditPage() {
   const [qrLoading, setQrLoading] = useState(false);
   const [qrMessage, setQrMessage] = useState<string | null>(null);
   const [qrBusy, setQrBusy] = useState<"generate" | "pdf" | "whatsapp" | null>(null);
+  const [whatsAppBusy, setWhatsAppBusy] = useState(false);
+  const [whatsAppMessage, setWhatsAppMessage] = useState<string | null>(null);
 
   // Inline hotel creation
   const [addingHotel, setAddingHotel] = useState(false);
@@ -212,7 +217,7 @@ export default function ServiceEditPage() {
       const [svcRes, hotelsRes, agenciesRes] = await Promise.all([
         supabase
           .from("services")
-          .select("id, customer_name, phone, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, transport_code, direction, booking_service_kind, service_type_code")
+          .select("id, customer_name, phone, phone_e164, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, transport_code, direction, booking_service_kind, service_type_code, reminder_status, sent_at")
           .eq("id", id)
           .eq("tenant_id", session.tenantId)
           .maybeSingle(),
@@ -311,6 +316,28 @@ export default function ServiceEditPage() {
     if (err) { setError(err.message); return; }
     setSaved(true);
     setTimeout(() => router.back(), 1200);
+  };
+
+  const sendWhatsAppReminder = async () => {
+    if (!service?.id || !accessToken) return;
+    setWhatsAppBusy(true);
+    setWhatsAppMessage(null);
+    const response = await fetch("/api/whatsapp/send", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ service_id: service.id })
+    });
+    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; sent_at?: string } | null;
+    setWhatsAppBusy(false);
+    if (!response.ok || !body?.ok) {
+      setWhatsAppMessage(body?.error ?? "Invio WhatsApp non riuscito.");
+      return;
+    }
+    setWhatsAppMessage("Messaggio WhatsApp inviato.");
+    setService((current) => current ? { ...current, reminder_status: "sent", sent_at: body.sent_at ?? new Date().toISOString() } : current);
   };
 
   if (loading) return (
@@ -450,6 +477,14 @@ export default function ServiceEditPage() {
         </div>
 
         <div className="flex justify-end gap-3 pt-2">
+          <button
+            type="button"
+            onClick={() => void sendWhatsAppReminder()}
+            disabled={whatsAppBusy || !(service.phone_e164 || service.phone)}
+            className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {whatsAppBusy ? "Invio WhatsApp..." : "Invia WhatsApp"}
+          </button>
           <button type="button" onClick={() => router.back()} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
             Annulla
           </button>
@@ -457,6 +492,8 @@ export default function ServiceEditPage() {
             {saving ? "Salvataggio..." : "Salva modifiche"}
           </button>
         </div>
+        {whatsAppMessage ? <p className="text-xs text-slate-600">{whatsAppMessage}</p> : null}
+        {service.sent_at ? <p className="text-xs text-slate-500">Ultimo invio WhatsApp: {new Date(service.sent_at).toLocaleString("it-IT")}</p> : null}
 
         {isBusBooking && (
           <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
