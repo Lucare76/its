@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
           .select("id, label, capacity, vehicle_size")
           .eq("tenant_id", tenantId)
           .eq("active", true)
-          .order("capacity"),
+          .order("capacity", { ascending: false }),
         auth.admin.from("driver_daily_availability")
           .select("driver_user_id, available, available_from, available_to, notes")
           .eq("tenant_id", tenantId)
