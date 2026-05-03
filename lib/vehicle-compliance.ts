@@ -8,7 +8,7 @@ export const COMPLIANCE_STATUS_RANK: Record<ComplianceStatus, number> = {
   ok: 4,
 };
 
-export const INSURANCE_GRACE_DAYS = 14;
+export const INSURANCE_GRACE_DAYS = 15;
 export const WARN_DAYS = 60;
 export const INSURANCE_WARN_WINDOW_DAYS = 61;
 
@@ -51,6 +51,20 @@ export function buildStatusLabel(daysLeft: number): string {
   if (daysLeft < 0) return `SCADUTO da ${Math.abs(daysLeft)} giorni`;
   if (daysLeft === 0) return "SCADE OGGI";
   return `Scade tra ${daysLeft} giorn${daysLeft === 1 ? "o" : "i"}`;
+}
+
+/**
+ * Stato assicurazione con proroga di 15 giorni (art. 170-bis CdA).
+ * expired solo dopo expiry + INSURANCE_GRACE_DAYS; critical se in proroga o ≤7 gg.
+ */
+export function insuranceExpiryStatus(expiryDate: string, today: string): ComplianceStatus {
+  const daysToNominal = diffDays(today, expiryDate);
+  const graceDeadline = addDays(expiryDate, INSURANCE_GRACE_DAYS);
+  const daysToGrace = diffDays(today, graceDeadline);
+  if (daysToGrace < 0) return "expired";
+  if (daysToNominal <= 7) return "critical";
+  if (daysToNominal <= 30) return "warning";
+  return "ok";
 }
 
 /**

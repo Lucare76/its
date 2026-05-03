@@ -117,6 +117,7 @@ type GracePeriod = {
 
 const COMPLIANCE_TYPE_LABELS: Record<string, string> = {
   insurance: "Assicurazione",
+  insurance_grace: "Proroga assicurazione (+15 gg)",
   inspection: "Collaudo",
   tachograph: "Tachigrafo",
   extinguisher: "Estintore",
@@ -242,6 +243,12 @@ export default function ScadenzePage() {
     return { year: now.getFullYear(), month: now.getMonth() };
   });
   const [calendarDay, setCalendarDay] = useState<number | null>(null);
+
+  // Export modal
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportVehicleIds, setExportVehicleIds] = useState<Set<string>>(new Set());
+  const [exportDateFrom, setExportDateFrom] = useState("");
+  const [exportDateTo, setExportDateTo] = useState("");
 
   // Grace periods modal
   const [showGraceModal, setShowGraceModal] = useState(false);
@@ -461,6 +468,63 @@ export default function ScadenzePage() {
     setStatusFilter((prev) => prev === s ? "all" : s);
   };
 
+  const openExportModal = useCallback(() => {
+    setExportVehicleIds(new Set(filtered.map((i) => i.vehicle_id)));
+    setExportDateFrom("");
+    setExportDateTo("");
+    setShowExportModal(true);
+  }, [filtered]);
+
+  const handleExport = useCallback(() => {
+    const rows = items.filter((item) => item.active && exportVehicleIds.has(item.vehicle_id));
+    const exportRows = (exportDateFrom || exportDateTo)
+      ? rows.filter((item) => {
+          const dates = [item.insurance?.expiry_date, item.inspection?.expiry_date, item.extinguisher?.expiry_date, item.tachograph?.expiry_date].filter((d): d is string => !!d);
+          return dates.some((d) => (!exportDateFrom || d >= exportDateFrom) && (!exportDateTo || d <= exportDateTo));
+        })
+      : rows;
+
+    const header = [
+      "Mezzo", "Targa", "Capienza",
+      "Assicurazione scadenza", "Assicurazione gg", "Assicurazione stato",
+      "Collaudo scadenza", "Collaudo gg", "Collaudo stato",
+      "Estintori scadenza", "Estintori gg", "Estintori stato",
+      "Tachigrafo scadenza", "Tachigrafo gg", "Tachigrafo stato",
+      "Stato generale",
+    ];
+    const csvRows = exportRows.map((item) => [
+      item.label,
+      item.plate ?? "",
+      item.capacity?.toString() ?? "",
+      item.insurance?.expiry_date ?? "",
+      item.insurance?.days_left?.toString() ?? "",
+      item.insurance?.status ?? "missing",
+      item.inspection?.expiry_date ?? "",
+      item.inspection?.days_left?.toString() ?? "",
+      item.inspection?.status ?? "missing",
+      item.extinguisher?.expiry_date ?? "",
+      item.extinguisher?.days_left?.toString() ?? "",
+      item.extinguisher?.status ?? "missing",
+      item.tachograph?.expiry_date ?? "",
+      item.tachograph?.days_left?.toString() ?? "",
+      item.tachograph?.status ?? "missing",
+      item.worst_status,
+    ]);
+    const csv = [header, ...csvRows]
+      .map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(","))
+      .join("\r\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scadenze-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setShowExportModal(false);
+  }, [items, exportVehicleIds, exportDateFrom, exportDateTo]);
+
   const loadGracePeriods = useCallback(async () => {
     if (!supabase) return;
     setGraceLoading(true);
@@ -515,6 +579,16 @@ export default function ScadenzePage() {
           if (!map[day]) map[day] = [];
           map[day].push({ label: item.label, plate: item.plate, type, status: entry.status });
         }
+        // Insurance: add a second dot for the grace deadline (+15 days)
+        if (type === "insurance") {
+          const gd = new Date(entry.expiry_date + "T12:00:00Z");
+          gd.setUTCDate(gd.getUTCDate() + 15);
+          if (gd.getUTCFullYear() === year && gd.getUTCMonth() === month) {
+            const graceDay = gd.getUTCDate();
+            if (!map[graceDay]) map[graceDay] = [];
+            map[graceDay].push({ label: item.label, plate: item.plate, type: "insurance_grace", status: entry.status });
+          }
+        }
       }
     }
     return map;
@@ -522,6 +596,7 @@ export default function ScadenzePage() {
 
   const CAL_TYPE_COLOR: Record<string, string> = {
     insurance: "bg-rose-400",
+    insurance_grace: "bg-rose-200",
     inspection: "bg-blue-400",
     extinguisher: "bg-orange-400",
     tachograph: "bg-emerald-500",
@@ -625,6 +700,14 @@ export default function ScadenzePage() {
                 Calendario
               </button>
             </div>
+            {/* Export button */}
+            <button
+              type="button"
+              onClick={openExportModal}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              ↓ Esporta
+            </button>
             {/* Grace periods button */}
             <button
               type="button"
@@ -854,6 +937,73 @@ export default function ScadenzePage() {
           </SectionCard>
         </>
       ) : null}
+
+      {/* Export modal */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="text-base font-bold text-slate-900 mb-1">Esporta scadenze</h2>
+            <p className="text-xs text-slate-500 mb-4">Seleziona i mezzi e l'intervallo di scadenza da esportare.</p>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label className="label text-xs">Scadenza dal</label>
+                <input type="date" className="input text-sm" value={exportDateFrom} onChange={(e) => setExportDateFrom(e.target.value)} />
+              </div>
+              <div>
+                <label className="label text-xs">al</label>
+                <input type="date" className="input text-sm" value={exportDateTo} onChange={(e) => setExportDateTo(e.target.value)} />
+              </div>
+            </div>
+            <div className="mb-5">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-semibold text-slate-700">Mezzi ({exportVehicleIds.size} selezionati)</div>
+                <div className="flex gap-3">
+                  <button type="button" onClick={() => setExportVehicleIds(new Set(filtered.map((i) => i.vehicle_id)))} className="text-xs text-blue-600 hover:underline">Tutti</button>
+                  <button type="button" onClick={() => setExportVehicleIds(new Set())} className="text-xs text-slate-400 hover:underline">Nessuno</button>
+                </div>
+              </div>
+              <div className="max-h-48 overflow-y-auto space-y-0.5 rounded-xl border border-slate-200 p-2">
+                {filtered.map((item) => (
+                  <label key={item.vehicle_id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-50 cursor-pointer text-sm">
+                    <input
+                      type="checkbox"
+                      checked={exportVehicleIds.has(item.vehicle_id)}
+                      onChange={(e) => setExportVehicleIds((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(item.vehicle_id); else next.delete(item.vehicle_id);
+                        return next;
+                      })}
+                      className="rounded border-slate-300"
+                    />
+                    <span className="font-medium text-slate-800">{item.label}</span>
+                    {item.plate && <span className="text-xs font-mono text-slate-400">{item.plate}</span>}
+                    <span className={`ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_CELL[item.worst_status]}`}>
+                      {STATUS_LABEL[item.worst_status]}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleExport}
+                disabled={exportVehicleIds.size === 0}
+                className="btn-primary flex-1 disabled:opacity-50"
+              >
+                Scarica CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-500 hover:bg-slate-50"
+              >
+                Annulla
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Grace periods modal */}
       {showGraceModal && (

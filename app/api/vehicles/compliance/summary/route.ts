@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { diffDays, expiryStatus, inspectionExpiryStatus, worstStatus } from "@/lib/vehicle-compliance";
+import { diffDays, expiryStatus, inspectionExpiryStatus, insuranceExpiryStatus, worstStatus } from "@/lib/vehicle-compliance";
 
 export const runtime = "nodejs";
 
@@ -69,8 +69,9 @@ export async function GET(request: NextRequest) {
     const tach = tachographMap.get(v.id) ?? null;
 
     const insuranceDays = insurance ? diffDays(today, insurance.expiry_date) : null;
+    const insuranceStatus = insurance ? insuranceExpiryStatus(insurance.expiry_date, today) : ("missing" as const);
     const inspectionDays = inspection ? diffDays(today, inspection.expiry_date) : null;
-    const inspectionStatus = inspection ? inspectionExpiryStatus(inspection.expiry_date, today) : "missing";
+    const inspectionStatus = inspection ? inspectionExpiryStatus(inspection.expiry_date, today) : ("missing" as const);
     const extDays = ext ? diffDays(today, ext.expiry_date) : null;
     const tachDays = tach ? diffDays(today, tach.expiry_date) : null;
 
@@ -96,7 +97,7 @@ export async function GET(request: NextRequest) {
             expiry_date: insurance.expiry_date,
             company: insurance.company,
             days_left: insuranceDays,
-            status: expiryStatus(insuranceDays),
+            status: insuranceStatus,
           }
         : null,
       inspection: inspection
@@ -125,7 +126,7 @@ export async function GET(request: NextRequest) {
       worst_status: overrideActive
         ? "ok"
         : worstStatus([
-            expiryStatus(insuranceDays),
+            insuranceStatus,
             inspectionStatus,
             expiryStatus(extDays),
             expiryStatus(tachDays),
