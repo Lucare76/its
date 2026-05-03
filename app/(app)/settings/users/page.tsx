@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { PageHeader, SectionCard } from "@/components/ui";
 import { capabilityRoleMap, type AppCapability } from "@/lib/rbac";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { UserRole } from "@/lib/types";
@@ -118,6 +119,12 @@ function roleBadgeTone(role: UserRole) {
   return "bg-amber-100 text-amber-800";
 }
 
+function statusBadgeTone(suspended?: boolean) {
+  return suspended
+    ? "bg-amber-100 text-amber-800 ring-1 ring-amber-200"
+    : "bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200";
+}
+
 export default function SettingsUsersPage() {
   const [memberships, setMemberships] = useState<MembershipRow[]>([]);
   const [roleCapabilityOverrides, setRoleCapabilityOverrides] = useState<RoleCapabilityOverrideRow[]>([]);
@@ -144,6 +151,14 @@ export default function SettingsUsersPage() {
       }),
     [memberships]
   );
+
+  const userStats = useMemo(() => {
+    const total = memberships.length;
+    const active = memberships.filter((item) => !item.suspended).length;
+    const suspended = memberships.filter((item) => item.suspended).length;
+    const admins = memberships.filter((item) => item.role === "admin" || item.role === "supervisor").length;
+    return { total, active, suspended, admins, pending: pendingAccessRequests.length };
+  }, [memberships, pendingAccessRequests]);
 
   useEffect(() => {
     let active = true;
@@ -514,18 +529,45 @@ export default function SettingsUsersPage() {
 
   return (
     <section className="space-y-4">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold text-text">Impostazioni utenti (Admin)</h1>
-        <p className="text-sm text-muted">{message}</p>
+      <PageHeader
+        title="Utenti del tenant"
+        subtitle="Gestisci accessi, ruoli, permessi e richieste in approvazione da un'unica control room."
+        breadcrumbs={[
+          { label: "Impostazioni", href: "/settings/tenant" },
+          { label: "Utenti" },
+        ]}
+        badge={
+          <span className="rounded-full border border-slate-200 bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            Admin area
+          </span>
+        }
+      />
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {[
+          { label: "Utenti totali", value: userStats.total, tone: "text-slate-900", bg: "bg-white" },
+          { label: "Attivi", value: userStats.active, tone: "text-emerald-700", bg: "bg-emerald-50/80" },
+          { label: "Sospesi", value: userStats.suspended, tone: "text-amber-700", bg: "bg-amber-50/80" },
+          { label: "Admin + Supervisor", value: userStats.admins, tone: "text-sky-700", bg: "bg-sky-50/80" },
+          { label: "Richieste pending", value: userStats.pending, tone: "text-violet-700", bg: "bg-violet-50/80" },
+        ].map((stat) => (
+          <div key={stat.label} className={`card p-4 ${stat.bg}`}>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">{stat.label}</p>
+            <p className={`mt-2 text-3xl font-bold tracking-[-0.03em] ${stat.tone}`}>{stat.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white/75 px-4 py-3 text-sm text-slate-600 shadow-sm backdrop-blur">
+        {message}
       </div>
 
       <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.08fr)_minmax(440px,0.92fr)]">
-        <article className="card p-4 sm:p-5">
-          <div className="mb-4">
-            <h2 className="text-lg font-semibold">Nuovo utente</h2>
-            <p className="text-sm text-muted">Crea accessi interni o agenzia senza passare dall&apos;onboarding tecnico.</p>
-          </div>
-
+        <SectionCard
+          title="Nuovo utente"
+          subtitle="Crea accessi interni o agenzia senza passare dall'onboarding tecnico."
+          className="bg-white/90"
+        >
           <form onSubmit={onSubmit} className="grid gap-4 md:grid-cols-2">
             <label className="grid gap-1 md:col-span-2">
               <span className="text-sm font-medium text-text">Nome completo</span>
@@ -596,14 +638,13 @@ export default function SettingsUsersPage() {
               </button>
             </div>
           </form>
-        </article>
+        </SectionCard>
 
-        <article className="card p-4 sm:p-5">
-          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">Permessi per ruolo</h2>
-              <p className="text-sm text-muted">Gradi permesso semplici e leggibili, coerenti con le funzioni del gestionale.</p>
-            </div>
+        <SectionCard
+          title="Permessi per ruolo"
+          subtitle="Gradi permesso semplici e leggibili, coerenti con le funzioni del gestionale."
+          className="bg-white/90"
+          actions={
             <button
               type="button"
               className="btn-secondary w-full text-sm sm:w-auto"
@@ -612,7 +653,8 @@ export default function SettingsUsersPage() {
             >
               {permissionsExpanded ? "Riduci" : "Espandi"}
             </button>
-          </div>
+          }
+        >
 
           <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-900">
             <span className="font-semibold">Ruolo Agenzia:</span> accesso limitato a <span className="font-semibold">Prenotazioni agenzia</span> e alla sola area dedicata. Non puo entrare nei moduli interni.
@@ -622,7 +664,7 @@ export default function SettingsUsersPage() {
             <>
               <div className="space-y-3">
                 {roleDescriptions.map((item) => (
-                  <article key={item.role} className="rounded-2xl border border-border bg-surface/80 p-3">
+                  <article key={item.role} className="rounded-2xl border border-border bg-surface/80 p-4 shadow-sm">
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="text-sm font-semibold text-text">{item.label}</h3>
                       <span className={`rounded-full px-2 py-1 text-[11px] uppercase tracking-[0.12em] ${roleBadgeTone(item.role)}`}>{item.role}</span>
@@ -742,23 +784,22 @@ export default function SettingsUsersPage() {
               La matrice completa dei permessi e nascosta. Usa <span className="font-semibold text-text">Espandi</span> per consultare o modificare i moduli per ruolo.
             </div>
           )}
-        </article>
+        </SectionCard>
       </div>
 
-      <article className="card p-4 sm:p-5">
-        <div className="mb-4">
-          <h2 className="text-lg font-semibold">Richieste accesso pending</h2>
-          <p className="text-sm text-muted">Chi si registra resta fuori dal tenant finche un admin non approva il ruolo.</p>
-        </div>
-
+      <SectionCard
+        title="Richieste accesso pending"
+        subtitle="Chi si registra resta fuori dal tenant finche un admin non approva il ruolo."
+        className="bg-white/90"
+      >
         {loading ? (
           <div className="text-sm text-muted">Caricamento richieste...</div>
         ) : pendingAccessRequests.length === 0 ? (
-          <div className="text-sm text-muted">Nessuna richiesta pending.</div>
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-6 text-sm text-muted">Nessuna richiesta pending.</div>
         ) : (
           <div className="grid gap-3 2xl:grid-cols-2">
             {pendingAccessRequests.map((request) => (
-              <article key={`pending-${request.id}`} className="rounded-2xl border border-border bg-white p-4 shadow-sm">
+              <article key={`pending-${request.id}`} className="rounded-3xl border border-border bg-gradient-to-br from-white to-slate-50/90 p-5 shadow-sm">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-base font-semibold text-text">{request.full_name}</p>
@@ -830,37 +871,48 @@ export default function SettingsUsersPage() {
             ))}
           </div>
         )}
-      </article>
+      </SectionCard>
 
-      <article className="card p-4 sm:p-5">
-        <div className="mb-4">
-          <h2 className="text-lg font-semibold">Utenti del tenant</h2>
-          <p className="text-sm text-muted">Elenco attuale degli utenti che lavorano nel tenant attivo.</p>
-        </div>
-
+      <SectionCard
+        title="Utenti del tenant"
+        subtitle="Elenco attuale degli utenti che lavorano nel tenant attivo."
+        className="bg-white/90"
+      >
         {loading ? (
           <div className="text-sm text-muted">Caricamento utenti...</div>
         ) : sortedMemberships.length === 0 ? (
-          <div className="text-sm text-muted">Nessun utente presente nel tenant.</div>
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-6 text-sm text-muted">Nessun utente presente nel tenant.</div>
         ) : (
           <div className="space-y-3">
             {sortedMemberships.map((membership) => (
-              <article key={`tenant-user-${membership.user_id}`} className="rounded-2xl border border-border bg-white p-4 shadow-sm">
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+              <article key={`tenant-user-${membership.user_id}`} className="overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-white to-slate-50/90 p-5 shadow-sm">
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                   <div>
-                    <p className="text-base font-semibold text-text">{membership.full_name}</p>
-                    <p className="mt-1 font-mono text-[11px] text-muted break-all">{membership.user_id}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-lg font-semibold text-text">{membership.full_name}</p>
+                      <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${roleBadgeTone(membership.role)}`}>
+                        {roleSwitchLabel(membership.role)}
+                      </span>
+                      <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusBadgeTone(membership.suspended)}`}>
+                        {membership.suspended ? "Sospeso" : "Attivo"}
+                      </span>
+                    </div>
+                    <p className="mt-2 font-mono text-[11px] text-muted break-all">{membership.user_id}</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`rounded-full px-2 py-1 text-[11px] font-medium uppercase tracking-[0.08em] ${roleBadgeTone(membership.role)}`}>
-                      {roleSwitchLabel(membership.role)}
-                    </span>
-                    <span className="text-sm text-muted">Creato il: <span className="text-text">{formatCreatedAt(membership.created_at)}</span></span>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:min-w-[280px]">
+                    <div className="rounded-2xl border border-slate-200 bg-white/80 px-3 py-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Creato il</p>
+                      <p className="mt-1 text-sm font-medium text-slate-700">{formatCreatedAt(membership.created_at)}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white/80 px-3 py-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Ruolo attuale</p>
+                      <p className="mt-1 text-sm font-medium text-slate-700">{roleSwitchLabel(membership.role)}</p>
+                    </div>
                   </div>
                 </div>
 
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 xl:items-end">
-                  <label className="grid gap-1">
+                <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-12 xl:items-end">
+                  <label className="grid gap-1 xl:col-span-2">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Ruolo</span>
                     <select
                       value={membership.role}
@@ -876,16 +928,10 @@ export default function SettingsUsersPage() {
                     </select>
                   </label>
 
-                  <div className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Stato</span>
-                    <div className="flex flex-wrap items-center gap-2 rounded-xl bg-surface/70 px-3 py-2">
-                      <span
-                        className={
-                          membership.suspended
-                            ? "mt-1 inline-flex rounded-full bg-amber-100 px-2 py-1 text-[11px] font-medium text-amber-800"
-                            : "mt-1 inline-flex rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-800"
-                        }
-                      >
+                  <div className="grid gap-1 xl:col-span-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Stato account</span>
+                    <div className="flex h-[42px] items-center gap-2 rounded-xl border border-slate-200 bg-white/80 px-3">
+                      <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-medium ${statusBadgeTone(membership.suspended)}`}>
                         {membership.suspended ? "Sospeso" : "Attivo"}
                       </span>
                       <button
@@ -899,7 +945,7 @@ export default function SettingsUsersPage() {
                     </div>
                   </div>
 
-                  <label className="grid gap-1">
+                  <label className="grid gap-1 xl:col-span-2">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Nuova password</span>
                     <input
                       type="password"
@@ -911,7 +957,7 @@ export default function SettingsUsersPage() {
                     />
                   </label>
 
-                  <label className="grid gap-1">
+                  <label className="grid gap-1 xl:col-span-2">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Genere</span>
                     <select
                       value={genderDrafts[membership.user_id] ?? ""}
@@ -921,15 +967,15 @@ export default function SettingsUsersPage() {
                     >
                       <option value="">— —</option>
                       <option value="male">Uomo</option>
-                      <option value="female">Donna 🍄</option>
+                      <option value="female">Donna</option>
                     </select>
                   </label>
 
-                  <div className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Salva modifiche</span>
+                  <div className="grid gap-1 xl:col-span-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Salva</span>
                     <button
                       type="button"
-                      className="btn-secondary h-[42px] px-2 py-2 text-xs whitespace-nowrap"
+                      className="btn-primary h-[42px] px-2 py-2 text-xs whitespace-nowrap"
                       disabled={updatingUserId === membership.user_id || (!(passwordDrafts[membership.user_id] ?? "").trim() && !genderDrafts[membership.user_id])}
                       onClick={() => {
                         const pwd = (passwordDrafts[membership.user_id] ?? "").trim();
@@ -946,8 +992,8 @@ export default function SettingsUsersPage() {
                     </button>
                   </div>
 
-                  <div className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Reset via email</span>
+                  <div className="grid gap-1 xl:col-span-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Reset email</span>
                     <button
                       type="button"
                       className="btn-secondary h-[42px] px-2 py-2 text-xs whitespace-nowrap"
@@ -958,11 +1004,11 @@ export default function SettingsUsersPage() {
                     </button>
                   </div>
 
-                  <div className="grid gap-1">
+                  <div className="grid gap-1 xl:col-span-2">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Elimina</span>
                     <button
                       type="button"
-                      className="h-[42px] rounded-xl border border-rose-200 bg-rose-50 px-2 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 whitespace-nowrap"
+                      className="h-[42px] rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 whitespace-nowrap"
                       disabled={updatingUserId === membership.user_id || deletingUserId === membership.user_id}
                       onClick={() => void deleteMembership(membership)}
                     >
@@ -974,7 +1020,7 @@ export default function SettingsUsersPage() {
             ))}
           </div>
         )}
-      </article>
+      </SectionCard>
     </section>
   );
 }
