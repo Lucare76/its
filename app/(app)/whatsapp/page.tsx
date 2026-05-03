@@ -112,6 +112,29 @@ function messageStatusLabel(status: string | null) {
   return "In coda";
 }
 
+function templateLanguageLabel(code: string) {
+  if (code === "it") return "Italiano";
+  if (code === "en") return "English";
+  if (code === "en_US") return "English (US)";
+  return code;
+}
+
+function templateFriendlyLabel(templateName: string) {
+  if (templateName.includes("aeroporto")) return "Aeroporto";
+  if (templateName.includes("stazione")) return "Stazione";
+  if (templateName.includes("medmar")) return "Medmar";
+  if (templateName.includes("snav")) return "SNAV";
+  return templateName.replace(/^its_/, "").replace(/_/g, " ");
+}
+
+function templateTone(templateName: string) {
+  if (templateName.includes("aeroporto")) return "from-sky-500/20 via-cyan-500/10 to-white";
+  if (templateName.includes("stazione")) return "from-amber-500/20 via-orange-500/10 to-white";
+  if (templateName.includes("medmar")) return "from-indigo-500/20 via-blue-500/10 to-white";
+  if (templateName.includes("snav")) return "from-emerald-500/20 via-teal-500/10 to-white";
+  return "from-slate-400/20 via-slate-200/10 to-white";
+}
+
 function buildSuggestedTemplateVariables(thread: ThreadRow | null, template: TemplateOption | null) {
   if (!thread || !template) return [];
   const customer = thread.service?.customer_name ?? thread.whatsapp_contacts?.profile_name ?? thread.phone_e164 ?? thread.wa_id;
@@ -164,6 +187,19 @@ export default function WhatsAppInboxPage() {
     () => templateOptions.find((option) => option.key === selectedTemplateKey) ?? templateOptions[0] ?? null,
     [selectedTemplateKey, templateOptions]
   );
+  const sortedTemplateOptions = useMemo(() => {
+    const approved = templateOptions.filter((option) => option.status === "APPROVED");
+    const source = approved.length > 0 ? approved : templateOptions;
+    return [...source].sort((a, b) => {
+      const aLang = a.language_code === "it" ? 0 : 1;
+      const bLang = b.language_code === "it" ? 0 : 1;
+      if (aLang !== bLang) return aLang - bLang;
+      const aDefault = a.is_tenant_default ? 0 : 1;
+      const bDefault = b.is_tenant_default ? 0 : 1;
+      if (aDefault !== bDefault) return aDefault - bDefault;
+      return a.template.localeCompare(b.template, "it");
+    });
+  }, [templateOptions]);
   const composerEnabled = Boolean(selectedThreadId) || newChatMode;
   const templateVariables = useMemo(
     () => templateVariablesText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
@@ -643,53 +679,113 @@ export default function WhatsAppInboxPage() {
                   </div>
                   {composerMode === "template" ? (
                     <div className="space-y-3">
-                      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
-                        <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                          Template WhatsApp
-                          <select
-                            value={selectedTemplate?.key ?? ""}
-                            onChange={(event) => setSelectedTemplateKey(event.target.value)}
-                            disabled={busyAction === "reply" || templateOptions.length === 0}
-                            className="input-saas mt-2 w-full"
-                          >
-                            {templateOptions.map((option) => (
-                              <option key={option.key} value={option.key}>
-                                {option.template} · {option.language_code}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                          Lingua
-                          <input
-                            value={selectedTemplate?.language_code ?? ""}
-                            readOnly
-                            className="input-saas mt-2 w-full bg-slate-100"
-                          />
-                        </label>
+                      <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+                        <div className="border-b border-slate-200 bg-[linear-gradient(135deg,rgba(255,255,255,1),rgba(240,253,250,1))] px-4 py-4">
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-emerald-700">Template Studio</p>
+                              <h3 className="mt-1 text-lg font-semibold text-slate-900">Selezione rapida, preview immediata</h3>
+                              <p className="mt-1 text-sm text-slate-600">Template approvati ordinati per priorita operativa, con focus sul contenuto vero del messaggio.</p>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                              <div className="rounded-2xl border border-emerald-100 bg-white px-3 py-2">
+                                <div className="font-semibold text-slate-900">{sortedTemplateOptions.length}</div>
+                                <div className="text-slate-500">Visibili</div>
+                              </div>
+                              <div className="rounded-2xl border border-emerald-100 bg-white px-3 py-2">
+                                <div className="font-semibold text-slate-900">{sortedTemplateOptions.filter((item) => item.language_code === "it").length}</div>
+                                <div className="text-slate-500">Italiano</div>
+                              </div>
+                              <div className="rounded-2xl border border-emerald-100 bg-white px-3 py-2">
+                                <div className="font-semibold text-slate-900">{sortedTemplateOptions.filter((item) => item.status === "APPROVED").length}</div>
+                                <div className="text-slate-500">Approved</div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+                          <div className="space-y-2">
+                            {sortedTemplateOptions.map((option) => {
+                              const active = selectedTemplate?.key === option.key;
+                              return (
+                                <button
+                                  key={option.key}
+                                  type="button"
+                                  onClick={() => setSelectedTemplateKey(option.key)}
+                                  disabled={busyAction === "reply"}
+                                  className={`group flex w-full items-start gap-4 rounded-[22px] border px-4 py-4 text-left transition ${
+                                    active
+                                      ? "border-emerald-500 bg-emerald-50 shadow-[0_14px_40px_-28px_rgba(16,185,129,0.65)]"
+                                      : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                                  }`}
+                                >
+                                  <div className={`mt-0.5 h-11 w-11 shrink-0 rounded-2xl bg-gradient-to-br ${templateTone(option.template)} ring-1 ring-black/5`} />
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="text-sm font-semibold text-slate-900">{templateFriendlyLabel(option.template)}</span>
+                                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                        option.language_code === "it" ? "bg-emerald-600 text-white" : "bg-slate-900 text-white"
+                                      }`}>
+                                        {option.language_code.toUpperCase()}
+                                      </span>
+                                      {option.is_tenant_default ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">Default</span> : null}
+                                    </div>
+                                    <div className="mt-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">{option.template}</div>
+                                    <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.12em]">
+                                      <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">{option.status}</span>
+                                      {option.category ? <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">{option.category}</span> : null}
+                                      <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">{option.body_parameter_count} variabili</span>
+                                    </div>
+                                  </div>
+                                  <div className={`pt-1 text-[11px] font-semibold ${active ? "text-emerald-700" : "text-slate-400 group-hover:text-slate-700"}`}>
+                                    {active ? "Attivo" : "Apri"}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {selectedTemplate ? (
+                            <div className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(15,23,42,1),rgba(30,41,59,0.98))] p-5 text-slate-100 shadow-[0_20px_60px_-36px_rgba(15,23,42,0.85)]">
+                              <div className="flex items-start justify-between gap-4">
+                                <div>
+                                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-300">Template Preview</p>
+                                  <h4 className="mt-2 text-lg font-semibold text-white">
+                                    {templateFriendlyLabel(selectedTemplate.template)}
+                                  </h4>
+                                  <p className="mt-1 text-sm text-slate-300">{selectedTemplate.template} · {templateLanguageLabel(selectedTemplate.language_code)}</p>
+                                </div>
+                                <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-200">
+                                  {selectedTemplate.status}
+                                </span>
+                              </div>
+                              <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                                <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                                  <div className="text-slate-400">Variabili BODY</div>
+                                  <div className="mt-1 text-lg font-semibold text-white">{selectedTemplate.body_parameter_count}</div>
+                                </div>
+                                <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                                  <div className="text-slate-400">Header</div>
+                                  <div className="mt-1 text-sm font-semibold text-white">{selectedTemplate.header_format ?? "Nessuno"}</div>
+                                </div>
+                              </div>
+                              <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-300">Body Meta</p>
+                                <p className="whitespace-pre-wrap text-sm leading-6 text-slate-100">
+                                  {selectedTemplate.body_text ?? "Preview del body non disponibile."}
+                                </p>
+                              </div>
+                              <div className="mt-4 flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.12em]">
+                                {selectedTemplate.category ? <span className="rounded-full bg-white/10 px-2 py-1 text-slate-200">{selectedTemplate.category}</span> : null}
+                                {selectedTemplate.is_tenant_default ? <span className="rounded-full bg-amber-400/15 px-2 py-1 text-amber-200">Default tenant</span> : null}
+                                {selectedTemplate.is_tenant_arrival ? <span className="rounded-full bg-sky-400/15 px-2 py-1 text-sky-200">Arrivi tenant</span> : null}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
                       {templateFetchError ? (
                         <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
                           Template Meta non caricati: {templateFetchError}
-                        </div>
-                      ) : null}
-                      {selectedTemplate ? (
-                        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                          <p>
-                            Template Meta live. Stato: <span className="font-semibold">{selectedTemplate.status}</span>
-                            {selectedTemplate.category ? ` · Categoria: ${selectedTemplate.category}` : ""}
-                            {selectedTemplate.is_tenant_default ? " · Default tenant" : ""}
-                            {selectedTemplate.is_tenant_arrival ? " · Template arrivi tenant" : ""}
-                          </p>
-                          <p className="mt-1">
-                            Variabili BODY richieste: <span className="font-semibold">{selectedTemplate.body_parameter_count}</span>
-                            {selectedTemplate.header_format ? ` · Header: ${selectedTemplate.header_format}` : ""}
-                          </p>
-                          {selectedTemplate.body_text ? (
-                            <p className="mt-1 whitespace-pre-wrap text-[11px] text-amber-900">
-                              BODY: {selectedTemplate.body_text}
-                            </p>
-                          ) : null}
                         </div>
                       ) : null}
                       <label htmlFor="whatsapp-template-vars" className="block text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
