@@ -72,11 +72,7 @@ export function insuranceExpiryStatus(expiryDate: string, today: string): Compli
  * fine del mese di scadenza. L'expired scatta solo dopo l'ultimo giorno del mese.
  */
 export function inspectionExpiryStatus(expiryDate: string, today: string): ComplianceStatus {
-  const [ey, em] = expiryDate.slice(0, 7).split("-").map(Number);
-  // new Date(year, month, 0) dà l'ultimo giorno del mese precedente a `month` (0-indexed).
-  // Poiché em è 1-indexed, new Date(ey, em, 0) restituisce l'ultimo giorno del mese em.
-  const lastDay = new Date(ey!, em!, 0).getDate();
-  const endOfExpiryMonth = `${ey}-${String(em).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  const endOfExpiryMonth = getInspectionEffectiveExpiry(expiryDate);
 
   const daysToDeadline = diffDays(today, endOfExpiryMonth);
   const daysToExpiry = diffDays(today, expiryDate);
@@ -89,8 +85,16 @@ export function inspectionExpiryStatus(expiryDate: string, today: string): Compl
 }
 
 /** Scadenza effettiva considerando l'eventuale proroga per tipo documento. */
+export function getInspectionEffectiveExpiry(expiryDate: string): string {
+  const [ey, em] = expiryDate.slice(0, 7).split("-").map(Number);
+  const lastDay = new Date(ey!, em!, 0).getDate();
+  return `${ey}-${String(em).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+}
+
+/** Scadenza effettiva considerando l'eventuale proroga per tipo documento. */
 export function getEffectiveExpiry(docType: string, expiry: string): string {
   if (docType === "Assicurazione") return addDays(expiry, INSURANCE_GRACE_DAYS);
+  if (docType === "Collaudo") return getInspectionEffectiveExpiry(expiry);
   return expiry;
 }
 

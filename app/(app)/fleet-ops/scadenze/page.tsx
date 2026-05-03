@@ -115,6 +115,16 @@ type GracePeriod = {
   grace_days: number;
 };
 
+type CalendarEntry = {
+  vehicleId: string;
+  label: string;
+  plate: string | null;
+  type: string;
+  status: StatusLevel;
+  expiryDate: string;
+  daysLeft: number | null;
+};
+
 const COMPLIANCE_TYPE_LABELS: Record<string, string> = {
   insurance: "Assicurazione",
   insurance_grace: "Proroga assicurazione (+15 gg)",
@@ -128,6 +138,14 @@ const DOC_LABELS: Record<DocType, string> = {
   insurance: "Assicurazione",
   inspection: "Collaudo",
   extinguisher: "Estintori",
+  tachograph: "Tachigrafo",
+};
+
+const CALENDAR_TYPE_SHORT_LABEL: Record<string, string> = {
+  insurance: "Ass.",
+  insurance_grace: "Proroga ass.",
+  inspection: "Collaudo",
+  extinguisher: "Estintore",
   tachograph: "Tachigrafo",
 };
 
@@ -650,10 +668,10 @@ small{font-size:9px;opacity:.75}
     showToast("Proroghe salvate", true);
   }, [gracePeriods, showToast]);
 
-  // Calendar data: list of {day, vehicleLabel, complianceType, status} for current month
+  // Calendar data for the visible month, reused by UI and PDF export.
   const calendarData = useMemo(() => {
     const { year, month } = calendarMonth;
-    const map: Record<number, { label: string; plate: string | null; type: string; status: StatusLevel }[]> = {};
+    const map: Record<number, CalendarEntry[]> = {};
     for (const item of filtered) {
       const types: [string, ComplianceEntry | null][] = [
         ["insurance", item.insurance],
@@ -667,7 +685,15 @@ small{font-size:9px;opacity:.75}
         if (d.getFullYear() === year && d.getMonth() === month) {
           const day = d.getDate();
           if (!map[day]) map[day] = [];
-          map[day].push({ label: item.label, plate: item.plate, type, status: entry.status });
+          map[day].push({
+            vehicleId: item.vehicle_id,
+            label: item.label,
+            plate: item.plate,
+            type,
+            status: entry.status,
+            expiryDate: entry.expiry_date,
+            daysLeft: entry.days_left,
+          });
         }
         // Insurance: add a second dot for the grace deadline (+15 days)
         if (type === "insurance") {
@@ -676,13 +702,93 @@ small{font-size:9px;opacity:.75}
           if (gd.getUTCFullYear() === year && gd.getUTCMonth() === month) {
             const graceDay = gd.getUTCDate();
             if (!map[graceDay]) map[graceDay] = [];
-            map[graceDay].push({ label: item.label, plate: item.plate, type: "insurance_grace", status: entry.status });
+            map[graceDay].push({
+              vehicleId: item.vehicle_id,
+              label: item.label,
+              plate: item.plate,
+              type: "insurance_grace",
+              status: entry.status,
+              expiryDate: gd.toISOString().slice(0, 10),
+              daysLeft: entry.days_left === null ? null : entry.days_left + 15,
+            });
           }
         }
       }
     }
+    for (const day of Object.keys(map)) {
+      map[Number(day)]?.sort((a, b) =>
+        STATUS_RANK[a.status] - STATUS_RANK[b.status]
+        || (a.daysLeft ?? 9999) - (b.daysLeft ?? 9999)
+        || a.label.localeCompare(b.label, "it", { numeric: true, sensitivity: "base" })
+      );
+    }
     return map;
   }, [filtered, calendarMonth]);
+
+  const calendarExportRows = useMemo(() => {
+    return Object.entries(calendarData)
+      .flatMap(([day, entries]) => entries.map((entry) => ({ day: Number(day), ...entry })))
+      .sort((a, b) =>
+        a.day - b.day
+        || STATUS_RANK[a.status] - STATUS_RANK[b.status]
+        || a.label.localeCompare(b.label, "it", { numeric: true, sensitivity: "base" })
+      );
+  }, [calendarData]);
+
+  const handleExportCalendarPDF = useCallback(() => {
+    const { year, month } = calendarMonth;
+    const monthLabel = new Date(year, month, 1).toLocaleDateString("it-IT", { month: "long", year: "numeric" });
+    const BG: Record<StatusLevel, string> = {
+      expired: "#fee2e2", critical: "#ffedd5", warning: "#fef9c3", missing: "#f8fafc", ok: "#dcfce7",
+    };
+    const FG: Record<StatusLevel, string> = {
+      expired: "#be123c", critical: "#c2410c", warning: "#92400e", missing: "#94a3b8", ok: "#15803d",
+    };
+
+    const rows = calendarExportRows.map((entry) => `
+      <tr>
+        <td>${String(entry.day).padStart(2, "0")}/${String(month + 1).padStart(2, "0")}/${year}</td>
+        <td><strong>${entry.label}</strong>${entry.plate ? `<br><span class="mono">${entry.plate}</span>` : ""}</td>
+        <td>${COMPLIANCE_TYPE_LABELS[entry.type] ?? entry.type}</td>
+        <td style="background:${BG[entry.status]};color:${FG[entry.status]};font-weight:700;">${STATUS_LABEL[entry.status]}</td>
+        <td>${formatDate(entry.expiryDate)}</td>
+        <td>${formatDays(entry.daysLeft)}</td>
+      </tr>
+    `).join("");
+
+    const html = `<!DOCTYPE html>
+<html lang="it"><head><meta charset="utf-8">
+<title>Calendario scadenze — ${monthLabel}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;font-size:11px;color:#1e293b;padding:20px}
+h1{font-size:18px;font-weight:800;margin-bottom:4px;text-transform:capitalize}
+.meta{font-size:10px;color:#64748b;margin-bottom:16px}
+table{width:100%;border-collapse:collapse}
+th{background:#f1f5f9;color:#475569;font-size:9px;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;text-align:left;border-bottom:2px solid #e2e8f0}
+td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+.mono{font-family:monospace;font-size:9px;color:#94a3b8}
+@media print{
+  body{padding:10px}
+  @page{size:A4 portrait;margin:12mm}
+  -webkit-print-color-adjust:exact;
+  print-color-adjust:exact
+}
+</style></head><body>
+<h1>Calendario scadenze ${monthLabel}</h1>
+<div class="meta">Generato il ${new Date().toLocaleDateString("it-IT")} alle ${new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })} · ${calendarExportRows.length} scadenz${calendarExportRows.length === 1 ? "a" : "e"}</div>
+<table><thead><tr>
+  <th>Data</th><th>Mezzo</th><th>Documento</th><th>Stato</th><th>Scadenza</th><th>Residuo</th>
+</tr></thead><tbody>${rows || '<tr><td colspan="6">Nessuna scadenza nel mese visibile.</td></tr>'}</tbody></table>
+</body></html>`;
+
+    const win = window.open("", "_blank");
+    if (!win) return;
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    win.print();
+  }, [calendarExportRows, calendarMonth]);
 
   const CAL_TYPE_COLOR: Record<string, string> = {
     insurance: "bg-rose-400",
@@ -827,28 +933,39 @@ small{font-size:9px;opacity:.75}
             const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
             return (
               <>
-                <div className="flex items-center justify-between mb-4">
-                  <button
-                    type="button"
-                    onClick={() => setCalendarMonth((m) => {
-                      const d = new Date(m.year, m.month - 1, 1);
-                      return { year: d.getFullYear(), month: d.getMonth() };
-                    })}
-                    className="rounded-lg border border-slate-200 px-3 py-1 text-sm text-slate-600 hover:bg-slate-50"
-                  >
-                    ‹
-                  </button>
-                  <div className="text-sm font-bold text-slate-800 capitalize">{monthName}</div>
-                  <button
-                    type="button"
-                    onClick={() => setCalendarMonth((m) => {
-                      const d = new Date(m.year, m.month + 1, 1);
-                      return { year: d.getFullYear(), month: d.getMonth() };
-                    })}
-                    className="rounded-lg border border-slate-200 px-3 py-1 text-sm text-slate-600 hover:bg-slate-50"
-                  >
-                    ›
-                  </button>
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center justify-between sm:justify-start sm:gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setCalendarMonth((m) => {
+                        const d = new Date(m.year, m.month - 1, 1);
+                        return { year: d.getFullYear(), month: d.getMonth() };
+                      })}
+                      className="rounded-lg border border-slate-200 px-3 py-1 text-sm text-slate-600 hover:bg-slate-50"
+                    >
+                      ‹
+                    </button>
+                    <div className="text-sm font-bold text-slate-800 capitalize">{monthName}</div>
+                    <button
+                      type="button"
+                      onClick={() => setCalendarMonth((m) => {
+                        const d = new Date(m.year, m.month + 1, 1);
+                        return { year: d.getFullYear(), month: d.getMonth() };
+                      })}
+                      className="rounded-lg border border-slate-200 px-3 py-1 text-sm text-slate-600 hover:bg-slate-50"
+                    >
+                      ›
+                    </button>
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={handleExportCalendarPDF}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                    >
+                      PDF calendario
+                    </button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-7 gap-1 mb-1">
                   {["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"].map((d) => (
@@ -866,24 +983,41 @@ small{font-size:9px;opacity:.75}
                         key={day}
                         type="button"
                         onClick={() => setCalendarDay((prev) => prev === day ? null : day)}
-                        className={`rounded-lg p-1 text-center min-h-[52px] border transition-colors ${
+                        className={`rounded-lg border p-1.5 text-left transition-colors ${
                           isSelected ? "border-blue-400 bg-blue-50" :
                           isToday ? "border-blue-200 bg-blue-50/40" :
                           entries.length > 0 ? "border-slate-200 bg-white hover:bg-slate-50" :
                           "border-transparent hover:bg-slate-50"
                         }`}
                       >
-                        <div className={`text-xs font-semibold mb-1 ${isToday ? "text-blue-600" : "text-slate-700"}`}>{day}</div>
-                        <div className="flex flex-wrap justify-center gap-0.5">
-                          {entries.slice(0, 4).map((e, ei) => (
-                            <span
-                              key={ei}
-                              title={`${e.label} — ${COMPLIANCE_TYPE_LABELS[e.type] ?? e.type}`}
-                              className={`inline-block h-2 w-2 rounded-full ${CAL_TYPE_COLOR[e.type] ?? "bg-slate-400"}`}
-                            />
-                          ))}
-                          {entries.length > 4 && <span className="text-[9px] text-slate-400">+{entries.length - 4}</span>}
+                        <div className="mb-1 flex items-center justify-between">
+                          <div className={`text-xs font-semibold ${isToday ? "text-blue-600" : "text-slate-700"}`}>{day}</div>
+                          {entries.length > 0 && (
+                            <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+                              {entries.length}
+                            </span>
+                          )}
                         </div>
+                        {entries.length > 0 ? (
+                          <div className="space-y-1">
+                            {entries.slice(0, 3).map((e, ei) => (
+                              <div
+                                key={`${e.vehicleId}-${e.type}-${ei}`}
+                                title={`${e.label} — ${COMPLIANCE_TYPE_LABELS[e.type] ?? e.type}`}
+                                className="flex items-start gap-1 rounded-md bg-slate-50 px-1.5 py-1"
+                              >
+                                <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${CAL_TYPE_COLOR[e.type] ?? "bg-slate-400"}`} />
+                                <div className="min-w-0">
+                                  <div className="truncate text-[10px] font-semibold text-slate-700">{e.label}</div>
+                                  <div className="truncate text-[9px] text-slate-500">{CALENDAR_TYPE_SHORT_LABEL[e.type] ?? COMPLIANCE_TYPE_LABELS[e.type] ?? e.type}</div>
+                                </div>
+                              </div>
+                            ))}
+                            {entries.length > 3 && <div className="text-[10px] font-medium text-slate-400">+{entries.length - 3} altre</div>}
+                          </div>
+                        ) : (
+                          <div className="min-h-[56px]" />
+                        )}
                       </button>
                     );
                   })}

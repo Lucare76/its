@@ -293,6 +293,8 @@ export async function POST(request: NextRequest) {
           note:
             docType === "Assicurazione"
               ? `Polizza ${formatDate(expiry)} + proroga 15 giorni => copertura fino al ${formatDate(effectiveExpiryDate)} inclusa`
+              : docType === "Collaudo"
+                ? `Scadenza nominale ${formatDate(expiry)} · regola valida fino al ${formatDate(effectiveExpiryDate)}`
               : undefined,
         });
       }
