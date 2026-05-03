@@ -99,6 +99,10 @@ export function normalizeE164(input: string, defaultCountryCode = "+39") {
   if (compact.startsWith("+")) return compact;
   if (compact.startsWith("00")) return `+${compact.slice(2)}`;
   if (compact.startsWith("0")) return `${defaultCountryCode}${compact.slice(1)}`;
+  const defaultCountryDigits = defaultCountryCode.replace(/[^\d]/g, "");
+  if (defaultCountryDigits && compact.startsWith(defaultCountryDigits) && compact.length >= defaultCountryDigits.length + 6) {
+    return `+${compact}`;
+  }
   return `${defaultCountryCode}${compact}`;
 }
 

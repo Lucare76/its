@@ -141,8 +141,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Conversazione non trovata" }, { status: 404 });
   }
 
+  const targetPhone = normalizeE164(thread.wa_id);
   const sendResult = await sendWhatsAppTextMessage({
-    to: thread.phone_e164 ?? normalizeE164(thread.wa_id),
+    to: targetPhone,
     text
   });
 
