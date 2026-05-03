@@ -525,6 +525,95 @@ export default function ScadenzePage() {
     setShowExportModal(false);
   }, [items, exportVehicleIds, exportDateFrom, exportDateTo]);
 
+  const handleExportPDF = useCallback(() => {
+    const rows = items.filter((item) => item.active && exportVehicleIds.has(item.vehicle_id));
+    const exportRows = (exportDateFrom || exportDateTo)
+      ? rows.filter((item) => {
+          const dates = [item.insurance?.expiry_date, item.inspection?.expiry_date, item.extinguisher?.expiry_date, item.tachograph?.expiry_date].filter((d): d is string => !!d);
+          return dates.some((d) => (!exportDateFrom || d >= exportDateFrom) && (!exportDateTo || d <= exportDateTo));
+        })
+      : rows;
+
+    const BG: Record<StatusLevel, string> = {
+      expired: "#fee2e2", critical: "#ffedd5", warning: "#fef9c3", missing: "#f8fafc", ok: "#dcfce7",
+    };
+    const FG: Record<StatusLevel, string> = {
+      expired: "#be123c", critical: "#c2410c", warning: "#92400e", missing: "#94a3b8", ok: "#15803d",
+    };
+    const IT: Record<StatusLevel, string> = {
+      expired: "Scaduto", critical: "Critico", warning: "In scadenza", missing: "Non inserito", ok: "Valido",
+    };
+    const fmt = (iso: string | undefined) => {
+      if (!iso) return "—";
+      const [y, m, d] = iso.split("-");
+      return `${d}/${m}/${y}`;
+    };
+    const fmtDays = (days: number | null | undefined) => {
+      if (days == null) return "—";
+      if (days < 0) return `${Math.abs(days)}gg fa`;
+      if (days === 0) return "Oggi";
+      return `${days}gg`;
+    };
+    const cell = (entry: ComplianceEntry | null) => {
+      if (!entry) return `<td class="missing">—</td>`;
+      const s = entry.status;
+      return `<td style="background:${BG[s]};color:${FG[s]};">${fmt(entry.expiry_date)}<br><small>${fmtDays(entry.days_left)}</small></td>`;
+    };
+
+    const tableRows = exportRows.map((item) => {
+      const ws = item.worst_status;
+      return `<tr>
+        <td><strong>${item.label}</strong>${item.plate ? `<br><span class="mono">${item.plate}</span>` : ""}</td>
+        <td>${item.capacity ?? "—"}</td>
+        ${cell(item.insurance)}
+        ${cell(item.inspection)}
+        ${cell(item.extinguisher)}
+        ${cell(item.tachograph)}
+        <td style="background:${BG[ws]};color:${FG[ws]};font-weight:600;">${IT[ws]}</td>
+      </tr>`;
+    }).join("");
+
+    const dateRange = (exportDateFrom || exportDateTo)
+      ? ` · Dal ${exportDateFrom ? fmt(exportDateFrom) : "—"} al ${exportDateTo ? fmt(exportDateTo) : "—"}`
+      : "";
+
+    const html = `<!DOCTYPE html>
+<html lang="it"><head><meta charset="utf-8">
+<title>Scadenze veicoli — ${new Date().toLocaleDateString("it-IT")}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;font-size:11px;color:#1e293b;padding:20px}
+h1{font-size:16px;font-weight:700;margin-bottom:4px}
+.meta{font-size:10px;color:#64748b;margin-bottom:16px}
+table{width:100%;border-collapse:collapse}
+th{background:#f1f5f9;color:#475569;font-size:9px;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;text-align:left;border-bottom:2px solid #e2e8f0}
+td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+.mono{font-family:monospace;font-size:9px;color:#94a3b8}
+small{font-size:9px;opacity:.75}
+.missing{color:#94a3b8}
+@media print{
+  body{padding:10px}
+  @page{size:A4 landscape;margin:12mm}
+  -webkit-print-color-adjust:exact;
+  print-color-adjust:exact
+}
+</style></head><body>
+<h1>Scadenze documenti veicoli</h1>
+<div class="meta">Generato il ${new Date().toLocaleDateString("it-IT")} alle ${new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}${dateRange} · ${exportRows.length} veicol${exportRows.length === 1 ? "o" : "i"}</div>
+<table><thead><tr>
+  <th>Mezzo</th><th>Cap.</th><th>Assicurazione</th><th>Collaudo</th><th>Estintori</th><th>Tachigrafo</th><th>Stato</th>
+</tr></thead><tbody>${tableRows}</tbody></table>
+</body></html>`;
+
+    const win = window.open("", "_blank");
+    if (!win) return;
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    win.print();
+    setShowExportModal(false);
+  }, [items, exportVehicleIds, exportDateFrom, exportDateTo]);
+
   const loadGracePeriods = useCallback(async () => {
     if (!supabase) return;
     setGraceLoading(true);
@@ -991,7 +1080,15 @@ export default function ScadenzePage() {
                 disabled={exportVehicleIds.size === 0}
                 className="btn-primary flex-1 disabled:opacity-50"
               >
-                Scarica CSV
+                CSV
+              </button>
+              <button
+                type="button"
+                onClick={handleExportPDF}
+                disabled={exportVehicleIds.size === 0}
+                className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                PDF
               </button>
               <button
                 type="button"
