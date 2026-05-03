@@ -407,7 +407,7 @@ export default function WhatsAppInboxPage() {
                         disabled={busyAction !== null}
                         className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                       >
-                        {selectedThread.status === "closed" ? "Riapri" : "Chiudi"}
+                        {selectedThread.status === "closed" ? "Ripristina" : "Archivia"}
                       </button>
                       <button
                         type="button"
@@ -415,7 +415,7 @@ export default function WhatsAppInboxPage() {
                         disabled={busyAction !== null}
                         className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
                       >
-                        Elimina chat
+                        Elimina
                       </button>
                       <button
                         type="button"

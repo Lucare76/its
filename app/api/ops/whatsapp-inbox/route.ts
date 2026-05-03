@@ -6,6 +6,8 @@ import { matchWhatsAppInboundMessage } from "@/lib/server/whatsapp/matching";
 
 export const runtime = "nodejs";
 
+type AuthorizedPricingRequest = Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>;
+
 const patchSchema = z.object({
   thread_id: z.string().uuid(),
   action: z.enum(["mark_read", "close", "reopen", "delete"])
@@ -34,7 +36,7 @@ function extractStatusFailureReason(rawStatus: unknown) {
 }
 
 async function upsertManualContact(
-  admin: Awaited<ReturnType<typeof authorizePricingRequest>>["admin"],
+  admin: AuthorizedPricingRequest["admin"],
   input: { tenantId: string; waId: string; phoneE164: string; profileName: string | null }
 ) {
   const payload = {
@@ -54,7 +56,7 @@ async function upsertManualContact(
 }
 
 async function upsertManualThread(
-  admin: Awaited<ReturnType<typeof authorizePricingRequest>>["admin"],
+  admin: AuthorizedPricingRequest["admin"],
   input: {
     tenantId: string;
     waId: string;
