@@ -181,11 +181,11 @@ export default function LoginPage() {
           <>
             <label className="block text-sm">
               Nome completo
-              <input className="input-saas mt-1" value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Mario Rossi" />
+              <input className="input-saas mt-1" value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Mario Rossi" autoCapitalize="words" />
             </label>
             <label className="block text-sm">
               Nome agenzia
-              <input className="input-saas mt-1" value={agencyName} onChange={(event) => setAgencyName(event.target.value)} placeholder="Nome della tua agenzia" />
+              <input className="input-saas mt-1" value={agencyName} onChange={(event) => setAgencyName(event.target.value)} placeholder="Nome della tua agenzia" autoCapitalize="words" />
             </label>
             <label className="block text-sm">
               Ruolo richiesto
@@ -202,6 +202,9 @@ export default function LoginPage() {
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             placeholder="Inserisci la tua email"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
           />
         </label>
         {mode !== "reset" ? (
@@ -211,10 +214,14 @@ export default function LoginPage() {
               <input
                 data-testid="login-password"
                 className="min-w-0 flex-1 rounded-l-xl border-0 bg-transparent px-3 py-2 text-sm outline-none"
+                data-no-uppercase
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 placeholder="Inserisci la password"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
               />
               <button
                 type="button"
