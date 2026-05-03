@@ -11,10 +11,11 @@ export async function GET(request: NextRequest) {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes] = await Promise.all([
+  const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, tachographsRes] = await Promise.all([
     admin.from("vehicles")
-      .select("id, label, plate, active, habitual_driver_profile_id, compliance_override_until, compliance_override_reason")
+      .select("id, label, plate, active, capacity, compliance_override_until, compliance_override_reason")
       .eq("tenant_id", tenant_id)
+      .order("capacity", { ascending: false, nullsFirst: false })
       .order("label"),
     admin.from("vehicle_insurances")
       .select("vehicle_id, expiry_date, company, policy_number")
@@ -28,27 +29,17 @@ export async function GET(request: NextRequest) {
       .select("vehicle_id, expiry_date")
       .eq("tenant_id", tenant_id)
       .eq("active", true),
+    admin.from("vehicle_tachographs")
+      .select("vehicle_id, expiry_date, calibration_date")
+      .eq("tenant_id", tenant_id)
+      .eq("is_current", true),
   ]);
 
   const vehicles = vehiclesRes.data ?? [];
   const insurances = insurancesRes.data ?? [];
   const inspections = inspectionsRes.data ?? [];
   const extinguishers = extinguishersRes.data ?? [];
-
-  // Tachograph data for habitual drivers
-  const profileIds = [
-    ...new Set(vehicles.map((v) => v.habitual_driver_profile_id).filter(Boolean) as string[]),
-  ];
-  let tachByProfile: Record<string, string | null> = {};
-  if (profileIds.length > 0) {
-    const { data: drivers } = await admin
-      .from("driver_profiles")
-      .select("id, tachograph_card_expiry")
-      .in("id", profileIds);
-    for (const d of drivers ?? []) {
-      tachByProfile[d.id] = d.tachograph_card_expiry ?? null;
-    }
-  }
+  const tachographs = tachographsRes.data ?? [];
 
   // Build lookup maps
   const insuranceMap = new Map<string, (typeof insurances)[0]>();
@@ -56,6 +47,9 @@ export async function GET(request: NextRequest) {
 
   const inspectionMap = new Map<string, (typeof inspections)[0]>();
   for (const ins of inspections) inspectionMap.set(ins.vehicle_id, ins);
+
+  const tachographMap = new Map<string, (typeof tachographs)[0]>();
+  for (const t of tachographs) tachographMap.set(t.vehicle_id, t);
 
   // Extinguishers: earliest expiry per vehicle
   const extMap = new Map<string, { expiry_date: string; count: number }>();
@@ -72,14 +66,12 @@ export async function GET(request: NextRequest) {
     const insurance = insuranceMap.get(v.id) ?? null;
     const inspection = inspectionMap.get(v.id) ?? null;
     const ext = extMap.get(v.id) ?? null;
-    const tachExpiry = v.habitual_driver_profile_id
-      ? (tachByProfile[v.habitual_driver_profile_id] ?? null)
-      : null;
+    const tach = tachographMap.get(v.id) ?? null;
 
     const insuranceDays = insurance ? diffDays(today, insurance.expiry_date) : null;
     const inspectionDays = inspection ? diffDays(today, inspection.expiry_date) : null;
     const extDays = ext ? diffDays(today, ext.expiry_date) : null;
-    const tachDays = tachExpiry ? diffDays(today, tachExpiry) : null;
+    const tachDays = tach ? diffDays(today, tach.expiry_date) : null;
 
     const overrideUntil = v.compliance_override_until
       ? new Date(v.compliance_override_until)
@@ -121,9 +113,9 @@ export async function GET(request: NextRequest) {
             status: expiryStatus(extDays),
           }
         : null,
-      tachograph: tachExpiry
+      tachograph: tach
         ? {
-            expiry_date: tachExpiry,
+            expiry_date: tach.expiry_date,
             days_left: tachDays,
             status: expiryStatus(tachDays),
           }

@@ -153,6 +153,14 @@ const EMPTY_EXTINGUISHER = {
   notes: "",
 };
 
+const EMPTY_TACHOGRAPH = {
+  calibration_date: new Date().toISOString().slice(0, 10),
+  expiry_date: "",
+  center: "",
+  certificate_number: "",
+  notes: "",
+};
+
 // Mini compliance pill used in mobile cards
 function CompliancePill({ label, entry }: { label: string; entry: ComplianceEntry | null }) {
   const status: StatusLevel = entry?.status ?? "missing";
@@ -208,17 +216,19 @@ export default function ScadenzePage() {
   const [docFilter, setDocFilter] = useState<DocType>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [panel, setPanel] = useState<SidePanelVehicle | null>(null);
-  const [panelTab, setPanelTab] = useState<"insurance" | "inspection" | "extinguisher">("insurance");
+  const [panelTab, setPanelTab] = useState<"insurance" | "inspection" | "extinguisher" | "tachograph">("insurance");
   const [panelRecords, setPanelRecords] = useState<{
     insurances: unknown[];
     inspections: unknown[];
     extinguishers: unknown[];
-  }>({ insurances: [], inspections: [], extinguishers: [] });
+    tachographs: unknown[];
+  }>({ insurances: [], inspections: [], extinguishers: [], tachographs: [] });
   const [panelLoading, setPanelLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [insuranceForm, setInsuranceForm] = useState(EMPTY_INSURANCE);
   const [inspectionForm, setInspectionForm] = useState(EMPTY_INSPECTION);
   const [extinguisherForm, setExtinguisherForm] = useState(EMPTY_EXTINGUISHER);
+  const [tachographForm, setTachographForm] = useState(EMPTY_TACHOGRAPH);
   const [showForm, setShowForm] = useState(false);
   const [overrideForm, setOverrideForm] = useState({ until: "", reason: "" });
   const [showOverrideForm, setShowOverrideForm] = useState(false);
@@ -264,20 +274,23 @@ export default function ScadenzePage() {
     const token = await getToken();
     if (!token) return;
     setPanelLoading(true);
-    const [insRes, inspRes, extRes] = await Promise.all([
+    const [insRes, inspRes, extRes, tachRes] = await Promise.all([
       fetch(`/api/vehicles/${vehicleId}/compliance/insurances`, { headers: { Authorization: `Bearer ${token}` } }),
       fetch(`/api/vehicles/${vehicleId}/compliance/inspections`, { headers: { Authorization: `Bearer ${token}` } }),
       fetch(`/api/vehicles/${vehicleId}/compliance/extinguishers`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`/api/vehicles/${vehicleId}/compliance/tachographs`, { headers: { Authorization: `Bearer ${token}` } }),
     ]);
-    const [insJson, inspJson, extJson] = await Promise.all([
+    const [insJson, inspJson, extJson, tachJson] = await Promise.all([
       insRes.json().catch(() => ({ items: [] })),
       inspRes.json().catch(() => ({ items: [] })),
       extRes.json().catch(() => ({ items: [] })),
+      tachRes.json().catch(() => ({ items: [] })),
     ]);
     setPanelRecords({
       insurances: insJson.items ?? [],
       inspections: inspJson.items ?? [],
       extinguishers: extJson.items ?? [],
+      tachographs: tachJson.items ?? [],
     });
     setPanelLoading(false);
   }, []);
@@ -290,6 +303,7 @@ export default function ScadenzePage() {
     setInsuranceForm(EMPTY_INSURANCE);
     setInspectionForm(EMPTY_INSPECTION);
     setExtinguisherForm(EMPTY_EXTINGUISHER);
+    setTachographForm(EMPTY_TACHOGRAPH);
     void loadPanelRecords(v.vehicle_id);
   }, [loadPanelRecords]);
 
@@ -358,7 +372,7 @@ export default function ScadenzePage() {
         outcome_notes: inspectionForm.outcome_notes || null,
         notes: inspectionForm.notes || null,
       };
-    } else {
+    } else if (panelTab === "extinguisher") {
       if (!extinguisherForm.expiry_date) {
         showToast("Data scadenza obbligatoria", false);
         setSaving(false);
@@ -370,6 +384,21 @@ export default function ScadenzePage() {
         last_revision_date: extinguisherForm.last_revision_date || null,
         expiry_date: extinguisherForm.expiry_date,
         notes: extinguisherForm.notes || null,
+      };
+    } else {
+      // tachograph
+      if (!tachographForm.calibration_date || !tachographForm.expiry_date) {
+        showToast("Data taratura e scadenza obbligatorie", false);
+        setSaving(false);
+        return;
+      }
+      url = `/api/vehicles/${panel.vehicleId}/compliance/tachographs`;
+      body = {
+        calibration_date: tachographForm.calibration_date,
+        expiry_date: tachographForm.expiry_date,
+        center: tachographForm.center || null,
+        certificate_number: tachographForm.certificate_number || null,
+        notes: tachographForm.notes || null,
       };
     }
 
@@ -388,7 +417,7 @@ export default function ScadenzePage() {
       await Promise.all([loadPanelRecords(panel.vehicleId), load()]);
     }
     setSaving(false);
-  }, [panel, panelTab, insuranceForm, inspectionForm, extinguisherForm, showToast, loadPanelRecords, load]);
+  }, [panel, panelTab, insuranceForm, inspectionForm, extinguisherForm, tachographForm, showToast, loadPanelRecords, load]);
 
   const stats = useMemo(() => {
     let expired = 0, critical = 0, warning = 0, ok = 0;
@@ -964,9 +993,9 @@ export default function ScadenzePage() {
 
               {/* Tab bar */}
               <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
-                {(["insurance", "inspection", "extinguisher"] as const).map((tab) => {
-                  const labels = { insurance: "Assicurazione", inspection: "Collaudo", extinguisher: "Estintori" };
-                  const entry = panelVehicle?.[tab === "insurance" ? "insurance" : tab === "inspection" ? "inspection" : "extinguisher"] ?? null;
+                {(["insurance", "inspection", "extinguisher", "tachograph"] as const).map((tab) => {
+                  const labels = { insurance: "Assicurazione", inspection: "Collaudo", extinguisher: "Estintori", tachograph: "Tachigrafo" };
+                  const entry = panelVehicle?.[tab] ?? null;
                   const s: StatusLevel = entry?.status ?? "missing";
                   return (
                     <button
@@ -1003,7 +1032,7 @@ export default function ScadenzePage() {
                   ) : (
                     <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
                       <div className="text-sm font-semibold text-slate-800">
-                        {panelTab === "insurance" ? "Nuova assicurazione" : panelTab === "inspection" ? "Nuovo collaudo" : "Nuovo estintore"}
+                        {panelTab === "insurance" ? "Nuova assicurazione" : panelTab === "inspection" ? "Nuovo collaudo" : panelTab === "extinguisher" ? "Nuovo estintore" : "Nuovo tachigrafo"}
                       </div>
 
                       {panelTab === "insurance" && (
@@ -1093,6 +1122,35 @@ export default function ScadenzePage() {
                         </>
                       )}
 
+                      {panelTab === "tachograph" && (
+                        <>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <label className="label">Data taratura *</label>
+                              <input type="date" className="input" value={tachographForm.calibration_date} onChange={(e) => setTachographForm((f) => ({ ...f, calibration_date: e.target.value }))} />
+                            </div>
+                            <div>
+                              <label className="label">Scadenza *</label>
+                              <input type="date" className="input" value={tachographForm.expiry_date} onChange={(e) => setTachographForm((f) => ({ ...f, expiry_date: e.target.value }))} />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <label className="label">Centro taratura</label>
+                              <input className="input" value={tachographForm.center} onChange={(e) => setTachographForm((f) => ({ ...f, center: e.target.value }))} />
+                            </div>
+                            <div>
+                              <label className="label">N. certificato</label>
+                              <input className="input" value={tachographForm.certificate_number} onChange={(e) => setTachographForm((f) => ({ ...f, certificate_number: e.target.value }))} />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="label">Note</label>
+                            <input className="input" value={tachographForm.notes} onChange={(e) => setTachographForm((f) => ({ ...f, notes: e.target.value }))} />
+                          </div>
+                        </>
+                      )}
+
                       <div className="flex gap-2 pt-1">
                         <button type="button" onClick={handleSave} disabled={saving} className="btn-primary flex-1">
                           {saving ? "Salvataggio..." : "Salva"}
@@ -1120,14 +1178,15 @@ export default function ScadenzePage() {
 }
 
 type RecordListProps = {
-  tab: "insurance" | "inspection" | "extinguisher";
-  records: { insurances: unknown[]; inspections: unknown[]; extinguishers: unknown[] };
+  tab: "insurance" | "inspection" | "extinguisher" | "tachograph";
+  records: { insurances: unknown[]; inspections: unknown[]; extinguishers: unknown[]; tachographs: unknown[] };
 };
 
 function RecordList({ tab, records }: RecordListProps) {
   const list =
     tab === "insurance" ? records.insurances
     : tab === "inspection" ? records.inspections
+    : tab === "tachograph" ? records.tachographs
     : records.extinguishers;
 
   if (list.length === 0) {
@@ -1150,6 +1209,7 @@ function RecordList({ tab, records }: RecordListProps) {
                 {tab === "insurance" && (row.company as string)}
                 {tab === "inspection" && `Collaudo ${row.inspection_date ? formatDate(row.inspection_date as string) : ""}`}
                 {tab === "extinguisher" && (row.serial_number ? `Sn: ${row.serial_number}` : "Estintore")}
+                {tab === "tachograph" && `Taratura ${row.calibration_date ? formatDate(row.calibration_date as string) : ""}`}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {isCurrent && (
