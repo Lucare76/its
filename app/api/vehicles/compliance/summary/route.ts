@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { diffDays, expiryStatus, worstStatus } from "@/lib/vehicle-compliance";
+import { diffDays, expiryStatus, inspectionExpiryStatus, worstStatus } from "@/lib/vehicle-compliance";
 
 export const runtime = "nodejs";
 
@@ -70,6 +70,7 @@ export async function GET(request: NextRequest) {
 
     const insuranceDays = insurance ? diffDays(today, insurance.expiry_date) : null;
     const inspectionDays = inspection ? diffDays(today, inspection.expiry_date) : null;
+    const inspectionStatus = inspection ? inspectionExpiryStatus(inspection.expiry_date, today) : "missing";
     const extDays = ext ? diffDays(today, ext.expiry_date) : null;
     const tachDays = tach ? diffDays(today, tach.expiry_date) : null;
 
@@ -103,7 +104,7 @@ export async function GET(request: NextRequest) {
             expiry_date: inspection.expiry_date,
             outcome: inspection.outcome,
             days_left: inspectionDays,
-            status: expiryStatus(inspectionDays),
+            status: inspectionStatus,
           }
         : null,
       extinguisher: ext
@@ -125,7 +126,7 @@ export async function GET(request: NextRequest) {
         ? "ok"
         : worstStatus([
             expiryStatus(insuranceDays),
-            expiryStatus(inspectionDays),
+            inspectionStatus,
             expiryStatus(extDays),
             expiryStatus(tachDays),
           ]),

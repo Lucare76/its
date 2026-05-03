@@ -53,6 +53,27 @@ export function buildStatusLabel(daysLeft: number): string {
   return `Scade tra ${daysLeft} giorn${daysLeft === 1 ? "o" : "i"}`;
 }
 
+/**
+ * Status collaudo con regola "fine mese": la revisione si può fare entro la
+ * fine del mese di scadenza. L'expired scatta solo dopo l'ultimo giorno del mese.
+ */
+export function inspectionExpiryStatus(expiryDate: string, today: string): ComplianceStatus {
+  const [ey, em] = expiryDate.slice(0, 7).split("-").map(Number);
+  // new Date(year, month, 0) dà l'ultimo giorno del mese precedente a `month` (0-indexed).
+  // Poiché em è 1-indexed, new Date(ey, em, 0) restituisce l'ultimo giorno del mese em.
+  const lastDay = new Date(ey!, em!, 0).getDate();
+  const endOfExpiryMonth = `${ey}-${String(em).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+  const daysToDeadline = diffDays(today, endOfExpiryMonth);
+  const daysToExpiry = diffDays(today, expiryDate);
+
+  if (daysToDeadline < 0) return "expired";                       // fine mese superata
+  if (daysToExpiry <= 0) return "critical";                       // scaduto ma siamo ancora nel mese
+  if (expiryDate.slice(0, 7) === today.slice(0, 7)) return "critical"; // scade questo mese
+  if (daysToExpiry <= 30) return "warning";
+  return "ok";
+}
+
 /** Scadenza effettiva considerando l'eventuale proroga per tipo documento. */
 export function getEffectiveExpiry(docType: string, expiry: string): string {
   if (docType === "Assicurazione") return addDays(expiry, INSURANCE_GRACE_DAYS);
