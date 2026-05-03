@@ -187,6 +187,9 @@ export default function WhatsAppSettingsPage() {
     ];
     for (const step of body.steps ?? []) {
       lines.push(`${step.label}: ${step.ok ? "OK" : `ERRORE ${step.status}`} ${step.error ?? ""}`.trim());
+      if (step.data) {
+        lines.push(JSON.stringify(step.data, null, 2));
+      }
     }
     setDiscoverySummary(lines.join("\n"));
     setMessage("Diagnostica Meta completata.");
