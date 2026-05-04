@@ -121,6 +121,13 @@ export function renderNavIcon(icon: string) {
           <path d="M3 4.5 5 11l3-4 3 4 2-6.5" />
         </svg>
       );
+    case "WA":
+      return (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className={common} aria-hidden="true">
+          <path d="M8 2.5a5.5 5.5 0 0 0-4.8 8.1L2.5 13.5l3-.7A5.5 5.5 0 1 0 8 2.5z" />
+          <path d="M6.2 6.3c.1.4.4.9.9 1.4s1 .8 1.4.9l.4-.4c.2-.2.4-.2.6 0 .3.2.5.3.7.4.2.1.2.4.1.5l-.4.8c-.1.2-.3.2-.5.1C7.3 9.5 6.1 8.3 5.7 7c-.1-.2 0-.4.1-.5l.8-.4c.2-.1.4 0 .5.2l.4.8-.3.3" />
+        </svg>
+      );
     case "L":
       return (
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" className={common} aria-hidden="true">
@@ -243,10 +250,10 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/disponibilita", label: "Disponibilità", icon: "✅" },
   { href: "/piano-giorno", label: "Piano del Giorno", icon: "📋" },
   { href: "/dispatch", label: "Assegnazioni", icon: "G" },
-  { href: "/ricerca", label: "Ricerca", icon: "🔍" },
+  { href: "/foglio-viaggio", label: "Foglio di viaggio", icon: "📋" },
   { href: "/cancellazioni", label: "Cancellazioni", icon: "✕" },
   { href: "/richieste-modifica", label: "Richieste modifica", icon: "✏️" },
-  { href: "/whatsapp", label: "Inbox WhatsApp", icon: "W" },
+  { href: "/whatsapp", label: "Inbox WhatsApp", icon: "WA" },
   { href: "/whatsapp-log", label: "WhatsApp Log", icon: "💬" },
 ];
 
@@ -259,28 +266,27 @@ export const AGENZIE_GROUP: NavMainGroup = {
     { href: "/agency-requests", label: "Richieste agenzie", icon: "🏨" },
     { href: "/agency-statement", label: "Estratto conto", icon: "€" },
     { href: "/inbox/agency-reviews", label: "Revisioni agenzie", icon: "✏️" },
+    { href: "/biglietti-multipli", label: "Invio Multiplo Agenzie", icon: "📎" },
   ]
 };
 
 export const OPERATIVO_GROUP: NavMainGroup = {
   type: "group",
   key: "operativo",
-  label: "Operativo",
+  label: "Logistica",
   icon: "O",
   items: [
-    { href: "/foglio-viaggio", label: "Foglio di viaggio", icon: "📋" },
     { href: "/biglietti-medmar", label: "Biglietti MEDMAR", icon: "⚓" },
     { href: "/medmar-ar", label: "Medmar A/R", icon: "🎫" },
     { href: "/medmar-fleet", label: "Medmar Flotta", icon: "🚗" },
     { href: "/inbox/fleet-reports", label: "Segnalazioni veicoli", icon: "🚨" },
-    { href: "/biglietti-multipli", label: "Invio Multiplo Agenzie", icon: "📎" },
   ]
 };
 
 export const MARIO_BOSS_GROUP: NavMainGroup = {
   type: "group",
   key: "mario-boss",
-  label: "Mario Boss",
+  label: "Pianificazione",
   icon: "MARIO",
   items: [
     { href: "/mario-planning", label: "Planning", icon: "P" },
@@ -294,7 +300,7 @@ export const MARIO_BOSS_GROUP: NavMainGroup = {
 export const KARMEN_PEACH_GROUP: NavMainGroup = {
   type: "group",
   key: "karmen-peach",
-  label: "Karmen",
+  label: "Report & Liste",
   icon: "KARMEN",
   items: [
     { href: "/liste-bruno", label: "Liste Bruno", icon: "S" },
