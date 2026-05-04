@@ -3,3 +3,5 @@
 /server/backups/
 /server/logs/
 /docs/demo/
+.env
+.env.*
