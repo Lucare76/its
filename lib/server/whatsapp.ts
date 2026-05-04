@@ -307,14 +307,29 @@ async function sendTextMessage(phoneNumberId: string, accessToken: string, toPho
   const payload = (await response.json().catch(() => null)) as
     | {
         messages?: Array<{ id: string }>;
-        error?: { message?: string; code?: number; error_subcode?: number };
+        error?: { message?: string; code?: number; error_subcode?: number; type?: string; fbtrace_id?: string };
       }
     | null;
 
-  let formattedError = payload?.error?.message ?? (response.ok ? null : `WhatsApp API error (${response.status})`);
-  if (!response.ok && payload?.error?.message?.includes("Unsupported post request")) {
-    formattedError = "Configurazione WhatsApp non valida: verifica WHATSAPP_PHONE_NUMBER_ID su Vercel.";
+  if (!response.ok) {
+    console.error("Meta WhatsApp API error (text)", {
+      status: response.status,
+      code: payload?.error?.code,
+      subcode: payload?.error?.error_subcode,
+      type: payload?.error?.type,
+      message: payload?.error?.message,
+      fbtrace_id: payload?.error?.fbtrace_id,
+      phoneNumberId,
+      toPhone
+    });
   }
+
+  const metaError = payload?.error;
+  const formattedError = response.ok
+    ? null
+    : metaError
+      ? `[#${metaError.code ?? response.status}] ${metaError.message ?? "WhatsApp API error"}`
+      : `WhatsApp API error (${response.status})`;
 
   return {
     ok: response.ok,
