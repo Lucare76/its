@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeE164, logWhatsAppEvent, mapWebhookStatus } from "@/lib/server/whatsapp";
+import { sendPushToTenantRoles } from "@/lib/server/web-push";
 import { matchWhatsAppInboundMessage } from "./matching";
 import type { MetaChangeValue, MetaContact, MetaMessage, MetaStatus, MetaWebhookPayload } from "./types";
 
@@ -266,7 +267,12 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
       if (error) throw error;
     }
   }
-  return { tenantId: match.tenantId, phoneE164 };
+  return {
+    tenantId: match.tenantId,
+    phoneE164,
+    preview: previewForMessage(message),
+    profileName: contact?.profile?.name ?? null
+  };
 }
 
 async function resolveStatusTenant(admin: SupabaseClient, status: MetaStatus) {
@@ -345,7 +351,22 @@ export async function processWhatsAppWebhook(admin: SupabaseClient, payload: Met
         try {
           const processed = await processMessage(admin, value, message);
           result.messages += 1;
-          if (processed?.tenantId) resolvedTenantIds.add(processed.tenantId);
+          if (processed?.tenantId) {
+            resolvedTenantIds.add(processed.tenantId);
+            const sender = processed.profileName || processed.phoneE164 || "cliente";
+            try {
+              await sendPushToTenantRoles(processed.tenantId, ["admin", "operator", "supervisor"], {
+                title: "Nuovo WhatsApp",
+                body: `${sender}: ${processed.preview}`.slice(0, 180),
+                url: "/whatsapp",
+                tag: `whatsapp-${message.id}`
+              });
+            } catch (pushError) {
+              console.warn("WhatsApp push notification failed", {
+                message: pushError instanceof Error ? pushError.message : "push failed"
+              });
+            }
+          }
         } catch (error) {
           result.errors.push(error instanceof Error ? error.message : "message processing failed");
           console.error("WhatsApp inbound message persistence failed", {

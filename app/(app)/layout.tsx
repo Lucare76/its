@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isAllowed, isAllowedWithOverrides, type CapabilityOverrides, parseRole } from "@/lib/rbac";
 import {
   AGENZIE_GROUP,
@@ -44,6 +44,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [pendingQrReportsCount,    setPendingQrReportsCount]    = useState(0);
   const [pendingAgencyBookingsCount, setPendingAgencyBookingsCount] = useState(0);
   const [pendingCancellationsCount, setPendingCancellationsCount] = useState(0);
+  const [whatsAppUnreadCount, setWhatsAppUnreadCount] = useState(0);
   const [liveToastMessage, setLiveToastMessage] = useState<string | null>(null);
   const [slaAlertMessage, setSlaAlertMessage]   = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -67,6 +68,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [authUserId, setAuthUserId] = useState<string | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [favoritesEditMode, setFavoritesEditMode] = useState(false);
+  const whatsAppSummaryInitializedRef = useRef(false);
+  const latestWhatsAppMessageAtRef = useRef<string | null>(null);
   const title = useMemo(() => pageTitle(pathname), [pathname]);
   const mainNav = useMemo(
     () =>
@@ -344,6 +347,60 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       window.setTimeout(() => { audio.pause(); audio.currentTime = 0; }, 2200);
     }).catch(() => { /* autoplay bloccato */ });
   };
+
+  useEffect(() => {
+    if (!authTenantId || !["admin", "operator", "supervisor"].includes(authRole ?? "")) {
+      whatsAppSummaryInitializedRef.current = false;
+      latestWhatsAppMessageAtRef.current = null;
+      return;
+    }
+    let isActive = true;
+
+    const refreshWhatsAppSummary = async () => {
+      try {
+        const { data: sessionData } = await supabase!.auth.getSession();
+        const token = sessionData.session?.access_token;
+        if (!token) return;
+        const response = await fetch("/api/ops/whatsapp-inbox/summary", {
+          headers: { authorization: `Bearer ${token}` },
+          cache: "no-store"
+        });
+        if (!response.ok) return;
+        const payload = await response.json() as {
+          unread_count?: number;
+          latest_message_at?: string | null;
+          latest_sender?: string | null;
+          latest_preview?: string | null;
+        };
+        if (!isActive) return;
+
+        const previousLatest = latestWhatsAppMessageAtRef.current;
+        const nextLatest = payload.latest_message_at ?? null;
+        const initialized = whatsAppSummaryInitializedRef.current;
+        const unreadCount = Number(payload.unread_count ?? 0);
+
+        setWhatsAppUnreadCount(unreadCount);
+        latestWhatsAppMessageAtRef.current = nextLatest;
+        whatsAppSummaryInitializedRef.current = true;
+
+        if (initialized && nextLatest && nextLatest !== previousLatest && unreadCount > 0 && pathname !== "/whatsapp") {
+          const sender = payload.latest_sender ? ` da ${payload.latest_sender}` : "";
+          const preview = payload.latest_preview ? `: ${payload.latest_preview}` : "";
+          setLiveToastMessage(`Nuovo messaggio WhatsApp${sender}${preview}`.slice(0, 180));
+          if (inboxSoundEnabled) playInboxSound();
+        }
+      } catch {
+        // Notifica non critica: se fallisce riproviamo al prossimo polling.
+      }
+    };
+
+    void refreshWhatsAppSummary();
+    const interval = window.setInterval(refreshWhatsAppSummary, 12_000);
+    return () => {
+      isActive = false;
+      window.clearInterval(interval);
+    };
+  }, [authRole, authTenantId, inboxSoundEnabled, pathname]);
 
   const playSlaAlarm = () => {
     if (typeof window === "undefined") return;
@@ -783,6 +840,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
               const active = matchesPath(pathname, item.href);
               const badge = item.href === "/inbox" && inboxPendingCount > 0
                 ? inboxPendingCount
+                : item.href === "/whatsapp" && whatsAppUnreadCount > 0
+                ? whatsAppUnreadCount
                 : item.href === "/cancellazioni" && pendingCancellationsCount > 0
                 ? pendingCancellationsCount
                 : 0;
@@ -1379,6 +1438,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 >
                   {item.label}
                   {item.href === "/inbox" && inboxPendingCount > 0 ? ` (${inboxPendingCount > 99 ? "99+" : inboxPendingCount})` : ""}
+                  {item.href === "/whatsapp" && whatsAppUnreadCount > 0 ? ` (${whatsAppUnreadCount > 99 ? "99+" : whatsAppUnreadCount})` : ""}
                   {item.href === "/agency-requests" && pendingAgencyBookingsCount > 0 ? ` (${pendingAgencyBookingsCount > 99 ? "99+" : pendingAgencyBookingsCount})` : ""}
                 </Link>
               );
