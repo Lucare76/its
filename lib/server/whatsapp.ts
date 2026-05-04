@@ -230,6 +230,15 @@ export function isReminderDueInWindow(date: string, time: string, targetHours: n
   return diffMinutes >= targetMinutes - tolerance && diffMinutes <= targetMinutes + tolerance;
 }
 
+export function isWhatsAppCustomerCareWindowOpen(lastInboundAt: string | null | undefined, now = new Date()) {
+  if (!lastInboundAt) return false;
+  const inboundAt = new Date(lastInboundAt);
+  const inboundTime = inboundAt.getTime();
+  if (!Number.isFinite(inboundTime)) return false;
+  if (inboundTime > now.getTime()) return true;
+  return now.getTime() - inboundTime <= 24 * 60 * 60 * 1000;
+}
+
 async function sendTemplateMessage(phoneNumberId: string, accessToken: string, toPhone: string, templateName: string, languageCode: string, parameters: Array<{ type: "text"; text: string }>) {
   const response = await fetch(`https://graph.facebook.com/${whatsappGraphVersion()}/${phoneNumberId}/messages`, {
     method: "POST",

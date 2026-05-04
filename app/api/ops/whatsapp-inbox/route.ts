@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { getTenantWhatsAppSettings, loadSyncedWhatsAppTemplates, logWhatsAppEvent, normalizeE164, sendWhatsAppMessage, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
+import { getTenantWhatsAppSettings, isWhatsAppCustomerCareWindowOpen, loadSyncedWhatsAppTemplates, logWhatsAppEvent, normalizeE164, sendWhatsAppMessage, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
 import { matchWhatsAppInboundMessage } from "@/lib/server/whatsapp/matching";
 
 export const runtime = "nodejs";
@@ -366,6 +366,12 @@ export async function POST(request: NextRequest) {
     }
     thread = existingThread;
   } else {
+    if (sendMode === "text") {
+      return NextResponse.json({
+        error: "Per iniziare una nuova conversazione WhatsApp devi usare un template approvato."
+      }, { status: 400 });
+    }
+
     const normalizedPhone = normalizeE164(parsed.data.phone ?? "");
     const waId = normalizedPhone.replace(/^\+/, "");
     const match = await matchWhatsAppInboundMessage(auth.admin, {
@@ -390,6 +396,30 @@ export async function POST(request: NextRequest) {
       transferId: match.tenantId === tenantId ? match.transferId : null,
       matchStatus: match.tenantId === tenantId && match.status === "matched" ? "matched" : "needs_review"
     });
+  }
+
+  if (sendMode === "text") {
+    const { data: latestInbound, error: latestInboundError } = await auth.admin
+      .from("whatsapp_messages")
+      .select("timestamp, created_at")
+      .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+      .eq("thread_id", thread.id)
+      .eq("direction", "inbound")
+      .order("timestamp", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestInboundError) {
+      return NextResponse.json({ error: latestInboundError.message }, { status: 500 });
+    }
+
+    const lastInboundAt = latestInbound?.timestamp ?? latestInbound?.created_at ?? null;
+    if (!isWhatsAppCustomerCareWindowOpen(lastInboundAt)) {
+      return NextResponse.json({
+        error: "WhatsApp consente risposte libere solo entro 24 ore dall'ultimo messaggio del cliente. Usa un template approvato."
+      }, { status: 400 });
+    }
   }
 
   const targetPhone = normalizeE164(thread.wa_id);

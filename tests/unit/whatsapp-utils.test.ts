@@ -5,6 +5,7 @@ import {
   isReminderDueInWindow,
   extractDriverPhoneFromNotes,
   isReminderDueIn24h,
+  isWhatsAppCustomerCareWindowOpen,
 } from "@/lib/server/whatsapp";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,6 +45,28 @@ describe("normalizeE164", () => {
 
   it("preserva + iniziale anche con spazi intorno alle cifre", () => {
     expect(normalizeE164("+1 800 555 0100")).toBe("+18005550100");
+  });
+});
+
+describe("isWhatsAppCustomerCareWindowOpen", () => {
+  it("ritorna true se il cliente ha scritto entro 24 ore", () => {
+    const now = new Date("2026-05-04T12:00:00.000Z");
+    expect(isWhatsAppCustomerCareWindowOpen("2026-05-03T12:30:00.000Z", now)).toBe(true);
+  });
+
+  it("ritorna true al limite esatto delle 24 ore", () => {
+    const now = new Date("2026-05-04T12:00:00.000Z");
+    expect(isWhatsAppCustomerCareWindowOpen("2026-05-03T12:00:00.000Z", now)).toBe(true);
+  });
+
+  it("ritorna false se l'ultimo inbound e piu vecchio di 24 ore", () => {
+    const now = new Date("2026-05-04T12:00:00.000Z");
+    expect(isWhatsAppCustomerCareWindowOpen("2026-05-03T11:59:59.000Z", now)).toBe(false);
+  });
+
+  it("ritorna false per date mancanti o non valide", () => {
+    expect(isWhatsAppCustomerCareWindowOpen(null)).toBe(false);
+    expect(isWhatsAppCustomerCareWindowOpen("non-una-data")).toBe(false);
   });
 });
 

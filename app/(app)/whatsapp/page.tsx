@@ -84,6 +84,8 @@ const quickReplies = [
   "Perfetto, ti aspettiamo.",
 ] as const;
 
+const CUSTOMER_CARE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 // ─── Visual helpers ────────────────────────────────────────────────────────
 
 function formatDate(value: string | null) {
@@ -274,6 +276,7 @@ export default function WhatsAppInboxPage() {
   const [error, setError] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<"list" | "chat">("list");
+  const [textWindowOpen, setTextWindowOpen] = useState(false);
 
   const selectedThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -284,6 +287,15 @@ export default function WhatsAppInboxPage() {
       [...messages]
         .reverse()
         .find((message) => message.direction === "outbound" && message.status === "failed") ?? null,
+    [messages],
+  );
+  const latestInboundAt = useMemo(
+    () => {
+      const latestInbound = [...messages]
+        .reverse()
+        .find((message) => message.direction === "inbound");
+      return latestInbound?.timestamp ?? latestInbound?.created_at ?? null;
+    },
     [messages],
   );
   const selectedTemplate = useMemo(
@@ -304,6 +316,7 @@ export default function WhatsAppInboxPage() {
     });
   }, [templateOptions]);
   const composerEnabled = Boolean(selectedThreadId) || newChatMode;
+  const textModeUnavailable = newChatMode || !textWindowOpen;
   const templateVariables = useMemo(
     () => templateVariablesText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
     [templateVariablesText],
@@ -358,8 +371,31 @@ export default function WhatsAppInboxPage() {
     if (composerMode !== "template") return;
     if (!selectedTemplate || templateVariablesText.trim()) return;
     const suggested = buildSuggestedTemplateVariables(selectedThread, selectedTemplate);
-    if (suggested.length > 0) setTemplateVariablesText(suggested.join("\n"));
+    if (suggested.length === 0) return;
+    const timeout = window.setTimeout(() => setTemplateVariablesText(suggested.join("\n")), 0);
+    return () => window.clearTimeout(timeout);
   }, [composerMode, selectedTemplate, selectedThread, templateVariablesText]);
+
+  useEffect(() => {
+    const updateTextWindow = () => {
+      if (!latestInboundAt) {
+        setTextWindowOpen(false);
+        return;
+      }
+      const inboundTime = new Date(latestInboundAt).getTime();
+      setTextWindowOpen(Number.isFinite(inboundTime) && Date.now() - inboundTime <= CUSTOMER_CARE_WINDOW_MS);
+    };
+    updateTextWindow();
+    const interval = window.setInterval(updateTextWindow, 60000);
+    return () => window.clearInterval(interval);
+  }, [latestInboundAt]);
+
+  useEffect(() => {
+    if (composerMode === "text" && textModeUnavailable) {
+      const timeout = window.setTimeout(() => setComposerMode("template"), 0);
+      return () => window.clearTimeout(timeout);
+    }
+  }, [composerMode, textModeUnavailable]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(selectedThreadId), 250);
@@ -421,6 +457,7 @@ export default function WhatsAppInboxPage() {
     if (!composerEnabled) return;
     const text = draft.trim();
     if (composerMode === "text" && !text) { setError("Inserisci un messaggio prima di inviare."); return; }
+    if (composerMode === "text" && textModeUnavailable) { setError("Per inviare ora devi usare un template approvato."); return; }
     if (composerMode === "template" && !selectedTemplate) { setError("Seleziona un template prima di inviare."); return; }
     const token = await getAccessToken();
     if (!token) { setError("Sessione non disponibile."); return; }
@@ -503,7 +540,7 @@ export default function WhatsAppInboxPage() {
               setNewChatMode(true);
               setSelectedThreadId(null);
               setDraft("");
-              setComposerMode("text");
+              setComposerMode("template");
               setTemplateVariablesText("");
               setError("");
               setMobileView("chat");
@@ -910,6 +947,17 @@ export default function WhatsAppInboxPage() {
                     </div>
                   )}
 
+                  {textModeUnavailable && (
+                    <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      <span className="mt-0.5 text-amber-600"><IconWarning /></span>
+                      <span className="flex-1">
+                        {newChatMode
+                          ? "Per aprire una nuova conversazione WhatsApp serve un template approvato."
+                          : "La finestra di risposta libera e scaduta: usa un template approvato per scrivere al cliente."}
+                      </span>
+                    </div>
+                  )}
+
                   {/* Mode toggle */}
                   <div className="mb-3 flex flex-wrap gap-2">
                     {[
@@ -920,7 +968,7 @@ export default function WhatsAppInboxPage() {
                         key={mode.value}
                         type="button"
                         onClick={() => setComposerMode(mode.value as "text" | "template")}
-                        disabled={busyAction === "reply"}
+                        disabled={busyAction === "reply" || (mode.value === "text" && textModeUnavailable)}
                         className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:bg-slate-100 ${
                           composerMode === mode.value
                             ? "border-emerald-600 bg-emerald-600 text-white"
