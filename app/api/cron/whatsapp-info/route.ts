@@ -4,6 +4,7 @@ import {
   logWhatsAppEvent,
   normalizeE164,
   selectInfoTemplate,
+  whatsappGraphVersion,
 } from "@/lib/server/whatsapp";
 
 export const runtime = "nodejs";
@@ -56,7 +57,7 @@ async function sendInfoTemplate(
     });
   }
 
-  const res = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberId}/messages`, {
+  const res = await fetch(`https://graph.facebook.com/${whatsappGraphVersion()}/${phoneNumberId}/messages`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,

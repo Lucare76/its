@@ -11,7 +11,8 @@ const payloadSchema = z.object({
   allow_text_fallback: z.boolean(),
   enable_arrival_messages: z.boolean().optional().default(false),
   arrival_template: z.string().min(1).max(120).optional().default("arrival_welcome"),
-  arrival_notice_minutes: z.number().int().min(5).max(1440).optional().default(90)
+  arrival_notice_minutes: z.number().int().min(5).max(1440).optional().default(90),
+  bus_convocazioni_send_hour: z.number().int().min(0).max(23).optional().default(13)
 });
 
 async function requireAdminMembership(request: NextRequest) {
@@ -78,6 +79,7 @@ export async function POST(request: NextRequest) {
     enable_arrival_messages: parsed.data.enable_arrival_messages,
     arrival_template: parsed.data.arrival_template,
     arrival_notice_minutes: parsed.data.arrival_notice_minutes,
+    bus_convocazioni_send_hour: parsed.data.bus_convocazioni_send_hour,
     updated_at: new Date().toISOString()
   };
 

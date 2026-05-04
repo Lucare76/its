@@ -44,6 +44,7 @@ export interface TenantWhatsAppSettings {
   enable_arrival_messages: boolean;
   arrival_template: string;
   arrival_notice_minutes: number;
+  bus_convocazioni_send_hour: number;
 }
 
 export interface SendReminderOptions {
@@ -107,7 +108,7 @@ export interface WhatsAppEventInsert {
   tenant_id: string;
   service_id: string | null;
   to_phone: string;
-  kind?: "24h" | "2h" | "48h_departure" | "24h_reminder" | "info_3d" | "manual" | "webhook" | null;
+  kind?: "24h" | "2h" | "48h_departure" | "24h_reminder" | "info_3d" | "manual" | "webhook" | "bus_convocazione" | null;
   template: string | null;
   status: WhatsAppEventStatus;
   provider_message_id: string | null;
@@ -125,7 +126,7 @@ function whatsappAccessToken() {
   return process.env.WHATSAPP_ACCESS_TOKEN?.trim().replace(/^["']|["']$/g, "") || mustEnv("WHATSAPP_TOKEN");
 }
 
-function whatsappGraphVersion() {
+export function whatsappGraphVersion() {
   return process.env.WHATSAPP_GRAPH_API_VERSION?.trim().replace(/^["']|["']$/g, "") || "v23.0";
 }
 
@@ -176,12 +177,13 @@ export async function getTenantWhatsAppSettings(admin: ReturnType<typeof createA
     allow_text_fallback: (process.env.WHATSAPP_ALLOW_TEXT_FALLBACK ?? "false").toLowerCase() === "true",
     enable_arrival_messages: false,
     arrival_template: "arrival_welcome",
-    arrival_notice_minutes: 90
+    arrival_notice_minutes: 90,
+    bus_convocazioni_send_hour: 13
   };
 
   const { data } = await admin
     .from("tenant_whatsapp_settings")
-    .select("default_template, template_language, enable_2h_reminder, allow_text_fallback, enable_arrival_messages, arrival_template, arrival_notice_minutes")
+    .select("default_template, template_language, enable_2h_reminder, allow_text_fallback, enable_arrival_messages, arrival_template, arrival_notice_minutes, bus_convocazioni_send_hour")
     .eq("tenant_id", tenantId)
     .maybeSingle();
 
@@ -196,7 +198,11 @@ export async function getTenantWhatsAppSettings(admin: ReturnType<typeof createA
     arrival_notice_minutes:
       typeof data.arrival_notice_minutes === "number" && Number.isFinite(data.arrival_notice_minutes)
         ? data.arrival_notice_minutes
-        : fallback.arrival_notice_minutes
+        : fallback.arrival_notice_minutes,
+    bus_convocazioni_send_hour:
+      typeof (data as Record<string, unknown>).bus_convocazioni_send_hour === "number"
+        ? (data as Record<string, unknown>).bus_convocazioni_send_hour as number
+        : fallback.bus_convocazioni_send_hour
   };
 }
 
