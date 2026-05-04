@@ -137,6 +137,9 @@ export const agencyBookingCreateSchema = z
     customer_phone: z.string().max(30).optional().or(z.literal("")),
     customer_email: z.string().email().max(160).optional().or(z.literal("")),
     pax: z.number().int().min(1).max(16),
+    infant_count: z.number().int().min(0).max(16).default(0),
+    pet_count: z.number().int().min(0).max(10).default(0),
+    pet_notes: z.string().max(240).optional().or(z.literal("")),
     hotel_id: z.string().uuid().optional().or(z.literal("")),
     booking_service_kind: agencyBookingServiceKindSchema,
     arrival_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -229,6 +232,14 @@ export const agencyBookingCreateSchema = z
 
     // Per SNAV/MEDMAR departure_time è il prelievo hotel (prima del traghetto):
     // confronta solo le date, non l'ora
+    if ((value.pet_count ?? 0) > 0 && (!value.pet_notes || value.pet_notes.trim().length < 2)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Indica tipo/taglia animale. Sono ammessi solo animali fino a 10 kg.",
+        path: ["pet_notes"]
+      });
+    }
+
     const isFerryKind = value.booking_service_kind === "formula_snav"
       || value.booking_service_kind === "formula_medmar_napoli"
       || value.booking_service_kind === "formula_medmar_pozzuoli";

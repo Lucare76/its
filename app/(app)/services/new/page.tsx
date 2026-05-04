@@ -217,6 +217,9 @@ export default function OpsNewBookingPage() {
     customer_last_name: "",
     customer_phone: "",
     pax: "2",
+    infant_count: "0",
+    pet_count: "0",
+    pet_notes: "",
     hotel_id: "",
     hotel_dest_id: "",
     booking_service_kind: "transfer_port_hotel" as BookingKind,
@@ -563,6 +566,9 @@ export default function OpsNewBookingPage() {
   const normalizedPayload = useMemo(() => ({
     ...form,
     pax: Number(form.pax || "0"),
+    infant_count: Number(form.infant_count || "0"),
+    pet_count: Number(form.pet_count || "0"),
+    pet_notes: form.pet_notes.trim(),
     notes: form.notes.trim(),
     transport_code_return: form.transport_code_return.trim(),
     agency_quoted_price_cents: form.quoted_price_eur
@@ -587,6 +593,7 @@ export default function OpsNewBookingPage() {
     if (isPhoneRequired && !form.customer_phone.trim()) warnings.push("Inserisci un telefono cliente.");
     const paxNum = Number(form.pax);
     if (!form.pax || isNaN(paxNum) || paxNum < 1) warnings.push("Inserisci il numero di pax (min. 1).");
+    if (Number(form.pet_count || "0") > 0 && !form.pet_notes.trim()) warnings.push("Indica tipo/taglia animale nelle note animali.");
     if (!form.hotel_id && !isPrivateIsland) warnings.push("Seleziona la struttura.");
     if (!form.arrival_date) warnings.push(`${contextLabels.arrivalDateLabel.replace("*", "").trim()} mancante.`);
     if (!form.arrival_time) warnings.push(`${contextLabels.arrivalTimeLabel.replace("*", "").trim()} mancante.`);
@@ -599,7 +606,7 @@ export default function OpsNewBookingPage() {
     if (isExcursionTitleRequired && !form.excursion_departure_port) warnings.push("Seleziona il porto di partenza.");
     if (isExcursionTitleRequired && !form.excursion_pickup_port) warnings.push("Seleziona il porto di prelevamento.");
     return warnings;
-  }, [contextLabels.arrivalDateLabel, contextLabels.arrivalTimeLabel, contextLabels.departureDateLabel, contextLabels.departureTimeLabel, contextLabels.transportCodeLabel, contextLabels.transportCodeReturnLabel, form.arrival_date, form.arrival_time, form.bus_city_origin, form.customer_first_name, form.customer_last_name, form.customer_phone, form.departure_date, form.departure_time, form.excursion_departure_port, form.excursion_pickup_port, form.excursion_title, form.hotel_id, form.pax, form.transport_code, form.transport_code_return, isBusOriginRequired, isExcursionTitleRequired, isPhoneRequired, isPrivateIsland, isSnavKind, isTransportCodeRequired]);
+  }, [contextLabels.arrivalDateLabel, contextLabels.arrivalTimeLabel, contextLabels.departureDateLabel, contextLabels.departureTimeLabel, contextLabels.transportCodeLabel, contextLabels.transportCodeReturnLabel, form.arrival_date, form.arrival_time, form.bus_city_origin, form.customer_first_name, form.customer_last_name, form.customer_phone, form.departure_date, form.departure_time, form.excursion_departure_port, form.excursion_pickup_port, form.excursion_title, form.hotel_id, form.pax, form.pet_count, form.pet_notes, form.transport_code, form.transport_code_return, isBusOriginRequired, isExcursionTitleRequired, isPhoneRequired, isPrivateIsland, isSnavKind, isTransportCodeRequired]);
 
   const doSubmit = async () => {
     if (!accessToken) { setMessage("Sessione non valida. Rifai login."); return; }
@@ -649,7 +656,7 @@ export default function OpsNewBookingPage() {
     setTripLeg("outbound_only");
     setForm({
       customer_first_name: "", customer_last_name: "", customer_phone: "",
-      pax: "2", hotel_id: firstHotelId, hotel_dest_id: "",
+      pax: "2", infant_count: "0", pet_count: "0", pet_notes: "", hotel_id: firstHotelId, hotel_dest_id: "",
       booking_service_kind: "transfer_port_hotel",
       arrival_date: todayIsoDate(), arrival_time: "12:00",
       departure_date: todayIsoDate(), departure_time: "18:00",
@@ -675,6 +682,7 @@ export default function OpsNewBookingPage() {
       }
       if (isPhoneRequired && !form.customer_phone.trim()) errs.customer_phone = "Campo obbligatorio";
       if (!form.pax || isNaN(Number(form.pax)) || Number(form.pax) < 1) errs.pax = "Minimo 1 pax";
+      if (Number(form.pet_count || "0") > 0 && !form.pet_notes.trim()) errs.pet_notes = "Indica tipo/taglia animale";
       if (!form.hotel_id && !isPrivateIsland) errs.hotel_id = "Seleziona la struttura";
       if (!form.arrival_date) errs.arrival_date = "Campo obbligatorio";
       if (!form.arrival_time) errs.arrival_time = "Campo obbligatorio";
@@ -813,12 +821,38 @@ export default function OpsNewBookingPage() {
         </label>
 
         <label className="text-sm">
-          Pax*
+          Pax prezzo pieno (2+ anni)*
           <input type="number" min={1} max={50} className="input-saas mt-1" value={form.pax}
             onChange={(e) => setForm((prev) => ({ ...prev, pax: e.target.value }))}
           />
+          <span className="mt-1 block text-xs text-slate-500">Dai 2 anni compiuti tutti pagano prezzo pieno.</span>
           {fieldErrors.pax ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.pax}</span> : null}
         </label>
+        <label className="text-sm">
+          Infant 0-1,99 anni
+          <input type="number" min={0} max={16} className="input-saas mt-1" value={form.infant_count}
+            onChange={(e) => setForm((prev) => ({ ...prev, infant_count: e.target.value }))}
+          />
+          <span className="mt-1 block text-xs text-slate-500">Quota fissa EUR 2,50 cad.</span>
+          {fieldErrors.infant_count ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.infant_count}</span> : null}
+        </label>
+        <div className="grid gap-3 md:col-span-2 md:grid-cols-2">
+          <label className="text-sm">
+            Animali piccola taglia
+            <input type="number" min={0} max={10} className="input-saas mt-1" value={form.pet_count}
+              onChange={(e) => setForm((prev) => ({ ...prev, pet_count: e.target.value }))}
+            />
+            <span className="mt-1 block text-xs text-slate-500">Solo fino a 10 kg. Biglietto a cura del cliente in biglietteria.</span>
+            {fieldErrors.pet_count ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.pet_count}</span> : null}
+          </label>
+          <label className="text-sm">
+            Note animali
+            <input className="input-saas mt-1" placeholder="Es. cane 6 kg nel trasportino" value={form.pet_notes}
+              onChange={(e) => setForm((prev) => ({ ...prev, pet_notes: e.target.value }))}
+            />
+            {fieldErrors.pet_notes ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.pet_notes}</span> : null}
+          </label>
+        </div>
 
         {/* Hotel */}
         <div className="text-sm md:col-span-2">
@@ -1224,6 +1258,13 @@ export default function OpsNewBookingPage() {
             {isSnavKind ? (form.customer_last_name || "Nome completo") : `${form.customer_first_name || "Nome"} ${form.customer_last_name || "Cognome"}`}
             {" | "}{serviceKindLabel} | Pax {form.pax || "0"}
           </p>
+          {Number(form.infant_count || "0") > 0 || Number(form.pet_count || "0") > 0 ? (
+            <p>
+              {Number(form.infant_count || "0") > 0 ? `Infant ${form.infant_count} (EUR 2,50 cad.)` : null}
+              {Number(form.infant_count || "0") > 0 && Number(form.pet_count || "0") > 0 ? " | " : ""}
+              {Number(form.pet_count || "0") > 0 ? `Animali ${form.pet_count} max 10 kg, biglietto cliente` : null}
+            </p>
+          ) : null}
           <p>{contextLabels.arrivalDateLabel.replace("*", "")} {form.arrival_date} {form.arrival_time} — {contextLabels.departureDateLabel.replace("*", "")} {form.departure_date} {form.departure_time}</p>
           {form.transport_code ? <p>{contextLabels.transportCodeLabel.replace("*", "")}: {form.transport_code}{form.transport_code_return ? ` / ritorno: ${form.transport_code_return}` : ""}</p> : null}
           {form.agency_id ? <p>Agenzia: {agencies.find((a) => a.id === form.agency_id)?.name ?? "—"}</p> : null}

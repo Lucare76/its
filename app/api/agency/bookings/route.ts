@@ -9,6 +9,7 @@ import { auditLog } from "@/lib/server/ops-audit";
 import { authorizeServiceRoleRequest } from "@/lib/server/pricing-auth";
 import { appUrlFromRequest, ensureBusBookingQrCodes } from "@/lib/server/bus-booking-qr";
 import { computeIschiaArrivalTime } from "@/lib/ferry-schedule-options";
+import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
 
 export const runtime = "nodejs";
 
@@ -317,7 +318,7 @@ export async function POST(request: NextRequest) {
 
     const bookingKind = parsed.data.booking_service_kind;
     const serviceType = bookingKind === "excursion" ? "bus_tour" : "transfer";
-    const notes = parsed.data.notes.trim();
+    const notes = appendBookingAncillaryNotes(parsed.data.notes, parsed.data);
     const customerName = `${(parsed.data.customer_first_name ?? "").trim()} ${parsed.data.customer_last_name.trim()}`.trim();
     const transportCodeOut = (parsed.data.transport_code ?? "").trim();
     const transportCodeReturn = (parsed.data.transport_code_return ?? "").trim();
@@ -399,7 +400,8 @@ export async function POST(request: NextRequest) {
       include_ferry_tickets: parsed.data.include_ferry_tickets,
       ferry_details: {
         outbound_code: ferryOutboundCode || null,
-        return_code: ferryReturnCode || null
+        return_code: ferryReturnCode || null,
+        ...buildBookingAncillaryDetails(parsed.data)
       },
       excursion_details:
         bookingKind === "excursion"

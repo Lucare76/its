@@ -14,6 +14,7 @@ import { buildServiceLabelShort } from "@/lib/service-label";
 import { auditLog } from "@/lib/server/ops-audit";
 import { appUrlFromRequest, ensureBusBookingQrCodes } from "@/lib/server/bus-booking-qr";
 import { computeIschiaArrivalTime } from "@/lib/ferry-schedule-options";
+import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
 
 export const runtime = "nodejs";
 
@@ -62,7 +63,7 @@ export async function POST(request: NextRequest) {
     const busCityOrigin = (d.bus_city_origin ?? "").trim();
     const excursionTitle = (d.excursion_title ?? "").trim();
     const customerName = `${(d.customer_first_name ?? "").trim()} ${d.customer_last_name.trim()}`.trim();
-    const notes = d.notes.trim();
+    const notes = appendBookingAncillaryNotes(d.notes, d);
     // Porto e dati extra per SNAV/MEDMAR
     const meetingPoint = typeof bodyRaw.meeting_point === "string" ? bodyRaw.meeting_point.trim() || null : null;
     const ferryDepTime = typeof bodyRaw.ferry_dep_time === "string" ? bodyRaw.ferry_dep_time.trim() || null : null;
@@ -197,7 +198,8 @@ export async function POST(request: NextRequest) {
       include_ferry_tickets: d.include_ferry_tickets ?? false,
       ferry_details: {
         outbound_code: (d.ferry_outbound_code ?? "").trim() || null,
-        return_code: (d.ferry_return_code ?? "").trim() || null
+        return_code: (d.ferry_return_code ?? "").trim() || null,
+        ...buildBookingAncillaryDetails(d)
       },
       excursion_details: bookingKind === "excursion" ? { title: excursionTitle } : {},
       agency_quoted_price_cents: d.agency_quoted_price_cents ?? null,

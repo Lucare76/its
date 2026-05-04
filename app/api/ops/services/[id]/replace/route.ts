@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { auditLog } from "@/lib/server/ops-audit";
+import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
 
 export const runtime = "nodejs";
 
@@ -10,6 +11,9 @@ const replaceSchema = z.object({
   customer_last_name: z.string().min(1).max(80),
   customer_phone: z.string().min(6).max(30),
   pax: z.number().int().min(1).max(99),
+  infant_count: z.number().int().min(0).max(16).default(0),
+  pet_count: z.number().int().min(0).max(10).default(0),
+  pet_notes: z.string().max(240).optional().or(z.literal("")),
   hotel_id: z.string().uuid(),
   arrival_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   arrival_time: z.string().regex(/^\d{2}:\d{2}$/),
@@ -20,6 +24,14 @@ const replaceSchema = z.object({
   notes: z.string().max(2000),
   agency_id: z.union([z.string().uuid(), z.literal(""), z.null()]).optional().transform((v) => v === "" ? null : v),
   agency_quoted_price_cents: z.number().int().optional().nullable(),
+}).superRefine((value, ctx) => {
+  if ((value.pet_count ?? 0) > 0 && (!value.pet_notes || value.pet_notes.trim().length < 2)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Indica tipo/taglia animale. Sono ammessi solo animali fino a 10 kg.",
+      path: ["pet_notes"]
+    });
+  }
 });
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -77,7 +89,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     departure_time: d.departure_time,
     date: d.arrival_date,
     time: d.arrival_time,
-    notes: d.notes,
+    notes: appendBookingAncillaryNotes(d.notes, d),
+    ferry_details: buildBookingAncillaryDetails(d),
     transport_code: d.transport_code ?? null,
     bus_city_origin: d.bus_city_origin ?? null,
     // Ripristina status a "new" se era cancellato (sostituzione esplicita)
