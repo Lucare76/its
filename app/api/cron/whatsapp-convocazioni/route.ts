@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   createAdminClient,
-  getTenantWhatsAppSettings,
   logWhatsAppEvent,
   normalizeE164,
   whatsappGraphVersion,
@@ -12,19 +11,12 @@ export const runtime = "nodejs";
 // Convocazioni bus_city_hotel: inviati al cliente il giorno prima dell'arrivo.
 // Include punto di partenza (meeting_point) e telefono autista (da bus_unit_driver_dates
 // con fallback a tenant_bus_units).
-// Orario di invio configurabile tramite tenant_whatsapp_settings.bus_convocazioni_send_hour
-// (ora italiana, default 13). Il cron gira ogni ora e si ferma se non è l'ora giusta.
+// Schedule: 11:05 UTC ogni giorno (= 13:05 ora italiana estiva CEST).
 
 function hasCronAuth(request: NextRequest) {
   const expected = process.env.WHATSAPP_CRON_SECRET ?? process.env.CRON_SECRET;
   if (!expected) return false;
   return request.headers.get("authorization") === `Bearer ${expected}`;
-}
-
-function italianHour(): number {
-  return new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Europe/Rome" })
-  ).getHours();
 }
 
 async function sendConvocazioneTemplate(
@@ -142,19 +134,6 @@ async function runCron(request: NextRequest) {
   const effectiveTenantId = tenantId ?? settingsRow?.tenant_id;
   if (!effectiveTenantId) {
     return NextResponse.json({ error: "Tenant non trovato" }, { status: 500 });
-  }
-
-  const settings = await getTenantWhatsAppSettings(admin, effectiveTenantId);
-  const sendHour = settings.bus_convocazioni_send_hour;
-  const currentHour = italianHour();
-
-  if (currentHour !== sendHour) {
-    return NextResponse.json({
-      ok: true,
-      skipped: "not_send_hour",
-      currentHour,
-      sendHour,
-    });
   }
 
   // Data di domani (servizi da convocate domani)
