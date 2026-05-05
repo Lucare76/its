@@ -192,7 +192,7 @@ function asCountItems(map: Map<string, number>) {
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
-async function resolveContext(request: NextRequest): Promise<AnalyticsContext | NextResponse> {
+export async function resolveContext(request: NextRequest): Promise<AnalyticsContext | NextResponse> {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
   const authHeader = request.headers.get("authorization");
@@ -248,7 +248,7 @@ async function resolveContext(request: NextRequest): Promise<AnalyticsContext | 
   };
 }
 
-async function computeAnalytics(
+export async function computeAnalytics(
   admin: SupabaseClient,
   tenantId: string,
   dateFrom: string,
