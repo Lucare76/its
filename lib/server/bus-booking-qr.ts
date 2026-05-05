@@ -670,7 +670,7 @@ export async function sendBusBookingQrWhatsApp(options: SendWhatsAppOptions): Pr
   }
 
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
-  const accessToken = process.env.WHATSAPP_TOKEN?.trim();
+  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN?.trim() ?? process.env.WHATSAPP_TOKEN?.trim();
   if (!phoneNumberId || !accessToken || options.dryRun) {
     return {
       ok: true,

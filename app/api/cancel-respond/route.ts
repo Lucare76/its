@@ -2,30 +2,24 @@
  * POST /api/cancel-respond
  *
  * Risposta dell'agenzia alla richiesta di cancellazione tramite token email.
- * Endpoint PUBBLICO — non richiede login.
- *
- * Body:
- *   token          string (uuid)
- *   action         "accept" | "reject" | "counter"
- *   counter_cents  number?   (solo se action=counter)
- *   note           string?
+ * Endpoint pubblico: non richiede login.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { type SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { sendEmail } from "@/lib/server/send-email";
 import { emailHtml } from "@/lib/server/email-layout";
 import { escapeHtml } from "@/lib/server/escape-html";
+import { notifyDriverServiceCancelled } from "@/lib/server/driver-cancellation-whatsapp";
 
 export const runtime = "nodejs";
 
 const bodySchema = z.object({
-  token:         z.string().uuid(),
-  action:        z.enum(["accept", "reject", "counter"]),
+  token: z.string().uuid(),
+  action: z.enum(["accept", "reject", "counter"]),
   counter_cents: z.number().int().min(0).max(9_999_900).optional(),
-  note:          z.string().max(500).optional(),
+  note: z.string().max(500).optional(),
 });
 
 function formatEur(cents: number) {
@@ -47,7 +41,6 @@ export async function POST(req: NextRequest) {
     }
     const { token, action, counter_cents, note } = parsed.data;
 
-    // Carica richiesta tramite token
     const { data: cr } = await admin
       .from("cancellation_requests")
       .select(`
@@ -64,7 +57,7 @@ export async function POST(req: NextRequest) {
 
     if (!cr) return NextResponse.json({ error: "Richiesta non trovata o link non valido." }, { status: 404 });
     if (cr.status !== "pending_agency_approval") {
-      return NextResponse.json({ error: "Questa richiesta non è più in attesa di risposta." }, { status: 409 });
+      return NextResponse.json({ error: "Questa richiesta non e piu in attesa di risposta." }, { status: 409 });
     }
 
     const svc = Array.isArray(cr.services) ? cr.services[0] : cr.services as Record<string, unknown>;
@@ -74,45 +67,67 @@ export async function POST(req: NextRequest) {
     const hotelName = (Array.isArray(hotelRaw) ? hotelRaw[0]?.name : (hotelRaw as { name?: string } | null)?.name) ?? "N/D";
     const tenantId = cr.tenant_id as string;
     const penaltyCents = cr.penalty_cents as number ?? 0;
-
-    // ── Aggiorna richiesta ────────────────────────────────────────────────────
-    // accept → approved, reject/counter → rimane pending_agency_approval per gestione operatore
     const newStatus = action === "accept" ? "approved" : "pending_agency_approval";
 
-    await admin
-      .from("cancellation_requests")
-      .update({
-        status: newStatus,
-        agency_response: action,
-        agency_response_note: note ?? null,
-        agency_counter_cents: action === "counter" ? (counter_cents ?? null) : null,
-        agency_responded_at: new Date().toISOString(),
-      })
-      .eq("id", cr.id);
-
-    const dateFormatted = formatDate(svc?.arrival_date as string ?? svc?.date as string ?? "");
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "";
-
-    // ── Se accetta → applica cancellazione subito ─────────────────────────────
     if (action === "accept") {
-      await applyFinalCancellation(admin, tenantId, cr, svc, penaltyCents);
+      const { data: assignmentBeforeCancellation } = await admin
+        .from("assignments")
+        .select("driver_user_id")
+        .eq("tenant_id", tenantId)
+        .eq("service_id", svc.id as string)
+        .maybeSingle();
 
+      const { error: finalizeError } = await admin.rpc("finalize_cancellation_request", {
+        p_request_id: cr.id,
+        p_tenant_id: tenantId,
+        p_user_id: null,
+        p_status: "approved",
+        p_agency_response: action,
+        p_agency_response_note: note ?? null,
+        p_agency_counter_cents: null,
+        p_penalty_cents: penaltyCents,
+        p_penalty_note: cr.penalty_note ?? null,
+      });
+
+      if (finalizeError) {
+        return NextResponse.json({ error: finalizeError.message }, { status: 500 });
+      }
+
+      void notifyDriverServiceCancelled({
+        admin,
+        tenantId,
+        service: {
+          id: svc.id as string,
+          customer_name: svc.customer_name as string | null,
+          date: (svc.arrival_date as string | null) ?? (svc.date as string | null),
+          time: (svc.arrival_time as string | null) ?? (svc.time as string | null),
+        },
+        driverUserId: assignmentBeforeCancellation?.driver_user_id as string | null | undefined,
+        requestedByUserId: null,
+      });
+    } else {
       await admin
         .from("cancellation_requests")
-        .update({ resolved_at: new Date().toISOString() })
+        .update({
+          status: newStatus,
+          agency_response: action,
+          agency_response_note: note ?? null,
+          agency_counter_cents: action === "counter" ? (counter_cents ?? null) : null,
+          agency_responded_at: new Date().toISOString(),
+        })
         .eq("id", cr.id);
     }
 
-    // ── Notifica in-app + email ad admin/operator ─────────────────────────────
+    const dateFormatted = formatDate(svc?.arrival_date as string ?? svc?.date as string ?? "");
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "";
     const actionLabel = action === "accept" ? "accettata" : action === "reject" ? "rifiutata" : "controproposta ricevuta";
     const notifTitle = action === "accept"
       ? "Cancellazione approvata"
       : action === "reject"
       ? "Penale rifiutata"
       : "Controproposta penale";
-    const notifBody = `${svc?.customer_name as string} — ${hotelName} — ${dateFormatted}`;
+    const notifBody = `${svc?.customer_name as string} - ${hotelName} - ${dateFormatted}`;
 
-    // Notifiche in-app agli admin/operator
     const { data: opsMembers } = await admin
       .from("memberships")
       .select("user_id")
@@ -126,12 +141,11 @@ export async function POST(req: NextRequest) {
         type: `cancellation_${action}`,
         title: notifTitle,
         body: notifBody,
-        link: `/cancellazioni`,
+        link: "/cancellazioni",
         reference_id: cr.id,
       }));
       await admin.from("notifications").insert(notifications);
 
-      // Email agli admin/operator
       const userIds = opsMembers.map((m: { user_id: string }) => m.user_id);
       const { data: { users } } = await admin.auth.admin.listUsers();
       const opsEmails = (users ?? [])
@@ -147,7 +161,7 @@ export async function POST(req: NextRequest) {
 
         await sendEmail({
           to: opsEmails,
-          subject: `${notifTitle} — ${escapeHtml(svc?.customer_name)}`,
+          subject: `${notifTitle} - ${escapeHtml(svc?.customer_name)}`,
           html: emailHtml(`
             <h2 style="color:#0f172a;margin-bottom:4px;">${notifTitle}</h2>
             <p style="color:#475569;margin-bottom:16px;">
@@ -162,7 +176,7 @@ export async function POST(req: NextRequest) {
             ${counterNote}
             ${noteHtml}
             <a href="${appUrl}/cancellazioni" style="display:inline-block;background:#1e293b;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;font-size:14px;">
-              Gestisci richiesta →
+              Gestisci richiesta
             </a>
           `, { title: notifTitle }),
         });
@@ -172,42 +186,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, action, status: newStatus });
   } catch (err) {
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore" }, { status: 500 });
-  }
-}
-
-// ── Applica cancellazione finale ──────────────────────────────────────────────
-async function applyFinalCancellation(
-  admin: SupabaseClient,
-  tenantId: string,
-  cr: Record<string, unknown>,
-  svc: Record<string, unknown>,
-  penaltyCents: number
-) {
-  const serviceId = svc?.id as string;
-  const legs = cr.cancel_legs as string;
-
-  if (legs === "both") {
-    await admin.from("services").update({ status: "cancelled" }).eq("id", serviceId).eq("tenant_id", tenantId);
-  } else if (legs === "arrival") {
-    await admin.from("services")
-      .update({ arrival_date: null, arrival_time: null, status: "new" })
-      .eq("id", serviceId).eq("tenant_id", tenantId);
-  } else {
-    await admin.from("services")
-      .update({ departure_date: null, departure_time: null, status: "new" })
-      .eq("id", serviceId).eq("tenant_id", tenantId);
-  }
-
-  await admin.from("status_events").insert({
-    tenant_id: tenantId,
-    service_id: serviceId,
-    status: legs === "both" ? "cancelled" : "new",
-    notes: `Cancellazione approvata dall'agenzia${penaltyCents > 0 ? ` — Penale: ${formatEur(penaltyCents)}` : ""}`,
-  });
-
-  if (penaltyCents > 0) {
-    await admin.from("services")
-      .update({ agency_quoted_price_cents: penaltyCents, agency_payment_status: "unpaid" })
-      .eq("id", serviceId).eq("tenant_id", tenantId);
   }
 }

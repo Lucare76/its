@@ -102,7 +102,7 @@ async function runCron(request: NextRequest) {
   const { data: assignmentsData } =
     dueServiceIds.length === 0
       ? { data: [] }
-      : await admin.from("assignments").select("service_id, vehicle_label").in("service_id", dueServiceIds);
+      : await admin.from("assignments").select("service_id, driver_user_id, vehicle_label").in("service_id", dueServiceIds);
   const assignmentByServiceId = new Map((assignmentsData ?? []).map((item) => [item.service_id, item]));
 
   let sent = 0;
@@ -119,11 +119,14 @@ async function runCron(request: NextRequest) {
     }
     const assignment = assignmentByServiceId.get(service.id);
     const settings = settingsByTenant.get(service.tenant_id);
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "");
+    const trackingUrl = appUrl && assignment?.driver_user_id ? `${appUrl}/track/${service.id}` : null;
     const result = await sendWhatsAppReminder(service, hotelById.get(service.hotel_id), {
       meetingPoint: service.meeting_point,
       driverPhone: extractDriverPhoneFromNotes(service.notes),
       vehicleLabel: assignment?.vehicle_label ?? null,
-      plate: service.bus_plate
+      plate: service.bus_plate,
+      trackingUrl
     }, {
       templateName: settings?.default_template,
       languageCode: settings?.template_language,
@@ -146,7 +149,8 @@ async function runCron(request: NextRequest) {
           source: "api/cron/whatsapp-reminders",
           phase,
           language: result.languageCode,
-          delivery_mode: result.deliveryMode
+          delivery_mode: result.deliveryMode,
+          tracking_url_included: Boolean(trackingUrl)
         }
       });
       await admin
@@ -173,7 +177,8 @@ async function runCron(request: NextRequest) {
         source: "api/cron/whatsapp-reminders",
         phase,
         language: result.languageCode,
-        delivery_mode: result.deliveryMode
+        delivery_mode: result.deliveryMode,
+        tracking_url_included: Boolean(trackingUrl)
       }
     });
     await admin

@@ -13,7 +13,7 @@ WHATSAPP_BUSINESS_ACCOUNT_ID=
 WHATSAPP_GRAPH_API_VERSION=v23.0
 ```
 
-Nota: il codice legacy usa ancora `WHATSAPP_TOKEN` per alcuni invii template esistenti. In uno step successivo conviene allinearlo a `WHATSAPP_ACCESS_TOKEN`.
+Nota: `WHATSAPP_ACCESS_TOKEN` deve essere un System User Token Meta permanente. `WHATSAPP_TOKEN` resta solo come fallback legacy durante la migrazione.
 
 ## Webhook Meta Developers
 
@@ -129,4 +129,3 @@ Controllare:
 3. Automazioni conferma transfer con suggerimenti, non auto-azioni rischiose.
 4. Escalation a operatore e assegnazione thread.
 5. AI suggestion per classificare risposte, senza modificare prenotazioni automaticamente.
-

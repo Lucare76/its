@@ -3,7 +3,8 @@
 ## Env richieste
 Imposta in `.env.local` (e in Vercel):
 
-- `WHATSAPP_TOKEN`: permanent/system user token Meta.
+- `WHATSAPP_ACCESS_TOKEN`: permanent System User Token Meta. Usare questo per produzione.
+- `WHATSAPP_TOKEN`: fallback legacy, da mantenere solo durante migrazione.
 - `WHATSAPP_PHONE_NUMBER_ID`: Phone Number ID del numero WhatsApp Business.
 - `WHATSAPP_VERIFY_TOKEN`: token arbitrario usato anche in Meta webhook verification.
 - `WHATSAPP_TEMPLATE_NAME` (opzionale, default `transfer_reminder`).
@@ -54,6 +55,9 @@ Viene popolata da:
   - `template_language`
   - `enable_2h_reminder`
   - `allow_text_fallback`
+- Il template `transfer_reminder` deve includere il parametro tracking come sesto placeholder:
+  `Segui il tuo autista in tempo reale: {{6}}`.
+  Il codice invia il link solo quando il servizio ha gia un autista assegnato.
 
 ## Template utility e fallback testo
 - Invio primario: `type=template` (utility template configurato per tenant).

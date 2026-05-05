@@ -34,6 +34,7 @@ export interface ReminderMessageContext {
   driverPhone?: string | null;
   vehicleLabel?: string | null;
   plate?: string | null;
+  trackingUrl?: string | null;
 }
 
 export interface TenantWhatsAppSettings {
@@ -122,7 +123,7 @@ function mustEnv(name: string) {
   return value;
 }
 
-function whatsappAccessToken() {
+export function whatsappAccessToken() {
   return process.env.WHATSAPP_ACCESS_TOKEN?.trim().replace(/^["']|["']$/g, "") || mustEnv("WHATSAPP_TOKEN");
 }
 
@@ -574,7 +575,8 @@ export async function sendWhatsAppReminder(
     { type: "text", text: service.date },
     { type: "text", text: reminderTime },
     { type: "text", text: hotelLine.slice(0, 1024) },
-    { type: "text", text: vesselLine.slice(0, 1024) }
+    { type: "text", text: vesselLine.slice(0, 1024) },
+    { type: "text", text: (context?.trackingUrl ? `Segui il tuo autista in tempo reale:\n${context.trackingUrl}` : "").slice(0, 1024) }
   ]);
 
   if (templateAttempt.ok) {
@@ -604,14 +606,16 @@ export async function sendWhatsAppReminder(
         `Ciao ${service.customer_name},`,
         `ricorda: il ${service.date} alle ${reminderTime} saremo all'hotel per portarti al porto.`,
         `Traghetto: ${vesselLine}`,
+        context?.trackingUrl ? `Segui il tuo autista in tempo reale:\n${context.trackingUrl}` : null,
         service.pickup_alert ? `⚠️ ${service.pickup_alert}` : null,
       ].filter(Boolean).join("\n")
     : [
         `Ciao ${service.customer_name},`,
         `promemoria transfer ${service.date} ${service.time.slice(0, 5)}.`,
         `Hotel/meeting: ${hotelLine}`,
-        `Dettagli nave: ${vesselLine}`
-      ].join("\n");
+        `Dettagli nave: ${vesselLine}`,
+        context?.trackingUrl ? `Segui il tuo autista in tempo reale:\n${context.trackingUrl}` : null
+      ].filter(Boolean).join("\n");
   const textAttempt = await sendTextMessage(phoneNumberId, accessToken, toPhone, plainText);
 
   if (!textAttempt.ok) {

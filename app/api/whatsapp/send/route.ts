@@ -53,17 +53,20 @@ export async function POST(request: NextRequest) {
     .maybeSingle();
   const { data: assignment } = await admin
     .from("assignments")
-    .select("vehicle_label")
+    .select("driver_user_id, vehicle_label")
     .eq("service_id", service.id)
     .eq("tenant_id", auth.membership.tenant_id)
     .maybeSingle();
   const settings = await getTenantWhatsAppSettings(admin, auth.membership.tenant_id);
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "");
+  const trackingUrl = appUrl && assignment?.driver_user_id ? `${appUrl}/track/${service.id}` : null;
 
   const result = await sendWhatsAppReminder(service, hotel?.name, {
     meetingPoint: service.meeting_point,
     driverPhone: extractDriverPhoneFromNotes(service.notes),
     vehicleLabel: assignment?.vehicle_label ?? null,
-    plate: service.bus_plate
+    plate: service.bus_plate,
+    trackingUrl
   }, {
     templateName: settings.default_template,
     languageCode: settings.template_language,
@@ -85,7 +88,8 @@ export async function POST(request: NextRequest) {
         source: "api/whatsapp/send",
         phase: "manual",
         language: result.languageCode,
-        delivery_mode: result.deliveryMode
+        delivery_mode: result.deliveryMode,
+        tracking_url_included: Boolean(trackingUrl)
       }
     });
     await admin
@@ -113,7 +117,8 @@ export async function POST(request: NextRequest) {
       source: "api/whatsapp/send",
       phase: "manual",
       language: result.languageCode,
-      delivery_mode: result.deliveryMode
+      delivery_mode: result.deliveryMode,
+      tracking_url_included: Boolean(trackingUrl)
     }
   });
   const { error: updateError } = await admin

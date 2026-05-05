@@ -98,6 +98,11 @@ export function PwaInit({ children }: { children?: React.ReactNode }) {
         swReg.current = reg;
         void reg.update();
         setSwReady(true);
+        void getToken().then((token) => {
+          if (token) {
+            reg.active?.postMessage({ type: "PREFETCH_DRIVER_DATA", token });
+          }
+        });
 
         // Controlla stato push attuale
         if (!("PushManager" in window)) {

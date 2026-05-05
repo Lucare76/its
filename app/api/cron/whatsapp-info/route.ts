@@ -93,11 +93,11 @@ async function runCron(request: NextRequest) {
   }
 
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
-  const accessToken   = process.env.WHATSAPP_TOKEN?.trim();
+  const accessToken   = process.env.WHATSAPP_ACCESS_TOKEN?.trim() ?? process.env.WHATSAPP_TOKEN?.trim();
   const defaultLang   = (process.env.WHATSAPP_TEMPLATE_LANGUAGE ?? "it").replace("-", "_");
 
   if (!phoneNumberId || !accessToken) {
-    return NextResponse.json({ error: "WHATSAPP_PHONE_NUMBER_ID e WHATSAPP_TOKEN non configurati" }, { status: 500 });
+    return NextResponse.json({ error: "WHATSAPP_PHONE_NUMBER_ID e WHATSAPP_ACCESS_TOKEN non configurati" }, { status: 500 });
   }
 
   let admin: ReturnType<typeof createAdminClient>;

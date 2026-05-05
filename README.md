@@ -58,7 +58,8 @@ Smoke test inbound automatico (senza problemi di escaping `curl`):
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `EMAIL_INBOUND_TOKEN`
-- `WHATSAPP_TOKEN`
+- `WHATSAPP_ACCESS_TOKEN` (System User Token Meta permanente; preferito)
+- `WHATSAPP_TOKEN` (fallback legacy durante la migrazione)
 - `WHATSAPP_PHONE_NUMBER_ID`
 - `WHATSAPP_VERIFY_TOKEN`
 - `WHATSAPP_TEMPLATE_NAME` (default: `transfer_reminder`)
@@ -76,7 +77,8 @@ Smoke test inbound automatico (senza problemi di escaping `curl`):
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `EMAIL_INBOUND_TOKEN`
-- `WHATSAPP_TOKEN`
+- `WHATSAPP_ACCESS_TOKEN`
+- `WHATSAPP_TOKEN` (fallback legacy)
 - `WHATSAPP_PHONE_NUMBER_ID`
 - `WHATSAPP_VERIFY_TOKEN`
 - `WHATSAPP_TEMPLATE_LANGUAGE`
@@ -213,6 +215,17 @@ Guida rapida completa: `docs/whatsapp-setup.md`
 5. Env scheduler opzionali:
    - `WHATSAPP_REMINDER_WINDOW_MINUTES` (tolleranza finestra)
    - `WHATSAPP_REMINDER_2H_ENABLED=true` per secondo promemoria a 2h
+
+### System User Token Meta
+Per produzione usa un System User Token permanente in `WHATSAPP_ACCESS_TOKEN`.
+`WHATSAPP_TOKEN` resta supportato solo come fallback durante la transizione.
+
+1. Apri Meta Business Manager -> Impostazioni -> Utenti di sistema.
+2. Crea un utente di sistema con ruolo Admin.
+3. Genera un token per l'app WhatsApp con permessi `whatsapp_business_messaging` e `whatsapp_business_management`.
+4. Il token generato come System User Token non ha scadenza.
+
+Il job `/api/cron/whatsapp-token-check` verifica ogni giorno il token configurato: se Meta risponde 401/403 invia una mail urgente agli admin; se il token espone `expires_at` e mancano meno di 15 giorni invia un avviso preventivo.
 
 ### Stima costi (400 messaggi/settimana)
 - WhatsApp Cloud API usa pricing a conversazione/template (varia per paese e categoria).

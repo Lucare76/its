@@ -24,6 +24,7 @@ type HealthPayload = {
     IMAP_PASS: boolean;
     IMAP_TLS: boolean;
     CRON_SECRET: boolean;
+    WHATSAPP_ACCESS_TOKEN: boolean;
     WHATSAPP_TOKEN: boolean;
     WHATSAPP_PHONE_NUMBER_ID: boolean;
     WHATSAPP_VERIFY_TOKEN: boolean;
@@ -61,6 +62,7 @@ const envOrder: Array<keyof HealthPayload["env"]> = [
   "IMAP_PASS",
   "IMAP_TLS",
   "CRON_SECRET",
+  "WHATSAPP_ACCESS_TOKEN",
   "WHATSAPP_TOKEN",
   "WHATSAPP_PHONE_NUMBER_ID",
   "WHATSAPP_VERIFY_TOKEN",

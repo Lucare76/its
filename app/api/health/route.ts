@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
   const googleVisionInputBucket = process.env.GOOGLE_CLOUD_VISION_INPUT_BUCKET;
   const googleVisionOutputBucket = process.env.GOOGLE_CLOUD_VISION_OUTPUT_BUCKET;
   const cronSecret = process.env.CRON_SECRET;
+  const whatsappAccessToken = process.env.WHATSAPP_ACCESS_TOKEN;
   const whatsappToken = process.env.WHATSAPP_TOKEN;
   const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   const whatsappVerifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
@@ -59,6 +60,7 @@ export async function GET(request: NextRequest) {
     GOOGLE_CLOUD_VISION_INPUT_BUCKET: Boolean(googleVisionInputBucket),
     GOOGLE_CLOUD_VISION_OUTPUT_BUCKET: Boolean(googleVisionOutputBucket),
     CRON_SECRET: Boolean(cronSecret),
+    WHATSAPP_ACCESS_TOKEN: Boolean(whatsappAccessToken),
     WHATSAPP_TOKEN: Boolean(whatsappToken),
     WHATSAPP_PHONE_NUMBER_ID: Boolean(whatsappPhoneNumberId),
     WHATSAPP_VERIFY_TOKEN: Boolean(whatsappVerifyToken),

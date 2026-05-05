@@ -9,31 +9,6 @@ import { DriverSign } from "@/components/driver/DriverSign";
 import type { FerryScheduleRow } from "@/lib/ferry-schedule-options";
 import { ferryPortLabel, findArrivalScheduleForService, findDepartureScheduleForService } from "@/lib/ferry-schedule-options";
 
-/* ------------------------------------------------------------------ offline queue */
-
-const OFFLINE_QUEUE_KEY = "it-driver-status-queue-v1";
-
-type QueuedStatusAction = {
-  serviceId: string;
-  status: ServiceStatus;
-  queuedAt: string;
-};
-
-function readQueue(): QueuedStatusAction[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(OFFLINE_QUEUE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as QueuedStatusAction[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
-}
-
-function writeQueue(queue: QueuedStatusAction[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
-}
-
 /* ------------------------------------------------------------------ types */
 
 type DriverService = {
@@ -401,7 +376,7 @@ function DriverPageInner() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [focusServiceId, setFocusServiceId] = useState<string | null>(null);
-  const [pendingQueueCount, setPendingQueueCount] = useState(() => readQueue().length);
+  const [pendingQueueCount, setPendingQueueCount] = useState(0);
   const [savingStatus, setSavingStatus] = useState<ServiceStatus | null>(null);
   const [message, setMessage] = useState("");
   const [driverNote, setDriverNote] = useState("");
@@ -485,14 +460,25 @@ function DriverPageInner() {
   useEffect(() => {
     const onOnline = () => {
       setIsOnline(true);
-      if (tenantId) void flushQueue(tenantId);
+      navigator.serviceWorker?.controller?.postMessage({ type: "SYNC_DRIVER_STATUS_QUEUE" });
     };
     const onOffline = () => setIsOnline(false);
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     return () => { window.removeEventListener("online", onOnline); window.removeEventListener("offline", onOffline); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantId]);
+  }, []);
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel("its-driver-offline");
+    channel.onmessage = (event) => {
+      if (event.data?.type === "queue-count") {
+        setPendingQueueCount(Number(event.data.count) || 0);
+      }
+    };
+    navigator.serviceWorker?.controller?.postMessage({ type: "GET_DRIVER_STATUS_QUEUE_COUNT" });
+    return () => channel.close();
+  }, []);
 
   useEffect(() => {
     if (!message) return;
@@ -502,10 +488,10 @@ function DriverPageInner() {
 
 
   /* ---- persist status (server API: aggiorna stato + cattura GPS Radius) */
-  const persistStatus = useCallback(async (serviceId: string, status: ServiceStatus, _tid = tenantId): Promise<boolean> => {
-    if (!isOnline || !userId) return false;
+  const persistStatus = useCallback(async (serviceId: string, status: ServiceStatus): Promise<"synced" | "queued" | "failed"> => {
+    if (!userId) return "failed";
     const token = await getToken();
-    if (!token) return false;
+    if (!token) return "failed";
 
     // Cattura posizione browser come fallback se GPS browser disponibile
     let browserLat: number | null = null;
@@ -524,34 +510,18 @@ function DriverPageInner() {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ service_id: serviceId, status, browser_lat: browserLat, browser_lng: browserLng }),
-    });
-    if (!res.ok) return false;
-    const data = await res.json() as { ok?: boolean };
-    if (!data.ok) return false;
-    await refresh();
-    return true;
-  }, [isOnline, refresh, tenantId, userId]);
-
-  const flushQueue = useCallback(async (tid: string) => {
-    if (!isOnline) return;
-    const queue = readQueue();
-    if (!queue.length) return;
-    const remaining: QueuedStatusAction[] = [];
-    for (const item of queue) {
-      const ok = await persistStatus(item.serviceId, item.status, tid);
-      if (!ok) remaining.push(item);
+    }).catch(() => null);
+    if (!res) return "failed";
+    if (!res.ok) return "failed";
+    const data = await res.json() as { ok?: boolean; queued?: boolean };
+    if (!data.ok) return "failed";
+    if (data.queued) {
+      navigator.serviceWorker?.controller?.postMessage({ type: "GET_DRIVER_STATUS_QUEUE_COUNT" });
+      return "queued";
     }
-    writeQueue(remaining);
-    setPendingQueueCount(remaining.length);
-    if (!remaining.length) setMessage("Azioni offline sincronizzate.");
-  }, [isOnline, persistStatus]);
-
-  const enqueueStatus = (serviceId: string, status: ServiceStatus) => {
-    const queue = readQueue();
-    queue.push({ serviceId, status, queuedAt: new Date().toISOString() });
-    writeQueue(queue);
-    setPendingQueueCount(queue.length);
-  };
+    await refresh();
+    return "synced";
+  }, [refresh, userId]);
 
   /* ---- dati derivati */
   const mine = useMemo(() => {
@@ -769,9 +739,10 @@ function DriverPageInner() {
   const saveStatus = async (status: ServiceStatus) => {
     if (!focused) return;
     setSavingStatus(status);
-    const ok = await persistStatus(focused.service.id, status);
-    if (!ok) { enqueueStatus(focused.service.id, status); setMessage("Salvato offline — sincronizzo appena online."); }
-    else setMessage(`Stato: ${status.toUpperCase()}`);
+    const result = await persistStatus(focused.service.id, status);
+    if (result === "queued") setMessage("Salvato offline - sincronizzo appena online.");
+    else if (result === "synced") setMessage(`Stato: ${status.toUpperCase()}`);
+    else setMessage("Aggiornamento non riuscito. Riprova quando torna la connessione.");
     setSavingStatus(null);
   };
 
@@ -995,6 +966,17 @@ function DriverPageInner() {
         {pendingQueueCount > 0 && (
           <p className="mt-3 rounded-xl bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-300">
             ⚠ {pendingQueueCount} azioni in attesa di sincronizzazione
+          </p>
+        )}
+
+        {!isOnline && (
+          <p className="mt-3 rounded-xl bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-200">
+            Sei offline - i tuoi aggiornamenti verranno sincronizzati automaticamente quando torni online
+          </p>
+        )}
+        {isOnline && pendingQueueCount === 0 && (
+          <p className="mt-3 rounded-xl bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-200">
+            Sincronizzato
           </p>
         )}
 
