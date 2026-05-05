@@ -448,20 +448,18 @@ export default function ScadenzePage() {
   const stats = useMemo(() => {
     let expired = 0, critical = 0, warning = 0, ok = 0;
     for (const item of items) {
-      if (!item.active) continue;
       const s = item.worst_status;
       if (s === "expired") expired++;
       else if (s === "critical") critical++;
       else if (s === "warning") warning++;
       else ok++;
     }
-    return { expired, critical, warning, ok, total: items.filter((i) => i.active).length };
+    return { expired, critical, warning, ok, total: items.length };
   }, [items]);
 
   const filtered = useMemo(() => {
     return items
       .filter((item) => {
-        if (!item.active) return false;
         if (search) {
           const q = search.toLowerCase();
           if (!item.label.toLowerCase().includes(q) && !(item.plate ?? "").toLowerCase().includes(q)) return false;
@@ -494,7 +492,7 @@ export default function ScadenzePage() {
   }, [filtered]);
 
   const handleExport = useCallback(() => {
-    const rows = items.filter((item) => item.active && exportVehicleIds.has(item.vehicle_id));
+    const rows = items.filter((item) => exportVehicleIds.has(item.vehicle_id));
     const exportRows = (exportDateFrom || exportDateTo)
       ? rows.filter((item) => {
           const dates = [item.insurance?.expiry_date, item.inspection?.expiry_date, item.extinguisher?.expiry_date, item.tachograph?.expiry_date].filter((d): d is string => !!d);
@@ -544,7 +542,7 @@ export default function ScadenzePage() {
   }, [items, exportVehicleIds, exportDateFrom, exportDateTo]);
 
   const handleExportPDF = useCallback(() => {
-    const rows = items.filter((item) => item.active && exportVehicleIds.has(item.vehicle_id));
+    const rows = items.filter((item) => exportVehicleIds.has(item.vehicle_id));
     const exportRows = (exportDateFrom || exportDateTo)
       ? rows.filter((item) => {
           const dates = [item.insurance?.expiry_date, item.inspection?.expiry_date, item.extinguisher?.expiry_date, item.tachograph?.expiry_date].filter((d): d is string => !!d);
@@ -1089,6 +1087,11 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                         <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[item.worst_status]}`} />
                         {STATUS_LABEL[item.worst_status]}
                       </span>
+                      {!item.active && (
+                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                          Inattivo
+                        </span>
+                      )}
                       {item.compliance_override && (
                         <span className="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
                           Forzato
@@ -1139,6 +1142,11 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                             <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[item.worst_status]}`} />
                             {STATUS_LABEL[item.worst_status]}
                           </span>
+                          {!item.active && (
+                            <span className="inline-flex w-fit items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                              Inattivo
+                            </span>
+                          )}
                           {item.compliance_override && (
                             <span className="inline-flex w-fit items-center rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
                               Forzato
