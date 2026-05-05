@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { DateInput, PageHeader } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
@@ -30,6 +30,9 @@ type ServiceRow = {
   service_type_code: string | null;
   reminder_status?: string | null;
   sent_at?: string | null;
+  internal_notes?: string | null;
+  internal_notes_updated_at?: string | null;
+  internal_notes_updated_by?: string | null;
 };
 type HotelRow = { id: string; name: string };
 type AgencyRow = { id: string; name: string };
@@ -80,6 +83,11 @@ export default function ServiceEditPage() {
   const [departureDate, setDepartureDate] = useState("");
   const [departureTime, setDepartureTime] = useState("");
   const [transportCode, setTransportCode] = useState("");
+
+  const [internalNotes, setInternalNotes] = useState("");
+  const [internalNotesSaving, setInternalNotesSaving] = useState(false);
+  const [internalNotesUpdatedAt, setInternalNotesUpdatedAt] = useState<string | null>(null);
+  const internalNotesDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -217,7 +225,7 @@ export default function ServiceEditPage() {
       const [svcRes, hotelsRes, agenciesRes] = await Promise.all([
         supabase
           .from("services")
-          .select("id, customer_name, phone, phone_e164, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, transport_code, direction, booking_service_kind, service_type_code, reminder_status, sent_at")
+          .select("id, customer_name, phone, phone_e164, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, transport_code, direction, booking_service_kind, service_type_code, reminder_status, sent_at, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
           .eq("id", id)
           .eq("tenant_id", session.tenantId)
           .maybeSingle(),
@@ -259,6 +267,8 @@ export default function ServiceEditPage() {
       setDepartureDate(svc.departure_date ?? "");
       setDepartureTime((svc.departure_time ?? "").slice(0, 5));
       setTransportCode(svc.transport_code ?? "");
+      setInternalNotes(svc.internal_notes ?? "");
+      setInternalNotesUpdatedAt(svc.internal_notes_updated_at ?? null);
 
       if (token && (svc.booking_service_kind === "bus_city_hotel" || svc.service_type_code === "bus_line")) {
         await loadBusQr(svc.id, token);
@@ -339,6 +349,25 @@ export default function ServiceEditPage() {
     setWhatsAppMessage("Messaggio WhatsApp inviato.");
     setService((current) => current ? { ...current, reminder_status: "sent", sent_at: body.sent_at ?? new Date().toISOString() } : current);
   };
+
+  function handleInternalNotesChange(value: string) {
+    setInternalNotes(value);
+    if (internalNotesDebounce.current) clearTimeout(internalNotesDebounce.current);
+    internalNotesDebounce.current = setTimeout(() => void saveInternalNotes(value), 2000);
+  }
+
+  async function saveInternalNotes(value: string) {
+    if (!service?.id || !accessToken) return;
+    setInternalNotesSaving(true);
+    const res = await fetch(`/api/ops/services/${service.id}/internal-notes`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ internal_notes: value.trim() || null }),
+    });
+    const body = (await res.json().catch(() => null)) as { ok?: boolean; updated_at?: string } | null;
+    setInternalNotesSaving(false);
+    if (body?.updated_at) setInternalNotesUpdatedAt(body.updated_at);
+  }
 
   if (loading) return (
     <section className="page-section">
@@ -474,6 +503,27 @@ export default function ServiceEditPage() {
             Note
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} className="mt-1 input-saas w-full resize-none" />
           </label>
+
+          {/* Note interne */}
+          <div className="sm:col-span-2">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs font-medium text-slate-600">Note interne</span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500 tracking-wide">Visibile solo all&apos;ufficio</span>
+              {internalNotesSaving && <span className="text-[10px] text-slate-400">Salvataggio...</span>}
+            </div>
+            <textarea
+              value={internalNotes}
+              onChange={(e) => handleInternalNotesChange(e.target.value)}
+              rows={3}
+              placeholder="Annotazioni riservate all'ufficio..."
+              className="input-saas w-full resize-none"
+            />
+            {internalNotesUpdatedAt && (
+              <p className="mt-1 text-[10px] text-slate-400">
+                Ultimo aggiornamento: {new Date(internalNotesUpdatedAt).toLocaleString("it-IT")}
+              </p>
+            )}
+          </div>
         </div>
 
         <div className="flex justify-end gap-3 pt-2">
