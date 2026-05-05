@@ -32,6 +32,24 @@ type AgencyRow = {
 type PriceListRow = { id: string; agency_id: string | null; active: boolean };
 type PricingRuleRow = { id: string; agency_id: string | null; active: boolean };
 
+type PortalInviteRow = {
+  id: string;
+  email: string;
+  full_name: string | null;
+  agency_id: string | null;
+  expires_at: string;
+  accepted_at: string | null;
+  rejected_at: string | null;
+  created_at: string;
+};
+
+type PortalMemberRow = {
+  user_id: string;
+  agency_id: string | null;
+  full_name: string | null;
+  suspended: boolean | null;
+};
+
 const DAY_LABELS = ["Domenica", "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
 const CADENCE_LABELS: Record<string, string> = {
   weekly: "Settimanale",
@@ -118,6 +136,141 @@ function agencyToForm(agency: AgencyRow): ModalForm {
     invoice_cadence: agency.invoice_cadence ?? "weekly",
     invoice_send_day: agency.invoice_send_day ?? 1,
   };
+}
+
+function getPortalStatus(
+  agencyId: string,
+  invites: PortalInviteRow[],
+  members: PortalMemberRow[]
+) {
+  const activeMember = members.find((m) => m.agency_id === agencyId && !m.suspended);
+  if (activeMember) return { status: "active" as const, member: activeMember };
+
+  const suspendedMember = members.find((m) => m.agency_id === agencyId && m.suspended);
+  if (suspendedMember) return { status: "suspended" as const, member: suspendedMember };
+
+  const now = new Date();
+  const pendingInvite = invites.find(
+    (i) =>
+      i.agency_id === agencyId &&
+      !i.accepted_at &&
+      !i.rejected_at &&
+      new Date(i.expires_at) > now
+  );
+  if (pendingInvite) return { status: "invited" as const, invite: pendingInvite };
+
+  const expiredInvite = invites.find(
+    (i) => i.agency_id === agencyId && !i.accepted_at && new Date(i.expires_at) <= now
+  );
+  if (expiredInvite) return { status: "expired" as const, invite: expiredInvite };
+
+  return { status: "none" as const };
+}
+
+// ── Modal Invita al portale ───────────────────────────────────────────────────
+
+function InvitePortalModal({
+  agency,
+  onClose,
+  onSent,
+  getToken,
+}: {
+  agency: AgencyRow;
+  onClose: () => void;
+  onSent: () => void;
+  getToken: () => Promise<string | null>;
+}) {
+  const [email, setEmail] = useState(agency.contact_email ?? agency.booking_email ?? "");
+  const [fullName, setFullName] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const send = async () => {
+    if (!email.trim() || !fullName.trim()) {
+      setError("Email e nome contatto obbligatori.");
+      return;
+    }
+    setSending(true);
+    setError(null);
+    const token = await getToken();
+    if (!token) {
+      setError("Sessione scaduta.");
+      setSending(false);
+      return;
+    }
+    const res = await fetch("/api/ops/agency-invitations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ agency_id: agency.id, email: email.trim(), full_name: fullName.trim() }),
+    });
+    const json = (await res.json().catch(() => null)) as { error?: string } | null;
+    if (!res.ok) {
+      setError(json?.error ?? "Errore invio invito.");
+      setSending(false);
+      return;
+    }
+    onSent();
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+          <div>
+            <p className="text-base font-semibold text-slate-800">Invita al portale</p>
+            <p className="text-sm text-slate-500 mt-0.5">{agency.name}</p>
+          </div>
+          <button type="button" onClick={onClose} className="text-xl text-slate-400 hover:text-slate-600">
+            ×
+          </button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          {error && (
+            <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>
+          )}
+          <label className="block text-xs font-semibold text-slate-500">
+            Nome contatto
+            <input
+              className="input-saas mt-1 w-full"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Mario Rossi"
+              disabled={sending}
+            />
+          </label>
+          <label className="block text-xs font-semibold text-slate-500">
+            Email
+            <input
+              type="email"
+              className="input-saas mt-1 w-full"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="contatto@agenzia.it"
+              disabled={sending}
+            />
+          </label>
+          <p className="text-xs text-slate-400">
+            L&apos;invitato riceverà un link per creare la propria password e accedere al portale
+            agenzie. Il link scade dopo 7 giorni.
+          </p>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-4">
+          <button type="button" onClick={onClose} className="btn-secondary px-4 py-2 text-sm">
+            Annulla
+          </button>
+          <button
+            type="button"
+            onClick={() => void send()}
+            disabled={sending}
+            className="btn-primary px-5 py-2 text-sm disabled:opacity-50"
+          >
+            {sending ? "Invio..." : "Invia invito"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ── Modal Crea / Modifica ─────────────────────────────────────────────────────
@@ -522,6 +675,11 @@ export default function CrmAgenciesPage() {
   const [sendReportDate, setSendReportDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [sendReportType, setSendReportType] = useState<"arrivals_48h" | "departures_48h" | "bus_monday">("arrivals_48h");
 
+  const [portalInvites, setPortalInvites] = useState<PortalInviteRow[]>([]);
+  const [portalMembers, setPortalMembers] = useState<PortalMemberRow[]>([]);
+  const [invitePortalModal, setInvitePortalModal] = useState<AgencyRow | null>(null);
+  const [revokingAgencyId, setRevokingAgencyId] = useState<string | null>(null);
+
   // Modifiche profilo agenzia in attesa di approvazione
   const [profileChanges, setProfileChanges] = useState<ProfileChangeRow[]>([]);
   const [rejectingChangeId, setRejectingChangeId] = useState<string | null>(null);
@@ -567,6 +725,19 @@ export default function CrmAgenciesPage() {
     if (changesRes.ok) {
       const changesBody = (await changesRes.json().catch(() => null)) as { rows?: ProfileChangeRow[] } | null;
       setProfileChanges(changesBody?.rows ?? []);
+    }
+
+    // Carica dati portale agenzie
+    const portalRes = await fetch("/api/ops/agency-invitations", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (portalRes.ok) {
+      const portalBody = (await portalRes.json().catch(() => null)) as {
+        invites?: PortalInviteRow[];
+        memberships?: PortalMemberRow[];
+      } | null;
+      setPortalInvites(portalBody?.invites ?? []);
+      setPortalMembers(portalBody?.memberships ?? []);
     }
   }, [getToken]);
 
@@ -758,6 +929,40 @@ export default function CrmAgenciesPage() {
       void load();
     } else {
       showToast("Errore aggiornamento stato.", false);
+    }
+  };
+
+  const reloadPortalData = useCallback(async () => {
+    const token = await getToken();
+    if (!token) return;
+    const portalRes = await fetch("/api/ops/agency-invitations", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (portalRes.ok) {
+      const portalBody = (await portalRes.json().catch(() => null)) as {
+        invites?: PortalInviteRow[];
+        memberships?: PortalMemberRow[];
+      } | null;
+      setPortalInvites(portalBody?.invites ?? []);
+      setPortalMembers(portalBody?.memberships ?? []);
+    }
+  }, [getToken]);
+
+  const handleRevokeAccess = async (agencyId: string, action: "revoke" | "reinstate") => {
+    const token = await getToken();
+    if (!token) return;
+    setRevokingAgencyId(agencyId);
+    const res = await fetch("/api/ops/agency-invitations/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ agency_id: agencyId, action }),
+    });
+    setRevokingAgencyId(null);
+    if (res.ok) {
+      showToast(action === "revoke" ? "Accesso portale revocato." : "Accesso portale riattivato.", true);
+      await reloadPortalData();
+    } else {
+      showToast("Errore durante l'operazione.", false);
     }
   };
 
@@ -1032,6 +1237,13 @@ export default function CrmAgenciesPage() {
                               {schedule}
                             </span>
                           ) : null}
+                          {(() => {
+                            const ps = getPortalStatus(agency.id, portalInvites, portalMembers);
+                            if (ps.status === "active") return <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700">portale attivo</span>;
+                            if (ps.status === "invited") return <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">invito inviato</span>;
+                            if (ps.status === "suspended") return <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">portale sospeso</span>;
+                            return null;
+                          })()}
                         </div>
                         <p className="mt-0.5 truncate text-xs text-slate-400">
                           {agency.billing_name ?? "Fatturazione non impostata"}
@@ -1305,6 +1517,103 @@ export default function CrmAgenciesPage() {
                               )}
                             </div>
                           )}
+
+                          {/* Portale agenzie */}
+                          <div className="lg:col-span-3 sm:col-span-2">
+                            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                              Portale agenzie
+                            </p>
+                            {(() => {
+                              const ps = getPortalStatus(agency.id, portalInvites, portalMembers);
+                              return (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {ps.status === "active" && (
+                                    <>
+                                      <span className="rounded-full bg-violet-100 px-2.5 py-0.5 text-[11px] font-semibold text-violet-700">
+                                        ● Portale attivo
+                                      </span>
+                                      <span className="text-xs text-slate-500">{ps.member.full_name ?? "—"}</span>
+                                      <button
+                                        type="button"
+                                        disabled={revokingAgencyId === agency.id}
+                                        onClick={() => void handleRevokeAccess(agency.id, "revoke")}
+                                        className="rounded-lg border border-rose-200 px-3 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                                      >
+                                        {revokingAgencyId === agency.id ? "..." : "Revoca accesso"}
+                                      </button>
+                                    </>
+                                  )}
+                                  {ps.status === "suspended" && (
+                                    <>
+                                      <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-500">
+                                        Sospeso
+                                      </span>
+                                      <span className="text-xs text-slate-400">{ps.member.full_name ?? "—"}</span>
+                                      <button
+                                        type="button"
+                                        disabled={revokingAgencyId === agency.id}
+                                        onClick={() => void handleRevokeAccess(agency.id, "reinstate")}
+                                        className="rounded-lg border border-emerald-200 px-3 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                                      >
+                                        {revokingAgencyId === agency.id ? "..." : "Riattiva accesso"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setInvitePortalModal(agency)}
+                                        className="rounded-lg border border-blue-200 px-3 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50"
+                                      >
+                                        Nuovo invito
+                                      </button>
+                                    </>
+                                  )}
+                                  {ps.status === "invited" && (
+                                    <>
+                                      <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700">
+                                        Invito inviato
+                                      </span>
+                                      <span className="text-xs text-slate-400">
+                                        {ps.invite.full_name} · {ps.invite.email} · scade{" "}
+                                        {new Date(ps.invite.expires_at).toLocaleDateString("it-IT")}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setInvitePortalModal(agency)}
+                                        className="rounded-lg border border-blue-200 px-3 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50"
+                                      >
+                                        Reinvia invito
+                                      </button>
+                                    </>
+                                  )}
+                                  {ps.status === "expired" && (
+                                    <>
+                                      <span className="rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-semibold text-rose-600">
+                                        Invito scaduto
+                                      </span>
+                                      <span className="text-xs text-slate-400">
+                                        {ps.invite.full_name} · {ps.invite.email}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setInvitePortalModal(agency)}
+                                        className="rounded-lg border border-blue-200 px-3 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50"
+                                      >
+                                        Nuovo invito
+                                      </button>
+                                    </>
+                                  )}
+                                  {ps.status === "none" && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setInvitePortalModal(agency)}
+                                      className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
+                                    >
+                                      + Invita al portale
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -1324,6 +1633,19 @@ export default function CrmAgenciesPage() {
           onSaved={() => {
             showToast("Agenzia salvata.", true);
             void load();
+          }}
+          getToken={getToken}
+        />
+      )}
+
+      {/* Modal invita al portale */}
+      {invitePortalModal && (
+        <InvitePortalModal
+          agency={invitePortalModal}
+          onClose={() => setInvitePortalModal(null)}
+          onSent={() => {
+            showToast("Invito al portale inviato.", true);
+            void reloadPortalData();
           }}
           getToken={getToken}
         />
