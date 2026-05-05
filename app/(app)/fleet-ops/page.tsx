@@ -36,6 +36,7 @@ type Anomaly = {
   severity: "low" | "medium" | "high" | "blocking";
   title: string;
   description?: string | null;
+  blocked_from?: string | null;
   blocked_until?: string | null;
   active: boolean;
   reported_at: string;
@@ -156,6 +157,7 @@ function getVehicleDocumentSummary(vehicle: Vehicle) {
 const EMPTY_ANOMALY = {
   title: "",
   severity: "medium",
+  blocked_from: "",
   blocked_until: "",
   description: "",
 };
@@ -930,10 +932,16 @@ export default function FleetOpsPage() {
                             <option value="blocking">Bloccante</option>
                           </select>
                         </label>
-                        <label className="text-xs font-semibold text-slate-500">
-                          Bloccato fino a (opzionale)
-                          <input type="datetime-local" className="input-saas mt-1 w-full" value={anomalyForm.blocked_until} onChange={(e) => setAnomalyForm((f) => ({ ...f, blocked_until: e.target.value }))} />
-                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="text-xs font-semibold text-slate-500">
+                            Blocco dal (opzionale)
+                            <input type="datetime-local" className="input-saas mt-1 w-full" value={anomalyForm.blocked_from} onChange={(e) => setAnomalyForm((f) => ({ ...f, blocked_from: e.target.value }))} />
+                          </label>
+                          <label className="text-xs font-semibold text-slate-500">
+                            Al (opzionale)
+                            <input type="datetime-local" className="input-saas mt-1 w-full" value={anomalyForm.blocked_until} onChange={(e) => setAnomalyForm((f) => ({ ...f, blocked_until: e.target.value }))} />
+                          </label>
+                        </div>
                         <label className="text-xs font-semibold text-slate-500">
                           Descrizione
                           <textarea rows={2} className="input-saas mt-1 w-full resize-none" value={anomalyForm.description} onChange={(e) => setAnomalyForm((f) => ({ ...f, description: e.target.value }))} />
@@ -947,6 +955,7 @@ export default function FleetOpsPage() {
                               vehicle_id: selectedVehicle.id,
                               title: anomalyForm.title,
                               severity: anomalyForm.severity,
+                              blocked_from: anomalyForm.blocked_from || null,
                               blocked_until: anomalyForm.blocked_until || null,
                               description: anomalyForm.description || null,
                             });

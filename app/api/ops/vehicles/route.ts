@@ -10,6 +10,7 @@ const anomalySchema = z.object({
   severity: z.enum(["low", "medium", "high", "blocking"]),
   title: z.string().min(2).max(160),
   description: z.string().max(2000).optional().nullable(),
+  blocked_from: z.string().datetime().optional().nullable(),
   blocked_until: z.string().datetime().optional().nullable()
 });
 
@@ -167,6 +168,7 @@ export async function POST(request: NextRequest) {
         severity: parsed.severity,
         title: parsed.title,
         description: parsed.description ?? null,
+        blocked_from: parsed.blocked_from ?? null,
         blocked_until: parsed.blocked_until ?? null,
         active: true
       });
