@@ -35,6 +35,7 @@ async function sendConvocazioneTemplate(
   customerName: string,
   serviceDate: string,
   meetingPoint: string,
+  driverName: string,
   driverPhone: string,
   qrImageUrl: string | null
 ) {
@@ -42,6 +43,7 @@ async function sendConvocazioneTemplate(
     { type: "text" as const, text: customerName.slice(0, 60) },
     { type: "text" as const, text: serviceDate },
     { type: "text" as const, text: meetingPoint.slice(0, 80) },
+    { type: "text" as const, text: driverName.slice(0, 60) },
     { type: "text" as const, text: driverPhone },
   ];
 
@@ -197,34 +199,36 @@ async function runCron(request: NextRequest) {
   // 3. Autisti per-data per domani (sovrascrive i campi statici)
   const unitIds = [...new Set(unitByService.values())];
 
-  let driverDates: { unit_id: string; driver_phone_outbound: string | null }[] = [];
+  type DriverInfo = { unit_id: string; driver_name_outbound: string | null; driver_phone_outbound: string | null };
+  let driverDates: DriverInfo[] = [];
   if (unitIds.length) {
     const { data } = await admin
       .from("bus_unit_driver_dates")
-      .select("unit_id, driver_phone_outbound")
+      .select("unit_id, driver_name_outbound, driver_phone_outbound")
       .eq("tenant_id", effectiveTenantId)
       .eq("travel_date", tomorrow)
       .in("unit_id", unitIds);
-    driverDates = (data ?? []) as typeof driverDates;
+    driverDates = (data ?? []) as DriverInfo[];
   }
 
-  const driverPhoneByUnit = new Map<string, string | null>(
-    driverDates.map((d) => [d.unit_id, d.driver_phone_outbound])
+  const driverByUnit = new Map<string, { name: string | null; phone: string | null }>(
+    driverDates.map((d) => [d.unit_id, { name: d.driver_name_outbound, phone: d.driver_phone_outbound }])
   );
 
   // 4. Fallback: campi statici sulle unità
-  let busUnits: { id: string; driver_phone_outbound: string | null }[] = [];
+  type BusUnitInfo = { id: string; driver_name_outbound: string | null; driver_phone_outbound: string | null };
+  let busUnits: BusUnitInfo[] = [];
   if (unitIds.length) {
     const { data } = await admin
       .from("tenant_bus_units")
-      .select("id, driver_phone_outbound")
+      .select("id, driver_name_outbound, driver_phone_outbound")
       .eq("tenant_id", effectiveTenantId)
       .in("id", unitIds);
-    busUnits = (data ?? []) as typeof busUnits;
+    busUnits = (data ?? []) as BusUnitInfo[];
   }
 
-  const staticPhoneByUnit = new Map<string, string | null>(
-    busUnits.map((u) => [u.id, u.driver_phone_outbound])
+  const staticDriverByUnit = new Map<string, { name: string | null; phone: string | null }>(
+    busUnits.map((u) => [u.id, { name: u.driver_name_outbound, phone: u.driver_phone_outbound }])
   );
 
   // 5. Deduplicazione: già inviati oggi
@@ -247,13 +251,15 @@ async function runCron(request: NextRequest) {
     const unitId = unitByService.get(svc.id);
     if (!unitId) { skipped++; continue; }
 
-    // Telefono autista: per-data con fallback statico
-    const driverPhone =
-      driverPhoneByUnit.has(unitId)
-        ? driverPhoneByUnit.get(unitId)
-        : staticPhoneByUnit.get(unitId);
+    // Nome e telefono autista: per-data con fallback statico
+    const driver = driverByUnit.has(unitId)
+      ? driverByUnit.get(unitId)
+      : staticDriverByUnit.get(unitId);
 
-    if (!driverPhone) { skipped++; continue; }
+    const driverPhone = driver?.phone?.trim();
+    const driverName  = driver?.name?.trim();
+
+    if (!driverPhone || !driverName) { skipped++; continue; }
 
     const meetingPoint = (svc.meeting_point as string | null)?.trim();
     if (!meetingPoint) { skipped++; continue; }
@@ -270,6 +276,7 @@ async function runCron(request: NextRequest) {
       (svc.customer_name as string) ?? "",
       svc.date as string,
       meetingPoint,
+      driverName,
       driverPhone,
       qrUrl
     );
@@ -286,6 +293,7 @@ async function runCron(request: NextRequest) {
       payload_json: {
         source: "api/cron/whatsapp-convocazioni",
         meeting_point: meetingPoint,
+        driver_name: driverName,
         driver_phone: driverPhone,
         bus_unit_id: unitId,
         arrival_date: svc.date,
