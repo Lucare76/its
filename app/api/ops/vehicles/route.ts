@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import {
+  deactivateDriverProfileAndAccess,
+  ensureDriverAccessForProfile,
+  listDriverRegistry,
+  syncMembershipNameFromProfile,
+} from "@/lib/server/driver-registry";
 import { vehicleUpsertSchema } from "@/lib/server/fleet-schemas";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 const anomalySchema = z.object({
   vehicle_id: z.string().uuid(),
@@ -41,15 +49,15 @@ const vehicleDocumentsSchema = z.object({
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
     if (auth instanceof NextResponse) return auth;
     const tenantId = auth.membership.tenant_id;
 
     const today = new Date().toISOString().slice(0, 10);
-    const [vehiclesResult, anomaliesResult, driversResult, commitmentsResult] = await Promise.all([
+    const [vehiclesResult, anomaliesResult, drivers, commitmentsResult] = await Promise.all([
       auth.admin.from("vehicles").select("*").eq("tenant_id", tenantId).order("label"),
       auth.admin.from("vehicle_anomalies").select("*").eq("tenant_id", tenantId).order("reported_at", { ascending: false }),
-      auth.admin.from("driver_profiles").select("id, full_name, phone, active").eq("tenant_id", tenantId).eq("active", true).order("full_name"),
+      listDriverRegistry(auth.admin, tenantId),
       auth.admin.from("vehicle_commitments")
         .select("id, vehicle_id, commitment_date, commitment_type, notes, created_at")
         .eq("tenant_id", tenantId)
@@ -57,15 +65,19 @@ export async function GET(request: NextRequest) {
         .order("commitment_date", { ascending: true })
     ]);
 
-    const error = vehiclesResult.error || anomaliesResult.error || driversResult.error || commitmentsResult.error;
+    const error = vehiclesResult.error || anomaliesResult.error || commitmentsResult.error;
     if (error) throw new Error(error.message);
 
     return NextResponse.json({
       ok: true,
       vehicles: vehiclesResult.data ?? [],
       anomalies: anomaliesResult.data ?? [],
-      drivers: driversResult.data ?? [],
+      drivers,
       commitments: commitmentsResult.data ?? []
+    }, {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+      },
     });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
@@ -74,11 +86,12 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator", "driver"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
     if (auth instanceof NextResponse) return auth;
     const tenantId = auth.membership.tenant_id;
     const body = await request.json().catch(() => null);
     const action = String(body?.action ?? "");
+    let driverAccessResponse: { username: string; temporary_password: string; created: boolean } | null = null;
 
     if (action === "upsert_vehicle") {
       if (!["admin", "operator"].includes(auth.membership.role)) {
@@ -201,12 +214,71 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: false, error: "Ruolo non autorizzato." }, { status: 403 });
       }
       const parsed = driverSchema.parse(body);
+      if (!parsed.id && !parsed.phone?.trim()) {
+        return NextResponse.json({ ok: false, error: "Inserire il numero di telefono: verrà usato come password per l'accesso autista." }, { status: 400 });
+      }
       const payload = { tenant_id: tenantId, full_name: parsed.full_name, phone: parsed.phone ?? null, active: true };
-      const query = parsed.id
-        ? auth.admin.from("driver_profiles").update({ full_name: payload.full_name, phone: payload.phone }).eq("tenant_id", tenantId).eq("id", parsed.id)
-        : auth.admin.from("driver_profiles").insert(payload);
-      const { error } = await query;
-      if (error) throw new Error(error.message);
+      const profileResult = parsed.id
+        ? await auth.admin
+            .from("driver_profiles")
+            .update({ full_name: payload.full_name, phone: payload.phone, active: true })
+            .eq("tenant_id", tenantId)
+            .eq("id", parsed.id)
+            .select("id, user_id")
+            .maybeSingle()
+        : await auth.admin
+            .from("driver_profiles")
+            .insert(payload)
+            .select("id, user_id")
+            .maybeSingle();
+      if (profileResult.error || !profileResult.data?.id) {
+        throw new Error(profileResult.error?.message ?? "Salvataggio autista fallito.");
+      }
+
+      let createdDriverAccess: { username: string; temporary_password: string; created: boolean } | null = null;
+      if (payload.phone) {
+        const access = await ensureDriverAccessForProfile(auth.admin, {
+          tenantId,
+          profileId: profileResult.data.id,
+          fullName: payload.full_name,
+          phone: payload.phone,
+        });
+        createdDriverAccess = {
+          username: access.username,
+          temporary_password: access.temporaryPassword,
+          created: access.created,
+        };
+      }
+
+      if (parsed.id) {
+        const linkedProfile = await auth.admin
+          .from("driver_profiles")
+          .select("user_id")
+          .eq("tenant_id", tenantId)
+          .eq("id", parsed.id)
+          .maybeSingle();
+        if (linkedProfile.error) throw new Error(linkedProfile.error.message);
+        if (linkedProfile.data?.user_id) {
+          await syncMembershipNameFromProfile(auth.admin, {
+            tenantId,
+            userId: linkedProfile.data.user_id,
+            fullName: payload.full_name,
+          });
+        }
+        if (!createdDriverAccess && payload.phone && linkedProfile.data?.user_id) {
+          const registry = await listDriverRegistry(auth.admin, tenantId);
+          const currentDriver = registry.find((driver) => driver.id === parsed.id) ?? null;
+          if (currentDriver?.username) {
+            createdDriverAccess = {
+              username: currentDriver.username,
+              temporary_password: payload.phone.replace(/\s+/g, "").trim(),
+              created: false,
+            };
+          }
+        }
+      }
+
+      driverAccessResponse = createdDriverAccess;
     }
 
     if (action === "delete_driver") {
@@ -215,8 +287,7 @@ export async function POST(request: NextRequest) {
       }
       const driverId = String(body?.id ?? "");
       if (!driverId) return NextResponse.json({ ok: false, error: "ID mancante." }, { status: 400 });
-      const { error } = await auth.admin.from("driver_profiles").update({ active: false }).eq("tenant_id", tenantId).eq("id", driverId);
-      if (error) throw new Error(error.message);
+      await deactivateDriverProfileAndAccess(auth.admin, { tenantId, profileId: driverId });
     }
 
     if (action === "resolve_anomaly") {
@@ -240,25 +311,30 @@ export async function POST(request: NextRequest) {
     }
 
     const todayStr = new Date().toISOString().slice(0, 10);
-    const [vehiclesResult, anomaliesResult, driversResult, commitmentsResult] = await Promise.all([
+    const [vehiclesResult, anomaliesResult, drivers, commitmentsResult] = await Promise.all([
       auth.admin.from("vehicles").select("*").eq("tenant_id", tenantId).order("label"),
       auth.admin.from("vehicle_anomalies").select("*").eq("tenant_id", tenantId).order("reported_at", { ascending: false }),
-      auth.admin.from("driver_profiles").select("id, full_name, phone, active").eq("tenant_id", tenantId).eq("active", true).order("full_name"),
+      listDriverRegistry(auth.admin, tenantId),
       auth.admin.from("vehicle_commitments")
         .select("id, vehicle_id, commitment_date, commitment_type, notes, created_at")
         .eq("tenant_id", tenantId)
         .gte("commitment_date", todayStr)
         .order("commitment_date", { ascending: true })
     ]);
-    const error = vehiclesResult.error || anomaliesResult.error || driversResult.error || commitmentsResult.error;
+    const error = vehiclesResult.error || anomaliesResult.error || commitmentsResult.error;
     if (error) throw new Error(error.message);
 
     return NextResponse.json({
       ok: true,
       vehicles: vehiclesResult.data ?? [],
       anomalies: anomaliesResult.data ?? [],
-      drivers: driversResult.data ?? [],
-      commitments: commitmentsResult.data ?? []
+      drivers,
+      commitments: commitmentsResult.data ?? [],
+      driver_access: driverAccessResponse,
+    }, {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+      },
     });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });

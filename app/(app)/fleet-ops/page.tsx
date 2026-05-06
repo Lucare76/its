@@ -28,7 +28,14 @@ type Vehicle = {
   telaio?: string | null;
 };
 
-type Driver = { id: string; full_name: string; phone?: string | null };
+type Driver = {
+  id: string;
+  full_name: string;
+  phone?: string | null;
+  username?: string | null;
+  has_access?: boolean;
+  access_suspended?: boolean;
+};
 
 type Anomaly = {
   id: string;
@@ -221,7 +228,10 @@ export default function FleetOpsPage() {
   const load = useCallback(async () => {
     const token = await accessToken();
     if (!token) { setLoading(false); return; }
-    const response = await fetch("/api/ops/vehicles", { headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch("/api/ops/vehicles", {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
     const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; vehicles?: Vehicle[]; drivers?: Driver[]; anomalies?: Anomaly[]; commitments?: Commitment[] } | null;
     if (!response.ok || !body?.ok) { setLoading(false); showToast(body?.error ?? "Errore caricamento flotta.", false); return; }
     const nextVehicles = body.vehicles ?? [];
@@ -261,15 +271,34 @@ export default function FleetOpsPage() {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
+      cache: "no-store",
     });
-    const json = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; vehicles?: Vehicle[]; anomalies?: Anomaly[]; drivers?: Driver[]; commitments?: Commitment[] } | null;
+    const json = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      vehicles?: Vehicle[];
+      anomalies?: Anomaly[];
+      drivers?: Driver[];
+      commitments?: Commitment[];
+      driver_access?: { username: string; temporary_password: string; created: boolean } | null;
+    } | null;
     setSaving(false);
     if (!response.ok || !json?.ok) { showToast(json?.error ?? "Operazione non riuscita.", false); return false; }
     setVehicles(json.vehicles ?? []);
     setDrivers(json.drivers ?? []);
     setAnomalies(json.anomalies ?? []);
     if (json.commitments) setCommitments(json.commitments);
-    showToast("Salvato.", true);
+    if (json.driver_access?.username) {
+      const email = `${json.driver_access.username}@ischiatransferservice.it`;
+      showToast(
+        json.driver_access.created
+          ? `Autista creato — accesso: ${email}`
+          : `Accesso autista già attivo: ${email}`,
+        true
+      );
+    } else {
+      showToast("Salvato.", true);
+    }
     return true;
   };
 
@@ -978,7 +1007,19 @@ export default function FleetOpsPage() {
             <div className="divide-y divide-slate-100">
               {drivers.map((driver) => (
                 <div key={driver.id} className="flex items-center justify-between gap-2 py-2.5 first:pt-0">
-                  <span className="font-medium text-slate-800">{driver.full_name}</span>
+                  <div className="min-w-0">
+                    <span className="font-medium text-slate-800">{driver.full_name}</span>
+                    <div className="mt-0.5 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                      {driver.username ? <span>username: <span className="font-semibold text-slate-700">{driver.username}</span></span> : null}
+                      {driver.has_access ? (
+                        <span className={driver.access_suspended ? "text-amber-700" : "text-emerald-700"}>
+                          {driver.access_suspended ? "accesso sospeso" : "accesso attivo"}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">senza accesso</span>
+                      )}
+                    </div>
+                  </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     {driver.phone ? (
                       <a href={`tel:${driver.phone}`} className="text-sm text-blue-600 hover:underline">{driver.phone}</a>
@@ -1031,7 +1072,7 @@ export default function FleetOpsPage() {
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      disabled={saving || !driverForm.full_name.trim()}
+                      disabled={saving || !driverForm.full_name.trim() || (!editingDriverId && !driverForm.phone.trim())}
                       className="btn-primary flex-1 py-1.5 text-xs disabled:opacity-50"
                       onClick={async () => {
                         const ok = await post({
