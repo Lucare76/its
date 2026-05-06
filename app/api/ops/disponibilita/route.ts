@@ -68,7 +68,6 @@ export async function GET(req: NextRequest) {
           .select("user_id, full_name, max_vehicle_capacity")
           .eq("tenant_id", tenantId)
           .in("role", ["driver", "autista"])
-          .or("suspended.eq.false,suspended.is.null")
           .order("full_name"),
         auth.admin.from("vehicles")
           .select("id, label, capacity, vehicle_size")
