@@ -156,12 +156,45 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         return;
       }
 
-      const { data: userData, error: userError } = await supabase.auth.getUser();
+      // Fast path: check localStorage synchronously before touching the Supabase
+      // client. navigator.locks.request() (used internally by getUser) can block
+      // indefinitely when no session exists, causing "Verifica sessione..." to hang.
+      // If storage has no auth token we know there is no active session.
+      const hasStoredSession = (() => {
+        try {
+          return Object.keys(localStorage).some(
+            (k) => k.endsWith("-auth-token") && !!localStorage.getItem(k)
+          );
+        } catch { return false; }
+      })();
+      if (!hasStoredSession) {
+        if (!active) return;
+        setNeedsOnboarding(false);
+        setAuthRole(null);
+        setAuthTenantId(null);
+        setAgencySetupRequired(false);
+        setCapabilityOverrides({});
+        setQuotesAccess(false);
+        setAuthLoading(false);
+        hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
+        return;
+      }
+
+      const { data: userData, error: userError } = await Promise.race([
+        supabase.auth.getUser(),
+        new Promise<{ data: { user: null }; error: null }>((resolve) => {
+          setTimeout(() => resolve({ data: { user: null }, error: null }), 8000);
+        }),
+      ]) as Awaited<ReturnType<typeof supabase.auth.getUser>>;
       if (!active) return;
       if (userError || !userData.user) {
-        // Clear stale session data (e.g. invalid/expired refresh token) before redirecting,
-        // so the Supabase client does not keep retrying with a bad token.
-        await supabase.auth.signOut().catch(() => undefined);
+        const isMissingSession = !userError || (userError as { name?: string }).name === "AuthSessionMissingError";
+        if (!isMissingSession) {
+          await Promise.race([
+            supabase.auth.signOut().catch(() => undefined),
+            new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+          ]);
+        }
         if (!active) return;
         setNeedsOnboarding(false);
         setAuthRole(null);

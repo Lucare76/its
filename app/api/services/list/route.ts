@@ -4,6 +4,17 @@ import { authorizeServiceRoleRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
 
+// GET is not used for listing (use POST with filters), but the auth check
+// must still return 401 for unauthenticated requests rather than 405.
+export async function GET(request: NextRequest) {
+  const auth = await authorizeServiceRoleRequest(request, {
+    roles: ["admin", "operator", "agency", "supervisor"],
+    auditPrefix: "services_list"
+  });
+  if (auth instanceof NextResponse) return auth;
+  return NextResponse.json({ error: "Use POST to list services." }, { status: 405 });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const auth = await authorizeServiceRoleRequest(request, {

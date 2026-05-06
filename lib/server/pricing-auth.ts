@@ -28,16 +28,18 @@ export async function authorizeServiceRoleRequest<TRole extends string, TExtra e
   request: NextRequest,
   options: AuthorizeRequestOptions<TRole, TExtra>
 ): Promise<AuthorizedRequestContext<TRole, TExtra> | NextResponse> {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
   const authHeader = request.headers.get("authorization");
   const auditPrefix = options.auditPrefix ?? "auth";
+  // Check token presence first so unauthenticated requests always get 401
+  // regardless of server-side Supabase configuration (e.g. during E2E tests).
+  if (!authHeader?.startsWith("Bearer ")) {
+    return NextResponse.json({ error: "Sessione non valida." }, { status: 401 });
+  }
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
   if (!supabaseUrl || !serviceRoleKey) {
     auditLog({ event: `${auditPrefix}_config_missing`, level: "error", details: { route: request.nextUrl.pathname } });
     return NextResponse.json({ error: "Configurazione server mancante." }, { status: 500 });
-  }
-  if (!authHeader?.startsWith("Bearer ")) {
-    return NextResponse.json({ error: "Sessione non valida." }, { status: 401 });
   }
 
   const admin = createClient(supabaseUrl, serviceRoleKey, {

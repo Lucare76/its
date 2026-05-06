@@ -38,7 +38,8 @@ export default defineConfig({
     baseURL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
-    video: "retain-on-failure"
+    video: "retain-on-failure",
+    extraHTTPHeaders: { "x-playwright-e2e": "1" }
   },
   webServer: useExternalBaseUrl
     ? undefined
