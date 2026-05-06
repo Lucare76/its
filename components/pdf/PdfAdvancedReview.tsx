@@ -429,7 +429,7 @@ export function PdfAdvancedReview({
           <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">PDF Advanced Review</p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-semibold ${statusMeta(row.status).className}`}>{statusMeta(row.status).label}</span>
+              <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-semibold ${statusMeta(row.status).className}`} data-testid="pdf-import-status-badge">{statusMeta(row.status).label}</span>
               <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-700">
                 {bookingKindLabel(text(row.effective_normalized.booking_kind), text(row.effective_normalized.service_variant))}
               </span>
@@ -500,13 +500,13 @@ export function PdfAdvancedReview({
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Cliente</span><input className="input-saas" value={reviewForm.customer_full_name} onChange={(event) => setReviewForm((current) => ({ ...current, customer_full_name: event.target.value }))} /></label>
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Agenzia fatturazione</span><input className="input-saas" value={reviewForm.billing_party_name} onChange={(event) => setReviewForm((current) => ({ ...current, billing_party_name: event.target.value }))} /></label>
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Data arrivo</span><input className="input-saas" value={reviewForm.arrival_date} onChange={(event) => setReviewForm((current) => ({ ...current, arrival_date: event.target.value }))} /></label>
-            <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">{getOutwardTimeLabel(reviewContext(reviewForm))}</span><input type="time" step="300" className="input-saas" value={reviewForm.outbound_time} onChange={(event) => setReviewForm((current) => ({ ...current, outbound_time: event.target.value }))} /></label>
+            <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">{getOutwardTimeLabel(reviewContext(reviewForm))}</span><input type="time" step="300" className="input-saas" data-testid="pdf-review-field-outbound-time" value={reviewForm.outbound_time} onChange={(event) => setReviewForm((current) => ({ ...current, outbound_time: event.target.value }))} /></label>
             <label className="space-y-1 md:col-span-2"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Hotel / destinazione</span><input className="input-saas" value={reviewForm.hotel_or_destination} onChange={(event) => setReviewForm((current) => ({ ...current, hotel_or_destination: event.target.value }))} /></label>
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Passeggeri</span><input className="input-saas" value={reviewForm.passengers} onChange={(event) => setReviewForm((current) => ({ ...current, passengers: event.target.value }))} /></label>
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Numero pratica</span><input className="input-saas" value={reviewForm.practice_number} onChange={(event) => setReviewForm((current) => ({ ...current, practice_number: event.target.value }))} /></label>
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Data ritorno</span><input className="input-saas" value={reviewForm.departure_date} onChange={(event) => setReviewForm((current) => ({ ...current, departure_date: event.target.value }))} /></label>
             <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">{getReturnTimeLabel(reviewContext(reviewForm))}</span><input type="time" step="300" className="input-saas" value={reviewForm.return_time} onChange={(event) => setReviewForm((current) => ({ ...current, return_time: event.target.value }))} /></label>
-            <label className="space-y-1 md:col-span-2"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Note</span><textarea rows={2} className="input-saas resize-none" value={reviewForm.notes} onChange={(event) => setReviewForm((current) => ({ ...current, notes: event.target.value }))} /></label>
+            <label className="space-y-1 md:col-span-2"><span className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">Note</span><textarea rows={2} className="input-saas resize-none" data-testid="pdf-review-field-notes" value={reviewForm.notes} onChange={(event) => setReviewForm((current) => ({ ...current, notes: event.target.value }))} /></label>
           </div>
           {busSuggestions.length > 0 ? (
             <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50/60 p-3">
@@ -578,13 +578,13 @@ export function PdfAdvancedReview({
 
       <div className="sticky bottom-0 border-t border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => void saveReview()} disabled={busy !== null} className="btn-secondary px-3 py-2 text-xs disabled:opacity-50">
+          <button type="button" onClick={() => void saveReview()} disabled={busy !== null} className="btn-secondary px-3 py-2 text-xs disabled:opacity-50" data-testid="pdf-review-save">
             {busy === "save" ? "Salvo..." : "Salva modifiche"}
           </button>
-          <button type="button" onClick={() => void runAction("confirm")} disabled={busy !== null || !(row.status === "draft" || row.status === "preview")} className="btn-primary px-3 py-2 text-xs disabled:opacity-50">
+          <button type="button" onClick={() => void runAction("confirm")} disabled={busy !== null || !(row.status === "draft" || row.status === "preview")} className="btn-primary px-3 py-2 text-xs disabled:opacity-50" data-testid="pdf-confirm-import">
             {busy === "confirm" ? "Confermo..." : "Approva servizio"}
           </button>
-          <button type="button" onClick={() => void runAction("ignore")} disabled={busy !== null || row.status === "confirmed" || row.status === "ignored"} className="btn-secondary px-3 py-2 text-xs disabled:opacity-50">
+          <button type="button" onClick={() => void runAction("ignore")} disabled={busy !== null || row.status === "confirmed" || row.status === "ignored"} className="btn-secondary px-3 py-2 text-xs disabled:opacity-50" data-testid="pdf-ignore-import">
             {busy === "ignore" ? "Scarto..." : "Ignora"}
           </button>
           <button type="button" onClick={() => { if (!window.confirm("Eliminare questo PDF importato e l'eventuale servizio collegato?")) return; void runAction("delete"); }} disabled={busy !== null} className="btn-secondary px-3 py-2 text-xs text-rose-700 disabled:opacity-50">

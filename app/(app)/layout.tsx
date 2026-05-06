@@ -23,7 +23,7 @@ import {
   saveFavorites,
   uniqueNavItems
 } from "@/lib/app-shell-nav";
-import { getE2ETestSessionOverride } from "@/lib/supabase/client-session";
+import { ensureSupabaseClientReady, getE2ETestSessionOverride } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { needsInboxReview } from "@/lib/inbox-review";
 import { MotivationalModal } from "@/components/motivational-modal";
@@ -179,6 +179,9 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
         return;
       }
+
+      await ensureSupabaseClientReady();
+      if (!active) return;
 
       const { data: userData, error: userError } = await Promise.race([
         supabase.auth.getUser(),

@@ -14,6 +14,10 @@ export interface ClientSessionContext {
 }
 
 const E2E_SESSION_STORAGE_KEY = "__it_e2e_session";
+type StoredSupabaseSession = {
+  access_token?: string;
+  refresh_token?: string;
+} | null;
 
 function isLocalE2ETestMode() {
   if (typeof window === "undefined") return false;
@@ -44,6 +48,34 @@ export function isClientDemoMode(): boolean {
   return false;
 }
 
+export function readStoredSupabaseSession(): { access_token: string; refresh_token: string } | null {
+  if (typeof window === "undefined") return null;
+  const key = Object.keys(window.localStorage).find((item) => /^sb-.*-auth-token$/i.test(item));
+  if (!key) return null;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) ?? "null") as StoredSupabaseSession;
+    if (!parsed?.access_token || !parsed?.refresh_token) return null;
+    return { access_token: parsed.access_token, refresh_token: parsed.refresh_token };
+  } catch {
+    return null;
+  }
+}
+
+export async function ensureSupabaseClientReady(maxAttempts = 20) {
+  if (!hasSupabaseEnv || !supabase) return false;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (sessionData.session?.access_token) return true;
+    const storedSession = readStoredSupabaseSession();
+    if (storedSession) {
+      const restored = await supabase.auth.setSession(storedSession);
+      if (!restored.error && restored.data.session?.access_token) return true;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 200));
+  }
+  return false;
+}
+
 export async function getClientSessionContext(): Promise<ClientSessionContext> {
   const e2eOverride = getE2ETestSessionOverride();
   if (e2eOverride) return e2eOverride;
@@ -57,6 +89,8 @@ export async function getClientSessionContext(): Promise<ClientSessionContext> {
       accessToken: null
     };
   }
+
+  await ensureSupabaseClientReady();
 
   const { data: userData, error: userError } = await supabase!.auth.getUser();
   if (userError || !userData.user) {

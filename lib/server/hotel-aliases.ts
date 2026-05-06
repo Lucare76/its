@@ -73,6 +73,18 @@ const SOSANDRA_HOTEL_ALIASES: Array<{ canonical: string; aliases: string[] }> = 
     aliases: ["Royal Palm Hotel Terme", "Royal Palm"]
   },
   {
+    canonical: "Punto Azzurro Resort",
+    aliases: ["Punto Azzurro Resort", "Punto Azzurro", "Punzo Azzurro"]
+  },
+  {
+    canonical: "Hotel Terme Park Victoria",
+    aliases: ["Hotel Terme Park Victoria", "Park Victoria", "Park Vittoria"]
+  },
+  {
+    canonical: "Hotel Terme Michelangelo",
+    aliases: ["Hotel Terme Michelangelo", "Michelangelo"]
+  },
+  {
     canonical: "Hotel Eden Park",
     aliases: ["Hotel Eden Park", "Eden Park"]
   }

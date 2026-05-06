@@ -40,6 +40,8 @@ export function MotivationalModal({ storageIdentity, userName }: Props) {
   const [quote, setQuote] = useState<string | null>(null);
 
   useEffect(() => {
+    if (process.env.NEXT_PUBLIC_E2E_TEST_MODE === "true") return;
+
     const isDev = typeof window !== "undefined" && window.location.hostname === "localhost";
     const key = storageKey(storageIdentity);
     const today = todayKey();

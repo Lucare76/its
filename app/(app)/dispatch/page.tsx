@@ -258,6 +258,7 @@ export default function DispatchPage() {
             <button
               key={key}
               onClick={() => setDateTab(key)}
+              data-testid={`dispatch-tab-${key}`}
               className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition border ${
                 active
                   ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
@@ -293,6 +294,7 @@ export default function DispatchPage() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Cerca cliente o hotel…"
+          data-testid="dispatch-search"
           className="flex-1 bg-transparent text-sm text-slate-700 placeholder:text-slate-400 outline-none"
         />
         {search && <button onClick={() => setSearch("")} className="text-slate-400 hover:text-slate-600 text-lg leading-none">×</button>}
@@ -331,7 +333,7 @@ export default function DispatchPage() {
                       ? [{ id: `custom-${svc.id}`, label: state.vehicleLabel, plate: null }, ...tenantVehicles]
                       : tenantVehicles;
                     return (
-                      <div key={svc.id} className={`grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[1fr_180px_180px_90px] sm:items-center transition-colors ${!hasAssign ? "bg-amber-50/40" : ""}`}>
+                      <div key={svc.id} data-testid={`dispatch-row-${svc.id}`} className={`grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[1fr_180px_180px_90px] sm:items-center transition-colors ${!hasAssign ? "bg-amber-50/40" : ""}`}>
 
                         {/* Info servizio */}
                         <div className="min-w-0">

@@ -142,18 +142,18 @@ test.describe.serial("Piano del Giorno – flusso operativo completo", () => {
     console.log(`   → Servizi per ${TEST_DATE}: ${(body.services as unknown[]).length}`);
   });
 
-  // ─── Test 2: auto-assign senza disponibilità confermata → 422 ────────────
+  // ─── Test 2: auto-assign senza disponibilità confermata → 409 ────────────
 
-  test("POST auto-assign senza conferma disponibilità → 422", async ({ request }) => {
+  test("POST auto-assign senza conferma disponibilità → 409", async ({ request }) => {
     const res = await request.post("/api/ops/piano-giorno/auto-assign", {
       headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
       data: { date: TEST_DATE, mode: "unassigned_only" },
     });
     // Il gate disponibilità deve bloccare
-    expect(res.status()).toBe(422);
+    expect(res.status()).toBe(409);
     const body = await res.json() as { ok: boolean; error: string };
     expect(body.ok).toBe(false);
-    console.log(`   → 422 corretto: "${body.error}"`);
+    console.log(`   → 409 corretto: "${body.error}"`);
   });
 
   // ─── Test 3: conferma disponibilità + auto-assign ─────────────────────────
@@ -177,12 +177,12 @@ test.describe.serial("Piano del Giorno – flusso operativo completo", () => {
 
     // Con disponibilità confermata deve rispondere 200 (anche se non ci sono autisti)
     expect(res.status()).toBe(200);
-    const body = await res.json() as { ok: boolean; assigned: number; unassigned: number; report: unknown[] };
+    const body = await res.json() as { ok: boolean; assigned: number; skipped: number; report: unknown[] };
     expect(body.ok).toBe(true);
     expect(typeof body.assigned).toBe("number");
-    expect(typeof body.unassigned).toBe("number");
+    expect(typeof body.skipped).toBe("number");
     expect(Array.isArray(body.report)).toBe(true);
-    console.log(`   → auto-assign: ${body.assigned} assegnati, ${body.unassigned} non assegnati`);
+    console.log(`   → auto-assign: ${body.assigned} assegnati, ${body.skipped} non assegnati`);
   });
 
   // ─── Test 4: GET piano-giorno dopo assign → trip_groups nel response ──────

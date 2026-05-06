@@ -11,6 +11,8 @@ export async function fetchAllServices(admin: SupabaseClient, tenantId: string) 
       .from("services")
       .select("*")
       .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) return { data: null, error };
     if (data) all.push(...(data as Service[]));

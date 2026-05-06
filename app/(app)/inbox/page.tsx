@@ -7,7 +7,7 @@ import { PdfAdvancedReview } from "@/components/pdf/PdfAdvancedReview";
 import { getInboxPdfParsingSignal } from "@/lib/pdf/parser";
 import type { PdfImportDetail } from "@/lib/server/pdf-imports";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
-import { getClientSessionContext } from "@/lib/supabase/client-session";
+import { ensureSupabaseClientReady, getClientSessionContext } from "@/lib/supabase/client-session";
 import type { Hotel, InboundEmail, Membership, Service } from "@/lib/types";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
@@ -282,6 +282,8 @@ export default function InboxPage() {
       setBlockingNotice(null);
       setAuthRole(session.role);
       try {
+        const clientReady = await ensureSupabaseClientReady();
+        if (!clientReady) throw new Error("Sessione non valida.");
         const supabaseSession = await supabase.auth.getSession();
         const token = supabaseSession.data.session?.access_token;
         if (!token) throw new Error("Sessione non valida.");
@@ -505,6 +507,14 @@ export default function InboxPage() {
     }).slice(0, 20);
   }, [searchQuery, agencyFilter, agenciesMap, services]);
 
+  const pdfUploadStatus = useMemo(() => {
+    if (pdfUploadSaving) return "Salvataggio in corso...";
+    if (pdfUploadLoading) return "Analisi Claude in corso...";
+    if (pdfUploadPreview) return "Anteprima parser pronta.";
+    if (pdfUploadFile) return `File selezionato: ${pdfUploadFile.name}`;
+    return "Seleziona un PDF da importare.";
+  }, [pdfUploadFile, pdfUploadLoading, pdfUploadPreview, pdfUploadSaving]);
+
   const refreshMailboxImports = async () => {
     if (!supabase || !tenantId) return;
     const token = await getToken();
@@ -637,7 +647,7 @@ export default function InboxPage() {
   }
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-4" data-testid="pdf-imports-page">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold flex-1">Prenotazioni</h1>
         <Link href="/services/new" className="btn-primary px-4 py-2 text-sm">
@@ -738,7 +748,7 @@ export default function InboxPage() {
           <button type="button" onClick={() => void refreshMailboxImports()} className="inbox-import-pill" disabled={importRefreshing}>
             {importRefreshing ? "Importo..." : "Da email"}
           </button>
-          <button type="button" onClick={openPdfUploadModal} className="inbox-import-pill">
+          <button type="button" onClick={openPdfUploadModal} className="inbox-import-pill" data-testid="pdf-upload-open">
             Da PDF
           </button>
           <Link href="/excel-import" className="inbox-import-pill">
@@ -774,6 +784,7 @@ export default function InboxPage() {
               const needsParsingReview = parsing.hasPdfImport && !parsing.confirmed && (parsing.reviewRecommended || parsing.missingFieldsCount > 0);
               return (
                 <button key={email.id} type="button" onClick={() => setSelectedId(email.id)}
+                  data-testid={`pdf-import-row-${email.id}`}
                   className={`w-full rounded-lg border p-2.5 text-left text-sm transition ${
                     isSelected
                       ? "border-blue-300 bg-blue-50"
@@ -896,9 +907,9 @@ export default function InboxPage() {
                       {parsingSignal.missingFieldsCount > 0 ? (
                         <span className="text-[11px] text-slate-500">{parsingSignal.missingFieldsCount} campi incerti</span>
                       ) : null}
-                      <button type="button" onClick={() => void openPdfAdvancedReview()} className="btn-secondary ml-auto px-3 py-1.5 text-xs">
-                        🔍 Dettaglio parsing
-                      </button>
+                    <button type="button" onClick={() => void openPdfAdvancedReview()} className="btn-secondary ml-auto px-3 py-1.5 text-xs" data-testid="pdf-review-open">
+                      🔍 Dettaglio parsing
+                    </button>
                     </div>
                   ) : null}
                   {!hasStructuredData && (
@@ -1261,6 +1272,7 @@ export default function InboxPage() {
                     type="file"
                     accept="application/pdf,.pdf"
                     className="sr-only"
+                    data-testid="pdf-upload-input"
                     onChange={(event) => {
                       setPdfUploadFile(event.target.files?.[0] ?? null);
                       setPdfUploadPreview(null);
@@ -1312,11 +1324,15 @@ export default function InboxPage() {
                 {pdfUploadError && !pdfUploadPreview ? (
                   <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{pdfUploadError}</p>
                 ) : null}
+                <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600" data-testid="pdf-upload-status">
+                  {pdfUploadStatus}
+                </p>
 
                 <button
                   type="button"
                   onClick={() => void previewUploadedPdf()}
                   className="btn-primary w-full py-2.5 text-sm"
+                  data-testid="pdf-upload-preview"
                   disabled={!pdfUploadFile || pdfUploadLoading || pdfUploadSaving}
                 >
                   {pdfUploadLoading ? "Analisi Claude in corso..." : pdfUploadPreview ? "Rianalizza PDF" : "Analizza con Claude AI"}
@@ -1505,6 +1521,7 @@ export default function InboxPage() {
                           type="button"
                           onClick={() => void createDraftFromUploadedPdf()}
                           className="btn-primary w-full py-2.5 text-sm"
+                          data-testid="pdf-upload-draft"
                           disabled={pdfUploadLoading || pdfUploadSaving}
                         >
                           {pdfUploadSaving ? "Salvataggio in corso..." : "✓ Conferma e crea servizio"}

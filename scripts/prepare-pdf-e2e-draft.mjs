@@ -79,7 +79,7 @@ async function main() {
   const arrivalTime = "15:10";
   const departureDate = departureBase.toISOString().slice(0, 10);
   const departureTime = "09:40";
-  const customerFullName = "DRAFT OPERATIVO";
+  const customerFullName = `DRAFT OPERATIVO ${String(timestamp).slice(-6)}`;
   const pdfHash = createHash("sha256").update(`pdf-${uniqueRef}`).digest("hex").slice(0, 24);
   const textHash = createHash("sha256").update(`text-${uniqueRef}`).digest("hex").slice(0, 24);
   const dedupeKey = createHash("sha256").update(`${uniqueRef}|${arrivalDate}|${hotelName}`).digest("hex").slice(0, 24);
@@ -314,6 +314,7 @@ async function main() {
       {
         inbound_email_id: inboundEmailId,
         draft_service_id: serviceInsert.data.id,
+        customer_name: customerFullName,
         external_reference: uniqueRef,
         import_state: "draft"
       },

@@ -10,6 +10,7 @@ import { authorizeServiceRoleRequest } from "@/lib/server/pricing-auth";
 import { appUrlFromRequest, ensureBusBookingQrCodes } from "@/lib/server/bus-booking-qr";
 import { computeIschiaArrivalTime } from "@/lib/ferry-schedule-options";
 import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
+import { resolveFerryScbarcoTime } from "@/lib/server/resolve-ferry-sbarco";
 
 export const runtime = "nodejs";
 
@@ -382,6 +383,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Per formula (SNAV/MEDMAR/ALILAURO/CAREMAR): calcola arrivo Ischia da orario nave
+    // Per transfer (treno/volo): cerca regola abbinamento corsa nave, usa orario sbarco
+    const computedArrivalTime =
+      computeIschiaArrivalTime(bookingKind, parsed.data.arrival_time ?? "") ??
+      (await resolveFerryScbarcoTime({
+        admin: auth.admin,
+        bookingKind,
+        transportArrivalTime: parsed.data.arrival_time ?? "",
+        bookingDate: parsed.data.arrival_date,
+        agencyId: agencyIdResult.agencyId,
+      })) ??
+      parsed.data.arrival_time;
+
     const extendedInsert = {
       ...insertPayloadBase,
       booking_service_kind: bookingKind,
@@ -389,7 +403,7 @@ export async function POST(request: NextRequest) {
       customer_last_name: parsed.data.customer_last_name.trim(),
       customer_email: customerEmail || null,
       arrival_date: parsed.data.arrival_date,
-      arrival_time: computeIschiaArrivalTime(bookingKind, parsed.data.arrival_time ?? "") ?? parsed.data.arrival_time,
+      arrival_time: computedArrivalTime,
       departure_date: parsed.data.departure_date,
       departure_time: parsed.data.departure_time,
       transport_code: transportCode || null,

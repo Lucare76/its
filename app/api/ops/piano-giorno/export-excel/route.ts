@@ -102,7 +102,7 @@ export async function GET(req: NextRequest) {
         .from("memberships")
         .select("user_id, full_name, role, max_vehicle_capacity")
         .eq("tenant_id", tenantId)
-        .in("role", ["driver", "admin", "operator", "supervisor"]),
+        .in("role", ["driver", "autista", "admin", "operator", "supervisor"]),
 
       auth.admin
         .from("vehicles")

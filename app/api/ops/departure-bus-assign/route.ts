@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
         .from("memberships")
         .select("user_id,full_name")
         .eq("tenant_id", tenantId)
-        .eq("role", "driver"),
+        .in("role", ["driver", "autista"]),
     ]);
 
     const profiles = (profilesRes.data ?? []) as Array<{ id: string; full_name: string; phone: string | null }>;

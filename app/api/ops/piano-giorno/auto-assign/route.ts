@@ -310,7 +310,7 @@ export async function POST(request: NextRequest) {
           .order("capacity"),
         auth.admin.from("memberships")
           .select("user_id, full_name, max_vehicle_capacity")
-          .eq("tenant_id", tenantId).eq("role", "driver"),
+          .eq("tenant_id", tenantId).in("role", ["driver", "autista"]),
         auth.admin.from("assignments")
           .select("service_id, group_id")
           .eq("tenant_id", tenantId),

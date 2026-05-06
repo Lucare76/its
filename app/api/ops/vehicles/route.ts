@@ -215,8 +215,23 @@ export async function POST(request: NextRequest) {
       }
       const driverId = String(body?.id ?? "");
       if (!driverId) return NextResponse.json({ ok: false, error: "ID mancante." }, { status: 400 });
+      const { data: driverProfile, error: profileLookupError } = await auth.admin
+        .from("driver_profiles")
+        .select("full_name")
+        .eq("tenant_id", tenantId)
+        .eq("id", driverId)
+        .maybeSingle();
+      if (profileLookupError) throw new Error(profileLookupError.message);
       const { error } = await auth.admin.from("driver_profiles").update({ active: false }).eq("tenant_id", tenantId).eq("id", driverId);
       if (error) throw new Error(error.message);
+      if (driverProfile?.full_name) {
+        await auth.admin
+          .from("memberships")
+          .update({ suspended: true })
+          .eq("tenant_id", tenantId)
+          .ilike("full_name", driverProfile.full_name)
+          .in("role", ["driver", "autista"]);
+      }
     }
 
     if (action === "resolve_anomaly") {

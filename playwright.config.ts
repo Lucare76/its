@@ -1,9 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const port = Number(process.env.E2E_PORT ?? 3010);
-const baseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${port}`;
+const baseURL = process.env.E2E_BASE_URL ?? `http://localhost:${port}`;
 const useExternalBaseUrl = Boolean(process.env.E2E_BASE_URL);
 const useRealAppMode = process.env.E2E_REAL_APP === "true";
+const reuseExistingServer = process.env.PW_REUSE_SERVER === "true";
 const webServerEnv = useRealAppMode
   ? {
       ...process.env,
@@ -46,7 +47,10 @@ export default defineConfig({
     : {
         command: `pnpm exec next dev --hostname 0.0.0.0 --port ${port}`,
         port,
-        reuseExistingServer: !process.env.CI,
+        // Reusing a random local dev server makes E2E flaky because the server
+        // may be running with different env flags than the current test mode.
+        // Opt in explicitly only when we intentionally want to attach to it.
+        reuseExistingServer,
         timeout: 120_000,
         env: webServerEnv
       },

@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
+import { ensureSupabaseClientReady } from "@/lib/supabase/client-session";
 import { QrCode } from "@/components/QrCode";
 
 type ServiceInfo = {
@@ -31,6 +32,8 @@ type AssignmentInfo = {
 
 async function accessToken() {
   if (!supabase) return null;
+  const clientReady = await ensureSupabaseClientReady();
+  if (!clientReady) return null;
   const { data } = await supabase.auth.getSession();
   return data.session?.access_token ?? null;
 }

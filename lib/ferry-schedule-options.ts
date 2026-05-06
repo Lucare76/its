@@ -4,6 +4,7 @@ export interface FerryScheduleRow {
   departure_port: string;
   arrival_port: string;
   departure_time: string;
+  arrival_time?: string | null;
   direction: "ischia_to_mainland" | "mainland_to_ischia";
   days_of_week: number[] | null;
   valid_from: string | null;
@@ -45,7 +46,8 @@ function inferArrivalDurationMinutes(row: FerryScheduleRow): number | null {
   if (row.company === "snav") return 65;
   if (row.company === "medmar" && row.departure_port === "napoli_beverello") return 90;
   if (row.company === "medmar" && row.departure_port === "pozzuoli") return 60;
-  if (row.company === "alilauro") return 70;
+  if (row.company === "alilauro") return 45;
+  if (row.company === "caremar") return 85;
   return null;
 }
 
@@ -54,6 +56,8 @@ export function computeIschiaArrivalTime(bookingKind: string | null, ferryDepart
   if (bookingKind === "formula_snav") minutes = 65;
   else if (bookingKind === "formula_medmar_napoli") minutes = 90;
   else if (bookingKind === "formula_medmar_pozzuoli") minutes = 60;
+  else if (bookingKind === "formula_alilauro") minutes = 45;
+  else if (bookingKind === "formula_caremar") minutes = 85;
   else return null;
   return addMinutesToTime(ferryDepartureTime, minutes);
 }
@@ -63,14 +67,12 @@ function bookingKindToScheduleFilter(bookingKind: string | null): {
   departurePort?: string;
 } {
   switch (bookingKind) {
-    case "formula_snav":
-      return { company: "snav", departurePort: "napoli_beverello" };
-    case "formula_medmar_napoli":
-      return { company: "medmar", departurePort: "napoli_beverello" };
-    case "formula_medmar_pozzuoli":
-      return { company: "medmar", departurePort: "pozzuoli" };
-    default:
-      return {};
+    case "formula_snav":           return { company: "snav",     departurePort: "napoli_beverello" };
+    case "formula_medmar_napoli":  return { company: "medmar",   departurePort: "napoli_beverello" };
+    case "formula_medmar_pozzuoli":return { company: "medmar",   departurePort: "pozzuoli" };
+    case "formula_alilauro":       return { company: "alilauro", departurePort: "napoli_beverello" };
+    case "formula_caremar":        return { company: "caremar",  departurePort: "pozzuoli" };
+    default:                       return {};
   }
 }
 
@@ -79,14 +81,12 @@ function bookingKindToReturnScheduleFilter(bookingKind: string | null): {
   arrivalPort?: string;
 } {
   switch (bookingKind) {
-    case "formula_snav":
-      return { company: "snav", arrivalPort: "napoli_beverello" };
-    case "formula_medmar_napoli":
-      return { company: "medmar", arrivalPort: "napoli_beverello" };
-    case "formula_medmar_pozzuoli":
-      return { company: "medmar", arrivalPort: "pozzuoli" };
-    default:
-      return {};
+    case "formula_snav":           return { company: "snav",     arrivalPort: "napoli_beverello" };
+    case "formula_medmar_napoli":  return { company: "medmar",   arrivalPort: "napoli_beverello" };
+    case "formula_medmar_pozzuoli":return { company: "medmar",   arrivalPort: "pozzuoli" };
+    case "formula_alilauro":       return { company: "alilauro", arrivalPort: "napoli_beverello" };
+    case "formula_caremar":        return { company: "caremar",  arrivalPort: "pozzuoli" };
+    default:                       return {};
   }
 }
 
@@ -162,11 +162,17 @@ export function findArrivalScheduleForService(
     return isScheduleActiveOnDate(row, isoDate);
   });
   if (!match) return null;
-  const durationMinutes = inferArrivalDurationMinutes(match);
-  if (durationMinutes == null) return null;
+  // Prefer DB-stored arrival_time (set by migrations), fall back to formula
+  const arrivalTime = match.arrival_time
+    ? normalizeTime(match.arrival_time)
+    : (() => {
+        const mins = inferArrivalDurationMinutes(match);
+        return mins != null ? addMinutesToTime(time, mins) : null;
+      })();
+  if (!arrivalTime) return null;
   return {
     departureTime: time,
-    arrivalTime: addMinutesToTime(time, durationMinutes),
+    arrivalTime,
     arrivalPort: match.arrival_port,
     company: match.company,
   };
