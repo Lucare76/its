@@ -419,7 +419,7 @@ export async function computeAnalytics(
           .eq("tenant_id", tenantId)
           .in("service_id", weeklyServiceIds)
       : Promise.resolve({ data: [] }),
-    admin.from("memberships").select("user_id, full_name").eq("tenant_id", tenantId).in("role", ["driver", "autista"])
+    admin.from("memberships").select("user_id, full_name").eq("tenant_id", tenantId).eq("role", "driver")
   ]);
 
   const driversById = new Map((driversData as DriverMembershipRow[] | null ?? []).map((item) => [item.user_id, item.full_name]));

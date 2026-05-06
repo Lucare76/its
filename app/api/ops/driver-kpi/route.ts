@@ -75,7 +75,7 @@ export async function GET(request: NextRequest) {
       .from("memberships")
       .select("user_id, full_name")
       .eq("tenant_id", tenantId)
-      .in("role", ["driver", "autista"]);
+      .eq("role", "driver");
 
     const nameByUserId = new Map<string, string>(
       (memberships ?? []).map((m) => [m.user_id as string, m.full_name as string])

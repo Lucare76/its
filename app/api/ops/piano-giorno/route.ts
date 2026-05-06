@@ -95,7 +95,7 @@ export async function GET(request: NextRequest) {
         .from("memberships")
         .select("user_id, full_name, role")
         .eq("tenant_id", tenantId)
-        .in("role", ["driver", "autista", "admin", "operator"]),
+        .in("role", ["driver", "admin", "operator"]),
 
       auth.admin
         .from("vehicles")

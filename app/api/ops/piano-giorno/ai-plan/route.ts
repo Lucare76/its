@@ -231,7 +231,7 @@ export async function POST(request: NextRequest) {
         .from("memberships")
         .select("user_id,full_name,role")
         .eq("tenant_id", tenantId)
-        .in("role", ["driver", "autista"]),
+        .eq("role", "driver"),
       auth.admin
         .from("assignments")
         .select("service_id,group_id,driver_user_id")
