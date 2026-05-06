@@ -24,19 +24,16 @@ import { createClient } from "@supabase/supabase-js";
 // ─── Env ──────────────────────────────────────────────────────────────────────
 
 function readEnvFile(): Record<string, string> {
-  const envPath = path.resolve(".env.local");
-  if (!fs.existsSync(envPath)) return {};
-  return Object.fromEntries(
-    fs
-      .readFileSync(envPath, "utf8")
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l && !l.startsWith("#") && l.includes("="))
-      .map((l) => {
-        const idx = l.indexOf("=");
-        return [l.slice(0, idx).trim(), l.slice(idx + 1).trim().replace(/^"|"$/g, "")];
-      })
-  );
+  const parse = (filePath: string): Record<string, string> => {
+    if (!fs.existsSync(filePath)) return {};
+    return Object.fromEntries(
+      fs.readFileSync(filePath, "utf8")
+        .split(/\r?\n/).map((l) => l.trim())
+        .filter((l) => l && !l.startsWith("#") && l.includes("="))
+        .map((l) => { const i = l.indexOf("="); return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^"|"$/g, "")]; })
+    );
+  };
+  return { ...parse(path.resolve(".env")), ...parse(path.resolve(".env.local")) };
 }
 
 const localEnv     = readEnvFile();
@@ -46,6 +43,7 @@ const supabaseUrl  = process.env.NEXT_PUBLIC_SUPABASE_URL      || localEnv.NEXT_
 const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || localEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const serviceRole  = process.env.SUPABASE_SERVICE_ROLE_KEY     || localEnv.SUPABASE_SERVICE_ROLE_KEY     || "";
 
+const isRealApp = process.env.E2E_REAL_APP === "true";
 const hasEnv = !!(supabaseUrl && supabaseAnon && serviceRole && adminEmail && adminPwd);
 
 // Data test: 2099-06-15 — lontana abbastanza da non toccare dati reali
@@ -54,7 +52,7 @@ const TEST_DATE = "2099-06-15";
 // ─── Flusso completo con Supabase reale ───────────────────────────────────────
 
 test.describe.serial("Piano del Giorno – flusso operativo completo", () => {
-  test.skip(!hasEnv, "Richiede env Supabase (NEXT_PUBLIC_SUPABASE_URL ecc.).");
+  test.skip(!isRealApp || !hasEnv, "Richiede E2E_REAL_APP=true e env Supabase (NEXT_PUBLIC_SUPABASE_URL ecc.).");
 
   let tenantId    = "";
   let authToken   = "";

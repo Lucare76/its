@@ -27,19 +27,16 @@ import { createClient } from "@supabase/supabase-js";
 // ─── Env ─────────────────────────────────────────────────────────────────────
 
 function readEnvFile(): Record<string, string> {
-  const envPath = path.resolve(".env.local");
-  if (!fs.existsSync(envPath)) return {};
-  return Object.fromEntries(
-    fs
-      .readFileSync(envPath, "utf8")
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l && !l.startsWith("#") && l.includes("="))
-      .map((l) => {
-        const idx = l.indexOf("=");
-        return [l.slice(0, idx).trim(), l.slice(idx + 1).trim().replace(/^"|"$/g, "")];
-      })
-  );
+  const parse = (filePath: string): Record<string, string> => {
+    if (!fs.existsSync(filePath)) return {};
+    return Object.fromEntries(
+      fs.readFileSync(filePath, "utf8")
+        .split(/\r?\n/).map((l) => l.trim())
+        .filter((l) => l && !l.startsWith("#") && l.includes("="))
+        .map((l) => { const i = l.indexOf("="); return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^"|"$/g, "")]; })
+    );
+  };
+  return { ...parse(path.resolve(".env")), ...parse(path.resolve(".env.local")) };
 }
 
 const localEnv = readEnvFile();
@@ -54,6 +51,7 @@ const externalServiceId = process.env.E2E_TEST_SERVICE_ID || "";
 // Se true, non resetta lo status del servizio dopo il test
 const keepService = process.env.E2E_KEEP_SERVICE === "true";
 
+const isRealApp = process.env.E2E_REAL_APP === "true";
 const hasSupabaseEnv = !!(supabaseUrl && supabaseAnon && serviceRole && adminEmail && adminPassword);
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
@@ -96,7 +94,7 @@ test.describe("Scan page – smoke (nessuna auth)", () => {
 // ─── Test completo con Supabase reale ─────────────────────────────────────────
 
 test.describe.serial("Scan page – flusso completo", () => {
-  test.skip(!hasSupabaseEnv, "Richiede env Supabase complete (NEXT_PUBLIC_SUPABASE_URL ecc.).");
+  test.skip(!isRealApp || !hasSupabaseEnv, "Richiede E2E_REAL_APP=true e env Supabase complete (NEXT_PUBLIC_SUPABASE_URL ecc.).");
 
   let testServiceId  = externalServiceId; // usa quello esterno se fornito
   let tenantId       = "";

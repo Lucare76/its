@@ -11,20 +11,17 @@ type PreparedDraft = {
   import_state: string;
 };
 
-function readEnvFile() {
-  const envPath = path.resolve(".env.local");
-  if (!fs.existsSync(envPath)) return {} as Record<string, string>;
-  return Object.fromEntries(
-    fs
-      .readFileSync(envPath, "utf8")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#") && line.includes("="))
-      .map((line) => {
-        const idx = line.indexOf("=");
-        return [line.slice(0, idx).trim(), line.slice(idx + 1).trim().replace(/^"|"$/g, "")];
-      })
-  );
+function readEnvFile(): Record<string, string> {
+  const parse = (filePath: string): Record<string, string> => {
+    if (!fs.existsSync(filePath)) return {};
+    return Object.fromEntries(
+      fs.readFileSync(filePath, "utf8")
+        .split(/\r?\n/).map((l) => l.trim())
+        .filter((l) => l && !l.startsWith("#") && l.includes("="))
+        .map((l) => { const i = l.indexOf("="); return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^"|"$/g, "")]; })
+    );
+  };
+  return { ...parse(path.resolve(".env")), ...parse(path.resolve(".env.local")) };
 }
 
 const localEnv = readEnvFile();
@@ -35,6 +32,7 @@ const baseURL = process.env.E2E_BASE_URL || `http://127.0.0.1:${inferredPort}`;
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || localEnv.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || localEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || localEnv.SUPABASE_SERVICE_ROLE_KEY || "";
+const isRealApp = process.env.E2E_REAL_APP === "true";
 
 let preparedDraft: PreparedDraft | null = null;
 let storageKey = "";
@@ -68,7 +66,7 @@ async function openWithSupabaseSession(page: Page, targetPath: string) {
 }
 
 test.describe.serial("PDF ops UI", () => {
-  test.skip(!baseURL || !supabaseUrl || !supabaseAnonKey || !serviceRoleKey, "Richiede env Supabase complete.");
+  test.skip(!isRealApp || !baseURL || !supabaseUrl || !supabaseAnonKey || !serviceRoleKey, "Richiede E2E_REAL_APP=true e env Supabase complete.");
 
   test.beforeAll(async () => {
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {

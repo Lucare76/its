@@ -6,9 +6,13 @@ const E2E_PUBLIC_PREFIXES = ["/login", "/auth", "/_next", "/api", "/favicon", "/
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // In E2E smoke tests, redirect all protected routes to /login server-side.
-  // This avoids relying on client-side auth (Supabase getUser lock / React hydration).
-  if (request.headers.get("x-playwright-e2e") === "1") {
+  // In E2E smoke tests (NEXT_PUBLIC_DISABLE_SUPABASE=true), redirect protected
+  // routes to /login server-side — avoids relying on client-side Supabase getUser.
+  // Not active in real-app mode (E2E_REAL_APP=true) where tests authenticate normally.
+  if (
+    request.headers.get("x-playwright-e2e") === "1" &&
+    process.env.NEXT_PUBLIC_DISABLE_SUPABASE === "true"
+  ) {
     const isPublic =
       E2E_PUBLIC_PREFIXES.some((p) => pathname.startsWith(p)) ||
       pathname === "/" ||
