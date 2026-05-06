@@ -38,6 +38,8 @@ type MappingSuggestion = {
   confidence: "high" | "medium" | "low";
 };
 
+type TemplateServiceCategory = "arrival" | "departure" | "transfer" | "excursion" | "round_trip";
+
 type CandidateRow = {
   row_index: number;
   customer_name: string;
@@ -54,6 +56,12 @@ type CandidateRow = {
   direction: "arrival" | "departure" | null;
   billing_party_name: string;
   bus_city_origin: string;
+  service_category?: TemplateServiceCategory | null;
+  service_name?: string;
+  hotel_name?: string;
+  external_destination?: string;
+  embark_time?: string;
+  driver_time?: string;
   localIssues: string[];
 };
 
@@ -70,7 +78,7 @@ type ImportResponse = {
 };
 
 type PresetKey = "generic_transfer" | "formula_snav" | "formula_medmar_napoli" | "formula_medmar_pozzuoli" | "transfer_airport" | "transfer_station" | "linea_bus";
-type SheetTemplate = "lista_operativa" | "dispatch_cliente" | "prenotazioni" | "linea_bus_arrivi_cliente" | "linea_bus_partenze_cliente" | "foglio_servizio" | "non_riconosciuto";
+type SheetTemplate = "lista_operativa" | "dispatch_cliente" | "prenotazioni" | "linea_bus_arrivi_cliente" | "linea_bus_partenze_cliente" | "foglio_servizio" | "ischia_transfer_service" | "non_riconosciuto";
 type SimulatedBusLoad = {
   label: string;
   pax: number;
@@ -157,6 +165,9 @@ function detectTemplate(sheet: SheetPreview): SheetTemplate {
   const header = sheet.header.map(normalize);
   const headerText = header.join(" | ");
   const firstRow = sheet.sample[0]?.map(normalize).join(" | ") ?? "";
+  if (header.includes("data servizio") && header.includes("ora servizio") && header.includes("categoria servizio") && header.includes("origine") && header.includes("destinazione")) {
+    return "ischia_transfer_service";
+  }
   if (firstRow.includes("arrivi") && headerText.includes("orario") && headerText.includes("punto di carico") && headerText.includes("hotel destinazione")) {
     return "linea_bus_arrivi_cliente";
   }
@@ -212,6 +223,39 @@ function parseFoglioFlightCell(raw: string): FoglioTransportInfo {
   }
 
   return { transportCode: original, ferryTime: "", pickupHint: null };
+}
+
+function extractTimeFromTravelReference(value: string) {
+  const compact = value.trim();
+  if (!compact) return "";
+  const match = compact.match(/(\d{1,2}[:.]\d{2})/);
+  return match ? parseTimeCell(match[1]) : "";
+}
+
+function resolveTemplateServiceTime(
+  category: TemplateServiceCategory | null,
+  explicitTime: string,
+  travelReference: string,
+  embarkTime: string,
+  driverTime: string
+) {
+  if (explicitTime) return explicitTime;
+
+  const referenceTime = extractTimeFromTravelReference(travelReference);
+  if (category === "excursion") {
+    return driverTime || embarkTime || referenceTime;
+  }
+  return referenceTime || embarkTime || driverTime;
+}
+
+function resolveTemplateDepartureTime(
+  category: TemplateServiceCategory | null,
+  explicitTime: string,
+  embarkTime: string,
+  driverTime: string
+) {
+  if (category !== "departure") return "";
+  return driverTime || embarkTime || explicitTime;
 }
 
 function suggestMappings(sheet: SheetPreview): Record<MappingTarget, string> {
@@ -283,6 +327,17 @@ function parseDirectionCell(value: string): "arrival" | "departure" | null {
   if (!normalized) return null;
   if (normalized.includes("arrivo") || normalized.includes("andata")) return "arrival";
   if (normalized.includes("partenza") || normalized.includes("ritorno")) return "departure";
+  return null;
+}
+
+function parseTemplateServiceCategory(value: string): TemplateServiceCategory | null {
+  const normalized = normalizeText(value);
+  if (!normalized) return null;
+  if (normalized === "arrivo") return "arrival";
+  if (normalized === "partenza") return "departure";
+  if (normalized === "transfer") return "transfer";
+  if (normalized === "escursione") return "excursion";
+  if (normalized === "a r" || normalized === "ar" || normalized === "a-r") return "round_trip";
   return null;
 }
 
@@ -456,6 +511,27 @@ export default function ExcelImportPage() {
           }
         }
       }
+      return;
+    }
+    if (nextTemplate === "ischia_transfer_service") {
+      setMappings({
+        customer_name: "Nominativo",
+        date: "Data Servizio",
+        time: "Ora Servizio",
+        pickup: "Origine",
+        destination: "Destinazione",
+        pax: "Pax",
+        transport_code: "Riferimento Viaggio",
+        phone: "Telefono",
+        notes: "Note Operative",
+        departure_date: "",
+        departure_time: "",
+        direction: "Categoria Servizio",
+        billing_party_name: "Cliente / Agenzia",
+        bus_city_origin: ""
+      });
+      setPresetKey("generic_transfer");
+      setDefaultDirection("arrival");
       return;
     }
     setMappings(suggestMappings(selectedSheet));
@@ -702,6 +778,117 @@ export default function ExcelImportPage() {
       }
 
       return results;
+    }
+
+    if (templateType === "ischia_transfer_service") {
+      return selectedSheet.allRows
+        .slice(1)
+        .map((row, index) => {
+          const category = parseTemplateServiceCategory(pick(row, "direction"));
+          const origin = pick(row, "pickup");
+          const destinationLabel = pick(row, "destination");
+          const serviceName = row[3] ? String(row[3]).trim() : "";
+          const travelReference = pick(row, "transport_code");
+          const practiceReference = row[17] ? String(row[17]).trim() : "";
+          const embarkTime = row[9] ? parseTimeCell(String(row[9]).trim()) : "";
+          const driverTime = row[14] ? parseTimeCell(String(row[14]).trim()) : "";
+          const serviceTime = resolveTemplateServiceTime(
+            category,
+            parseTimeCell(pick(row, "time")),
+            travelReference,
+            embarkTime,
+            driverTime
+          );
+          const departureTime = resolveTemplateDepartureTime(
+            category,
+            serviceTime,
+            embarkTime,
+            driverTime
+          );
+          const statusLabel = row[16] ? String(row[16]).trim() : "";
+          const vehicleLabel = row[15] ? String(row[15]).trim() : "";
+          const clientAgency = pick(row, "billing_party_name");
+          const tourOperator = row[10] ? String(row[10]).trim() : "";
+          const billingPartyName = clientAgency || tourOperator;
+          const hotelName =
+            category === "arrival"
+              ? destinationLabel
+              : category === "departure"
+                ? origin
+                : category === "excursion"
+                  ? origin || destinationLabel
+                  : category === "transfer"
+                    ? destinationLabel || origin
+                    : "";
+          const externalDestination =
+            category === "departure"
+              ? destinationLabel
+              : category === "arrival"
+                ? origin
+                : destinationLabel;
+          const notes = [
+            serviceName ? `Servizio: ${serviceName}` : "",
+            practiceReference ? `Pratica: ${practiceReference}` : "",
+            embarkTime ? `Imbarco: ${embarkTime}` : "",
+            driverTime ? `Ora autista: ${driverTime}` : "",
+            vehicleLabel ? `Mezzo: ${vehicleLabel}` : "",
+            tourOperator ? `TO: ${tourOperator}` : "",
+            statusLabel ? `Stato file: ${statusLabel}` : "",
+            pick(row, "notes")
+          ].filter(Boolean).join(" | ");
+
+          const base: Omit<CandidateRow, "localIssues"> = {
+            row_index: index + 2,
+            customer_name: pick(row, "customer_name"),
+            date: parseDateCell(pick(row, "date")),
+            time: serviceTime,
+            pickup: origin,
+            destination: hotelName,
+            pax: parsePaxCell(pick(row, "pax")),
+            transport_code: travelReference,
+            phone: pick(row, "phone"),
+            notes,
+            departure_date: "",
+            departure_time: departureTime,
+            direction: category === "departure" ? "departure" : "arrival",
+            billing_party_name: billingPartyName,
+            bus_city_origin: "",
+            service_category: category,
+            service_name: serviceName,
+            hotel_name: hotelName,
+            external_destination: externalDestination,
+            embark_time: embarkTime,
+            driver_time: driverTime
+          };
+
+          const issues = localRowIssues(base, defaultHotelId).filter(
+            (issue) => issue !== "telefono mancante"
+          );
+          if (!category) issues.push("categoria servizio non riconosciuta");
+          if (category === "round_trip") issues.push("categoria A-R da gestire manualmente");
+          if (category === "excursion" && !serviceName.trim()) issues.push("nome escursione mancante");
+          if (!hotelName.trim() && !defaultHotelId) issues.push("hotel non riconoscibile da origine/destinazione");
+
+          return {
+            ...base,
+            localIssues: Array.from(new Set(issues))
+          };
+        })
+        .filter((row) =>
+          [
+            row.customer_name,
+            row.date,
+            row.time,
+            row.pickup,
+            row.destination,
+            row.transport_code,
+            row.phone,
+            row.notes,
+            row.billing_party_name,
+            row.service_name ?? "",
+            row.external_destination ?? ""
+          ].some((value) => value.trim().length > 0) || row.pax > 0
+        );
     }
 
     return selectedSheet.allRows
