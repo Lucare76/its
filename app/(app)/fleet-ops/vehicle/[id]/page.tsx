@@ -58,6 +58,14 @@ type ComplianceCost = {
   notes: string | null;
 };
 
+type VehicleDoc = {
+  id: string;
+  title: string;
+  file_path: string;
+  uploaded_at: string;
+  notes: string | null;
+};
+
 const COST_TYPE_LABELS: Record<string, string> = {
   insurance: "Assicurazione",
   inspection: "Collaudo",
@@ -110,6 +118,14 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   const [librettoUploadedAt, setLibrettoUploadedAt] = useState<string | null>(null);
   const [uploadingLibretto, setUploadingLibretto]   = useState(false);
 
+  // documenti aggiuntivi
+  const [docs, setDocs] = useState<VehicleDoc[]>([]);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [showDocForm, setShowDocForm] = useState(false);
+  const [newDocTitle, setNewDocTitle] = useState("");
+  const [newDocNotes, setNewDocNotes] = useState("");
+  const [uploadingDoc, setUploadingDoc] = useState(false);
+
   // compliance settings
   const [tachographEnabled, setTachographEnabled] = useState(false);
   const [extinguisherEnabled, setExtinguisherEnabled] = useState(true);
@@ -144,8 +160,20 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     setCostsLoading(false);
   }, [vehicleId]);
 
+  const loadDocs = useCallback(async () => {
+    if (!supabase) return;
+    setDocsLoading(true);
+    const { data } = await supabase
+      .from("vehicle_documents")
+      .select("id, title, file_path, uploaded_at, notes")
+      .eq("vehicle_id", vehicleId)
+      .order("uploaded_at", { ascending: false });
+    setDocs((data as VehicleDoc[]) ?? []);
+    setDocsLoading(false);
+  }, [vehicleId]);
+
   const load = useCallback(async () => {
-    if (tab === "documenti") return;
+    if (tab === "documenti") { void loadDocs(); return; }
     if (tab === "costi") { void loadCosts(); return; }
     setLoading(true);
     if (tab === "km_logs") {
@@ -296,6 +324,44 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     setLibrettoPath(null);
     setLibrettoUploadedAt(null);
     showMsg("Libretto rimosso.", true);
+  }
+
+  async function handleDocUpload(file: File, title: string, notes: string) {
+    if (!supabase) return;
+    if (file.size > 10 * 1024 * 1024) { showMsg("File troppo grande (max 10 MB)", false); return; }
+    setUploadingDoc(true);
+    const ts = Date.now();
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `${vehicleId}/docs/${ts}_${safeName}`;
+    const { error: uploadError } = await supabase.storage
+      .from("vehicle-documents")
+      .upload(path, file, { upsert: false });
+    if (uploadError) { showMsg(`Errore upload: ${uploadError.message}`, false); setUploadingDoc(false); return; }
+    const { data: sessionData } = await supabase.auth.getSession();
+    const { error: dbError } = await supabase.from("vehicle_documents").insert({
+      vehicle_id: vehicleId,
+      title,
+      file_path: path,
+      uploaded_by: sessionData.session?.user?.id ?? null,
+      notes: notes || null,
+    });
+    setUploadingDoc(false);
+    if (dbError) { showMsg(`Errore salvataggio: ${dbError.message}`, false); return; }
+    showMsg("Documento aggiunto.", true);
+    setShowDocForm(false);
+    setNewDocTitle("");
+    setNewDocNotes("");
+    void loadDocs();
+  }
+
+  async function handleDocDelete(doc: VehicleDoc) {
+    if (!confirm(`Rimuovere "${doc.title}"?`)) return;
+    if (!supabase) return;
+    const { error } = await supabase.from("vehicle_documents").delete().eq("id", doc.id);
+    if (error) { showMsg(`Errore: ${error.message}`, false); return; }
+    void supabase.storage.from("vehicle-documents").remove([doc.file_path]);
+    setDocs((prev) => prev.filter((d) => d.id !== doc.id));
+    showMsg("Documento rimosso.", true);
   }
 
   async function handleDelete(id: string) {
@@ -498,6 +564,102 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
                     }}
                   />
                 </label>
+              </div>
+            )}
+          </div>
+
+          {/* Documenti aggiuntivi */}
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-700">Documenti aggiuntivi</h3>
+                <p className="text-xs text-slate-400 mt-0.5">PDF, immagini, Word — max 10 MB ciascuno</p>
+              </div>
+              {!showDocForm && (
+                <button
+                  type="button"
+                  onClick={() => setShowDocForm(true)}
+                  className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                >
+                  + Aggiungi
+                </button>
+              )}
+            </div>
+
+            {showDocForm && (
+              <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <label className="text-xs font-semibold text-slate-500 col-span-2 sm:col-span-1">
+                    Titolo *
+                    <input
+                      value={newDocTitle}
+                      onChange={(e) => setNewDocTitle(e.target.value)}
+                      className="input-saas mt-1 w-full"
+                      placeholder="es. Carta di circolazione"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-500 col-span-2 sm:col-span-1">
+                    Note
+                    <input
+                      value={newDocNotes}
+                      onChange={(e) => setNewDocNotes(e.target.value)}
+                      className="input-saas mt-1 w-full"
+                    />
+                  </label>
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className={`cursor-pointer rounded-lg px-4 py-2 text-xs font-semibold text-white ${!newDocTitle.trim() || uploadingDoc ? "bg-slate-300 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700"}`}>
+                    {uploadingDoc ? "Caricamento..." : "Seleziona file"}
+                    <input
+                      type="file"
+                      accept="application/pdf,image/*,.doc,.docx"
+                      className="hidden"
+                      disabled={!newDocTitle.trim() || uploadingDoc}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void handleDocUpload(file, newDocTitle, newDocNotes);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => { setShowDocForm(false); setNewDocTitle(""); setNewDocNotes(""); }}
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-500 hover:bg-slate-100"
+                  >
+                    Annulla
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {docsLoading ? (
+              <div className="text-sm text-slate-400 py-4 text-center">Caricamento...</div>
+            ) : docs.length === 0 ? (
+              <div className="text-sm text-slate-400 py-4 text-center">Nessun documento aggiuntivo.</div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {docs.map((doc) => (
+                  <div key={doc.id} className="flex items-center justify-between gap-3 py-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-800 truncate">{doc.title}</div>
+                      <div className="text-xs text-slate-400 mt-0.5">
+                        {new Date(doc.uploaded_at).toLocaleDateString("it-IT")}
+                        {doc.notes && <span className="ml-2">— {doc.notes}</span>}
+                      </div>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <DocDownloadButton path={doc.file_path} />
+                      <button
+                        type="button"
+                        onClick={() => void handleDocDelete(doc)}
+                        className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                      >
+                        Rimuovi
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -888,6 +1050,23 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
         </div>
       ))}
     </section>
+  );
+}
+
+function DocDownloadButton({ path }: { path: string }) {
+  const handleDownload = async () => {
+    if (!supabase) return;
+    const { data } = await supabase.storage.from("vehicle-documents").createSignedUrl(path, 60);
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+  };
+  return (
+    <button
+      type="button"
+      onClick={() => void handleDownload()}
+      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+    >
+      Apri
+    </button>
   );
 }
 

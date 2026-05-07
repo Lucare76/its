@@ -36,6 +36,7 @@ const toggleVehicleSchema = z.object({
 const vehicleBlockSchema = z.object({
   id: z.string().uuid(),
   blocked_reason: z.string().max(500).nullable().optional(),
+  blocked_from: z.string().datetime().nullable().optional(),
   blocked_until: z.string().datetime().nullable().optional(),
   is_blocked_manual: z.boolean(),
 });
@@ -147,6 +148,7 @@ export async function POST(request: NextRequest) {
         .from("vehicles")
         .update({
           blocked_reason: parsed.blocked_reason ?? null,
+          blocked_from: parsed.blocked_from ?? null,
           blocked_until: parsed.blocked_until ?? null,
           is_blocked_manual: parsed.is_blocked_manual,
         })

@@ -15,6 +15,7 @@ type Vehicle = {
   habitual_driver_user_id?: string | null;
   habitual_driver_profile_id?: string | null;
   default_zone?: string | null;
+  blocked_from?: string | null;
   blocked_until?: string | null;
   blocked_reason?: string | null;
   notes?: string | null;
@@ -109,6 +110,7 @@ const SEVERITY_BADGE: Record<string, string> = {
 const EMPTY_FORM = {
   label: "",
   plate: "",
+  blocked_from: "",
   vehicle_size: "medium",
   habitual_driver_profile_id: "",
   default_zone: "",
@@ -209,6 +211,7 @@ export default function FleetOpsPage() {
       vehicle_size: vehicle.vehicle_size ?? "medium",
       habitual_driver_profile_id: vehicle.habitual_driver_profile_id ?? "",
       default_zone: vehicle.default_zone ?? "",
+      blocked_from: vehicle.blocked_from?.slice(0, 16) ?? "",
       blocked_until: vehicle.blocked_until?.slice(0, 16) ?? "",
       blocked_reason: vehicle.blocked_reason ?? "",
       notes: vehicle.notes ?? "",
@@ -825,8 +828,12 @@ export default function FleetOpsPage() {
                           Motivo blocco
                           <input className="input-saas mt-1 w-full" value={form.blocked_reason} onChange={(e) => setForm((f) => ({ ...f, blocked_reason: e.target.value }))} placeholder="Guasto, revisione..." />
                         </label>
-                        <label className="col-span-2 text-xs font-semibold text-slate-500">
-                          Bloccato fino a
+                        <label className="text-xs font-semibold text-slate-500">
+                          Dal
+                          <input type="datetime-local" className="input-saas mt-1 w-full" value={form.blocked_from} onChange={(e) => setForm((f) => ({ ...f, blocked_from: e.target.value }))} />
+                        </label>
+                        <label className="text-xs font-semibold text-slate-500">
+                          Al
                           <input type="datetime-local" className="input-saas mt-1 w-full" value={form.blocked_until} onChange={(e) => setForm((f) => ({ ...f, blocked_until: e.target.value }))} />
                         </label>
                         <div className="col-span-2 flex flex-wrap gap-2">
@@ -838,6 +845,7 @@ export default function FleetOpsPage() {
                               action: "set_vehicle_block",
                               id: selectedVehicle.id,
                               blocked_reason: form.blocked_reason || null,
+                              blocked_from: form.blocked_from ? new Date(form.blocked_from).toISOString() : null,
                               blocked_until: form.blocked_until ? new Date(form.blocked_until).toISOString() : null,
                               is_blocked_manual: Boolean(form.blocked_reason || form.blocked_until),
                             })}
