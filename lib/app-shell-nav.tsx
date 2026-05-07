@@ -360,6 +360,7 @@ export const SETTINGS_GROUPS: NavGroup[] = [
     title: "Operativo",
     items: [
       { href: "/settings/ferry-rules", label: "Abbinamento corse nave", icon: "⛴" },
+      { href: "/settings/shuttles", label: "Navette", icon: "⇄" },
     ]
   },
   {

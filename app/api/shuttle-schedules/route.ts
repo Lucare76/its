@@ -1,0 +1,121 @@
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { authorizeServiceRoleRequest, type AuthorizedRequestContext } from "@/lib/server/pricing-auth";
+import { fetchAllServices } from "@/lib/server/fetch-all-services";
+import { deriveShuttleSchedules, enumerateShuttleDates, type ShuttleSchedule } from "@/lib/shuttle-schedules";
+
+export const runtime = "nodejs";
+
+const shuttleScheduleSchema = z.object({
+  hotel_id: z.string().uuid().nullable().optional(),
+  booking_service_kind: z.enum(["navetta", "shuttle_hotel"]).default("navetta"),
+  customer_name: z.string().min(1).max(120),
+  direction: z.enum(["arrival", "departure"]),
+  departure_time: z.string().regex(/^\d{2}:\d{2}$/),
+  meeting_point: z.string().max(200).nullable().optional(),
+  vessel: z.string().min(1).max(60).default("Navetta"),
+  valid_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  valid_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  days_of_week: z.array(z.number().int().min(0).max(6)).nullable().optional(),
+  notes: z.string().max(500).nullable().optional(),
+}).refine((data) => data.valid_to >= data.valid_from, {
+  message: "La data finale deve essere uguale o successiva alla data iniziale.",
+  path: ["valid_to"],
+});
+
+function todayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function buildServiceRows(tenantId: string, schedule: ShuttleSchedule) {
+  return enumerateShuttleDates(schedule, todayIsoDate()).map((date) => ({
+    tenant_id: tenantId,
+    date,
+    time: schedule.departure_time,
+    service_type: "transfer",
+    direction: schedule.direction,
+    customer_name: schedule.customer_name,
+    pax: 1,
+    hotel_id: schedule.hotel_id,
+    vessel: schedule.vessel,
+    booking_service_kind: schedule.booking_service_kind,
+    meeting_point: schedule.meeting_point,
+    notes: schedule.notes ?? "",
+    phone: "",
+    status: "new",
+    is_draft: false,
+  }));
+}
+
+async function insertInChunks(
+  auth: AuthorizedRequestContext<"admin" | "operator">,
+  rows: Array<Record<string, unknown>>,
+) {
+  if (rows.length === 0) return;
+  const chunkSize = 500;
+  for (let index = 0; index < rows.length; index += chunkSize) {
+    const { error } = await auth.admin.from("services").insert(rows.slice(index, index + chunkSize));
+    if (error) {
+      throw new Error(error.message);
+    }
+  }
+}
+
+export async function GET(request: NextRequest) {
+  const auth = await authorizeServiceRoleRequest(request, {
+    roles: ["admin", "operator"],
+    auditPrefix: "shuttle_schedules_list",
+  });
+  if (auth instanceof NextResponse) return auth;
+
+  const servicesResult = await fetchAllServices(auth.admin, auth.membership.tenant_id);
+  if (servicesResult.error) {
+    return NextResponse.json({ error: servicesResult.error.message }, { status: 500 });
+  }
+
+  const schedules = deriveShuttleSchedules(servicesResult.data ?? []);
+  return NextResponse.json({ ok: true, schedules });
+}
+
+export async function POST(request: NextRequest) {
+  const auth = await authorizeServiceRoleRequest(request, {
+    roles: ["admin", "operator"],
+    auditPrefix: "shuttle_schedules_create",
+  });
+  if (auth instanceof NextResponse) return auth;
+
+  const parsed = shuttleScheduleSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: parsed.error.issues[0]?.message ?? "Dati non validi." },
+      { status: 400 }
+    );
+  }
+
+  const schedule: ShuttleSchedule = {
+    id: "",
+    tenant_id: auth.membership.tenant_id,
+    hotel_id: parsed.data.hotel_id ?? null,
+    booking_service_kind: parsed.data.booking_service_kind,
+    customer_name: parsed.data.customer_name.trim(),
+    direction: parsed.data.direction,
+    departure_time: parsed.data.departure_time,
+    meeting_point: parsed.data.meeting_point?.trim() || null,
+    vessel: parsed.data.vessel.trim() || "Navetta",
+    valid_from: parsed.data.valid_from,
+    valid_to: parsed.data.valid_to,
+    days_of_week: parsed.data.days_of_week?.length ? parsed.data.days_of_week : null,
+    notes: parsed.data.notes?.trim() || null,
+  };
+
+  try {
+    await insertInChunks(auth, buildServiceRows(auth.membership.tenant_id, schedule));
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Errore creazione navetta." },
+      { status: 500 }
+    );
+  }
+
+  return GET(request);
+}
