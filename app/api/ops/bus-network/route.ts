@@ -1710,6 +1710,13 @@ export async function POST(request: NextRequest) {
         if (lineId) serviceToLineId.set(a.service_id, lineId);
       }
 
+      if (serviceToLineId.size === 0) {
+        return NextResponse.json({
+          ok: false,
+          error: "Non ci sono ancora passeggeri allocati sulle linee bus per questa data. Prima assegna i passeggeri alle linee, poi esegui Smistamento Ischia."
+        }, { status: 400 });
+      }
+
       type Svc = { service_id: string; customer_name: string; pax_assigned: number; hotel_name: string; hotel_zone: string; bus_line_id: string | null };
       const enriched: Svc[] = (rawServices as Array<{ id: string; customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; pax: number; hotel_id: string | null; meeting_point: string | null }>).map(s => {
         const hotelFromId = s.hotel_id ? hotelsById.get(s.hotel_id) : null;
