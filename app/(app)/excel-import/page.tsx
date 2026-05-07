@@ -30,7 +30,15 @@ type MappingTarget =
   | "departure_time"
   | "direction"
   | "billing_party_name"
-  | "bus_city_origin";
+  | "bus_city_origin"
+  | "route_kind"
+  | "origin_place_type"
+  | "destination_place_type"
+  | "company_name"
+  | "embark_time"
+  | "pickup_time"
+  | "service_name"
+  | "practice_reference";
 
 type MappingSuggestion = {
   target: MappingTarget;
@@ -38,7 +46,25 @@ type MappingSuggestion = {
   confidence: "high" | "medium" | "low";
 };
 
-type TemplateServiceCategory = "arrival" | "departure" | "transfer" | "excursion" | "round_trip";
+type TemplateServiceCategory = "arrival" | "departure" | "transfer" | "excursion" | "territorial" | "round_trip" | "bus_line";
+type TemplatePlaceType = "hotel" | "locality" | "poi" | "attraction" | "port" | "airport" | "station" | "address" | "bus_stop" | "other";
+type TemplateRouteKind =
+  | "porto_hotel"
+  | "hotel_porto"
+  | "aeroporto_hotel"
+  | "hotel_aeroporto"
+  | "stazione_hotel"
+  | "hotel_stazione"
+  | "hotel_luogo"
+  | "luogo_hotel"
+  | "luogo_luogo"
+  | "hotel_attrazione"
+  | "attrazione_hotel"
+  | "escursione"
+  | "territoriale"
+  | "linea_bus_arrivo_ritorno"
+  | "linea_bus_solo_arrivo"
+  | "linea_bus_solo_ritorno";
 
 type CandidateRow = {
   row_index: number;
@@ -57,6 +83,12 @@ type CandidateRow = {
   billing_party_name: string;
   bus_city_origin: string;
   service_category?: TemplateServiceCategory | null;
+  route_kind?: TemplateRouteKind | null;
+  origin_place_type?: TemplatePlaceType | null;
+  destination_place_type?: TemplatePlaceType | null;
+  company_name?: string;
+  practice_reference?: string;
+  pickup_time?: string;
   service_name?: string;
   hotel_name?: string;
   external_destination?: string;
@@ -109,7 +141,15 @@ const mappingTargetMeta: Array<{ target: MappingTarget; label: string; patterns:
   { target: "departure_time", label: "Ora ritorno", patterns: ["ora ritorno", "alle ritorno"] },
   { target: "direction", label: "Direzione", patterns: ["direzione", "tipo servizio"] },
   { target: "billing_party_name", label: "Agenzia fatturazione", patterns: ["agenzia", "to", "fatturazione"] },
-  { target: "bus_city_origin", label: "Origine linea bus", patterns: ["origine", "citta", "partenza bus"] }
+  { target: "bus_city_origin", label: "Origine linea bus", patterns: ["origine", "citta", "partenza bus"] },
+  { target: "route_kind", label: "Tipo tratta", patterns: ["tipo tratta", "tratta"] },
+  { target: "origin_place_type", label: "Tipo origine", patterns: ["tipo origine"] },
+  { target: "destination_place_type", label: "Tipo destinazione", patterns: ["tipo destinazione"] },
+  { target: "company_name", label: "Compagnia / mezzo", patterns: ["compagnia", "mezzo"] },
+  { target: "embark_time", label: "Ora imbarco", patterns: ["ora imbarco", "imbarco"] },
+  { target: "pickup_time", label: "Ora pickup", patterns: ["ora pickup", "pickup"] },
+  { target: "service_name", label: "Nome escursione", patterns: ["nome escursione", "escursione"] },
+  { target: "practice_reference", label: "Pratica", patterns: ["pratica"] }
 ];
 
 const presets: Array<{
@@ -337,8 +377,49 @@ function parseTemplateServiceCategory(value: string): TemplateServiceCategory | 
   if (normalized === "partenza") return "departure";
   if (normalized === "transfer") return "transfer";
   if (normalized === "escursione") return "excursion";
+  if (normalized === "territoriale") return "territorial";
+  if (normalized === "linea bus" || normalized === "lineabus" || normalized === "bus") return "bus_line";
   if (normalized === "a r" || normalized === "ar" || normalized === "a-r") return "round_trip";
   return null;
+}
+
+function parseTemplatePlaceType(value: string): TemplatePlaceType | null {
+  const normalized = normalizeText(value);
+  if (!normalized) return null;
+  if (normalized === "hotel" || normalized === "albergo" || normalized === "struttura") return "hotel";
+  if (normalized === "localita" || normalized === "luogo" || normalized === "comune") return "locality";
+  if (normalized === "attrazione") return "attraction";
+  if (normalized === "poi") return "poi";
+  if (normalized === "porto") return "port";
+  if (normalized === "aeroporto") return "airport";
+  if (normalized === "stazione") return "station";
+  if (normalized === "indirizzo") return "address";
+  if (normalized === "fermata bus" || normalized === "fermata_bus") return "bus_stop";
+  if (normalized === "altro") return "other";
+  return null;
+}
+
+function parseTemplateRouteKind(value: string): TemplateRouteKind | null {
+  const normalized = normalizeText(value).replace(/\s+/g, "_");
+  const values: TemplateRouteKind[] = [
+    "porto_hotel",
+    "hotel_porto",
+    "aeroporto_hotel",
+    "hotel_aeroporto",
+    "stazione_hotel",
+    "hotel_stazione",
+    "hotel_luogo",
+    "luogo_hotel",
+    "luogo_luogo",
+    "hotel_attrazione",
+    "attrazione_hotel",
+    "escursione",
+    "territoriale",
+    "linea_bus_arrivo_ritorno",
+    "linea_bus_solo_arrivo",
+    "linea_bus_solo_ritorno"
+  ];
+  return values.includes(normalized as TemplateRouteKind) ? normalized as TemplateRouteKind : null;
 }
 
 function normalizeBillingPartyName(value: string) {
@@ -386,6 +467,32 @@ function deriveBusFamilyFromLineCode(lineCode?: string | null) {
   return "ITALIA" as const;
 }
 
+function buildHeaderPicker(header: string[]) {
+  const indexes = new Map<string, number>();
+  header.forEach((item, index) => {
+    const normalized = normalizeText(item);
+    if (normalized && !indexes.has(normalized)) indexes.set(normalized, index);
+  });
+
+  const findIndex = (aliases: string[]) => {
+    for (const alias of aliases) {
+      const index = indexes.get(normalizeText(alias));
+      if (index !== undefined) return index;
+    }
+    return -1;
+  };
+
+  return {
+    get(row: string[], aliases: string[]) {
+      const index = findIndex(aliases);
+      return index >= 0 ? String(row[index] ?? "").trim() : "";
+    },
+    missing(required: Array<{ label: string; aliases: string[] }>) {
+      return required.filter((item) => findIndex(item.aliases) < 0).map((item) => item.label);
+    }
+  };
+}
+
 function localRowIssues(row: Omit<CandidateRow, "localIssues">, defaultHotelId: string) {
   const issues: string[] = [];
   if (!row.customer_name) issues.push("cliente mancante");
@@ -402,7 +509,7 @@ export default function ExcelImportPage() {
   const [sheets, setSheets] = useState<SheetPreview[]>([]);
   const [fileName, setFileName] = useState<string | null>(null);
   const [selectedSheetName, setSelectedSheetName] = useState("");
-  const [mappings, setMappings] = useState<Record<MappingTarget, string>>({} as Record<MappingTarget, string>);
+  const [mappings, setMappings] = useState<Partial<Record<MappingTarget, string>>>({});
   const [presetKey, setPresetKey] = useState<PresetKey>("generic_transfer");
   const [defaultDirection, setDefaultDirection] = useState<"arrival" | "departure">("arrival");
   const [defaultBillingPartyName, setDefaultBillingPartyName] = useState("");
@@ -515,20 +622,28 @@ export default function ExcelImportPage() {
     }
     if (nextTemplate === "ischia_transfer_service") {
       setMappings({
-        customer_name: "Nominativo",
-        date: "Data Servizio",
-        time: "Ora Servizio",
+        customer_name: "Nome cliente",
+        date: "Data servizio",
+        time: "Ora servizio",
         pickup: "Origine",
         destination: "Destinazione",
         pax: "Pax",
-        transport_code: "Riferimento Viaggio",
+        transport_code: "Riferimento viaggio",
         phone: "Telefono",
-        notes: "Note Operative",
+        notes: "Note operative",
         departure_date: "",
         departure_time: "",
-        direction: "Categoria Servizio",
+        direction: "Categoria servizio",
         billing_party_name: "Cliente / Agenzia",
-        bus_city_origin: ""
+        bus_city_origin: "",
+        route_kind: "Tipo tratta",
+        origin_place_type: "Tipo origine",
+        destination_place_type: "Tipo destinazione",
+        company_name: "Compagnia / mezzo",
+        embark_time: "Ora imbarco",
+        pickup_time: "Ora pickup",
+        service_name: "Nome escursione",
+        practice_reference: "Pratica"
       });
       setPresetKey("generic_transfer");
       setDefaultDirection("arrival");
@@ -781,72 +896,151 @@ export default function ExcelImportPage() {
     }
 
     if (templateType === "ischia_transfer_service") {
+      const picker = buildHeaderPicker(selectedSheet.header);
+      const missingHeaders = picker.missing([
+        { label: "Data servizio", aliases: ["Data servizio"] },
+        { label: "Ora servizio", aliases: ["Ora servizio"] },
+        { label: "Categoria servizio", aliases: ["Categoria servizio"] },
+        { label: "Tipo tratta", aliases: ["Tipo tratta"] },
+        { label: "Origine", aliases: ["Origine"] },
+        { label: "Tipo origine", aliases: ["Tipo origine"] },
+        { label: "Destinazione", aliases: ["Destinazione"] },
+        { label: "Tipo destinazione", aliases: ["Tipo destinazione"] },
+        { label: "Nome cliente", aliases: ["Nome cliente", "Nominativo", "Cliente"] },
+        { label: "Pax", aliases: ["Pax", "Passeggeri"] }
+      ]);
+
       return selectedSheet.allRows
         .slice(1)
-        .map((row, index) => {
-          const category = parseTemplateServiceCategory(pick(row, "direction"));
-          const origin = pick(row, "pickup");
-          const destinationLabel = pick(row, "destination");
-          const serviceName = row[3] ? String(row[3]).trim() : "";
-          const travelReference = pick(row, "transport_code");
-          const practiceReference = row[17] ? String(row[17]).trim() : "";
-          const embarkTime = row[9] ? parseTimeCell(String(row[9]).trim()) : "";
-          const driverTime = row[14] ? parseTimeCell(String(row[14]).trim()) : "";
+        .flatMap((row, index) => {
+          const categoryRaw = picker.get(row, ["Categoria servizio"]);
+          const routeKindRaw = picker.get(row, ["Tipo tratta"]);
+          const origin = picker.get(row, ["Origine"]);
+          const destinationLabel = picker.get(row, ["Destinazione"]);
+          const originPlaceType = parseTemplatePlaceType(picker.get(row, ["Tipo origine"]));
+          const destinationPlaceType = parseTemplatePlaceType(picker.get(row, ["Tipo destinazione"]));
+          const serviceName = picker.get(row, ["Nome escursione", "Escursione"]);
+          const travelReference = picker.get(row, ["Riferimento viaggio", "Riferimento mezzo"]);
+          const practiceReference = picker.get(row, ["Pratica", "Numero pratica"]);
+          const embarkTime = parseTimeCell(picker.get(row, ["Ora imbarco", "Imbarco"]));
+          const pickupTime = parseTimeCell(picker.get(row, ["Ora pickup", "Ora prelievo", "Pickup"]));
+          const companyName = picker.get(row, ["Compagnia / mezzo", "Compagnia", "Mezzo"]);
+          const category = parseTemplateServiceCategory(categoryRaw);
+          const routeKind = parseTemplateRouteKind(routeKindRaw);
+
+          if (category === "bus_line") {
+            const busLine = picker.get(row, ["Linea bus", "Linea"]);
+            const busStop = picker.get(row, ["Fermata / città partenza", "Fermata / citta partenza", "Fermata", "Città partenza", "Citta partenza"]);
+            const busStopCode = picker.get(row, ["Codice fermata"]);
+            const busHotel = picker.get(row, ["Hotel destinazione bus", "Hotel destinazione", "Hotel"]);
+            const busArrivalDate = parseDateCell(picker.get(row, ["Data arrivo bus"]));
+            const busArrivalTime = parseTimeCell(picker.get(row, ["Ora arrivo bus"]));
+            const busReturnDate = parseDateCell(picker.get(row, ["Data ritorno bus"]));
+            const busReturnTime = parseTimeCell(picker.get(row, ["Ora ritorno bus"]));
+            const pickupReturn = picker.get(row, ["Pickup ritorno"]);
+            const phone = picker.get(row, ["Telefono", "Tel", "Cellulare"]);
+            const customerName = picker.get(row, ["Nome cliente", "Nominativo", "Cliente"]);
+            const pax = parsePaxCell(picker.get(row, ["Pax", "Passeggeri"]));
+            const billingPartyName = picker.get(row, ["Agenzia", "Cliente / Agenzia", "Cliente fatturazione"]);
+            const notes = [
+              practiceReference ? `Pratica: ${practiceReference}` : "",
+              pickupReturn ? `Pickup ritorno: ${pickupReturn}` : "",
+              picker.get(row, ["Note operative", "Note"])
+            ].filter(Boolean).join(" | ");
+            const routeIssue = routeKind && routeKind.startsWith("linea_bus_") ? "" : "tipo tratta Linea Bus non riconosciuto";
+            const lineIssue = ["italia", "centro", "adriatica"].includes(normalizeText(busLine)) ? "" : "linea bus non riconosciuta";
+            const commonIssues = [
+              routeIssue,
+              lineIssue,
+              !busLine ? "Linea bus mancante" : "",
+              !busStop ? "Fermata / città partenza mancante" : "",
+              !busHotel ? "Hotel destinazione bus mancante" : "",
+              !customerName ? "Nome cliente mancante" : "",
+              !pax || pax < 1 ? "Pax non valido" : ""
+            ].filter(Boolean);
+
+            const makeBusRow = (direction: "arrival" | "departure", date: string, time: string, suffix: number) => {
+              const dateIssue = !date
+                ? direction === "arrival" ? "Data arrivo bus mancante" : "Data ritorno bus mancante"
+                : "";
+              const base: Omit<CandidateRow, "localIssues"> = {
+                row_index: routeKind === "linea_bus_arrivo_ritorno" ? ((index + 2) * 10) + suffix : index + 2,
+                customer_name: customerName,
+                date,
+                time: time || "00:00",
+                pickup: busStop,
+                destination: busHotel,
+                pax,
+                transport_code: busLine,
+                phone,
+                notes,
+                departure_date: "",
+                departure_time: "",
+                direction,
+                billing_party_name: billingPartyName,
+                bus_city_origin: busStopCode || busStop,
+                service_category: "bus_line",
+                route_kind: routeKind,
+                origin_place_type: "bus_stop",
+                destination_place_type: "hotel",
+                company_name: "Linea bus",
+                practice_reference: practiceReference,
+                pickup_time: direction === "departure" ? pickupReturn : "",
+                service_name: "Linea Bus",
+                hotel_name: busHotel,
+                external_destination: busHotel,
+                embark_time: "",
+                driver_time: direction === "departure" ? pickupReturn : ""
+              };
+              return { ...base, localIssues: Array.from(new Set([...commonIssues, dateIssue].filter(Boolean))) };
+            };
+
+            if (routeKind === "linea_bus_arrivo_ritorno") {
+              return [
+                makeBusRow("arrival", busArrivalDate, busArrivalTime, 1),
+                makeBusRow("departure", busReturnDate, busReturnTime, 2)
+              ];
+            }
+            if (routeKind === "linea_bus_solo_ritorno") {
+              return [makeBusRow("departure", busReturnDate, busReturnTime, 0)];
+            }
+            return [makeBusRow("arrival", busArrivalDate, busArrivalTime, 0)];
+          }
+
           const serviceTime = resolveTemplateServiceTime(
             category,
-            parseTimeCell(pick(row, "time")),
+            parseTimeCell(picker.get(row, ["Ora servizio"])),
             travelReference,
             embarkTime,
-            driverTime
+            pickupTime
           );
           const departureTime = resolveTemplateDepartureTime(
             category,
             serviceTime,
             embarkTime,
-            driverTime
+            pickupTime
           );
-          const statusLabel = row[16] ? String(row[16]).trim() : "";
-          const vehicleLabel = row[15] ? String(row[15]).trim() : "";
-          const clientAgency = pick(row, "billing_party_name");
-          const tourOperator = row[10] ? String(row[10]).trim() : "";
-          const billingPartyName = clientAgency || tourOperator;
-          const hotelName =
-            category === "arrival"
-              ? destinationLabel
-              : category === "departure"
-                ? origin
-                : category === "excursion"
-                  ? origin || destinationLabel
-                  : category === "transfer"
-                    ? destinationLabel || origin
-                    : "";
-          const externalDestination =
-            category === "departure"
-              ? destinationLabel
-              : category === "arrival"
-                ? origin
-                : destinationLabel;
+          const billingPartyName = picker.get(row, ["Agenzia", "Cliente / Agenzia", "Cliente fatturazione"]);
+          const hotelColumn = picker.get(row, ["Hotel"]);
           const notes = [
             serviceName ? `Servizio: ${serviceName}` : "",
             practiceReference ? `Pratica: ${practiceReference}` : "",
             embarkTime ? `Imbarco: ${embarkTime}` : "",
-            driverTime ? `Ora autista: ${driverTime}` : "",
-            vehicleLabel ? `Mezzo: ${vehicleLabel}` : "",
-            tourOperator ? `TO: ${tourOperator}` : "",
-            statusLabel ? `Stato file: ${statusLabel}` : "",
-            pick(row, "notes")
+            pickupTime ? `Pickup: ${pickupTime}` : "",
+            companyName ? `Mezzo: ${companyName}` : "",
+            picker.get(row, ["Note operative", "Note"])
           ].filter(Boolean).join(" | ");
 
           const base: Omit<CandidateRow, "localIssues"> = {
             row_index: index + 2,
-            customer_name: pick(row, "customer_name"),
-            date: parseDateCell(pick(row, "date")),
+            customer_name: picker.get(row, ["Nome cliente", "Nominativo", "Cliente"]),
+            date: parseDateCell(picker.get(row, ["Data servizio"])),
             time: serviceTime,
             pickup: origin,
-            destination: hotelName,
-            pax: parsePaxCell(pick(row, "pax")),
+            destination: destinationLabel,
+            pax: parsePaxCell(picker.get(row, ["Pax", "Passeggeri"])),
             transport_code: travelReference,
-            phone: pick(row, "phone"),
+            phone: picker.get(row, ["Telefono", "Tel", "Cellulare"]),
             notes,
             departure_date: "",
             departure_time: departureTime,
@@ -854,25 +1048,36 @@ export default function ExcelImportPage() {
             billing_party_name: billingPartyName,
             bus_city_origin: "",
             service_category: category,
+            route_kind: routeKind,
+            origin_place_type: originPlaceType,
+            destination_place_type: destinationPlaceType,
+            company_name: companyName,
+            practice_reference: practiceReference,
+            pickup_time: pickupTime,
             service_name: serviceName,
-            hotel_name: hotelName,
-            external_destination: externalDestination,
+            hotel_name: hotelColumn || (originPlaceType === "hotel" ? origin : destinationPlaceType === "hotel" ? destinationLabel : ""),
+            external_destination: destinationLabel,
             embark_time: embarkTime,
-            driver_time: driverTime
+            driver_time: pickupTime
           };
 
           const issues = localRowIssues(base, defaultHotelId).filter(
-            (issue) => issue !== "telefono mancante"
+            (issue) => issue !== "telefono mancante" && issue !== "hotel/destinazione mancante"
           );
+          for (const missing of missingHeaders) issues.push(`colonna obbligatoria mancante: ${missing}`);
           if (!category) issues.push("categoria servizio non riconosciuta");
+          if (!routeKind) issues.push("tipo tratta non riconosciuto");
+          if (!originPlaceType) issues.push("tipo origine non riconosciuto");
+          if (!destinationPlaceType) issues.push("tipo destinazione non riconosciuto");
           if (category === "round_trip") issues.push("categoria A-R da gestire manualmente");
           if (category === "excursion" && !serviceName.trim()) issues.push("nome escursione mancante");
-          if (!hotelName.trim() && !defaultHotelId) issues.push("hotel non riconoscibile da origine/destinazione");
+          if (!origin.trim()) issues.push("origine mancante");
+          if (!destinationLabel.trim()) issues.push("destinazione mancante");
 
-          return {
+          return [{
             ...base,
             localIssues: Array.from(new Set(issues))
-          };
+          }];
         })
         .filter((row) =>
           [
@@ -886,7 +1091,10 @@ export default function ExcelImportPage() {
             row.notes,
             row.billing_party_name,
             row.service_name ?? "",
-            row.external_destination ?? ""
+            row.external_destination ?? "",
+            row.route_kind ?? "",
+            row.origin_place_type ?? "",
+            row.destination_place_type ?? ""
           ].some((value) => value.trim().length > 0) || row.pax > 0
         );
     }

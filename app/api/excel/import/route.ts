@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { authorizePricingRequest, type PricingAuthContext } from "@/lib/server/pricing-auth";
 import {
   appendSplitImportNote,
   formatImportValidationMessage,
@@ -11,10 +10,22 @@ import {
   splitPassengerChunks
 } from "@/lib/server/bus-excel-import";
 import { resolveHotelMatch } from "@/lib/server/hotel-matching";
-import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 import { serviceCreateSchema } from "@/lib/validation";
 import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
 import { autoLinkImportedServices } from "@/lib/server/transfer-ischia-blocks";
+import {
+  loadTenantPlaces,
+  parseImportPlaceType,
+  resolvePlaceMatch,
+  type ImportPlaceType
+} from "@/lib/server/place-matching";
+import {
+  loadBusResolverContext,
+  registerBusResolverAllocation,
+  resolveBusImportRow,
+  type BusAllocationPlan,
+  type BusResolverContext
+} from "@/lib/server/bus-service-resolver";
 
 export const runtime = "nodejs";
 
@@ -36,7 +47,30 @@ const rowSchema = z.object({
   direction: z.enum(["arrival", "departure"]).nullable().optional(),
   billing_party_name: z.string().trim().optional().default(""),
   bus_city_origin: z.string().trim().optional().default(""),
-  service_category: z.enum(["arrival", "departure", "transfer", "excursion", "round_trip"]).nullable().optional(),
+  service_category: z.enum(["arrival", "departure", "transfer", "excursion", "territorial", "round_trip", "bus_line"]).nullable().optional(),
+  route_kind: z.enum([
+    "porto_hotel",
+    "hotel_porto",
+    "aeroporto_hotel",
+    "hotel_aeroporto",
+    "stazione_hotel",
+    "hotel_stazione",
+    "hotel_luogo",
+    "luogo_hotel",
+    "luogo_luogo",
+    "hotel_attrazione",
+    "attrazione_hotel",
+    "escursione",
+    "territoriale",
+    "linea_bus_arrivo_ritorno",
+    "linea_bus_solo_arrivo",
+    "linea_bus_solo_ritorno"
+  ]).nullable().optional(),
+  origin_place_type: z.string().trim().optional().default(""),
+  destination_place_type: z.string().trim().optional().default(""),
+  company_name: z.string().trim().optional().default(""),
+  pickup_time: z.string().trim().optional().default(""),
+  practice_reference: z.string().trim().optional().default(""),
   service_name: z.string().trim().optional().default(""),
   hotel_name: z.string().trim().optional().default(""),
   external_destination: z.string().trim().optional().default(""),
@@ -105,14 +139,28 @@ const presetConfig = {
   }
 } as const;
 
-type PreparedLegacyRow = { mode: "legacy"; rowIndex: number; payload: z.infer<typeof serviceCreateSchema> };
+type PreparedLegacyRow = {
+  mode: "legacy";
+  rowIndex: number;
+  payload: z.infer<typeof serviceCreateSchema>;
+  busAllocation?: BusAllocationPlan | null;
+};
 type PreparedDirectRow = {
   mode: "direct";
   rowIndex: number;
   payload: Record<string, unknown>;
   linkedReturnPayload?: Record<string, unknown> | null;
   status: "new" | "needs_review" | "cancelled";
+  busAllocation?: BusAllocationPlan | null;
 };
+type PreparedBusPendingRow = {
+  mode: "bus_pending";
+  rowIndex: number;
+  pendingPayload: Record<string, unknown>;
+};
+
+type ImportCategory = "arrival" | "departure" | "transfer" | "excursion" | "territorial";
+type BusRouteKind = "linea_bus_arrivo_ritorno" | "linea_bus_solo_arrivo" | "linea_bus_solo_ritorno";
 
 function normalizeLooseText(value: string | null | undefined) {
   return String(value ?? "")
@@ -130,7 +178,7 @@ function mapImportedStatus(notes: string) {
   return "new" as const;
 }
 
-function inferTransferMeta(reference: string, pickup: string, externalDestination: string, category: "arrival" | "departure" | "transfer" | "excursion") {
+function inferTransferMeta(reference: string, pickup: string, externalDestination: string, category: ImportCategory) {
   if (category === "excursion") {
     return {
       service_type: "bus_tour" as const,
@@ -174,6 +222,120 @@ function inferTransferMeta(reference: string, pickup: string, externalDestinatio
   };
 }
 
+function isBusImportCandidate(row: z.infer<typeof rowSchema>, presetKey: z.infer<typeof presetSchema>) {
+  if (presetKey === "linea_bus") return true;
+  if (row.service_category === "bus_line") return true;
+  if (row.route_kind?.startsWith("linea_bus_")) return true;
+  const source = normalizeLooseText([
+    row.service_category,
+    row.route_kind,
+    row.transport_code,
+    row.service_name,
+    row.notes
+  ].filter(Boolean).join(" "));
+  return /\b(bus|linea bus|lineabus|transfer bus)\b/.test(source);
+}
+
+function isTemplateBusRow(row: z.infer<typeof rowSchema>) {
+  return row.service_category === "bus_line" || Boolean(row.route_kind?.startsWith("linea_bus_"));
+}
+
+function busTemplateDirection(routeKind: string | null | undefined, fallback: "arrival" | "departure" | null | undefined) {
+  if (routeKind === "linea_bus_solo_ritorno") return "departure" as const;
+  return fallback ?? "arrival" as const;
+}
+
+function makeBusLegacyPayload(
+  row: z.infer<typeof rowSchema>,
+  rowDate: string,
+  rowTime: string,
+  direction: "arrival" | "departure",
+  hotelId: string,
+  pax: number,
+  customerName: string,
+  phone: string,
+  billingPartyName: string,
+  busCityOrigin: string,
+  transportCode: string,
+  notes: string
+) {
+  return {
+    date: rowDate,
+    time: rowTime,
+    service_type: "transfer" as const,
+    direction,
+    vessel: "Linea bus",
+    pax,
+    hotel_id: hotelId,
+    customer_name: customerName,
+    phone,
+    notes,
+    meeting_point: busCityOrigin,
+    stops: [],
+    bus_plate: "",
+    billing_party_name: billingPartyName,
+    customer_email: "",
+    booking_service_kind: "bus_city_hotel" as const,
+    service_type_code: "bus_line" as const,
+    arrival_date: direction === "arrival" ? rowDate : "",
+    arrival_time: direction === "arrival" ? rowTime : "",
+    departure_date: direction === "departure" ? rowDate : "",
+    departure_time: direction === "departure" ? rowTime : "",
+    transport_code: transportCode,
+    bus_city_origin: busCityOrigin,
+    tour_name: transportCode || busCityOrigin || "Linea bus",
+    capacity: 54,
+    low_seat_threshold: 5,
+    minimum_passengers: null,
+    waitlist_enabled: false,
+    waitlist_count: 0,
+    status: "new" as const
+  };
+}
+
+async function insertServiceWithSchemaFallback(
+  admin: PricingAuthContext["admin"],
+  payload: Record<string, unknown>
+) {
+  let insertPayload = { ...payload };
+  const droppedColumns: string[] = [];
+  let insertResult = await admin.from("services").insert(insertPayload).select("id").single();
+
+  while (insertResult.error) {
+    const missingColumnMatch = insertResult.error.message.match(/Could not find the '([^']+)' column/i);
+    const missingColumn = missingColumnMatch?.[1] ?? "";
+    if (!missingColumn || droppedColumns.includes(missingColumn)) break;
+    droppedColumns.push(missingColumn);
+    const nextPayload = { ...insertPayload };
+    delete nextPayload[missingColumn];
+    insertPayload = nextPayload;
+    insertResult = await admin.from("services").insert(insertPayload).select("id").single();
+  }
+
+  return { ...insertResult, droppedColumns };
+}
+
+function makeBusPendingRow(rowIndex: number, pendingPayload: Record<string, unknown>): PreparedBusPendingRow {
+  return { mode: "bus_pending", rowIndex, pendingPayload };
+}
+
+function addBusPendingOrError(
+  validRows: Array<PreparedLegacyRow | PreparedDirectRow | PreparedBusPendingRow>,
+  errors: Array<{ row_index: number; message: string }>,
+  rowIndex: number,
+  pendingPayload: Record<string, unknown> | undefined,
+  reasons: string[]
+) {
+  if (pendingPayload?.bus_line_id) {
+    validRows.push(makeBusPendingRow(rowIndex, pendingPayload));
+    return;
+  }
+  errors.push({
+    row_index: rowIndex,
+    message: reasons.join(" ") || "Riga bus non importabile: dati insufficienti."
+  });
+}
+
 function resolveFirstHotelMatch(hotels: HotelRow[], candidates: Array<string | null | undefined>, defaultHotelId?: string | null) {
   for (const candidate of candidates) {
     const match = resolveHotelMatch(hotels, String(candidate ?? ""), undefined);
@@ -200,53 +362,24 @@ function isOperationalLocality(value: string | null | undefined) {
   return OPERATIONAL_LOCALITIES.has(normalizeLooseText(value));
 }
 
-async function resolveOrCreateHotel(
-  admin: SupabaseClient,
-  tenantId: string,
-  hotels: HotelRow[],
-  aliasesByHotel: Map<string, string[]>,
-  rawHotelName: string | null | undefined
-) {
-  const rawName = String(rawHotelName ?? "").trim();
-  if (!rawName || isOperationalLocality(rawName)) return null;
+function isPlaceBasedRow(row: z.infer<typeof rowSchema>) {
+  return Boolean(row.route_kind || row.origin_place_type || row.destination_place_type);
+}
 
-  const existing = resolveHotelMatch(hotels, rawName, undefined);
-  if (existing) return existing;
+function directionForCategory(category: ImportCategory) {
+  return category === "departure" ? "departure" as const : "arrival" as const;
+}
 
-  const name = canonicalizeKnownHotelName(rawName) ?? rawName;
-  const normalizedAlias = normalizeHotelAliasValue(rawName);
-  const createResult = await admin
-    .from("hotels")
-    .insert({
-      tenant_id: tenantId,
-      name,
-      normalized_name: normalizeLooseText(name),
-      address: "Ischia",
-      city: "Ischia",
-      zone: "Ischia Porto",
-      lat: 40.7405,
-      lng: 13.9438,
-      source: "excel_import",
-      is_active: true
-    })
-    .select("id")
-    .single();
-  const createdId = createResult.data?.id ?? null;
-  if (!createdId) return null;
+function placeErrorLabel(kind: "origine" | "destinazione", status: string, raw: string) {
+  if (status === "ambiguous") return `${kind} ambigua: ${raw}`;
+  return `${kind} non trovata: ${raw || "vuota"}`;
+}
 
-  hotels.push({ id: createdId, name, normalized_name: normalizeLooseText(name), aliases: [] });
-  if (normalizedAlias && normalizeHotelAliasValue(name) !== normalizedAlias) {
-    await admin.from("hotel_aliases").insert({
-      tenant_id: tenantId,
-      hotel_id: createdId,
-      alias: rawName,
-      alias_normalized: normalizedAlias,
-      source: "excel_import_auto_create"
-    });
-    aliasesByHotel.set(createdId, [rawName]);
-  }
-
-  return createdId;
+function normalizeExpectedPlaceType(rawType: string, label: string): ImportPlaceType | null {
+  const parsed = parseImportPlaceType(rawType);
+  if (parsed) return parsed;
+  if (isOperationalLocality(label)) return "locality";
+  return null;
 }
 
 export async function POST(request: NextRequest) {
@@ -285,8 +418,20 @@ export async function POST(request: NextRequest) {
     ...hotel,
     aliases: aliasesByHotel.get(hotel.id) ?? []
   }));
+  const places = await loadTenantPlaces(auth.admin, auth.membership.tenant_id);
   const preset = presetConfig[parsed.data.preset_key];
-  const validRows: Array<PreparedLegacyRow | PreparedDirectRow> = [];
+  const needsBusResolver = parsed.data.rows.some((row) => isBusImportCandidate(row, parsed.data.preset_key));
+  let busResolverContext: BusResolverContext | null = null;
+  if (needsBusResolver) {
+    try {
+      busResolverContext = await loadBusResolverContext(auth.admin, auth.membership.tenant_id);
+    } catch (error) {
+      return NextResponse.json({
+        error: `Errore caricamento rete bus per import Excel: ${error instanceof Error ? error.message : "errore sconosciuto"}`
+      }, { status: 500 });
+    }
+  }
+  const validRows: Array<PreparedLegacyRow | PreparedDirectRow | PreparedBusPendingRow> = [];
   const errors: Array<{ row_index: number; message: string }> = [];
   let skippedRows = 0;
 
@@ -305,32 +450,125 @@ export async function POST(request: NextRequest) {
       continue;
     }
 
-    if (row.service_category) {
-      const hotelLabel = row.hotel_name || row.destination;
-      let resolvedHotelId = resolveFirstHotelMatch(
-        hotelRows,
-        row.service_category === "excursion"
-          ? [row.hotel_name, row.destination, row.external_destination, row.pickup]
-          : [hotelLabel, row.destination, row.pickup],
-        parsed.data.default_hotel_id
-      );
-      if (!resolvedHotelId) {
-        const createCandidates = row.service_category === "excursion"
-          ? [row.hotel_name, row.external_destination, row.destination, row.pickup]
-          : [hotelLabel, row.destination, row.pickup];
-        for (const candidate of createCandidates) {
-          resolvedHotelId = await resolveOrCreateHotel(
-            auth.admin,
-            auth.membership.tenant_id,
-            hotelRows,
-            aliasesByHotel,
-            candidate
-          );
-          if (resolvedHotelId) break;
-        }
+    if (isTemplateBusRow(row)) {
+      if (!busResolverContext) {
+        errors.push({ row_index: row.row_index, message: "Resolver bus non disponibile per riga Linea Bus." });
+        continue;
       }
-      if (!resolvedHotelId) {
-        errors.push({ row_index: row.row_index, message: `Hotel non riconosciuto: ${hotelLabel || "vuoto"}` });
+
+      const routeKind = row.route_kind as BusRouteKind | null | undefined;
+      if (!routeKind || !routeKind.startsWith("linea_bus_")) {
+        errors.push({ row_index: row.row_index, message: "Tipo tratta Linea Bus non valido: usare linea_bus_solo_arrivo, linea_bus_solo_ritorno o linea_bus_arrivo_ritorno." });
+        continue;
+      }
+
+      const busDirection = busTemplateDirection(routeKind, row.direction);
+      const busCityOrigin = row.bus_city_origin || row.pickup;
+      const lineName = row.transport_code;
+      const customerName = sanitizeImportCustomerName(row.customer_name, row.row_index);
+      const phone = sanitizeImportPhone(row.phone);
+      const billingPartyName = row.billing_party_name || parsed.data.default_billing_party_name;
+
+      const missing: string[] = [];
+      if (!row.date) missing.push(busDirection === "departure" ? "Data ritorno bus" : "Data arrivo bus");
+      if (!lineName) missing.push("Linea bus");
+      if (!busCityOrigin) missing.push("Fermata / città partenza");
+      if (!row.destination) missing.push("Hotel destinazione bus");
+      if (!row.customer_name) missing.push("Nome cliente");
+      if (row.pax <= 0) missing.push("Pax");
+      if (missing.length > 0) {
+        errors.push({ row_index: row.row_index, message: `Linea Bus incompleta: ${missing.join(", ")}.` });
+        continue;
+      }
+
+      const resolvedHotelId = resolveHotelMatch(hotelRows, row.destination, null);
+      const busResolution = resolveBusImportRow(busResolverContext, {
+        tenantId: auth.membership.tenant_id,
+        date: row.date,
+        direction: busDirection,
+        bookingServiceKind: "bus_city_hotel",
+        serviceTypeCode: "bus_line",
+        importCategory: "linea bus",
+        busCityOrigin,
+        stopName: busCityOrigin,
+        transportCode: lineName,
+        lineName,
+        hotelName: row.destination,
+        hotelId: resolvedHotelId,
+        pax: row.pax,
+        customerName,
+        phone,
+        agencyName: billingPartyName,
+        notes: row.notes,
+        time: row.time
+      });
+
+      if (busResolution.status === "needs_review") {
+        addBusPendingOrError(validRows, errors, row.row_index, busResolution.pendingPayload, busResolution.reasons);
+        continue;
+      }
+      if (busResolution.status !== "ready" || !busResolution.allocationPlan || !resolvedHotelId) {
+        errors.push({ row_index: row.row_index, message: busResolution.reasons.join(" ") || "Riga bus bloccata dal resolver." });
+        continue;
+      }
+
+      registerBusResolverAllocation(busResolverContext, {
+        busUnitId: busResolution.allocationPlan.unitId,
+        date: row.date,
+        direction: busResolution.allocationPlan.direction,
+        pax: row.pax
+      });
+
+      const payload = makeBusLegacyPayload(
+        row,
+        row.date,
+        row.time || "00:00",
+        busDirection,
+        resolvedHotelId,
+        row.pax,
+        customerName,
+        phone,
+        billingPartyName,
+        busCityOrigin,
+        lineName,
+        row.notes
+      );
+      const validated = serviceCreateSchema.safeParse(payload);
+      if (!validated.success) {
+        errors.push({ row_index: row.row_index, message: formatImportValidationMessage(validated.error.issues[0]) });
+        continue;
+      }
+
+      validRows.push({ mode: "legacy", rowIndex: row.row_index, payload: validated.data, busAllocation: busResolution.allocationPlan });
+      continue;
+    }
+
+    if (row.service_category && isPlaceBasedRow(row)) {
+      const category = row.service_category as ImportCategory;
+      const originType = normalizeExpectedPlaceType(row.origin_place_type, row.pickup);
+      const destinationType = normalizeExpectedPlaceType(row.destination_place_type, row.destination);
+      const originMatch = resolvePlaceMatch(places, row.pickup, originType);
+      const destinationMatch = resolvePlaceMatch(places, row.destination, destinationType);
+
+      if (originMatch.status !== "matched") {
+        errors.push({ row_index: row.row_index, message: placeErrorLabel("origine", originMatch.status, row.pickup) });
+        continue;
+      }
+      if (destinationMatch.status !== "matched") {
+        errors.push({ row_index: row.row_index, message: placeErrorLabel("destinazione", destinationMatch.status, row.destination) });
+        continue;
+      }
+
+      const hotelCandidate =
+        row.hotel_name ||
+        (originMatch.place.place_type === "hotel"
+          ? row.pickup
+          : destinationMatch.place.place_type === "hotel"
+            ? row.destination
+            : "");
+      const resolvedHotelId = hotelCandidate ? resolveHotelMatch(hotelRows, hotelCandidate, null) : null;
+      if (hotelCandidate && !resolvedHotelId) {
+        errors.push({ row_index: row.row_index, message: `Hotel non collegato al catalogo hotel: ${hotelCandidate}` });
         continue;
       }
 
@@ -338,9 +576,104 @@ export async function POST(request: NextRequest) {
       const customerName = sanitizeImportCustomerName(row.customer_name, row.row_index);
       const phone = sanitizeImportPhone(row.phone);
       const importedStatus = mapImportedStatus(row.notes);
-      const directDirection = row.service_category === "departure" ? "departure" : "arrival";
+      const meta = inferTransferMeta(row.transport_code || row.company_name, row.pickup, row.destination, category);
+      const confidence = Math.min(originMatch.confidence, destinationMatch.confidence);
+
+      for (const [chunkIndex, paxChunk] of paxChunks.entries()) {
+        const baseNotes = appendSplitImportNote(row.notes, row.pax, chunkIndex + 1, paxChunks.length);
+        const placeNote = `Origine: ${originMatch.place.name} | Destinazione: ${destinationMatch.place.name}`;
+        const insertPayload = {
+          tenant_id: auth.membership.tenant_id,
+          created_by_user_id: auth.user.id,
+          is_draft: false,
+          date: row.date,
+          time: row.time,
+          service_type: meta.service_type,
+          direction: directionForCategory(category),
+          vessel: row.company_name || meta.vessel,
+          pax: paxChunk,
+          hotel_id: resolvedHotelId,
+          customer_name: customerName,
+          phone,
+          notes: [baseNotes, row.practice_reference ? `Pratica: ${row.practice_reference}` : "", placeNote].filter(Boolean).join(" | "),
+          meeting_point: row.pickup || null,
+          billing_party_name: row.billing_party_name || parsed.data.default_billing_party_name || null,
+          customer_email: null,
+          booking_service_kind: row.route_kind === "escursione" ? "excursion" : meta.booking_service_kind,
+          service_type_code: row.route_kind === "escursione" ? "excursion" : meta.service_type_code,
+          service_category: category,
+          route_kind: row.route_kind ?? null,
+          origin_place_id: originMatch.place.id,
+          destination_place_id: destinationMatch.place.id,
+          origin_label_raw: row.pickup,
+          destination_label_raw: row.destination,
+          origin_place_type: originType,
+          destination_place_type: destinationType,
+          geo_status: "matched",
+          geo_confidence: confidence,
+          arrival_date: row.date,
+          arrival_time: row.time,
+          departure_date: row.departure_date || null,
+          departure_time: row.departure_time || null,
+          pickup_time: row.pickup_time || null,
+          transport_code: row.transport_code || null,
+          bus_city_origin: null,
+          status: importedStatus,
+          tour_name: category === "excursion" ? row.service_name || row.destination || "Escursione" : null,
+          excursion_details: category === "excursion"
+            ? {
+                title: row.service_name || row.destination || "Escursione",
+                origin_place_id: originMatch.place.id,
+                destination_place_id: destinationMatch.place.id,
+                embark_time: row.embark_time || null,
+                driver_time: row.driver_time || null,
+                import_source: "excel_place_template"
+              }
+            : null
+        } satisfies Record<string, unknown>;
+
+        const pickupFields = meta.service_type === "transfer"
+          ? applyPickupCalc({
+              direction: String(insertPayload.direction),
+              place_type: null,
+              time: String(insertPayload.time),
+              billing_party_name: typeof insertPayload.billing_party_name === "string" ? insertPayload.billing_party_name : null,
+              vessel: typeof insertPayload.vessel === "string" ? insertPayload.vessel : null,
+            })
+          : {};
+
+        validRows.push({
+          mode: "direct",
+          rowIndex: row.row_index,
+          payload: { ...insertPayload, ...pickupFields },
+          status: importedStatus
+        });
+      }
+      continue;
+    }
+
+    if (row.service_category) {
+      const category = row.service_category as ImportCategory;
+      const hotelLabel = row.hotel_name || row.destination;
+      let resolvedHotelId = resolveFirstHotelMatch(
+        hotelRows,
+        category === "excursion"
+          ? [row.hotel_name, row.destination, row.external_destination, row.pickup]
+          : [hotelLabel, row.destination, row.pickup],
+        parsed.data.default_hotel_id
+      );
+      if (!resolvedHotelId) {
+        errors.push({ row_index: row.row_index, message: `Hotel non riconosciuto: ${hotelLabel || "vuoto"}. Import bloccato: non creo hotel automatici da Excel.` });
+        continue;
+      }
+
+      const paxChunks = splitPassengerChunks(row.pax);
+      const customerName = sanitizeImportCustomerName(row.customer_name, row.row_index);
+      const phone = sanitizeImportPhone(row.phone);
+      const importedStatus = mapImportedStatus(row.notes);
+      const directDirection = category === "departure" ? "departure" : "arrival";
       const externalDestination = row.external_destination || row.pickup || row.destination;
-      const meta = inferTransferMeta(row.transport_code, row.pickup, externalDestination, row.service_category);
+      const meta = inferTransferMeta(row.transport_code, row.pickup, externalDestination, category);
 
       for (const [chunkIndex, paxChunk] of paxChunks.entries()) {
         const baseNotes = appendSplitImportNote(row.notes, row.pax, chunkIndex + 1, paxChunks.length);
@@ -370,8 +703,8 @@ export async function POST(request: NextRequest) {
           transport_code: row.transport_code || null,
           bus_city_origin: null,
           status: importedStatus,
-          tour_name: row.service_category === "excursion" ? row.service_name || row.transport_code || "Escursione" : null,
-          excursion_details: row.service_category === "excursion"
+          tour_name: category === "excursion" ? row.service_name || row.transport_code || "Escursione" : null,
+          excursion_details: category === "excursion"
             ? {
                 title: row.service_name || row.transport_code || "Escursione",
                 external_destination: row.external_destination || null,
@@ -405,6 +738,30 @@ export async function POST(request: NextRequest) {
 
     const resolvedHotelId = resolveHotelMatch(hotelRows, row.destination, parsed.data.default_hotel_id);
     if (!resolvedHotelId) {
+      if (parsed.data.preset_key === "linea_bus" && busResolverContext) {
+        const busResolution = resolveBusImportRow(busResolverContext, {
+          tenantId: auth.membership.tenant_id,
+          date: row.date,
+          direction: row.direction ?? parsed.data.default_direction,
+          bookingServiceKind: preset.bookingKind,
+          serviceTypeCode: preset.serviceTypeCode,
+          importCategory: "linea bus",
+          busCityOrigin: row.bus_city_origin || row.pickup,
+          stopName: row.bus_city_origin || row.pickup,
+          transportCode: row.transport_code,
+          lineName: row.transport_code,
+          hotelName: row.destination,
+          hotelId: null,
+          pax: row.pax,
+          customerName: sanitizeImportCustomerName(row.customer_name, row.row_index),
+          phone: sanitizeImportPhone(row.phone),
+          agencyName: row.billing_party_name || parsed.data.default_billing_party_name,
+          notes: row.notes,
+          time: row.time
+        });
+        addBusPendingOrError(validRows, errors, row.row_index, busResolution.pendingPayload, busResolution.reasons);
+        continue;
+      }
       errors.push({ row_index: row.row_index, message: `Hotel non riconosciuto: ${row.destination || "vuoto"}` });
       continue;
     }
@@ -438,6 +795,12 @@ export async function POST(request: NextRequest) {
         departure_time: row.departure_time,
         transport_code: row.transport_code,
         bus_city_origin: row.bus_city_origin || (parsed.data.preset_key === "linea_bus" ? row.pickup : ""),
+        tour_name: parsed.data.preset_key === "linea_bus" ? (row.transport_code || row.bus_city_origin || row.pickup || "Linea bus") : "",
+        capacity: parsed.data.preset_key === "linea_bus" ? 54 : undefined,
+        low_seat_threshold: parsed.data.preset_key === "linea_bus" ? 5 : undefined,
+        minimum_passengers: parsed.data.preset_key === "linea_bus" ? null : undefined,
+        waitlist_enabled: parsed.data.preset_key === "linea_bus" ? false : undefined,
+        waitlist_count: parsed.data.preset_key === "linea_bus" ? 0 : undefined,
         status: "new" as const
       };
 
@@ -450,7 +813,54 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      validRows.push({ mode: "legacy", rowIndex: row.row_index, payload: validated.data });
+      let busAllocation: BusAllocationPlan | null = null;
+      if (parsed.data.preset_key === "linea_bus" && busResolverContext) {
+        const busResolution = resolveBusImportRow(busResolverContext, {
+          tenantId: auth.membership.tenant_id,
+          date: row.date,
+          direction: validated.data.direction,
+          bookingServiceKind: preset.bookingKind,
+          serviceTypeCode: preset.serviceTypeCode,
+          importCategory: "linea bus",
+          busCityOrigin: validated.data.bus_city_origin || row.pickup,
+          stopName: validated.data.bus_city_origin || row.pickup,
+          transportCode: validated.data.transport_code || row.transport_code,
+          lineName: validated.data.transport_code || row.transport_code,
+          hotelName: row.destination,
+          hotelId: resolvedHotelId,
+          pax: paxChunk,
+          customerName,
+          phone,
+          agencyName: row.billing_party_name || parsed.data.default_billing_party_name,
+          notes: row.notes,
+          time: row.time
+        });
+
+        if (busResolution.status === "ready" && busResolution.allocationPlan) {
+          busAllocation = busResolution.allocationPlan;
+          registerBusResolverAllocation(busResolverContext, {
+            busUnitId: busResolution.allocationPlan.unitId,
+            date: row.date,
+            direction: busResolution.allocationPlan.direction,
+            pax: paxChunk
+          });
+        } else if (busResolution.status === "needs_review") {
+          addBusPendingOrError(validRows, errors, row.row_index, busResolution.pendingPayload, busResolution.reasons);
+          continue;
+        } else {
+          errors.push({ row_index: row.row_index, message: busResolution.reasons.join(" ") || "Riga bus bloccata dal resolver." });
+          continue;
+        }
+      }
+
+      const finalPayload = parsed.data.preset_key === "linea_bus" && busAllocation
+        ? {
+            ...validated.data,
+            bus_city_origin: validated.data.bus_city_origin || busAllocation.stopName
+          }
+        : validated.data;
+
+      validRows.push({ mode: "legacy", rowIndex: row.row_index, payload: finalPayload, busAllocation });
     }
   }
 
@@ -462,7 +872,8 @@ export async function POST(request: NextRequest) {
         total_rows: parsed.data.rows.length,
         skipped_rows: skippedRows,
         valid_rows: validRows.length,
-        invalid_rows: errors.length
+        invalid_rows: errors.length,
+        pending_rows: validRows.filter((row) => row.mode === "bus_pending").length
       },
       errors
     });
@@ -477,7 +888,8 @@ export async function POST(request: NextRequest) {
           total_rows: parsed.data.rows.length,
           skipped_rows: skippedRows,
           valid_rows: 0,
-          invalid_rows: errors.length
+          invalid_rows: errors.length,
+          pending_rows: 0
         },
         errors
       },
@@ -486,7 +898,21 @@ export async function POST(request: NextRequest) {
   }
 
   const insertedIds: string[] = [];
+  let pendingRows = 0;
+  let allocatedBusRows = 0;
   for (const item of validRows) {
+    if (item.mode === "bus_pending") {
+      const pendingInsert = await auth.admin.from("bus_import_pending").insert({
+        tenant_id: auth.membership.tenant_id,
+        ...item.pendingPayload
+      });
+      if (pendingInsert.error) {
+        return NextResponse.json({ error: pendingInsert.error.message }, { status: 500 });
+      }
+      pendingRows += 1;
+      continue;
+    }
+
     const payload = item.mode === "legacy"
       ? (() => {
           const base = {
@@ -517,9 +943,48 @@ export async function POST(request: NextRequest) {
         })()
       : item.payload;
 
-    const insertResult = await auth.admin.from("services").insert(payload).select("id").single();
+    const insertResult = await insertServiceWithSchemaFallback(auth.admin, payload as Record<string, unknown>);
     if (insertResult.error || !insertResult.data?.id) {
       return NextResponse.json({ error: insertResult.error?.message ?? `Errore import riga ${item.rowIndex}.` }, { status: 500 });
+    }
+
+    if (item.busAllocation) {
+      const { error: allocationError } = await auth.admin.rpc("allocate_bus_service", {
+        p_tenant_id: auth.membership.tenant_id,
+        p_service_id: insertResult.data.id,
+        p_bus_line_id: item.busAllocation.lineId,
+        p_bus_unit_id: item.busAllocation.unitId,
+        p_stop_id: item.busAllocation.stopId,
+        p_stop_name: item.busAllocation.stopName,
+        p_direction: item.busAllocation.direction,
+        p_pax_assigned: item.busAllocation.pax,
+        p_notes: "Allocato da import generale Excel tramite resolver bus.",
+        p_created_by_user_id: auth.user.id
+      });
+
+      if (allocationError) {
+        await auth.admin
+          .from("services")
+          .delete()
+          .eq("tenant_id", auth.membership.tenant_id)
+          .eq("id", insertResult.data.id);
+
+        if (item.busAllocation.pendingPayload?.bus_line_id) {
+          await auth.admin.from("bus_import_pending").insert({
+            tenant_id: auth.membership.tenant_id,
+            ...item.busAllocation.pendingPayload,
+            notes: [
+              typeof item.busAllocation.pendingPayload.notes === "string" ? item.busAllocation.pendingPayload.notes : "",
+              `Allocazione fallita: ${allocationError.message}`
+            ].filter(Boolean).join(" | ")
+          });
+          pendingRows += 1;
+          continue;
+        }
+
+        return NextResponse.json({ error: `Allocazione bus fallita riga ${item.rowIndex}: ${allocationError.message}` }, { status: 500 });
+      }
+      allocatedBusRows += 1;
     }
 
     insertedIds.push(insertResult.data.id);
@@ -545,7 +1010,9 @@ export async function POST(request: NextRequest) {
       skipped_rows: skippedRows,
       valid_rows: validRows.length,
       invalid_rows: errors.length,
-      imported_rows: insertedIds.length
+      imported_rows: insertedIds.length,
+      pending_rows: pendingRows,
+      allocated_bus_rows: allocatedBusRows
     },
     imported_service_ids: insertedIds,
     errors
