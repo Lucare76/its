@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
-import { buildServiceLabel, type AgencyBookingKind, type ServiceLabelContext } from "@/lib/service-label";
+import { buildServiceLabel, buildServiceLabelShort, type AgencyBookingKind, type ServiceLabelContext } from "@/lib/service-label";
+import { sendEmail as sendEmailUtil } from "@/lib/server/send-email";
+import { fmtDate } from "@/lib/server/email-layout";
 
 export const runtime = "nodejs";
 
@@ -140,11 +142,27 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       .eq("id", tokenRow.id);
 
     if (response === "changes_requested") {
-      await admin
-        .from("services")
-        .update({ approval_status: "agency_changes_requested", approval_notes: notes ?? null })
-        .eq("id", tokenRow.service_id)
-        .eq("tenant_id", tokenRow.tenant_id);
+      const [svcResult] = await Promise.all([
+        admin.from("services")
+          .select("id,customer_name,customer_first_name,customer_last_name,pax,arrival_date,arrival_time,booking_service_kind,transport_code,bus_city_origin,excursion_details,hotels(name),agencies(name)")
+          .eq("id", tokenRow.service_id).eq("tenant_id", tokenRow.tenant_id).maybeSingle(),
+        admin.from("services")
+          .update({ approval_status: "agency_changes_requested", approval_notes: notes ?? null })
+          .eq("id", tokenRow.service_id).eq("tenant_id", tokenRow.tenant_id),
+      ]);
+      const svc = svcResult.data as (typeof svcResult.data & { agencies?: { name: string } | null });
+      const opsEmail = process.env.OPS_NOTIFY_EMAIL?.trim();
+      if (opsEmail && svc) {
+        const hotelRow = Array.isArray(svc.hotels) ? svc.hotels[0] : svc.hotels;
+        const hotelName = (hotelRow as { name?: string } | null)?.name ?? "N/D";
+        const agencyName = (svc.agencies as { name?: string } | null)?.name ?? "Agenzia";
+        const customerName = svc.customer_first_name && svc.customer_last_name
+          ? `${svc.customer_first_name} ${svc.customer_last_name}` : svc.customer_name;
+        const serviceLabel = buildServiceLabelShort({ kind: svc.booking_service_kind ?? "transfer_port_hotel", transportCode: svc.transport_code ?? null, busCityOrigin: svc.bus_city_origin ?? null, excursionTitle: (svc.excursion_details as { title?: string } | null)?.title ?? null });
+        const subject = `✏️ Modifica richiesta — ${serviceLabel}, ${fmtDate(svc.arrival_date ?? "")}`;
+        const bodyText = [`AGENZIA HA RICHIESTO MODIFICHE`, `Servizio: ${serviceLabel}`, `Cliente: ${customerName}`, `Agenzia: ${agencyName}`, `Arrivo: ${fmtDate(svc.arrival_date ?? "")} ${svc.arrival_time ?? ""}`, `Pax: ${svc.pax}`, notes ? `Note agenzia: ${notes}` : null].filter(Boolean).join("\n");
+        await sendEmailUtil({ to: opsEmail, subject, html: `<pre style="font-family:sans-serif">${bodyText}</pre>`, text: bodyText });
+      }
     }
 
     return NextResponse.json({ ok: true, response });

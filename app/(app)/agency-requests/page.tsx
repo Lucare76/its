@@ -288,9 +288,10 @@ export default function AgencyRequestsPage() {
     return () => { active = false; };
   }, [filter]);
 
-  const pending   = rows.filter((r) => r.approval_status === "pending_operator");
-  const confirmed = rows.filter((r) => r.approval_status === "confirmed");
-  const rejected  = rows.filter((r) => r.approval_status === "rejected");
+  const pending        = rows.filter((r) => r.approval_status === "pending_operator");
+  const confirmed      = rows.filter((r) => r.approval_status === "confirmed");
+  const rejected       = rows.filter((r) => r.approval_status === "rejected");
+  const changesReq     = rows.filter((r) => r.approval_status === "agency_changes_requested");
 
   const openCancel = (row: BookingRow) => {
     setCancelMessage("");
@@ -374,9 +375,18 @@ export default function AgencyRequestsPage() {
         >
           Tutte
         </button>
+        {changesReq.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setFilter("all")}
+            className="rounded-xl px-4 py-2 text-sm font-semibold bg-violet-100 border border-violet-300 text-violet-800"
+          >
+            ✏️ Modifiche richieste ({changesReq.length})
+          </button>
+        )}
         {filter === "all" && (
           <span className="text-xs text-slate-400">
-            {pending.length} in attesa · {confirmed.length} confermate · {rejected.length} rifiutate
+            {pending.length} in attesa · {confirmed.length} confermate · {rejected.length} rifiutate{changesReq.length > 0 ? ` · ${changesReq.length} modifiche` : ""}
           </span>
         )}
       </div>
@@ -412,6 +422,7 @@ export default function AgencyRequestsPage() {
                     {isPending && <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 border border-amber-300 px-2.5 py-1 text-xs font-semibold text-amber-800">Attesa</span>}
                     {isConfirmed && !isCancelled && <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 border border-emerald-300 px-2.5 py-1 text-xs font-semibold text-emerald-800">Confermata</span>}
                     {row.approval_status === "rejected" && <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 border border-rose-300 px-2.5 py-1 text-xs font-semibold text-rose-800">Rifiutata</span>}
+                    {row.approval_status === "agency_changes_requested" && <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 border border-violet-300 px-2.5 py-1 text-xs font-semibold text-violet-800">✏️ Modifica richiesta</span>}
                     {isCancelled && <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-600">Annullata</span>}
                   </div>
 
