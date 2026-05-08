@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { sendAccessApprovalEmail } from "@/lib/server/access-approval-email";
+import {
+  ensureDriverProfileForMembership,
+  reserveMembershipUsername,
+  unlinkDriverProfileFromMembership,
+} from "@/lib/server/driver-registry";
 import { sendPasswordResetEmail } from "@/lib/server/password-reset-email";
 import { capabilityRoleMap, type AppCapability } from "@/lib/rbac";
 import { getRequestedTenantFromRequest, hasMembershipForTenant, resolvePreferredMembership } from "@/lib/tenant-preference";
@@ -22,6 +27,7 @@ type TenantMembershipRow = {
   agency_id?: string | null;
   role: "admin" | "operator" | "driver" | "agency" | "supervisor";
   full_name: string;
+  username?: string | null;
   created_at?: string | null;
   suspended?: boolean;
 };
@@ -175,7 +181,7 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await auth.admin
     .from("memberships")
-    .select("user_id, tenant_id, agency_id, role, full_name, created_at, suspended")
+    .select("user_id, tenant_id, agency_id, role, full_name, username, created_at, suspended")
     .eq("tenant_id", auth.membership.tenant_id)
     .order("created_at", { ascending: true });
 
@@ -189,6 +195,7 @@ export async function GET(request: NextRequest) {
     agency_id: item.agency_id ?? null,
     role: item.role,
     full_name: item.full_name,
+    username: item.username ?? null,
     created_at: item.created_at ?? null,
     suspended: item.suspended ?? false
   }));
@@ -271,6 +278,10 @@ export async function POST(request: NextRequest) {
   const gender = typeof (parsed.data as Record<string, unknown>).gender === "string"
     ? (parsed.data as Record<string, unknown>).gender as string
     : null;
+  const username =
+    parsed.data.role === "driver" || parsed.data.role === "autista"
+      ? await reserveMembershipUsername(auth.admin, { preferredUsername: fullName })
+      : null;
 
   const userResult = await auth.admin.auth.admin.createUser({
     email,
@@ -278,8 +289,11 @@ export async function POST(request: NextRequest) {
     email_confirm: true,
     user_metadata: {
       full_name: fullName,
+      ...(username ? { username } : {}),
       ...(gender ? { gender } : {}),
-      ...(parsed.data.role === "driver" ? { force_password_change: true, password_change_required: true } : {})
+      ...(parsed.data.role === "driver" || parsed.data.role === "autista"
+        ? { force_password_change: true, password_change_required: true }
+        : {})
     }
   });
 
@@ -310,18 +324,32 @@ export async function POST(request: NextRequest) {
     }
     createdAgencyId = agencyInsert.data.id;
   }
-
   const membershipInsert = await auth.admin.from("memberships").insert({
     user_id: newUserId,
     tenant_id: auth.membership.tenant_id,
     agency_id: parsed.data.role === "agency" ? createdAgencyId : null,
     role: parsed.data.role,
-    full_name: fullName
+    full_name: fullName,
+    username,
   });
 
   if (membershipInsert.error) {
     await auth.admin.auth.admin.deleteUser(newUserId).then(() => undefined, () => undefined);
     return NextResponse.json({ error: membershipInsert.error.message }, { status: 500 });
+  }
+
+  if (parsed.data.role === "driver" || parsed.data.role === "autista") {
+    try {
+      await ensureDriverProfileForMembership(auth.admin, {
+        tenantId: auth.membership.tenant_id,
+        userId: newUserId,
+        fullName,
+      });
+    } catch (error) {
+      await auth.admin.from("memberships").delete().eq("tenant_id", auth.membership.tenant_id).eq("user_id", newUserId).then(() => undefined, () => undefined);
+      await auth.admin.auth.admin.deleteUser(newUserId).then(() => undefined, () => undefined);
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Creazione profilo autista fallita." }, { status: 500 });
+    }
   }
 
   // Popola le capability di default per il nuovo ruolo
@@ -353,7 +381,8 @@ export async function POST(request: NextRequest) {
         tenant_id: auth.membership.tenant_id,
         role: parsed.data.role,
         full_name: fullName,
-        email
+        email,
+        username,
       }
     },
     { status: 201 }
@@ -566,6 +595,11 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: existingMembership.error.message }, { status: 500 });
     }
 
+    const approvedUsername =
+      approvedRole === "driver" || approvedRole === "autista"
+        ? await reserveMembershipUsername(auth.admin, { preferredUsername: requestRow.full_name, excludeUserId: requestRow.user_id })
+        : null;
+
     if (!existingMembership.data?.user_id) {
       const membershipInsert = await auth.admin.from("memberships").insert({
         user_id: requestRow.user_id,
@@ -573,6 +607,7 @@ export async function PATCH(request: NextRequest) {
         agency_id: approvedRole === "agency" ? approvedAgencyId : null,
         role: approvedRole,
         full_name: requestRow.full_name,
+        username: approvedUsername,
         suspended: false
       });
       if (membershipInsert.error) {
@@ -585,12 +620,25 @@ export async function PATCH(request: NextRequest) {
           agency_id: approvedRole === "agency" ? approvedAgencyId : null,
           role: approvedRole,
           full_name: requestRow.full_name,
+          username: approvedUsername,
           suspended: false
         })
         .eq("tenant_id", auth.membership.tenant_id)
         .eq("user_id", requestRow.user_id);
       if (membershipUpdate.error) {
         return NextResponse.json({ error: membershipUpdate.error.message }, { status: 500 });
+      }
+    }
+
+    if (approvedRole === "driver" || approvedRole === "autista") {
+      try {
+        await ensureDriverProfileForMembership(auth.admin, {
+          tenantId: auth.membership.tenant_id,
+          userId: requestRow.user_id,
+          fullName: requestRow.full_name,
+        });
+      } catch (error) {
+        return NextResponse.json({ error: error instanceof Error ? error.message : "Sync profilo autista fallita." }, { status: 500 });
       }
     }
 
@@ -647,7 +695,7 @@ export async function PATCH(request: NextRequest) {
 
   const membershipLookup = await auth.admin
     .from("memberships")
-    .select("user_id, agency_id")
+    .select("user_id, agency_id, role, username")
     .eq("tenant_id", auth.membership.tenant_id)
     .eq("user_id", parsed.data.user_id)
     .maybeSingle();
@@ -655,6 +703,8 @@ export async function PATCH(request: NextRequest) {
   if (membershipLookup.error || !membershipLookup.data?.user_id) {
     return NextResponse.json({ error: membershipLookup.error?.message ?? "Utente non trovato nel tenant." }, { status: 404 });
   }
+
+  const previousRole = membershipLookup.data.role;
 
   let nextAgencyId: string | null = null;
   if (parsed.data.role === "agency") {
@@ -681,21 +731,47 @@ export async function PATCH(request: NextRequest) {
     }
   }
 
+  const nextUsername =
+    parsed.data.role === "driver" || parsed.data.role === "autista"
+      ? membershipLookup.data.username ?? await reserveMembershipUsername(auth.admin, {
+          preferredUsername: parsed.data.full_name.trim(),
+          excludeUserId: parsed.data.user_id,
+        })
+      : null;
+
   const updateResult = await auth.admin
     .from("memberships")
     .update({
       full_name: parsed.data.full_name.trim(),
       agency_id: parsed.data.role === "agency" ? nextAgencyId : null,
       role: parsed.data.role,
+      username: nextUsername,
       suspended: shouldSuspend
     })
     .eq("tenant_id", auth.membership.tenant_id)
     .eq("user_id", parsed.data.user_id)
-    .select("user_id, tenant_id, agency_id, role, full_name, created_at, suspended")
+    .select("user_id, tenant_id, agency_id, role, full_name, username, created_at, suspended")
     .maybeSingle();
 
   if (updateResult.error || !updateResult.data) {
     return NextResponse.json({ error: updateResult.error?.message ?? "Aggiornamento utente fallito." }, { status: 500 });
+  }
+
+  try {
+    if (parsed.data.role === "driver" || parsed.data.role === "autista") {
+      await ensureDriverProfileForMembership(auth.admin, {
+        tenantId: auth.membership.tenant_id,
+        userId: parsed.data.user_id,
+        fullName: parsed.data.full_name.trim(),
+      });
+    } else if (previousRole === "driver" || previousRole === "autista") {
+      await unlinkDriverProfileFromMembership(auth.admin, {
+        tenantId: auth.membership.tenant_id,
+        userId: parsed.data.user_id,
+      });
+    }
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Sync profilo autista fallita." }, { status: 500 });
   }
 
   // Revoca le sessioni attive così l'utente ricarica il nuovo ruolo al prossimo login
@@ -706,6 +782,7 @@ export async function PATCH(request: NextRequest) {
     : null;
 
   const metadataPatch: Record<string, string> = { full_name: parsed.data.full_name.trim() };
+  if (nextUsername) metadataPatch.username = nextUsername;
   if (updateGender) metadataPatch.gender = updateGender;
 
   if (parsed.data.password) {
@@ -741,7 +818,7 @@ export async function DELETE(request: NextRequest) {
 
   const membershipLookup = await auth.admin
     .from("memberships")
-    .select("user_id, full_name")
+    .select("user_id, full_name, role")
     .eq("tenant_id", auth.membership.tenant_id)
     .eq("user_id", userId)
     .maybeSingle();
@@ -758,6 +835,17 @@ export async function DELETE(request: NextRequest) {
 
   if (membershipDelete.error) {
     return NextResponse.json({ error: membershipDelete.error.message }, { status: 500 });
+  }
+
+  if (membershipLookup.data.role === "driver" || membershipLookup.data.role === "autista") {
+    try {
+      await unlinkDriverProfileFromMembership(auth.admin, {
+        tenantId: auth.membership.tenant_id,
+        userId,
+      });
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Scollegamento profilo autista fallito." }, { status: 500 });
+    }
   }
 
   const otherMembershipsLookup = await auth.admin

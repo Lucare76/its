@@ -284,6 +284,7 @@ export default function FleetOpsPage() {
       drivers?: Driver[];
       commitments?: Commitment[];
       driver_access?: { username: string; temporary_password: string; created: boolean } | null;
+      driver_access_error?: string | null;
     } | null;
     setSaving(false);
     if (!response.ok || !json?.ok) { showToast(json?.error ?? "Operazione non riuscita.", false); return false; }
@@ -299,6 +300,8 @@ export default function FleetOpsPage() {
           : `Accesso autista già attivo: ${email}`,
         true
       );
+    } else if (json.driver_access_error) {
+      showToast(`Autista salvato, ma accesso non creato: ${json.driver_access_error}`, false);
     } else {
       showToast("Salvato.", true);
     }

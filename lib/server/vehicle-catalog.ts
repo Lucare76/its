@@ -14,6 +14,7 @@ type VehicleCatalogRow = {
 
 type DriverProfileRow = {
   id: string;
+  user_id: string | null;
   full_name: string;
 };
 
@@ -60,7 +61,7 @@ export async function loadOperationalVehicles(
   const [profilesResult, membershipsResult] = await Promise.all([
     admin
       .from("driver_profiles")
-      .select("id, full_name")
+      .select("id, user_id, full_name")
       .eq("tenant_id", tenantId)
       .in("id", profileIds),
     admin
@@ -76,6 +77,11 @@ export async function loadOperationalVehicles(
   const profileById = new Map(
     ((profilesResult.data ?? []) as DriverProfileRow[]).map((profile) => [profile.id, profile])
   );
+  const membershipUserIdByProfileId = new Map(
+    ((profilesResult.data ?? []) as DriverProfileRow[])
+      .filter((profile) => profile.user_id)
+      .map((profile) => [profile.id, profile.user_id as string])
+  );
   const membershipUserIdByName = new Map<string, string>();
   for (const membership of (membershipsResult.data ?? []) as MembershipRow[]) {
     const key = normalizeName(membership.full_name);
@@ -87,7 +93,9 @@ export async function loadOperationalVehicles(
   return rows.map((vehicle) => {
     if (vehicle.habitual_driver_user_id || !vehicle.habitual_driver_profile_id) return vehicle;
     const profile = profileById.get(vehicle.habitual_driver_profile_id);
-    const mappedUserId = membershipUserIdByName.get(normalizeName(profile?.full_name));
+    const mappedUserId =
+      membershipUserIdByProfileId.get(vehicle.habitual_driver_profile_id) ??
+      membershipUserIdByName.get(normalizeName(profile?.full_name));
     return {
       ...vehicle,
       habitual_driver_user_id: mappedUserId ?? null,

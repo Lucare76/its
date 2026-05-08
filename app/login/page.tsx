@@ -4,12 +4,25 @@ import { useEffect, useState } from "react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { PasswordStrengthMeter } from "@/components/password-strength-meter";
 
+function normalizeIdentifier(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function clearStoredSupabaseAuth() {
+  if (typeof window === "undefined") return;
+  for (const key of Object.keys(window.localStorage)) {
+    if (/^sb-.*-auth-token$/i.test(key)) {
+      window.localStorage.removeItem(key);
+    }
+  }
+}
+
 export default function LoginPage() {
   const defaultLoginMessage = hasSupabaseEnv
     ? "Accesso riservato. Se hai credenziali attive, puoi entrare subito."
     : "Supabase non configurato: login non disponibile.";
   const [mode, setMode] = useState<"login" | "register" | "reset">("login");
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [agencyName, setAgencyName] = useState("");
@@ -22,6 +35,15 @@ export default function LoginPage() {
       setMessage("Supabase non configurato: login non disponibile.");
       return;
     }
+    const authClient = supabase;
+
+    void authClient.auth.getSession().then(async ({ error }) => {
+      if (!error) return;
+      if (!/refresh token/i.test(error.message)) return;
+      await authClient.auth.signOut().catch(() => undefined);
+      clearStoredSupabaseAuth();
+    });
+
     const suspended = new URLSearchParams(window.location.search).get("suspended");
     if (suspended === "1") {
       setMessage("Accesso sospeso per questo tenant. Contatta un admin del tenant per riattivarti.");
@@ -56,7 +78,18 @@ export default function LoginPage() {
         setMessage("Supabase non configurato: login non disponibile.");
         return;
       }
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const resolveResponse = await fetch("/api/auth/resolve-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifier: normalizeIdentifier(identifier) })
+      });
+      const resolveBody = (await resolveResponse.json().catch(() => null)) as { email?: string; error?: string } | null;
+      if (!resolveResponse.ok || !resolveBody?.email) {
+        setMessage(resolveBody?.error ?? "Login non riuscito: username o email non validi.");
+        return;
+      }
+
+      const { error } = await supabase.auth.signInWithPassword({ email: resolveBody.email, password });
       if (error) {
         setMessage(`Login non riuscito: ${error.message}`);
         return;
@@ -85,14 +118,14 @@ export default function LoginPage() {
       }
       const emailRedirectTo = `${window.location.origin}/dashboard`;
       const { error } = await supabase.auth.signInWithOtp({
-        email,
+        email: normalizeIdentifier(identifier),
         options: { emailRedirectTo }
       });
       if (error) {
         setMessage(`Invio link non riuscito: ${error.message}`);
         return;
       }
-      setMessage(`Link inviato a ${email}. Apri la mail e completa l'accesso.`);
+      setMessage(`Link inviato a ${identifier}. Apri la mail e completa l'accesso.`);
     } catch (error) {
       setMessage(error instanceof Error ? `Errore invio link: ${error.message}` : "Errore invio link inatteso.");
     } finally {
@@ -108,7 +141,7 @@ export default function LoginPage() {
       const response = await fetch("/api/auth/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email })
+        body: JSON.stringify({ email: normalizeIdentifier(identifier) })
       });
       const body = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
       if (!response.ok) {
@@ -135,7 +168,7 @@ export default function LoginPage() {
         body: JSON.stringify({
           agency_name: agencyName,
           full_name: fullName,
-          email,
+          email: normalizeIdentifier(identifier),
           password,
           requested_role: "agency"
         })
@@ -148,7 +181,7 @@ export default function LoginPage() {
       setMessage(body?.message ?? "Richiesta accesso inviata. Un admin la vedra nella coda di approvazione.");
       setFullName("");
       setAgencyName("");
-      setEmail("");
+      setIdentifier("");
       setPassword("");
       setMode("login");
     } catch (error) {
@@ -194,17 +227,18 @@ export default function LoginPage() {
           </>
         ) : null}
         <label className="block text-sm">
-          Email
+          {mode === "login" ? "Email o username" : "Email"}
           <input
             data-testid="login-email"
             className="input-saas mt-1"
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="Inserisci la tua email"
+            type={mode === "login" ? "text" : "email"}
+            value={identifier}
+            onChange={(event) => setIdentifier(normalizeIdentifier(event.target.value))}
+            placeholder={mode === "login" ? "Inserisci email o username" : "Inserisci la tua email"}
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
+            data-no-uppercase
           />
         </label>
         {mode !== "reset" ? (

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { ensureDriverProfileForMembership, reserveMembershipUsername } from "@/lib/server/driver-registry";
 import { sendPushToUser } from "@/lib/server/web-push";
 
 export const runtime = "nodejs";
@@ -24,7 +25,7 @@ export async function GET(req: NextRequest) {
     const [profilesRes, membershipsRes] = await Promise.all([
       auth.admin
         .from("driver_profiles")
-        .select("id,full_name,phone")
+        .select("id,full_name,phone,user_id")
         .eq("tenant_id", tenantId)
         .eq("active", true)
         .order("full_name"),
@@ -35,13 +36,14 @@ export async function GET(req: NextRequest) {
         .eq("role", "driver"),
     ]);
 
-    const profiles = (profilesRes.data ?? []) as Array<{ id: string; full_name: string; phone: string | null }>;
+    const profiles = (profilesRes.data ?? []) as Array<{ id: string; full_name: string; phone: string | null; user_id: string | null }>;
     const memberships = (membershipsRes.data ?? []) as Array<{ user_id: string; full_name: string }>;
 
+    const membershipByUserId = new Map(memberships.map((m) => [m.user_id, m]));
     const membershipByName = new Map(memberships.map((m) => [m.full_name.toLowerCase().trim(), m]));
 
     const drivers = profiles.map((p) => {
-      const match = membershipByName.get(p.full_name.toLowerCase().trim());
+      const match = (p.user_id ? membershipByUserId.get(p.user_id) : null) ?? membershipByName.get(p.full_name.toLowerCase().trim());
       return {
         profile_id: p.id,
         full_name: p.full_name,
@@ -119,12 +121,21 @@ export async function POST(req: NextRequest) {
         tenant_id: tenantId,
         role: "driver",
         full_name: (profile as { id: string; full_name: string }).full_name,
+        username: await reserveMembershipUsername(adminClient, {
+          preferredUsername: (profile as { id: string; full_name: string }).full_name,
+        }),
       });
 
       if (membershipErr) {
         await adminClient.auth.admin.deleteUser(newUser.user.id);
         return NextResponse.json({ ok: false, error: membershipErr.message }, { status: 500 });
       }
+
+      await ensureDriverProfileForMembership(adminClient, {
+        tenantId,
+        userId: newUser.user.id,
+        fullName: (profile as { id: string; full_name: string }).full_name,
+      });
 
       return NextResponse.json({ ok: true, user_id: newUser.user.id });
     }

@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { ensureDriverProfileForMembership, reserveMembershipUsername } from "@/lib/server/driver-registry";
 import { onboardingDriversBatchSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -79,11 +80,23 @@ export async function POST(request: NextRequest) {
         user_id: newUserId,
         tenant_id: parsed.data.tenant_id,
         role: "driver",
-        full_name: driver.full_name
+        full_name: driver.full_name,
+        username: await reserveMembershipUsername(admin, { preferredUsername: driver.full_name }),
       });
 
       if (membershipError) {
         failed.push({ email: driver.email, error: membershipError.message });
+        continue;
+      }
+
+      try {
+        await ensureDriverProfileForMembership(admin, {
+          tenantId: parsed.data.tenant_id,
+          userId: newUserId,
+          fullName: driver.full_name,
+        });
+      } catch (error) {
+        failed.push({ email: driver.email, error: error instanceof Error ? error.message : "Sync profilo autista fallita." });
         continue;
       }
 

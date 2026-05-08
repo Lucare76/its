@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
     // Nomi autisti dai profili driver_profiles
     const { data: driverProfiles } = await auth.admin
       .from("driver_profiles")
-      .select("id, full_name")
+      .select("id, user_id, full_name")
       .eq("tenant_id", tenantId)
       .eq("active", true);
 
@@ -82,8 +82,9 @@ export async function GET(request: NextRequest) {
     );
     // driver_profiles potrebbero avere un user_id collegato
     for (const dp of driverProfiles ?? []) {
-      if (!nameByUserId.has(dp.id as string)) {
-        nameByUserId.set(dp.id as string, dp.full_name as string);
+      const linkedUserId = (dp as { user_id?: string | null }).user_id ?? null;
+      if (linkedUserId && !nameByUserId.has(linkedUserId)) {
+        nameByUserId.set(linkedUserId, dp.full_name as string);
       }
     }
 
