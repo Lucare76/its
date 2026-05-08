@@ -262,4 +262,50 @@ describe("auto-assign — impegni mezzi", () => {
 
     expect(groups?.some((group) => group.vehicle_label === "Van Officina")).toBe(false);
   });
+
+  it("non usa un mezzo bloccato manualmente in Flotta", async () => {
+    const date = "2026-05-13";
+    await seedAvailabilityConfirmation(ctx.admin, ctx.tenantId, date, ctx.userId);
+    const hotelId = await seedHotel(ctx.admin, ctx.tenantId, {
+      name: "Hotel Manual Block",
+      zone: "Ischia Porto",
+      lat: 40.7329,
+      lng: 13.9477,
+    });
+    await seedVehicle(ctx.admin, ctx.tenantId, {
+      label: "Van Manual Block",
+      capacity: 8,
+      blocked_from: `${date}T00:00:00.000Z`,
+      blocked_until: `${date}T23:59:59.000Z`,
+      blocked_reason: "Manutenzione straordinaria",
+      is_blocked_manual: true,
+    });
+    await seedVehicle(ctx.admin, ctx.tenantId, { label: "Van Manual Libero", capacity: 8 });
+    await seedDriver(ctx.admin, ctx.tenantId, additionalUsers);
+    await seedService(ctx.admin, ctx.tenantId, hotelId, {
+      date,
+      time: "10:00",
+      direction: "arrival",
+      vessel: "SNAV Manual Block",
+      pax: 4,
+      meeting_point: "Ischia Porto",
+    });
+
+    const req = makeNextRequest("POST", { date, mode: "unassigned_only" }, ctx.token);
+    const res = await POST(req);
+    const body = await json<{ ok: boolean; assigned: number }>(res);
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.assigned).toBeGreaterThanOrEqual(1);
+
+    const { data: groups } = await ctx.admin
+      .from("trip_groups")
+      .select("vehicle_label")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("date", date)
+      .eq("status", "active");
+
+    expect(groups?.some((group) => group.vehicle_label === "Van Manual Block")).toBe(false);
+  });
 });

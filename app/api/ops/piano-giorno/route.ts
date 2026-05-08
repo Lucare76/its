@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
+import { isVehicleManuallyBlockedOnDate } from "@/lib/server/vehicle-availability";
 
 export const runtime = "nodejs";
 
@@ -99,7 +100,7 @@ export async function GET(request: NextRequest) {
 
       auth.admin
         .from("vehicles")
-        .select("id, label, capacity, vehicle_size, active")
+        .select("id, label, capacity, vehicle_size, active, blocked_from, blocked_until, blocked_reason, is_blocked_manual")
         .eq("tenant_id", tenantId)
         .eq("active", true)
         .order("label"),
@@ -126,6 +127,10 @@ export async function GET(request: NextRequest) {
 
     const dayAssignments = assignmentsResult.data ?? [];
     const committedVehicleIds = new Set(commitments.rows.map((row) => row.vehicle_id));
+    const availableVehicles = (vehiclesResult.data ?? []).filter((vehicle) => {
+      if (committedVehicleIds.has(vehicle.id as string)) return false;
+      return !isVehicleManuallyBlockedOnDate(vehicle, date);
+    });
     const ferrySchedules = ((ferryResult.data ?? []) as FerryScheduleRow[]).filter((schedule) => {
       if (schedule.valid_from && schedule.valid_from > date) return false;
       if (schedule.valid_to && schedule.valid_to < date) return false;
@@ -143,7 +148,7 @@ export async function GET(request: NextRequest) {
       assignments: dayAssignments,
       hotels: hotelsResult.data ?? [],
       memberships: membershipsResult.data ?? [],
-      vehicles: (vehiclesResult.data ?? []).filter((vehicle) => !committedVehicleIds.has(vehicle.id as string)),
+      vehicles: availableVehicles,
       vehicle_commitments: commitments.rows,
       ferry_schedules: ferrySchedules,
     });

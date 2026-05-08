@@ -11,6 +11,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
+import {
+  isVehicleManuallyBlockedOnDate,
+  manualVehicleBlockMessage,
+  type VehicleManualBlock,
+} from "@/lib/server/vehicle-availability";
 import { sendPushToUser } from "@/lib/server/web-push";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
@@ -597,7 +602,7 @@ async function resolveVehicleAssignment(
   vehicleId: string | null,
   vehicleLabel: string | null
 ): Promise<
-  | { ok: true; vehicle: { id: string; label: string; capacity: number | null } | null }
+  | { ok: true; vehicle: (VehicleManualBlock & { id: string; label: string; capacity: number | null }) | null }
   | { ok: false; error: string }
 > {
   if (!vehicleId && !vehicleLabel) return { ok: true, vehicle: null };
@@ -609,28 +614,51 @@ async function resolveVehicleAssignment(
     return { ok: false, error: `Mezzo impegnato per ${commitment.commitment_type}. Rimuovi prima l'impegno in Fleet Ops.` };
   }
 
-  let vehicle: { id: string; label: string; capacity: number | null } | null = null;
+  let vehicle: (VehicleManualBlock & { id: string; label: string; capacity: number | null }) | null = null;
   if (vehicleId) {
     const { data } = await admin
       .from("vehicles")
-      .select("id, label, capacity")
+      .select("id, label, capacity, blocked_from, blocked_until, blocked_reason, is_blocked_manual")
       .eq("tenant_id", tenantId)
       .eq("id", vehicleId)
       .maybeSingle();
-    if (data) vehicle = { id: data.id as string, label: data.label as string, capacity: (data.capacity as number | null) ?? null };
+    if (data) {
+      vehicle = {
+        id: data.id as string,
+        label: data.label as string,
+        capacity: (data.capacity as number | null) ?? null,
+        blocked_from: (data.blocked_from as string | null) ?? null,
+        blocked_until: (data.blocked_until as string | null) ?? null,
+        blocked_reason: (data.blocked_reason as string | null) ?? null,
+        is_blocked_manual: (data.is_blocked_manual as boolean | null) ?? null,
+      };
+    }
   } else if (vehicleLabel) {
     const { data } = await admin
       .from("vehicles")
-      .select("id, label, capacity")
+      .select("id, label, capacity, blocked_from, blocked_until, blocked_reason, is_blocked_manual")
       .eq("tenant_id", tenantId)
       .eq("label", vehicleLabel)
       .maybeSingle();
-    if (data) vehicle = { id: data.id as string, label: data.label as string, capacity: (data.capacity as number | null) ?? null };
+    if (data) {
+      vehicle = {
+        id: data.id as string,
+        label: data.label as string,
+        capacity: (data.capacity as number | null) ?? null,
+        blocked_from: (data.blocked_from as string | null) ?? null,
+        blocked_until: (data.blocked_until as string | null) ?? null,
+        blocked_reason: (data.blocked_reason as string | null) ?? null,
+        is_blocked_manual: (data.is_blocked_manual as boolean | null) ?? null,
+      };
+    }
   }
 
   if (vehicle && byVehicleId.has(vehicle.id)) {
     const commitment = byVehicleId.get(vehicle.id)!;
     return { ok: false, error: `Mezzo impegnato per ${commitment.commitment_type}. Rimuovi prima l'impegno in Fleet Ops.` };
+  }
+  if (vehicle && isVehicleManuallyBlockedOnDate(vehicle, date)) {
+    return { ok: false, error: manualVehicleBlockMessage(vehicle) };
   }
 
   return { ok: true, vehicle };

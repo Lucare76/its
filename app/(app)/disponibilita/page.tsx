@@ -14,7 +14,16 @@ type Driver = {
   has_access?: boolean;
   access_suspended?: boolean;
 };
-type Vehicle = { id: string; label: string; capacity: number | null; vehicle_size: string | null };
+type Vehicle = {
+  id: string;
+  label: string;
+  capacity: number | null;
+  vehicle_size: string | null;
+  blocked_from?: string | null;
+  blocked_until?: string | null;
+  blocked_reason?: string | null;
+  is_blocked_manual?: boolean | null;
+};
 type DriverAvail = {
   driver_profile_id: string | null;
   driver_user_id: string | null;
@@ -51,6 +60,14 @@ function isoToIt(iso: string) {
   if (!iso) return "";
   const [y, m, d] = iso.split("-");
   return `${d}/${m}/${y}`;
+}
+function isVehicleFleetBlocked(vehicle: Vehicle, date: string) {
+  if (!vehicle.is_blocked_manual && !vehicle.blocked_until) return false;
+  const start = vehicle.blocked_from ? new Date(vehicle.blocked_from) : null;
+  const end = vehicle.blocked_until ? new Date(vehicle.blocked_until) : null;
+  const dayStart = new Date(`${date}T00:00:00.000Z`);
+  const dayEnd = new Date(`${date}T23:59:59.999Z`);
+  return (!start || start < dayEnd) && (!end || end > dayStart);
 }
 
 // ─── Componente principale ────────────────────────────────────────────────────
@@ -213,7 +230,11 @@ export default function DisponibilitaPage() {
 
   const availableDrivers = drivers.filter(d => driverAvail.get(d.id)?.available !== false).length;
   const commitmentByVehicleId = new Map(commitments.map((item) => [item.vehicle_id, item]));
-  const availableVehicles = vehicles.filter(v => vehicleAvail.get(v.id)?.available !== false && !commitmentByVehicleId.has(v.id)).length;
+  const availableVehicles = vehicles.filter(v =>
+    vehicleAvail.get(v.id)?.available !== false &&
+    !commitmentByVehicleId.has(v.id) &&
+    !isVehicleFleetBlocked(v, date)
+  ).length;
 
   return (
     <section className="mx-auto max-w-6xl page-section">
@@ -350,14 +371,15 @@ export default function DisponibilitaPage() {
             ) : vehicles.map(vehicle => {
               const avail = vehicleAvail.get(vehicle.id);
               const commitment = commitmentByVehicleId.get(vehicle.id);
-              const isAvailable = avail?.available !== false && !commitment;
+              const fleetBlocked = isVehicleFleetBlocked(vehicle, date);
+              const isAvailable = avail?.available !== false && !commitment && !fleetBlocked;
               const vehicleBlocks = blocks.filter(b => b.vehicle_id === vehicle.id);
               return (
                 <div key={vehicle.id} className={`card p-3 transition ${isAvailable ? "" : "opacity-60 bg-slate-50"}`}>
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      disabled={saving === vehicle.id || Boolean(commitment)}
+                      disabled={saving === vehicle.id || Boolean(commitment) || fleetBlocked}
                       onClick={() => void toggleVehicle(vehicle.id, isAvailable)}
                       className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${isAvailable ? "bg-emerald-500" : "bg-slate-300"}`}
                     >
@@ -370,6 +392,11 @@ export default function DisponibilitaPage() {
                         <p className="mt-1 text-xs font-semibold text-rose-700">
                           Impegno: {COMMITMENT_LABELS[commitment.commitment_type] ?? commitment.commitment_type}
                           {commitment.notes ? ` · ${commitment.notes}` : ""}
+                        </p>
+                      ) : null}
+                      {fleetBlocked ? (
+                        <p className="mt-1 text-xs font-semibold text-rose-700">
+                          Blocco Flotta{vehicle.blocked_reason ? `: ${vehicle.blocked_reason}` : ""}
                         </p>
                       ) : null}
                     </div>

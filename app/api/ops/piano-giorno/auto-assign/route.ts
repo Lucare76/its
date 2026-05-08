@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { hotelGeoQuality } from "@/lib/hotel-geocoding";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
+import { isVehicleManuallyBlockedAtTime, isVehicleManuallyBlockedOnDate, type VehicleManualBlock } from "@/lib/server/vehicle-availability";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -186,7 +187,7 @@ type HotelRow = {
   geo_accuracy: string | null;
   geo_verified_at: string | null;
 };
-type VehicleRow = { id: string; label: string; capacity: number | null };
+type VehicleRow = VehicleManualBlock & { id: string; label: string; capacity: number | null };
 type DriverRow = { user_id: string; full_name: string; max_vehicle_capacity: number | null };
 
 // Verifica se un veicolo è disponibile in un certo orario tenendo conto dei blocchi orari
@@ -305,7 +306,7 @@ export async function POST(request: NextRequest) {
           .neq("status", "cancelled").neq("is_draft", true),
         auth.admin.from("hotels").select("id, name, address, zone, lat, lng, geo_status, geo_source, geo_accuracy, geo_verified_at").eq("tenant_id", tenantId),
         auth.admin.from("vehicles")
-          .select("id, label, capacity")
+          .select("id, label, capacity, blocked_from, blocked_until, blocked_reason, is_blocked_manual")
           .eq("tenant_id", tenantId).eq("active", true)
           .order("capacity"),
         auth.admin.from("memberships")
@@ -385,8 +386,10 @@ export async function POST(request: NextRequest) {
       .filter((v) => v.capacity && v.capacity > 0)
       .sort((a, b) => (a.capacity ?? 0) - (b.capacity ?? 0));
 
-    // Filtra veicoli globalmente non disponibili (available=false senza blocchi orari specifici)
-    const vehicles = allVehicles.filter((v) => vehicleAvailByIdMap.get(v.id) !== false);
+    // Filtra veicoli globalmente non disponibili: disponibilita giornaliera, impegni Fleet Ops, blocchi manuali Flotta.
+    const vehicles = allVehicles.filter((v) =>
+      vehicleAvailByIdMap.get(v.id) !== false && !isVehicleManuallyBlockedOnDate(v, date)
+    );
 
     const allDrivers = (membershipsRes.data ?? []) as DriverRow[];
     // Filtra autisti dichiarati non disponibili (available=false)
@@ -670,6 +673,7 @@ export async function POST(request: NextRequest) {
         const cap = v.capacity ?? 0;
         if (cap < pax) return false;
         if (hardMaxCap != null && cap > hardMaxCap) return false;
+        if (isVehicleManuallyBlockedAtTime(v, date, draft.time)) return false;
         if (!vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap)) return false;
         return true;
       });
@@ -677,6 +681,7 @@ export async function POST(request: NextRequest) {
 
       // Fallback: veicolo più grande disponibile (anche se non soddisfa i vincoli di capienza)
       const fallback = [...vehicles]
+        .filter((v) => !isVehicleManuallyBlockedAtTime(v, date, draft.time))
         .filter((v) => vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap))
         .sort((a, b) => (b.capacity ?? 0) - (a.capacity ?? 0))[0];
       return fallback ?? null;

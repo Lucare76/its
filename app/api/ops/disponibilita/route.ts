@@ -10,6 +10,7 @@ import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
+import { isVehicleManuallyBlockedOnDate, manualVehicleBlockMessage } from "@/lib/server/vehicle-availability";
 
 export const runtime = "nodejs";
 
@@ -68,7 +69,7 @@ export async function GET(req: NextRequest) {
       await Promise.all([
         listDriverRegistry(auth.admin, tenantId, { activeOnly: true }),
         auth.admin.from("vehicles")
-          .select("id, label, capacity, vehicle_size")
+          .select("id, label, capacity, vehicle_size, blocked_from, blocked_until, blocked_reason, is_blocked_manual")
           .eq("tenant_id", tenantId)
           .eq("active", true)
           .order("capacity", { ascending: false }),
@@ -201,6 +202,16 @@ export async function POST(req: NextRequest) {
             ok: false,
             error: `Mezzo impegnato per ${commitment.commitment_type}. Rimuovi prima l'impegno in Fleet Ops.`,
           }, { status: 409 });
+        }
+        const { data: vehicle, error: vehicleError } = await auth.admin
+          .from("vehicles")
+          .select("id, blocked_from, blocked_until, blocked_reason, is_blocked_manual")
+          .eq("tenant_id", tenantId)
+          .eq("id", d.vehicle_id)
+          .maybeSingle();
+        if (vehicleError) return NextResponse.json({ ok: false, error: vehicleError.message }, { status: 500 });
+        if (vehicle && isVehicleManuallyBlockedOnDate(vehicle, d.date)) {
+          return NextResponse.json({ ok: false, error: manualVehicleBlockMessage(vehicle) }, { status: 409 });
         }
       }
       const { error } = await auth.admin.from("vehicle_daily_availability").upsert({

@@ -6,6 +6,8 @@ export type InboxPdfParsingSignal = {
   duplicate: boolean;
   duplicateServiceAlert: boolean;
   confirmed: boolean;
+  importState: string | null;
+  reviewStatus: string | null;
 };
 
 function clean(value: unknown) {
@@ -20,7 +22,8 @@ export function getInboxPdfParsingSignal(parsedJson: Record<string, unknown> | n
   const parsingQuality = clean(pdfImport?.parsing_quality);
   const parserMode = clean(parser?.mode);
   const missingFields = Array.isArray(pdfImport?.missing_fields) ? pdfImport?.missing_fields : [];
-  const confirmed = parsedJson?.review_status === "confirmed" || parsedJson?.review_status === "ready_operational";
+  const reviewStatus = clean(parsedJson?.review_status);
+  const confirmed = reviewStatus === "confirmed" || reviewStatus === "ready_operational";
   const duplicate =
     importState === "skipped_duplicate" ||
     importState === "skipped_duplicate_final" ||
@@ -38,6 +41,21 @@ export function getInboxPdfParsingSignal(parsedJson: Record<string, unknown> | n
     missingFieldsCount: missingFields.length,
     duplicate,
     duplicateServiceAlert,
-    confirmed
+    confirmed,
+    importState,
+    reviewStatus
   };
+}
+
+export function isInboxPdfReviewOpen(parsedJson: Record<string, unknown> | null | undefined): boolean {
+  const signal = getInboxPdfParsingSignal(parsedJson);
+  if (!signal.hasPdfImport || signal.confirmed || signal.duplicate) return false;
+  if (["ignored", "imported", "final", "skipped_duplicate", "skipped_duplicate_final", "skipped_duplicate_draft"].includes(signal.importState ?? "")) {
+    return false;
+  }
+  const reviewOpen =
+    signal.importState === "draft" ||
+    signal.importState === "preview" ||
+    signal.reviewStatus === "needs_review";
+  return reviewOpen && (signal.reviewRecommended || signal.missingFieldsCount > 0);
 }
