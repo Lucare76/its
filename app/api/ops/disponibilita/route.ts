@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
 
 export const runtime = "nodejs";
@@ -17,7 +18,8 @@ export const runtime = "nodejs";
 const saveDriverSchema = z.object({
   action: z.literal("save_driver"),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  driver_user_id: z.string().uuid(),
+  driver_profile_id: z.string().uuid(),
+  driver_user_id: z.string().uuid().nullable().optional(),
   available: z.boolean(),
   available_from: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
   available_to: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
@@ -62,20 +64,16 @@ export async function GET(req: NextRequest) {
 
     const date = req.nextUrl.searchParams.get("date")?.trim() || new Date().toISOString().slice(0, 10);
 
-    const [driversRes, vehiclesRes, driverAvailRes, vehicleAvailRes, blocksRes, confirmRes, commitments] =
+    const [drivers, vehiclesRes, driverAvailRes, vehicleAvailRes, blocksRes, confirmRes, commitments] =
       await Promise.all([
-        auth.admin.from("memberships")
-          .select("user_id, full_name, max_vehicle_capacity")
-          .eq("tenant_id", tenantId)
-          .eq("role", "driver")
-          .order("full_name"),
+        listDriverRegistry(auth.admin, tenantId, { activeOnly: true }),
         auth.admin.from("vehicles")
           .select("id, label, capacity, vehicle_size")
           .eq("tenant_id", tenantId)
           .eq("active", true)
           .order("capacity", { ascending: false }),
         auth.admin.from("driver_daily_availability")
-          .select("driver_user_id, available, available_from, available_to, notes")
+          .select("driver_profile_id, driver_user_id, available, available_from, available_to, notes")
           .eq("tenant_id", tenantId)
           .eq("date", date),
         auth.admin.from("vehicle_daily_availability")
@@ -98,7 +96,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       date,
-      drivers: driversRes.data ?? [],
+      drivers: drivers.map((driver) => ({
+        id: driver.id,
+        user_id: driver.user_id,
+        full_name: driver.full_name,
+        max_vehicle_capacity: driver.max_vehicle_capacity,
+        has_access: driver.has_access,
+        access_suspended: driver.access_suspended,
+      })),
       vehicles: vehiclesRes.data ?? [],
       driver_availability: driverAvailRes.data ?? [],
       vehicle_availability: vehicleAvailRes.data ?? [],
@@ -128,17 +133,58 @@ export async function POST(req: NextRequest) {
       const p = saveDriverSchema.safeParse(body);
       if (!p.success) return NextResponse.json({ ok: false, error: p.error.issues[0]?.message }, { status: 400 });
       const d = p.data;
-      const { error } = await auth.admin.from("driver_daily_availability").upsert({
+      const profileResult = await auth.admin
+        .from("driver_profiles")
+        .select("id, user_id, active")
+        .eq("tenant_id", tenantId)
+        .eq("id", d.driver_profile_id)
+        .maybeSingle();
+      if (profileResult.error) return NextResponse.json({ ok: false, error: profileResult.error.message }, { status: 500 });
+      if (!profileResult.data?.id || profileResult.data.active === false) {
+        return NextResponse.json({ ok: false, error: "Autista non trovato o non attivo." }, { status: 404 });
+      }
+      const effectiveUserId = d.driver_user_id ?? profileResult.data.user_id ?? null;
+      const availabilityPayload = {
         tenant_id: tenantId,
-        driver_user_id: d.driver_user_id,
+        driver_profile_id: d.driver_profile_id,
+        driver_user_id: effectiveUserId,
         date: d.date,
         available: d.available,
         available_from: d.available_from ?? null,
         available_to: d.available_to ?? null,
         notes: d.notes ?? null,
         updated_at: new Date().toISOString(),
-      }, { onConflict: "tenant_id,driver_user_id,date" });
-      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      };
+      const existingByProfile = await auth.admin
+        .from("driver_daily_availability")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("driver_profile_id", d.driver_profile_id)
+        .eq("date", d.date)
+        .maybeSingle();
+      if (existingByProfile.error) return NextResponse.json({ ok: false, error: existingByProfile.error.message }, { status: 500 });
+      let availabilityId = existingByProfile.data?.id ?? null;
+      if (!availabilityId && effectiveUserId) {
+        const existingByUser = await auth.admin
+          .from("driver_daily_availability")
+          .select("id")
+          .eq("tenant_id", tenantId)
+          .eq("driver_user_id", effectiveUserId)
+          .eq("date", d.date)
+          .maybeSingle();
+        if (existingByUser.error) return NextResponse.json({ ok: false, error: existingByUser.error.message }, { status: 500 });
+        availabilityId = existingByUser.data?.id ?? null;
+      }
+      const saveResult = availabilityId
+        ? await auth.admin
+            .from("driver_daily_availability")
+            .update(availabilityPayload)
+            .eq("tenant_id", tenantId)
+            .eq("id", availabilityId)
+        : await auth.admin
+            .from("driver_daily_availability")
+            .insert(availabilityPayload);
+      if (saveResult.error) return NextResponse.json({ ok: false, error: saveResult.error.message }, { status: 500 });
       return NextResponse.json({ ok: true });
     }
 

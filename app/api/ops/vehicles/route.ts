@@ -5,6 +5,7 @@ import {
   deactivateDriverProfileAndAccess,
   ensureDriverAccessForProfile,
   listDriverRegistry,
+  normalizeDriverPassword,
   syncMembershipNameFromProfile,
 } from "@/lib/server/driver-registry";
 import { vehicleUpsertSchema } from "@/lib/server/fleet-schemas";
@@ -216,7 +217,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: false, error: "Ruolo non autorizzato." }, { status: 403 });
       }
       const parsed = driverSchema.parse(body);
-      if (!parsed.id && !parsed.phone?.trim()) {
+      const normalizedPhone = normalizeDriverPassword(parsed.phone);
+      if (!parsed.id && normalizedPhone.length < 6) {
         return NextResponse.json({ ok: false, error: "Inserire il numero di telefono: verrà usato come password per l'accesso autista." }, { status: 400 });
       }
       const payload = { tenant_id: tenantId, full_name: parsed.full_name, phone: parsed.phone ?? null, active: true };
@@ -239,17 +241,28 @@ export async function POST(request: NextRequest) {
 
       let createdDriverAccess: { username: string; temporary_password: string; created: boolean } | null = null;
       if (payload.phone) {
-        const access = await ensureDriverAccessForProfile(auth.admin, {
-          tenantId,
-          profileId: profileResult.data.id,
-          fullName: payload.full_name,
-          phone: payload.phone,
-        });
-        createdDriverAccess = {
-          username: access.username,
-          temporary_password: access.temporaryPassword,
-          created: access.created,
-        };
+        try {
+          const access = await ensureDriverAccessForProfile(auth.admin, {
+            tenantId,
+            profileId: profileResult.data.id,
+            fullName: payload.full_name,
+            phone: payload.phone,
+          });
+          createdDriverAccess = {
+            username: access.username,
+            temporary_password: access.temporaryPassword,
+            created: access.created,
+          };
+        } catch (error) {
+          if (!parsed.id) {
+            await auth.admin
+              .from("driver_profiles")
+              .update({ active: false })
+              .eq("tenant_id", tenantId)
+              .eq("id", profileResult.data.id);
+          }
+          throw error;
+        }
       }
 
       if (parsed.id) {

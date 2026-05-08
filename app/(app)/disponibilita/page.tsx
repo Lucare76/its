@@ -6,9 +6,23 @@ import { DateInput } from "@/components/ui/date-input";
 
 // ─── Tipi ─────────────────────────────────────────────────────────────────────
 
-type Driver = { user_id: string; full_name: string; max_vehicle_capacity: number | null };
+type Driver = {
+  id: string;
+  user_id: string | null;
+  full_name: string;
+  max_vehicle_capacity: number | null;
+  has_access?: boolean;
+  access_suspended?: boolean;
+};
 type Vehicle = { id: string; label: string; capacity: number | null; vehicle_size: string | null };
-type DriverAvail = { driver_user_id: string; available: boolean; available_from: string | null; available_to: string | null; notes: string | null };
+type DriverAvail = {
+  driver_profile_id: string | null;
+  driver_user_id: string | null;
+  available: boolean;
+  available_from: string | null;
+  available_to: string | null;
+  notes: string | null;
+};
 type VehicleAvail = { vehicle_id: string; available: boolean; notes: string | null };
 type TimeBlock = { id: string; vehicle_id: string; block_from: string; block_to: string; reason: string; reason_notes: string | null };
 type VehicleCommitment = { id: string; vehicle_id: string; commitment_date: string; commitment_type: string; notes: string | null };
@@ -88,7 +102,19 @@ export default function DisponibilitaPage() {
       if (!body.ok) { setError(body.error ?? "Errore"); return; }
       setDrivers(body.drivers);
       setVehicles(body.vehicles);
-      setDriverAvail(new Map(body.driver_availability.map(a => [a.driver_user_id, a])));
+      const driverIdByUserId = new Map(
+        body.drivers
+          .filter((driver): driver is Driver & { user_id: string } => Boolean(driver.user_id))
+          .map((driver) => [driver.user_id, driver.id])
+      );
+      const availabilityEntries: Array<[string, DriverAvail]> = [];
+      for (const availability of body.driver_availability) {
+        const profileKey =
+          availability.driver_profile_id ??
+          (availability.driver_user_id ? driverIdByUserId.get(availability.driver_user_id) : null);
+        if (profileKey) availabilityEntries.push([profileKey, availability]);
+      }
+      setDriverAvail(new Map(availabilityEntries));
       setVehicleAvail(new Map(body.vehicle_availability.map(a => [a.vehicle_id, a])));
       setBlocks(body.vehicle_blocks);
       setCommitments(body.vehicle_commitments ?? []);
@@ -111,12 +137,13 @@ export default function DisponibilitaPage() {
     return res.json() as Promise<{ ok: boolean; error?: string; id?: string }>;
   };
 
-  const toggleDriver = async (userId: string, currentAvail: boolean) => {
-    setSaving(userId);
-    const current = driverAvail.get(userId);
+  const toggleDriver = async (driver: Driver, currentAvail: boolean) => {
+    setSaving(driver.id);
+    const current = driverAvail.get(driver.id);
     await post({
       action: "save_driver", date,
-      driver_user_id: userId,
+      driver_profile_id: driver.id,
+      driver_user_id: driver.user_id,
       available: !currentAvail,
       available_from: current?.available_from ?? null,
       available_to: current?.available_to ?? null,
@@ -124,8 +151,15 @@ export default function DisponibilitaPage() {
     });
     setDriverAvail(prev => {
       const next = new Map(prev);
-      const existing = next.get(userId);
-      next.set(userId, { driver_user_id: userId, available: !currentAvail, available_from: existing?.available_from ?? null, available_to: existing?.available_to ?? null, notes: existing?.notes ?? null });
+      const existing = next.get(driver.id);
+      next.set(driver.id, {
+        driver_profile_id: driver.id,
+        driver_user_id: driver.user_id,
+        available: !currentAvail,
+        available_from: existing?.available_from ?? null,
+        available_to: existing?.available_to ?? null,
+        notes: existing?.notes ?? null
+      });
       return next;
     });
     setSaving(null);
@@ -177,7 +211,7 @@ export default function DisponibilitaPage() {
     setConfirming(false);
   };
 
-  const availableDrivers = drivers.filter(d => driverAvail.get(d.user_id)?.available !== false).length;
+  const availableDrivers = drivers.filter(d => driverAvail.get(d.id)?.available !== false).length;
   const commitmentByVehicleId = new Map(commitments.map((item) => [item.vehicle_id, item]));
   const availableVehicles = vehicles.filter(v => vehicleAvail.get(v.id)?.available !== false && !commitmentByVehicleId.has(v.id)).length;
 
@@ -245,21 +279,26 @@ export default function DisponibilitaPage() {
             ) : drivers.length === 0 ? (
               <div className="card p-4 text-sm text-slate-400">Nessun autista trovato.</div>
             ) : drivers.map(driver => {
-              const avail = driverAvail.get(driver.user_id);
+              const avail = driverAvail.get(driver.id);
               const isAvailable = avail?.available !== false;
               return (
-                <div key={driver.user_id} className={`card p-3 transition ${isAvailable ? "" : "opacity-60 bg-slate-50"}`}>
+                <div key={driver.id} className={`card p-3 transition ${isAvailable ? "" : "opacity-60 bg-slate-50"}`}>
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      disabled={saving === driver.user_id}
-                      onClick={() => void toggleDriver(driver.user_id, isAvailable)}
+                      disabled={saving === driver.id}
+                      onClick={() => void toggleDriver(driver, isAvailable)}
                       className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${isAvailable ? "bg-emerald-500" : "bg-slate-300"}`}
                     >
                       <span className={`block w-4 h-4 rounded-full bg-white shadow mx-1 transition-transform ${isAvailable ? "translate-x-4" : ""}`} />
                     </button>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-slate-800">{driver.full_name}</p>
+                      {!driver.has_access ? (
+                        <p className="text-xs text-slate-400">Senza accesso utente</p>
+                      ) : driver.access_suspended ? (
+                        <p className="text-xs text-amber-600">Accesso sospeso</p>
+                      ) : null}
                       {driver.max_vehicle_capacity ? (
                         <p className="text-xs text-slate-500">Max {driver.max_vehicle_capacity} posti</p>
                       ) : null}
@@ -269,17 +308,17 @@ export default function DisponibilitaPage() {
                         <input type="time" value={avail?.available_from ?? ""} className="border rounded px-1 py-0.5 text-xs w-20"
                           onChange={e => {
                             const val = e.target.value || null;
-                            setDriverAvail(prev => { const next = new Map(prev); const ex = next.get(driver.user_id); next.set(driver.user_id, { driver_user_id: driver.user_id, available: true, available_from: val, available_to: ex?.available_to ?? null, notes: ex?.notes ?? null }); return next; });
+                            setDriverAvail(prev => { const next = new Map(prev); const ex = next.get(driver.id); next.set(driver.id, { driver_profile_id: driver.id, driver_user_id: driver.user_id, available: true, available_from: val, available_to: ex?.available_to ?? null, notes: ex?.notes ?? null }); return next; });
                           }}
-                          onBlur={() => void post({ action: "save_driver", date, driver_user_id: driver.user_id, available: true, available_from: avail?.available_from ?? null, available_to: avail?.available_to ?? null, notes: avail?.notes ?? null })}
+                          onBlur={() => void post({ action: "save_driver", date, driver_profile_id: driver.id, driver_user_id: driver.user_id, available: true, available_from: avail?.available_from ?? null, available_to: avail?.available_to ?? null, notes: avail?.notes ?? null })}
                         />
                         <span>–</span>
                         <input type="time" value={avail?.available_to ?? ""} className="border rounded px-1 py-0.5 text-xs w-20"
                           onChange={e => {
                             const val = e.target.value || null;
-                            setDriverAvail(prev => { const next = new Map(prev); const ex = next.get(driver.user_id); next.set(driver.user_id, { driver_user_id: driver.user_id, available: true, available_from: ex?.available_from ?? null, available_to: val, notes: ex?.notes ?? null }); return next; });
+                            setDriverAvail(prev => { const next = new Map(prev); const ex = next.get(driver.id); next.set(driver.id, { driver_profile_id: driver.id, driver_user_id: driver.user_id, available: true, available_from: ex?.available_from ?? null, available_to: val, notes: ex?.notes ?? null }); return next; });
                           }}
-                          onBlur={() => void post({ action: "save_driver", date, driver_user_id: driver.user_id, available: true, available_from: avail?.available_from ?? null, available_to: avail?.available_to ?? null, notes: avail?.notes ?? null })}
+                          onBlur={() => void post({ action: "save_driver", date, driver_profile_id: driver.id, driver_user_id: driver.user_id, available: true, available_from: avail?.available_from ?? null, available_to: avail?.available_to ?? null, notes: avail?.notes ?? null })}
                         />
                       </div>
                     ) : null}
@@ -289,9 +328,9 @@ export default function DisponibilitaPage() {
                       className="mt-2 w-full border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-600 placeholder:text-slate-300"
                       onChange={e => {
                         const val = e.target.value;
-                        setDriverAvail(prev => { const next = new Map(prev); const ex = next.get(driver.user_id); next.set(driver.user_id, { driver_user_id: driver.user_id, available: true, available_from: ex?.available_from ?? null, available_to: ex?.available_to ?? null, notes: val || null }); return next; });
+                        setDriverAvail(prev => { const next = new Map(prev); const ex = next.get(driver.id); next.set(driver.id, { driver_profile_id: driver.id, driver_user_id: driver.user_id, available: true, available_from: ex?.available_from ?? null, available_to: ex?.available_to ?? null, notes: val || null }); return next; });
                       }}
-                      onBlur={() => void post({ action: "save_driver", date, driver_user_id: driver.user_id, available: true, available_from: avail?.available_from ?? null, available_to: avail?.available_to ?? null, notes: avail?.notes ?? null })}
+                      onBlur={() => void post({ action: "save_driver", date, driver_profile_id: driver.id, driver_user_id: driver.user_id, available: true, available_from: avail?.available_from ?? null, available_to: avail?.available_to ?? null, notes: avail?.notes ?? null })}
                     />
                   ) : null}
                 </div>
