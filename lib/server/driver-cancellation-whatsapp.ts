@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeE164, sendWhatsAppMessage } from "@/lib/server/whatsapp";
+import { sendEmail } from "@/lib/server/send-email";
 
 type CancellationNoticeInput = {
   admin: SupabaseClient;
@@ -83,13 +84,37 @@ export async function notifyDriverServiceCancelled(input: CancellationNoticeInpu
     },
   });
 
-  await audit(admin, input, result.ok ? "sent" : "failed", {
+  if (result.ok) {
+    await audit(admin, input, "sent", {
+      driver_user_id: driverUserId,
+      phone_e164: phoneE164,
+      provider_message_id: result.messageId ?? null,
+    });
+    return result;
+  }
+
+  // WhatsApp fallito → tenta email se l'autista ha un indirizzo
+  if (user?.email) {
+    const emailResult = await sendEmail({
+      to: user.email,
+      subject: `Servizio cancellato — ${service.customer_name ?? "Cliente"}`,
+      html: `<p>Il servizio del <strong>${service.date ?? "data non disponibile"}</strong> alle <strong>${service.time?.slice(0, 5) ?? "orario non disponibile"}</strong> per il cliente <strong>${service.customer_name ?? "Cliente"}</strong> è stato cancellato.</p>`,
+    });
+    await audit(admin, input, emailResult.ok ? "sent_email_fallback" : "failed", {
+      driver_user_id: driverUserId,
+      phone_e164: phoneE164,
+      whatsapp_error: result.error,
+      email: user.email,
+      email_error: emailResult.ok ? null : emailResult.error,
+    });
+    return emailResult.ok ? { ok: true } : { ok: false, error: `WhatsApp: ${result.error ?? "fallito"}; Email: ${emailResult.error ?? "fallita"}` };
+  }
+
+  await audit(admin, input, "failed", {
     driver_user_id: driverUserId,
     phone_e164: phoneE164,
-    provider_message_id: result.ok ? result.messageId ?? null : null,
-    error: result.ok ? null : result.error,
+    error: result.error,
   });
-
   return result;
   } catch (error) {
     await audit(input.admin, input, "failed", {
