@@ -105,9 +105,16 @@ type ImportResponse = {
     valid_rows: number;
     invalid_rows: number;
     imported_rows?: number;
+    skipped_rows?: number;
+    pending_rows?: number;
+    allocated_bus_rows?: number;
   };
   errors: Array<{ row_index: number; message: string }>;
+  error?: string;
 };
+
+const IMPORT_TIMEOUT_MS = 45_000;
+const SESSION_TIMEOUT_MS = 10_000;
 
 type PresetKey = "generic_transfer" | "formula_snav" | "formula_medmar_napoli" | "formula_medmar_pozzuoli" | "transfer_airport" | "transfer_station" | "linea_bus";
 type SheetTemplate = "lista_operativa" | "dispatch_cliente" | "prenotazioni" | "linea_bus_arrivi_cliente" | "linea_bus_partenze_cliente" | "foglio_servizio" | "ischia_transfer_service" | "non_riconosciuto";
@@ -517,6 +524,8 @@ export default function ExcelImportPage() {
   const [hotels, setHotels] = useState<Hotel[]>([]);
   const [result, setResult] = useState<ImportResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [importProgress, setImportProgress] = useState("");
+  const [processedRowIndexes, setProcessedRowIndexes] = useState<Set<number>>(new Set());
   const [inferredFileDate, setInferredFileDate] = useState("");
   const [rowDecisions, setRowDecisions] = useState<Map<number, "approved" | "skipped" | "pending">>(new Map());
 
@@ -1211,22 +1220,27 @@ export default function ExcelImportPage() {
   }, [candidateRows]);
 
   const approvedCandidates = useMemo(
-    () => candidateRows.filter((row) => rowDecisions.get(row.row_index) === "approved"),
-    [candidateRows, rowDecisions]
+    () => candidateRows.filter((row) => !processedRowIndexes.has(row.row_index) && rowDecisions.get(row.row_index) === "approved"),
+    [candidateRows, processedRowIndexes, rowDecisions]
   );
 
   const decisionCounts = useMemo(
     () => ({
-      approved: candidateRows.filter((row) => rowDecisions.get(row.row_index) === "approved").length,
-      skipped: candidateRows.filter((row) => rowDecisions.get(row.row_index) === "skipped").length,
-      pending: candidateRows.filter((row) => rowDecisions.get(row.row_index) === "pending").length
+      approved: candidateRows.filter((row) => !processedRowIndexes.has(row.row_index) && rowDecisions.get(row.row_index) === "approved").length,
+      skipped: candidateRows.filter((row) => !processedRowIndexes.has(row.row_index) && rowDecisions.get(row.row_index) === "skipped").length,
+      pending: candidateRows.filter((row) => !processedRowIndexes.has(row.row_index) && rowDecisions.get(row.row_index) === "pending").length
     }),
-    [candidateRows, rowDecisions]
+    [candidateRows, processedRowIndexes, rowDecisions]
   );
 
   const pendingValidCount = useMemo(
-    () => candidateRows.filter((row) => row.localIssues.length === 0 && rowDecisions.get(row.row_index) !== "approved").length,
-    [candidateRows, rowDecisions]
+    () => candidateRows.filter((row) => !processedRowIndexes.has(row.row_index) && row.localIssues.length === 0 && rowDecisions.get(row.row_index) !== "approved").length,
+    [candidateRows, processedRowIndexes, rowDecisions]
+  );
+
+  const visibleCandidateRows = useMemo(
+    () => candidateRows.filter((row) => !processedRowIndexes.has(row.row_index)),
+    [candidateRows, processedRowIndexes]
   );
 
   const setDecision = (rowIndex: number, decision: "approved" | "skipped" | "pending") => {
@@ -1236,7 +1250,7 @@ export default function ExcelImportPage() {
   const approveAllValid = () => {
     setRowDecisions((prev) => {
       const next = new Map(prev);
-      for (const row of candidateRows) {
+      for (const row of visibleCandidateRows) {
         if (row.localIssues.length === 0) next.set(row.row_index, "approved");
       }
       return next;
@@ -1246,15 +1260,7 @@ export default function ExcelImportPage() {
   const skipAll = () => {
     setRowDecisions((prev) => {
       const next = new Map(prev);
-      for (const row of candidateRows) next.set(row.row_index, "skipped");
-      return next;
-    });
-  };
-
-  const approveAll = () => {
-    setRowDecisions((prev) => {
-      const next = new Map(prev);
-      for (const row of candidateRows) next.set(row.row_index, "approved");
+      for (const row of visibleCandidateRows) next.set(row.row_index, "skipped");
       return next;
     });
   };
@@ -1264,6 +1270,8 @@ export default function ExcelImportPage() {
     if (!file) return;
     setFileName(file.name);
     setResult(null);
+    setImportProgress("");
+    setProcessedRowIndexes(new Set());
 
     try {
       const buffer = await file.arrayBuffer();
@@ -1293,33 +1301,78 @@ export default function ExcelImportPage() {
     }
   };
 
-  const runImport = async (dryRun: boolean) => {
+  const approveAll = () => {
+    setRowDecisions((prev) => {
+      const next = new Map(prev);
+      for (const row of visibleCandidateRows) next.set(row.row_index, "approved");
+      return next;
+    });
+  };
+
+  const importResponseMessage = (body: ImportResponse, fallbackError?: string) => {
+    const imported = body.summary.imported_rows ?? 0;
+    const pending = body.summary.pending_rows ?? 0;
+    const invalid = body.summary.invalid_rows ?? body.errors.length;
+    const allocated = body.summary.allocated_bus_rows ?? 0;
+    if (fallbackError || body.error) {
+      return [
+        fallbackError ?? body.error,
+        invalid > 0 ? `${invalid} righe con errore` : "",
+        pending > 0 ? `${pending} righe in pending bus` : ""
+      ].filter(Boolean).join(" - ");
+    }
+    if (body.dry_run) {
+      return `Dry run completato: ${body.summary.valid_rows} importabili, ${invalid} errori, ${pending} pending.`;
+    }
+    if (imported === 0 && pending === 0) {
+      return "Import completato ma nessun servizio creato: controlla errori, righe saltate e pending.";
+    }
+    return `Import completato: ${imported} servizi creati, ${allocated} allocazioni bus, ${pending} pending, ${invalid} errori.`;
+  };
+
+  const runImport = async (dryRun: boolean, rowsOverride?: CandidateRow[]) => {
+    const updateProgress = (text: string) => {
+      setImportProgress(text);
+      setMessage(text);
+    };
+
     if (!hasSupabaseEnv || !supabase) {
-      setMessage("Supabase non configurato.");
+      updateProgress("Supabase non configurato.");
       return;
     }
-    const rowsToImport = dryRun ? candidateRows : approvedCandidates;
+    const rowsToImport = rowsOverride ?? (dryRun ? candidateRows : approvedCandidates);
     if (rowsToImport.length === 0) {
-      setMessage(dryRun ? "Nessuna riga disponibile da importare." : "Nessuna riga approvata da importare.");
+      updateProgress(dryRun ? "Nessuna riga disponibile da importare." : "Nessuna riga approvata da importare.");
       return;
     }
 
     setSubmitting(true);
     setResult(null);
+    updateProgress(dryRun ? `Dry run in corso su ${rowsToImport.length} righe...` : `Import in corso su ${rowsToImport.length} righe approvate...`);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), IMPORT_TIMEOUT_MS);
     try {
-      const session = await supabase.auth.getSession();
+      updateProgress("Verifica sessione in corso...");
+      const session = await Promise.race([
+        supabase.auth.getSession(),
+        new Promise<never>((_, reject) => {
+          window.setTimeout(() => reject(new Error("Timeout verifica sessione Supabase.")), SESSION_TIMEOUT_MS);
+        })
+      ]);
       if (session.error || !session.data.session?.access_token) {
-        setMessage("Sessione non valida. Rifai login.");
+        updateProgress("Sessione non valida. Rifai login.");
         setSubmitting(false);
         return;
       }
 
+      updateProgress(`Chiamata API /api/excel/import in corso (${rowsToImport.length} righe)...`);
       const response = await fetch("/api/excel/import", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.data.session.access_token}`
         },
+        signal: controller.signal,
         body: JSON.stringify({
           dry_run: dryRun,
           preset_key: presetKey,
@@ -1330,20 +1383,55 @@ export default function ExcelImportPage() {
         })
       });
 
+      updateProgress(`Risposta API ricevuta: HTTP ${response.status}. Elaborazione risultato...`);
       const body = (await response.json().catch(() => null)) as ImportResponse | { error?: string } | null;
       if (!response.ok) {
-        setMessage((body as { error?: string } | null)?.error ?? "Import Excel non riuscito.");
+        if (body && "summary" in body && "errors" in body) {
+          setResult(body as ImportResponse);
+          updateProgress(importResponseMessage(body as ImportResponse, (body as ImportResponse).error ?? "Import Excel non riuscito."));
+        } else {
+          updateProgress((body as { error?: string } | null)?.error ?? "Import Excel non riuscito.");
+        }
         setSubmitting(false);
         return;
       }
 
-      setResult(body as ImportResponse);
-      setMessage(dryRun ? "Dry run completato." : "Import servizi completato.");
-    } catch {
-      setMessage("Errore rete durante import Excel.");
+      const importBody = body as ImportResponse;
+      setResult(importBody);
+      updateProgress(importResponseMessage(importBody));
+      if (!dryRun) {
+        const errorRowIndexes = new Set(importBody.errors.map((item) => item.row_index));
+        const processedRows = rowsToImport.filter((row) => !errorRowIndexes.has(row.row_index)).map((row) => row.row_index);
+        if (processedRows.length > 0) {
+          setProcessedRowIndexes((current) => {
+            const next = new Set(current);
+            for (const rowIndex of processedRows) next.add(rowIndex);
+            return next;
+          });
+        }
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        updateProgress(`Timeout import Excel dopo ${Math.round(IMPORT_TIMEOUT_MS / 1000)} secondi: la API non ha risposto.`);
+      } else {
+        updateProgress(error instanceof Error ? `Errore rete durante import Excel: ${error.message}` : "Errore rete durante import Excel.");
+      }
     } finally {
+      window.clearTimeout(timeoutId);
       setSubmitting(false);
     }
+  };
+
+  const approveAllAndImport = () => {
+    if (visibleCandidateRows.length === 0) {
+      setMessage("Nessuna riga candidata da approvare.");
+      setImportProgress("Nessuna riga candidata da approvare.");
+      return;
+    }
+    approveAll();
+    setImportProgress(`Approva tutte intercettato: invio ${visibleCandidateRows.length} righe all'API...`);
+    setMessage(`Approva tutte intercettato: invio ${visibleCandidateRows.length} righe all'API...`);
+    void runImport(false, visibleCandidateRows);
   };
 
   return (
@@ -1366,7 +1454,7 @@ export default function ExcelImportPage() {
           <p className="text-3xl font-semibold text-text">{totals.rows}</p>
         </SectionCard>
         <SectionCard title="Righe candidate">
-          <p className="text-3xl font-semibold text-text">{candidateRows.length}</p>
+          <p className="text-3xl font-semibold text-text">{visibleCandidateRows.length}</p>
           <p className="mt-1 text-xs text-muted">
             {decisionCounts.approved} approvate / {decisionCounts.pending} da decidere
           </p>
@@ -1374,7 +1462,16 @@ export default function ExcelImportPage() {
       </div>
 
       <SectionCard title="Upload file Excel" subtitle="Il file viene letto nel browser. L'import server parte solo dopo il dry run.">
-        <input type="file" accept=".xlsx,.xls,.csv" className="input-saas" onChange={(event) => void handleFile(event)} />
+        <div className="flex flex-wrap items-center gap-3">
+          <input type="file" accept=".xlsx,.xls,.csv" className="input-saas" onChange={(event) => void handleFile(event)} />
+          <a
+            href="/templates/import-servizi-place-based.xlsx"
+            download
+            className="btn-secondary"
+          >
+            Scarica template
+          </a>
+        </div>
         {inferredFileDate ? (
           <p className="mt-3 text-xs text-muted">Data inferita dal nome file: <span className="font-semibold text-text">{inferredFileDate}</span></p>
         ) : null}
@@ -1521,6 +1618,18 @@ export default function ExcelImportPage() {
                 {result.summary.imported_rows ?? 0} / {result.summary.invalid_rows}
               </p>
             </article>
+            <article className="rounded-2xl border border-border bg-surface/80 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-muted">Pending bus / allocazioni</p>
+              <p className="mt-2 text-2xl font-semibold text-text">
+                {result.summary.pending_rows ?? 0} / {result.summary.allocated_bus_rows ?? 0}
+              </p>
+            </article>
+            {result.error ? (
+              <article className="rounded-2xl border border-rose-200 bg-rose-50 p-3 md:col-span-3">
+                <p className="text-xs uppercase tracking-[0.14em] text-rose-700">Errore API</p>
+                <p className="mt-2 text-sm font-semibold text-rose-900">{result.error}</p>
+              </article>
+            ) : null}
           </div>
         ) : null}
       </SectionCard>
@@ -1558,7 +1667,7 @@ export default function ExcelImportPage() {
       </SectionCard>
 
       <SectionCard title="Righe candidate" subtitle="Approva o salta ogni riga. Solo le approvate verranno importate.">
-        {candidateRows.length === 0 ? (
+        {visibleCandidateRows.length === 0 ? (
           <EmptyState title="Nessuna riga candidata" description="Carica un file e completa il mapping per generare una preview importabile." compact />
         ) : (
           <>
@@ -1580,16 +1689,19 @@ export default function ExcelImportPage() {
                 >
                   {pendingValidCount === 0 ? "Valide gia approvate" : `Approva valide (${pendingValidCount})`}
                 </button>
-                <button type="button" className="btn-secondary text-xs py-1 px-3" onClick={approveAll}>
-                  Approva tutte
+                <button type="button" className="btn-primary text-xs py-1 px-3" onClick={approveAllAndImport} disabled={submitting || visibleCandidateRows.length === 0}>
+                  {submitting ? "Invio in corso..." : "Approva tutte"}
                 </button>
                 <button type="button" className="btn-secondary text-xs py-1 px-3" onClick={skipAll}>
                   Salta tutte
                 </button>
               </div>
+              {importProgress ? (
+                <p className="basis-full text-xs font-semibold text-slate-600">{importProgress}</p>
+              ) : null}
             </div>
             <div className="space-y-3">
-              {candidateRows.map((row) => {
+              {visibleCandidateRows.map((row) => {
                 const decision = rowDecisions.get(row.row_index) ?? "pending";
                 return (
                   <article

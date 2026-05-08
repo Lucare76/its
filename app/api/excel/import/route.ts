@@ -336,6 +336,13 @@ function addBusPendingOrError(
   });
 }
 
+function formatImportStorageError(rowIndex: number, action: string, message: string) {
+  return {
+    row_index: rowIndex,
+    message: `${action}: ${message}`
+  };
+}
+
 function resolveFirstHotelMatch(hotels: HotelRow[], candidates: Array<string | null | undefined>, defaultHotelId?: string | null) {
   for (const candidate of candidates) {
     const match = resolveHotelMatch(hotels, String(candidate ?? ""), undefined);
@@ -629,7 +636,7 @@ export async function POST(request: NextRequest) {
                 driver_time: row.driver_time || null,
                 import_source: "excel_place_template"
               }
-            : null
+            : {}
         } satisfies Record<string, unknown>;
 
         const pickupFields = meta.service_type === "transfer"
@@ -712,7 +719,7 @@ export async function POST(request: NextRequest) {
                 driver_time: row.driver_time || null,
                 import_source: "excel_template"
               }
-            : null
+            : {}
         } satisfies Record<string, unknown>;
 
         const payloadAny = insertPayload as Record<string, unknown>;
@@ -907,7 +914,8 @@ export async function POST(request: NextRequest) {
         ...item.pendingPayload
       });
       if (pendingInsert.error) {
-        return NextResponse.json({ error: pendingInsert.error.message }, { status: 500 });
+        errors.push(formatImportStorageError(item.rowIndex, "Pending bus non salvato", pendingInsert.error.message));
+        continue;
       }
       pendingRows += 1;
       continue;
@@ -945,7 +953,8 @@ export async function POST(request: NextRequest) {
 
     const insertResult = await insertServiceWithSchemaFallback(auth.admin, payload as Record<string, unknown>);
     if (insertResult.error || !insertResult.data?.id) {
-      return NextResponse.json({ error: insertResult.error?.message ?? `Errore import riga ${item.rowIndex}.` }, { status: 500 });
+      errors.push(formatImportStorageError(item.rowIndex, "Servizio non creato", insertResult.error?.message ?? "Errore sconosciuto."));
+      continue;
     }
 
     if (item.busAllocation) {
@@ -970,7 +979,7 @@ export async function POST(request: NextRequest) {
           .eq("id", insertResult.data.id);
 
         if (item.busAllocation.pendingPayload?.bus_line_id) {
-          await auth.admin.from("bus_import_pending").insert({
+          const fallbackPendingInsert = await auth.admin.from("bus_import_pending").insert({
             tenant_id: auth.membership.tenant_id,
             ...item.busAllocation.pendingPayload,
             notes: [
@@ -978,28 +987,72 @@ export async function POST(request: NextRequest) {
               `Allocazione fallita: ${allocationError.message}`
             ].filter(Boolean).join(" | ")
           });
-          pendingRows += 1;
+          if (fallbackPendingInsert.error) {
+            errors.push(formatImportStorageError(
+              item.rowIndex,
+              "Allocazione bus fallita e pending non salvato",
+              `${allocationError.message} | ${fallbackPendingInsert.error.message}`
+            ));
+          } else {
+            pendingRows += 1;
+          }
           continue;
         }
 
-        return NextResponse.json({ error: `Allocazione bus fallita riga ${item.rowIndex}: ${allocationError.message}` }, { status: 500 });
+        errors.push(formatImportStorageError(item.rowIndex, "Allocazione bus fallita", allocationError.message));
+        continue;
       }
       allocatedBusRows += 1;
     }
 
     insertedIds.push(insertResult.data.id);
     const eventStatus = item.mode === "legacy" ? "new" : item.status;
-    await auth.admin.from("status_events").insert({
+    const statusEventResult = await auth.admin.from("status_events").insert({
       tenant_id: auth.membership.tenant_id,
       service_id: insertResult.data.id,
       status: eventStatus,
       by_user_id: auth.user.id
     });
+    if (statusEventResult.error) {
+      console.warn("[excel-import] status_events insert failed", {
+        rowIndex: item.rowIndex,
+        serviceId: insertResult.data.id,
+        message: statusEventResult.error.message
+      });
+    }
   }
 
   if (insertedIds.length > 0) {
     // Collega automaticamente i servizi Formula Medmar/SNAV al blocco traghetto
-    await autoLinkImportedServices(auth.admin, auth.membership.tenant_id, insertedIds);
+    try {
+      await autoLinkImportedServices(auth.admin, auth.membership.tenant_id, insertedIds);
+    } catch (error) {
+      console.warn("[excel-import] autoLinkImportedServices failed", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  if (insertedIds.length === 0 && pendingRows === 0 && errors.length > 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        dry_run: false,
+        error: "Nessuna riga importata. Controlla gli errori riga.",
+        summary: {
+          total_rows: parsed.data.rows.length,
+          skipped_rows: skippedRows,
+          valid_rows: validRows.length,
+          invalid_rows: errors.length,
+          imported_rows: 0,
+          pending_rows: 0,
+          allocated_bus_rows: 0
+        },
+        imported_service_ids: [],
+        errors
+      },
+      { status: 400 }
+    );
   }
 
   return NextResponse.json({
