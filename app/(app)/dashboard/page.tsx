@@ -7,7 +7,7 @@ import { OperationsSuggestions } from "@/components/operations-suggestions";
 import { EmptyState, SidePanel } from "@/components/ui";
 import { needsInboxReview } from "@/lib/inbox-review";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
-import { isInboxPdfReviewOpen } from "@/lib/pdf/parser";
+import { isInboxPdfReviewOpen, isInboxPdfTestNoise } from "@/lib/pdf/parser";
 import { formatDisplayUppercase, formatServiceSlot, getCustomerFullName, getOutboundTime } from "@/lib/service-display";
 import { getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
 import { supabase } from "@/lib/supabase/client";
@@ -169,7 +169,7 @@ export default function OperatorDashboardPage() {
   const todayPdfNeedsAttention = todayServices.filter((service) => getServicePdfOperationalMeta(service, data.inboundEmails).reviewRecommended);
   const inboxPdfNeedsReview = data.inboundEmails.filter((email) => {
     const parsedJson = (email.parsed_json ?? null) as Record<string, unknown> | null;
-    return isInboxPdfReviewOpen(parsedJson);
+    return !isInboxPdfTestNoise({ subject: email.subject, parsedJson }) && isInboxPdfReviewOpen(parsedJson);
   });
   const inboxToReview = data.inboundEmails.filter((email) => needsInboxReview(email.parsed_json));
   const futureInstances = buildOperationalInstances(data.services).filter((instance) => instance.date > todayIso && instance.date <= next48hIso);

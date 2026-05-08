@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DateInput } from "@/components/ui";
 import { PdfAdvancedReview } from "@/components/pdf/PdfAdvancedReview";
-import { getInboxPdfParsingSignal, isInboxPdfReviewOpen } from "@/lib/pdf/parser";
+import { getInboxPdfParsingSignal, isInboxPdfReviewOpen, isInboxPdfTestNoise } from "@/lib/pdf/parser";
 import type { PdfImportDetail } from "@/lib/server/pdf-imports";
 import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 import { ensureSupabaseClientReady, getClientSessionContext } from "@/lib/supabase/client-session";
@@ -459,7 +459,10 @@ export default function InboxPage() {
     return inboundEmails.filter((email) => {
       const status = (email.parsed_json as Record<string, unknown>)?.review_status;
       const confirmed = status === "confirmed" || status === "ready_operational";
-      return inboxFilter === "confirmed" ? confirmed : isInboxPdfReviewOpen((email.parsed_json as Record<string, unknown>) ?? null);
+      const parsedJson = (email.parsed_json as Record<string, unknown>) ?? null;
+      return inboxFilter === "confirmed"
+        ? confirmed
+        : !isInboxPdfTestNoise({ subject: email.subject, parsedJson }) && isInboxPdfReviewOpen(parsedJson);
     });
   }, [inboundEmails, inboxFilter]);
 
@@ -777,7 +780,7 @@ export default function InboxPage() {
               const hasStructured = hasInboxStructuredData(pj);
               const parsing = getInboxPdfParsingSignal(pj);
               const isSelected = email.id === (selectedEmail?.id ?? null);
-              const needsParsingReview = isInboxPdfReviewOpen(pj);
+              const needsParsingReview = !isInboxPdfTestNoise({ subject: email.subject, parsedJson: pj }) && isInboxPdfReviewOpen(pj);
               return (
                 <button key={email.id} type="button" onClick={() => setSelectedId(email.id)}
                   data-testid={`pdf-import-row-${email.id}`}

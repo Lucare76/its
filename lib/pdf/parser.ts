@@ -59,3 +59,12 @@ export function isInboxPdfReviewOpen(parsedJson: Record<string, unknown> | null 
     signal.reviewStatus === "needs_review";
   return reviewOpen && (signal.reviewRecommended || signal.missingFieldsCount > 0);
 }
+
+export function isInboxPdfTestNoise(input: { subject?: unknown; parsedJson?: Record<string, unknown> | null | undefined }): boolean {
+  const subject = String(input.subject ?? "").toLowerCase();
+  if (subject.includes("draft pdf e2e") || subject.includes("e2e-draft-")) return true;
+
+  const pdfImport = (input.parsedJson?.pdf_import ?? null) as Record<string, unknown> | null;
+  const externalReference = String(pdfImport?.external_reference ?? pdfImport?.normalized_reference ?? "").toLowerCase();
+  return externalReference.includes("e2e-draft-");
+}
