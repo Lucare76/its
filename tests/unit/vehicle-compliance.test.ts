@@ -47,8 +47,9 @@ describe("addDays", () => {
     expect(addDays("2025-12-30", 3)).toBe("2026-01-02");
   });
 
-  it("aggiunge 14 giorni (proroga assicurazione)", () => {
-    expect(addDays("2026-10-01", INSURANCE_GRACE_DAYS)).toBe("2026-10-15");
+  it("aggiunge INSURANCE_GRACE_DAYS giorni (proroga assicurazione, art. 170-bis CdA = 15gg)", () => {
+    // Costante aggiornata a 15 giorni (era 14) per allineamento normativo
+    expect(addDays("2026-10-01", INSURANCE_GRACE_DAYS)).toBe("2026-10-16");
   });
 
   it("aggiunge 0 giorni (nessuna variazione)", () => {
@@ -143,12 +144,14 @@ describe("buildStatusLabel", () => {
 });
 
 describe("getEffectiveExpiry", () => {
-  it("aggiunge INSURANCE_GRACE_DAYS per Assicurazione", () => {
-    expect(getEffectiveExpiry("Assicurazione", "2026-10-01")).toBe("2026-10-15");
+  it("aggiunge INSURANCE_GRACE_DAYS (15gg) per Assicurazione", () => {
+    // 2026-10-01 + 15 = 2026-10-16 (aggiornato da 14 a 15 per art. 170-bis CdA)
+    expect(getEffectiveExpiry("Assicurazione", "2026-10-01")).toBe("2026-10-16");
   });
 
-  it("non modifica la data per Collaudo", () => {
-    expect(getEffectiveExpiry("Collaudo", "2026-10-01")).toBe("2026-10-01");
+  it("Collaudo → fine del mese di scadenza (regola ministeriale)", () => {
+    // Il collaudo ha validità fino al ultimo giorno del mese di scadenza
+    expect(getEffectiveExpiry("Collaudo", "2026-10-01")).toBe("2026-10-31");
   });
 
   it("non modifica la data per Bollo", () => {
@@ -180,8 +183,9 @@ describe("getWarnWindowDays", () => {
 });
 
 describe("costanti esportate", () => {
-  it("INSURANCE_GRACE_DAYS è 14", () => {
-    expect(INSURANCE_GRACE_DAYS).toBe(14);
+  it("INSURANCE_GRACE_DAYS è 15 (art. 170-bis CdA)", () => {
+    // Aggiornato da 14 a 15 giorni per allineamento normativo
+    expect(INSURANCE_GRACE_DAYS).toBe(15);
   });
 
   it("WARN_DAYS è 60", () => {

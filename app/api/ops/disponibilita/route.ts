@@ -10,9 +10,10 @@ import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
-import { isVehicleManuallyBlockedOnDate, manualVehicleBlockMessage } from "@/lib/server/vehicle-availability";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 // ─── Schemi ───────────────────────────────────────────────────────────────────
 
@@ -20,7 +21,6 @@ const saveDriverSchema = z.object({
   action: z.literal("save_driver"),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   driver_profile_id: z.string().uuid(),
-  driver_user_id: z.string().uuid().nullable().optional(),
   available: z.boolean(),
   available_from: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
   available_to: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
@@ -67,9 +67,9 @@ export async function GET(req: NextRequest) {
 
     const [drivers, vehiclesRes, driverAvailRes, vehicleAvailRes, blocksRes, confirmRes, commitments] =
       await Promise.all([
-        listDriverRegistry(auth.admin, tenantId, { activeOnly: true }),
+        listDriverRegistry(auth.admin, tenantId),
         auth.admin.from("vehicles")
-          .select("id, label, capacity, vehicle_size, blocked_from, blocked_until, blocked_reason, is_blocked_manual")
+          .select("id, label, capacity, vehicle_size")
           .eq("tenant_id", tenantId)
           .eq("active", true)
           .order("capacity", { ascending: false }),
@@ -97,14 +97,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       date,
-      drivers: drivers.map((driver) => ({
-        id: driver.id,
-        user_id: driver.user_id,
-        full_name: driver.full_name,
-        max_vehicle_capacity: driver.max_vehicle_capacity,
-        has_access: driver.has_access,
-        access_suspended: driver.access_suspended,
-      })),
+      drivers,
       vehicles: vehiclesRes.data ?? [],
       driver_availability: driverAvailRes.data ?? [],
       vehicle_availability: vehicleAvailRes.data ?? [],
@@ -112,6 +105,10 @@ export async function GET(req: NextRequest) {
       vehicle_commitments: commitments.rows,
       confirmed: confirmRes.data?.confirmed ?? false,
       confirmed_at: confirmRes.data?.confirmed_at ?? null,
+    }, {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+      },
     });
   } catch (err) {
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore" }, { status: 500 });
@@ -140,52 +137,24 @@ export async function POST(req: NextRequest) {
         .eq("tenant_id", tenantId)
         .eq("id", d.driver_profile_id)
         .maybeSingle();
-      if (profileResult.error) return NextResponse.json({ ok: false, error: profileResult.error.message }, { status: 500 });
-      if (!profileResult.data?.id || profileResult.data.active === false) {
-        return NextResponse.json({ ok: false, error: "Autista non trovato o non attivo." }, { status: 404 });
+      if (profileResult.error || !profileResult.data?.id) {
+        return NextResponse.json({ ok: false, error: profileResult.error?.message ?? "Profilo autista non trovato." }, { status: 404 });
       }
-      const effectiveUserId = d.driver_user_id ?? profileResult.data.user_id ?? null;
-      const availabilityPayload = {
+      if (profileResult.data.active === false) {
+        return NextResponse.json({ ok: false, error: "Autista disattivato." }, { status: 409 });
+      }
+      const { error } = await auth.admin.from("driver_daily_availability").upsert({
         tenant_id: tenantId,
         driver_profile_id: d.driver_profile_id,
-        driver_user_id: effectiveUserId,
+        driver_user_id: profileResult.data.user_id ?? null,
         date: d.date,
         available: d.available,
         available_from: d.available_from ?? null,
         available_to: d.available_to ?? null,
         notes: d.notes ?? null,
         updated_at: new Date().toISOString(),
-      };
-      const existingByProfile = await auth.admin
-        .from("driver_daily_availability")
-        .select("id")
-        .eq("tenant_id", tenantId)
-        .eq("driver_profile_id", d.driver_profile_id)
-        .eq("date", d.date)
-        .maybeSingle();
-      if (existingByProfile.error) return NextResponse.json({ ok: false, error: existingByProfile.error.message }, { status: 500 });
-      let availabilityId = existingByProfile.data?.id ?? null;
-      if (!availabilityId && effectiveUserId) {
-        const existingByUser = await auth.admin
-          .from("driver_daily_availability")
-          .select("id")
-          .eq("tenant_id", tenantId)
-          .eq("driver_user_id", effectiveUserId)
-          .eq("date", d.date)
-          .maybeSingle();
-        if (existingByUser.error) return NextResponse.json({ ok: false, error: existingByUser.error.message }, { status: 500 });
-        availabilityId = existingByUser.data?.id ?? null;
-      }
-      const saveResult = availabilityId
-        ? await auth.admin
-            .from("driver_daily_availability")
-            .update(availabilityPayload)
-            .eq("tenant_id", tenantId)
-            .eq("id", availabilityId)
-        : await auth.admin
-            .from("driver_daily_availability")
-            .insert(availabilityPayload);
-      if (saveResult.error) return NextResponse.json({ ok: false, error: saveResult.error.message }, { status: 500 });
+      }, { onConflict: "tenant_id,driver_profile_id,date" });
+      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
       return NextResponse.json({ ok: true });
     }
 
@@ -202,16 +171,6 @@ export async function POST(req: NextRequest) {
             ok: false,
             error: `Mezzo impegnato per ${commitment.commitment_type}. Rimuovi prima l'impegno in Fleet Ops.`,
           }, { status: 409 });
-        }
-        const { data: vehicle, error: vehicleError } = await auth.admin
-          .from("vehicles")
-          .select("id, blocked_from, blocked_until, blocked_reason, is_blocked_manual")
-          .eq("tenant_id", tenantId)
-          .eq("id", d.vehicle_id)
-          .maybeSingle();
-        if (vehicleError) return NextResponse.json({ ok: false, error: vehicleError.message }, { status: 500 });
-        if (vehicle && isVehicleManuallyBlockedOnDate(vehicle, d.date)) {
-          return NextResponse.json({ ok: false, error: manualVehicleBlockMessage(vehicle) }, { status: 409 });
         }
       }
       const { error } = await auth.admin.from("vehicle_daily_availability").upsert({

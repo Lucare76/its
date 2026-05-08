@@ -21,8 +21,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { hotelGeoQuality } from "@/lib/hotel-geocoding";
+import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
-import { isVehicleManuallyBlockedAtTime, isVehicleManuallyBlockedOnDate, type VehicleManualBlock } from "@/lib/server/vehicle-availability";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -187,8 +187,8 @@ type HotelRow = {
   geo_accuracy: string | null;
   geo_verified_at: string | null;
 };
-type VehicleRow = VehicleManualBlock & { id: string; label: string; capacity: number | null };
-type DriverRow = { user_id: string; full_name: string; max_vehicle_capacity: number | null };
+type VehicleRow = { id: string; label: string; capacity: number | null };
+type DriverRow = { profile_id: string; user_id: string; full_name: string; max_vehicle_capacity: number | null };
 
 // Verifica se un veicolo è disponibile in un certo orario tenendo conto dei blocchi orari
 function vehicleAvailableAtTime(
@@ -211,11 +211,11 @@ function vehicleAvailableAtTime(
 
 // Verifica disponibilità oraria autista
 function driverAvailableAtTime(
-  driverId: string,
+  driverProfileId: string,
   tripTimeMin: number,
   driverAvailMap: Map<string, { available: boolean; available_from: string | null; available_to: string | null }>
 ): boolean {
-  const avail = driverAvailMap.get(driverId);
+  const avail = driverAvailMap.get(driverProfileId);
   if (!avail) return true; // non dichiarato = disponibile
   if (!avail.available) return false;
   if (avail.available_from) {
@@ -297,7 +297,7 @@ export async function POST(request: NextRequest) {
 
     // ── 1. Carica dati ────────────────────────────────────────────────────────
 
-    const [servicesRes, hotelsRes, vehiclesRes, membershipsRes, assignmentsRes, groupsRes,
+    const [servicesRes, hotelsRes, vehiclesRes, driverRegistry, assignmentsRes, groupsRes,
            hotelLimitsRes, driverAvailRes, vehicleAvailRes, vehicleBlocksRes, availabilityConfirmRes, commitments] =
       await Promise.all([
         auth.admin.from("services")
@@ -306,12 +306,10 @@ export async function POST(request: NextRequest) {
           .neq("status", "cancelled").neq("is_draft", true),
         auth.admin.from("hotels").select("id, name, address, zone, lat, lng, geo_status, geo_source, geo_accuracy, geo_verified_at").eq("tenant_id", tenantId),
         auth.admin.from("vehicles")
-          .select("id, label, capacity, blocked_from, blocked_until, blocked_reason, is_blocked_manual")
+          .select("id, label, capacity")
           .eq("tenant_id", tenantId).eq("active", true)
           .order("capacity"),
-        auth.admin.from("memberships")
-          .select("user_id, full_name, max_vehicle_capacity")
-          .eq("tenant_id", tenantId).eq("role", "driver"),
+        listDriverRegistry(auth.admin, tenantId),
         auth.admin.from("assignments")
           .select("service_id, group_id")
           .eq("tenant_id", tenantId),
@@ -324,7 +322,7 @@ export async function POST(request: NextRequest) {
           .eq("tenant_id", tenantId),
         // Disponibilità autisti del giorno
         auth.admin.from("driver_daily_availability")
-          .select("driver_user_id, available, available_from, available_to")
+          .select("driver_profile_id, available, available_from, available_to")
           .eq("tenant_id", tenantId).eq("date", date),
         // Disponibilità mezzi del giorno
         auth.admin.from("vehicle_daily_availability")
@@ -362,7 +360,7 @@ export async function POST(request: NextRequest) {
     // driver_user_id → disponibilità giornaliera
     const driverAvailMap = new Map(
       (driverAvailRes.data ?? []).map((d) => [
-        d.driver_user_id as string,
+        d.driver_profile_id as string,
         { available: d.available as boolean, available_from: d.available_from as string | null, available_to: d.available_to as string | null },
       ])
     );
@@ -386,15 +384,20 @@ export async function POST(request: NextRequest) {
       .filter((v) => v.capacity && v.capacity > 0)
       .sort((a, b) => (a.capacity ?? 0) - (b.capacity ?? 0));
 
-    // Filtra veicoli globalmente non disponibili: disponibilita giornaliera, impegni Fleet Ops, blocchi manuali Flotta.
-    const vehicles = allVehicles.filter((v) =>
-      vehicleAvailByIdMap.get(v.id) !== false && !isVehicleManuallyBlockedOnDate(v, date)
-    );
+    // Filtra veicoli globalmente non disponibili (available=false senza blocchi orari specifici)
+    const vehicles = allVehicles.filter((v) => vehicleAvailByIdMap.get(v.id) !== false);
 
-    const allDrivers = (membershipsRes.data ?? []) as DriverRow[];
+    const allDrivers = (driverRegistry ?? [])
+      .filter((driver) => driver.user_id && !driver.access_suspended)
+      .map((driver) => ({
+        profile_id: driver.id,
+        user_id: driver.user_id!,
+        full_name: driver.full_name,
+        max_vehicle_capacity: driver.max_vehicle_capacity,
+      })) as DriverRow[];
     // Filtra autisti dichiarati non disponibili (available=false)
     const drivers = allDrivers.filter((d) => {
-      const avail = driverAvailMap.get(d.user_id);
+      const avail = driverAvailMap.get(d.profile_id);
       return !avail || avail.available;
     });
 
@@ -613,7 +616,7 @@ export async function POST(request: NextRequest) {
 
         for (const driver of sorted) {
           // Verifica disponibilità oraria autista
-          if (!driverAvailableAtTime(driver.user_id, tripMin, driverAvailMap)) continue;
+          if (!driverAvailableAtTime(driver.profile_id, tripMin, driverAvailMap)) continue;
           const times = driverTimes.get(driver.user_id) ?? [];
           const conflict = times.some((t) => Math.abs(t - tripMin) < 75);
           if (!conflict) {
@@ -627,7 +630,7 @@ export async function POST(request: NextRequest) {
         // Fallback: assegna al meno occupato ignorando conflitto orario (ma rispettando disponibilità)
         if (!assigned) {
           const fallback = [...drivers]
-            .filter((d) => driverAvailableAtTime(d.user_id, tripMin, driverAvailMap))
+            .filter((d) => driverAvailableAtTime(d.profile_id, tripMin, driverAvailMap))
             .sort((a, b) =>
               (driverTimes.get(a.user_id)?.length ?? 0) - (driverTimes.get(b.user_id)?.length ?? 0)
             )[0];
@@ -673,7 +676,6 @@ export async function POST(request: NextRequest) {
         const cap = v.capacity ?? 0;
         if (cap < pax) return false;
         if (hardMaxCap != null && cap > hardMaxCap) return false;
-        if (isVehicleManuallyBlockedAtTime(v, date, draft.time)) return false;
         if (!vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap)) return false;
         return true;
       });
@@ -681,7 +683,6 @@ export async function POST(request: NextRequest) {
 
       // Fallback: veicolo più grande disponibile (anche se non soddisfa i vincoli di capienza)
       const fallback = [...vehicles]
-        .filter((v) => !isVehicleManuallyBlockedAtTime(v, date, draft.time))
         .filter((v) => vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap))
         .sort((a, b) => (b.capacity ?? 0) - (a.capacity ?? 0))[0];
       return fallback ?? null;

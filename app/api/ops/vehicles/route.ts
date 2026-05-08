@@ -94,6 +94,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => null);
     const action = String(body?.action ?? "");
     let driverAccessResponse: { username: string; temporary_password: string; created: boolean } | null = null;
+    let driverAccessError: string | null = null;
 
     if (action === "upsert_vehicle") {
       if (!["admin", "operator"].includes(auth.membership.role)) {
@@ -253,15 +254,16 @@ export async function POST(request: NextRequest) {
             temporary_password: access.temporaryPassword,
             created: access.created,
           };
-        } catch (error) {
+        } catch (err) {
           if (!parsed.id) {
             await auth.admin
               .from("driver_profiles")
               .update({ active: false })
               .eq("tenant_id", tenantId)
               .eq("id", profileResult.data.id);
+            throw err;
           }
-          throw error;
+          driverAccessError = err instanceof Error ? err.message : "Creazione accesso autista fallita.";
         }
       }
 
@@ -346,6 +348,7 @@ export async function POST(request: NextRequest) {
       drivers,
       commitments: commitmentsResult.data ?? [],
       driver_access: driverAccessResponse,
+      driver_access_error: driverAccessError,
     }, {
       headers: {
         "Cache-Control": "no-store, no-cache, must-revalidate",
