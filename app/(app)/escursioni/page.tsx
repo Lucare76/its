@@ -776,6 +776,7 @@ export default function EscursioniPage() {
                       if (!token) { setExcelParsing(false); return; }
                       const fd = new FormData();
                       fd.append("file", excelFile);
+                      fd.append("date", date);
                       const res = await fetch("/api/excel/import-escursioni", {
                         method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd,
                       });
@@ -783,8 +784,8 @@ export default function EscursioniPage() {
                       setExcelParsing(false);
                       if (!body?.ok) { setExcelError(body?.error ?? "Errore lettura file."); return; }
                       const defaultUnitId = units.find((u) => u.excursion_line_id === selectedLineId)?.id ?? "";
-                      setExcelResults((body.rows ?? []).map((b: { customer_name: string; pax: number; hotel_name: string | null; agency_name: string | null; phone: string | null; excursion_name: string | null; excursion_date: string | null; notes: string | null }) => ({
-                        ...b, unit_id: defaultUnitId, confirmed: true,
+                      setExcelResults((body.rows ?? []).map((b: { customer_name: string; pax: number; hotel_name: string | null; agency_name: string | null; phone: string | null; excursion_name: string | null; excursion_date: string | null; notes: string | null; resolved_unit_id?: string | null; match_confidence?: string }) => ({
+                        ...b, unit_id: b.resolved_unit_id || defaultUnitId, confirmed: true,
                       })));
                     }}
                     className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40">
@@ -898,8 +899,8 @@ export default function EscursioniPage() {
                       setImportParsing(false);
                       if (!body?.ok) { setImportError(body?.error ?? "Errore nell'analisi."); return; }
                       const defaultUnitId = units.find((u) => u.excursion_line_id === selectedLineId)?.id ?? "";
-                      setImportResults((body.bookings ?? []).map((b: { customer_name: string; pax: number; hotel_name: string | null; agency_name: string | null; phone: string | null; excursion_name: string | null; excursion_date: string | null; notes: string | null }) => ({
-                        ...b, unit_id: defaultUnitId, confirmed: true,
+                      setImportResults((body.bookings ?? []).map((b: { customer_name: string; pax: number; hotel_name: string | null; agency_name: string | null; phone: string | null; excursion_name: string | null; excursion_date: string | null; notes: string | null; resolved_unit_id?: string | null; match_confidence?: string }) => ({
+                        ...b, unit_id: b.resolved_unit_id || defaultUnitId, confirmed: true,
                       })));
                     }}
                     className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40">

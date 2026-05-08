@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
 import { buildServiceLabel, type AgencyBookingKind, type ServiceLabelContext } from "@/lib/service-label";
@@ -214,8 +215,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const now = new Date().toISOString();
 
+    const agencyToken = action === "confirmed" ? randomUUID() : null;
+
     await admin.from("booking_approval_tokens")
-      .update({ used_at: now, action, resolved_price_cents: price_cents ?? null, resolved_notes: notes ?? null, resolved_by_email: resolved_by_email ?? null })
+      .update({ used_at: now, action, resolved_price_cents: price_cents ?? null, resolved_notes: notes ?? null, resolved_by_email: resolved_by_email ?? null, agency_token: agencyToken })
       .eq("id", tokenRow.id);
 
     const serviceUpdate: Record<string, unknown> = { approval_status: action, approval_notes: notes ?? null, approval_resolved_at: now };
@@ -256,8 +259,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       operatorNotes: notes ?? null
     };
 
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "";
+    const confirmUrl = agencyToken ? `${appUrl}/agency-confirm/${agencyToken}` : undefined;
+
     const emailResult = action === "confirmed"
-      ? await sendAgencyConfirmedEmail({ ...emailBase, priceCents: price_cents! })
+      ? await sendAgencyConfirmedEmail({ ...emailBase, priceCents: price_cents!, confirmUrl })
       : await sendAgencyRejectedEmail(emailBase);
 
     return NextResponse.json({ ok: true, action, email_status: emailResult.status, email_error: emailResult.error });

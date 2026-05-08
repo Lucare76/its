@@ -12,7 +12,9 @@
 import * as XLSX from "xlsx";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import type { ParsedEscursioneBooking } from "@/app/api/email/import-escursioni/route";
+import type { ParsedEscursioneBooking, ResolvedEscursioneRow } from "@/app/api/email/import-escursioni/route";
+
+export type { ResolvedEscursioneRow };
 
 export const runtime = "nodejs";
 
@@ -119,5 +121,56 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Nessuna riga valida trovata nel file." }, { status: 400 });
   }
 
-  return NextResponse.json({ ok: true, rows, total: rows.length });
+  // Server-side resolution: match excursion_name → excursion_line + excursion_unit
+  const targetDate = formData.get("date");
+  const dateStr = typeof targetDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(targetDate) ? targetDate : null;
+  const { admin, membership } = auth;
+
+  const { data: excursionLines } = await admin
+    .from("excursion_lines")
+    .select("id, name")
+    .eq("tenant_id", membership.tenant_id)
+    .eq("active", true);
+
+  function normalizeName(s: string): string {
+    return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/[^a-z0-9]+/g, " ").trim();
+  }
+
+  const lineMap = new Map<string, string>(); // normalized_name → line_id
+  for (const line of excursionLines ?? []) {
+    lineMap.set(normalizeName(line.name), line.id);
+  }
+
+  const unitsByLineId = new Map<string, string>(); // line_id → first unit_id
+  if (dateStr && lineMap.size > 0) {
+    const lineIds = Array.from(lineMap.values());
+    const { data: units } = await admin
+      .from("excursion_units")
+      .select("id, excursion_line_id")
+      .eq("tenant_id", membership.tenant_id)
+      .eq("excursion_date", dateStr)
+      .in("excursion_line_id", lineIds)
+      .order("created_at");
+    for (const u of units ?? []) {
+      if (!unitsByLineId.has(u.excursion_line_id)) unitsByLineId.set(u.excursion_line_id, u.id);
+    }
+  }
+
+  const resolvedRows: ResolvedEscursioneRow[] = rows.map((r) => {
+    if (!r.excursion_name) return { ...r, resolved_line_id: null, resolved_unit_id: null, match_confidence: "none" };
+    const norm = normalizeName(r.excursion_name);
+    let lineId: string | null = lineMap.get(norm) ?? null;
+    let confidence: "exact" | "fuzzy" | "none" = lineId ? "exact" : "none";
+    if (!lineId) {
+      for (const [lineName, id] of lineMap) {
+        if (lineName.includes(norm) || norm.includes(lineName)) {
+          lineId = id; confidence = "fuzzy"; break;
+        }
+      }
+    }
+    const unitId = lineId ? (unitsByLineId.get(lineId) ?? null) : null;
+    return { ...r, resolved_line_id: lineId, resolved_unit_id: unitId, match_confidence: confidence };
+  });
+
+  return NextResponse.json({ ok: true, rows: resolvedRows, total: resolvedRows.length });
 }

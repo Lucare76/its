@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { z } from "zod";
 import { DateInput } from "@/components/ui";
 import {
   buildFerryScheduleOptions,
@@ -12,43 +11,19 @@ import {
 } from "@/lib/ferry-schedule-options";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
-import { todayIsoDate } from "@/lib/utils";
 import { agencyBookingCreateSchema } from "@/lib/validation";
 import {
-  getDepartureRule, normalizeZonaToPickup,
-} from "@/lib/snav-medmar-lookup";
+  useServiceForm,
+  useBusCatalog,
+  type BookingKind,
+  type HotelOption,
+} from "./_hooks";
 
-type BookingKind = z.infer<typeof agencyBookingCreateSchema>["booking_service_kind"];
 type OpsRole = "admin" | "operator";
-
-interface HotelOption {
-  id: string;
-  name: string;
-  zone: string | null;
-}
 
 interface AgencyOption {
   id: string;
   name: string;
-}
-
-interface BusCatalogStop {
-  city: string;
-  time: string;
-  pickupNote: string | null;
-  lineCode: string;
-  lineName: string;
-}
-
-type BusLineFamily = "ITALIA" | "CENTRO" | "ADRIATICA";
-
-function deriveBusLineFamily(lineCode: string): BusLineFamily {
-  const normalized = lineCode.toLowerCase();
-  const match = normalized.match(/linea[_\s-]*(\d{1,2})/);
-  const lineNumber = match ? Number(match[1]) : null;
-  if (lineNumber === 7) return "CENTRO";
-  if (lineNumber === 11 || normalized.includes("adriatica")) return "ADRIATICA";
-  return "ITALIA";
 }
 
 const EXCURSION_PORTS = ["Casamicciola", "Lacco Ameno", "Forio", "Ischia Porto"] as const;
@@ -70,8 +45,6 @@ const kindOptions: Array<{ value: BookingKind; label: string }> = [
   { value: "shuttle_hotel", label: "Navetta hotel" },
   { value: "private_island", label: "Servizio Privato sull'Isola" },
 ];
-
-// Orari traghetti: ora derivati da snav-medmar-lookup.ts
 
 function isSunday(dateStr: string): boolean {
   if (!dateStr) return false;
@@ -208,53 +181,18 @@ export default function OpsNewBookingPage() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [hotels, setHotels] = useState<HotelOption[]>([]);
   const [agencies, setAgencies] = useState<AgencyOption[]>([]);
-  const [tripLeg, setTripLeg] = useState<"outbound_only" | "return_only" | "round_trip">("outbound_only");
-  const [form, setForm] = useState({
-    customer_first_name: "",
-    customer_last_name: "",
-    customer_phone: "",
-    pax: "2",
-    infant_count: "0",
-    pet_count: "0",
-    pet_notes: "",
-    hotel_id: "",
-    hotel_dest_id: "",
-    booking_service_kind: "transfer_port_hotel" as BookingKind,
-    arrival_date: todayIsoDate(),
-    arrival_time: "12:00",
-    departure_date: todayIsoDate(),
-    departure_time: "18:00",
-    transport_code: "",
-    transport_code_return: "",
-    bus_city_origin: "",
-    excursion_title: "",
-    excursion_departure_port: "",
-    excursion_pickup_port: "",
-    pickup_time_outbound: "",
-    pickup_time_return: "",
-    notes: "",
-    agency_id: "",
-    quoted_price_eur: ""
-  });
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-
-  // SNAV/MEDMAR: orario traghetto partenza (UI only — departure_time = prelievo hotel auto-calcolato)
-  const [ferryDepTime, setFerryDepTime] = useState<string>("07:10");
   const [ferryScheduleRows, setFerryScheduleRows] = useState<FerryScheduleRow[]>([]);
 
-  // Hotel inline creation
   const [addingHotel, setAddingHotel] = useState(false);
   const [newHotelName, setNewHotelName] = useState("");
   const [newHotelAddress, setNewHotelAddress] = useState("");
   const [newHotelCity, setNewHotelCity] = useState("");
   const [savingHotel, setSavingHotel] = useState(false);
 
-  // Agency inline creation
   const [addingAgency, setAddingAgency] = useState(false);
   const [newAgencyName, setNewAgencyName] = useState("");
   const [savingAgency, setSavingAgency] = useState(false);
 
-  // Duplicate detection modal
   type DuplicateService = {
     id: string;
     date: string;
@@ -272,18 +210,36 @@ export default function OpsNewBookingPage() {
     services: DuplicateService[];
   } | null>(null);
 
-  // Bus catalog
-  const [busStops, setBusStops] = useState<BusCatalogStop[]>([]);
-  const [busSearch, setBusSearch] = useState("");
-  const [busSearchOpen, setBusSearchOpen] = useState(false);
-  const [busLoading, setBusLoading] = useState(false);
-  const [selectedBusStop, setSelectedBusStop] = useState<BusCatalogStop | null>(null);
-  const [busReturnTime, setBusReturnTime] = useState<string | null>(null);
-  const [busReturnTimeLoading, setBusReturnTimeLoading] = useState(false);
-  const [replaceError, setReplaceError] = useState<string | null>(null);
+  const {
+    form, setForm, fieldErrors, setFieldErrors,
+    tripLeg, setTripLeg,
+    ferryDepTime, setFerryDepTime,
+    excursionLines,
+    isSnavKind, isMedmarKind, isSnavMedmar,
+    isPrivateIsland, isTransferHotelHotel, isBusOriginRequired,
+    isExcursionTitleRequired, isTransportCodeRequired,
+    isPhoneRequired, showTransportCodeField,
+    showTripLeg, isRoundTrip, showPickupTime,
+    snavArrivalOptions, snavDepartureOptions,
+    medmarArrivalOptions, medmarDepartureOptions,
+    portoArrivo, depRuleInfo, hotelZona,
+    normalizedPayload, isFormValid,
+    reviewWarnings, resetForm,
+  } = useServiceForm({ hotels, ferryScheduleRows, tenantId });
 
-  // Excursion lines
-  const [excursionLines, setExcursionLines] = useState<Array<{ id: string; name: string }>>([]);
+  const {
+    busStops, busSearch, setBusSearch,
+    busSearchOpen, setBusSearchOpen,
+    busLoading, selectedBusStop, setSelectedBusStop,
+    busReturnTime, busReturnTimeLoading,
+    replaceError, setReplaceError,
+    reset: resetBus,
+  } = useBusCatalog({
+    bookingKind: form.booking_service_kind,
+    hotelId: form.hotel_id,
+    accessToken,
+    onDepartureTimeChange: (t) => setForm((prev) => ({ ...prev, departure_time: t })),
+  });
 
   useEffect(() => {
     let active = true;
@@ -333,105 +289,6 @@ export default function OpsNewBookingPage() {
     return () => { active = false; };
   }, []);
 
-  // Auto-fill prelievo hotel per SNAV/MEDMAR (calcolato inline per evitare forward-reference)
-  useEffect(() => {
-    const kind = form.booking_service_kind;
-    if (kind !== "formula_snav" && kind !== "formula_medmar_napoli" && kind !== "formula_medmar_pozzuoli") return;
-    const company = kind === "formula_snav" ? "snav" as const : "medmar" as const;
-    const hotel = hotels.find((h) => h.id === form.hotel_id);
-    const zona = normalizeZonaToPickup(hotel?.zone ?? null);
-    const rule = getDepartureRule(company, ferryDepTime);
-    const pickup = rule?.pickup_by_zona[zona] ?? null;
-    if (pickup) setForm((prev) => ({ ...prev, departure_time: pickup }));
-  }, [form.booking_service_kind, ferryDepTime, form.hotel_id, hotels]);
-
-  // Reset ferry dep time quando cambia il tipo servizio o la data di partenza
-  useEffect(() => {
-    const kind = form.booking_service_kind;
-    if (kind === "formula_snav") {
-      const available = buildFerryScheduleOptions(ferryScheduleRows, "ischia_to_mainland", form.departure_date, { company: "snav" }).map((option) => option.time);
-      if (!available.includes(ferryDepTime)) setFerryDepTime(available[0] ?? "07:10");
-    } else if (kind === "formula_medmar_napoli") {
-      const available = buildFerryScheduleOptions(ferryScheduleRows, "ischia_to_mainland", form.departure_date, { company: "medmar", arrivalPort: "napoli_beverello" }).map((option) => option.time);
-      if (!available.includes(ferryDepTime)) setFerryDepTime(available[0] ?? "06:25");
-    } else if (kind === "formula_medmar_pozzuoli") {
-      const available = buildFerryScheduleOptions(ferryScheduleRows, "ischia_to_mainland", form.departure_date, { company: "medmar", arrivalPort: "pozzuoli" }).map((option) => option.time);
-      if (!available.includes(ferryDepTime)) setFerryDepTime(available[0] ?? "06:20");
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.booking_service_kind, ferryScheduleRows, form.departure_date]);
-
-  // Reset arrival_time SNAV se non disponibile nella data selezionata
-  useEffect(() => {
-    const kind = form.booking_service_kind;
-    if (kind !== "formula_snav" && kind !== "formula_medmar_napoli" && kind !== "formula_medmar_pozzuoli") return;
-    const available = kind === "formula_snav"
-      ? buildFerryScheduleOptions(ferryScheduleRows, "mainland_to_ischia", form.arrival_date, { company: "snav" }).map((option) => option.time)
-      : kind === "formula_medmar_napoli"
-        ? buildFerryScheduleOptions(ferryScheduleRows, "mainland_to_ischia", form.arrival_date, { company: "medmar", departurePort: "napoli_beverello" }).map((option) => option.time)
-        : buildFerryScheduleOptions(ferryScheduleRows, "mainland_to_ischia", form.arrival_date, { company: "medmar", departurePort: "pozzuoli" }).map((option) => option.time);
-    if (!available.includes(form.arrival_time)) {
-      setForm((prev) => ({ ...prev, arrival_time: available[0] ?? "" }));
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.booking_service_kind, ferryScheduleRows, form.arrival_date]);
-
-  // Escursioni
-  useEffect(() => {
-    if (form.booking_service_kind !== "excursion" || !supabase || !tenantId) return;
-    if (excursionLines.length > 0) {
-      // Linee già caricate: assicura che il titolo sia impostato se vuoto (es. dopo reset form)
-      setForm((prev) => prev.excursion_title ? prev : { ...prev, excursion_title: excursionLines[0]?.name || "" });
-      return;
-    }
-    supabase.from("excursion_lines").select("id, name").eq("tenant_id", tenantId).eq("active", true).order("sort_order")
-      .then(({ data }) => {
-        if (data?.length) {
-          setExcursionLines(data as Array<{ id: string; name: string }>);
-          setForm((prev) => ({ ...prev, excursion_title: prev.excursion_title || data[0]?.name || "" }));
-        }
-      });
-  }, [form.booking_service_kind, tenantId, excursionLines]);
-
-  // Bus catalog
-  useEffect(() => {
-    if (form.booking_service_kind !== "bus_city_hotel" || !accessToken || busStops.length > 0) return;
-    setBusLoading(true);
-    fetch("/api/agency/bus-catalog", { headers: { Authorization: `Bearer ${accessToken}` } })
-      .then((r) => r.json())
-      .then((body: { stops?: BusCatalogStop[] }) => { setBusStops(body.stops ?? []); })
-      .catch(() => {})
-      .finally(() => setBusLoading(false));
-  }, [form.booking_service_kind, accessToken, busStops.length]);
-
-  // Per private_island: departure_date = arrival_date (stesso giorno)
-  useEffect(() => {
-    if (form.booking_service_kind === "private_island") {
-      setForm((prev) => prev.departure_date === prev.arrival_date ? prev : { ...prev, departure_date: prev.arrival_date });
-    }
-  }, [form.arrival_date, form.booking_service_kind]);
-
-  // Bus return pickup
-  useEffect(() => {
-    if (form.booking_service_kind !== "bus_city_hotel" || !selectedBusStop || !form.hotel_id || !accessToken) {
-      setBusReturnTime(null);
-      return;
-    }
-    const lineFamily = deriveBusLineFamily(selectedBusStop.lineCode);
-    setBusReturnTimeLoading(true);
-    fetch(`/api/agency/bus-return-time?hotel_id=${encodeURIComponent(form.hotel_id)}&line_family=${lineFamily}`, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    })
-      .then((r) => r.json())
-      .then((body: { pickup_time?: string | null }) => {
-        const t = body.pickup_time ?? null;
-        setBusReturnTime(t);
-        if (t) setForm((prev) => ({ ...prev, departure_time: t }));
-      })
-      .catch(() => { setBusReturnTime(null); })
-      .finally(() => setBusReturnTimeLoading(false));
-  }, [selectedBusStop, form.hotel_id, form.booking_service_kind, accessToken]);
-
   const createHotel = async () => {
     if (!supabase || !tenantId || !newHotelName.trim()) return;
     setSavingHotel(true);
@@ -464,146 +321,10 @@ export default function OpsNewBookingPage() {
     setNewAgencyName("");
   };
 
-  const selectedKind = form.booking_service_kind;
-  const isSnavKind = selectedKind === "formula_snav";
-  const isMedmarKind = selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli";
-  const isSnavMedmar = isSnavKind || isMedmarKind;
-  const snavMedmarCompany = isSnavKind ? "snav" : isMedmarKind ? "medmar" : null;
-  const snavArrivalOptions = useMemo(
-    () => buildFerryScheduleOptions(ferryScheduleRows, "mainland_to_ischia", form.arrival_date, { company: "snav" }),
-    [form.arrival_date, ferryScheduleRows]
-  );
-  const snavDepartureOptions = useMemo(
-    () => buildFerryScheduleOptions(ferryScheduleRows, "ischia_to_mainland", form.departure_date, { company: "snav" }),
-    [form.departure_date, ferryScheduleRows]
-  );
-  const medmarArrivalOptions = useMemo(
-    () => buildFerryScheduleOptions(
-      ferryScheduleRows,
-      "mainland_to_ischia",
-      form.arrival_date,
-      {
-        company: "medmar",
-        departurePort: selectedKind === "formula_medmar_napoli" ? "napoli_beverello" : "pozzuoli",
-      }
-    ),
-    [form.arrival_date, ferryScheduleRows, selectedKind]
-  );
-  const medmarDepartureOptions = useMemo(
-    () => buildFerryScheduleOptions(
-      ferryScheduleRows,
-      "ischia_to_mainland",
-      form.departure_date,
-      {
-        company: "medmar",
-        arrivalPort: selectedKind === "formula_medmar_napoli" ? "napoli_beverello" : "pozzuoli",
-      }
-    ),
-    [form.departure_date, ferryScheduleRows, selectedKind]
-  );
-  // Porto arrivo (da orario traghetto arrivo)
-  const portoArrivo = useMemo(() => {
-    if (!snavMedmarCompany) return null;
-    const activeArrivalOptions = isSnavKind ? snavArrivalOptions : isMedmarKind ? medmarArrivalOptions : [];
-    const porto = activeArrivalOptions.find((option) => option.time === form.arrival_time)?.porto ?? null;
-    return porto ? ferryPortLabel(porto) : null;
-  }, [
-    form.arrival_time,
-    isMedmarKind,
-    isSnavKind,
-    medmarArrivalOptions,
-    snavMedmarCompany,
-    snavArrivalOptions,
-  ]);
-
-  // Porto e prelievo partenza (da orario traghetto partenza + zona hotel)
-  const hotelZona = useMemo(() => {
-    const h = hotels.find((h) => h.id === form.hotel_id);
-    return normalizeZonaToPickup(h?.zone ?? null);
-  }, [hotels, form.hotel_id]);
-
-  const depRuleInfo = useMemo(() => {
-    if (!snavMedmarCompany) return null;
-    const activeDepartureOptions = isSnavKind ? snavDepartureOptions : isMedmarKind ? medmarDepartureOptions : [];
-    const rule = getDepartureRule(snavMedmarCompany, ferryDepTime);
-    if (!rule) return null;
-    const porto = activeDepartureOptions.find((option) => option.time === ferryDepTime)?.porto ?? rule.porto_ischia;
-    return {
-      porto: ferryPortLabel(porto),
-      pickup: rule.pickup_by_zona[hotelZona] ?? null,
-    };
-  }, [
-    ferryDepTime,
-    hotelZona,
-    isMedmarKind,
-    isSnavKind,
-    medmarDepartureOptions,
-    snavDepartureOptions,
-    snavMedmarCompany,
-  ]);
-
-  const isTransportCodeRequired = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_airport_hotel_aliscafo" || selectedKind === "transfer_train_hotel" || selectedKind === "transfer_train_hotel_aliscafo";
-  const isPhoneRequired = selectedKind !== "shuttle_hotel" && selectedKind !== "excursion";
-  const showTransportCodeField =
-    selectedKind === "transfer_airport_hotel" ||
-    selectedKind === "transfer_airport_hotel_exclusive" ||
-    selectedKind === "transfer_airport_hotel_aliscafo" ||
-    selectedKind === "transfer_train_hotel" ||
-    selectedKind === "transfer_train_hotel_exclusive" ||
-    selectedKind === "transfer_train_hotel_aliscafo";
-  const isBusOriginRequired = selectedKind === "bus_city_hotel";
-  const isExcursionTitleRequired = selectedKind === "excursion";
-  const isPrivateIsland = selectedKind === "private_island";
-  const isTransferHotelHotel = selectedKind === "transfer_hotel_hotel";
-  const showTripLeg = ["transfer_port_hotel", "transfer_hotel_hotel", "shuttle_hotel"].includes(selectedKind);
-  const isRoundTrip = tripLeg === "round_trip" && showTripLeg;
-  const showPickupTime = !isSnavMedmar && !isBusOriginRequired && !isPrivateIsland;
   const hasHotels = hotels.length > 0;
-
-  const normalizedPayload = useMemo(() => ({
-    ...form,
-    pax: Number(form.pax || "0"),
-    infant_count: Number(form.infant_count || "0"),
-    pet_count: Number(form.pet_count || "0"),
-    pet_notes: form.pet_notes.trim(),
-    notes: form.notes.trim(),
-    transport_code_return: form.transport_code_return.trim(),
-    agency_quoted_price_cents: form.quoted_price_eur
-      ? Math.round(Number(form.quoted_price_eur.replace(",", ".")) * 100)
-      : null,
-    trip_leg: showTripLeg ? tripLeg : undefined,
-  }), [form, showTripLeg, tripLeg]);
-
-  const parsedPreview = useMemo(() => agencyBookingCreateSchema.safeParse(normalizedPayload), [normalizedPayload]);
-  const isFormValid = parsedPreview.success && hasHotels;
-
+  const selectedKind = form.booking_service_kind;
   const serviceKindLabel = useMemo(() => kindOptions.find((item) => item.value === selectedKind)?.label ?? "Servizio", [selectedKind]);
   const contextLabels = useMemo(() => bookingContext(selectedKind), [selectedKind]);
-
-  const reviewWarnings = useMemo(() => {
-    const warnings: string[] = [];
-    if (isSnavKind) {
-      if (!form.customer_last_name.trim()) warnings.push("Inserisci il nome completo del cliente.");
-    } else {
-      if (!form.customer_first_name.trim() || !form.customer_last_name.trim()) warnings.push("Completa nome e cognome cliente.");
-    }
-    if (isPhoneRequired && !form.customer_phone.trim()) warnings.push("Inserisci un telefono cliente.");
-    const paxNum = Number(form.pax);
-    if (!form.pax || isNaN(paxNum) || paxNum < 1) warnings.push("Inserisci il numero di pax (min. 1).");
-    if (Number(form.pet_count || "0") > 0 && !form.pet_notes.trim()) warnings.push("Indica tipo/taglia animale nelle note animali.");
-    if (!form.hotel_id && !isPrivateIsland) warnings.push("Seleziona la struttura.");
-    if (!form.arrival_date) warnings.push(`${contextLabels.arrivalDateLabel.replace("*", "").trim()} mancante.`);
-    if (!form.arrival_time) warnings.push(`${contextLabels.arrivalTimeLabel.replace("*", "").trim()} mancante.`);
-    if (!form.departure_date) warnings.push(`${contextLabels.departureDateLabel.replace("*", "").trim()} mancante.`);
-    if (!form.departure_time) warnings.push(`${contextLabels.departureTimeLabel.replace("*", "").trim()} mancante.`);
-    if (isTransportCodeRequired && !form.transport_code.trim()) warnings.push(`${contextLabels.transportCodeLabel.replace("*", "")} mancante.`);
-    if (isTransportCodeRequired && contextLabels.transportCodeReturnLabel && !form.transport_code_return.trim()) warnings.push(`${contextLabels.transportCodeReturnLabel.replace("*", "")} mancante.`);
-    if (isBusOriginRequired && !form.bus_city_origin.trim()) warnings.push("Città di partenza bus mancante.");
-    if (isExcursionTitleRequired && !form.excursion_title.trim()) warnings.push("Nome escursione mancante.");
-    if (isExcursionTitleRequired && !form.excursion_departure_port) warnings.push("Seleziona il porto di partenza.");
-    if (isExcursionTitleRequired && !form.excursion_pickup_port) warnings.push("Seleziona il porto di prelevamento.");
-    return warnings;
-  }, [contextLabels.arrivalDateLabel, contextLabels.arrivalTimeLabel, contextLabels.departureDateLabel, contextLabels.departureTimeLabel, contextLabels.transportCodeLabel, contextLabels.transportCodeReturnLabel, form.arrival_date, form.arrival_time, form.bus_city_origin, form.customer_first_name, form.customer_last_name, form.customer_phone, form.departure_date, form.departure_time, form.excursion_departure_port, form.excursion_pickup_port, form.excursion_title, form.hotel_id, form.pax, form.pet_count, form.pet_notes, form.transport_code, form.transport_code_return, isBusOriginRequired, isExcursionTitleRequired, isPhoneRequired, isPrivateIsland, isSnavKind, isTransportCodeRequired]);
 
   const doSubmit = async () => {
     if (!accessToken) { setMessage("Sessione non valida. Rifai login."); return; }
@@ -621,7 +342,6 @@ export default function OpsNewBookingPage() {
     setFieldErrors({});
     setSubmitting(true);
 
-    // Per SNAV/MEDMAR passa porto arrivo come meeting_point e ferry_dep_time
     const extraFields = isSnavMedmar ? {
       meeting_point: portoArrivo ?? undefined,
       ferry_dep_time: ferryDepTime,
@@ -648,27 +368,11 @@ export default function OpsNewBookingPage() {
       ? `Prenotazione A/R creata (${serviceKindLabel}). Andata: ${body.id} · Ritorno: ${body.id_return ?? "—"}`
       : `Prenotazione creata (${serviceKindLabel}). ID: ${body.id}`);
 
-    // Reset form
-    const firstHotelId = hotels[0]?.id ?? "";
-    setTripLeg("outbound_only");
-    setForm({
-      customer_first_name: "", customer_last_name: "", customer_phone: "",
-      pax: "2", infant_count: "0", pet_count: "0", pet_notes: "", hotel_id: firstHotelId, hotel_dest_id: "",
-      booking_service_kind: "transfer_port_hotel",
-      arrival_date: todayIsoDate(), arrival_time: "12:00",
-      departure_date: todayIsoDate(), departure_time: "18:00",
-      transport_code: "", transport_code_return: "",
-      bus_city_origin: "", excursion_title: "",
-      excursion_departure_port: "", excursion_pickup_port: "",
-      pickup_time_outbound: "", pickup_time_return: "",
-      notes: "", agency_id: "", quoted_price_eur: ""
-    });
-    setFieldErrors({});
-    setBusSearch(""); setSelectedBusStop(null); setBusReturnTime(null);
+    resetForm(hotels[0]?.id ?? "");
+    resetBus();
   };
 
   const submit = async (force = false) => {
-    // Blocco duro: evidenzia campi obbligatori mancanti
     if (reviewWarnings.length > 0) {
       const errs: Record<string, string> = {};
       if (isSnavKind) {
@@ -699,7 +403,6 @@ export default function OpsNewBookingPage() {
     const parsed = agencyBookingCreateSchema.safeParse(normalizedPayload);
     if (!parsed.success) { await doSubmit(); return; }
 
-    // Check duplicati
     if (!force && accessToken) {
       const customerName = isSnavKind
         ? form.customer_last_name.trim()
@@ -773,7 +476,7 @@ export default function OpsNewBookingPage() {
                 arrival_time: kind === "formula_snav" ? (snavArrivalOptions[0]?.time ?? prev.arrival_time) : kind === "formula_medmar_napoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "mainland_to_ischia", prev.arrival_date, { company: "medmar", departurePort: "napoli_beverello" })[0]?.time ?? prev.arrival_time) : kind === "formula_medmar_pozzuoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "mainland_to_ischia", prev.arrival_date, { company: "medmar", departurePort: "pozzuoli" })[0]?.time ?? prev.arrival_time) : prev.arrival_time,
                 departure_time: kind === "formula_snav" ? (snavDepartureOptions[0]?.time ?? prev.departure_time) : kind === "formula_medmar_napoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "ischia_to_mainland", prev.departure_date, { company: "medmar", arrivalPort: "napoli_beverello" })[0]?.time ?? prev.departure_time) : kind === "formula_medmar_pozzuoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "ischia_to_mainland", prev.departure_date, { company: "medmar", arrivalPort: "pozzuoli" })[0]?.time ?? prev.departure_time) : prev.departure_time
               }));
-              if (kind !== "bus_city_hotel") { setBusSearch(""); setSelectedBusStop(null); }
+              if (kind !== "bus_city_hotel") resetBus();
             }}
           >
             {kindOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}

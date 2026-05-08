@@ -210,6 +210,7 @@ export interface AgencyConfirmedInput {
   notes: string;
   priceCents: number;
   operatorNotes: string | null;
+  confirmUrl?: string | null;
 }
 
 export async function sendAgencyConfirmedEmail(input: AgencyConfirmedInput): Promise<EmailResult> {
@@ -242,6 +243,8 @@ export async function sendAgencyConfirmedEmail(input: AgencyConfirmedInput): Pro
 
     ${operatorNotes ? `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;margin-top:16px;"><div style="font-size:12px;font-weight:700;color:#166534;text-transform:uppercase;margin-bottom:4px;">Note operative</div><div style="font-size:14px;color:#15803d;">${operatorNotes}</div></div>` : ""}
 
+    ${input.confirmUrl ? emailButton("✅ Conferma ricezione", input.confirmUrl, "#16a34a") : ""}
+
     <p style="color:#475569;margin-top:24px;">Grazie per aver scelto Ischia Transfer Service!</p>
   `, { title: "Prenotazione confermata", preheader: `Confermato: ${serviceLabelShort} — ${priceFormatted}` });
 
@@ -254,6 +257,7 @@ export async function sendAgencyConfirmedEmail(input: AgencyConfirmedInput): Pro
     `Passeggeri: ${input.pax}`,
     operatorNotes ? `Note operative: ${operatorNotes}` : null,
     `Prezzo: ${priceFormatted}`,
+    input.confirmUrl ? `\nConferma ricezione: ${input.confirmUrl}` : null,
     `Grazie per aver scelto Ischia Transfer Service!`
   ].filter(Boolean).join("\n");
 
