@@ -41,6 +41,9 @@ export async function POST(request: NextRequest) {
   if (!pdf_base64 || typeof pdf_base64 !== "string") {
     return NextResponse.json({ ok: false, error: "pdf_base64 mancante." }, { status: 400 });
   }
+  if (pdf_base64.length > 14_000_000) {
+    return NextResponse.json({ ok: false, error: "PDF troppo grande (max ~10 MB)." }, { status: 413 });
+  }
 
   try {
     const result = await extractWithHaiku(pdf_base64, email_body, email_subject);

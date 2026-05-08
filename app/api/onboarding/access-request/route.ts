@@ -6,8 +6,7 @@ export const runtime = "nodejs";
 
 const requestAccessSchema = z.object({
   full_name: z.string().min(2).max(120).trim(),
-  requested_role: z.enum(["operator", "driver", "agency"]).optional(),
-  tenant_id: z.string().uuid().optional()
+  requested_role: z.enum(["operator", "driver", "agency"]).optional()
 });
 
 function createAdminClient() {
@@ -35,7 +34,7 @@ export async function POST(request: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Payload non valido." }, { status: 400 });
   }
-  const { full_name, requested_role, tenant_id: explicitTenantId } = parsed.data;
+  const { full_name, requested_role } = parsed.data;
 
   // Check no existing active membership
   const { data: existingMembership } = await admin
@@ -51,22 +50,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Hai già un accesso attivo per questo tenant." }, { status: 409 });
   }
 
-  // Resolve tenant: use explicit ID, or find the first active tenant
-  let tenantId = explicitTenantId;
+  // Resolve tenant: always use the first active tenant (explicit tenant_id not accepted from clients)
+  let tenantId: string | undefined;
   let tenantName: string | null = null;
-  if (!tenantId) {
-    const { data: tenants } = await admin
-      .from("tenants")
-      .select("id, name")
-      .order("created_at", { ascending: true })
-      .limit(1);
-    const firstTenant = (tenants ?? []) as Array<{ id: string; name: string }>;
-    tenantId = firstTenant[0]?.id;
-    tenantName = firstTenant[0]?.name ?? null;
-  } else {
-    const { data: tenantRow } = await admin.from("tenants").select("name").eq("id", tenantId).maybeSingle();
-    tenantName = (tenantRow as { name?: string } | null)?.name ?? null;
-  }
+  const { data: tenants } = await admin
+    .from("tenants")
+    .select("id, name")
+    .order("created_at", { ascending: true })
+    .limit(1);
+  const firstTenant = (tenants ?? []) as Array<{ id: string; name: string }>;
+  tenantId = firstTenant[0]?.id;
+  tenantName = firstTenant[0]?.name ?? null;
 
   if (!tenantId) {
     return NextResponse.json({ error: "Nessun tenant trovato. Contatta l'amministratore." }, { status: 404 });

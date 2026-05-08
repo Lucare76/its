@@ -431,7 +431,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     };
 
     void refreshWhatsAppSummary();
-    const interval = window.setInterval(refreshWhatsAppSummary, 12_000);
+    const interval = window.setInterval(refreshWhatsAppSummary, 30_000);
     return () => {
       isActive = false;
       window.clearInterval(interval);
