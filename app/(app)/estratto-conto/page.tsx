@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { DateInput } from "@/components/ui";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 
 // ─── Tipi ────────────────────────────────────────────────────────────────────
@@ -54,11 +54,7 @@ const CADENCE_LABELS: Record<string, string> = {
 
 const DAY_LABELS = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"];
 
-async function getToken() {
-  if (!supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
+
 
 // ─── Componente ─────────────────────────────────────────────────────────────
 

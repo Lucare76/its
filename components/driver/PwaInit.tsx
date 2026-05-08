@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 /**
  * PwaInit — registrazione Service Worker, install prompt PWA e iscrizione push.

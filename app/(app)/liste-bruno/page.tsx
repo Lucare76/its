@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
 import { DateInput, PageHeader } from "@/components/ui";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 
 // ── Tipi ─────────────────────────────────────────────────────────────────────
 
@@ -29,11 +29,6 @@ type BrunoService = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function getToken() {
-  if (!hasSupabaseEnv || !supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
 
 function fmtDate(iso: string) {
   return new Date(iso + "T12:00:00").toLocaleDateString("it-IT", {

@@ -1,17 +1,12 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DateInput, PageHeader } from "@/components/ui";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 import type { ContinentDispatchService } from "@/lib/server/continent-dispatch";
 
 const TARGET_LABEL = "Smistamento continente";
 
-async function getToken() {
-  if (!hasSupabaseEnv || !supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
 
 function PlaceBadge({ service }: { service: ContinentDispatchService }) {
   return service.place_type === "airport"

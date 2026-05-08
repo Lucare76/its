@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase/client";
+import { supabase, getToken} from "@/lib/supabase/client";
 import {
   ROUTE_LABELS,
   formatEur,
@@ -11,11 +11,7 @@ import {
 import type { MedmarArStats } from "@/app/api/medmar-ar/stats/route";
 import type { InsightsResponse } from "@/app/api/medmar-ar/insights/route";
 
-async function getToken() {
-  if (!supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
+
 
 async function apiFetch<T>(path: string, token: string): Promise<T | null> {
   const res = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });

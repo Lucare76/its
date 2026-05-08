@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { FormEvent, useEffect, useState } from "react";
 import { PageHeader } from "@/components/ui";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 
 type TenantProfile = {
   id: string;
@@ -20,11 +20,7 @@ const EMPTY: TenantProfile = {
   vat_number: "", contact_email: "", contact_phone: "", website_url: "",
 };
 
-async function getToken() {
-  if (!supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
+
 
 export default function TenantSettingsPage() {
   const [form, setForm]       = useState<TenantProfile>(EMPTY);

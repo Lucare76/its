@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { normalizeText } from "@/lib/utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,14 +47,6 @@ type DriverServiceRow = {
   departure_time: string | null;
 };
 
-function normalizeText(value: string | null | undefined) {
-  return String(value ?? "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
 
 function isFerryFormulaLikeService(service: Pick<DriverServiceRow, "booking_service_kind" | "vessel">) {
   const kind = service.booking_service_kind ?? "";

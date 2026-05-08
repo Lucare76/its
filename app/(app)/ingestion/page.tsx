@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader, SectionCard } from "@/components/ui";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 
 /* ------------------------------------------------------------------ types */
 
@@ -24,11 +24,6 @@ type InboundEmail = {
 
 /* ------------------------------------------------------------------ helpers */
 
-async function getToken() {
-  if (!hasSupabaseEnv || !supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
 
 const STATUS_CONFIG: Record<string, { label: string; bg: string; color: string; border: string }> = {
   needs_review: { label: "Da revisionare", bg: "#fffbeb", color: "#92400e", border: "#fde68a" },

@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader, SectionCard, SidePanel } from "@/components/ui";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 
 type StatusLevel = "expired" | "critical" | "warning" | "missing" | "ok";
 
@@ -100,11 +100,6 @@ function formatDays(days: number | null): string {
   return `${days}gg`;
 }
 
-async function getToken(): Promise<string | null> {
-  if (!hasSupabaseEnv || !supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
 
 type DocType = "all" | "insurance" | "inspection" | "extinguisher" | "tachograph";
 type StatusFilter = "all" | "expired" | "critical" | "warning" | "ok";

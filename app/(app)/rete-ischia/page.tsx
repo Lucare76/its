@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DateInput, PageHeader } from "@/components/ui";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 import { getPickupRule, getPickupRuleByRange, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 
 // ── Tipi ─────────────────────────────────────────────────────────────────────
@@ -89,11 +89,6 @@ type RoutingRule = { id: string; port: string; direction: string; label: string;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function getToken() {
-  if (!hasSupabaseEnv || !supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
 
 const STATUS_LABELS: Record<string, string> = {
   pending: "Da assegnare", assigned: "Assegnato",

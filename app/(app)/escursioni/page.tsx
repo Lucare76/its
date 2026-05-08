@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
 import { DateInput, PageHeader } from "@/components/ui";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 
 // ── Tipi ─────────────────────────────────────────────────────────────────────
 
@@ -40,11 +40,6 @@ function fmtPrice(cents: number) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function getToken() {
-  if (!hasSupabaseEnv || !supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
 
 async function downloadExcel(date: string) {
   const token = await getToken();

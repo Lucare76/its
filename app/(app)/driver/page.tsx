@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { ServiceStatus } from "@/lib/types";
-import { supabase } from "@/lib/supabase/client";
+import { supabase, getToken } from "@/lib/supabase/client";
+import { normalizeText } from "@/lib/utils";
 import { usePwa } from "@/components/driver/PwaInit";
 import { DriverSign } from "@/components/driver/DriverSign";
 import type { FerryScheduleRow } from "@/lib/ferry-schedule-options";
@@ -66,14 +67,6 @@ function FerryIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
   );
 }
 
-function normalizeText(value: string | null | undefined) {
-  return String(value ?? "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
 
 function statusColor(status: ServiceStatus) {
   switch (status) {
@@ -277,12 +270,6 @@ function WhatsAppIcon({ className = "h-4 w-4" }: { className?: string }) {
       <path d="M19.05 4.94A9.84 9.84 0 0 0 12.03 2C6.56 2 2.1 6.45 2.1 11.92c0 1.75.46 3.46 1.33 4.97L2 22l5.24-1.37a9.91 9.91 0 0 0 4.77 1.22h.01c5.47 0 9.93-4.45 9.93-9.92a9.84 9.84 0 0 0-2.9-6.99Zm-7.03 15.23h-.01a8.23 8.23 0 0 1-4.18-1.14l-.3-.18-3.11.81.83-3.03-.2-.31a8.18 8.18 0 0 1-1.26-4.39c0-4.52 3.69-8.21 8.23-8.21 2.2 0 4.26.86 5.82 2.41a8.14 8.14 0 0 1 2.41 5.81c0 4.53-3.69 8.22-8.23 8.22Zm4.5-6.13c-.25-.12-1.48-.73-1.71-.82-.23-.08-.39-.12-.56.12-.16.25-.64.82-.78.98-.14.17-.28.19-.53.06-.25-.12-1.05-.38-1.99-1.22-.74-.65-1.23-1.45-1.37-1.69-.14-.25-.02-.38.11-.5.11-.11.25-.28.37-.42.12-.14.16-.25.25-.41.08-.17.04-.31-.02-.44-.06-.12-.56-1.35-.77-1.85-.2-.47-.4-.41-.56-.41h-.47c-.17 0-.44.06-.67.31-.23.25-.88.86-.88 2.11s.9 2.45 1.02 2.62c.13.16 1.75 2.66 4.23 3.73.59.26 1.05.41 1.41.52.59.19 1.12.16 1.54.1.47-.07 1.48-.6 1.69-1.18.21-.58.21-1.08.15-1.18-.06-.1-.22-.17-.47-.29Z" />
     </svg>
   );
-}
-
-async function getToken(): Promise<string | null> {
-  if (!supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
 }
 
 /* ------------------------------------------------------------------ disposizione helpers */

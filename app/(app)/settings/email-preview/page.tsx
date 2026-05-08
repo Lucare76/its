@@ -1,7 +1,7 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase/client";
+import { supabase, getToken} from "@/lib/supabase/client";
 
 const TEMPLATES = [
   { key: "quote",    label: "Preventivo cliente",       desc: "Email preventivo con accetta/rifiuta e riepilogo viaggio" },
@@ -14,10 +14,6 @@ const TEMPLATES = [
   { key: "reminder", label: "Reminder servizi",         desc: "Email riepilogo servizi imminenti inviata alle agenzie" },
 ];
 
-async function getToken() {
-  const { data: { session } } = await supabase!.auth.getSession();
-  return session?.access_token ?? null;
-}
 
 export default function EmailPreviewPage() {
   const [active, setActive] = useState("quote");

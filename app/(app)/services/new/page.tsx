@@ -12,6 +12,7 @@ import {
 } from "@/lib/ferry-schedule-options";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { todayIsoDate } from "@/lib/utils";
 import { agencyBookingCreateSchema } from "@/lib/validation";
 import {
   getDepartureRule, normalizeZonaToPickup,
@@ -71,10 +72,6 @@ const kindOptions: Array<{ value: BookingKind; label: string }> = [
 ];
 
 // Orari traghetti: ora derivati da snav-medmar-lookup.ts
-
-function todayIsoDate() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function isSunday(dateStr: string): boolean {
   if (!dateStr) return false;

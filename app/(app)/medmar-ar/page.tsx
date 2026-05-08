@@ -1,9 +1,9 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui";
 import { DateInput } from "@/components/ui";
-import { supabase } from "@/lib/supabase/client";
+import { supabase, getToken} from "@/lib/supabase/client";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell,
@@ -127,11 +127,7 @@ function getMedmarScheduleOptionsForRoute(
   return Array.from(new Set(options.map((option) => option.time)));
 }
 
-async function getToken(): Promise<string | null> {
-  if (!supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
+
 
 async function api<T>(
   path: string,

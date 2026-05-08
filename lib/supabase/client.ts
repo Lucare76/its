@@ -14,3 +14,9 @@ export const hasSupabaseEnv = !forceE2ESmokeAuthFallback && Boolean(supabaseUrl 
 export const supabase = hasSupabaseEnv
   ? createClient(supabaseUrl as string, supabaseAnonKey as string)
   : null;
+
+export async function getToken(): Promise<string | null> {
+  if (!supabase) return null;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
+}

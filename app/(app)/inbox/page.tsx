@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -6,7 +6,7 @@ import { DateInput } from "@/components/ui";
 import { PdfAdvancedReview } from "@/components/pdf/PdfAdvancedReview";
 import { getInboxPdfParsingSignal } from "@/lib/pdf/parser";
 import type { PdfImportDetail } from "@/lib/server/pdf-imports";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 import { ensureSupabaseClientReady, getClientSessionContext } from "@/lib/supabase/client-session";
 import type { Hotel, InboundEmail, Membership, Service } from "@/lib/types";
 
@@ -60,11 +60,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
   catch { return false; }
 }
 
-async function getToken(): Promise<string | null> {
-  if (!supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
+
 
 async function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

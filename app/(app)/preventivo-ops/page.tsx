@@ -1,9 +1,9 @@
-"use client";
+﻿"use client";
 
 import { FormEvent, useEffect, useEffectEvent, useMemo, useState } from "react";
 import { PageHeader, SectionCard } from "@/components/ui";
 import { BUS_LINES_2026 } from "@/lib/bus-lines-catalog";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 
 type Quote = {
   id: string;
@@ -94,11 +94,6 @@ function isDispoQuote(serviceKind: string) {
   return serviceKind === "Disposizione H24";
 }
 
-async function getToken() {
-  if (!hasSupabaseEnv || !supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
 
 async function apiCall(token: string, body: Record<string, unknown>) {
   const res = await fetch("/api/ops/quotes", {

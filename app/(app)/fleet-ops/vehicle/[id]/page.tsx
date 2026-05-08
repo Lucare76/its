@@ -1,7 +1,7 @@
 "use client";
 
 import { use, useCallback, useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase/client";
+import { supabase, getToken } from "@/lib/supabase/client";
 import Link from "next/link";
 import { DateInput } from "@/components/ui";
 
@@ -77,11 +77,6 @@ const COST_TYPE_LABELS: Record<string, string> = {
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
 
-async function getToken() {
-  if (!supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
 
 /* ─── Pagina ─────────────────────────────────────────────────────────────── */
 
@@ -203,7 +198,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     const data = await res.json();
     setRecords(data.records ?? []);
     setLoading(false);
-  }, [loadCosts, vehicleId, tab]);
+  }, [loadCosts, loadDocs, vehicleId, tab]);
 
   // Carica nome veicolo + dati libretto + impostazioni compliance
   useEffect(() => {

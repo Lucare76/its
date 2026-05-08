@@ -1,7 +1,7 @@
-"use client";
+﻿"use client";
 
 import { useRef, useState } from "react";
-import { supabase } from "@/lib/supabase/client";
+import { supabase, getToken} from "@/lib/supabase/client";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -48,11 +48,7 @@ const AGENCY_LABELS: Record<string, string> = {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-async function getToken(): Promise<string | null> {
-  if (!supabase) return null;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
+
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
