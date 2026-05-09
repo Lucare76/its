@@ -30,9 +30,11 @@ export async function GET(request: NextRequest) {
   const googleVisionOutputBucket = process.env.GOOGLE_CLOUD_VISION_OUTPUT_BUCKET;
   const cronSecret = process.env.CRON_SECRET;
   const whatsappAccessToken = process.env.WHATSAPP_ACCESS_TOKEN;
-  const whatsappToken = process.env.WHATSAPP_TOKEN;
   const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   const whatsappVerifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+  const whatsappBusinessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+  const whatsappAppSecret = process.env.WHATSAPP_APP_SECRET;
+  const whatsappGraphApiVersion = process.env.WHATSAPP_GRAPH_API_VERSION;
   const whatsappReminderWindow = process.env.WHATSAPP_REMINDER_WINDOW_MINUTES;
   const whatsappReminder2hEnabled = process.env.WHATSAPP_REMINDER_2H_ENABLED;
   const whatsappTemplateLanguage = process.env.WHATSAPP_TEMPLATE_LANGUAGE;
@@ -61,9 +63,11 @@ export async function GET(request: NextRequest) {
     GOOGLE_CLOUD_VISION_OUTPUT_BUCKET: Boolean(googleVisionOutputBucket),
     CRON_SECRET: Boolean(cronSecret),
     WHATSAPP_ACCESS_TOKEN: Boolean(whatsappAccessToken),
-    WHATSAPP_TOKEN: Boolean(whatsappToken),
     WHATSAPP_PHONE_NUMBER_ID: Boolean(whatsappPhoneNumberId),
     WHATSAPP_VERIFY_TOKEN: Boolean(whatsappVerifyToken),
+    WHATSAPP_BUSINESS_ACCOUNT_ID: Boolean(whatsappBusinessAccountId),
+    WHATSAPP_APP_SECRET: Boolean(whatsappAppSecret),
+    WHATSAPP_GRAPH_API_VERSION: Boolean(whatsappGraphApiVersion),
     WHATSAPP_REMINDER_WINDOW_MINUTES: Boolean(whatsappReminderWindow),
     WHATSAPP_REMINDER_2H_ENABLED: Boolean(whatsappReminder2hEnabled),
     WHATSAPP_TEMPLATE_LANGUAGE: Boolean(whatsappTemplateLanguage),
