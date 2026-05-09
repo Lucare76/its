@@ -143,17 +143,39 @@ export async function POST(req: NextRequest) {
       if (profileResult.data.active === false) {
         return NextResponse.json({ ok: false, error: "Autista disattivato." }, { status: 409 });
       }
-      const { error } = await auth.admin.from("driver_daily_availability").upsert({
-        tenant_id: tenantId,
-        driver_profile_id: d.driver_profile_id,
+      const payload = {
         driver_user_id: profileResult.data.user_id ?? null,
-        date: d.date,
         available: d.available,
         available_from: d.available_from ?? null,
         available_to: d.available_to ?? null,
         notes: d.notes ?? null,
         updated_at: new Date().toISOString(),
-      }, { onConflict: "tenant_id,driver_profile_id,date" });
+      };
+      const existing = await auth.admin
+        .from("driver_daily_availability")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("driver_profile_id", d.driver_profile_id)
+        .eq("date", d.date);
+      if (existing.error) return NextResponse.json({ ok: false, error: existing.error.message }, { status: 500 });
+
+      if ((existing.data ?? []).length > 0) {
+        const { error } = await auth.admin
+          .from("driver_daily_availability")
+          .update(payload)
+          .eq("tenant_id", tenantId)
+          .eq("driver_profile_id", d.driver_profile_id)
+          .eq("date", d.date);
+        if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+        return NextResponse.json({ ok: true });
+      }
+
+      const { error } = await auth.admin.from("driver_daily_availability").insert({
+        tenant_id: tenantId,
+        driver_profile_id: d.driver_profile_id,
+        date: d.date,
+        ...payload,
+      });
       if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
       return NextResponse.json({ ok: true });
     }
