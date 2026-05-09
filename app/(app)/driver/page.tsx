@@ -823,11 +823,14 @@ function DriverPageInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedIsDisposizione, focusedIsRunning, focused?.service.id, userId]);
 
-  if (loading) return <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">Caricamento...</div>;
+  if (loading) return <div className="flex min-h-[100svh] items-center justify-center text-sm text-slate-500">Caricamento...</div>;
   if (errorMessage) return <div className="p-4 text-sm text-rose-600">{errorMessage}</div>;
 
   return (
-    <div className="mx-auto max-w-lg space-y-4 px-2 pb-10 pt-4">
+    <div
+      className="mx-auto min-h-[100svh] max-w-lg space-y-4 px-2 pt-4"
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 2.5rem)" }}
+    >
       {/* Cartello digitale — overlay fullscreen */}
       {showSign && focused && (
         <DriverSign
@@ -1120,23 +1123,23 @@ function DriverPageInner() {
                 })}
               </div>
             )}
-            <div className="flex gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               {customerPhone && (
-                <a href={`tel:${customerPhone}`} className="flex-1 rounded-2xl border-2 border-slate-200 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                <a href={`tel:${customerPhone}`} className="rounded-2xl border-2 border-slate-200 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">
                   📞 Chiama
                 </a>
               )}
               {focusedWhatsappUrl && (
                 <a href={focusedWhatsappUrl}
                   target="_blank" rel="noreferrer"
-                  className="flex-1 rounded-2xl border-2 border-green-200 bg-green-50 py-3 text-center text-sm font-semibold text-green-700 hover:bg-green-100">
+                  className="rounded-2xl border-2 border-green-200 bg-green-50 py-3 text-center text-sm font-semibold text-green-700 hover:bg-green-100">
                   <span className="inline-flex items-center justify-center gap-2">
                     <WhatsAppIcon className="h-4 w-4" />
                     WhatsApp
                   </span>
                 </a>
               )}
-              <a href={navigationUrl} target="_blank" rel="noreferrer" className="flex-1 rounded-2xl border-2 border-slate-200 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">
+              <a href={navigationUrl} target="_blank" rel="noreferrer" className="rounded-2xl border-2 border-slate-200 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">
                 🗺 Naviga
               </a>
             </div>
@@ -1504,7 +1507,10 @@ function DriverPageInner() {
 
       {/* Toast */}
       {message && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-xl z-50">
+        <div
+          className="fixed left-1/2 z-50 -translate-x-1/2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-xl"
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 1.5rem)" }}
+        >
           {message}
         </div>
       )}

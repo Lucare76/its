@@ -125,7 +125,10 @@ export default function DriverDetailPage() {
   if (!service && !scanData && !loading) return <div className="card p-4 text-sm text-muted">Servizio non trovato.</div>;
   if (!isMine) {
     return (
-      <section className="mx-auto max-w-lg space-y-4 p-4">
+      <section
+        className="mx-auto max-w-lg space-y-4 p-4"
+        style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)" }}
+      >
         <div className="rounded-2xl border-2 border-rose-500 bg-rose-50 p-6 text-center shadow-lg">
           <div className="mb-3 text-5xl">🚫</div>
           <h1 className="text-2xl font-black text-rose-700">IMBARCO VIETATO</h1>
@@ -162,7 +165,10 @@ export default function DriverDetailPage() {
   const callHref = customerPhone ? `tel:${customerPhone}` : "";
 
   return (
-    <section className="mx-auto max-w-lg space-y-4">
+    <section
+      className="mx-auto max-w-lg space-y-4 px-3 pt-3"
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.5rem)" }}
+    >
       <Link href="/driver" className="text-sm text-primary underline">
         Torna ai miei servizi
       </Link>
@@ -223,13 +229,13 @@ export default function DriverDetailPage() {
             </div>
           )}
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {callHref ? (
-            <a href={callHref} className="btn-secondary inline-flex w-fit">
+            <a href={callHref} className="btn-secondary inline-flex w-full justify-center">
               Chiama cliente
             </a>
           ) : null}
-          <a href={navigationUrl} target="_blank" rel="noreferrer" className="btn-secondary inline-flex w-fit">
+          <a href={navigationUrl} target="_blank" rel="noreferrer" className="btn-secondary inline-flex w-full justify-center">
             Apri navigazione
           </a>
         </div>
