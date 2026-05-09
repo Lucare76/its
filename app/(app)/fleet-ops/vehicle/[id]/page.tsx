@@ -1096,23 +1096,6 @@ function DocDownloadButton({ path, signedUrl, downloadError }: { path: string; s
   );
 }
 
-function LibrettoDownloadButton({ path }: { path: string }) {
-  const handleDownload = async () => {
-    if (!supabase) return;
-    const { data } = await supabase.storage.from("vehicle-documents").createSignedUrl(path, 60);
-    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
-  };
-  return (
-    <button
-      type="button"
-      onClick={() => void handleDownload()}
-      className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
-    >
-      Apri
-    </button>
-  );
-}
-
 function LibrettoSlot({
   label,
   path,
@@ -1128,23 +1111,67 @@ function LibrettoSlot({
   onUpload: (file: File) => void;
   onDelete: () => void;
 }) {
+  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+  const [loadingView, setLoadingView] = useState(false);
+
+  const handleView = async () => {
+    if (!supabase || !path) return;
+    setLoadingView(true);
+    const { data } = await supabase.storage.from("vehicle-documents").createSignedUrl(path, 600);
+    setLoadingView(false);
+    if (data?.signedUrl) setViewerUrl(data.signedUrl);
+  };
+
+  const isImage = path ? /\.(jpg|jpeg|png|webp|gif|heic)$/i.test(path) : false;
+
   return (
-    <div className="rounded-lg border border-slate-200 p-3">
-      <div className="text-xs font-bold text-slate-500 mb-2">{label}</div>
-      {path ? (
-        <div className="flex flex-col gap-2">
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
-            <div className="text-sm font-semibold text-emerald-800">Documento presente</div>
-            {uploadedAt && (
-              <div className="text-xs text-emerald-600 mt-0.5">
-                Caricato il {new Date(uploadedAt).toLocaleDateString("it-IT")}
-              </div>
-            )}
+    <>
+      <div className="rounded-lg border border-slate-200 p-3">
+        <div className="text-xs font-bold text-slate-500 mb-2">{label}</div>
+        {path ? (
+          <div className="flex flex-col gap-2">
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+              <div className="text-sm font-semibold text-emerald-800">Documento presente</div>
+              {uploadedAt && (
+                <div className="text-xs text-emerald-600 mt-0.5">
+                  Caricato il {new Date(uploadedAt).toLocaleDateString("it-IT")}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={loadingView}
+                onClick={() => void handleView()}
+                className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+              >
+                {loadingView ? "..." : "Visualizza"}
+              </button>
+              <label className={`cursor-pointer rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 ${uploading ? "opacity-50 cursor-not-allowed" : "hover:bg-slate-50"}`}>
+                {uploading ? "Caricamento..." : "Sostituisci"}
+                <input
+                  type="file"
+                  accept="application/pdf,image/*"
+                  className="hidden"
+                  disabled={uploading}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = ""; }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={onDelete}
+                className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+              >
+                Rimuovi
+              </button>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <LibrettoDownloadButton path={path} />
-            <label className={`cursor-pointer rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 ${uploading ? "opacity-50 cursor-not-allowed" : "hover:bg-slate-50"}`}>
-              {uploading ? "Caricamento..." : "Sostituisci"}
+        ) : (
+          <div className="rounded-lg border-2 border-dashed border-slate-200 p-6 text-center">
+            <div className="text-2xl mb-1">📄</div>
+            <div className="text-xs text-slate-400 mb-3">Nessun documento</div>
+            <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-semibold text-white ${uploading ? "bg-slate-300 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700"}`}>
+              {uploading ? "Caricamento..." : "Seleziona"}
               <input
                 type="file"
                 accept="application/pdf,image/*"
@@ -1153,31 +1180,45 @@ function LibrettoSlot({
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = ""; }}
               />
             </label>
+          </div>
+        )}
+      </div>
+
+      {/* Overlay visualizzatore */}
+      {viewerUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex flex-col"
+          onClick={() => setViewerUrl(null)}
+        >
+          <div className="flex items-center justify-between px-4 py-3 shrink-0">
+            <span className="text-white text-sm font-semibold">Libretto — {label}</span>
             <button
               type="button"
-              onClick={onDelete}
-              className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+              onClick={(e) => { e.stopPropagation(); setViewerUrl(null); }}
+              className="rounded-lg bg-white/10 hover:bg-white/20 text-white px-4 py-2 text-sm font-semibold"
             >
-              Rimuovi
+              ✕ Chiudi
             </button>
           </div>
-        </div>
-      ) : (
-        <div className="rounded-lg border-2 border-dashed border-slate-200 p-6 text-center">
-          <div className="text-2xl mb-1">📄</div>
-          <div className="text-xs text-slate-400 mb-3">Nessun documento</div>
-          <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-semibold text-white ${uploading ? "bg-slate-300 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700"}`}>
-            {uploading ? "Caricamento..." : "Seleziona"}
-            <input
-              type="file"
-              accept="application/pdf,image/*"
-              className="hidden"
-              disabled={uploading}
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = ""; }}
-            />
-          </label>
+          <div className="flex-1 overflow-auto" onClick={(e) => e.stopPropagation()}>
+            {isImage ? (
+              <img
+                src={viewerUrl}
+                alt={label}
+                className="max-w-full object-contain mx-auto block"
+                style={{ maxHeight: "calc(100vh - 60px)" }}
+              />
+            ) : (
+              <iframe
+                src={viewerUrl}
+                className="w-full border-0"
+                style={{ height: "calc(100vh - 60px)" }}
+                title={label}
+              />
+            )}
+          </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
