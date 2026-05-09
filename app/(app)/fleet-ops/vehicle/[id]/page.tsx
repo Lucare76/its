@@ -1096,6 +1096,12 @@ function DocDownloadButton({ path, signedUrl, downloadError }: { path: string; s
   );
 }
 
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: "application/pdf",
+  jpg: "image/jpeg", jpeg: "image/jpeg",
+  png: "image/png", webp: "image/webp", gif: "image/gif",
+};
+
 function LibrettoSlot({
   label,
   path,
@@ -1112,17 +1118,35 @@ function LibrettoSlot({
   onDelete: () => void;
 }) {
   const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+  const [viewerMime, setViewerMime] = useState("");
   const [loadingView, setLoadingView] = useState(false);
+
+  const closeViewer = () => {
+    if (viewerUrl?.startsWith("blob:")) URL.revokeObjectURL(viewerUrl);
+    setViewerUrl(null);
+    setViewerMime("");
+  };
 
   const handleView = async () => {
     if (!supabase || !path) return;
     setLoadingView(true);
     const { data } = await supabase.storage.from("vehicle-documents").createSignedUrl(path, 600);
+    if (!data?.signedUrl) { setLoadingView(false); return; }
+
+    // Fetch blob e correggi il MIME type se è octet-stream
+    const resp = await fetch(data.signedUrl);
+    const raw = await resp.blob();
+    const ext = (path.split(".").pop() ?? "").toLowerCase();
+    const mime = raw.type !== "application/octet-stream" ? raw.type : (MIME_BY_EXT[ext] ?? "application/pdf");
+    const blobUrl = URL.createObjectURL(new Blob([raw], { type: mime }));
+
+    setViewerUrl(blobUrl);
+    setViewerMime(mime);
     setLoadingView(false);
-    if (data?.signedUrl) setViewerUrl(data.signedUrl);
   };
 
-  const isImage = path ? /\.(jpg|jpeg|png|webp|gif|heic)$/i.test(path) : false;
+  const isPdf = viewerMime === "application/pdf";
+  const isImg = viewerMime.startsWith("image/");
 
   return (
     <>
@@ -1145,7 +1169,7 @@ function LibrettoSlot({
                 onClick={() => void handleView()}
                 className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
               >
-                {loadingView ? "..." : "Visualizza"}
+                {loadingView ? "Caricamento..." : "Visualizza"}
               </button>
               <label className={`cursor-pointer rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 ${uploading ? "opacity-50 cursor-not-allowed" : "hover:bg-slate-50"}`}>
                 {uploading ? "Caricamento..." : "Sostituisci"}
@@ -1184,37 +1208,56 @@ function LibrettoSlot({
         )}
       </div>
 
-      {/* Overlay visualizzatore */}
       {viewerUrl && (
-        <div
-          className="fixed inset-0 z-50 bg-black/90 flex flex-col"
-          onClick={() => setViewerUrl(null)}
-        >
+        <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={closeViewer}>
           <div className="flex items-center justify-between px-4 py-3 shrink-0">
             <span className="text-white text-sm font-semibold">Libretto — {label}</span>
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); setViewerUrl(null); }}
+              onClick={(e) => { e.stopPropagation(); closeViewer(); }}
               className="rounded-lg bg-white/10 hover:bg-white/20 text-white px-4 py-2 text-sm font-semibold"
             >
               ✕ Chiudi
             </button>
           </div>
           <div className="flex-1 overflow-auto" onClick={(e) => e.stopPropagation()}>
-            {isImage ? (
+            {isImg && (
               <img
                 src={viewerUrl}
                 alt={label}
                 className="max-w-full object-contain mx-auto block"
                 style={{ maxHeight: "calc(100vh - 60px)" }}
               />
-            ) : (
-              <iframe
-                src={viewerUrl}
-                className="w-full border-0"
-                style={{ height: "calc(100vh - 60px)" }}
-                title={label}
-              />
+            )}
+            {isPdf && (
+              <>
+                {/* Desktop: iframe */}
+                <iframe
+                  src={viewerUrl}
+                  className="hidden sm:block w-full border-0"
+                  style={{ height: "calc(100vh - 60px)" }}
+                  title={label}
+                />
+                {/* Mobile: link nativo — iOS apre con QuickLook, Android con il viewer PDF */}
+                <div
+                  className="sm:hidden flex flex-col items-center justify-center gap-5 p-8"
+                  style={{ minHeight: "calc(100vh - 60px)" }}
+                >
+                  <div className="text-5xl">📄</div>
+                  <p className="text-white/80 text-sm text-center">
+                    Tocca il pulsante per vedere il PDF
+                  </p>
+                  <a
+                    href={viewerUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-xl bg-blue-600 text-white px-8 py-3 text-sm font-semibold"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Apri PDF
+                  </a>
+                </div>
+              </>
             )}
           </div>
         </div>
