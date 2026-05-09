@@ -589,7 +589,7 @@ export default function DeparturesPage() {
       Tipo: item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "",
       Agenzia: item.service.billing_party_name ?? "",
     }))
-  , [departures, resolveHotelName]);
+  , [departures, resolveHotelName, resolvePickupNote]);
 
   const handleExcel = () => void exportToExcel(buildRows(), `partenze-${selectedDate}.xlsx`);
   const handlePrint = () => void printTable(buildRows(), formatIsoDateShort(selectedDate));

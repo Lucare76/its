@@ -287,7 +287,7 @@ export default function OpsNewBookingPage() {
     };
     void boot();
     return () => { active = false; };
-  }, []);
+  }, [setForm]);
 
   const createHotel = async () => {
     if (!supabase || !tenantId || !newHotelName.trim()) return;

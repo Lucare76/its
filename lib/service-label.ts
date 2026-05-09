@@ -17,6 +17,7 @@ export type AgencyBookingKind =
   | "formula_medmar_napoli"
   | "formula_medmar_pozzuoli"
   | "transfer_hotel_hotel"
+  | "navetta"
   | "shuttle_hotel"
   | "private_island";
 
@@ -73,6 +74,8 @@ export function buildServiceLabel(ctx: ServiceLabelContext): string {
       return `Formula MEDMAR Pozzuoli${hotel}`;
     case "transfer_hotel_hotel":
       return `Transfer Hotel → Hotel${hotel}`;
+    case "navetta":
+      return `Navetta${hotel}`;
     case "shuttle_hotel":
       return `Navetta Hotel${hotel}`;
     case "private_island":

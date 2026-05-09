@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import type { z } from "zod";
 import {
   buildFerryScheduleOptions,
@@ -327,7 +327,7 @@ export function useBusCatalog(opts: {
   // Load catalog when kind switches to bus_city_hotel
   useEffect(() => {
     if (bookingKind !== "bus_city_hotel" || !accessToken || busStops.length > 0) return;
-    setBusLoading(true);
+    startTransition(() => setBusLoading(true));
     fetch("/api/agency/bus-catalog", { headers: { Authorization: `Bearer ${accessToken}` } })
       .then((r) => r.json())
       .then((body: { stops?: BusCatalogStop[] }) => { setBusStops(body.stops ?? []); })
@@ -338,11 +338,11 @@ export function useBusCatalog(opts: {
   // Fetch return pickup time when stop + hotel change
   useEffect(() => {
     if (bookingKind !== "bus_city_hotel" || !selectedBusStop || !hotelId || !accessToken) {
-      setBusReturnTime(null);
+      startTransition(() => setBusReturnTime(null));
       return;
     }
     const lineFamily = deriveBusLineFamily(selectedBusStop.lineCode);
-    setBusReturnTimeLoading(true);
+    startTransition(() => setBusReturnTimeLoading(true));
     fetch(`/api/agency/bus-return-time?hotel_id=${encodeURIComponent(hotelId)}&line_family=${lineFamily}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     })

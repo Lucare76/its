@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
     if (auth instanceof NextResponse) return auth;
 
     const [servicesResult, assignmentsResult, hotelsResult, membershipsResult, inboundResult, vehiclesResult] = await Promise.all([

@@ -17,6 +17,7 @@ export type AgencyBookingServiceKind =
   | "formula_medmar_napoli"
   | "formula_medmar_pozzuoli"
   | "transfer_hotel_hotel"
+  | "navetta"
   | "shuttle_hotel"
   | "private_island";
 export type OperationalServiceType =

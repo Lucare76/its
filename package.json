@@ -9,7 +9,7 @@
     "dev:safe": "scripts\\start-safe-dev.cmd",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint .",
+    "lint": "eslint app components lib scripts tests proxy.ts next.config.ts tailwind.config.ts eslint.config.mjs vitest.config.ts vitest.integration.config.ts playwright.config.ts --cache",
     "typecheck": "tsc --noEmit",
     "e2e": "pnpm exec playwright test",
     "e2e:smoke": "pnpm exec playwright test tests/e2e/smoke.spec.ts tests/e2e/pricing.spec.ts tests/e2e/scan-smoke.spec.ts tests/e2e/ops-gates.spec.ts --workers=1 --reporter=line",

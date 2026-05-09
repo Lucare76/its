@@ -51,6 +51,11 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/settings/tenant", roles: ["admin", "supervisor"] },
   { prefix: "/settings/system", roles: ["admin", "supervisor"] },
   { prefix: "/settings/email-preview", roles: ["admin", "supervisor"] },
+  { prefix: "/settings/whatsapp-preview", roles: ["admin", "supervisor"] },
+  { prefix: "/settings/ferry-rules", roles: ["admin", "operator", "supervisor"] },
+  { prefix: "/settings/shuttles", roles: ["admin", "operator", "supervisor"] },
+  { prefix: "/settings/agency-rates", roles: ["admin", "operator", "supervisor"] },
+  { prefix: "/settings/agency-margins", roles: ["admin", "supervisor"] },
 ];
 
 export type AppCapability =
@@ -129,6 +134,7 @@ export const capabilityRoleMap: Record<AppCapability, UserRole[]> = {
 export const routeCapabilityMap: Array<{ prefix: string; capability: AppCapability }> = [
   { prefix: "/settings/users", capability: "users:manage" },
   { prefix: "/settings/whatsapp", capability: "whatsapp:manage" },
+  { prefix: "/settings/whatsapp-preview", capability: "whatsapp:manage" },
   { prefix: "/dashboard", capability: "dashboard:view" },
   { prefix: "/arrivals", capability: "arrivals:view" },
   { prefix: "/departures", capability: "departures:view" },
@@ -161,7 +167,11 @@ export const routeCapabilityMap: Array<{ prefix: string; capability: AppCapabili
   { prefix: "/inbox", capability: "inbox:manage" },
   { prefix: "/whatsapp", capability: "inbox:manage" },
   { prefix: "/pricing/margins", capability: "pricing:view" },
-  { prefix: "/pricing", capability: "pricing:view" }
+  { prefix: "/pricing", capability: "pricing:view" },
+  { prefix: "/settings/ferry-rules", capability: "ops_rules:view" },
+  { prefix: "/settings/shuttles", capability: "ops_rules:view" },
+  { prefix: "/settings/agency-rates", capability: "pricing:view" },
+  { prefix: "/settings/agency-margins", capability: "pricing:view" }
 ];
 
 export function isProtectedPath(pathname: string): boolean {

@@ -5,12 +5,5 @@ export const metadata: Metadata = {
 };
 
 export default function ReviewLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="it">
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-      </head>
-      <body style={{ margin: 0, padding: 0 }}>{children}</body>
-    </html>
-  );
+  return <div style={{ margin: 0, padding: 0 }}>{children}</div>;
 }

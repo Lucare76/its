@@ -46,6 +46,12 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: false, error: linkedServiceError.message }, { status: 500 });
       }
       if (linkedService?.id) {
+        if (linkedService.is_draft !== true) {
+          return NextResponse.json({
+            ok: false,
+            error: "Questo PDF e gia collegato a un servizio confermato. Elimina prima il collegamento con un flusso dedicato, non dalla coda PDF."
+          }, { status: 409 });
+        }
         const { error: deleteServiceError } = await auth.admin
           .from("services")
           .delete()
