@@ -27,6 +27,10 @@ type VehicleInfo = {
   inspection_expiry?: string | null;
   km?: number | null;
   telaio?: string | null;
+  active?: boolean;
+  radius_vehicle_id?: string | null;
+  blocked_until?: string | null;
+  blocked_reason?: string | null;
 };
 
 type KmLog = {
@@ -54,6 +58,7 @@ type Fuel = {
   km_at_fuel?: number | null;
   fuel_type?: string | null;
   station?: string | null;
+  approval_status?: "pending" | "approved" | "rejected";
 };
 
 type Anomaly = {
@@ -62,6 +67,25 @@ type Anomaly = {
   title: string;
   description?: string | null;
   reported_at: string;
+};
+
+type VehicleComplianceItem = {
+  key: "insurance" | "road_tax" | "inspection" | "extinguisher" | "tachograph";
+  label: string;
+  expiry_date: string | null;
+  status: "ok" | "warn" | "expired" | "none";
+  source: "legacy_vehicle" | "compliance";
+};
+
+type VehicleDocument = {
+  id: string;
+  title: string;
+  category: "uploaded" | "libretto" | "compliance";
+  file_path: string;
+  uploaded_at: string | null;
+  due_date: string | null;
+  status: "valid" | "warning" | "expired" | "available";
+  signed_url: string | null;
 };
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
@@ -105,6 +129,13 @@ const EXPIRY_STYLE: Record<string, { bg: string; color: string; icon: string }> 
   none:    { bg: "#f1f5f9", color: "#64748b", icon: "—" },
 };
 
+const DOCUMENT_STATUS_STYLE: Record<VehicleDocument["status"], { bg: string; color: string; label: string }> = {
+  valid: { bg: "#dcfce7", color: "#166534", label: "Valido" },
+  warning: { bg: "#fef9c3", color: "#854d0e", label: "In scadenza" },
+  expired: { bg: "#fee2e2", color: "#991b1b", label: "Scaduto" },
+  available: { bg: "#e0f2fe", color: "#075985", label: "Disponibile" },
+};
+
 /* ─── Componente principale ──────────────────────────────────────────────── */
 
 export default function VehicleQRPage({ params }: { params: Promise<{ token: string }> }) {
@@ -116,6 +147,8 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
   const [kmLogs,     setKmLogs]     = useState<KmLog[]>([]);
   const [fuel,       setFuel]       = useState<Fuel[]>([]);
   const [drivers,    setDrivers]    = useState<{ id: string; full_name: string }[]>([]);
+  const [compliance, setCompliance] = useState<VehicleComplianceItem[]>([]);
+  const [documents,  setDocuments]  = useState<VehicleDocument[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState<string | null>(null);
 
@@ -163,6 +196,8 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
         setKmLogs(d.kmLogs ?? []);
         setFuel(d.fuel ?? []);
         setDrivers(d.drivers ?? []);
+        setCompliance(d.compliance ?? []);
+        setDocuments(d.documents ?? []);
         setLoading(false);
       })
       .catch(() => { setError("Errore di connessione."); setLoading(false); });
@@ -232,7 +267,7 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
     const json = await res.json();
     setFuelSubmitting(false);
     if (json.ok) {
-      setFuelMsg({ ok: true, text: "Rifornimento registrato." });
+      setFuelMsg({ ok: true, text: "Rifornimento inviato correttamente. Sara visibile dopo l'approvazione in ufficio." });
       setShowFuel(false);
       setFuelLiters(""); setFuelCost(""); setFuelKm(""); setFuelStation("");
       loadData();
@@ -340,10 +375,35 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
     </div>
   );
 
-  const docExpiries = [
-    { label: "Assicurazione", date: vehicle.insurance_expiry },
-    { label: "Bollo",         date: vehicle.road_tax_expiry },
-    { label: "Collaudo",      date: vehicle.inspection_expiry },
+  const docExpiries = compliance.length > 0
+    ? compliance
+    : [
+        { key: "insurance", label: "Assicurazione", expiry_date: vehicle.insurance_expiry ?? null, status: expiryStatus(vehicle.insurance_expiry), source: "legacy_vehicle" as const },
+        { key: "road_tax", label: "Bollo", expiry_date: vehicle.road_tax_expiry ?? null, status: expiryStatus(vehicle.road_tax_expiry), source: "legacy_vehicle" as const },
+        { key: "inspection", label: "Collaudo", expiry_date: vehicle.inspection_expiry ?? null, status: expiryStatus(vehicle.inspection_expiry), source: "legacy_vehicle" as const },
+      ];
+  const documentAlerts = docExpiries.filter((item) => item.status === "expired" || item.status === "warn").length;
+  const operationalBadges = [
+    {
+      label: vehicle.active === false ? "Non attivo" : "Operativo",
+      bg: vehicle.active === false ? "#334155" : "#dcfce7",
+      color: vehicle.active === false ? "#cbd5e1" : "#166534",
+    },
+    {
+      label: vehicle.blocked_until ? "Fuori servizio" : "Disponibile",
+      bg: vehicle.blocked_until ? "#fee2e2" : "#e0f2fe",
+      color: vehicle.blocked_until ? "#991b1b" : "#075985",
+    },
+    {
+      label: vehicle.radius_vehicle_id ? "GPS attivo" : "GPS non attivo",
+      bg: vehicle.radius_vehicle_id ? "#dbeafe" : "#e2e8f0",
+      color: vehicle.radius_vehicle_id ? "#1d4ed8" : "#475569",
+    },
+    ...(documentAlerts > 0 ? [{
+      label: documentAlerts === 1 ? "1 documento da verificare" : `${documentAlerts} documenti da verificare`,
+      bg: "#fef3c7",
+      color: "#92400e",
+    }] : []),
   ];
 
   return (
@@ -382,6 +442,31 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
       </div>
 
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "0 16px" }}>
+        <Section title="🟢 Stato operativo" mt={24}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {operationalBadges.map((badge) => (
+              <span
+                key={badge.label}
+                style={{
+                  background: badge.bg,
+                  color: badge.color,
+                  borderRadius: 999,
+                  padding: "8px 12px",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  letterSpacing: "0.02em",
+                }}
+              >
+                {badge.label}
+              </span>
+            ))}
+          </div>
+          {vehicle.blocked_reason && (
+            <div style={{ marginTop: 10, background: "#1e293b", borderRadius: 10, padding: "10px 14px", color: "#cbd5e1", fontSize: 12 }}>
+              Motivo fermo: <strong>{vehicle.blocked_reason}</strong>
+            </div>
+          )}
+        </Section>
 
         {/* ── Anomalie attive ── */}
         {anomalies.length > 0 && (
@@ -403,15 +488,15 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
 
         {/* ── Scadenze documenti ── */}
         <Section title="📋 Scadenze documenti" mt={24}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-            {docExpiries.map(({ label, date }) => {
-              const st = expiryStatus(date);
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+            {docExpiries.map(({ key, label, expiry_date, status }) => {
+              const st = status ?? expiryStatus(expiry_date);
               const s = EXPIRY_STYLE[st];
               return (
-                <div key={label} style={{ background: s.bg, borderRadius: 12, padding: "14px 10px", textAlign: "center" }}>
+                <div key={key} style={{ background: s.bg, borderRadius: 12, padding: "14px 10px", textAlign: "center" }}>
                   <div style={{ fontSize: 20, marginBottom: 4 }}>{s.icon}</div>
                   <div style={{ fontSize: 11, fontWeight: 700, color: s.color, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{label}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: s.color }}>{formatDate(date)}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: s.color }}>{formatDate(expiry_date)}</div>
                 </div>
               );
             })}
@@ -420,6 +505,60 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
             <div style={{ marginTop: 10, background: "#1e293b", borderRadius: 10, padding: "10px 14px" }}>
               {vehicle.telaio && <div style={{ color: "#94a3b8", fontSize: 12 }}>Telaio: <span style={{ color: "#e2e8f0", fontFamily: "monospace" }}>{vehicle.telaio}</span></div>}
               {vehicle.notes && <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>📝 {vehicle.notes}</div>}
+            </div>
+          )}
+        </Section>
+
+        <Section title="📎 Documenti veicolo" mt={24} count={documents.length}>
+          {documents.length === 0 ? (
+            <div style={{ background: "#111827", borderRadius: 12, padding: "14px 16px", color: "#94a3b8", fontSize: 13 }}>
+              Nessun documento operativo disponibile per questo mezzo.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {documents.map((doc) => {
+                const style = DOCUMENT_STATUS_STYLE[doc.status];
+                return (
+                  <div key={doc.id} style={{ background: "#111827", border: "1px solid #1e293b", borderRadius: 12, padding: "12px 14px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ color: "#f8fafc", fontSize: 14, fontWeight: 700 }}>{doc.title}</div>
+                        <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
+                          Caricato: {formatDateTime(doc.uploaded_at)}
+                          {doc.due_date ? ` · Scadenza: ${formatDate(doc.due_date)}` : ""}
+                        </div>
+                      </div>
+                      <span style={{ background: style.bg, color: style.color, borderRadius: 999, padding: "5px 10px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>
+                        {style.label}
+                      </span>
+                    </div>
+                    {doc.signed_url ? (
+                      <a
+                        href={doc.signed_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: "inline-block",
+                          marginTop: 10,
+                          background: "#e0f2fe",
+                          color: "#075985",
+                          borderRadius: 10,
+                          padding: "8px 12px",
+                          fontSize: 12,
+                          fontWeight: 800,
+                          textDecoration: "none",
+                        }}
+                      >
+                        Apri documento
+                      </a>
+                    ) : (
+                      <div style={{ marginTop: 10, color: "#fca5a5", fontSize: 12, fontWeight: 700 }}>
+                        Documento temporaneamente non disponibile.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </Section>

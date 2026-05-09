@@ -24,6 +24,35 @@ type PhotoInput = {
   dataUrl?: string;
 };
 
+type PublicDocumentStatus = "valid" | "warning" | "expired" | "available";
+
+type PublicVehicleDocument = {
+  id: string;
+  title: string;
+  category: "uploaded" | "libretto" | "compliance";
+  file_path: string;
+  uploaded_at: string | null;
+  due_date: string | null;
+  status: PublicDocumentStatus;
+  signed_url: string | null;
+};
+
+type PublicComplianceItem = {
+  key: "insurance" | "road_tax" | "inspection" | "extinguisher" | "tachograph";
+  label: string;
+  expiry_date: string | null;
+  status: "ok" | "warn" | "expired" | "none";
+  source: "legacy_vehicle" | "compliance";
+};
+
+function documentStatusFromExpiry(dateValue?: string | null): PublicDocumentStatus {
+  const status = expiryStatus(dateValue);
+  if (status === "ok") return "valid";
+  if (status === "warn") return "warning";
+  if (status === "expired") return "expired";
+  return "available";
+}
+
 function adminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "")!;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "")!;
@@ -44,6 +73,29 @@ function buildRateLimitKey(request: NextRequest, token: string, action: string) 
 
 function fail(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
+}
+
+function expiryStatus(dateValue?: string | null): "ok" | "warn" | "expired" | "none" {
+  if (!dateValue) return "none";
+  const raw = dateValue.length > 10 ? dateValue.slice(0, 10) : dateValue;
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const expiry = new Date(`${raw}T00:00:00Z`);
+  const diffDays = Math.floor((expiry.getTime() - today.getTime()) / 86400000);
+  if (diffDays < 0) return "expired";
+  if (diffDays <= 30) return "warn";
+  return "ok";
+}
+
+async function createStorageSignedUrl(
+  admin: ReturnType<typeof adminClient>,
+  bucket: string,
+  filePath: string | null | undefined,
+  expiresInSeconds = 900
+) {
+  if (!filePath) return null;
+  const { data } = await admin.storage.from(bucket).createSignedUrl(filePath, expiresInSeconds);
+  return data?.signedUrl ?? null;
 }
 
 function decodeDataUrl(dataUrl: string) {
@@ -124,7 +176,7 @@ export async function GET(
 
   const { data: vehicle, error } = await admin
     .from("vehicles")
-    .select("id, label, plate, capacity, vehicle_size, notes, insurance_expiry, road_tax_expiry, inspection_expiry, km, telaio")
+    .select("id, tenant_id, label, plate, capacity, vehicle_size, notes, insurance_expiry, road_tax_expiry, inspection_expiry, km, telaio, active, radius_vehicle_id, blocked_until, blocked_reason, libretto_document_path, libretto_uploaded_at, libretto_document_path_back, libretto_uploaded_at_back")
     .eq("qr_token", token)
     .maybeSingle();
 
@@ -132,64 +184,210 @@ export async function GET(
     return NextResponse.json({ error: "Veicolo non trovato." }, { status: 404 });
   }
 
-  // Anomalie attive
-  const { data: anomalies } = await admin
-    .from("vehicle_anomalies")
-    .select("id, severity, title, description, reported_at")
-    .eq("vehicle_id", vehicle.id)
-    .eq("active", true)
-    .order("reported_at", { ascending: false });
+  const [
+    anomaliesRes,
+    openLogRes,
+    kmLogsRes,
+    fuelRes,
+    driversRes,
+    documentsRes,
+    insuranceRes,
+    inspectionRes,
+    extinguishersRes,
+    tachographRes,
+  ] = await Promise.all([
+    admin
+      .from("vehicle_anomalies")
+      .select("id, severity, title, description, reported_at")
+      .eq("vehicle_id", vehicle.id)
+      .eq("active", true)
+      .order("reported_at", { ascending: false }),
+    admin
+      .from("vehicle_km_logs")
+      .select("id, driver_name, start_km, start_at")
+      .eq("vehicle_id", vehicle.id)
+      .is("end_km", null)
+      .order("start_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    admin
+      .from("vehicle_km_logs")
+      .select("id, driver_name, start_km, end_km, start_at, end_at, notes")
+      .eq("vehicle_id", vehicle.id)
+      .not("end_km", "is", null)
+      .order("start_at", { ascending: false })
+      .limit(10),
+    admin
+      .from("vehicle_fuel")
+      .select("id, fuel_date, liters, cost, km_at_fuel, fuel_type, station, approval_status")
+      .eq("vehicle_id", vehicle.id)
+      .eq("approval_status", "approved")
+      .order("fuel_date", { ascending: false })
+      .limit(10),
+    admin
+      .from("driver_profiles")
+      .select("id, full_name")
+      .eq("tenant_id", vehicle.tenant_id)
+      .eq("active", true)
+      .order("full_name"),
+    admin
+      .from("vehicle_documents")
+      .select("id, title, file_path, uploaded_at")
+      .eq("tenant_id", vehicle.tenant_id)
+      .eq("vehicle_id", vehicle.id)
+      .order("uploaded_at", { ascending: false }),
+    admin
+      .from("vehicle_insurances")
+      .select("id, expiry_date, document_path, created_at")
+      .eq("tenant_id", vehicle.tenant_id)
+      .eq("vehicle_id", vehicle.id)
+      .eq("is_current", true)
+      .maybeSingle(),
+    admin
+      .from("vehicle_inspections")
+      .select("id, expiry_date, document_path, created_at")
+      .eq("tenant_id", vehicle.tenant_id)
+      .eq("vehicle_id", vehicle.id)
+      .eq("is_current", true)
+      .maybeSingle(),
+    admin
+      .from("vehicle_extinguishers")
+      .select("id, expiry_date, document_path, created_at")
+      .eq("tenant_id", vehicle.tenant_id)
+      .eq("vehicle_id", vehicle.id)
+      .eq("active", true)
+      .order("expiry_date", { ascending: true }),
+    admin
+      .from("vehicle_tachographs")
+      .select("id, expiry_date, document_path, created_at")
+      .eq("tenant_id", vehicle.tenant_id)
+      .eq("vehicle_id", vehicle.id)
+      .eq("is_current", true)
+      .maybeSingle(),
+  ]);
 
-  // Turno aperto (km_end null) — per mostrare "fine turno"
-  const { data: openLog } = await admin
-    .from("vehicle_km_logs")
-    .select("id, driver_name, start_km, start_at")
-    .eq("vehicle_id", vehicle.id)
-    .is("end_km", null)
-    .order("start_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const compliance: PublicComplianceItem[] = [
+    {
+      key: "insurance",
+      label: "Assicurazione",
+      expiry_date: insuranceRes.data?.expiry_date ?? vehicle.insurance_expiry ?? null,
+      status: expiryStatus(insuranceRes.data?.expiry_date ?? vehicle.insurance_expiry ?? null),
+      source: insuranceRes.data?.expiry_date ? "compliance" : "legacy_vehicle",
+    },
+    {
+      key: "road_tax",
+      label: "Bollo",
+      expiry_date: vehicle.road_tax_expiry ?? null,
+      status: expiryStatus(vehicle.road_tax_expiry ?? null),
+      source: "legacy_vehicle",
+    },
+    {
+      key: "inspection",
+      label: "Collaudo",
+      expiry_date: inspectionRes.data?.expiry_date ?? vehicle.inspection_expiry ?? null,
+      status: expiryStatus(inspectionRes.data?.expiry_date ?? vehicle.inspection_expiry ?? null),
+      source: inspectionRes.data?.expiry_date ? "compliance" : "legacy_vehicle",
+    },
+    {
+      key: "extinguisher",
+      label: "Estintore",
+      expiry_date: extinguishersRes.data?.[0]?.expiry_date ?? null,
+      status: expiryStatus(extinguishersRes.data?.[0]?.expiry_date ?? null),
+      source: "compliance",
+    },
+    {
+      key: "tachograph",
+      label: "Tachigrafo",
+      expiry_date: tachographRes.data?.expiry_date ?? null,
+      status: expiryStatus(tachographRes.data?.expiry_date ?? null),
+      source: "compliance",
+    },
+  ];
 
-  // Ultimi 10 turni chiusi
-  const { data: kmLogs } = await admin
-    .from("vehicle_km_logs")
-    .select("id, driver_name, start_km, end_km, start_at, end_at, notes")
-    .eq("vehicle_id", vehicle.id)
-    .not("end_km", "is", null)
-    .order("start_at", { ascending: false })
-    .limit(10);
+  const documentsSeed: Array<Omit<PublicVehicleDocument, "signed_url">> = [
+    ...((documentsRes.data ?? []).map((doc) => ({
+      id: doc.id,
+      title: doc.title,
+      category: "uploaded" as const,
+      file_path: doc.file_path,
+      uploaded_at: doc.uploaded_at ?? null,
+      due_date: null,
+      status: "available" as const,
+    }))),
+    ...(vehicle.libretto_document_path ? [{
+      id: `libretto-front-${vehicle.id}`,
+      title: "Libretto fronte",
+      category: "libretto" as const,
+      file_path: vehicle.libretto_document_path,
+      uploaded_at: vehicle.libretto_uploaded_at ?? null,
+      due_date: null,
+      status: "available" as const,
+    }] : []),
+    ...(vehicle.libretto_document_path_back ? [{
+      id: `libretto-back-${vehicle.id}`,
+      title: "Libretto retro",
+      category: "libretto" as const,
+      file_path: vehicle.libretto_document_path_back,
+      uploaded_at: vehicle.libretto_uploaded_at_back ?? null,
+      due_date: null,
+      status: "available" as const,
+    }] : []),
+    ...(insuranceRes.data?.document_path ? [{
+      id: `insurance-${insuranceRes.data.id}`,
+      title: "Documento assicurazione",
+      category: "compliance" as const,
+      file_path: insuranceRes.data.document_path,
+      uploaded_at: insuranceRes.data.created_at ?? null,
+      due_date: insuranceRes.data.expiry_date ?? null,
+      status: documentStatusFromExpiry(insuranceRes.data?.expiry_date ?? null),
+    }] : []),
+    ...(inspectionRes.data?.document_path ? [{
+      id: `inspection-${inspectionRes.data.id}`,
+      title: "Documento collaudo",
+      category: "compliance" as const,
+      file_path: inspectionRes.data.document_path,
+      uploaded_at: inspectionRes.data.created_at ?? null,
+      due_date: inspectionRes.data.expiry_date ?? null,
+      status: documentStatusFromExpiry(inspectionRes.data?.expiry_date ?? null),
+    }] : []),
+    ...((extinguishersRes.data ?? [])
+      .filter((item) => Boolean(item.document_path))
+      .map((item) => ({
+        id: `extinguisher-${item.id}`,
+        title: "Documento estintore",
+        category: "compliance" as const,
+        file_path: item.document_path as string,
+        uploaded_at: item.created_at ?? null,
+        due_date: item.expiry_date ?? null,
+        status: documentStatusFromExpiry(item.expiry_date ?? null),
+      }))),
+    ...(tachographRes.data?.document_path ? [{
+      id: `tachograph-${tachographRes.data.id}`,
+      title: "Documento tachigrafo",
+      category: "compliance" as const,
+      file_path: tachographRes.data.document_path,
+      uploaded_at: tachographRes.data.created_at ?? null,
+      due_date: tachographRes.data.expiry_date ?? null,
+      status: documentStatusFromExpiry(tachographRes.data?.expiry_date ?? null),
+    }] : []),
+  ];
 
-  // Ultimi 10 rifornimenti
-  const { data: fuel } = await admin
-    .from("vehicle_fuel")
-    .select("id, fuel_date, liters, cost, km_at_fuel, fuel_type, station")
-    .eq("vehicle_id", vehicle.id)
-    .order("fuel_date", { ascending: false })
-    .limit(10);
-
-  // Autisti attivi del tenant
-  const { data: vehicleWithTenant } = await admin
-    .from("vehicles")
-    .select("tenant_id")
-    .eq("id", vehicle.id)
-    .maybeSingle();
-
-  const { data: drivers } = vehicleWithTenant
-    ? await admin
-        .from("driver_profiles")
-        .select("id, full_name")
-        .eq("tenant_id", vehicleWithTenant.tenant_id)
-        .eq("active", true)
-        .order("full_name")
-    : { data: [] };
+  const documents: PublicVehicleDocument[] = await Promise.all(
+    documentsSeed.map(async (doc) => ({
+      ...doc,
+      signed_url: await createStorageSignedUrl(admin, "vehicle-documents", doc.file_path),
+    }))
+  );
 
   return NextResponse.json({
     vehicle,
-    anomalies:  anomalies  ?? [],
-    openLog:    openLog    ?? null,
-    kmLogs:     kmLogs     ?? [],
-    fuel:       fuel       ?? [],
-    drivers:    drivers    ?? [],
+    anomalies: anomaliesRes.data ?? [],
+    openLog: openLogRes.data ?? null,
+    kmLogs: kmLogsRes.data ?? [],
+    fuel: fuelRes.data ?? [],
+    drivers: driversRes.data ?? [],
+    compliance,
+    documents,
   });
 }
 

@@ -573,10 +573,11 @@ export default function FleetOpsPage() {
             ) : (
               <div className="space-y-3">
                 {!isNewVehicle && selectedVehicle ? (
-                    <div className="rounded-2xl border border-slate-200 bg-[linear-gradient(135deg,rgba(248,250,252,0.98),rgba(241,245,249,0.96))] p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="rounded-2xl border border-slate-200 bg-[linear-gradient(135deg,rgba(248,250,252,0.98),rgba(241,245,249,0.96))] p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <p className="text-lg font-semibold text-slate-900">{selectedVehicle.label}</p>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Identita mezzo</p>
+                        <p className="mt-2 text-lg font-semibold text-slate-900">{selectedVehicle.label}</p>
                         <p className="mt-1 font-mono text-sm text-slate-500">{selectedVehicle.plate ?? "Targa da inserire"}</p>
                         <p className="mt-1 text-xs font-medium text-slate-400">Licenza: <span className="font-mono text-slate-500">{selectedVehicle.license_number ?? "da inserire"}</span></p>
                       </div>
@@ -584,8 +585,11 @@ export default function FleetOpsPage() {
                         <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${SIZE_BADGE[selectedVehicle.vehicle_size ?? ""] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
                           {SIZE_LABEL[selectedVehicle.vehicle_size ?? ""] ?? "N/D"}
                         </span>
-                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${selectedVehicle.radius_vehicle_id ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-500"}`}>
-                          {selectedVehicle.radius_vehicle_id ? "GPS collegato" : "GPS mancante"}
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${selectedVehicle.active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-500"}`}>
+                          {selectedVehicle.active ? "Attivo" : "Non attivo"}
+                        </span>
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${selectedVehicle.radius_vehicle_id ? "border-sky-200 bg-sky-50 text-sky-700" : "border-slate-200 bg-slate-100 text-slate-500"}`}>
+                          {selectedVehicle.radius_vehicle_id ? "GPS attivo" : "GPS non attivo"}
                         </span>
                         {(() => {
                           const docSummary = getVehicleDocumentSummary(selectedVehicle);
@@ -598,13 +602,23 @@ export default function FleetOpsPage() {
                         })()}
                         {selectedVehicle.is_blocked_manual || selectedVehicle.blocked_until ? (
                           <span className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700">
-                            Mezzo bloccato
+                            Fuori servizio
+                          </span>
+                        ) : null}
+                        {selectedAnomalies.length > 0 ? (
+                          <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
+                            {selectedAnomalies.length} anomalie aperte
                           </span>
                         ) : null}
                       </div>
                     </div>
-                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                       {[
+                        {
+                          label: "Capacita",
+                          value: selectedVehicle.capacity ? `${selectedVehicle.capacity} posti` : "Non definita",
+                        },
                         {
                           label: "Autista abituale",
                           value: selectedVehicle.habitual_driver_profile_id ? driverNameById.get(selectedVehicle.habitual_driver_profile_id) ?? "—" : "Non assegnato",
@@ -614,12 +628,8 @@ export default function FleetOpsPage() {
                           value: selectedVehicle.default_zone ?? "Non definita",
                         },
                         {
-                          label: "Licenza mezzo",
-                          value: selectedVehicle.license_number ?? "Non inserita",
-                        },
-                        {
-                          label: "Operatività",
-                          value: selectedAnomalies.length > 0 ? `${selectedAnomalies.length} anomalie aperte` : "Nessuna anomalia aperta",
+                          label: "Note operative",
+                          value: selectedVehicle.notes?.trim() ? selectedVehicle.notes : "Nessuna nota operativa",
                         },
                       ].map((item) => (
                         <div key={item.label} className="rounded-xl border border-slate-200 bg-white px-3 py-3">
@@ -628,8 +638,29 @@ export default function FleetOpsPage() {
                         </div>
                       ))}
                     </div>
+
+                    <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Collegamenti rapidi</p>
+                          <p className="mt-1 text-xs text-slate-500">La gestione dettagliata resta nelle sezioni dedicate: qui teniamo solo riepilogo e accesso rapido.</p>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                          <a href={`/fleet-ops/vehicle/${selectedVehicle.id}`} className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">Apri scheda mezzo</a>
+                          <a href="/fleet-ops/scadenze" className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100">Apri scadenzario</a>
+                          <a href="/fleet-ops/fuel" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100">Apri rifornimenti</a>
+                          <a href="/fleet-ops/maintenance" className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 hover:bg-orange-100">Apri manutenzioni</a>
+                          <a href="/fleet-ops/inventory" className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800 hover:bg-sky-100">Apri magazzino</a>
+                          <a href="/fleet-ops/reports" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">Apri report costi/km</a>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 ) : null}
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Anagrafica mezzo</p>
+                  <p className="mt-1 text-xs text-slate-500">Dati base e note operative. Le scadenze documento e i moduli specialistici restano separati qui sotto.</p>
+                </div>
                 <div className="grid grid-cols-2 gap-3">
                   <label className="text-xs font-semibold text-slate-500">
                     Nome mezzo
@@ -740,15 +771,6 @@ export default function FleetOpsPage() {
                     </button>
                   ) : null}
                 </div>
-
-                {!isNewVehicle && selectedVehicle ? (
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <a href="/fleet-ops/fuel" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100">Apri coda rifornimenti</a>
-                    <a href="/fleet-ops/maintenance" className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 hover:bg-orange-100">Apri registro manutenzioni</a>
-                    <a href="/fleet-ops/inventory" className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800 hover:bg-sky-100">Apri magazzino ricambi</a>
-                    <a href="/fleet-ops/reports" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">Apri report costi/km</a>
-                  </div>
-                ) : null}
 
                 {/* Documenti, blocco e anomalie solo in modifica */}
                 {!isNewVehicle && selectedVehicle ? (

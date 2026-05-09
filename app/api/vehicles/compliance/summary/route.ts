@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
 
   const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, tachographsRes] = await Promise.all([
     admin.from("vehicles")
-      .select("id, label, plate, active, capacity, compliance_override_until, compliance_override_reason")
+      .select("id, label, plate, active, capacity, road_tax_expiry, compliance_override_until, compliance_override_reason")
       .eq("tenant_id", tenant_id)
       .order("capacity", { ascending: false })
       .order("label"),
@@ -69,6 +69,8 @@ export async function GET(request: NextRequest) {
     const inspection = inspectionMap.get(v.id) ?? null;
     const ext = extMap.get(v.id) ?? null;
     const tach = tachographMap.get(v.id) ?? null;
+    const roadTaxDays = v.road_tax_expiry ? diffDays(today, v.road_tax_expiry) : null;
+    const roadTaxStatus = v.road_tax_expiry ? expiryStatus(roadTaxDays) : ("missing" as const);
 
     const insuranceDays = insurance ? diffDays(today, insurance.expiry_date) : null;
     const insuranceStatus = insurance ? insuranceExpiryStatus(insurance.expiry_date, today) : ("missing" as const);
@@ -110,6 +112,13 @@ export async function GET(request: NextRequest) {
             status: inspectionStatus,
           }
         : null,
+      road_tax: v.road_tax_expiry
+        ? {
+            expiry_date: v.road_tax_expiry,
+            days_left: roadTaxDays,
+            status: roadTaxStatus,
+          }
+        : null,
       extinguisher: ext
         ? {
             expiry_date: ext.expiry_date,
@@ -130,6 +139,7 @@ export async function GET(request: NextRequest) {
         : worstStatus([
             insuranceStatus,
             inspectionStatus,
+            roadTaxStatus,
             expiryStatus(extDays),
             expiryStatus(tachDays),
           ]),

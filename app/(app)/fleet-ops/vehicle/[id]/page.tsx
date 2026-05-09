@@ -1075,13 +1075,14 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
 function DocDownloadButton({ path, signedUrl, downloadError }: { path: string; signedUrl?: string | null; downloadError?: string | null }) {
   const handleDownload = async () => {
     if (downloadError) return;
-    if (signedUrl) {
-      window.open(signedUrl, "_blank");
-      return;
+    if (supabase) {
+      const { data } = await supabase.storage.from("vehicle-documents").createSignedUrl(path, 300);
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, "_blank");
+        return;
+      }
     }
-    if (!supabase) return;
-    const { data } = await supabase.storage.from("vehicle-documents").createSignedUrl(path, 60);
-    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+    if (signedUrl) window.open(signedUrl, "_blank");
   };
   return (
     <button

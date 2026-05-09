@@ -29,6 +29,7 @@ type VehicleCompliance = {
   compliance_override: ComplianceOverride | null;
   insurance: ComplianceEntry | null;
   inspection: ComplianceEntry | null;
+  road_tax: ComplianceEntry | null;
   extinguisher: ComplianceEntry | null;
   tachograph: ComplianceEntry | null;
   worst_status: StatusLevel;
@@ -101,7 +102,7 @@ function formatDays(days: number | null): string {
 }
 
 
-type DocType = "all" | "insurance" | "inspection" | "extinguisher" | "tachograph";
+type DocType = "all" | "insurance" | "inspection" | "road_tax" | "extinguisher" | "tachograph";
 type StatusFilter = "all" | "expired" | "critical" | "warning" | "ok";
 type ViewMode = "list" | "calendar";
 
@@ -124,6 +125,7 @@ const COMPLIANCE_TYPE_LABELS: Record<string, string> = {
   insurance: "Assicurazione",
   insurance_grace: "Proroga assicurazione (+15 gg)",
   inspection: "Collaudo",
+  road_tax: "Bollo",
   tachograph: "Tachigrafo",
   extinguisher: "Estintore",
 };
@@ -132,6 +134,7 @@ const DOC_LABELS: Record<DocType, string> = {
   all: "Tutti",
   insurance: "Assicurazione",
   inspection: "Collaudo",
+  road_tax: "Bollo",
   extinguisher: "Estintori",
   tachograph: "Tachigrafo",
 };
@@ -140,6 +143,7 @@ const CALENDAR_TYPE_SHORT_LABEL: Record<string, string> = {
   insurance: "Ass.",
   insurance_grace: "Proroga ass.",
   inspection: "Collaudo",
+  road_tax: "Bollo",
   extinguisher: "Estintore",
   tachograph: "Tachigrafo",
 };
@@ -196,6 +200,7 @@ function ComplianceDots({ item }: { item: VehicleCompliance }) {
   const docs: [string, ComplianceEntry | null][] = [
     ["A", item.insurance],
     ["C", item.inspection],
+    ["B", item.road_tax],
     ["E", item.extinguisher],
     ["T", item.tachograph],
   ];
@@ -206,7 +211,7 @@ function ComplianceDots({ item }: { item: VehicleCompliance }) {
         return (
           <span
             key={letter}
-            title={`${letter === "A" ? "Assicurazione" : letter === "C" ? "Collaudo" : letter === "E" ? "Estintori" : "Tachigrafo"}${entry ? ` · ${formatDays(entry.days_left)}` : " · Non inserito"}`}
+            title={`${letter === "A" ? "Assicurazione" : letter === "C" ? "Collaudo" : letter === "B" ? "Bollo" : letter === "E" ? "Estintori" : "Tachigrafo"}${entry ? ` · ${formatDays(entry.days_left)}` : " · Non inserito"}`}
             className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold ${
               s === "expired" ? "bg-rose-500 text-white" :
               s === "critical" ? "bg-orange-500 text-white" :
@@ -491,7 +496,7 @@ export default function ScadenzePage() {
     const rows = items.filter((item) => exportVehicleIds.has(item.vehicle_id));
     const exportRows = (exportDateFrom || exportDateTo)
       ? rows.filter((item) => {
-          const dates = [item.insurance?.expiry_date, item.inspection?.expiry_date, item.extinguisher?.expiry_date, item.tachograph?.expiry_date].filter((d): d is string => !!d);
+          const dates = [item.insurance?.expiry_date, item.inspection?.expiry_date, item.road_tax?.expiry_date, item.extinguisher?.expiry_date, item.tachograph?.expiry_date].filter((d): d is string => !!d);
           return dates.some((d) => (!exportDateFrom || d >= exportDateFrom) && (!exportDateTo || d <= exportDateTo));
         })
       : rows;
@@ -500,6 +505,7 @@ export default function ScadenzePage() {
       "Mezzo", "Targa", "Capienza",
       "Assicurazione scadenza", "Assicurazione gg", "Assicurazione stato",
       "Collaudo scadenza", "Collaudo gg", "Collaudo stato",
+      "Bollo scadenza", "Bollo gg", "Bollo stato",
       "Estintori scadenza", "Estintori gg", "Estintori stato",
       "Tachigrafo scadenza", "Tachigrafo gg", "Tachigrafo stato",
       "Stato generale",
@@ -514,6 +520,9 @@ export default function ScadenzePage() {
       item.inspection?.expiry_date ?? "",
       item.inspection?.days_left?.toString() ?? "",
       item.inspection?.status ?? "missing",
+      item.road_tax?.expiry_date ?? "",
+      item.road_tax?.days_left?.toString() ?? "",
+      item.road_tax?.status ?? "missing",
       item.extinguisher?.expiry_date ?? "",
       item.extinguisher?.days_left?.toString() ?? "",
       item.extinguisher?.status ?? "missing",
@@ -541,7 +550,7 @@ export default function ScadenzePage() {
     const rows = items.filter((item) => exportVehicleIds.has(item.vehicle_id));
     const exportRows = (exportDateFrom || exportDateTo)
       ? rows.filter((item) => {
-          const dates = [item.insurance?.expiry_date, item.inspection?.expiry_date, item.extinguisher?.expiry_date, item.tachograph?.expiry_date].filter((d): d is string => !!d);
+          const dates = [item.insurance?.expiry_date, item.inspection?.expiry_date, item.road_tax?.expiry_date, item.extinguisher?.expiry_date, item.tachograph?.expiry_date].filter((d): d is string => !!d);
           return dates.some((d) => (!exportDateFrom || d >= exportDateFrom) && (!exportDateTo || d <= exportDateTo));
         })
       : rows;
@@ -579,6 +588,7 @@ export default function ScadenzePage() {
         <td>${item.capacity ?? "—"}</td>
         ${cell(item.insurance)}
         ${cell(item.inspection)}
+        ${cell(item.road_tax)}
         ${cell(item.extinguisher)}
         ${cell(item.tachograph)}
         <td style="background:${BG[ws]};color:${FG[ws]};font-weight:600;">${IT[ws]}</td>
@@ -613,7 +623,7 @@ small{font-size:9px;opacity:.75}
 <h1>Scadenze documenti veicoli</h1>
 <div class="meta">Generato il ${new Date().toLocaleDateString("it-IT")} alle ${new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}${dateRange} · ${exportRows.length} veicol${exportRows.length === 1 ? "o" : "i"}</div>
 <table><thead><tr>
-  <th>Mezzo</th><th>Cap.</th><th>Assicurazione</th><th>Collaudo</th><th>Estintori</th><th>Tachigrafo</th><th>Stato</th>
+  <th>Mezzo</th><th>Cap.</th><th>Assicurazione</th><th>Collaudo</th><th>Bollo</th><th>Estintori</th><th>Tachigrafo</th><th>Stato</th>
 </tr></thead><tbody>${tableRows}</tbody></table>
 </body></html>`;
 
@@ -670,6 +680,7 @@ small{font-size:9px;opacity:.75}
       const types: [string, ComplianceEntry | null][] = [
         ["insurance", item.insurance],
         ["inspection", item.inspection],
+        ["road_tax", item.road_tax],
         ["extinguisher", item.extinguisher],
         ["tachograph", item.tachograph],
       ];
@@ -1098,6 +1109,7 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                   <div className="mt-3 grid grid-cols-2 gap-2">
                     <CompliancePill label="Assicurazione" entry={item.insurance} />
                     <CompliancePill label="Collaudo" entry={item.inspection} />
+                    <CompliancePill label="Bollo" entry={item.road_tax} />
                     <CompliancePill label="Estintori" entry={item.extinguisher} />
                     <CompliancePill label="Tachigrafo" entry={item.tachograph} />
                   </div>
@@ -1117,8 +1129,9 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                     <th className="hidden pb-3 pr-3 md:table-cell">Ind.</th>
                     <th className="pb-3 pr-3">Assicurazione</th>
                     <th className="hidden pb-3 pr-3 md:table-cell">Collaudo</th>
-                    <th className="hidden pb-3 pr-3 lg:table-cell">Estintori</th>
-                    <th className="hidden pb-3 lg:table-cell">Tachigrafo</th>
+                    <th className="hidden pb-3 pr-3 lg:table-cell">Bollo</th>
+                    <th className="hidden pb-3 pr-3 xl:table-cell">Estintori</th>
+                    <th className="hidden pb-3 xl:table-cell">Tachigrafo</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -1155,8 +1168,9 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                       </td>
                       <td className="py-3 pr-3">{renderTableCell(item.insurance)}</td>
                       <td className="hidden py-3 pr-3 md:table-cell">{renderTableCell(item.inspection)}</td>
-                      <td className="hidden py-3 pr-3 lg:table-cell">{renderTableCell(item.extinguisher)}</td>
-                      <td className="hidden py-3 lg:table-cell">{renderTableCell(item.tachograph)}</td>
+                      <td className="hidden py-3 pr-3 lg:table-cell">{renderTableCell(item.road_tax)}</td>
+                      <td className="hidden py-3 pr-3 xl:table-cell">{renderTableCell(item.extinguisher)}</td>
+                      <td className="hidden py-3 xl:table-cell">{renderTableCell(item.tachograph)}</td>
                     </tr>
                   ))}
                 </tbody>

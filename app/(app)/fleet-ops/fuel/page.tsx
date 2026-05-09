@@ -153,6 +153,11 @@ export default function FleetFuelPage() {
       showToast(json?.error ?? "Aggiornamento rifornimento fallito.", false);
       return;
     }
+    if (approval_status === "approved" && statusFilter === "pending") {
+      setStatusFilter("approved");
+      showToast("Rifornimento approvato e spostato nella lista Approvati.", true);
+      return;
+    }
     showToast(approval_status === "approved" ? "Rifornimento approvato." : "Rifornimento respinto.", true);
     void load();
   }
