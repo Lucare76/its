@@ -2,6 +2,7 @@
 
 import { use, useCallback, useEffect, useState } from "react";
 import { supabase, getToken } from "@/lib/supabase/client";
+import { getClientSessionContext } from "@/lib/supabase/client-session";
 import Link from "next/link";
 import { DateInput } from "@/components/ui";
 
@@ -83,6 +84,7 @@ const COST_TYPE_LABELS: Record<string, string> = {
 export default function VehicleRecordsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: vehicleId } = use(params);
 
+  const [userRole, setUserRole] = useState<string | null>(null);
   const [vehicleLabel, setVehicleLabel] = useState<string>("");
   const [tab, setTab]     = useState<"maintenance" | "fuel" | "spare_parts" | "km_logs" | "documenti" | "costi">("maintenance");
   const [records, setRecords]   = useState<(Maintenance | Fuel | SparePart)[]>([]);
@@ -199,6 +201,11 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     setRecords(data.records ?? []);
     setLoading(false);
   }, [loadCosts, loadDocs, vehicleId, tab]);
+
+  // Carica ruolo utente
+  useEffect(() => {
+    getClientSessionContext().then((s) => setUserRole(s?.role ?? null)).catch(() => null);
+  }, []);
 
   // Carica nome veicolo + dati libretto + impostazioni compliance
   useEffect(() => {
@@ -360,7 +367,12 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("Eliminare questo record?")) return;
+    if (tab === "fuel") {
+      if (userRole !== "admin") { showMsg("Solo gli admin possono eliminare i rifornimenti.", false); return; }
+      if (!confirm("Eliminare questo rifornimento? L'operazione non è reversibile.")) return;
+    } else {
+      if (!confirm("Eliminare questo record?")) return;
+    }
     const token = await getToken();
     if (!token) return;
     await fetch("/api/ops/vehicle-records", {
@@ -997,7 +1009,9 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
                   <td className="px-4 py-3 text-right text-slate-500">{r.km_at_fuel != null ? r.km_at_fuel.toLocaleString("it-IT") : "—"}</td>
                   <td className="px-4 py-3 text-right font-semibold text-emerald-700">{r.cost != null ? `€${r.cost.toFixed(2)}` : "—"}</td>
                   <td className="px-4 py-3 text-right">
-                    <button type="button" onClick={() => void handleDelete(r.id)} className="text-xs text-slate-300 hover:text-rose-500">✕</button>
+                    {userRole === "admin" && (
+                      <button type="button" onClick={() => void handleDelete(r.id)} className="text-xs text-slate-300 hover:text-rose-500">✕</button>
+                    )}
                   </td>
                 </tr>
               ))}

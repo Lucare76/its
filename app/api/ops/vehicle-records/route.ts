@@ -80,6 +80,9 @@ export async function POST(request: NextRequest) {
 
   if (body.action === "delete") {
     if (!body.id) return NextResponse.json({ error: "id richiesto." }, { status: 400 });
+    if (body.type === "fuel" && auth.membership.role !== "admin") {
+      return NextResponse.json({ error: "Solo gli admin possono eliminare i rifornimenti." }, { status: 403 });
+    }
     const { error } = await auth.admin.from(table).delete().eq("id", body.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
