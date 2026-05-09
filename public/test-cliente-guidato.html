@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Test Cliente Controllato – Ischia Transfer Service</title>
+<style>
+  /* ── Reset & base ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --navy:   #0f2744;
+    --blue:   #1e3a5f;
+    --accent: #2563eb;
+    --green:  #16a34a;
+    --amber:  #d97706;
+    --rose:   #dc2626;
+    --slate:  #64748b;
+    --light:  #f8fafc;
+    --border: #e2e8f0;
+    --text:   #1e293b;
+    --muted:  #94a3b8;
+    --radius: 10px;
+    --font:   'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
+  }
+
+  html { font-family: var(--font); font-size: 10.5pt; color: var(--text); background: #fff; }
+  body { margin: 0; }
+
+  /* ── Page layout ── */
+  .page {
+    width: 210mm;
+    margin: 0 auto;
+    padding: 16mm 18mm 18mm;
+    background: #fff;
+    position: relative;
+  }
+
+  /* ── Print ── */
+  @page {
+    size: A4;
+    margin: 0;
+  }
+  @media print {
+    html, body { background: #fff; margin: 0; padding: 0; }
+    .page {
+      width: 210mm;
+      min-height: 0;
+      padding: 14mm 16mm 14mm;
+      page-break-before: always;
+      page-break-after: always;
+      break-before: page;
+      break-after: page;
+    }
+    .page:first-child { page-break-before: auto; break-before: auto; }
+    .page:last-child  { page-break-after: auto;  break-after: auto; }
+
+    /* prevent boxes from splitting across pages */
+    .ex-header, .obj-box, .result-box, .warn-box,
+    .notes-area, .cleanup-box, .appendix-box,
+    .cover-banner, .cover-desc, .section-header,
+    .info-box, table { break-inside: avoid; }
+
+    .steps li { break-inside: avoid; }
+    .page-footer { display: none; }
+    .no-print { display: none !important; }
+  }
+
+  /* ── Screen only ── */
+  @media screen {
+    body { background: #e5e7eb; padding: 20px 0; }
+    .page {
+      min-height: 297mm;
+      box-shadow: 0 4px 24px rgba(0,0,0,.12);
+      margin-bottom: 24px;
+    }
+  }
+
+  /* ── Cover ── */
+  .cover {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  @media screen {
+    .cover { min-height: 260mm; }
+  }
+  .cover-top { padding-top: 12mm; }
+  .cover-badge {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    font-size: 8.5pt;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    padding: 5px 14px;
+    border-radius: 20px;
+    margin-bottom: 22px;
+  }
+  .cover-title {
+    font-size: 28pt;
+    font-weight: 800;
+    color: var(--navy);
+    line-height: 1.15;
+    margin-bottom: 8px;
+  }
+  .cover-subtitle {
+    font-size: 14pt;
+    font-weight: 400;
+    color: var(--slate);
+    margin-bottom: 30px;
+  }
+  .cover-divider {
+    width: 60px;
+    height: 4px;
+    background: var(--accent);
+    border-radius: 2px;
+    margin-bottom: 28px;
+  }
+  .cover-desc {
+    font-size: 11pt;
+    color: var(--slate);
+    line-height: 1.7;
+    max-width: 148mm;
+    background: var(--light);
+    border-left: 4px solid var(--accent);
+    padding: 14px 18px;
+    border-radius: 0 var(--radius) var(--radius) 0;
+  }
+  .cover-banner {
+    background: linear-gradient(135deg, var(--navy) 0%, var(--blue) 100%);
+    border-radius: 14px;
+    padding: 24px 28px;
+    color: #fff;
+  }
+  .cover-banner-label {
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,.5);
+    margin-bottom: 8px;
+  }
+  .cover-banner-name {
+    font-size: 17pt;
+    font-weight: 800;
+    line-height: 1.2;
+    margin-bottom: 8px;
+  }
+  .cover-banner-meta {
+    font-size: 9pt;
+    color: rgba(255,255,255,.65);
+  }
+  .cover-footer {
+    font-size: 8.5pt;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+    margin-top: 18px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  /* ── TOC ── */
+  .toc-title {
+    font-size: 18pt;
+    font-weight: 800;
+    color: var(--navy);
+    margin-bottom: 22px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--border);
+  }
+  .toc-item {
+    display: flex;
+    align-items: baseline;
+    gap: 0;
+    margin-bottom: 10px;
+    font-size: 10.5pt;
+  }
+  .toc-num {
+    min-width: 28px;
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 9pt;
+  }
+  .toc-text { flex: 1; color: var(--text); }
+  .toc-dots {
+    flex: 1;
+    border-bottom: 1.5px dotted var(--border);
+    margin: 0 8px;
+    position: relative;
+    top: -2px;
+  }
+  .toc-page { font-size: 9pt; color: var(--muted); font-weight: 600; }
+  .toc-section {
+    margin-top: 14px;
+    margin-bottom: 4px;
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* ── Section header ── */
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--border);
+  }
+  .section-num {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--navy);
+    color: #fff;
+    font-size: 13pt;
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+  .section-title { font-size: 16pt; font-weight: 800; color: var(--navy); line-height: 1.2; }
+  .section-sub { font-size: 9.5pt; color: var(--slate); margin-top: 2px; }
+
+  /* ── Exercise header ── */
+  .ex-header {
+    background: linear-gradient(135deg, var(--navy), var(--blue));
+    border-radius: 12px;
+    padding: 13px 18px;
+    color: #fff;
+    margin-bottom: 14px;
+  }
+  .ex-label {
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,.5);
+    margin-bottom: 4px;
+  }
+  .ex-title { font-size: 14pt; font-weight: 800; line-height: 1.2; }
+
+  /* ── Objective box ── */
+  .obj-box {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    margin-bottom: 13px;
+    font-size: 10pt;
+    color: #1e40af;
+  }
+  .obj-box strong { color: #1e3a8a; }
+
+  /* ── Steps ── */
+  .steps-title {
+    font-size: 9pt;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--slate);
+    margin-bottom: 8px;
+  }
+  .steps { list-style: none; counter-reset: step; margin-bottom: 12px; }
+  .steps li {
+    counter-increment: step;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 5px;
+    font-size: 10pt;
+    line-height: 1.45;
+  }
+  .steps li::before {
+    content: counter(step);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 8pt;
+    font-weight: 700;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* ── Result box ── */
+  .result-box {
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    margin-bottom: 10px;
+  }
+  .result-box .box-label {
+    font-size: 8.5pt;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--green);
+    margin-bottom: 5px;
+  }
+  .result-box p { font-size: 10pt; color: #166534; line-height: 1.5; }
+
+  /* ── Warning box ── */
+  .warn-box {
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    margin-bottom: 10px;
+  }
+  .warn-box .box-label {
+    font-size: 8.5pt;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--amber);
+    margin-bottom: 5px;
+  }
+  .warn-box p { font-size: 10pt; color: #92400e; line-height: 1.5; }
+
+  /* ── Notes space ── */
+  .notes-area {
+    border: 1.5px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    min-height: 52px;
+    margin-top: 4px;
+    margin-bottom: 6px;
+  }
+  .notes-label {
+    font-size: 8.5pt;
+    font-weight: 600;
+    color: var(--muted);
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .notes-lines {
+    border-bottom: 1px solid #e2e8f0;
+    height: 16px;
+    margin-bottom: 6px;
+  }
+
+  /* ── Rules list ── */
+  .rule-list { list-style: none; margin: 0; padding: 0; }
+  .rule-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 10.5pt;
+    line-height: 1.5;
+  }
+  .rule-list li:last-child { border-bottom: none; }
+  .rule-icon { font-size: 13pt; flex-shrink: 0; margin-top: 1px; }
+
+  /* ── Data table ── */
+  table.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10pt;
+    margin-bottom: 16px;
+  }
+  table.data-table thead tr {
+    background: var(--navy);
+    color: #fff;
+  }
+  table.data-table thead th {
+    padding: 10px 12px;
+    text-align: left;
+    font-size: 8.5pt;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  table.data-table tbody tr { border-bottom: 1px solid var(--border); }
+  table.data-table tbody tr:nth-child(even) { background: var(--light); }
+  table.data-table tbody td { padding: 9px 12px; vertical-align: top; line-height: 1.4; }
+  table.data-table td.mono {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 9pt;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* ── Feedback table ── */
+  table.feedback-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9.5pt;
+    margin-bottom: 16px;
+  }
+  table.feedback-table thead tr { background: var(--navy); color: #fff; }
+  table.feedback-table thead th {
+    padding: 9px 10px;
+    text-align: left;
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+  }
+  table.feedback-table tbody tr { border-bottom: 1px solid var(--border); }
+  table.feedback-table tbody tr:nth-child(even) { background: var(--light); }
+  table.feedback-table tbody td { padding: 10px 10px; vertical-align: top; }
+  table.feedback-table td.area { font-weight: 600; color: var(--navy); }
+  table.feedback-table td.check { text-align: center; font-size: 14pt; color: var(--border); }
+  table.feedback-table td.note-cell { min-width: 60px; }
+
+  /* ── Info box ── */
+  .info-box {
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    font-size: 10pt;
+    color: var(--slate);
+    line-height: 1.6;
+  }
+
+  /* ── Highlight tag ── */
+  .tag {
+    display: inline-block;
+    background: #eff6ff;
+    color: var(--accent);
+    font-size: 8pt;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: .04em;
+  }
+
+  /* ── Page footer (screen only — hidden in print) ── */
+  .page-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 8pt;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    margin-top: 18px;
+  }
+
+  /* ── Cleanup box ── */
+  .cleanup-box {
+    background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+    border: 1.5px solid #86efac;
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin-bottom: 18px;
+  }
+  .cleanup-box h3 { font-size: 12pt; font-weight: 700; color: #166534; margin-bottom: 8px; }
+  .cleanup-box p { font-size: 10pt; color: #15803d; line-height: 1.65; }
+
+  /* ── Appendix ── */
+  .appendix-box {
+    background: #f8fafc;
+    border: 1.5px dashed var(--border);
+    border-radius: 12px;
+    padding: 18px 22px;
+    margin-bottom: 16px;
+  }
+  .appendix-box h3 { font-size: 11pt; font-weight: 700; color: var(--navy); margin-bottom: 8px; }
+  .appendix-box p { font-size: 10pt; color: var(--slate); line-height: 1.65; }
+  .appendix-box .mono-tag {
+    display: inline-block;
+    font-family: 'Consolas', 'Courier New', monospace;
+    background: var(--navy);
+    color: #fff;
+    padding: 3px 10px;
+    border-radius: 5px;
+    font-size: 9pt;
+    margin: 4px 0;
+  }
+
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════ COVER ═══════════════════════════ -->
+<div class="page">
+  <div class="cover">
+    <div class="cover-top">
+      <div class="cover-badge">Documento riservato · Solo uso demo</div>
+      <div class="cover-title">Test Cliente Controllato<br/>Esercizi guidati</div>
+      <div class="cover-subtitle">per il gestionale operativo</div>
+      <div class="cover-divider"></div>
+      <div class="cover-desc">
+        Questo documento guida il cliente nella prova controllata dei principali flussi del gestionale:
+        disponibilità autisti, import Excel, arrivi, partenze, Linea Bus, smistamento Ischia, dispatch e driver app.<br/><br/>
+        <strong>Tutti gli esercizi si svolgono esclusivamente su dati demo. Nessun dato reale viene toccato.</strong>
+      </div>
+    </div>
+
+    <div>
+      <div class="cover-banner">
+        <div class="cover-banner-label">Sistema</div>
+        <div class="cover-banner-name">Ischia Transfer Service<br/>Demo Operativa</div>
+        <div class="cover-banner-meta">Versione test controllato · Uso esclusivo dati DEMO_CLIENTE</div>
+      </div>
+      <div class="cover-footer">
+        <span>Ischia Transfer Service – Gestionale Operativo</span>
+        <span>Test Cliente Controllato · <strong>Uso interno demo</strong></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ TOC ═══════════════════════════ -->
+<div class="page">
+  <div class="toc-title">Indice del documento</div>
+
+  <div class="toc-section">Introduzione</div>
+  <div class="toc-item"><span class="toc-num">1.</span><span class="toc-text">Regole del test</span><span class="toc-dots"></span><span class="toc-page">3</span></div>
+  <div class="toc-item"><span class="toc-num">2.</span><span class="toc-text">Dati demo consigliati</span><span class="toc-dots"></span><span class="toc-page">3</span></div>
+
+  <div class="toc-section">Esercizi guidati</div>
+  <div class="toc-item"><span class="toc-num">3.</span><span class="toc-text">Esercizio 1 — Accesso e controllo iniziale</span><span class="toc-dots"></span><span class="toc-page">4</span></div>
+  <div class="toc-item"><span class="toc-num">4.</span><span class="toc-text">Esercizio 2 — Disponibilità autisti</span><span class="toc-dots"></span><span class="toc-page">5</span></div>
+  <div class="toc-item"><span class="toc-num">5.</span><span class="toc-text">Esercizio 3 — Import Excel servizi futuri</span><span class="toc-dots"></span><span class="toc-page">6</span></div>
+  <div class="toc-item"><span class="toc-num">6.</span><span class="toc-text">Esercizio 4 — Controllo Arrivi e Partenze</span><span class="toc-dots"></span><span class="toc-page">7</span></div>
+  <div class="toc-item"><span class="toc-num">7.</span><span class="toc-text">Esercizio 5 — Linea Bus</span><span class="toc-dots"></span><span class="toc-page">8</span></div>
+  <div class="toc-item"><span class="toc-num">8.</span><span class="toc-text">Esercizio 6 — Smistamento Ischia</span><span class="toc-dots"></span><span class="toc-page">9</span></div>
+  <div class="toc-item"><span class="toc-num">9.</span><span class="toc-text">Esercizio 7 — Dispatch</span><span class="toc-dots"></span><span class="toc-page">10</span></div>
+  <div class="toc-item"><span class="toc-num">10.</span><span class="toc-text">Esercizio 8 — Driver App</span><span class="toc-dots"></span><span class="toc-page">11</span></div>
+
+  <div class="toc-section">Chiusura</div>
+  <div class="toc-item"><span class="toc-num">11.</span><span class="toc-text">Scheda feedback cliente</span><span class="toc-dots"></span><span class="toc-page">12</span></div>
+  <div class="toc-item"><span class="toc-num">12.</span><span class="toc-text">Cleanup finale</span><span class="toc-dots"></span><span class="toc-page">13</span></div>
+  <div class="toc-item"><span class="toc-num">13.</span><span class="toc-text">Appendice tecnica</span><span class="toc-dots"></span><span class="toc-page">13</span></div>
+
+  <div style="margin-top:32px;">
+    <div class="info-box">
+      <strong>Come usare questo documento</strong><br/>
+      Segui gli esercizi nell'ordine indicato. Per ogni esercizio trovi: l'obiettivo, i passaggi operativi, il risultato atteso e uno spazio per prendere note. Se qualcosa non corrisponde al risultato atteso, annota il dettaglio nello spazio note e segnalalo al team di supporto durante la sessione.
+    </div>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Indice</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ S1 — REGOLE ═══════════════════════════ -->
+<div class="page">
+  <div class="section-header">
+    <div class="section-num">1</div>
+    <div>
+      <div class="section-title">Regole del test</div>
+      <div class="section-sub">Da leggere prima di iniziare qualsiasi esercizio</div>
+    </div>
+  </div>
+
+  <ul class="rule-list">
+    <li><span class="rule-icon">🔵</span><span>Usare <strong>solo dati demo</strong>. Tutti i valori inseriti devono contenere la dicitura <span class="tag">DEMO_CLIENTE</span> per poter essere identificati e rimossi al termine del test.</span></li>
+    <li><span class="rule-icon">🚫</span><span><strong>Non inserire dati reali</strong> di clienti, passeggeri o agenzie durante gli esercizi.</span></li>
+    <li><span class="rule-icon">🚫</span><span><strong>Non cancellare servizi reali</strong>. Operare sempre su servizi con nome DEMO_CLIENTE.</span></li>
+    <li><span class="rule-icon">🚫</span><span><strong>Non modificare date operative reali</strong>. Usare sempre una data futura non operativa concordata per il test.</span></li>
+    <li><span class="rule-icon">📱</span><span><strong>Non inviare messaggi WhatsApp reali</strong> se non espressamente concordato con il team di supporto durante la sessione.</span></li>
+    <li><span class="rule-icon">🛑</span><span>In caso di dubbio su un'azione, <strong>fermarsi e chiedere supporto</strong> prima di procedere.</span></li>
+    <li><span class="rule-icon">✅</span><span>Tutti i dati demo devono contenere la dicitura <span class="tag">DEMO_CLIENTE</span> così da poter essere individuati e rimossi in sicurezza al termine della sessione.</span></li>
+  </ul>
+
+  <div style="margin-top:28px;">
+    <div class="section-header" style="border-bottom-color:#e2e8f0;">
+      <div class="section-num" style="width:32px;height:32px;font-size:11pt;">2</div>
+      <div>
+        <div class="section-title" style="font-size:14pt;">Dati demo consigliati</div>
+        <div class="section-sub">Usa questi valori durante gli esercizi per poter identificare e rimuovere i dati al termine del test</div>
+      </div>
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th style="width:38%">Tipo dato</th>
+          <th>Valore demo da usare</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Cliente arrivo</td><td class="mono">DEMO_CLIENTE ARRIVO</td></tr>
+        <tr><td>Cliente partenza</td><td class="mono">DEMO_CLIENTE PARTENZA</td></tr>
+        <tr><td>Cliente escursione</td><td class="mono">DEMO_CLIENTE ESCURSIONE</td></tr>
+        <tr><td>Cliente territoriale</td><td class="mono">DEMO_CLIENTE TERRITORIALE</td></tr>
+        <tr><td>Cliente Linea Bus</td><td class="mono">DEMO_CLIENTE LINEA BUS</td></tr>
+        <tr><td>Riga ambigua (test import)</td><td class="mono">DEMO_CLIENTE AMBIGUA</td></tr>
+        <tr><td>Autista demo</td><td class="mono">DEMO_CLIENTE AUTISTA</td></tr>
+        <tr><td>Nota disponibilità</td><td class="mono">DEMO_CLIENTE disponibilità</td></tr>
+        <tr><td>Hotel demo</td><td><span class="mono">Hotel Bellevue</span> &nbsp;oppure hotel demo concordato</td></tr>
+        <tr><td>Linea Bus</td><td class="mono">Italia</td></tr>
+        <tr><td>Fermata</td><td><span class="mono">FELTRE</span> &nbsp;oppure fermata demo presente nel catalogo</td></tr>
+        <tr><td>Numero passeggeri (pax)</td><td><span class="mono">2</span> &nbsp;oppure&nbsp; <span class="mono">4</span></td></tr>
+        <tr><td>Data test</td><td>Una <strong>data futura non operativa</strong> concordata (es. fine mese, mese successivo)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Sezione 1–2 · Regole e dati demo</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ ES 1 ═══════════════════════════ -->
+<div class="page">
+  <div class="ex-header">
+    <div class="ex-label">Esercizio 1 di 8</div>
+    <div class="ex-title">Accesso e controllo iniziale</div>
+  </div>
+
+  <div class="obj-box"><strong>Obiettivo:</strong> Verificare che l'utente riesca ad accedere al gestionale e visualizzare correttamente la dashboard operativa.</div>
+
+  <div class="steps-title">Passaggi</div>
+  <ol class="steps">
+    <li>Aprire il gestionale dal browser (indirizzo fornito dal team di supporto).</li>
+    <li>Effettuare il login con le credenziali demo fornite.</li>
+    <li>Controllare che la dashboard si carichi correttamente.</li>
+    <li>Verificare che il menu principale di navigazione sia visibile e accessibile.</li>
+  </ol>
+
+  <div class="result-box">
+    <div class="box-label">✅ Risultato atteso</div>
+    <p>L'utente accede correttamente, la dashboard è visibile e il menu principale mostra le sezioni operative (Arrivi, Partenze, Disponibilità, Piano del Giorno, Dispatch, ecc.).</p>
+  </div>
+
+  <div class="warn-box">
+    <div class="box-label">⚠️ Cosa evitare</div>
+    <p>Non aprire pagine di impostazioni tecniche, configurazioni o sezioni admin durante questo esercizio.</p>
+  </div>
+
+  <div class="notes-label">📝 Note cliente</div>
+  <div class="notes-area">
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Esercizio 1 · Accesso</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ ES 2 ═══════════════════════════ -->
+<div class="page">
+  <div class="ex-header">
+    <div class="ex-label">Esercizio 2 di 8</div>
+    <div class="ex-title">Disponibilità autisti</div>
+  </div>
+
+  <div class="obj-box"><strong>Obiettivo:</strong> Registrare la disponibilità di un autista demo su una data futura di test e verificare che il dato venga salvato correttamente.</div>
+
+  <div class="steps-title">Passaggi</div>
+  <ol class="steps">
+    <li>Aprire la sezione <strong>Disponibilità</strong> dal menu.</li>
+    <li>Selezionare la data futura di test concordata (non una data operativa reale).</li>
+    <li>Individuare l'autista demo oppure quello concordato con il team.</li>
+    <li>Impostare lo stato su <strong>Disponibile</strong> oppure <strong>Non disponibile</strong>.</li>
+    <li>Inserire una nota contenente <span class="tag">DEMO_CLIENTE</span> nel campo note.</li>
+    <li>Salvare la modifica.</li>
+    <li>Ricaricare la pagina e verificare che il dato sia rimasto correttamente salvato.</li>
+  </ol>
+
+  <div class="result-box">
+    <div class="box-label">✅ Risultato atteso</div>
+    <p>La disponibilità viene salvata e resta visibile dopo il refresh della pagina. La nota con DEMO_CLIENTE è presente e leggibile.</p>
+  </div>
+
+  <div class="warn-box">
+    <div class="box-label">⚠️ Cosa evitare</div>
+    <p>Non modificare la disponibilità di date operative reali o di autisti realmente in servizio durante il periodo del test.</p>
+  </div>
+
+  <div class="notes-label">📝 Note cliente</div>
+  <div class="notes-area">
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Esercizio 2 · Disponibilità autisti</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ ES 3 ═══════════════════════════ -->
+<div class="page">
+  <div class="ex-header">
+    <div class="ex-label">Esercizio 3 di 8</div>
+    <div class="ex-title">Import Excel servizi futuri</div>
+  </div>
+
+  <div class="obj-box"><strong>Obiettivo:</strong> Importare un file Excel demo con diverse tipologie di servizio e verificare che il sistema le riconosca e gestisca correttamente, inclusa la riga ambigua.</div>
+
+  <div class="steps-title">Passaggi</div>
+  <ol class="steps">
+    <li>Aprire la sezione <strong>Import Excel</strong> dal menu.</li>
+    <li>Scaricare il template Excel messo a disposizione dalla pagina.</li>
+    <li>Compilare nel file le seguenti righe demo (usare i nomi dalla tabella Dati Demo):
+      <ul style="margin-top:6px;margin-left:20px;list-style:disc;font-size:10pt;line-height:1.7;">
+        <li>Arrivo porto → hotel (<span class="tag">DEMO_CLIENTE ARRIVO</span>)</li>
+        <li>Partenza hotel → porto (<span class="tag">DEMO_CLIENTE PARTENZA</span>)</li>
+        <li>Escursione (<span class="tag">DEMO_CLIENTE ESCURSIONE</span>)</li>
+        <li>Territoriale (<span class="tag">DEMO_CLIENTE TERRITORIALE</span>)</li>
+        <li>Linea Bus Italia (<span class="tag">DEMO_CLIENTE LINEA BUS</span>)</li>
+        <li>Una riga ambigua (<span class="tag">DEMO_CLIENTE AMBIGUA</span>)</li>
+      </ul>
+    </li>
+    <li>Salvare il file e caricarlo tramite la funzione di import.</li>
+    <li>Controllare l'anteprima delle righe rilevate dal sistema.</li>
+    <li>Cliccare <strong>Approva tutte</strong> per confermare l'importazione.</li>
+    <li>Verificare il riepilogo dell'import e annotare eventuali righe in revisione.</li>
+  </ol>
+
+  <div class="result-box">
+    <div class="box-label">✅ Risultato atteso</div>
+    <p>Le righe valide vengono importate correttamente. La riga ambigua non crea un servizio errato: viene messa in revisione o segnalata per verifica manuale, senza impattare i dati operativi.</p>
+  </div>
+
+  <div class="warn-box">
+    <div class="box-label">⚠️ Cosa evitare</div>
+    <p>Non caricare file Excel reali contenenti nomi di clienti reali non anonimizzati. Usare esclusivamente il file demo compilato con i valori DEMO_CLIENTE.</p>
+  </div>
+
+  <div class="notes-label">📝 Note cliente</div>
+  <div class="notes-area">
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Esercizio 3 · Import Excel</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ ES 4 ═══════════════════════════ -->
+<div class="page">
+  <div class="ex-header">
+    <div class="ex-label">Esercizio 4 di 8</div>
+    <div class="ex-title">Controllo Arrivi e Partenze</div>
+  </div>
+
+  <div class="obj-box"><strong>Obiettivo:</strong> Verificare che i servizi importati siano visibili nelle liste operative corrette e che arrivi e partenze siano separati e filtrabili.</div>
+
+  <div class="steps-title">Passaggi</div>
+  <ol class="steps">
+    <li>Aprire la sezione <strong>Arrivi</strong> dal menu.</li>
+    <li>Filtrare per la data demo usata nell'esercizio precedente.</li>
+    <li>Cercare il servizio <span class="tag">DEMO_CLIENTE ARRIVO</span> nella lista.</li>
+    <li>Verificare che i dettagli siano corretti (hotel, pax, orario).</li>
+    <li>Aprire la sezione <strong>Partenze</strong> dal menu.</li>
+    <li>Filtrare per la stessa data demo.</li>
+    <li>Cercare il servizio <span class="tag">DEMO_CLIENTE PARTENZA</span> nella lista.</li>
+  </ol>
+
+  <div class="result-box">
+    <div class="box-label">✅ Risultato atteso</div>
+    <p>Il servizio di arrivo appare nella sezione Arrivi e quello di partenza nella sezione Partenze. I due flussi sono separati e filtrabili per data. I dati inseriti nell'Excel corrispondono a quelli visualizzati.</p>
+  </div>
+
+  <div class="warn-box">
+    <div class="box-label">⚠️ Cosa evitare</div>
+    <p>Non usare azioni di modifica, eliminazione o approvazione in blocco (bulk) su servizi reali presenti nella lista. Operare solo sui servizi DEMO_CLIENTE.</p>
+  </div>
+
+  <div class="notes-label">📝 Note cliente</div>
+  <div class="notes-area">
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Esercizio 4 · Arrivi e Partenze</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ ES 5 ═══════════════════════════ -->
+<div class="page">
+  <div class="ex-header">
+    <div class="ex-label">Esercizio 5 di 8</div>
+    <div class="ex-title">Linea Bus</div>
+  </div>
+
+  <div class="obj-box"><strong>Obiettivo:</strong> Verificare che il servizio Linea Bus importato venga gestito nel modulo dedicato — separato dai transfer normali — con linea, fermata, pax e capienza corretti.</div>
+
+  <div class="steps-title">Passaggi</div>
+  <ol class="steps">
+    <li>Aprire la sezione <strong>Bus Network</strong> dal menu.</li>
+    <li>Selezionare la data demo usata negli esercizi precedenti.</li>
+    <li>Cercare il servizio <span class="tag">DEMO_CLIENTE LINEA BUS</span>.</li>
+    <li>Verificare che la linea assegnata sia <strong>Italia</strong>.</li>
+    <li>Verificare che la fermata sia quella indicata nel file Excel demo.</li>
+    <li>Controllare il numero di passeggeri (pax) e la capienza residua del bus.</li>
+    <li>Verificare che il bus assegnato sia visibile e la capienza sia aggiornata.</li>
+  </ol>
+
+  <div class="result-box">
+    <div class="box-label">✅ Risultato atteso</div>
+    <p>Il servizio Linea Bus non appare come transfer generico. È gestito nel modulo Bus Network con linea corretta, fermata, numero pax e capienza residua aggiornata. L'allocazione è leggibile e coerente.</p>
+  </div>
+
+  <div class="warn-box">
+    <div class="box-label">⚠️ Cosa evitare</div>
+    <p>Non modificare linee reali operative (Italia, Centro, Adriatica) o bus già allocati a servizi reali durante la data di test.</p>
+  </div>
+
+  <div class="notes-label">📝 Note cliente</div>
+  <div class="notes-area">
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Esercizio 5 · Linea Bus</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ ES 6 ═══════════════════════════ -->
+<div class="page">
+  <div class="ex-header">
+    <div class="ex-label">Esercizio 6 di 8</div>
+    <div class="ex-title">Smistamento Ischia</div>
+  </div>
+
+  <div class="obj-box"><strong>Obiettivo:</strong> Verificare che il sistema di smistamento Ischia sia protetto da guardrail e che funzioni correttamente solo quando i dati sono pronti e completi.</div>
+
+  <div class="steps-title">Passaggi</div>
+  <ol class="steps">
+    <li>Aprire la sezione <strong>Bus Network</strong> o <strong>Smistamento Ischia</strong> dal menu.</li>
+    <li>Selezionare una data priva di allocazioni bus.</li>
+    <li>Verificare che il sistema mostri un <strong>messaggio di blocco</strong> o avviso che impedisce di procedere.</li>
+    <li>Tornare alla data demo con la Linea Bus già allocata (Esercizio 5).</li>
+    <li>Verificare che il guardrail venga superato con i dati corretti.</li>
+    <li>Avviare lo smistamento <strong>solo se concordato</strong> con il team di supporto durante la sessione.</li>
+    <li>Se avviato, verificare l'eventuale bus locale generato e i relativi dati.</li>
+  </ol>
+
+  <div class="result-box">
+    <div class="box-label">✅ Risultato atteso</div>
+    <p>Senza allocazioni il sistema blocca l'azione mostrando un messaggio di avviso chiaro. Con i dati corretti il guardrail viene superato e lo smistamento procede regolarmente, generando il bus locale con i passeggeri corretti.</p>
+  </div>
+
+  <div class="warn-box">
+    <div class="box-label">⚠️ Cosa evitare</div>
+    <p>Non eseguire smistamenti su date reali operative o su date che contengono servizi reali già assegnati. Procedere solo sulla data demo concordata.</p>
+  </div>
+
+  <div class="notes-label">📝 Note cliente</div>
+  <div class="notes-area">
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Esercizio 6 · Smistamento Ischia</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ ES 7 ═══════════════════════════ -->
+<div class="page">
+  <div class="ex-header">
+    <div class="ex-label">Esercizio 7 di 8</div>
+    <div class="ex-title">Dispatch</div>
+  </div>
+
+  <div class="obj-box"><strong>Obiettivo:</strong> Assegnare un servizio demo a un autista e a un mezzo, verificando che l'assegnazione venga salvata e resti visibile dopo il refresh.</div>
+
+  <div class="steps-title">Passaggi</div>
+  <ol class="steps">
+    <li>Aprire la sezione <strong>Dispatch</strong> o <strong>Piano del Giorno</strong> dal menu.</li>
+    <li>Selezionare la data demo.</li>
+    <li>Individuare il servizio <span class="tag">DEMO_CLIENTE ARRIVO</span> nella lista.</li>
+    <li>Assegnare un autista demo o concordato con il team.</li>
+    <li>Assegnare un mezzo demo o concordato con il team.</li>
+    <li>Salvare l'assegnazione.</li>
+    <li>Ricaricare la pagina.</li>
+    <li>Verificare che l'autista e il mezzo assegnati siano ancora visibili e corretti.</li>
+  </ol>
+
+  <div class="result-box">
+    <div class="box-label">✅ Risultato atteso</div>
+    <p>Il servizio demo risulta assegnato correttamente all'autista e al mezzo scelti. L'assegnazione è persistente e visibile dopo il refresh della pagina.</p>
+  </div>
+
+  <div class="warn-box">
+    <div class="box-label">⚠️ Cosa evitare</div>
+    <p>Non assegnare servizi reali o mezzi reali su date operative. Non modificare assegnazioni già confermate su servizi di clienti reali.</p>
+  </div>
+
+  <div class="notes-label">📝 Note cliente</div>
+  <div class="notes-area">
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Esercizio 7 · Dispatch</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ ES 8 ═══════════════════════════ -->
+<div class="page">
+  <div class="ex-header">
+    <div class="ex-label">Esercizio 8 di 8</div>
+    <div class="ex-title">Driver App</div>
+  </div>
+
+  <div class="obj-box"><strong>Obiettivo:</strong> Verificare la vista autista su dispositivo mobile e controllare che il servizio assegnato sia visibile con tutte le informazioni operative essenziali.</div>
+
+  <div class="steps-title">Passaggi</div>
+  <ol class="steps">
+    <li>Aprire la <strong>Driver App</strong> su dispositivo mobile oppure in modalità mobile dal browser.</li>
+    <li>Accedere con il profilo autista demo se disponibile, oppure con l'account concordato.</li>
+    <li>Cercare il servizio assegnato nell'esercizio precedente (data demo).</li>
+    <li>Aprire il dettaglio del servizio.</li>
+    <li>Verificare le informazioni principali: orario, nome cliente, hotel, note operative.</li>
+    <li>Non modificare lo stato di alcun servizio reale durante questa verifica.</li>
+  </ol>
+
+  <div class="result-box">
+    <div class="box-label">✅ Risultato atteso</div>
+    <p>L'autista visualizza correttamente il servizio assegnato con orario, cliente, hotel e note. Le informazioni operative sono leggibili e complete su schermo mobile.</p>
+  </div>
+
+  <div class="warn-box">
+    <div class="box-label">⚠️ Cosa evitare</div>
+    <p>Non cambiare lo stato (es. "completato", "in corso") di servizi reali già operativi. Operare solo sul servizio DEMO_CLIENTE assegnato nella sessione demo.</p>
+  </div>
+
+  <div class="notes-label">📝 Note cliente</div>
+  <div class="notes-area">
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+    <div class="notes-lines"></div>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Esercizio 8 · Driver App</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ FEEDBACK ═══════════════════════════ -->
+<div class="page">
+  <div class="section-header">
+    <div class="section-num">11</div>
+    <div>
+      <div class="section-title">Scheda feedback cliente</div>
+      <div class="section-sub">Compilare al termine del test per ogni area provata</div>
+    </div>
+  </div>
+
+  <div class="info-box" style="margin-bottom:16px;">
+    Compila questa scheda durante o dopo la sessione di test. Il tuo feedback aiuta il team a migliorare il sistema e a identificare eventuali priorità operative.
+  </div>
+
+  <table class="feedback-table">
+    <thead>
+      <tr>
+        <th style="width:22%">Area testata</th>
+        <th style="width:14%;text-align:center;">Facile?<br/><span style="font-size:7pt;opacity:.7;">sì / no</span></th>
+        <th style="width:28%">Cosa migliorare?</th>
+        <th style="width:22%">Note operative</th>
+        <th style="width:14%;text-align:center;">Priorità<br/><span style="font-size:7pt;opacity:.7;">alta/media/bassa</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="area">Dashboard</td>
+        <td class="check">○ sì &nbsp; ○ no</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="check">&nbsp;</td>
+      </tr>
+      <tr>
+        <td class="area">Disponibilità</td>
+        <td class="check">○ sì &nbsp; ○ no</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="check">&nbsp;</td>
+      </tr>
+      <tr>
+        <td class="area">Import Excel</td>
+        <td class="check">○ sì &nbsp; ○ no</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="check">&nbsp;</td>
+      </tr>
+      <tr>
+        <td class="area">Arrivi / Partenze</td>
+        <td class="check">○ sì &nbsp; ○ no</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="check">&nbsp;</td>
+      </tr>
+      <tr>
+        <td class="area">Linea Bus</td>
+        <td class="check">○ sì &nbsp; ○ no</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="check">&nbsp;</td>
+      </tr>
+      <tr>
+        <td class="area">Smistamento Ischia</td>
+        <td class="check">○ sì &nbsp; ○ no</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="check">&nbsp;</td>
+      </tr>
+      <tr>
+        <td class="area">Dispatch</td>
+        <td class="check">○ sì &nbsp; ○ no</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="check">&nbsp;</td>
+      </tr>
+      <tr>
+        <td class="area">Driver App</td>
+        <td class="check">○ sì &nbsp; ○ no</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="note-cell">&nbsp;</td>
+        <td class="check">&nbsp;</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div style="margin-top:18px;">
+    <div class="notes-label" style="font-size:10pt;font-weight:600;color:var(--navy);margin-bottom:8px;">Impressioni generali e note libere</div>
+    <div class="notes-area" style="min-height:72px;">
+      <div class="notes-lines"></div>
+      <div class="notes-lines"></div>
+      <div class="notes-lines"></div>
+      <div class="notes-lines"></div>
+    </div>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Sezione 11 · Feedback</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ CLEANUP + APPENDICE ═══════════════════════════ -->
+<div class="page">
+  <div class="section-header">
+    <div class="section-num">12</div>
+    <div>
+      <div class="section-title">Cleanup finale</div>
+      <div class="section-sub">Rimozione dati demo al termine della sessione</div>
+    </div>
+  </div>
+
+  <div class="cleanup-box">
+    <h3>✅ Nessuna azione richiesta al cliente</h3>
+    <p>
+      Al termine della sessione di test, tutti i dati demo inseriti durante gli esercizi verranno <strong>rimossi in sicurezza dal team tecnico</strong>.<br/><br/>
+      I dati demo sono facilmente identificabili perché contengono la dicitura <strong>DEMO_CLIENTE</strong>. Non è necessario eliminarli manualmente: il team si occuperà di tutto dopo la sessione.<br/><br/>
+      Se hai inserito dati diversi da quelli indicati in questo documento, segnalalo al team di supporto prima della chiusura della sessione.
+    </p>
+  </div>
+
+  <div class="info-box">
+    <strong>Hai dubbi su un dato inserito?</strong><br/>
+    Contatta il team di supporto durante o dopo la sessione prima che la pulizia venga eseguita. È sempre possibile verificare insieme cosa è stato creato durante il test.
+  </div>
+
+  <div style="margin-top:32px;">
+    <div class="section-header" style="border-bottom-color:var(--border);">
+      <div class="section-num" style="background:var(--slate);">13</div>
+      <div>
+        <div class="section-title" style="font-size:13pt;">Appendice tecnica</div>
+        <div class="section-sub">Nota per il team operativo</div>
+      </div>
+    </div>
+
+    <div class="appendix-box">
+      <h3>Identificazione e rimozione dati demo</h3>
+      <p>
+        Tutti i dati demo inseriti durante la sessione di test sono identificabili dalla stringa:<br/>
+        <span class="mono-tag">DEMO_CLIENTE</span><br/><br/>
+        Questa convenzione di naming consente al team operativo di individuare e rimuovere in sicurezza tutti i record demo senza rischio di impattare dati reali.<br/><br/>
+        La rimozione avviene tramite una query selettiva su tutti i record che contengono tale stringa nei campi nome cliente, note operative e campi correlati.
+      </p>
+    </div>
+
+    <div class="appendix-box" style="margin-top:12px;">
+      <h3>Tabelle coinvolte nel test</h3>
+      <p>
+        Durante la sessione di test vengono tipicamente toccate le seguenti aree del sistema: servizi, disponibilità autisti, allocazioni bus, assegnazioni dispatch. Tutte le modifiche sono tracciate e reversibili tramite il normale processo di cleanup post-sessione.
+      </p>
+    </div>
+  </div>
+
+  <div class="page-footer">
+    <span>Ischia Transfer Service · Test Cliente Controllato</span>
+    <span>Sezione 12–13 · Cleanup e Appendice</span>
+  </div>
+</div>
+
+</body>
+</html>
