@@ -65,6 +65,8 @@ type VehicleDoc = {
   file_path: string;
   uploaded_at: string;
   notes: string | null;
+  signed_url?: string | null;
+  download_error?: string | null;
 };
 
 const COST_TYPE_LABELS: Record<string, string> = {
@@ -140,10 +142,10 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   const [costProvider, setCostProvider] = useState("");
   const [costNotes, setCostNotes] = useState("");
 
-  const showMsg = (text: string, ok: boolean) => {
+  const showMsg = useCallback((text: string, ok: boolean) => {
     setToast({ text, ok });
     setTimeout(() => setToast(null), 3000);
-  };
+  }, []);
 
   const loadCosts = useCallback(async () => {
     if (!supabase) return;
@@ -158,16 +160,22 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   }, [vehicleId]);
 
   const loadDocs = useCallback(async () => {
-    if (!supabase) return;
+    const token = await getToken();
+    if (!token) return;
     setDocsLoading(true);
-    const { data } = await supabase
-      .from("vehicle_documents")
-      .select("id, title, file_path, uploaded_at, notes")
-      .eq("vehicle_id", vehicleId)
-      .order("uploaded_at", { ascending: false });
-    setDocs((data as VehicleDoc[]) ?? []);
+    const res = await fetch(`/api/ops/vehicle-documents?vehicle_id=${vehicleId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    const json = await res.json().catch(() => null) as { documents?: VehicleDoc[]; error?: string } | null;
+    if (!res.ok) {
+      showMsg(json?.error ?? "Errore caricamento documenti.", false);
+      setDocs([]);
+    } else {
+      setDocs(json?.documents ?? []);
+    }
     setDocsLoading(false);
-  }, [vehicleId]);
+  }, [showMsg, vehicleId]);
 
   const load = useCallback(async () => {
     if (tab === "documenti") { void loadDocs(); return; }
@@ -339,16 +347,29 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
       .from("vehicle-documents")
       .upload(path, file, { upsert: false });
     if (uploadError) { showMsg(`Errore upload: ${uploadError.message}`, false); setUploadingDoc(false); return; }
-    const { data: sessionData } = await supabase.auth.getSession();
-    const { error: dbError } = await supabase.from("vehicle_documents").insert({
-      vehicle_id: vehicleId,
-      title,
-      file_path: path,
-      uploaded_by: sessionData.session?.user?.id ?? null,
-      notes: notes || null,
+    const token = await getToken();
+    if (!token) {
+      await supabase.storage.from("vehicle-documents").remove([path]);
+      setUploadingDoc(false);
+      return;
+    }
+    const res = await fetch("/api/ops/vehicle-documents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        vehicle_id: vehicleId,
+        title,
+        file_path: path,
+        notes: notes || null,
+      }),
     });
+    const json = await res.json().catch(() => null) as { error?: string } | null;
     setUploadingDoc(false);
-    if (dbError) { showMsg(`Errore salvataggio: ${dbError.message}`, false); return; }
+    if (!res.ok) {
+      await supabase.storage.from("vehicle-documents").remove([path]);
+      showMsg(`Errore salvataggio: ${json?.error ?? "record documento non creato"}`, false);
+      return;
+    }
     showMsg("Documento aggiunto.", true);
     setShowDocForm(false);
     setNewDocTitle("");
@@ -358,10 +379,15 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
 
   async function handleDocDelete(doc: VehicleDoc) {
     if (!confirm(`Rimuovere "${doc.title}"?`)) return;
-    if (!supabase) return;
-    const { error } = await supabase.from("vehicle_documents").delete().eq("id", doc.id);
-    if (error) { showMsg(`Errore: ${error.message}`, false); return; }
-    void supabase.storage.from("vehicle-documents").remove([doc.file_path]);
+    const token = await getToken();
+    if (!token) return;
+    const res = await fetch("/api/ops/vehicle-documents", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ id: doc.id }),
+    });
+    const json = await res.json().catch(() => null) as { error?: string } | null;
+    if (!res.ok) { showMsg(`Errore: ${json?.error ?? "rimozione non riuscita"}`, false); return; }
     setDocs((prev) => prev.filter((d) => d.id !== doc.id));
     showMsg("Documento rimosso.", true);
   }
@@ -656,7 +682,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
                       </div>
                     </div>
                     <div className="flex gap-2 shrink-0">
-                      <DocDownloadButton path={doc.file_path} />
+                      <DocDownloadButton path={doc.file_path} signedUrl={doc.signed_url} downloadError={doc.download_error} />
                       <button
                         type="button"
                         onClick={() => void handleDocDelete(doc)}
@@ -1062,8 +1088,13 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   );
 }
 
-function DocDownloadButton({ path }: { path: string }) {
+function DocDownloadButton({ path, signedUrl, downloadError }: { path: string; signedUrl?: string | null; downloadError?: string | null }) {
   const handleDownload = async () => {
+    if (downloadError) return;
+    if (signedUrl) {
+      window.open(signedUrl, "_blank");
+      return;
+    }
     if (!supabase) return;
     const { data } = await supabase.storage.from("vehicle-documents").createSignedUrl(path, 60);
     if (data?.signedUrl) window.open(data.signedUrl, "_blank");
@@ -1072,9 +1103,11 @@ function DocDownloadButton({ path }: { path: string }) {
     <button
       type="button"
       onClick={() => void handleDownload()}
+      disabled={!!downloadError}
+      title={downloadError ? "File non disponibile nello storage" : undefined}
       className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
     >
-      Apri
+      {downloadError ? "Non disponibile" : "Apri"}
     </button>
   );
 }

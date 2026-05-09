@@ -280,6 +280,7 @@ export default function ScadenzePage() {
     setLoading(true);
     const res = await fetch("/api/vehicles/compliance/summary", {
       headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
     });
     const json = await res.json().catch(() => null) as { items?: VehicleCompliance[] } | null;
     setItems(json?.items ?? []);
@@ -296,10 +297,10 @@ export default function ScadenzePage() {
     if (!token) return;
     setPanelLoading(true);
     const [insRes, inspRes, extRes, tachRes] = await Promise.all([
-      fetch(`/api/vehicles/${vehicleId}/compliance/insurances`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`/api/vehicles/${vehicleId}/compliance/inspections`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`/api/vehicles/${vehicleId}/compliance/extinguishers`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`/api/vehicles/${vehicleId}/compliance/tachographs`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`/api/vehicles/${vehicleId}/compliance/insurances`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }),
+      fetch(`/api/vehicles/${vehicleId}/compliance/inspections`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }),
+      fetch(`/api/vehicles/${vehicleId}/compliance/extinguishers`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }),
+      fetch(`/api/vehicles/${vehicleId}/compliance/tachographs`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }),
     ]);
     const [insJson, inspJson, extJson, tachJson] = await Promise.all([
       insRes.json().catch(() => ({ items: [] })),

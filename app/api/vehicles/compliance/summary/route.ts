@@ -3,6 +3,8 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { diffDays, expiryStatus, inspectionExpiryStatus, insuranceExpiryStatus, worstStatus } from "@/lib/vehicle-compliance";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(request: NextRequest) {
   const ctx = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
@@ -134,5 +136,9 @@ export async function GET(request: NextRequest) {
     };
   });
 
-  return NextResponse.json({ items, today });
+  return NextResponse.json({ items, today }, {
+    headers: {
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+    },
+  });
 }
