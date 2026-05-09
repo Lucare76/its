@@ -314,7 +314,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     const path = `${vehicleId}/libretto_${side}_${ts}.${ext}`;
     const { error: uploadError } = await supabase.storage
       .from("vehicle-documents")
-      .upload(path, file, { upsert: true });
+      .upload(path, file, { upsert: true, contentType: file.type });
     if (uploadError) {
       showMsg(`Errore upload: ${uploadError.message}`, false);
       if (isRetro) setUploadingLibrettoBack(false); else setUploadingLibretto(false);
@@ -365,7 +365,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     const path = `${vehicleId}/docs/${ts}_${safeName}`;
     const { error: uploadError } = await supabase.storage
       .from("vehicle-documents")
-      .upload(path, file, { upsert: false });
+      .upload(path, file, { upsert: false, contentType: file.type });
     if (uploadError) { showMsg(`Errore upload: ${uploadError.message}`, false); setUploadingDoc(false); return; }
     const token = await getToken();
     if (!token) {
