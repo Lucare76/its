@@ -112,10 +112,14 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   const [fSupplier,    setFSupplier]    = useState("");
   const [fStatus,      setFStatus]      = useState("ordered");
   const [fInstalledAt, setFInstalledAt] = useState("");
-  // libretto
+  // libretto fronte
   const [librettoPath, setLibrettoPath]         = useState<string | null>(null);
   const [librettoUploadedAt, setLibrettoUploadedAt] = useState<string | null>(null);
   const [uploadingLibretto, setUploadingLibretto]   = useState(false);
+  // libretto retro
+  const [librettoBackPath, setLibrettoBackPath]         = useState<string | null>(null);
+  const [librettoBackUploadedAt, setLibrettoBackUploadedAt] = useState<string | null>(null);
+  const [uploadingLibrettoBack, setUploadingLibrettoBack]   = useState(false);
 
   // documenti aggiuntivi
   const [docs, setDocs] = useState<VehicleDoc[]>([]);
@@ -222,11 +226,13 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
       fetch("/api/ops/vehicles", { headers: { Authorization: `Bearer ${token}` } })
         .then((r) => r.json())
         .then((d) => {
-          const v = (d.vehicles ?? []).find((x: { id: string; label: string; libretto_document_path?: string | null; libretto_uploaded_at?: string | null; tachograph_enabled?: boolean; extinguisher_enabled?: boolean }) => x.id === vehicleId);
+          const v = (d.vehicles ?? []).find((x: { id: string; label: string; libretto_document_path?: string | null; libretto_uploaded_at?: string | null; libretto_document_path_back?: string | null; libretto_uploaded_at_back?: string | null; tachograph_enabled?: boolean; extinguisher_enabled?: boolean }) => x.id === vehicleId);
           if (v) {
             setVehicleLabel(v.label);
             setLibrettoPath(v.libretto_document_path ?? null);
             setLibrettoUploadedAt(v.libretto_uploaded_at ?? null);
+            setLibrettoBackPath(v.libretto_document_path_back ?? null);
+            setLibrettoBackUploadedAt(v.libretto_uploaded_at_back ?? null);
             setTachographEnabled(v.tachograph_enabled ?? false);
             setExtinguisherEnabled(v.extinguisher_enabled ?? true);
           }
@@ -295,45 +301,59 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     else showMsg(json.error ?? "Errore.", false);
   }
 
-  async function handleLibrettoUpload(file: File) {
+  async function handleLibrettoUpload(file: File, side: "fronte" | "retro" = "fronte") {
     if (!supabase) return;
-    if (file.type !== "application/pdf") { showMsg("Solo PDF consentiti", false); return; }
+    if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
+      showMsg("Solo PDF o immagini consentiti", false); return;
+    }
     if (file.size > 10 * 1024 * 1024) { showMsg("File troppo grande (max 10 MB)", false); return; }
-    setUploadingLibretto(true);
+    const isRetro = side === "retro";
+    if (isRetro) setUploadingLibrettoBack(true); else setUploadingLibretto(true);
     const ts = Date.now();
-    const path = `${vehicleId}/libretto_${ts}.pdf`;
+    const ext = file.name.split(".").pop() ?? (file.type === "application/pdf" ? "pdf" : "jpg");
+    const path = `${vehicleId}/libretto_${side}_${ts}.${ext}`;
     const { error: uploadError } = await supabase.storage
       .from("vehicle-documents")
       .upload(path, file, { upsert: true });
-    if (uploadError) { showMsg(`Errore upload: ${uploadError.message}`, false); setUploadingLibretto(false); return; }
+    if (uploadError) {
+      showMsg(`Errore upload: ${uploadError.message}`, false);
+      if (isRetro) setUploadingLibrettoBack(false); else setUploadingLibretto(false);
+      return;
+    }
     const token = await getToken();
-    if (!token) { setUploadingLibretto(false); return; }
+    if (!token) { if (isRetro) setUploadingLibrettoBack(false); else setUploadingLibretto(false); return; }
     const res = await fetch(`/api/vehicles/${vehicleId}/libretto`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ document_path: path }),
+      body: JSON.stringify({ document_path: path, side }),
     });
     if (res.ok) {
-      setLibrettoPath(path);
-      setLibrettoUploadedAt(new Date().toISOString());
-      showMsg("Libretto caricato.", true);
+      if (isRetro) {
+        setLibrettoBackPath(path);
+        setLibrettoBackUploadedAt(new Date().toISOString());
+      } else {
+        setLibrettoPath(path);
+        setLibrettoUploadedAt(new Date().toISOString());
+      }
+      showMsg(`Libretto ${side} caricato.`, true);
     } else {
       showMsg("Errore salvataggio percorso", false);
     }
-    setUploadingLibretto(false);
+    if (isRetro) setUploadingLibrettoBack(false); else setUploadingLibretto(false);
   }
 
-  async function handleLibrettoDelete() {
-    if (!confirm("Rimuovere il libretto?")) return;
+  async function handleLibrettoDelete(side: "fronte" | "retro" = "fronte") {
+    if (!confirm(`Rimuovere il ${side} del libretto?`)) return;
     const token = await getToken();
     if (!token) return;
     await fetch(`/api/vehicles/${vehicleId}/libretto`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ side }),
     });
-    setLibrettoPath(null);
-    setLibrettoUploadedAt(null);
-    showMsg("Libretto rimosso.", true);
+    if (side === "retro") { setLibrettoBackPath(null); setLibrettoBackUploadedAt(null); }
+    else { setLibrettoPath(null); setLibrettoUploadedAt(null); }
+    showMsg(`Libretto ${side} rimosso.`, true);
   }
 
   async function handleDocUpload(file: File, title: string, notes: string) {
@@ -541,66 +561,28 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <h3 className="text-sm font-bold text-slate-700 mb-1">Libretto di circolazione</h3>
-            <p className="text-xs text-slate-400 mb-4">PDF — max 10 MB</p>
-            {librettoPath ? (
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
-                <div>
-                  <div className="text-sm font-semibold text-emerald-800">Documento presente</div>
-                  {librettoUploadedAt && (
-                    <div className="text-xs text-emerald-600 mt-0.5">
-                      Caricato il {new Date(librettoUploadedAt).toLocaleDateString("it-IT")}
-                    </div>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <LibrettoDownloadButton path={librettoPath} />
-                  <button
-                    type="button"
-                    onClick={() => void handleLibrettoDelete()}
-                    className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50"
-                  >
-                    Rimuovi
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-lg border-2 border-dashed border-slate-200 p-8 text-center">
-                <div className="text-2xl mb-2">📄</div>
-                <div className="text-sm text-slate-500 mb-4">Nessun libretto caricato</div>
-                <label className="cursor-pointer rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-                  {uploadingLibretto ? "Caricamento..." : "Seleziona PDF"}
-                  <input
-                    type="file"
-                    accept="application/pdf"
-                    className="hidden"
-                    disabled={uploadingLibretto}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) void handleLibrettoUpload(file);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-              </div>
-            )}
-            {librettoPath && (
-              <div className="mt-3">
-                <label className="cursor-pointer rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
-                  {uploadingLibretto ? "Caricamento..." : "Sostituisci PDF"}
-                  <input
-                    type="file"
-                    accept="application/pdf"
-                    className="hidden"
-                    disabled={uploadingLibretto}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) void handleLibrettoUpload(file);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-              </div>
-            )}
+            <p className="text-xs text-slate-400 mb-4">PDF o foto — fronte e retro — max 10 MB ciascuno</p>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {/* Fronte */}
+              <LibrettoSlot
+                label="Fronte"
+                path={librettoPath}
+                uploadedAt={librettoUploadedAt}
+                uploading={uploadingLibretto}
+                onUpload={(file) => void handleLibrettoUpload(file, "fronte")}
+                onDelete={() => void handleLibrettoDelete("fronte")}
+              />
+              {/* Retro */}
+              <LibrettoSlot
+                label="Retro"
+                path={librettoBackPath}
+                uploadedAt={librettoBackUploadedAt}
+                uploading={uploadingLibrettoBack}
+                onUpload={(file) => void handleLibrettoUpload(file, "retro")}
+                onDelete={() => void handleLibrettoDelete("retro")}
+              />
+            </div>
           </div>
 
           {/* Documenti aggiuntivi */}
@@ -1126,7 +1108,76 @@ function LibrettoDownloadButton({ path }: { path: string }) {
       onClick={() => void handleDownload()}
       className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
     >
-      Apri PDF
+      Apri
     </button>
+  );
+}
+
+function LibrettoSlot({
+  label,
+  path,
+  uploadedAt,
+  uploading,
+  onUpload,
+  onDelete,
+}: {
+  label: string;
+  path: string | null;
+  uploadedAt: string | null;
+  uploading: boolean;
+  onUpload: (file: File) => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 p-3">
+      <div className="text-xs font-bold text-slate-500 mb-2">{label}</div>
+      {path ? (
+        <div className="flex flex-col gap-2">
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+            <div className="text-sm font-semibold text-emerald-800">Documento presente</div>
+            {uploadedAt && (
+              <div className="text-xs text-emerald-600 mt-0.5">
+                Caricato il {new Date(uploadedAt).toLocaleDateString("it-IT")}
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <LibrettoDownloadButton path={path} />
+            <label className={`cursor-pointer rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 ${uploading ? "opacity-50 cursor-not-allowed" : "hover:bg-slate-50"}`}>
+              {uploading ? "Caricamento..." : "Sostituisci"}
+              <input
+                type="file"
+                accept="application/pdf,image/*"
+                className="hidden"
+                disabled={uploading}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = ""; }}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={onDelete}
+              className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+            >
+              Rimuovi
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-lg border-2 border-dashed border-slate-200 p-6 text-center">
+          <div className="text-2xl mb-1">📄</div>
+          <div className="text-xs text-slate-400 mb-3">Nessun documento</div>
+          <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-semibold text-white ${uploading ? "bg-slate-300 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700"}`}>
+            {uploading ? "Caricamento..." : "Seleziona"}
+            <input
+              type="file"
+              accept="application/pdf,image/*"
+              className="hidden"
+              disabled={uploading}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = ""; }}
+            />
+          </label>
+        </div>
+      )}
+    </div>
   );
 }

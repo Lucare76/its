@@ -119,9 +119,7 @@ const EMPTY_FORM = {
   notes: "",
   radius_vehicle_id: "",
   capacity: "",
-  insurance_expiry: "",
   road_tax_expiry: "",
-  inspection_expiry: "",
   km: "",
   telaio: "",
   license_number: "",
@@ -145,21 +143,10 @@ const EXPIRY_BADGE: Record<string, string> = {
 };
 
 function getVehicleDocumentSummary(vehicle: Vehicle) {
-  const docs = [
-    { key: "Ass.", val: vehicle.insurance_expiry },
-    { key: "Bollo", val: vehicle.road_tax_expiry },
-    { key: "Coll.", val: vehicle.inspection_expiry },
-  ];
-  const worst = docs.reduce<"ok" | "soon" | "expired" | "none">((acc, doc) => {
-    const status = expiryStatus(doc.val);
-    if (status === "expired") return "expired";
-    if (status === "soon" && acc !== "expired") return "soon";
-    if (status === "ok" && acc === "none") return "ok";
-    return acc;
-  }, "none");
-  const expiredDocs = docs.filter((doc) => expiryStatus(doc.val) === "expired").map((doc) => doc.key);
-  const soonDocs = docs.filter((doc) => expiryStatus(doc.val) === "soon").map((doc) => doc.key);
-  const label = expiredDocs.length ? `Scaduto: ${expiredDocs.join(", ")}` : soonDocs.length ? `In scadenza: ${soonDocs.join(", ")}` : worst === "ok" ? "Documenti in ordine" : "Nessun documento";
+  const status = expiryStatus(vehicle.road_tax_expiry);
+  const worst: "ok" | "soon" | "expired" | "none" =
+    status === "expired" ? "expired" : status === "soon" ? "soon" : status === "ok" ? "ok" : "none";
+  const label = worst === "expired" ? "Bollo scaduto" : worst === "soon" ? "Bollo in scadenza" : worst === "ok" ? "Bollo in regola" : "Nessun documento";
   return { worst, label };
 }
 
@@ -217,9 +204,7 @@ export default function FleetOpsPage() {
       notes: vehicle.notes ?? "",
       radius_vehicle_id: vehicle.radius_vehicle_id ?? "",
       capacity: String(vehicle.capacity ?? ""),
-      insurance_expiry: vehicle.insurance_expiry ?? "",
       road_tax_expiry: vehicle.road_tax_expiry ?? "",
-      inspection_expiry: vehicle.inspection_expiry ?? "",
       km: String(vehicle.km ?? ""),
       telaio: vehicle.telaio ?? "",
       license_number: vehicle.license_number ?? "",
@@ -720,9 +705,7 @@ export default function FleetOpsPage() {
                         radius_vehicle_id: form.radius_vehicle_id || null,
                         capacity: form.capacity ? Number(form.capacity) : null,
                         is_blocked_manual: Boolean(form.blocked_reason),
-                        insurance_expiry: form.insurance_expiry || null,
                         road_tax_expiry: form.road_tax_expiry || null,
-                        inspection_expiry: form.inspection_expiry || null,
                         km: form.km ? Number(form.km) : null,
                         telaio: form.telaio || null,
                         license_number: form.license_number || null,
@@ -771,25 +754,20 @@ export default function FleetOpsPage() {
                 {!isNewVehicle && selectedVehicle ? (
                   <>
                     <details className="rounded-xl border border-slate-200" open={
-                      expiryStatus(selectedVehicle.insurance_expiry) !== "ok" ||
-                      expiryStatus(selectedVehicle.road_tax_expiry) !== "ok" ||
-                      expiryStatus(selectedVehicle.inspection_expiry) !== "ok"
+                      expiryStatus(selectedVehicle.road_tax_expiry) !== "ok"
                     }>
                       <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-700">
                         Scadenze documenti
                       </summary>
                       <div className="grid grid-cols-1 gap-3 border-t border-slate-100 px-4 py-3">
-                        {[
-                          { label: "Assicurazione", field: "insurance_expiry" as const, val: selectedVehicle.insurance_expiry },
-                          { label: "Bollo",          field: "road_tax_expiry"   as const, val: selectedVehicle.road_tax_expiry },
-                          { label: "Collaudo",       field: "inspection_expiry" as const, val: selectedVehicle.inspection_expiry },
-                        ].map(({ label, field, val }) => {
-                          const status = expiryStatus(form[field] || val);
+                        {/* Bollo — unico campo gestito qui */}
+                        {(() => {
+                          const status = expiryStatus(form.road_tax_expiry || selectedVehicle.road_tax_expiry);
                           return (
-                            <label key={field} className="text-xs font-semibold text-slate-500">
+                            <label className="text-xs font-semibold text-slate-500">
                               <div className="flex items-center justify-between">
-                                <span>{label}</span>
-                                {form[field] && (
+                                <span>Bollo</span>
+                                {(form.road_tax_expiry || selectedVehicle.road_tax_expiry) && (
                                   <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${EXPIRY_BADGE[status]}`}>
                                     {status === "expired" ? "Scaduto" : status === "soon" ? "In scadenza" : "OK"}
                                   </span>
@@ -797,12 +775,16 @@ export default function FleetOpsPage() {
                               </div>
                               <DateInput
                                 className="input-saas mt-1 w-full"
-                                value={form[field]}
-                                onChange={(iso) => setForm((f) => ({ ...f, [field]: iso }))}
+                                value={form.road_tax_expiry}
+                                onChange={(iso) => setForm((f) => ({ ...f, road_tax_expiry: iso }))}
                               />
                             </label>
                           );
-                        })}
+                        })()}
+                        <p className="text-xs text-slate-400">
+                          Assicurazione, collaudo, estintore e tachigrafo si gestiscono nella sezione{" "}
+                          <a href="/fleet-ops/scadenze" className="text-blue-600 hover:underline font-medium">Scadenze</a>.
+                        </p>
                         <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
@@ -811,13 +793,17 @@ export default function FleetOpsPage() {
                             onClick={() => void post({
                               action: "set_vehicle_documents",
                               id: selectedVehicle.id,
-                              insurance_expiry: form.insurance_expiry || null,
                               road_tax_expiry: form.road_tax_expiry || null,
-                              inspection_expiry: form.inspection_expiry || null,
                             })}
                           >
-                            Salva documenti
+                            Salva bollo
                           </button>
+                          <a
+                            href="/fleet-ops/scadenze"
+                            className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                          >
+                            Gestisci scadenze →
+                          </a>
                         </div>
                       </div>
                     </details>

@@ -12,18 +12,20 @@ export async function POST(request: NextRequest, { params }: Ctx) {
   const { admin, membership: { tenant_id } } = ctx;
 
   const body = await request.json().catch(() => ({}));
-  const { document_path } = body as { document_path?: string };
+  const { document_path, side } = body as { document_path?: string; side?: "fronte" | "retro" };
 
   if (!document_path) {
     return NextResponse.json({ error: "document_path obbligatorio" }, { status: 400 });
   }
 
+  const isRetro = side === "retro";
+  const updatePayload = isRetro
+    ? { libretto_document_path_back: document_path, libretto_uploaded_at_back: new Date().toISOString() }
+    : { libretto_document_path: document_path, libretto_uploaded_at: new Date().toISOString() };
+
   const { error } = await admin
     .from("vehicles")
-    .update({
-      libretto_document_path: document_path,
-      libretto_uploaded_at: new Date().toISOString(),
-    })
+    .update(updatePayload)
     .eq("id", vehicleId)
     .eq("tenant_id", tenant_id);
 
@@ -34,7 +36,7 @@ export async function POST(request: NextRequest, { params }: Ctx) {
     vehicle_id: vehicleId,
     compliance_type: "libretto",
     action: "uploaded",
-    notes: document_path,
+    notes: `${isRetro ? "retro" : "fronte"}: ${document_path}`,
   });
 
   return NextResponse.json({ ok: true });
@@ -46,9 +48,17 @@ export async function DELETE(request: NextRequest, { params }: Ctx) {
   if (ctx instanceof NextResponse) return ctx;
   const { admin, membership: { tenant_id } } = ctx;
 
+  const body = await request.json().catch(() => ({}));
+  const { side } = body as { side?: "fronte" | "retro" };
+
+  const isRetro = side === "retro";
+  const updatePayload = isRetro
+    ? { libretto_document_path_back: null, libretto_uploaded_at_back: null }
+    : { libretto_document_path: null, libretto_uploaded_at: null };
+
   await admin
     .from("vehicles")
-    .update({ libretto_document_path: null, libretto_uploaded_at: null })
+    .update(updatePayload)
     .eq("id", vehicleId)
     .eq("tenant_id", tenant_id);
 
