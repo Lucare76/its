@@ -518,20 +518,22 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
       )}
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-5 border-b border-slate-200 pb-0">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => { setTab(t.key); setShowForm(false); }}
-            className={`px-4 py-2 text-sm font-semibold rounded-t-lg border-b-2 transition-colors ${
-              tab === t.key
-                ? "border-blue-600 text-blue-700"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 mb-5 border-b border-slate-200">
+        <div className="flex gap-1 min-w-max sm:min-w-0">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => { setTab(t.key); setShowForm(false); }}
+              className={`whitespace-nowrap px-3 py-2.5 text-sm font-semibold rounded-t-lg border-b-2 transition-colors ${
+                tab === t.key
+                  ? "border-blue-600 text-blue-700"
+                  : "border-transparent text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Documenti tab */}
@@ -706,7 +708,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
           {showCostForm ? (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
               <h3 className="text-sm font-bold text-slate-700 mb-4">Nuovo costo</h3>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <label className="text-xs font-semibold text-slate-500">
                   Tipo *
                   <select value={costType} onChange={(e) => setCostType(e.target.value)} className="input-saas mt-1 w-full">
@@ -769,15 +771,15 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
             </div>
           ) : (
             <>
-              <div className="rounded-xl border border-slate-200 overflow-hidden">
+              <div className="rounded-xl border border-slate-200 overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
                     <tr>
-                      <th className="px-4 py-3 text-left">Data</th>
-                      <th className="px-4 py-3 text-left">Tipo</th>
-                      <th className="px-4 py-3 text-left">Fornitore</th>
-                      <th className="px-4 py-3 text-right">Durata</th>
-                      <th className="px-4 py-3 text-right">Importo</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Data</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Tipo</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Fornitore</th>
+                      <th className="px-4 py-3 text-right whitespace-nowrap">Durata</th>
+                      <th className="px-4 py-3 text-right whitespace-nowrap">Importo</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -829,7 +831,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
           <h3 className="text-sm font-bold text-slate-700 mb-4">
             {tab === "maintenance" ? "Nuova manutenzione" : tab === "fuel" ? "Nuovo rifornimento" : "Nuovo ricambio"}
           </h3>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
 
             {tab === "maintenance" && (
               <>
@@ -965,50 +967,50 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
           Nessun record registrato.
         </div>
       ) : (
-        <div className="rounded-xl border border-slate-200 overflow-hidden">
+        <div className="rounded-xl border border-slate-200 overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
               <tr>
                 {tab === "maintenance" && (
                   <>
-                    <th className="px-4 py-3 text-left">Data</th>
+                    <th className="px-4 py-3 text-left whitespace-nowrap">Data</th>
                     <th className="px-4 py-3 text-left">Descrizione</th>
-                    <th className="px-4 py-3 text-left">Officina</th>
-                    <th className="px-4 py-3 text-right">Km</th>
-                    <th className="px-4 py-3 text-right">Costo</th>
+                    <th className="px-4 py-3 text-left whitespace-nowrap hidden sm:table-cell">Officina</th>
+                    <th className="px-4 py-3 text-right whitespace-nowrap hidden sm:table-cell">Km</th>
+                    <th className="px-4 py-3 text-right whitespace-nowrap">Costo</th>
                     <th className="px-4 py-3" />
                   </>
                 )}
                 {tab === "fuel" && (
                   <>
-                    <th className="px-4 py-3 text-left">Data</th>
-                    <th className="px-4 py-3 text-left">Tipo</th>
-                    <th className="px-4 py-3 text-left">Distributore</th>
-                    <th className="px-4 py-3 text-right">Litri</th>
-                    <th className="px-4 py-3 text-right">Km</th>
-                    <th className="px-4 py-3 text-right">Costo</th>
+                    <th className="px-4 py-3 text-left whitespace-nowrap">Data</th>
+                    <th className="px-4 py-3 text-left whitespace-nowrap">Tipo</th>
+                    <th className="px-4 py-3 text-left whitespace-nowrap hidden sm:table-cell">Distributore</th>
+                    <th className="px-4 py-3 text-right whitespace-nowrap">Litri</th>
+                    <th className="px-4 py-3 text-right whitespace-nowrap hidden sm:table-cell">Km</th>
+                    <th className="px-4 py-3 text-right whitespace-nowrap">Costo</th>
                     <th className="px-4 py-3" />
                   </>
                 )}
                 {tab === "spare_parts" && (
                   <>
-                    <th className="px-4 py-3 text-left">Data</th>
+                    <th className="px-4 py-3 text-left whitespace-nowrap">Data</th>
                     <th className="px-4 py-3 text-left">Pezzo</th>
-                    <th className="px-4 py-3 text-left">Stato</th>
-                    <th className="px-4 py-3 text-right">Qtà</th>
-                    <th className="px-4 py-3 text-right">Costo</th>
+                    <th className="px-4 py-3 text-left whitespace-nowrap">Stato</th>
+                    <th className="px-4 py-3 text-right whitespace-nowrap hidden sm:table-cell">Qtà</th>
+                    <th className="px-4 py-3 text-right whitespace-nowrap">Costo</th>
                     <th className="px-4 py-3" />
                   </>
                 )}
                 {tab === "km_logs" && (
                   <>
-                    <th className="px-4 py-3 text-left">Data/ora</th>
-                    <th className="px-4 py-3 text-left">Autista</th>
-                    <th className="px-4 py-3 text-right">Km partenza</th>
-                    <th className="px-4 py-3 text-right">Km arrivo</th>
-                    <th className="px-4 py-3 text-right">Percorsi</th>
-                    <th className="px-4 py-3 text-left">Note</th>
-                    <th className="px-4 py-3 text-left">Stato</th>
+                    <th className="px-4 py-3 text-left whitespace-nowrap">Data/ora</th>
+                    <th className="px-4 py-3 text-left whitespace-nowrap">Autista</th>
+                    <th className="px-4 py-3 text-right whitespace-nowrap hidden sm:table-cell">Km partenza</th>
+                    <th className="px-4 py-3 text-right whitespace-nowrap hidden sm:table-cell">Km arrivo</th>
+                    <th className="px-4 py-3 text-right whitespace-nowrap">Percorsi</th>
+                    <th className="px-4 py-3 text-left hidden sm:table-cell">Note</th>
+                    <th className="px-4 py-3 text-left whitespace-nowrap">Stato</th>
                   </>
                 )}
               </tr>
@@ -1018,8 +1020,8 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
                 <tr key={r.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{new Date(r.maintenance_date).toLocaleDateString("it-IT")}</td>
                   <td className="px-4 py-3 font-medium text-slate-800">{r.description}{r.notes ? <span className="text-xs text-slate-400 ml-1">({r.notes})</span> : null}</td>
-                  <td className="px-4 py-3 text-slate-500">{r.provider ?? "—"}</td>
-                  <td className="px-4 py-3 text-right text-slate-500">{r.km_at_service != null ? r.km_at_service.toLocaleString("it-IT") : "—"}</td>
+                  <td className="px-4 py-3 text-slate-500 hidden sm:table-cell">{r.provider ?? "—"}</td>
+                  <td className="px-4 py-3 text-right text-slate-500 hidden sm:table-cell">{r.km_at_service != null ? r.km_at_service.toLocaleString("it-IT") : "—"}</td>
                   <td className="px-4 py-3 text-right font-semibold text-emerald-700">{r.cost != null ? `€${r.cost.toFixed(2)}` : "—"}</td>
                   <td className="px-4 py-3 text-right">
                     <button type="button" onClick={() => void handleDelete(r.id)} className="text-xs text-slate-300 hover:text-rose-500">✕</button>
@@ -1030,9 +1032,9 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
                 <tr key={r.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{new Date(r.fuel_date).toLocaleDateString("it-IT")}</td>
                   <td className="px-4 py-3"><span className="capitalize text-amber-700 font-semibold text-xs">{r.fuel_type ?? "—"}</span></td>
-                  <td className="px-4 py-3 text-slate-500">{r.station ?? "—"}</td>
+                  <td className="px-4 py-3 text-slate-500 hidden sm:table-cell">{r.station ?? "—"}</td>
                   <td className="px-4 py-3 text-right font-semibold text-slate-700">{r.liters != null ? `${r.liters.toFixed(1)} L` : "—"}</td>
-                  <td className="px-4 py-3 text-right text-slate-500">{r.km_at_fuel != null ? r.km_at_fuel.toLocaleString("it-IT") : "—"}</td>
+                  <td className="px-4 py-3 text-right text-slate-500 hidden sm:table-cell">{r.km_at_fuel != null ? r.km_at_fuel.toLocaleString("it-IT") : "—"}</td>
                   <td className="px-4 py-3 text-right font-semibold text-emerald-700">{r.cost != null ? `€${r.cost.toFixed(2)}` : "—"}</td>
                   <td className="px-4 py-3 text-right">
                     {userRole === "admin" && (
@@ -1050,7 +1052,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
                       {r.status === "installed" ? "Installato" : r.status === "received" ? "Ricevuto" : "Ordinato"}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right text-slate-600">{r.quantity}</td>
+                  <td className="px-4 py-3 text-right text-slate-600 hidden sm:table-cell">{r.quantity}</td>
                   <td className="px-4 py-3 text-right font-semibold text-emerald-700">{r.cost != null ? `€${r.cost.toFixed(2)}` : "—"}</td>
                   <td className="px-4 py-3 text-right">
                     <button type="button" onClick={() => void handleDelete(r.id)} className="text-xs text-slate-300 hover:text-rose-500">✕</button>
@@ -1066,10 +1068,10 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
                       {new Date(r.start_at).toLocaleString("it-IT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
                     </td>
                     <td className="px-4 py-3 font-semibold text-slate-800">{r.driver_name}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{r.start_km.toLocaleString("it-IT")}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{r.end_km != null ? r.end_km.toLocaleString("it-IT") : "—"}</td>
+                    <td className="px-4 py-3 text-right text-slate-600 hidden sm:table-cell">{r.start_km.toLocaleString("it-IT")}</td>
+                    <td className="px-4 py-3 text-right text-slate-600 hidden sm:table-cell">{r.end_km != null ? r.end_km.toLocaleString("it-IT") : "—"}</td>
                     <td className="px-4 py-3 text-right font-bold text-emerald-700">{km != null ? `+${km.toLocaleString("it-IT")}` : "—"}</td>
-                    <td className="px-4 py-3 text-slate-400 text-xs">{r.notes ?? "—"}</td>
+                    <td className="px-4 py-3 text-slate-400 text-xs hidden sm:table-cell">{r.notes ?? "—"}</td>
                     <td className="px-4 py-3">
                       {isOpen ? (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">In corso</span>
