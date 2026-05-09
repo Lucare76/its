@@ -98,6 +98,7 @@ Smoke test inbound automatico (senza problemi di escaping `curl`):
 ### Script helper locali
 - `pnpm db:bootstrap` -> mostra percorso file + istruzioni SQL Editor
 - `pnpm db:seed` -> mostra percorso file + istruzioni SQL Editor
+- `pnpm db:attach-demo-users` -> mostra il file SQL per collegare gli utenti demo creati in Auth
 
 Nota: i comandi `db:*` non eseguono SQL automaticamente. L'esecuzione va fatta nel SQL Editor Supabase.
 
@@ -112,6 +113,9 @@ Nota: i comandi `db:*` non eseguono SQL automaticamente. L'esecuzione va fatta n
 8. Esegui `pnpm db:seed`.
 9. Copia tutto il contenuto di `supabase/seed_demo.sql`.
 10. Incolla nella query e clicca `Run`.
+11. Dopo aver creato gli utenti demo in `Authentication -> Users`, esegui `pnpm db:attach-demo-users`.
+12. Copia tutto il contenuto di `supabase/attach_demo_users.sql`.
+13. Incolla nella query e clicca `Run`.
 
 ### Deploy note: Service Type v2 (transfer + bus_tour) 
 Se il database esiste gia:
@@ -135,9 +139,10 @@ Se il database esiste gia:
 
 ### Collega utenti al tenant demo (memberships)
 1. Torna in `SQL Editor` -> `New query`.
-2. Copia/incolla il contenuto di `supabase/attach_demo_users.sql`.
-3. Clicca `Run`.
-4. Esegui questo passaggio solo dopo aver creato i 4 utenti in `Authentication -> Users`.
+2. Esegui `pnpm db:attach-demo-users`.
+3. Copia/incolla il contenuto di `supabase/attach_demo_users.sql`.
+4. Clicca `Run`.
+5. Esegui questo passaggio solo dopo aver creato i 4 utenti in `Authentication -> Users`.
 
 ### Configura `.env.local`
 1. In root progetto crea `.env.local` partendo da `.env.example`.
