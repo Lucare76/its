@@ -625,6 +625,7 @@ export default function WhatsAppInboxPage() {
                   type="button"
                   onClick={() => {
                     setNewChatMode(false);
+                    setComposerMode("text");
                     void load(thread.id);
                     setMobileView("chat");
                   }}
