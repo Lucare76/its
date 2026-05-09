@@ -31,6 +31,7 @@
     "db:bootstrap": "node scripts/db-sql-editor.mjs bootstrap",
     "db:seed": "node scripts/db-sql-editor.mjs seed",
     "db:attach-demo-users": "node scripts/db-sql-editor.mjs attach-demo-users",
+    "db:verify-rls": "node scripts/db-sql-editor.mjs verify-rls",
     "types:supabase:gen": "node scripts/supabase-gen-types.mjs",
     "types:supabase:check": "node scripts/supabase-gen-types.mjs --check",
     "test": "vitest run",

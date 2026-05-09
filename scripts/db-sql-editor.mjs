@@ -6,7 +6,8 @@ const mode = process.argv[2];
 const fileMap = {
   bootstrap: "supabase/bootstrap.sql",
   seed: "supabase/seed_demo.sql",
-  "attach-demo-users": "supabase/attach_demo_users.sql"
+  "attach-demo-users": "supabase/attach_demo_users.sql",
+  "verify-rls": "supabase/verify_rls.sql"
 };
 const relativePath = fileMap[mode] ?? fileMap.bootstrap;
 const absolutePath = path.resolve(process.cwd(), relativePath);

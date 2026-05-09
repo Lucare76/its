@@ -99,6 +99,7 @@ Smoke test inbound automatico (senza problemi di escaping `curl`):
 - `pnpm db:bootstrap` -> mostra percorso file + istruzioni SQL Editor
 - `pnpm db:seed` -> mostra percorso file + istruzioni SQL Editor
 - `pnpm db:attach-demo-users` -> mostra il file SQL per collegare gli utenti demo creati in Auth
+- `pnpm db:verify-rls` -> apre la checklist SQL read-only per verificare RLS e policy core
 
 Nota: i comandi `db:*` non eseguono SQL automaticamente. L'esecuzione va fatta nel SQL Editor Supabase.
 
@@ -116,6 +117,13 @@ Nota: i comandi `db:*` non eseguono SQL automaticamente. L'esecuzione va fatta n
 11. Dopo aver creato gli utenti demo in `Authentication -> Users`, esegui `pnpm db:attach-demo-users`.
 12. Copia tutto il contenuto di `supabase/attach_demo_users.sql`.
 13. Incolla nella query e clicca `Run`.
+14. Esegui `pnpm db:verify-rls`.
+15. Copia tutto il contenuto di `supabase/verify_rls.sql`.
+16. Incolla nella query e verifica che:
+ - `rls_status = ON` per tutte le tabelle core
+ - `policy_status = OK` per tutte le policy attese
+ - `tables_with_rls_on = expected_table_count`
+ - `matched_policy_count = expected_policy_count`
 
 ### Deploy note: Service Type v2 (transfer + bus_tour) 
 Se il database esiste gia:
