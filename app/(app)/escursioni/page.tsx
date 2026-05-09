@@ -666,9 +666,15 @@ export default function EscursioniPage() {
                     agencyNames={agencyNames}
                     saving={saving}
                     onUpdate={(patch) => void post("update_unit", { unit_id: unit.id, ...patch })}
-                    onDelete={() => void post("delete_unit", { unit_id: unit.id })}
+                    onDelete={() => {
+                      if (!window.confirm("Sei sicuro di voler eliminare questa unita escursione?")) return;
+                      void post("delete_unit", { unit_id: unit.id });
+                    }}
                     onAddPassenger={(data) => void post("add_passenger", { excursion_unit_id: unit.id, ...data })}
-                    onRemovePassenger={(id) => void post("remove_passenger", { allocation_id: id })}
+                    onRemovePassenger={(id) => {
+                      if (!window.confirm("Sei sicuro di voler rimuovere questo passeggero dall'escursione?")) return;
+                      void post("remove_passenger", { allocation_id: id });
+                    }}
                   />
                 ))}
               </div>

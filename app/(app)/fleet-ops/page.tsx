@@ -1284,6 +1284,7 @@ function CommitmentsPanel({
   }
 
   async function deleteCommitment(id: string) {
+    if (!window.confirm("Sei sicuro di voler rimuovere questo impegno mezzo?")) return;
     const token = await accessToken();
     if (!token) return;
     const res = await fetch("/api/ops/vehicle-records", {

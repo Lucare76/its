@@ -286,7 +286,10 @@ function PickupRunCard({
             </button>
           )}
           <button
-            onClick={() => void onPost("delete_run", { run_id: run.id, date })}
+            onClick={() => {
+              if (!window.confirm("Sei sicuro di voler eliminare questa run? L'operazione potrebbe rimuovere dati operativi collegati.")) return;
+              void onPost("delete_run", { run_id: run.id, date });
+            }}
             disabled={saving}
             className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-400 hover:border-rose-300 hover:text-rose-500 disabled:opacity-40">
             ✕
@@ -1340,7 +1343,10 @@ function TabServiziIsola() {
                           Annulla
                         </button>
                       )}
-                      <button onClick={() => void post("delete_service", { service_id: svc.id })}
+                      <button onClick={() => {
+                        if (!window.confirm("Sei sicuro di voler eliminare questo servizio locale?")) return;
+                        void post("delete_service", { service_id: svc.id });
+                      }}
                         disabled={saving}
                         className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-400 hover:border-rose-300 hover:text-rose-500">
                         ✕

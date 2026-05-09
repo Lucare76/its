@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DateInput, PageHeader, SectionCard } from "@/components/ui";
@@ -1851,7 +1851,10 @@ export default function BusNetworkPage() {
                                       disabled={saving}
                                       className="text-slate-400 hover:text-sky-400 disabled:opacity-30 text-xs">⧉</button>
                                     <button
-                                      onClick={() => void post("remove_dist_bus", { dist_bus_id: bus.id })}
+                                      onClick={() => {
+                                        if (!window.confirm("Sei sicuro di voler rimuovere questo bus di distribuzione Ischia? Le assegnazioni collegate potrebbero essere eliminate o rigenerate.")) return;
+                                        void post("remove_dist_bus", { dist_bus_id: bus.id });
+                                      }}
                                       disabled={saving}
                                       className="text-slate-400 hover:text-rose-400 disabled:opacity-30 text-xs">✕</button>
                                   </div>
@@ -2108,7 +2111,10 @@ export default function BusNetworkPage() {
                                       disabled={saving}
                                       className="text-white/60 hover:text-sky-300 disabled:opacity-30 text-xs">⧉</button>
                                     <button
-                                      onClick={() => void post("remove_dist_bus", { dist_bus_id: bus.id })}
+                                      onClick={() => {
+                                        if (!window.confirm("Sei sicuro di voler rimuovere questo bus di distribuzione Ischia? Le assegnazioni collegate potrebbero essere eliminate o rigenerate.")) return;
+                                        void post("remove_dist_bus", { dist_bus_id: bus.id });
+                                      }}
                                       disabled={saving}
                                       className="text-white/60 hover:text-rose-300 disabled:opacity-30 text-xs">✕</button>
                                   </div>
