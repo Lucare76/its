@@ -5,7 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
 
@@ -42,18 +42,9 @@ const ENV_VARS = [
   { key: "RADIUS_CUSTOMER_ID",            label: "Radius Customer ID",      group: "GPS" },
 ];
 
-function createAdminClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
-  if (!url || !key) return null;
-  return createClient(url, key, { auth: { persistSession: false } });
-}
-
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await authorizePricingRequest(request, ["admin"]);
+  if (auth instanceof NextResponse) return auth;
 
   // Verifica env
   const envStatus = ENV_VARS.map(({ key, label, group }) => ({
@@ -66,19 +57,16 @@ export async function GET(request: NextRequest) {
   // Ultimo backup da Storage
   let lastBackup: { filename: string; date: string; size_bytes: number } | null = null;
   let backupCount = 0;
-  const admin = createAdminClient();
-  if (admin) {
-    const { data: files } = await admin.storage.from(BUCKET).list("", { limit: 200, sortBy: { column: "name", order: "desc" } });
-    if (files && files.length > 0) {
-      backupCount = files.length;
-      const latest = files[0];
-      const match = latest.name.match(/^backup_(\d{4}-\d{2}-\d{2})\.json$/);
-      lastBackup = {
-        filename: latest.name,
-        date: match?.[1] ?? "",
-        size_bytes: latest.metadata?.size ?? 0,
-      };
-    }
+  const { data: files } = await auth.admin.storage.from(BUCKET).list("", { limit: 200, sortBy: { column: "name", order: "desc" } });
+  if (files && files.length > 0) {
+    backupCount = files.length;
+    const latest = files[0];
+    const match = latest.name.match(/^backup_(\d{4}-\d{2}-\d{2})\.json$/);
+    lastBackup = {
+      filename: latest.name,
+      date: match?.[1] ?? "",
+      size_bytes: latest.metadata?.size ?? 0,
+    };
   }
 
   return NextResponse.json({
