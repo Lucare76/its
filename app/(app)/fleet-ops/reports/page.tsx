@@ -18,6 +18,8 @@ type SummaryRow = {
   fuel_cost: number;
   total_cost: number;
   logged_km: number;
+  fuel_liters: number;
+  fuel_interval_km: number;
 };
 
 type TimelineRow = {
@@ -29,6 +31,8 @@ type TimelineRow = {
   fuel_cost: number;
   total_cost: number;
   logged_km: number;
+  fuel_liters: number;
+  fuel_interval_km: number;
 };
 
 type Payload = {
@@ -37,7 +41,7 @@ type Payload = {
   year: string;
   summary: SummaryRow[];
   timeline: TimelineRow[];
-  totals: { maintenance_cost: number; fuel_cost: number; total_cost: number; logged_km: number };
+  totals: { maintenance_cost: number; fuel_cost: number; total_cost: number; logged_km: number; fuel_liters: number; fuel_interval_km: number };
 };
 
 async function accessToken() {
@@ -48,6 +52,20 @@ async function accessToken() {
 
 function fmt(n: number) {
   return `€${n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatKmPerLiter(km: number, liters: number) {
+  if (km <= 0 || liters <= 0) return "—";
+  return `${(km / liters).toFixed(2)} km/L`;
+}
+
+function formatLitersPer100Km(km: number, liters: number) {
+  if (km <= 0 || liters <= 0) return "—";
+  return `${((liters / km) * 100).toFixed(1)} L/100 km`;
+}
+
+function safeNumber(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 const MONTH_LABELS = ["Gen", "Feb", "Mar", "Apr", "Mag", "Giu", "Lug", "Ago", "Set", "Ott", "Nov", "Dic"];
@@ -116,8 +134,17 @@ export default function FleetReportsPage() {
   }, [payload]);
 
   const totals = payload?.totals;
-  const costPerKm = totals && totals.logged_km > 0
-    ? totals.total_cost / totals.logged_km
+  const totalsLoggedKm = safeNumber(totals?.logged_km);
+  const totalsFuelLiters = safeNumber(totals?.fuel_liters);
+  const totalsFuelIntervalKm = safeNumber(totals?.fuel_interval_km);
+  const costPerKm = totals && totalsLoggedKm > 0
+    ? totals.total_cost / totalsLoggedKm
+    : null;
+  const avgKmPerLiter = totals && totalsFuelIntervalKm > 0 && totalsFuelLiters > 0
+    ? totalsFuelIntervalKm / totalsFuelLiters
+    : null;
+  const avgLitersPer100Km = totals && totalsFuelIntervalKm > 0 && totalsFuelLiters > 0
+    ? (totalsFuelLiters / totalsFuelIntervalKm) * 100
     : null;
 
   const maxCost = useMemo(() =>
@@ -163,12 +190,14 @@ export default function FleetReportsPage() {
       )}
 
       {/* KPI bar */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-6">
         {[
           { label: "Totale costi", value: totals ? fmt(totals.total_cost) : "—", sub: "carburante + manutenzione", color: "text-slate-900" },
           { label: "Carburante", value: totals ? fmt(totals.fuel_cost) : "—", sub: totals ? `${((totals.fuel_cost / Math.max(totals.total_cost, 1)) * 100).toFixed(0)}% del totale` : "—", color: "text-amber-700" },
           { label: "Manutenzione", value: totals ? fmt(totals.maintenance_cost) : "—", sub: totals ? `${((totals.maintenance_cost / Math.max(totals.total_cost, 1)) * 100).toFixed(0)}% del totale` : "—", color: "text-orange-700" },
-          { label: "Costo/km", value: costPerKm != null ? `€${costPerKm.toFixed(3)}` : "—", sub: totals ? `su ${totals.logged_km.toLocaleString("it-IT")} km` : "dati insufficienti", color: "text-teal-700" },
+          { label: "Costo/km", value: costPerKm != null ? `€${costPerKm.toFixed(3)}` : "—", sub: totals ? `su ${totalsLoggedKm.toLocaleString("it-IT")} km` : "dati insufficienti", color: "text-teal-700" },
+          { label: "Consumo medio", value: avgKmPerLiter != null ? `${avgKmPerLiter.toFixed(2)} km/L` : "—", sub: totals ? `calcolato su ${totalsFuelLiters.toFixed(1)} L` : "dati insufficienti", color: "text-sky-700" },
+          { label: "Consumo per 100 km", value: avgLitersPer100Km != null ? `${avgLitersPer100Km.toFixed(1)} L/100 km` : "—", sub: totals ? `su ${totalsFuelIntervalKm.toLocaleString("it-IT")} km da rifornimenti` : "dati insufficienti", color: "text-violet-700" },
         ].map((kpi) => (
           <div key={kpi.label} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{kpi.label}</p>
@@ -278,12 +307,18 @@ export default function FleetReportsPage() {
                   <th className="pb-3 pr-4 text-right">Manutenzione</th>
                   <th className="pb-3 pr-4 text-right font-bold text-slate-600">Totale</th>
                   <th className="hidden pb-3 pr-4 text-right md:table-cell">Km</th>
+                  <th className="hidden pb-3 pr-4 text-right lg:table-cell">Consumo medio</th>
+                  <th className="hidden pb-3 pr-4 text-right lg:table-cell">Consumo/100 km</th>
                   <th className="hidden pb-3 text-right md:table-cell">€/km</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {payload.summary.map((row) => {
                   const cpk = row.logged_km > 0 ? row.total_cost / row.logged_km : null;
+                  const rowFuelIntervalKm = safeNumber(row.fuel_interval_km);
+                  const rowFuelLiters = safeNumber(row.fuel_liters);
+                  const averageKmPerLiter = rowFuelIntervalKm > 0 && rowFuelLiters > 0 ? rowFuelIntervalKm / rowFuelLiters : null;
+                  const averageLitersPer100Km = rowFuelIntervalKm > 0 && rowFuelLiters > 0 ? (rowFuelLiters / rowFuelIntervalKm) * 100 : null;
                   const isTop = row.total_cost === maxCost;
                   return (
                     <tr key={row.vehicle_id} className={isTop ? "bg-amber-50/60" : "hover:bg-slate-50"}>
@@ -296,6 +331,12 @@ export default function FleetReportsPage() {
                       <td className="py-2.5 pr-4 text-right text-orange-700">{fmt(row.maintenance_cost)}</td>
                       <td className="py-2.5 pr-4 text-right font-bold text-slate-900">{fmt(row.total_cost)}</td>
                       <td className="hidden py-2.5 pr-4 text-right text-slate-600 md:table-cell">{row.logged_km.toLocaleString("it-IT")}</td>
+                      <td className="hidden py-2.5 pr-4 text-right text-sky-700 lg:table-cell">
+                        {averageKmPerLiter != null ? formatKmPerLiter(rowFuelIntervalKm, rowFuelLiters) : "—"}
+                      </td>
+                      <td className="hidden py-2.5 pr-4 text-right text-violet-700 lg:table-cell">
+                        {averageLitersPer100Km != null ? formatLitersPer100Km(rowFuelIntervalKm, rowFuelLiters) : "—"}
+                      </td>
                       <td className="hidden py-2.5 text-right text-teal-700 md:table-cell">
                         {cpk != null ? `€${cpk.toFixed(3)}` : "—"}
                       </td>
@@ -311,6 +352,12 @@ export default function FleetReportsPage() {
                   <td className="py-2.5 pr-4 text-right font-semibold text-orange-700">{fmt(totals?.maintenance_cost ?? 0)}</td>
                   <td className="py-2.5 pr-4 text-right text-base font-bold text-slate-900">{fmt(totals?.total_cost ?? 0)}</td>
                   <td className="hidden py-2.5 pr-4 text-right font-semibold text-slate-600 md:table-cell">{totals?.logged_km.toLocaleString("it-IT") ?? "—"}</td>
+                  <td className="hidden py-2.5 pr-4 text-right font-semibold text-sky-700 lg:table-cell">
+                    {totals ? formatKmPerLiter(totalsFuelIntervalKm, totalsFuelLiters) : "—"}
+                  </td>
+                  <td className="hidden py-2.5 pr-4 text-right font-semibold text-violet-700 lg:table-cell">
+                    {totals ? formatLitersPer100Km(totalsFuelIntervalKm, totalsFuelLiters) : "—"}
+                  </td>
                   <td className="hidden py-2.5 text-right font-semibold text-teal-700 md:table-cell">
                     {costPerKm != null ? `€${costPerKm.toFixed(3)}` : "—"}
                   </td>

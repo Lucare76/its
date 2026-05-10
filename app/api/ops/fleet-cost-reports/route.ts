@@ -11,6 +11,29 @@ function yearKey(date: string) {
   return date.slice(0, 4);
 }
 
+type SummaryAccumulator = {
+  vehicle_id: string;
+  label: string;
+  plate?: string | null;
+  license_number?: string | null;
+  km_snapshot?: number | null;
+  maintenance_cost: number;
+  fuel_cost: number;
+  total_cost: number;
+  logged_km: number;
+  fuel_liters: number;
+  fuel_interval_km: number;
+};
+
+type TimelineAccumulator = {
+  period: string;
+  maintenance_cost: number;
+  fuel_cost: number;
+  logged_km: number;
+  fuel_liters: number;
+  fuel_interval_km: number;
+};
+
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
   if (auth instanceof NextResponse) return auth;
@@ -22,7 +45,7 @@ export async function GET(request: NextRequest) {
   const [{ data: vehicles, error: vehiclesError }, { data: maintenance, error: maintenanceError }, { data: fuel, error: fuelError }, { data: kmLogs, error: kmError }] = await Promise.all([
     auth.admin.from("vehicles").select("id, label, plate, license_number, km").eq("tenant_id", auth.membership.tenant_id).order("label"),
     auth.admin.from("vehicle_maintenance").select("vehicle_id, maintenance_date, cost").eq("tenant_id", auth.membership.tenant_id),
-    auth.admin.from("vehicle_fuel").select("vehicle_id, fuel_date, cost").eq("tenant_id", auth.membership.tenant_id).eq("approval_status", "approved"),
+    auth.admin.from("vehicle_fuel").select("vehicle_id, fuel_date, cost, liters, km_at_fuel, created_at").eq("tenant_id", auth.membership.tenant_id).eq("approval_status", "approved"),
     auth.admin.from("vehicle_km_logs").select("vehicle_id, start_at, start_km, end_km"),
   ]);
 
@@ -40,15 +63,24 @@ export async function GET(request: NextRequest) {
     fuel_cost: 0,
     total_cost: 0,
     logged_km: 0,
-  }));
-  const summaryMap = new Map(summary.map((row) => [row.vehicle_id, row]));
-  const timelineMap = new Map<string, { period: string; maintenance_cost: number; fuel_cost: number; logged_km: number }>();
+    fuel_liters: 0,
+    fuel_interval_km: 0,
+  })) satisfies SummaryAccumulator[];
+  const summaryMap = new Map<string, SummaryAccumulator>(summary.map((row) => [row.vehicle_id, row]));
+  const timelineMap = new Map<string, TimelineAccumulator>();
 
   const ensureTimeline = (vehicleId: string, key: string) => {
     const timelineKey = `${vehicleId}:${key}`;
     const existing = timelineMap.get(timelineKey);
     if (existing) return existing;
-    const created = { period: key, maintenance_cost: 0, fuel_cost: 0, logged_km: 0 };
+    const created: TimelineAccumulator = {
+      period: key,
+      maintenance_cost: 0,
+      fuel_cost: 0,
+      logged_km: 0,
+      fuel_liters: 0,
+      fuel_interval_km: 0,
+    };
     timelineMap.set(timelineKey, created);
     return created;
   };
@@ -79,6 +111,59 @@ export async function GET(request: NextRequest) {
     ensureTimeline(row.vehicle_id, bucket).fuel_cost += amount;
   }
 
+  const fuelByVehicle = new Map<string, Array<{
+    vehicle_id: string;
+    fuel_date: string;
+    liters: number | null;
+    km_at_fuel: number | null;
+    created_at?: string | null;
+  }>>();
+
+  for (const row of fuel ?? []) {
+    if (!vehicleIds.has(row.vehicle_id)) continue;
+    const list = fuelByVehicle.get(row.vehicle_id) ?? [];
+    list.push({
+      vehicle_id: row.vehicle_id,
+      fuel_date: row.fuel_date,
+      liters: typeof row.liters === "number" ? row.liters : row.liters != null ? Number(row.liters) : null,
+      km_at_fuel: typeof row.km_at_fuel === "number" ? row.km_at_fuel : row.km_at_fuel != null ? Number(row.km_at_fuel) : null,
+      created_at: row.created_at ?? null,
+    });
+    fuelByVehicle.set(row.vehicle_id, list);
+  }
+
+  for (const [vehicleId, entries] of fuelByVehicle.entries()) {
+    entries.sort((left, right) => {
+      const byDate = left.fuel_date.localeCompare(right.fuel_date);
+      if (byDate !== 0) return byDate;
+      const leftKm = left.km_at_fuel ?? -1;
+      const rightKm = right.km_at_fuel ?? -1;
+      if (leftKm !== rightKm) return leftKm - rightKm;
+      return (left.created_at ?? "").localeCompare(right.created_at ?? "");
+    });
+
+    for (let index = 1; index < entries.length; index += 1) {
+      const previous = entries[index - 1];
+      const current = entries[index];
+      if (!current.fuel_date.startsWith(selectedYear)) continue;
+      if (typeof previous.km_at_fuel !== "number" || typeof current.km_at_fuel !== "number") continue;
+      if (typeof current.liters !== "number" || current.liters <= 0) continue;
+
+      const intervalKm = current.km_at_fuel - previous.km_at_fuel;
+      if (intervalKm <= 0) continue;
+
+      const bucket = period === "yearly" ? yearKey(current.fuel_date) : monthKey(current.fuel_date);
+      const summaryRow = summaryMap.get(vehicleId);
+      if (summaryRow) {
+        summaryRow.fuel_liters += current.liters;
+        summaryRow.fuel_interval_km += intervalKm;
+      }
+      const timelineRow = ensureTimeline(vehicleId, bucket);
+      timelineRow.fuel_liters += current.liters;
+      timelineRow.fuel_interval_km += intervalKm;
+    }
+  }
+
   for (const row of kmLogs ?? []) {
     if (!vehicleIds.has(row.vehicle_id)) continue;
     if (!row.start_at.startsWith(selectedYear)) continue;
@@ -107,8 +192,10 @@ export async function GET(request: NextRequest) {
     acc.fuel_cost += row.fuel_cost;
     acc.total_cost += row.total_cost;
     acc.logged_km += row.logged_km;
+    acc.fuel_liters += row.fuel_liters;
+    acc.fuel_interval_km += row.fuel_interval_km;
     return acc;
-  }, { maintenance_cost: 0, fuel_cost: 0, total_cost: 0, logged_km: 0 });
+  }, { maintenance_cost: 0, fuel_cost: 0, total_cost: 0, logged_km: 0, fuel_liters: 0, fuel_interval_km: 0 });
 
   return NextResponse.json({
     ok: true,
