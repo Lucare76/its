@@ -736,6 +736,26 @@ export default function WhatsAppInboxPage() {
   }, [selectedThreadId, newChatMode]);
 
   useEffect(() => {
+    if (mobileView !== "chat") return;
+    if (!selectedThreadId && !newChatMode) return;
+    shouldStickToBottomRef.current = true;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const container = messagesContainerRef.current;
+        if (container) {
+          container.scrollTop = container.scrollHeight;
+        }
+        scrollToLatestMessage("auto");
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [mobileView, newChatMode, scrollToLatestMessage, selectedThreadId]);
+
+  useEffect(() => {
     const changed = lastRenderedMessageKeyRef.current !== latestMessageKey;
     lastRenderedMessageKeyRef.current = latestMessageKey;
     if (!changed) return;
