@@ -1,6 +1,22 @@
 import { z } from "zod";
 
 const optionalDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional();
+const placeholderFiscalDocumentHosts = new Set(["example.com", "example.org", "example.net"]);
+
+const optionalFiscalDocumentUrl = z
+  .string()
+  .url()
+  .max(2000)
+  .nullable()
+  .optional()
+  .refine((value) => {
+    if (!value) return true;
+    try {
+      return !placeholderFiscalDocumentHosts.has(new URL(value).hostname.toLowerCase());
+    } catch {
+      return false;
+    }
+  }, "Il documento fiscale deve puntare a un file reale, non a un link di esempio.");
 
 export const vehicleUpsertSchema = z.object({
   id: z.string().uuid().optional(),
@@ -45,7 +61,7 @@ export const fuelRecordSchema = z.object({
   station: z.string().max(160).nullable().optional(),
   notes: z.string().max(1000).nullable().optional(),
   approval_status: z.enum(["pending", "approved", "rejected"]).optional(),
-  fiscal_document_url: z.string().url().max(2000).nullable().optional(),
+  fiscal_document_url: optionalFiscalDocumentUrl,
   fiscal_document_name: z.string().max(240).nullable().optional(),
   submitted_via_qr: z.boolean().optional(),
 });
@@ -53,7 +69,7 @@ export const fuelRecordSchema = z.object({
 export const fuelApprovalSchema = z.object({
   id: z.string().uuid(),
   approval_status: z.enum(["approved", "rejected"]),
-  fiscal_document_url: z.string().url().max(2000).nullable().optional(),
+  fiscal_document_url: optionalFiscalDocumentUrl,
   fiscal_document_name: z.string().max(240).nullable().optional(),
 });
 
