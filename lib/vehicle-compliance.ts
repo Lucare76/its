@@ -57,9 +57,9 @@ export function buildStatusLabel(daysLeft: number): string {
  * Stato assicurazione con proroga di 15 giorni (art. 170-bis CdA).
  * expired solo dopo expiry + INSURANCE_GRACE_DAYS; critical se in proroga o ≤7 gg.
  */
-export function insuranceExpiryStatus(expiryDate: string, today: string): ComplianceStatus {
+export function insuranceExpiryStatus(expiryDate: string, today: string, graceDays = INSURANCE_GRACE_DAYS): ComplianceStatus {
   const daysToNominal = diffDays(today, expiryDate);
-  const graceDeadline = addDays(expiryDate, INSURANCE_GRACE_DAYS);
+  const graceDeadline = addDays(expiryDate, graceDays);
   const daysToGrace = diffDays(today, graceDeadline);
   if (daysToGrace < 0) return "expired";
   if (daysToNominal <= 7) return "critical";
@@ -92,8 +92,12 @@ export function getInspectionEffectiveExpiry(expiryDate: string): string {
 }
 
 /** Scadenza effettiva considerando l'eventuale proroga per tipo documento. */
-export function getEffectiveExpiry(docType: string, expiry: string): string {
-  if (docType === "Assicurazione") return addDays(expiry, INSURANCE_GRACE_DAYS);
+export function getEffectiveExpiry(
+  docType: string,
+  expiry: string,
+  options?: { insuranceGraceDays?: number | null },
+): string {
+  if (docType === "Assicurazione") return addDays(expiry, options?.insuranceGraceDays ?? INSURANCE_GRACE_DAYS);
   if (docType === "Collaudo") return getInspectionEffectiveExpiry(expiry);
   return expiry;
 }

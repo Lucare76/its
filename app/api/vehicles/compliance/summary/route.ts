@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { diffDays, expiryStatus, inspectionExpiryStatus, insuranceExpiryStatus, worstStatus } from "@/lib/vehicle-compliance";
+import { INSURANCE_GRACE_DAYS, addDays, diffDays, expiryStatus, inspectionExpiryStatus, insuranceExpiryStatus, worstStatus } from "@/lib/vehicle-compliance";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, tachographsRes] = await Promise.all([
+  const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, tachographsRes, graceRes] = await Promise.all([
     admin.from("vehicles")
       .select("id, label, plate, active, capacity, road_tax_expiry, compliance_override_until, compliance_override_reason")
       .eq("tenant_id", tenant_id)
@@ -35,6 +35,11 @@ export async function GET(request: NextRequest) {
       .select("vehicle_id, expiry_date, calibration_date")
       .eq("tenant_id", tenant_id)
       .eq("is_current", true),
+    admin.from("vehicle_compliance_grace_periods")
+      .select("compliance_type, grace_days")
+      .eq("tenant_id", tenant_id)
+      .eq("compliance_type", "insurance")
+      .maybeSingle(),
   ]);
 
   const vehicles = vehiclesRes.data ?? [];
@@ -42,6 +47,7 @@ export async function GET(request: NextRequest) {
   const inspections = inspectionsRes.data ?? [];
   const extinguishers = extinguishersRes.data ?? [];
   const tachographs = tachographsRes.data ?? [];
+  const insuranceGraceDays = graceRes.data?.grace_days ?? INSURANCE_GRACE_DAYS;
 
   // Build lookup maps
   const insuranceMap = new Map<string, (typeof insurances)[0]>();
@@ -73,7 +79,7 @@ export async function GET(request: NextRequest) {
     const roadTaxStatus = v.road_tax_expiry ? expiryStatus(roadTaxDays) : ("missing" as const);
 
     const insuranceDays = insurance ? diffDays(today, insurance.expiry_date) : null;
-    const insuranceStatus = insurance ? insuranceExpiryStatus(insurance.expiry_date, today) : ("missing" as const);
+    const insuranceStatus = insurance ? insuranceExpiryStatus(insurance.expiry_date, today, insuranceGraceDays) : ("missing" as const);
     const inspectionDays = inspection ? diffDays(today, inspection.expiry_date) : null;
     const inspectionStatus = inspection ? inspectionExpiryStatus(inspection.expiry_date, today) : ("missing" as const);
     const extDays = ext ? diffDays(today, ext.expiry_date) : null;
@@ -99,6 +105,7 @@ export async function GET(request: NextRequest) {
       insurance: insurance
         ? {
             expiry_date: insurance.expiry_date,
+            effective_expiry_date: addDays(insurance.expiry_date, insuranceGraceDays),
             company: insurance.company,
             days_left: insuranceDays,
             status: insuranceStatus,
@@ -146,7 +153,7 @@ export async function GET(request: NextRequest) {
     };
   });
 
-  return NextResponse.json({ items, today }, {
+  return NextResponse.json({ items, today, insurance_grace_days: insuranceGraceDays }, {
     headers: {
       "Cache-Control": "no-store, no-cache, must-revalidate",
     },

@@ -8,6 +8,7 @@ type StatusLevel = "expired" | "critical" | "warning" | "missing" | "ok";
 
 type ComplianceEntry = {
   expiry_date: string;
+  effective_expiry_date?: string;
   days_left: number | null;
   status: StatusLevel;
   company?: string;
@@ -39,6 +40,15 @@ type SidePanelVehicle = {
   vehicleId: string;
   label: string;
   plate: string | null;
+};
+
+type PanelTab = "insurance" | "inspection" | "road_tax" | "extinguisher" | "tachograph";
+
+type PanelRecords = {
+  insurances: Record<string, unknown>[];
+  inspections: Record<string, unknown>[];
+  extinguishers: Record<string, unknown>[];
+  tachographs: Record<string, unknown>[];
 };
 
 const STATUS_RANK: Record<StatusLevel, number> = {
@@ -123,7 +133,7 @@ type CalendarEntry = {
 
 const COMPLIANCE_TYPE_LABELS: Record<string, string> = {
   insurance: "Assicurazione",
-  insurance_grace: "Proroga assicurazione (+15 gg)",
+  insurance_grace: "Fine copertura assicurazione",
   inspection: "Collaudo",
   road_tax: "Bollo",
   tachograph: "Tachigrafo",
@@ -141,7 +151,7 @@ const DOC_LABELS: Record<DocType, string> = {
 
 const CALENDAR_TYPE_SHORT_LABEL: Record<string, string> = {
   insurance: "Ass.",
-  insurance_grace: "Proroga ass.",
+  insurance_grace: "Fine cop.",
   inspection: "Collaudo",
   road_tax: "Bollo",
   extinguisher: "Estintore",
@@ -230,26 +240,25 @@ function ComplianceDots({ item }: { item: VehicleCompliance }) {
 
 export default function ScadenzePage() {
   const [items, setItems] = useState<VehicleCompliance[]>([]);
+  const [insuranceGraceDays, setInsuranceGraceDays] = useState(15);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
   const [search, setSearch] = useState("");
   const [docFilter, setDocFilter] = useState<DocType>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [panel, setPanel] = useState<SidePanelVehicle | null>(null);
-  const [panelTab, setPanelTab] = useState<"insurance" | "inspection" | "extinguisher" | "tachograph">("insurance");
-  const [panelRecords, setPanelRecords] = useState<{
-    insurances: unknown[];
-    inspections: unknown[];
-    extinguishers: unknown[];
-    tachographs: unknown[];
-  }>({ insurances: [], inspections: [], extinguishers: [], tachographs: [] });
+  const [panelTab, setPanelTab] = useState<PanelTab>("insurance");
+  const [panelRecords, setPanelRecords] = useState<PanelRecords>({ insurances: [], inspections: [], extinguishers: [], tachographs: [] });
   const [panelLoading, setPanelLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [insuranceForm, setInsuranceForm] = useState(EMPTY_INSURANCE);
   const [inspectionForm, setInspectionForm] = useState(EMPTY_INSPECTION);
+  const [roadTaxForm, setRoadTaxForm] = useState({ expiry_date: "", notes: "" });
   const [extinguisherForm, setExtinguisherForm] = useState(EMPTY_EXTINGUISHER);
   const [tachographForm, setTachographForm] = useState(EMPTY_TACHOGRAPH);
   const [showForm, setShowForm] = useState(false);
+  const [formMode, setFormMode] = useState<"insert" | "update">("insert");
   const [overrideForm, setOverrideForm] = useState({ until: "", reason: "" });
   const [showOverrideForm, setShowOverrideForm] = useState(false);
   const [savingOverride, setSavingOverride] = useState(false);
@@ -287,10 +296,11 @@ export default function ScadenzePage() {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
     });
-    const json = await res.json().catch(() => null) as { items?: VehicleCompliance[] } | null;
-    setItems(json?.items ?? []);
-    setLoading(false);
-  }, []);
+      const json = await res.json().catch(() => null) as { items?: VehicleCompliance[]; insurance_grace_days?: number } | null;
+      setItems(json?.items ?? []);
+      setInsuranceGraceDays(typeof json?.insurance_grace_days === "number" ? json.insurance_grace_days : 15);
+      setLoading(false);
+    }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void load(); }, 0);
@@ -322,17 +332,100 @@ export default function ScadenzePage() {
     setPanelLoading(false);
   }, []);
 
-  const openPanel = useCallback((v: VehicleCompliance) => {
-    setPanel({ vehicleId: v.vehicle_id, label: v.label, plate: v.plate });
-    setShowForm(false);
-    setShowOverrideForm(false);
-    setOverrideForm({ until: "", reason: "" });
+  const resetForms = useCallback(() => {
     setInsuranceForm(EMPTY_INSURANCE);
     setInspectionForm(EMPTY_INSPECTION);
+    setRoadTaxForm({ expiry_date: "", notes: "" });
     setExtinguisherForm(EMPTY_EXTINGUISHER);
     setTachographForm(EMPTY_TACHOGRAPH);
+  }, []);
+
+  const openPanel = useCallback((v: VehicleCompliance, tab?: PanelTab, autoOpenForm = false) => {
+    setPanel({ vehicleId: v.vehicle_id, label: v.label, plate: v.plate });
+    setPanelTab(tab ?? "insurance");
+    setShowForm(false);
+    setFormMode("insert");
+    setShowOverrideForm(false);
+    setOverrideForm({ until: "", reason: "" });
+    resetForms();
+    if (autoOpenForm) setShowForm(true);
     void loadPanelRecords(v.vehicle_id);
-  }, [loadPanelRecords]);
+  }, [loadPanelRecords, resetForms]);
+
+  const getCurrentRecordForTab = useCallback((tab: PanelTab, records: PanelRecords) => {
+    if (tab === "insurance") {
+      return records.insurances.find((row) => row.is_current === true) ?? records.insurances[0] ?? null;
+    }
+    if (tab === "inspection") {
+      return records.inspections.find((row) => row.is_current === true) ?? records.inspections[0] ?? null;
+    }
+    if (tab === "extinguisher") {
+      return records.extinguishers.find((row) => row.active === true) ?? records.extinguishers[0] ?? null;
+    }
+    if (tab === "tachograph") {
+      return records.tachographs.find((row) => row.is_current === true) ?? records.tachographs[0] ?? null;
+    }
+    return null;
+  }, []);
+
+  useEffect(() => {
+    if (!panel || !showForm) return;
+    const panelVehicle = items.find((item) => item.vehicle_id === panel.vehicleId) ?? null;
+    const currentRecord = getCurrentRecordForTab(panelTab, panelRecords);
+
+    if (panelTab === "road_tax") {
+      if (panelVehicle?.road_tax?.expiry_date) {
+        setRoadTaxForm({ expiry_date: panelVehicle.road_tax.expiry_date, notes: "" });
+        setFormMode("update");
+      } else {
+        setRoadTaxForm({ expiry_date: "", notes: "" });
+        setFormMode("insert");
+      }
+      return;
+    }
+
+    if (!currentRecord) {
+      resetForms();
+      setFormMode("insert");
+      return;
+    }
+
+    if (panelTab === "insurance") {
+      setInsuranceForm({
+        company: String(currentRecord.company ?? ""),
+        policy_number: String(currentRecord.policy_number ?? ""),
+        expiry_date: String(currentRecord.expiry_date ?? ""),
+        annual_amount_cents: currentRecord.annual_amount_cents != null ? String(Number(currentRecord.annual_amount_cents) / 100) : "",
+        notes: String(currentRecord.notes ?? ""),
+      });
+    } else if (panelTab === "inspection") {
+      setInspectionForm({
+        inspection_date: String(currentRecord.inspection_date ?? new Date().toISOString().slice(0, 10)),
+        expiry_date: String(currentRecord.expiry_date ?? ""),
+        inspection_center: String(currentRecord.inspection_center ?? ""),
+        outcome: (currentRecord.outcome as "passed" | "failed" | "pending" | undefined) ?? "passed",
+        outcome_notes: String(currentRecord.outcome_notes ?? ""),
+        notes: String(currentRecord.notes ?? ""),
+      });
+    } else if (panelTab === "extinguisher") {
+      setExtinguisherForm({
+        serial_number: String(currentRecord.serial_number ?? ""),
+        last_revision_date: String(currentRecord.last_revision_date ?? ""),
+        expiry_date: String(currentRecord.expiry_date ?? ""),
+        notes: String(currentRecord.notes ?? ""),
+      });
+    } else if (panelTab === "tachograph") {
+      setTachographForm({
+        calibration_date: String(currentRecord.calibration_date ?? new Date().toISOString().slice(0, 10)),
+        expiry_date: String(currentRecord.expiry_date ?? ""),
+        center: String(currentRecord.center ?? ""),
+        certificate_number: String(currentRecord.certificate_number ?? ""),
+        notes: String(currentRecord.notes ?? ""),
+      });
+    }
+
+    setFormMode("update");
+  }, [getCurrentRecordForTab, items, panel, panelRecords, panelTab, resetForms, showForm]);
 
   const handleOverride = useCallback(async (clear?: boolean) => {
     if (!panel) return;
@@ -367,6 +460,8 @@ export default function ScadenzePage() {
 
     let url = "";
     let body: Record<string, unknown> = {};
+    let method: "POST" | "PUT" = "POST";
+    const currentRecord = getCurrentRecordForTab(panelTab, panelRecords);
 
     if (panelTab === "insurance") {
       if (!insuranceForm.company || !insuranceForm.expiry_date) {
@@ -375,7 +470,9 @@ export default function ScadenzePage() {
         return;
       }
       url = `/api/vehicles/${panel.vehicleId}/compliance/insurances`;
+      method = currentRecord ? "PUT" : "POST";
       body = {
+        ...(currentRecord ? { id: currentRecord.id } : {}),
         company: insuranceForm.company,
         policy_number: insuranceForm.policy_number || null,
         expiry_date: insuranceForm.expiry_date,
@@ -391,13 +488,27 @@ export default function ScadenzePage() {
         return;
       }
       url = `/api/vehicles/${panel.vehicleId}/compliance/inspections`;
+      method = currentRecord ? "PUT" : "POST";
       body = {
+        ...(currentRecord ? { id: currentRecord.id } : {}),
         inspection_date: inspectionForm.inspection_date,
         expiry_date: inspectionForm.expiry_date,
         inspection_center: inspectionForm.inspection_center || null,
         outcome: inspectionForm.outcome,
         outcome_notes: inspectionForm.outcome_notes || null,
         notes: inspectionForm.notes || null,
+      };
+    } else if (panelTab === "road_tax") {
+      if (!roadTaxForm.expiry_date) {
+        showToast("Data scadenza obbligatoria", false);
+        setSaving(false);
+        return;
+      }
+      url = "/api/ops/vehicles";
+      body = {
+        action: "set_vehicle_documents",
+        id: panel.vehicleId,
+        road_tax_expiry: roadTaxForm.expiry_date,
       };
     } else if (panelTab === "extinguisher") {
       if (!extinguisherForm.expiry_date) {
@@ -406,7 +517,9 @@ export default function ScadenzePage() {
         return;
       }
       url = `/api/vehicles/${panel.vehicleId}/compliance/extinguishers`;
+      method = currentRecord ? "PUT" : "POST";
       body = {
+        ...(currentRecord ? { id: currentRecord.id } : {}),
         serial_number: extinguisherForm.serial_number || null,
         last_revision_date: extinguisherForm.last_revision_date || null,
         expiry_date: extinguisherForm.expiry_date,
@@ -420,7 +533,9 @@ export default function ScadenzePage() {
         return;
       }
       url = `/api/vehicles/${panel.vehicleId}/compliance/tachographs`;
+      method = currentRecord ? "PUT" : "POST";
       body = {
+        ...(currentRecord ? { id: currentRecord.id } : {}),
         calibration_date: tachographForm.calibration_date,
         expiry_date: tachographForm.expiry_date,
         center: tachographForm.center || null,
@@ -430,7 +545,7 @@ export default function ScadenzePage() {
     }
 
     const res = await fetch(url, {
-      method: "POST",
+      method,
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -439,12 +554,70 @@ export default function ScadenzePage() {
     if (!res.ok) {
       showToast(json?.error ?? "Errore salvataggio", false);
     } else {
-      showToast("Salvato", true);
+      showToast(formMode === "update" ? "Scadenza aggiornata" : "Scadenza inserita", true);
       setShowForm(false);
       await Promise.all([loadPanelRecords(panel.vehicleId), load()]);
     }
     setSaving(false);
-  }, [panel, panelTab, insuranceForm, inspectionForm, extinguisherForm, tachographForm, showToast, loadPanelRecords, load]);
+  }, [panel, panelTab, insuranceForm, inspectionForm, roadTaxForm, extinguisherForm, tachographForm, showToast, loadPanelRecords, load, formMode, getCurrentRecordForTab, panelRecords]);
+
+  const handleDelete = useCallback(async () => {
+    if (!panel) return;
+    const token = await getToken();
+    if (!token) return;
+
+    const currentRecord = getCurrentRecordForTab(panelTab, panelRecords);
+    if (panelTab !== "road_tax" && !currentRecord) {
+      showToast("Nessuna scadenza attiva da disattivare.", false);
+      return;
+    }
+
+    const confirmed = window.confirm("Disattivare questa scadenza documento? L'operazione riguarda solo il record selezionato.");
+    if (!confirmed) return;
+
+    setDeleting(true);
+    let res: Response;
+
+    if (panelTab === "road_tax") {
+      res = await fetch("/api/ops/vehicles", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "set_vehicle_documents",
+          id: panel.vehicleId,
+          road_tax_expiry: null,
+        }),
+      });
+    } else if (panelTab === "extinguisher") {
+      res = await fetch(`/api/vehicles/${panel.vehicleId}/compliance/extinguishers`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ id: currentRecord?.id }),
+      });
+    } else {
+      const endpoint =
+        panelTab === "insurance"
+          ? "insurances"
+          : panelTab === "inspection"
+            ? "inspections"
+            : "tachographs";
+      res = await fetch(`/api/vehicles/${panel.vehicleId}/compliance/${endpoint}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ id: currentRecord?.id }),
+      });
+    }
+
+    const json = await res.json().catch(() => null) as { error?: string } | null;
+    if (!res.ok) {
+      showToast(json?.error ?? "Errore disattivazione", false);
+    } else {
+      showToast("Scadenza disattivata", true);
+      setShowForm(false);
+      await Promise.all([loadPanelRecords(panel.vehicleId), load()]);
+    }
+    setDeleting(false);
+  }, [getCurrentRecordForTab, load, loadPanelRecords, panel, panelRecords, panelTab, showToast]);
 
   const stats = useMemo(() => {
     let expired = 0, critical = 0, warning = 0, ok = 0;
@@ -644,7 +817,7 @@ small{font-size:9px;opacity:.75}
       .select("compliance_type, grace_days");
     const defaults: GracePeriod[] = (["insurance", "inspection", "tachograph", "extinguisher"] as const).map((t) => ({
       compliance_type: t,
-      grace_days: (data as GracePeriod[] | null)?.find((r) => r.compliance_type === t)?.grace_days ?? 0,
+      grace_days: (data as GracePeriod[] | null)?.find((r) => r.compliance_type === t)?.grace_days ?? (t === "insurance" ? 15 : 0),
     }));
     setGracePeriods(defaults);
     setGraceLoading(false);
@@ -669,8 +842,9 @@ small{font-size:9px;opacity:.75}
     }
     setGraceSaving(false);
     setShowGraceModal(false);
+    await load();
     showToast("Proroghe salvate", true);
-  }, [gracePeriods, showToast]);
+  }, [gracePeriods, load, showToast]);
 
   // Calendar data for the visible month, reused by UI and PDF export.
   const calendarData = useMemo(() => {
@@ -700,25 +874,24 @@ small{font-size:9px;opacity:.75}
             daysLeft: entry.days_left,
           });
         }
-        // Insurance: add a second dot for the grace deadline (+15 days)
+        // Insurance: add a second dot for the effective coverage deadline.
         if (type === "insurance") {
-          const gd = new Date(entry.expiry_date + "T12:00:00Z");
-          gd.setUTCDate(gd.getUTCDate() + 15);
+          const gd = new Date((entry.effective_expiry_date ?? entry.expiry_date) + "T12:00:00Z");
           if (gd.getUTCFullYear() === year && gd.getUTCMonth() === month) {
             const graceDay = gd.getUTCDate();
             if (!map[graceDay]) map[graceDay] = [];
             map[graceDay].push({
               vehicleId: item.vehicle_id,
               label: item.label,
-              plate: item.plate,
-              type: "insurance_grace",
-              status: entry.status,
-              expiryDate: gd.toISOString().slice(0, 10),
-              daysLeft: entry.days_left === null ? null : entry.days_left + 15,
-            });
+                plate: item.plate,
+                type: "insurance_grace",
+                status: entry.status,
+                expiryDate: gd.toISOString().slice(0, 10),
+                daysLeft: entry.days_left === null ? null : entry.days_left + insuranceGraceDays,
+              });
+            }
           }
         }
-      }
     }
     for (const day of Object.keys(map)) {
       map[Number(day)]?.sort((a, b) =>
@@ -728,7 +901,7 @@ small{font-size:9px;opacity:.75}
       );
     }
     return map;
-  }, [filtered, calendarMonth]);
+  }, [filtered, calendarMonth, insuranceGraceDays]);
 
   const calendarExportRows = useMemo(() => {
     return Object.entries(calendarData)
@@ -799,19 +972,37 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
     insurance: "bg-rose-400",
     insurance_grace: "bg-rose-200",
     inspection: "bg-blue-400",
+    road_tax: "bg-slate-500",
     extinguisher: "bg-orange-400",
     tachograph: "bg-emerald-500",
   };
 
-  const renderTableCell = (entry: ComplianceEntry | null) => {
+  const renderTableCell = (item: VehicleCompliance, tab: PanelTab, entry: ComplianceEntry | null) => {
+    const openCellEditor = (event: React.MouseEvent) => {
+      event.stopPropagation();
+      void openPanel(item, tab, true);
+    };
+
     if (!entry) {
-      return <span className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-slate-50 text-slate-400 border border-slate-200">—</span>;
+      return (
+        <button
+          type="button"
+          onClick={openCellEditor}
+          className="inline-flex items-center gap-1 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-500 hover:border-slate-400 hover:bg-slate-100"
+        >
+          + Inserisci
+        </button>
+      );
     }
     return (
-      <span className={`inline-flex flex-col gap-0.5 rounded-lg px-2 py-1 text-xs font-medium ${STATUS_CELL[entry.status]}`}>
+      <button
+        type="button"
+        onClick={openCellEditor}
+        className={`inline-flex flex-col gap-0.5 rounded-lg px-2 py-1 text-left text-xs font-medium transition hover:opacity-85 ${STATUS_CELL[entry.status]}`}
+      >
         <span>{formatDate(entry.expiry_date)}</span>
         <span className="opacity-75">{formatDays(entry.days_left)}</span>
-      </span>
+      </button>
     );
   };
 
@@ -1077,18 +1268,16 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
           {/* Mobile card grid (hidden on sm+) */}
           <div className="sm:hidden space-y-3">
             {filtered.map((item) => (
-              <button
+              <article
                 key={item.vehicle_id}
-                type="button"
-                onClick={() => openPanel(item)}
                 className={`w-full rounded-2xl border bg-white text-left shadow-sm transition-shadow hover:shadow-md ${STATUS_LEFT_BORDER[item.worst_status]}`}
               >
                 <div className="p-4">
                   <div className="flex items-start justify-between gap-2">
-                    <div>
+                    <button type="button" onClick={() => openPanel(item)} className="text-left">
                       <div className="font-semibold text-slate-900">{item.label}</div>
                       {item.plate && <div className="text-xs font-mono text-slate-500">{item.plate}</div>}
-                    </div>
+                    </button>
                     <div className="flex flex-col items-end gap-1 shrink-0">
                       <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_CELL[item.worst_status]}`}>
                         <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[item.worst_status]}`} />
@@ -1107,14 +1296,20 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                     </div>
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2">
-                    <CompliancePill label="Assicurazione" entry={item.insurance} />
-                    <CompliancePill label="Collaudo" entry={item.inspection} />
-                    <CompliancePill label="Bollo" entry={item.road_tax} />
-                    <CompliancePill label="Estintori" entry={item.extinguisher} />
-                    <CompliancePill label="Tachigrafo" entry={item.tachograph} />
+                    {([
+                      ["Assicurazione", "insurance", item.insurance],
+                      ["Collaudo", "inspection", item.inspection],
+                      ["Bollo", "road_tax", item.road_tax],
+                      ["Estintori", "extinguisher", item.extinguisher],
+                      ["Tachigrafo", "tachograph", item.tachograph],
+                    ] as const).map(([label, tab, entry]) => (
+                      <button key={label} type="button" onClick={(event) => { event.stopPropagation(); void openPanel(item, tab, true); }} className="text-left">
+                        <CompliancePill label={label} entry={entry} />
+                      </button>
+                    ))}
                   </div>
                 </div>
-              </button>
+              </article>
             ))}
           </div>
 
@@ -1166,11 +1361,11 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                       <td className="hidden py-3 pr-3 md:table-cell">
                         <ComplianceDots item={item} />
                       </td>
-                      <td className="py-3 pr-3">{renderTableCell(item.insurance)}</td>
-                      <td className="hidden py-3 pr-3 md:table-cell">{renderTableCell(item.inspection)}</td>
-                      <td className="hidden py-3 pr-3 lg:table-cell">{renderTableCell(item.road_tax)}</td>
-                      <td className="hidden py-3 pr-3 xl:table-cell">{renderTableCell(item.extinguisher)}</td>
-                      <td className="hidden py-3 xl:table-cell">{renderTableCell(item.tachograph)}</td>
+                      <td className="py-3 pr-3">{renderTableCell(item, "insurance", item.insurance)}</td>
+                      <td className="hidden py-3 pr-3 md:table-cell">{renderTableCell(item, "inspection", item.inspection)}</td>
+                      <td className="hidden py-3 pr-3 lg:table-cell">{renderTableCell(item, "road_tax", item.road_tax)}</td>
+                      <td className="hidden py-3 pr-3 xl:table-cell">{renderTableCell(item, "extinguisher", item.extinguisher)}</td>
+                      <td className="hidden py-3 xl:table-cell">{renderTableCell(item, "tachograph", item.tachograph)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1325,6 +1520,7 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
         {panel && (() => {
           const panelVehicle = items.find((i) => i.vehicle_id === panel.vehicleId);
           const activeOverride = panelVehicle?.compliance_override ?? null;
+          const currentRecord = getCurrentRecordForTab(panelTab, panelRecords);
           return (
             <div className="space-y-5">
               {/* Override status */}
@@ -1404,9 +1600,9 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
               )}
 
               {/* Tab bar */}
-              <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
-                {(["insurance", "inspection", "extinguisher", "tachograph"] as const).map((tab) => {
-                  const labels = { insurance: "Assicurazione", inspection: "Collaudo", extinguisher: "Estintori", tachograph: "Tachigrafo" };
+              <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 sm:grid-cols-5">
+                {(["insurance", "inspection", "road_tax", "extinguisher", "tachograph"] as const).map((tab) => {
+                  const labels = { insurance: "Assicurazione", inspection: "Collaudo", road_tax: "Bollo", extinguisher: "Estintori", tachograph: "Tachigrafo" };
                   const entry = panelVehicle?.[tab] ?? null;
                   const s: StatusLevel = entry?.status ?? "missing";
                   return (
@@ -1414,7 +1610,7 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                       key={tab}
                       type="button"
                       onClick={() => { setPanelTab(tab); setShowForm(false); }}
-                      className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition-colors ${
+                      className={`rounded-lg py-1.5 text-xs font-semibold transition-colors ${
                         panelTab === tab ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"
                       }`}
                     >
@@ -1431,21 +1627,47 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                 <div className="py-8 text-center text-slate-400 text-sm">Caricamento...</div>
               ) : (
                 <>
-                  <RecordList tab={panelTab} records={panelRecords} />
+                  <RecordList tab={panelTab} records={panelRecords} roadTaxEntry={panelVehicle?.road_tax ?? null} />
 
                   {!showForm ? (
-                    <button
-                      type="button"
-                      onClick={() => setShowForm(true)}
-                      className="btn-primary w-full"
-                    >
-                      + Aggiungi / Rinnova
-                    </button>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {(currentRecord || (panelTab === "road_tax" && panelVehicle?.road_tax)) ? (
+                        <button
+                          type="button"
+                          onClick={() => { setFormMode("update"); setShowForm(true); }}
+                          className="btn-primary w-full"
+                        >
+                          Modifica data
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => { setFormMode("insert"); setShowForm(true); }}
+                          className="btn-primary w-full"
+                        >
+                          + Inserisci scadenza
+                        </button>
+                      )}
+                      {panelTab !== "road_tax" ? (
+                        <button
+                          type="button"
+                          onClick={() => { resetForms(); setFormMode("insert"); setShowForm(true); }}
+                          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          + Nuova polizza / rinnovo
+                        </button>
+                      ) : null}
+                    </div>
                   ) : (
                     <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
                       <div className="text-sm font-semibold text-slate-800">
-                        {panelTab === "insurance" ? "Nuova assicurazione" : panelTab === "inspection" ? "Nuovo collaudo" : panelTab === "extinguisher" ? "Nuovo estintore" : "Nuovo tachigrafo"}
+                        {formMode === "update" ? "Modifica scadenza" : "Nuova scadenza"} · {panelTab === "insurance" ? "Assicurazione" : panelTab === "inspection" ? "Collaudo" : panelTab === "road_tax" ? "Bollo" : panelTab === "extinguisher" ? "Estintore" : "Tachigrafo"}
                       </div>
+                      {formMode === "update" ? (
+                        <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                          Stai modificando la scadenza attuale. Se invece devi registrare un rinnovo o una nuova polizza, chiudi questo form e usa `+ Nuova polizza / rinnovo`.
+                        </div>
+                      ) : null}
 
                       {panelTab === "insurance" && (
                         <>
@@ -1509,6 +1731,21 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                         </>
                       )}
 
+                      {panelTab === "road_tax" && (
+                        <>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <label className="label">Scadenza *</label>
+                              <input type="date" className="input" value={roadTaxForm.expiry_date} onChange={(e) => setRoadTaxForm((f) => ({ ...f, expiry_date: e.target.value }))} />
+                            </div>
+                            <div>
+                              <label className="label">Note</label>
+                              <input className="input bg-slate-50 text-slate-400" value={roadTaxForm.notes} onChange={(e) => setRoadTaxForm((f) => ({ ...f, notes: e.target.value }))} placeholder="Non ancora supportate per il bollo" disabled />
+                            </div>
+                          </div>
+                        </>
+                      )}
+
                       {panelTab === "extinguisher" && (
                         <>
                           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1563,10 +1800,19 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                         </>
                       )}
 
+                      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                        Upload documento collegato: il backend supporta `document_path` per i documenti compliance, ma questa pagina per ora non gestisce ancora l&apos;upload diretto del file.
+                      </div>
+
                       <div className="flex gap-2 pt-1">
                         <button type="button" onClick={handleSave} disabled={saving} className="btn-primary flex-1">
                           {saving ? "Salvataggio..." : "Salva"}
                         </button>
+                        {(currentRecord || (panelTab === "road_tax" && panelVehicle?.road_tax)) ? (
+                          <button type="button" onClick={() => void handleDelete()} disabled={deleting} className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50">
+                            {deleting ? "..." : "Disattiva"}
+                          </button>
+                        ) : null}
                         <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">
                           Annulla
                         </button>
@@ -1590,11 +1836,34 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
 }
 
 type RecordListProps = {
-  tab: "insurance" | "inspection" | "extinguisher" | "tachograph";
-  records: { insurances: unknown[]; inspections: unknown[]; extinguishers: unknown[]; tachographs: unknown[] };
+  tab: PanelTab;
+  records: PanelRecords;
+  roadTaxEntry: ComplianceEntry | null;
 };
 
-function RecordList({ tab, records }: RecordListProps) {
+function RecordList({ tab, records, roadTaxEntry }: RecordListProps) {
+  if (tab === "road_tax") {
+    return (
+      <div className={`rounded-xl border p-3 text-sm ${roadTaxEntry ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50"}`}>
+        <div className="flex items-center justify-between gap-2">
+          <div className="font-medium text-slate-800">Bollo veicolo</div>
+          {roadTaxEntry ? (
+            <span className={`rounded-lg px-2 py-0.5 text-xs font-semibold ${STATUS_CELL[roadTaxEntry.status]}`}>
+              {formatDate(roadTaxEntry.expiry_date)} · {formatDays(roadTaxEntry.days_left)}
+            </span>
+          ) : (
+            <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-400">
+              Nessuna scadenza
+            </span>
+          )}
+        </div>
+        <div className="mt-1 text-xs text-slate-400">
+          Il bollo usa il campo dedicato su `vehicles.road_tax_expiry` ed e aggiornato nello stesso summary letto da lista e calendario.
+        </div>
+      </div>
+    );
+  }
+
   const list =
     tab === "insurance" ? records.insurances
     : tab === "inspection" ? records.inspections

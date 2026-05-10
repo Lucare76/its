@@ -6,7 +6,7 @@
  *
  * Regola business assicurazione:
  * - la data inserita e' la scadenza nominale della polizza
- * - il promemoria usa la scadenza effettiva includendo i 15 giorni di proroga
+ * - il promemoria usa la scadenza effettiva includendo la proroga configurata
  * - esempio: polizza 2026-10-01 -> copertura fino al 2026-10-15 inclusa
  * - primo alert il 2026-10-07
  */
@@ -20,6 +20,7 @@ import {
   getEffectiveExpiry,
   getWarnWindowDays,
   buildStatusLabel,
+  INSURANCE_GRACE_DAYS,
   WARN_DAYS,
 } from "@/lib/vehicle-compliance";
 
@@ -35,6 +36,7 @@ type WarningItem = {
   expiryDate: string;
   effectiveExpiryDate: string;
   daysLeft: number;
+  insuranceGraceDays?: number;
   note?: string;
 };
 
@@ -131,7 +133,7 @@ function buildEmailHtml(warnings: WarningItem[]): string {
                     <div style="font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:#bfd7ea;font-weight:700">Fleet Alert</div>
                     <div style="padding-top:8px;font-size:34px;line-height:1.04;color:#ffffff;font-weight:800">Promemoria documenti flotta</div>
                     <div style="padding-top:14px;font-size:15px;line-height:1.7;color:#e7f0f7;max-width:610px">
-                      Monitoraggio automatico delle scadenze dei mezzi Ischia Transfer Service. Per l'assicurazione la data mostrata considera sempre anche i 15 giorni di proroga.
+                      Monitoraggio automatico delle scadenze dei mezzi Ischia Transfer Service. Per l'assicurazione la data mostrata considera sempre la proroga configurata per il tenant.
                     </div>
                   </td>
                 </tr>
@@ -191,7 +193,7 @@ function buildEmailHtml(warnings: WarningItem[]): string {
                   <td style="padding:16px 18px">
                     <div style="font-size:12px;font-weight:800;letter-spacing:0.16em;text-transform:uppercase;color:#64748b">Nota assicurazione</div>
                     <div style="padding-top:8px;font-size:13px;line-height:1.7;color:#475569">
-                      La data mostrata per l'assicurazione e' la scadenza effettiva, comprensiva dei 15 giorni di proroga. Esempio: polizza del 01/10 -> copertura valida fino al 15/10 incluso.
+                      La data mostrata per l'assicurazione e' la scadenza effettiva, comprensiva della proroga configurata per il tenant.
                     </div>
                   </td>
                 </tr>
@@ -228,12 +230,13 @@ export async function POST(request: NextRequest) {
   const today = isIsoDate(body.today) ? body.today : new Date().toISOString().slice(0, 10);
   const dryRun = body.dry_run === true;
 
-  const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, driversRes] = await Promise.all([
-    admin.from("vehicles").select("id, label, plate, habitual_driver_profile_id, insurance_expiry, road_tax_expiry, inspection_expiry").eq("active", true),
+  const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, driversRes, graceRes] = await Promise.all([
+    admin.from("vehicles").select("id, tenant_id, label, plate, habitual_driver_profile_id, insurance_expiry, road_tax_expiry, inspection_expiry").eq("active", true),
     admin.from("vehicle_insurances").select("vehicle_id, expiry_date").eq("is_current", true),
     admin.from("vehicle_inspections").select("vehicle_id, expiry_date").eq("is_current", true),
     admin.from("vehicle_extinguishers").select("vehicle_id, expiry_date, serial_number").eq("active", true),
     admin.from("driver_profiles").select("id, full_name, tachograph_card_expiry").eq("active", true).not("tachograph_card_expiry", "is", null),
+    admin.from("vehicle_compliance_grace_periods").select("tenant_id, compliance_type, grace_days").eq("compliance_type", "insurance"),
   ]);
 
   if (vehiclesRes.error) {
@@ -263,9 +266,15 @@ export async function POST(request: NextRequest) {
     if (d.tachograph_card_expiry) driverTachMap.set(d.id, { name: d.full_name, expiry: d.tachograph_card_expiry });
   }
 
+  const insuranceGraceMap = new Map<string, number>();
+  for (const row of graceRes.data ?? []) {
+    if (row.tenant_id) insuranceGraceMap.set(row.tenant_id, row.grace_days ?? INSURANCE_GRACE_DAYS);
+  }
+
   const warnings: WarningItem[] = [];
 
   for (const vehicle of vehicles) {
+    const insuranceGraceDays = insuranceGraceMap.get(vehicle.tenant_id as string) ?? INSURANCE_GRACE_DAYS;
     // Insurance: prefer new table, fallback to legacy
     const insuranceExpiry = insuranceMap.get(vehicle.id) ?? (vehicle.insurance_expiry as string | null);
     // Inspection: prefer new table, fallback to legacy
@@ -279,7 +288,7 @@ export async function POST(request: NextRequest) {
 
     for (const { docType, expiry } of docs) {
       if (!expiry) continue;
-      const effectiveExpiryDate = getEffectiveExpiry(docType, expiry);
+      const effectiveExpiryDate = getEffectiveExpiry(docType, expiry, { insuranceGraceDays });
       const daysLeft = diffDays(today, effectiveExpiryDate);
 
       if (daysLeft <= getWarnWindowDays(docType)) {
@@ -290,12 +299,13 @@ export async function POST(request: NextRequest) {
           expiryDate: expiry,
           effectiveExpiryDate,
           daysLeft,
+          insuranceGraceDays: docType === "Assicurazione" ? insuranceGraceDays : undefined,
           note:
             docType === "Assicurazione"
-              ? `Polizza ${formatDate(expiry)} + proroga 15 giorni => copertura fino al ${formatDate(effectiveExpiryDate)} inclusa`
+              ? `Polizza ${formatDate(expiry)} + proroga ${insuranceGraceDays} giorni => copertura fino al ${formatDate(effectiveExpiryDate)} inclusa`
               : docType === "Collaudo"
                 ? `Scadenza nominale ${formatDate(expiry)} · regola valida fino al ${formatDate(effectiveExpiryDate)}`
-              : undefined,
+                : undefined,
         });
       }
     }

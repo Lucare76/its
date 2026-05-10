@@ -150,3 +150,44 @@ export async function PUT(request: NextRequest, { params }: Ctx) {
 
   return NextResponse.json({ item: updated });
 }
+
+export async function DELETE(request: NextRequest, { params }: Ctx) {
+  const { vehicleId } = await params;
+  const ctx = await authorizePricingRequest(request, ["admin", "operator"]);
+  if (ctx instanceof NextResponse) return ctx;
+  const { admin, user, membership: { tenant_id } } = ctx;
+
+  const body = await request.json().catch(() => ({}));
+  const { id } = body as { id?: string };
+  if (!id) return NextResponse.json({ error: "id obbligatorio" }, { status: 400 });
+
+  const { data: row, error: rowError } = await admin
+    .from("vehicle_inspections")
+    .select("id, expiry_date")
+    .eq("id", id)
+    .eq("tenant_id", tenant_id)
+    .eq("vehicle_id", vehicleId)
+    .maybeSingle();
+  if (rowError) return NextResponse.json({ error: rowError.message }, { status: 500 });
+  if (!row?.id) return NextResponse.json({ error: "Record non trovato" }, { status: 404 });
+
+  const { error } = await admin
+    .from("vehicle_inspections")
+    .update({ is_current: false })
+    .eq("id", id)
+    .eq("tenant_id", tenant_id)
+    .eq("vehicle_id", vehicleId);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  await admin.from("vehicle_compliance_history").insert({
+    tenant_id,
+    vehicle_id: vehicleId,
+    compliance_type: "inspection",
+    action: "archived",
+    old_expiry_date: row.expiry_date ?? null,
+    ref_id: id,
+    performed_by: user.id,
+  });
+
+  return NextResponse.json({ ok: true });
+}
