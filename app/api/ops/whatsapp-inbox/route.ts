@@ -417,7 +417,8 @@ export async function POST(request: NextRequest) {
     const lastInboundAt = latestInbound?.timestamp ?? latestInbound?.created_at ?? null;
     if (!isWhatsAppCustomerCareWindowOpen(lastInboundAt)) {
       return NextResponse.json({
-        error: "WhatsApp consente risposte libere solo entro 24 ore dall'ultimo messaggio del cliente. Usa un template approvato."
+        ok: false,
+        error: "La finestra WhatsApp di 24 ore è chiusa. Usa un template approvato per contattare il cliente."
       }, { status: 400 });
     }
   }

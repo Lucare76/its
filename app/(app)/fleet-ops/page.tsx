@@ -775,64 +775,9 @@ export default function FleetOpsPage() {
                 {/* Documenti, blocco e anomalie solo in modifica */}
                 {!isNewVehicle && selectedVehicle ? (
                   <>
-                    <details className="rounded-xl border border-slate-200" open={
-                      expiryStatus(selectedVehicle.road_tax_expiry) !== "ok"
-                    }>
-                      <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-700">
-                        Scadenze documenti
-                      </summary>
-                      <div className="grid grid-cols-1 gap-3 border-t border-slate-100 px-4 py-3">
-                        {/* Bollo — unico campo gestito qui */}
-                        {(() => {
-                          const status = expiryStatus(form.road_tax_expiry || selectedVehicle.road_tax_expiry);
-                          return (
-                            <label className="text-xs font-semibold text-slate-500">
-                              <div className="flex items-center justify-between">
-                                <span>Bollo</span>
-                                {(form.road_tax_expiry || selectedVehicle.road_tax_expiry) && (
-                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${EXPIRY_BADGE[status]}`}>
-                                    {status === "expired" ? "Scaduto" : status === "soon" ? "In scadenza" : "OK"}
-                                  </span>
-                                )}
-                              </div>
-                              <DateInput
-                                className="input-saas mt-1 w-full"
-                                value={form.road_tax_expiry}
-                                onChange={(iso) => setForm((f) => ({ ...f, road_tax_expiry: iso }))}
-                              />
-                            </label>
-                          );
-                        })()}
-                        <p className="text-xs text-slate-400">
-                          Assicurazione, collaudo, estintore e tachigrafo si gestiscono nella sezione{" "}
-                          <a href="/fleet-ops/scadenze" className="text-blue-600 hover:underline font-medium">Scadenze</a>.
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            disabled={saving || !selectedVehicle}
-                            className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
-                            onClick={() => void post({
-                              action: "set_vehicle_documents",
-                              id: selectedVehicle.id,
-                              road_tax_expiry: form.road_tax_expiry || null,
-                            })}
-                          >
-                            Salva bollo
-                          </button>
-                          <a
-                            href="/fleet-ops/scadenze"
-                            className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
-                          >
-                            Gestisci scadenze →
-                          </a>
-                        </div>
-                      </div>
-                    </details>
-
-                    <details className="rounded-xl border border-slate-200">
-                      <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700 select-none">
-                        {selectedVehicle.is_blocked_manual || selectedVehicle.blocked_until ? "⚠ Mezzo bloccato — modifica blocco" : "Blocca mezzo"}
+                      <details className="rounded-xl border border-slate-200">
+                        <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700 select-none">
+                          {selectedVehicle.is_blocked_manual || selectedVehicle.blocked_until ? "⚠ Mezzo bloccato — modifica blocco" : "Blocca mezzo"}
                       </summary>
                       <div className="grid grid-cols-2 gap-3 border-t border-slate-100 px-4 py-3">
                         <label className="col-span-2 text-xs font-semibold text-slate-500">

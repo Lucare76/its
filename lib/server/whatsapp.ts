@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { isWhatsAppConversationWindowOpen } from "@/lib/whatsapp-conversation-window";
 
 export type ReminderStatus = "pending" | "sent" | "delivered" | "read" | "failed";
 export type WhatsAppEventStatus = "queued" | "sent" | "delivered" | "read" | "failed";
@@ -238,12 +239,7 @@ export function isReminderDueInWindow(date: string, time: string, targetHours: n
 }
 
 export function isWhatsAppCustomerCareWindowOpen(lastInboundAt: string | null | undefined, now = new Date()) {
-  if (!lastInboundAt) return false;
-  const inboundAt = new Date(lastInboundAt);
-  const inboundTime = inboundAt.getTime();
-  if (!Number.isFinite(inboundTime)) return false;
-  if (inboundTime > now.getTime()) return true;
-  return now.getTime() - inboundTime <= 24 * 60 * 60 * 1000;
+  return isWhatsAppConversationWindowOpen(lastInboundAt, now);
 }
 
 async function sendTemplateMessage(phoneNumberId: string, accessToken: string, toPhone: string, templateName: string, languageCode: string, parameters: Array<{ type: "text"; text: string }>) {

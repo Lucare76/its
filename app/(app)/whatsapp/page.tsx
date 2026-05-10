@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { getWhatsAppConversationWindowState } from "@/lib/whatsapp-conversation-window";
 
 type ThreadRow = {
   id: string;
@@ -83,8 +84,6 @@ const quickReplies = [
   "Ci chiami a questo numero, grazie.",
   "Perfetto, ti aspettiamo.",
 ] as const;
-
-const CUSTOMER_CARE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // ─── Visual helpers ────────────────────────────────────────────────────────
 
@@ -276,7 +275,11 @@ export default function WhatsAppInboxPage() {
   const [error, setError] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<"list" | "chat">("list");
-  const [textWindowOpen, setTextWindowOpen] = useState(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const lastRenderedMessageKeyRef = useRef<string>("");
 
   const selectedThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -298,6 +301,10 @@ export default function WhatsAppInboxPage() {
     },
     [messages],
   );
+  const conversationWindow = useMemo(
+    () => getWhatsAppConversationWindowState(latestInboundAt),
+    [latestInboundAt],
+  );
   const selectedTemplate = useMemo(
     () => templateOptions.find((option) => option.key === selectedTemplateKey) ?? templateOptions[0] ?? null,
     [selectedTemplateKey, templateOptions],
@@ -316,7 +323,7 @@ export default function WhatsAppInboxPage() {
     });
   }, [templateOptions]);
   const composerEnabled = Boolean(selectedThreadId) || newChatMode;
-  const textModeUnavailable = newChatMode || !textWindowOpen;
+  const textModeUnavailable = newChatMode || !conversationWindow.isOpen;
   const templateVariables = useMemo(
     () => templateVariablesText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
     [templateVariablesText],
@@ -325,6 +332,39 @@ export default function WhatsAppInboxPage() {
     const reason = (latestFailedOutbound?.failure_reason ?? "").toLowerCase();
     return reason.includes("131047") || reason.includes("re-engagement");
   }, [latestFailedOutbound]);
+  const latestMessageKey = useMemo(
+    () => (messages.length > 0 ? `${messages[messages.length - 1]?.id}:${messages.length}` : "empty"),
+    [messages],
+  );
+  const windowStatusText = useMemo(() => {
+    if (newChatMode) {
+      return "Per aprire una nuova conversazione WhatsApp serve un template approvato.";
+    }
+    if (!latestInboundAt) {
+      return "Non risultano messaggi ricevuti dal cliente in questa conversazione. Per scrivere devi usare un template approvato.";
+    }
+    if (!conversationWindow.isOpen) {
+      return "Sono passate più di 24 ore dall’ultimo messaggio del cliente. Per poter scrivere devi usare un template approvato.";
+    }
+    return "Puoi rispondere con messaggio libero.";
+  }, [conversationWindow.isOpen, latestInboundAt, newChatMode]);
+
+  const scrollToLatestMessage = useCallback((behavior: ScrollBehavior = "smooth") => {
+    shouldStickToBottomRef.current = true;
+    setShowJumpToLatest(false);
+    bottomRef.current?.scrollIntoView({ behavior, block: "end" });
+  }, []);
+
+  const updateScrollState = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const nearBottom = distanceFromBottom <= 96;
+    shouldStickToBottomRef.current = nearBottom;
+    if (nearBottom) {
+      setShowJumpToLatest(false);
+    }
+  }, []);
 
   const load = useCallback(
     async (nextThreadId?: string | null) => {
@@ -377,27 +417,6 @@ export default function WhatsAppInboxPage() {
   }, [composerMode, selectedTemplate, selectedThread, templateVariablesText]);
 
   useEffect(() => {
-    const updateTextWindow = () => {
-      if (!latestInboundAt) {
-        setTextWindowOpen(false);
-        return;
-      }
-      const inboundTime = new Date(latestInboundAt).getTime();
-      setTextWindowOpen(Number.isFinite(inboundTime) && Date.now() - inboundTime <= CUSTOMER_CARE_WINDOW_MS);
-    };
-    updateTextWindow();
-    const interval = window.setInterval(updateTextWindow, 60000);
-    return () => window.clearInterval(interval);
-  }, [latestInboundAt]);
-
-  useEffect(() => {
-    if (composerMode === "text" && textModeUnavailable) {
-      const timeout = window.setTimeout(() => setComposerMode("template"), 0);
-      return () => window.clearTimeout(timeout);
-    }
-  }, [composerMode, textModeUnavailable]);
-
-  useEffect(() => {
     const timeout = window.setTimeout(() => void load(selectedThreadId), 250);
     return () => window.clearTimeout(timeout);
   }, [filter, search, selectedThreadId, load]);
@@ -407,6 +426,25 @@ export default function WhatsAppInboxPage() {
     const interval = window.setInterval(() => { void load(selectedThreadId); }, 12000);
     return () => window.clearInterval(interval);
   }, [selectedThreadId, load]);
+
+  useEffect(() => {
+    shouldStickToBottomRef.current = true;
+    setShowJumpToLatest(false);
+  }, [selectedThreadId, newChatMode]);
+
+  useEffect(() => {
+    const changed = lastRenderedMessageKeyRef.current !== latestMessageKey;
+    lastRenderedMessageKeyRef.current = latestMessageKey;
+    if (!changed) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (shouldStickToBottomRef.current) {
+        scrollToLatestMessage(messages.length > 1 ? "smooth" : "auto");
+      } else if (messages.length > 0) {
+        setShowJumpToLatest(true);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [latestMessageKey, messages.length, scrollToLatestMessage]);
 
   const runAction = async (action: "mark_read" | "close" | "reopen") => {
     if (!selectedThreadId) return;
@@ -457,7 +495,10 @@ export default function WhatsAppInboxPage() {
     if (!composerEnabled) return;
     const text = draft.trim();
     if (composerMode === "text" && !text) { setError("Inserisci un messaggio prima di inviare."); return; }
-    if (composerMode === "text" && textModeUnavailable) { setError("Per inviare ora devi usare un template approvato."); return; }
+    if (composerMode === "text" && textModeUnavailable) {
+      setError("La finestra WhatsApp di 24 ore è chiusa. Usa un template approvato per contattare il cliente.");
+      return;
+    }
     if (composerMode === "template" && !selectedTemplate) { setError("Seleziona un template prima di inviare."); return; }
     const token = await getAccessToken();
     if (!token) { setError("Sessione non disponibile."); return; }
@@ -480,6 +521,7 @@ export default function WhatsAppInboxPage() {
     if (!response.ok || !body?.ok) {
       setError(body?.error ?? "Invio messaggio non riuscito.");
     } else {
+      shouldStickToBottomRef.current = true;
       setDraft("");
       setTemplateVariablesText("");
       if (newChatMode) {
@@ -626,6 +668,8 @@ export default function WhatsAppInboxPage() {
                   onClick={() => {
                     setNewChatMode(false);
                     setComposerMode("text");
+                    shouldStickToBottomRef.current = true;
+                    setShowJumpToLatest(false);
                     void load(thread.id);
                     setMobileView("chat");
                   }}
@@ -833,7 +877,14 @@ export default function WhatsAppInboxPage() {
               </div>
 
               {/* Messages area */}
-              <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4">
+              <div className="relative border-b border-slate-100 bg-slate-50">
+                <div
+                  ref={messagesContainerRef}
+                  onScroll={updateScrollState}
+                  className="h-[42vh] min-h-[280px] overflow-y-auto px-4 py-4 lg:h-[48vh]"
+                  style={{ scrollbarGutter: "stable" }}
+                >
+                  <div className="space-y-3">
                 {messages.map((message) => {
                   const inbound = message.direction === "inbound";
                   const failed = !inbound && message.status === "failed";
@@ -898,6 +949,18 @@ export default function WhatsAppInboxPage() {
                     </p>
                   </div>
                 )}
+                    <div ref={bottomRef} />
+                  </div>
+                </div>
+                {showJumpToLatest && messages.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => scrollToLatestMessage("smooth")}
+                    className="absolute bottom-4 right-4 rounded-full border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 shadow-lg transition hover:border-emerald-300 hover:bg-emerald-50"
+                  >
+                    Vai all’ultimo messaggio
+                  </button>
+                )}
               </div>
 
               {/* Composer */}
@@ -952,9 +1015,29 @@ export default function WhatsAppInboxPage() {
                     <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                       <span className="mt-0.5 text-amber-600"><IconWarning /></span>
                       <span className="flex-1">
-                        {newChatMode
-                          ? "Per aprire una nuova conversazione WhatsApp serve un template approvato."
-                          : "La finestra di risposta libera e scaduta: usa un template approvato per scrivere al cliente."}
+                        {windowStatusText}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setComposerMode("template")}
+                        className="shrink-0 rounded-full border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-800 hover:bg-amber-100"
+                      >
+                        Usa template
+                      </button>
+                    </div>
+                  )}
+
+                  {!newChatMode && selectedThread && (
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${conversationWindow.isOpen ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>
+                        {conversationWindow.isOpen ? "Finestra WhatsApp aperta" : "Finestra WhatsApp chiusa"}
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        {conversationWindow.isOpen
+                          ? "Puoi rispondere con messaggio libero."
+                          : latestInboundAt
+                            ? `Ultimo messaggio cliente: ${formatDate(latestInboundAt)}`
+                            : "Nessun messaggio inbound cliente disponibile."}
                       </span>
                     </div>
                   )}
@@ -969,7 +1052,7 @@ export default function WhatsAppInboxPage() {
                         key={mode.value}
                         type="button"
                         onClick={() => setComposerMode(mode.value as "text" | "template")}
-                        disabled={busyAction === "reply" || (mode.value === "text" && textModeUnavailable)}
+                        disabled={busyAction === "reply" || (mode.value === "text" && newChatMode)}
                         className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:bg-slate-100 ${
                           composerMode === mode.value
                             ? "border-emerald-600 bg-emerald-600 text-white"
@@ -1134,9 +1217,9 @@ export default function WhatsAppInboxPage() {
                         data-no-uppercase
                         value={draft}
                         onChange={(e) => setDraft(e.target.value)}
-                        placeholder="Scrivi la risposta al cliente…"
+                        placeholder={textModeUnavailable ? "Messaggio libero non disponibile fuori dalla finestra di 24 ore." : "Scrivi la risposta al cliente…"}
                         rows={4}
-                        disabled={busyAction === "reply"}
+                        disabled={busyAction === "reply" || textModeUnavailable}
                         autoCapitalize="sentences"
                         autoCorrect="on"
                         spellCheck
@@ -1184,6 +1267,7 @@ export default function WhatsAppInboxPage() {
                       onClick={() => void sendReply()}
                       disabled={
                         busyAction !== null ||
+                        (composerMode === "text" && textModeUnavailable) ||
                         (composerMode === "text" ? !draft.trim() : !selectedTemplate) ||
                         (newChatMode && !newChatPhone.trim())
                       }
