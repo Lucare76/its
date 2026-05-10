@@ -37,6 +37,7 @@ type MessageRow = {
   text_body: string | null;
   media_id: string | null;
   media_mime_type: string | null;
+  media_filename?: string | null;
   status: string | null;
   failure_reason?: string | null;
   timestamp: string | null;
@@ -204,6 +205,33 @@ async function getAccessToken() {
   return data.session?.access_token ?? null;
 }
 
+async function fetchWhatsAppMediaBlob(messageId: string) {
+  const token = await getAccessToken();
+  if (!token) throw new Error("Sessione non disponibile.");
+  const response = await fetch(`/api/ops/whatsapp-media/${messageId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(body?.error ?? "Impossibile aprire l'allegato WhatsApp.");
+  }
+  const blob = await response.blob();
+  return {
+    blob,
+    contentType: response.headers.get("content-type") ?? blob.type ?? "application/octet-stream",
+  };
+}
+
+function messageTypeLabel(message: MessageRow) {
+  if (message.media_filename?.trim()) return message.media_filename.trim();
+  if (message.message_type === "image") return "Foto ricevuta";
+  if (message.message_type === "document") return "Documento ricevuto";
+  if (message.message_type === "video") return "Video ricevuto";
+  if (message.message_type === "audio") return "Audio ricevuto";
+  return message.media_mime_type ?? message.media_id ?? "Allegato WhatsApp";
+}
+
 // ─── Icons ─────────────────────────────────────────────────────────────────
 
 function IconSearch() {
@@ -251,6 +279,115 @@ function IconWarning() {
     <svg className="h-3.5 w-3.5 shrink-0" fill="currentColor" viewBox="0 0 20 20">
       <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
     </svg>
+  );
+}
+
+function IconPaperclip() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="m18.375 12.739-6.315 6.316a4.5 4.5 0 1 1-6.364-6.364l8.485-8.485a3 3 0 0 1 4.243 4.243l-8.486 8.485a1.5 1.5 0 1 1-2.121-2.121l7.425-7.425" />
+    </svg>
+  );
+}
+
+function WhatsAppMediaAttachment({
+  message,
+  onError,
+}: {
+  message: MessageRow;
+  onError: (message: string) => void;
+}) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const isImage = Boolean(message.media_mime_type?.startsWith("image/"));
+
+  useEffect(() => {
+    let revokedUrl: string | null = null;
+    let active = true;
+
+    async function loadPreview() {
+      if (!message.media_id || !isImage) return;
+      setLoadingPreview(true);
+      try {
+        const media = await fetchWhatsAppMediaBlob(message.id);
+        if (!active) return;
+        const nextUrl = URL.createObjectURL(media.blob);
+        revokedUrl = nextUrl;
+        setPreviewUrl(nextUrl);
+      } catch (error) {
+        if (!active) return;
+        onError(error instanceof Error ? error.message : "Impossibile caricare l'anteprima immagine.");
+      } finally {
+        if (active) setLoadingPreview(false);
+      }
+    }
+
+    void loadPreview();
+    return () => {
+      active = false;
+      if (revokedUrl) URL.revokeObjectURL(revokedUrl);
+    };
+  }, [isImage, message.id, message.media_id, onError]);
+
+  const openAttachment = useCallback(async () => {
+    if (!message.media_id || opening) return;
+    setOpening(true);
+    try {
+      if (previewUrl && isImage) {
+        window.open(previewUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
+      const media = await fetchWhatsAppMediaBlob(message.id);
+      const nextUrl = URL.createObjectURL(media.blob);
+      window.open(nextUrl, "_blank", "noopener,noreferrer");
+      window.setTimeout(() => URL.revokeObjectURL(nextUrl), 60_000);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Impossibile aprire l'allegato WhatsApp.");
+    } finally {
+      setOpening(false);
+    }
+  }, [isImage, message.id, message.media_id, onError, opening, previewUrl]);
+
+  if (!message.media_id) return null;
+
+  return (
+    <div className="mt-2 rounded-2xl border border-slate-200/80 bg-slate-50/90 p-2.5">
+      {isImage ? (
+        <button
+          type="button"
+          onClick={() => void openAttachment()}
+          className="group block w-full overflow-hidden rounded-xl border border-slate-200 bg-white"
+        >
+          {previewUrl ? (
+            <img
+              src={previewUrl}
+              alt={message.text_body?.trim() || "Immagine WhatsApp"}
+              className="max-h-72 w-full object-cover transition-transform duration-200 group-hover:scale-[1.01]"
+            />
+          ) : (
+            <div className="flex h-32 items-center justify-center text-xs text-slate-400">
+              {loadingPreview ? "Caricamento anteprima..." : "Apri immagine"}
+            </div>
+          )}
+        </button>
+      ) : null}
+
+      <div className={`flex flex-wrap items-center gap-2 ${isImage ? "mt-2" : ""}`}>
+        <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-600">
+          <IconPaperclip />
+          {messageTypeLabel(message)}
+        </span>
+        <button
+          type="button"
+          onClick={() => void openAttachment()}
+          disabled={opening}
+          className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-50"
+        >
+          {opening ? "Apertura..." : "Apri allegato"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -429,7 +566,8 @@ export default function WhatsAppInboxPage() {
 
   useEffect(() => {
     shouldStickToBottomRef.current = true;
-    setShowJumpToLatest(false);
+    const frame = window.requestAnimationFrame(() => setShowJumpToLatest(false));
+    return () => window.cancelAnimationFrame(frame);
   }, [selectedThreadId, newChatMode]);
 
   useEffect(() => {
@@ -917,9 +1055,10 @@ export default function WhatsAppInboxPage() {
                           {message.text_body || `[${message.message_type ?? "messaggio"}]`}
                         </p>
                         {message.media_id && (
-                          <p className="mt-1 text-[11px] text-slate-400">
-                            Allegato: {message.media_mime_type ?? message.media_id}
-                          </p>
+                          <WhatsAppMediaAttachment
+                            message={message}
+                            onError={(nextError) => setError(nextError)}
+                          />
                         )}
                         <div className={`mt-1.5 flex flex-wrap items-center gap-1.5 ${inbound ? "" : "justify-end"}`}>
                           <p className="text-[10px] text-slate-400">{formatDate(message.timestamp ?? message.created_at)}</p>

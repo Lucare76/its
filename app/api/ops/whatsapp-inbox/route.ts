@@ -193,7 +193,7 @@ export async function GET(request: NextRequest) {
   const { data: messages, error: messageError } = selectedId
     ? await auth.admin
       .from("whatsapp_messages")
-      .select("id, wa_message_id, direction, wa_id, phone_e164, message_type, text_body, media_id, media_mime_type, status, timestamp, created_at, booking_id, transfer_id")
+      .select("id, wa_message_id, direction, wa_id, phone_e164, message_type, text_body, media_id, media_mime_type, status, timestamp, created_at, booking_id, transfer_id, raw_message")
       .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
       .eq("thread_id", selectedId)
       .order("timestamp", { ascending: true, nullsFirst: true })
@@ -223,10 +223,29 @@ export async function GET(request: NextRequest) {
 
   const enrichedMessages = (messages ?? []).map((message) => {
     const latestStatus = message.wa_message_id ? latestStatusByMessageId.get(message.wa_message_id) : null;
+    const rawMessage = typeof message.raw_message === "object" && message.raw_message !== null
+      ? message.raw_message as Record<string, unknown>
+      : null;
+    const documentMeta = rawMessage && typeof rawMessage.document === "object" && rawMessage.document !== null
+      ? rawMessage.document as { filename?: unknown }
+      : null;
     return {
-      ...message,
+      id: message.id,
+      wa_message_id: message.wa_message_id,
+      direction: message.direction,
+      wa_id: message.wa_id,
+      phone_e164: message.phone_e164,
+      message_type: message.message_type,
+      text_body: message.text_body,
+      media_id: message.media_id,
+      media_mime_type: message.media_mime_type,
       status: latestStatus?.status ?? message.status,
-      failure_reason: latestStatus?.status === "failed" ? latestStatus.failure_reason : null
+      failure_reason: latestStatus?.status === "failed" ? latestStatus.failure_reason : null,
+      timestamp: message.timestamp,
+      created_at: message.created_at,
+      booking_id: message.booking_id,
+      transfer_id: message.transfer_id,
+      media_filename: typeof documentMeta?.filename === "string" ? documentMeta.filename : null,
     };
   });
 

@@ -106,6 +106,14 @@ export interface WhatsAppGraphResult<T = unknown> {
   error: string | null;
 }
 
+export interface WhatsAppMediaMetadata {
+  id: string;
+  url: string;
+  mime_type?: string | null;
+  sha256?: string | null;
+  file_size?: number | null;
+}
+
 export interface WhatsAppEventInsert {
   tenant_id: string;
   service_id: string | null;
@@ -240,6 +248,91 @@ export function isReminderDueInWindow(date: string, time: string, targetHours: n
 
 export function isWhatsAppCustomerCareWindowOpen(lastInboundAt: string | null | undefined, now = new Date()) {
   return isWhatsAppConversationWindowOpen(lastInboundAt, now);
+}
+
+export async function fetchWhatsAppMediaMetadata(mediaId: string): Promise<WhatsAppGraphResult<WhatsAppMediaMetadata>> {
+  const accessToken = whatsappAccessToken();
+  const graphVersion = whatsappGraphVersion();
+  const response = await fetch(`https://graph.facebook.com/${graphVersion}/${mediaId}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    cache: "no-store",
+  });
+
+  let data: WhatsAppMediaMetadata | null = null;
+  let error: string | null = null;
+  try {
+    const json = await response.json();
+    if (response.ok) {
+      data = {
+        id: String(json.id ?? mediaId),
+        url: String(json.url ?? ""),
+        mime_type: typeof json.mime_type === "string" ? json.mime_type : null,
+        sha256: typeof json.sha256 === "string" ? json.sha256 : null,
+        file_size: typeof json.file_size === "number" ? json.file_size : null,
+      };
+      if (!data.url) {
+        error = "URL media WhatsApp non disponibile.";
+      }
+    } else {
+      error = typeof json?.error?.message === "string" ? json.error.message : "Errore recupero media WhatsApp.";
+    }
+  } catch {
+    error = response.ok ? "Risposta media WhatsApp non valida." : "Errore recupero media WhatsApp.";
+  }
+
+  return {
+    ok: response.ok && Boolean(data?.url) && !error,
+    status: response.status,
+    data,
+    error,
+  };
+}
+
+export async function downloadWhatsAppMedia(mediaId: string) {
+  const metadata = await fetchWhatsAppMediaMetadata(mediaId);
+  if (!metadata.ok || !metadata.data?.url) {
+    return {
+      ok: false as const,
+      status: metadata.status || 502,
+      error: metadata.error ?? "Media WhatsApp non disponibile.",
+    };
+  }
+
+  const accessToken = whatsappAccessToken();
+  const response = await fetch(metadata.data.url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    let error = "Download allegato WhatsApp non riuscito.";
+    try {
+      const json = await response.json();
+      error = typeof json?.error?.message === "string" ? json.error.message : error;
+    } catch {
+      // ignore non-json body
+    }
+    return {
+      ok: false as const,
+      status: response.status,
+      error,
+    };
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  return {
+    ok: true as const,
+    status: 200,
+    data: {
+      bytes: Buffer.from(arrayBuffer),
+      mimeType: response.headers.get("content-type") ?? metadata.data.mime_type ?? "application/octet-stream",
+      metadata: metadata.data,
+    },
+  };
 }
 
 async function sendTemplateMessage(phoneNumberId: string, accessToken: string, toPhone: string, templateName: string, languageCode: string, parameters: Array<{ type: "text"; text: string }>) {
