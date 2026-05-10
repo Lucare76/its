@@ -232,6 +232,14 @@ function messageTypeLabel(message: MessageRow) {
   return message.media_mime_type ?? message.media_id ?? "Allegato WhatsApp";
 }
 
+function attachmentKind(message: MessageRow) {
+  if (message.media_mime_type?.startsWith("image/")) return "image";
+  if (message.media_mime_type?.includes("pdf")) return "pdf";
+  if (message.media_mime_type?.startsWith("audio/")) return "audio";
+  if (message.media_mime_type?.startsWith("video/")) return "video";
+  return "file";
+}
+
 // ─── Icons ─────────────────────────────────────────────────────────────────
 
 function IconSearch() {
@@ -290,6 +298,51 @@ function IconPaperclip() {
   );
 }
 
+function IconImage() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 7.5A2.25 2.25 0 0 1 6 5.25h12A2.25 2.25 0 0 1 20.25 7.5v9A2.25 2.25 0 0 1 18 18.75H6a2.25 2.25 0 0 1-2.25-2.25v-9Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="m3.75 15.75 4.72-4.72a1.5 1.5 0 0 1 2.12 0l2.16 2.16a1.5 1.5 0 0 0 2.12 0l3.38-3.38a1.5 1.5 0 0 1 2.12 0" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9h.008v.008h-.008V9Z" />
+    </svg>
+  );
+}
+
+function IconDocument() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-8.25a2.25 2.25 0 0 0-2.25-2.25H8.25A2.25 2.25 0 0 0 6 6v12a2.25 2.25 0 0 0 2.25 2.25h6.75" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 3.75v4.5a.75.75 0 0 0 .75.75h4.5" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 18.75h6m-3-3v6" />
+    </svg>
+  );
+}
+
+function IconVolume() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 5.25 6.75 9H4.5A1.5 1.5 0 0 0 3 10.5v3A1.5 1.5 0 0 0 4.5 15h2.25l4.5 3.75V5.25Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 8.25a5.25 5.25 0 0 1 0 7.5M18.75 6a8.25 8.25 0 0 1 0 12" />
+    </svg>
+  );
+}
+
+function IconVideo() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5 20.25 7.5v9l-4.5-3m-9.75 4.5h9a2.25 2.25 0 0 0 2.25-2.25v-7.5A2.25 2.25 0 0 0 15 6h-9A2.25 2.25 0 0 0 3.75 8.25v7.5A2.25 2.25 0 0 0 6 18Z" />
+    </svg>
+  );
+}
+
+function IconDownload() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4.5 19.5h15" />
+    </svg>
+  );
+}
+
 function WhatsAppMediaAttachment({
   message,
   onError,
@@ -298,12 +351,18 @@ function WhatsAppMediaAttachment({
   onError: (message: string) => void;
 }) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [blobMimeType, setBlobMimeType] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
-  const [opening, setOpening] = useState(false);
-  const isImage = Boolean(message.media_mime_type?.startsWith("image/"));
+  const [busyAction, setBusyAction] = useState<"open" | "download" | null>(null);
+  const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+  const kind = attachmentKind(message);
+  const isImage = kind === "image";
+  const isPdf = kind === "pdf";
+  const isAudio = kind === "audio";
+  const isVideo = kind === "video";
 
   useEffect(() => {
-    let revokedUrl: string | null = null;
     let active = true;
 
     async function loadPreview() {
@@ -313,8 +372,9 @@ function WhatsAppMediaAttachment({
         const media = await fetchWhatsAppMediaBlob(message.id);
         if (!active) return;
         const nextUrl = URL.createObjectURL(media.blob);
-        revokedUrl = nextUrl;
         setPreviewUrl(nextUrl);
+        setBlobUrl((current) => current ?? nextUrl);
+        setBlobMimeType(media.contentType);
       } catch (error) {
         if (!active) return;
         onError(error instanceof Error ? error.message : "Impossibile caricare l'anteprima immagine.");
@@ -326,33 +386,113 @@ function WhatsAppMediaAttachment({
     void loadPreview();
     return () => {
       active = false;
-      if (revokedUrl) URL.revokeObjectURL(revokedUrl);
     };
   }, [isImage, message.id, message.media_id, onError]);
 
+  useEffect(() => () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    if (blobUrl && blobUrl !== previewUrl) URL.revokeObjectURL(blobUrl);
+  }, [blobUrl, previewUrl]);
+
+  const ensureBlobUrl = useCallback(async () => {
+    if (blobUrl) {
+      return {
+        url: blobUrl,
+        mimeType: blobMimeType ?? message.media_mime_type ?? "application/octet-stream",
+      };
+    }
+    const media = await fetchWhatsAppMediaBlob(message.id);
+    const nextUrl = URL.createObjectURL(media.blob);
+    setBlobUrl(nextUrl);
+    setBlobMimeType(media.contentType);
+    return { url: nextUrl, mimeType: media.contentType };
+  }, [blobMimeType, blobUrl, message.id, message.media_mime_type]);
+
   const openAttachment = useCallback(async () => {
-    if (!message.media_id || opening) return;
-    setOpening(true);
+    if (!message.media_id || busyAction) return;
+    setBusyAction("open");
     try {
       if (previewUrl && isImage) {
         window.open(previewUrl, "_blank", "noopener,noreferrer");
         return;
       }
-      const media = await fetchWhatsAppMediaBlob(message.id);
-      const nextUrl = URL.createObjectURL(media.blob);
-      window.open(nextUrl, "_blank", "noopener,noreferrer");
-      window.setTimeout(() => URL.revokeObjectURL(nextUrl), 60_000);
+      const media = await ensureBlobUrl();
+      if (isPdf) {
+        setPdfViewerOpen(true);
+        return;
+      }
+      window.open(media.url, "_blank", "noopener,noreferrer");
     } catch (error) {
       onError(error instanceof Error ? error.message : "Impossibile aprire l'allegato WhatsApp.");
     } finally {
-      setOpening(false);
+      setBusyAction(null);
     }
-  }, [isImage, message.id, message.media_id, onError, opening, previewUrl]);
+  }, [busyAction, ensureBlobUrl, isImage, isPdf, message.media_id, onError, previewUrl]);
+
+  const downloadAttachment = useCallback(async () => {
+    if (!message.media_id || busyAction) return;
+    setBusyAction("download");
+    try {
+      const media = await ensureBlobUrl();
+      const link = document.createElement("a");
+      link.href = media.url;
+      link.download = messageTypeLabel(message);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Impossibile scaricare l'allegato WhatsApp.");
+    } finally {
+      setBusyAction(null);
+    }
+  }, [busyAction, ensureBlobUrl, message, onError]);
 
   if (!message.media_id) return null;
 
+  const pillTone = isImage
+    ? "bg-emerald-50 text-emerald-700"
+    : isPdf
+      ? "bg-rose-50 text-rose-700"
+      : isAudio
+        ? "bg-amber-50 text-amber-700"
+        : isVideo
+          ? "bg-violet-50 text-violet-700"
+          : "bg-slate-100 text-slate-700";
+
+  const AttachmentIcon = isImage ? IconImage : isPdf ? IconDocument : isAudio ? IconVolume : isVideo ? IconVideo : IconPaperclip;
+
   return (
     <div className="mt-2 rounded-2xl border border-slate-200/80 bg-slate-50/90 p-2.5">
+      {pdfViewerOpen && blobUrl ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
+          <div className="flex h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-slate-900">{messageTypeLabel(message)}</p>
+                <p className="mt-1 text-xs text-slate-500">Anteprima PDF WhatsApp</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void downloadAttachment()}
+                  className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Scarica
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPdfViewerOpen(false)}
+                  className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Chiudi
+                </button>
+              </div>
+            </div>
+            <iframe src={blobUrl} title={messageTypeLabel(message)} className="min-h-0 flex-1 bg-slate-100" />
+          </div>
+        </div>
+      ) : null}
+
       {isImage ? (
         <button
           type="button"
@@ -373,18 +513,43 @@ function WhatsAppMediaAttachment({
         </button>
       ) : null}
 
-      <div className={`flex flex-wrap items-center gap-2 ${isImage ? "mt-2" : ""}`}>
-        <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-600">
-          <IconPaperclip />
-          {messageTypeLabel(message)}
+      {!isImage ? (
+        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+          <div className="flex items-start gap-2">
+            <span className={`mt-0.5 inline-flex rounded-full p-1.5 ${pillTone}`}>
+              <AttachmentIcon />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-slate-800">{messageTypeLabel(message)}</p>
+              <p className="mt-0.5 text-[11px] text-slate-400">
+                {message.media_mime_type ?? "Allegato WhatsApp"}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className={`flex flex-wrap items-center gap-2 ${isImage ? "mt-2" : "mt-2.5"}`}>
+        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium ${pillTone}`}>
+          <AttachmentIcon />
+          {isImage ? "Foto" : isPdf ? "PDF" : isAudio ? "Audio" : isVideo ? "Video" : "File"}
         </span>
         <button
           type="button"
           onClick={() => void openAttachment()}
-          disabled={opening}
+          disabled={Boolean(busyAction)}
           className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-50"
         >
-          {opening ? "Apertura..." : "Apri allegato"}
+          {busyAction === "open" ? "Apertura..." : isPdf ? "Apri PDF" : "Apri allegato"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void downloadAttachment()}
+          disabled={Boolean(busyAction)}
+          className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          <IconDownload />
+          {busyAction === "download" ? "Scaricamento..." : "Scarica"}
         </button>
       </div>
     </div>
