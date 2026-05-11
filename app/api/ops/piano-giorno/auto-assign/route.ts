@@ -750,7 +750,7 @@ export async function POST(request: NextRequest) {
         const [assignRes, svcRes, statusRes] = await Promise.all([
           batchAdmin.from("assignments").upsert(allAssignRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false }),
           auth.admin.from("services").update({ status: "assigned" }).in("id", allServiceIds).eq("tenant_id", tenantId),
-          batchAdmin.from("status_events").upsert(allStatusEvents, { onConflict: "tenant_id,service_id,status", ignoreDuplicates: true }),
+          batchAdmin.from("status_events").insert(allStatusEvents),
         ]);
 
         if (assignRes.error) errors.push(`Assignments: ${assignRes.error.message}`);
