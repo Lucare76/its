@@ -599,10 +599,11 @@ export async function POST(request: NextRequest) {
 
     // ── 7. Assegna autisti (score-based: no-conflict + zona geografica + workload) ──
     //
-    // Punteggio per autista (più basso = preferito):
-    //   conflitto <75 min → +100_000  (sempre peggio di qualsiasi non-conflict)
-    //   numero giri × 100            (distribuisce il carico: 0 giri batte sempre 1+ giri)
-    //   zona: stessa → +0, ignota → +2, diversa → +5  (solo tiebreaker a parità di giri)
+    // Selezione autista in due fasi:
+    //   1. Hard block < 30 min: esclusi dal pool (fisicamente impossibile)
+    //      → fallback al pool completo solo se tutti sono hard-bloccati
+    //   2. Score sul pool residuo:
+    //      conflitto 30-75 min → +100_000 | num giri × 100 | zona +0/2/5 (tiebreaker)
 
     const driverTimes = new Map<string, number[]>();
     const driverCurrentArea = new Map<string, "nordovest" | "estsud" | "unknown">();
@@ -616,14 +617,21 @@ export async function POST(request: NextRequest) {
       let assigned: string | null = null;
 
       if (drivers.length > 0) {
-        const available = [...drivers].filter((d) =>
+        const timeAvailable = [...drivers].filter((d) =>
           driverAvailableAtTime(d.profile_id, tripMin, driverAvailMap)
         );
 
-        // Score: conflitto (100_000) >> num giri (×100) >> zona (0/2/5 tiebreaker)
-        // times.length × 100 > max zonePenalty (5): un autista fresco batte sempre
-        // uno con più giri, indipendentemente dalla zona.
-        const best = available
+        // Hard block: < 30 min → fisicamente impossibile fare due giri
+        // Soft penalty: 30-75 min → penalizzato ma usabile come ultima risorsa
+        const hardFree = timeAvailable.filter((d) => {
+          const times = driverTimes.get(d.user_id) ?? [];
+          return !times.some((t) => Math.abs(t - tripMin) < 30);
+        });
+        // Solo se tutti hanno hard conflict si usa il pool completo
+        const candidates = hardFree.length > 0 ? hardFree : timeAvailable;
+
+        // Score: conflitto 30-75 min (100_000) >> num giri (×100) >> zona (0/2/5 tiebreaker)
+        const best = candidates
           .map((d) => {
             const times = driverTimes.get(d.user_id) ?? [];
             const conflictPenalty = times.some((t) => Math.abs(t - tripMin) < 75) ? 100_000 : 0;
