@@ -15,7 +15,7 @@
  *   - Non spezza automaticamente un hotel con stesso pickup
  *
  * Regole comuni:
- *   - Autisti distribuiti equamente con verifica conflitto orario (75 min)
+ *   - Autisti assegnati per punteggio: no-conflitto orario (75 min) > stessa zona > minor carico
  *   - Mezzo più piccolo che soddisfa i PAX del giro
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -597,49 +597,48 @@ export async function POST(request: NextRequest) {
 
     drafts.sort((a, b) => a.time.localeCompare(b.time));
 
-    // ── 7. Assegna autisti (round-robin con verifica conflitto 75 min) ────────
+    // ── 7. Assegna autisti (score-based: no-conflict + zona geografica + workload) ──
+    //
+    // Punteggio per autista (più basso = preferito):
+    //   conflitto <75 min → +1000 (penalità pesante, non blocco assoluto)
+    //   zona diversa dalla precedente → +15
+    //   zona ignota / primo giro → +5
+    //   stessa zona → +0
+    //   numero giri → tiebreaker finale
 
     const driverTimes = new Map<string, number[]>();
+    const driverCurrentArea = new Map<string, "nordovest" | "estsud" | "unknown">();
     for (const d of drivers) driverTimes.set(d.user_id, []);
 
     const draftAssignments: Array<{ draft: TripDraft; driverId: string | null }> = [];
 
     for (const draft of drafts) {
       const tripMin = timeToMin(draft.time);
+      const tripArea = zoneArea(draft.zoneLabel);
       let assigned: string | null = null;
 
       if (drivers.length > 0) {
-        // Ordina per numero giri assegnati (meno occupato prima)
-        const sorted = [...drivers].sort((a, b) =>
-          (driverTimes.get(a.user_id)?.length ?? 0) - (driverTimes.get(b.user_id)?.length ?? 0)
+        const available = [...drivers].filter((d) =>
+          driverAvailableAtTime(d.profile_id, tripMin, driverAvailMap)
         );
 
-        for (const driver of sorted) {
-          // Verifica disponibilità oraria autista
-          if (!driverAvailableAtTime(driver.profile_id, tripMin, driverAvailMap)) continue;
-          const times = driverTimes.get(driver.user_id) ?? [];
-          const conflict = times.some((t) => Math.abs(t - tripMin) < 75);
-          if (!conflict) {
-            assigned = driver.user_id;
-            times.push(tripMin);
-            driverTimes.set(driver.user_id, times);
-            break;
-          }
-        }
+        const best = available
+          .map((d) => {
+            const times = driverTimes.get(d.user_id) ?? [];
+            const conflictPenalty = times.some((t) => Math.abs(t - tripMin) < 75) ? 1000 : 0;
+            const lastArea = driverCurrentArea.get(d.user_id);
+            const zonePenalty = !lastArea || tripArea === "unknown" ? 5
+              : lastArea === tripArea ? 0 : 15;
+            return { driver: d, score: conflictPenalty + zonePenalty + times.length };
+          })
+          .sort((a, b) => a.score - b.score)[0];
 
-        // Fallback: assegna al meno occupato ignorando conflitto orario (ma rispettando disponibilità)
-        if (!assigned) {
-          const fallback = [...drivers]
-            .filter((d) => driverAvailableAtTime(d.profile_id, tripMin, driverAvailMap))
-            .sort((a, b) =>
-              (driverTimes.get(a.user_id)?.length ?? 0) - (driverTimes.get(b.user_id)?.length ?? 0)
-            )[0];
-          if (fallback) {
-            assigned = fallback.user_id;
-            const times = driverTimes.get(fallback.user_id) ?? [];
-            times.push(tripMin);
-            driverTimes.set(fallback.user_id, times);
-          }
+        if (best) {
+          assigned = best.driver.user_id;
+          const times = driverTimes.get(assigned) ?? [];
+          times.push(tripMin);
+          driverTimes.set(assigned, times);
+          if (tripArea !== "unknown") driverCurrentArea.set(assigned, tripArea);
         }
       }
 
