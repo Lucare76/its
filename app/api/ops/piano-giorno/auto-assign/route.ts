@@ -600,11 +600,9 @@ export async function POST(request: NextRequest) {
     // ── 7. Assegna autisti (score-based: no-conflict + zona geografica + workload) ──
     //
     // Punteggio per autista (più basso = preferito):
-    //   conflitto <75 min → +1000 (penalità pesante, non blocco assoluto)
-    //   zona diversa dalla precedente → +15
-    //   zona ignota / primo giro → +5
-    //   stessa zona → +0
-    //   numero giri → tiebreaker finale
+    //   conflitto <75 min → +100_000  (sempre peggio di qualsiasi non-conflict)
+    //   numero giri × 100            (distribuisce il carico: 0 giri batte sempre 1+ giri)
+    //   zona: stessa → +0, ignota → +2, diversa → +5  (solo tiebreaker a parità di giri)
 
     const driverTimes = new Map<string, number[]>();
     const driverCurrentArea = new Map<string, "nordovest" | "estsud" | "unknown">();
@@ -622,14 +620,17 @@ export async function POST(request: NextRequest) {
           driverAvailableAtTime(d.profile_id, tripMin, driverAvailMap)
         );
 
+        // Score: conflitto (100_000) >> num giri (×100) >> zona (0/2/5 tiebreaker)
+        // times.length × 100 > max zonePenalty (5): un autista fresco batte sempre
+        // uno con più giri, indipendentemente dalla zona.
         const best = available
           .map((d) => {
             const times = driverTimes.get(d.user_id) ?? [];
-            const conflictPenalty = times.some((t) => Math.abs(t - tripMin) < 75) ? 1000 : 0;
+            const conflictPenalty = times.some((t) => Math.abs(t - tripMin) < 75) ? 100_000 : 0;
             const lastArea = driverCurrentArea.get(d.user_id);
-            const zonePenalty = !lastArea || tripArea === "unknown" ? 5
-              : lastArea === tripArea ? 0 : 15;
-            return { driver: d, score: conflictPenalty + zonePenalty + times.length };
+            const zonePenalty = !lastArea || tripArea === "unknown" ? 2
+              : lastArea === tripArea ? 0 : 5;
+            return { driver: d, score: conflictPenalty + times.length * 100 + zonePenalty };
           })
           .sort((a, b) => a.score - b.score)[0];
 
