@@ -45,7 +45,16 @@ async function ensureSupabaseClientReady() {
   return false;
 }
 
-type RowState = { driverId: string; vehicleLabel: string; saving: boolean; saved: boolean; error: string };
+type DispatchDriver = {
+  id: string;
+  user_id: string | null;
+  tenant_id?: string;
+  full_name: string;
+  active?: boolean;
+  has_access?: boolean;
+};
+
+type RowState = { driverProfileId: string; vehicleLabel: string; saving: boolean; saved: boolean; error: string };
 type DateTab = "today" | "tomorrow" | "all";
 
 export default function DispatchPage() {
@@ -57,6 +66,7 @@ export default function DispatchPage() {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [hotels, setHotels]           = useState<Hotel[]>([]);
   const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [driverProfiles, setDriverProfiles] = useState<DispatchDriver[]>([]);
   const [vehicles, setVehicles]       = useState<VehicleRecord[]>([]);
   const [token, setToken]             = useState<string | null>(null);
   const [search, setSearch]           = useState("");
@@ -72,13 +82,14 @@ export default function DispatchPage() {
       });
       const payload = await response.json().catch(() => null) as {
         ok?: boolean; services?: Service[]; assignments?: Assignment[];
-        hotels?: Hotel[]; memberships?: Membership[]; vehicles?: VehicleRecord[];
+        hotels?: Hotel[]; memberships?: Membership[]; driver_profiles?: DispatchDriver[]; vehicles?: VehicleRecord[];
       } | null;
       if (!active || !response.ok || !payload?.ok) return false;
       setServices((payload.services ?? []) as Service[]);
       setAssignments((payload.assignments ?? []) as Assignment[]);
       setHotels((payload.hotels ?? []) as Hotel[]);
       setMemberships((payload.memberships ?? []) as Membership[]);
+      setDriverProfiles(payload.driver_profiles ?? []);
       setVehicles((payload.vehicles ?? []) as VehicleRecord[]);
       return true;
     };
@@ -110,6 +121,9 @@ export default function DispatchPage() {
         .channel(`dispatch-live-${nextTenantId}`)
         .on("postgres_changes", { event: "*", schema: "public", table: "services",    filter: `tenant_id=eq.${nextTenantId}` }, () => { void loadData(accessToken); })
         .on("postgres_changes", { event: "*", schema: "public", table: "assignments", filter: `tenant_id=eq.${nextTenantId}` }, () => { void loadData(accessToken); })
+        .on("postgres_changes", { event: "*", schema: "public", table: "driver_profiles", filter: `tenant_id=eq.${nextTenantId}` }, () => { void loadData(accessToken); })
+        .on("postgres_changes", { event: "*", schema: "public", table: "memberships", filter: `tenant_id=eq.${nextTenantId}` }, () => { void loadData(accessToken); })
+        .on("postgres_changes", { event: "*", schema: "public", table: "vehicles", filter: `tenant_id=eq.${nextTenantId}` }, () => { void loadData(accessToken); })
         .subscribe();
 
       return channel;
@@ -128,7 +142,23 @@ export default function DispatchPage() {
   const tenantMemberships = tenantId ? memberships.filter((m) => m.tenant_id === tenantId) : memberships;
   const assignmentByServiceId = useMemo(() => new Map(tenantAssignments.map((a) => [a.service_id, a])), [tenantAssignments]);
   const hotelsById            = useMemo(() => new Map((tenantId ? hotels.filter((h) => h.tenant_id === tenantId) : hotels).map((h) => [h.id, h])), [hotels, tenantId]);
-  const drivers               = useMemo(() => tenantMemberships.filter((m) => m.role === "driver" || m.role === "autista"), [tenantMemberships]);
+  const drivers = useMemo(() => {
+    const profileDrivers = driverProfiles.filter((driver) => driver.active !== false);
+    const profileUserIds = new Set(profileDrivers.map((driver) => driver.user_id).filter(Boolean));
+    const legacyDrivers = tenantMemberships
+      .filter((m) => m.role === "driver" || m.role === "autista")
+      .filter((m) => !profileUserIds.has(m.user_id))
+      .map((m) => ({
+        id: m.user_id,
+        user_id: m.user_id,
+        tenant_id: m.tenant_id,
+        full_name: m.full_name,
+        active: true,
+        has_access: true,
+      }));
+    return [...profileDrivers, ...legacyDrivers]
+      .sort((left, right) => left.full_name.localeCompare(right.full_name, "it"));
+  }, [driverProfiles, tenantMemberships]);
   const tenantVehicles        = useMemo(() => (tenantId ? vehicles.filter((vehicle) => vehicle.tenant_id === tenantId) : vehicles), [vehicles, tenantId]);
 
   const today    = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -181,19 +211,25 @@ export default function DispatchPage() {
   const tomorrowPending = baseServices.filter((s) => s.date === tomorrow && !assignmentByServiceId.has(s.id)).length;
   const tomorrowTotal   = baseServices.filter((s) => s.date === tomorrow).length;
 
-  const getRow = (svc: Service): RowState =>
-    ({
-      driverId: assignmentByServiceId.get(svc.id)?.driver_user_id ?? "",
+  const getRow = (svc: Service): RowState => {
+    const assignment = assignmentByServiceId.get(svc.id);
+    const assignedProfileId = assignment?.driver_profile_id
+      ?? drivers.find((driver) => assignment?.driver_user_id && driver.user_id === assignment.driver_user_id)?.id
+      ?? "";
+    return ({
+      driverProfileId: assignedProfileId,
       vehicleLabel: assignmentByServiceId.get(svc.id)?.vehicle_label ?? suggestedVehicleByPax(svc.pax),
       saving: false,
       saved: false,
       error: "",
       ...rowStates[svc.id],
     });
+  };
 
   const save = async (svc: Service) => {
     if (!token) return;
     const state = getRow(svc);
+    const selectedDriver = drivers.find((driver) => driver.id === state.driverProfileId);
     setRowStates((current) => ({
       ...current,
       [svc.id]: { ...state, saving: true, error: "", saved: false },
@@ -204,7 +240,8 @@ export default function DispatchPage() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({
         service_id: svc.id,
-        driver_user_id: state.driverId || null,
+        driver_user_id: selectedDriver?.user_id ?? null,
+        driver_profile_id: state.driverProfileId || null,
         vehicle_label: state.vehicleLabel,
         action: "assign",
       }),
@@ -353,19 +390,19 @@ export default function DispatchPage() {
 
                         {/* Driver */}
                         <select
-                          value={state.driverId}
+                          value={state.driverProfileId}
                           onChange={(e) => {
                             const value = e.target.value;
                             setRowStates((current) => ({
                               ...current,
-                              [svc.id]: { ...getRow(svc), driverId: value },
+                              [svc.id]: { ...getRow(svc), driverProfileId: value },
                             }));
                           }}
                           className="input-saas text-sm"
                         >
                           <option value="">— Nessun driver —</option>
                           {drivers.map((d) => (
-                            <option key={d.user_id} value={d.user_id}>{d.full_name}</option>
+                            <option key={d.id} value={d.id}>{d.full_name}</option>
                           ))}
                         </select>
 

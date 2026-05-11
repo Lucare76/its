@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { loadOperationalVehicles } from "@/lib/server/vehicle-catalog";
 import { fetchAllServices } from "@/lib/server/fetch-all-services";
 
@@ -10,9 +11,9 @@ export async function GET(request: NextRequest) {
     const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
     if (auth instanceof NextResponse) return auth;
 
-    const [servicesResult, assignmentsResult, hotelsResult, membershipsResult, inboundResult, vehiclesResult] = await Promise.all([
+    const [servicesResult, assignmentsResult, hotelsResult, membershipsResult, inboundResult, vehiclesResult, driverRegistry] = await Promise.all([
       fetchAllServices(auth.admin, auth.membership.tenant_id),
-      auth.admin.from("assignments").select("*").eq("tenant_id", auth.membership.tenant_id),
+      auth.admin.from("assignments").select("*, driver_profile_id").eq("tenant_id", auth.membership.tenant_id),
       auth.admin.from("hotels").select("*").eq("tenant_id", auth.membership.tenant_id),
       auth.admin
         .from("memberships")
@@ -20,6 +21,7 @@ export async function GET(request: NextRequest) {
         .eq("tenant_id", auth.membership.tenant_id),
       auth.admin.from("inbound_emails").select("*").eq("tenant_id", auth.membership.tenant_id),
       loadOperationalVehicles(auth.admin, auth.membership.tenant_id, { activeOnly: true }),
+      listDriverRegistry(auth.admin, auth.membership.tenant_id, { activeOnly: true }),
     ]);
 
     const error =
@@ -42,6 +44,7 @@ export async function GET(request: NextRequest) {
       assignments: assignmentsResult.data ?? [],
       hotels: hotelsResult.data ?? [],
       memberships: membershipsResult.data ?? [],
+      driver_profiles: driverRegistry,
       inbound_emails: inboundResult.data ?? [],
       vehicles: vehiclesResult ?? []
     });

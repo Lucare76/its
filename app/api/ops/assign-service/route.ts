@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
     type Body = {
       service_id: string;
       driver_user_id?: string | null;
+      driver_profile_id?: string | null;
       vehicle_label?: string | null;
       action?: "assign" | "remove";
     };
@@ -102,11 +103,13 @@ export async function POST(request: NextRequest) {
       await Promise.all([
         auth.admin.from("trip_groups").update({
           driver_user_id: body.driver_user_id ?? null,
+          driver_profile_id: body.driver_profile_id ?? null,
           vehicle_label: body.vehicle_label ?? null,
           updated_at: now,
         }).eq("id", groupId).eq("tenant_id", tenantId),
         auth.admin.from("assignments").update({
           driver_user_id: body.driver_user_id ?? null,
+          driver_profile_id: body.driver_profile_id ?? null,
           vehicle_label: body.vehicle_label ?? "",
         }).eq("id", existingAssignment.id).eq("tenant_id", tenantId),
       ]);
@@ -122,6 +125,7 @@ export async function POST(request: NextRequest) {
           tenant_id: tenantId,
           date,
           driver_user_id: body.driver_user_id ?? null,
+          driver_profile_id: body.driver_profile_id ?? null,
           vehicle_label: body.vehicle_label ?? null,
           created_by: userId,
           created_at: now,
@@ -140,6 +144,7 @@ export async function POST(request: NextRequest) {
         tenant_id: tenantId,
         service_id: body.service_id,
         driver_user_id: body.driver_user_id ?? null,
+        driver_profile_id: body.driver_profile_id ?? null,
         vehicle_label: body.vehicle_label ?? "",
         group_id: groupId,
       });
