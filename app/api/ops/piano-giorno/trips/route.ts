@@ -17,6 +17,12 @@ import {
   type VehicleManualBlock,
 } from "@/lib/server/vehicle-availability";
 import { sendPushToUser } from "@/lib/server/web-push";
+import {
+  geographicBlockMessage,
+  strongestGeographicResult,
+  validateGeographicCompatibility,
+  type GeographicCompatibilityService,
+} from "@/lib/server/geo-assignment";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -377,13 +383,32 @@ export async function POST(request: NextRequest) {
       // Ottieni driver/vehicle del giro destinazione
       const { data: destGroup } = await auth.admin
         .from("trip_groups")
-        .select("driver_user_id, vehicle_label")
+        .select("driver_user_id, vehicle_label, vehicle_capacity")
         .eq("id", destGroupId)
         .eq("tenant_id", tenantId)
         .maybeSingle();
 
       const destDriver = destGroup?.driver_user_id ?? driver_user_id ?? null;
       const destVehicle = destGroup?.vehicle_label ?? vehicle_label ?? null;
+      if (destDriver && destGroupId) {
+        const targetServiceIds = [...new Set([...(await loadGroupServiceIds(auth.admin, tenantId, destGroupId)), ...service_ids])];
+        const { data: destGroupDate } = await auth.admin
+          .from("trip_groups")
+          .select("date")
+          .eq("id", destGroupId)
+          .eq("tenant_id", tenantId)
+          .maybeSingle();
+        const validation = await validateTripPayload(auth.admin, tenantId, {
+          date: (destGroupDate?.date as string | undefined) ?? date ?? "",
+          serviceIds: targetServiceIds,
+          driverUserId: destDriver,
+          vehicleCapacity: (destGroup?.vehicle_capacity as number | null) ?? vehicle_capacity ?? null,
+          excludeGroupId: destGroupId,
+        });
+        if (!validation.ok) {
+          return NextResponse.json({ ok: false, error: validation.error }, { status: 409 });
+        }
+      }
 
       // Aggiorna assignments (cambia group_id)
       await auth.admin
@@ -429,6 +454,17 @@ export async function POST(request: NextRequest) {
       const groupIds = (groups ?? []).map((g) => g.id as string);
       if (!groupIds.length) {
         return NextResponse.json({ ok: true, affected: 0 });
+      }
+
+      const movedServiceIds = (await Promise.all(groupIds.map((groupId) => loadGroupServiceIds(auth.admin, tenantId, groupId)))).flat();
+      const validation = await validateTripPayload(auth.admin, tenantId, {
+        date,
+        serviceIds: movedServiceIds,
+        driverUserId: to_driver_id,
+        vehicleCapacity: null,
+      });
+      if (!validation.ok) {
+        return NextResponse.json({ ok: false, error: validation.error }, { status: 409 });
       }
 
       await Promise.all([
@@ -693,6 +729,13 @@ type ServiceValidationRow = {
   pickup_hotel: string | null;
   direction: "arrival" | "departure";
   pax: number;
+  hotel_id: string | null;
+  meeting_point: string | null;
+};
+
+type HotelValidationRow = {
+  id: string;
+  zone: string | null;
 };
 
 function serviceOperationalTime(service: ServiceValidationRow): string {
@@ -739,7 +782,7 @@ async function validateTripPayload(
 
   const { data: services, error } = await admin
     .from("services")
-    .select("id, time, pickup_hotel, direction, pax")
+    .select("id, time, pickup_hotel, direction, pax, hotel_id, meeting_point")
     .eq("tenant_id", tenantId)
     .in("id", params.serviceIds);
 
@@ -754,9 +797,15 @@ async function validateTripPayload(
     return { ok: false, error: `Overbooking bloccante: ${totalPax} pax su mezzo da ${params.vehicleCapacity}.` };
   }
 
+  const hotelIds = serviceRows.map((service) => service.hotel_id).filter((id): id is string => Boolean(id));
+  const { data: hotelsData } = hotelIds.length > 0
+    ? await admin.from("hotels").select("id, zone").eq("tenant_id", tenantId).in("id", hotelIds)
+    : { data: [] as HotelValidationRow[] };
+  const hotelMap = new Map((hotelsData ?? []).map((hotel) => [hotel.id as string, hotel as HotelValidationRow]));
+
   const { data: otherAssignments, error: otherAssignmentsError } = await admin
     .from("assignments")
-    .select("group_id, services!inner(id, time, pickup_hotel, direction)")
+    .select("group_id, services!inner(id, time, pickup_hotel, direction, hotel_id, meeting_point)")
     .eq("tenant_id", tenantId)
     .eq("driver_user_id", params.driverUserId)
     .not("group_id", "is", null);
@@ -785,7 +834,7 @@ async function validateTripPayload(
 
   const otherTimes = (otherAssignments ?? [])
     .filter((assignment) => activeGroupIds.has(assignment.group_id as string))
-    .map((assignment) => (assignment.services as unknown) as Pick<ServiceValidationRow, "time" | "pickup_hotel" | "direction">)
+    .map((assignment) => (assignment.services as unknown) as ServiceValidationRow)
     .map((service) => toMinutes(serviceOperationalTime({ ...service, id: "", pax: 0 })));
 
   for (const service of serviceRows) {
@@ -795,5 +844,97 @@ async function validateTripPayload(
     }
   }
 
+  const otherAssignmentsForGeo = (otherAssignments ?? [])
+    .filter((assignment) => activeGroupIds.has(assignment.group_id as string));
+  const otherServices = otherAssignmentsForGeo
+    .map((assignment) => (assignment.services as unknown) as ServiceValidationRow);
+  const otherHotelIds = otherServices.map((service) => service.hotel_id).filter((id): id is string => Boolean(id));
+  const missingHotelIds = otherHotelIds.filter((id) => !hotelMap.has(id));
+  if (missingHotelIds.length > 0) {
+    const { data: otherHotelsData } = await admin
+      .from("hotels")
+      .select("id, zone")
+      .eq("tenant_id", tenantId)
+      .in("id", [...new Set(missingHotelIds)]);
+    for (const hotel of otherHotelsData ?? []) {
+      hotelMap.set(hotel.id as string, hotel as HotelValidationRow);
+    }
+  }
+
+  const otherServicesByGroup = new Map<string, ServiceValidationRow[]>();
+  for (const assignment of otherAssignmentsForGeo) {
+    const groupId = assignment.group_id as string;
+    otherServicesByGroup.set(groupId, [
+      ...(otherServicesByGroup.get(groupId) ?? []),
+      (assignment.services as unknown) as ServiceValidationRow,
+    ]);
+  }
+  const combinedGeoServices = [
+    ...Array.from(otherServicesByGroup.values()).map((groupServices) => servicesToTripGeographicWindow(groupServices, hotelMap)),
+    servicesToTripGeographicWindow(serviceRows, hotelMap),
+  ]
+    .sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
+  const geoResults = [];
+  for (let i = 1; i < combinedGeoServices.length; i++) {
+    geoResults.push(validateGeographicCompatibility(combinedGeoServices[i - 1]!, combinedGeoServices[i]!));
+  }
+  const strongestGeoIssue = strongestGeographicResult(geoResults.filter((result) => result.severity !== "ok"));
+  if (strongestGeoIssue?.severity === "block") {
+    const driverName = await loadDriverName(admin, tenantId, params.driverUserId);
+    return { ok: false, error: geographicBlockMessage(driverName, strongestGeoIssue) };
+  }
+
   return { ok: true, totalPax };
+}
+
+function serviceToGeographicWindow(
+  service: ServiceValidationRow,
+  hotels: Map<string, HotelValidationRow>
+): GeographicCompatibilityService {
+  const hotelZone = service.hotel_id ? hotels.get(service.hotel_id)?.zone ?? null : null;
+  const portZone = service.meeting_point ?? null;
+  const startTime = serviceOperationalTime(service);
+  if (service.direction === "departure") {
+    return {
+      id: service.id,
+      startTime,
+      endZone: portZone,
+      startZone: hotelZone,
+    };
+  }
+  return {
+    id: service.id,
+    startTime,
+    endZone: hotelZone,
+    startZone: portZone,
+  };
+}
+
+function servicesToTripGeographicWindow(
+  services: ServiceValidationRow[],
+  hotels: Map<string, HotelValidationRow>
+): GeographicCompatibilityService {
+  const windows = [...services]
+    .sort((a, b) => toMinutes(serviceOperationalTime(a)) - toMinutes(serviceOperationalTime(b)))
+    .map((service) => serviceToGeographicWindow(service, hotels));
+  const first = windows[0];
+  const last = windows[windows.length - 1] ?? first;
+  return {
+    id: services.map((service) => service.id).join(","),
+    startTime: first?.startTime ?? "00:00",
+    startZone: first?.startZone ?? null,
+    startArea: first?.startArea ?? null,
+    endZone: last?.endZone ?? first?.endZone ?? null,
+    endArea: last?.endArea ?? first?.endArea ?? null,
+  };
+}
+
+async function loadDriverName(admin: SupabaseClient, tenantId: string, driverUserId: string): Promise<string> {
+  const { data } = await admin
+    .from("memberships")
+    .select("full_name")
+    .eq("tenant_id", tenantId)
+    .eq("user_id", driverUserId)
+    .maybeSingle();
+  return (data?.full_name as string | null) ?? "selezionato";
 }

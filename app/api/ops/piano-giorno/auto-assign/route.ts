@@ -23,6 +23,12 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { hotelGeoQuality } from "@/lib/hotel-geocoding";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
+import {
+  strongestGeographicResult,
+  validateGeographicCompatibility,
+  zoneToGeoArea,
+  type GeographicCompatibilityService,
+} from "@/lib/server/geo-assignment";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -237,6 +243,74 @@ type TripDraft = {
   zoneLabel: string;
 };
 
+function serviceOperationalTime(service: ServiceRow): string {
+  return service.direction === "departure"
+    ? (service.pickup_hotel ?? service.time).slice(0, 5)
+    : service.time.slice(0, 5);
+}
+
+function serviceToGeographicWindow(service: ServiceRow, hotelMap: Map<string, HotelRow>): GeographicCompatibilityService {
+  const hotelZone = service.hotel_id ? hotelMap.get(service.hotel_id)?.zone ?? null : null;
+  const startTime = serviceOperationalTime(service);
+  if (service.direction === "departure") {
+    return { id: service.id, startTime, startZone: hotelZone, endZone: service.meeting_point };
+  }
+  return { id: service.id, startTime, startZone: service.meeting_point, endZone: hotelZone };
+}
+
+function draftToGeographicWindow(
+  draft: TripDraft,
+  serviceMap: Map<string, ServiceRow>,
+  hotelMap: Map<string, HotelRow>
+): GeographicCompatibilityService {
+  const services = draft.serviceIds
+    .map((serviceId) => serviceMap.get(serviceId))
+    .filter((service): service is ServiceRow => Boolean(service));
+  const windows = services.map((service) => serviceToGeographicWindow(service, hotelMap));
+  const first = windows[0];
+  const last = windows[windows.length - 1] ?? first;
+  return {
+    id: draft.serviceIds.join(","),
+    label: draft.zoneLabel,
+    startTime: first?.startTime ?? draft.time,
+    startZone: first?.startZone ?? draft.zoneLabel,
+    startArea: first?.startArea ?? zoneToGeoArea(first?.startZone ?? draft.zoneLabel),
+    endZone: last?.endZone ?? draft.zoneLabel,
+    endArea: last?.endArea ?? zoneToGeoArea(last?.endZone ?? draft.zoneLabel),
+  };
+}
+
+function servicesToExistingTripGeographicWindow(
+  services: ServiceRow[],
+  hotelMap: Map<string, HotelRow>
+): GeographicCompatibilityService {
+  const windows = [...services]
+    .sort((a, b) => timeToMin(serviceOperationalTime(a)) - timeToMin(serviceOperationalTime(b)))
+    .map((service) => serviceToGeographicWindow(service, hotelMap));
+  const first = windows[0];
+  const last = windows[windows.length - 1] ?? first;
+  return {
+    id: services.map((service) => service.id).join(","),
+    startTime: first?.startTime ?? "00:00",
+    startZone: first?.startZone ?? null,
+    startArea: first?.startArea ?? null,
+    endZone: last?.endZone ?? first?.endZone ?? null,
+    endArea: last?.endArea ?? first?.endArea ?? null,
+  };
+}
+
+function geographicScheduleIssue(
+  existing: GeographicCompatibilityService[],
+  next: GeographicCompatibilityService
+) {
+  const windows = [...existing, next].sort((a, b) => timeToMin(a.startTime) - timeToMin(b.startTime));
+  const issues = [];
+  for (let i = 1; i < windows.length; i++) {
+    issues.push(validateGeographicCompatibility(windows[i - 1]!, windows[i]!));
+  }
+  return strongestGeographicResult(issues.filter((issue) => issue.severity !== "ok"));
+}
+
 type DepartureProtectedBlock = {
   serviceIds: string[];
   pax: number;
@@ -311,10 +385,10 @@ export async function POST(request: NextRequest) {
           .order("capacity"),
         listDriverRegistry(auth.admin, tenantId),
         auth.admin.from("assignments")
-          .select("service_id, group_id")
+          .select("service_id, group_id, driver_user_id")
           .eq("tenant_id", tenantId),
         auth.admin.from("trip_groups")
-          .select("id")
+          .select("id, driver_user_id")
           .eq("tenant_id", tenantId).eq("date", date).eq("status", "active"),
         // Vincoli rigidi hotel → capienza mezzo
         auth.admin.from("hotel_vehicle_limits")
@@ -402,12 +476,16 @@ export async function POST(request: NextRequest) {
     });
 
     const allDayServiceIds = new Set(allServices.map((s) => s.id));
+    const serviceMap = new Map(allServices.map((service) => [service.id, service]));
     const assignedMap = new Map(
       (assignmentsRes.data ?? [])
         .filter((a) => a.group_id && allDayServiceIds.has(a.service_id as string))
         .map((a) => [a.service_id as string, a.group_id as string])
     );
     const existingGroups = (groupsRes.data ?? []).map((g) => g.id as string);
+    const activeGroupDriverById = new Map(
+      (groupsRes.data ?? []).map((group) => [group.id as string, (group.driver_user_id as string | null) ?? null])
+    );
 
     // Capacità massima disponibile (o 8 come fallback)
     const maxCap = vehicles.length > 0
@@ -606,14 +684,43 @@ export async function POST(request: NextRequest) {
     //      conflitto 30-75 min → +100_000 | num giri × 100 | zona +0/2/5 (tiebreaker)
 
     const driverTimes = new Map<string, number[]>();
-    const driverCurrentArea = new Map<string, "nordovest" | "estsud" | "unknown">();
-    for (const d of drivers) driverTimes.set(d.user_id, []);
+    const driverCurrentArea = new Map<string, "nord_ovest" | "est_sud" | null>();
+    const driverGeoWindows = new Map<string, GeographicCompatibilityService[]>();
+    for (const d of drivers) {
+      driverTimes.set(d.user_id, []);
+      driverGeoWindows.set(d.user_id, []);
+    }
+
+    const existingServicesByDriverGroup = new Map<string, ServiceRow[]>();
+    for (const assignment of assignmentsRes.data ?? []) {
+      const serviceId = assignment.service_id as string;
+      const groupId = assignment.group_id as string | null;
+      if (!groupId || !allDayServiceIds.has(serviceId)) continue;
+      const driverId = (assignment.driver_user_id as string | null) ?? activeGroupDriverById.get(groupId) ?? null;
+      const service = serviceMap.get(serviceId);
+      if (!driverId || !service) continue;
+      const times = driverTimes.get(driverId) ?? [];
+      times.push(timeToMin(serviceOperationalTime(service)));
+      driverTimes.set(driverId, times);
+      const key = `${driverId}|${groupId}`;
+      existingServicesByDriverGroup.set(key, [...(existingServicesByDriverGroup.get(key) ?? []), service]);
+    }
+
+    for (const [key, services] of existingServicesByDriverGroup.entries()) {
+      const driverId = key.split("|")[0]!;
+      const window = servicesToExistingTripGeographicWindow(services, hotelMap);
+      driverGeoWindows.set(driverId, [...(driverGeoWindows.get(driverId) ?? []), window]);
+      const area = zoneToGeoArea(window.endZone ?? window.startZone);
+      if (area) driverCurrentArea.set(driverId, area);
+    }
 
     const draftAssignments: Array<{ draft: TripDraft; driverId: string | null }> = [];
+    const geographicSkips: string[] = [];
 
     for (const draft of drafts) {
       const tripMin = timeToMin(draft.time);
-      const tripArea = zoneArea(draft.zoneLabel);
+      const tripArea = zoneToGeoArea(draft.zoneLabel);
+      const draftGeoWindow = draftToGeographicWindow(draft, serviceMap, hotelMap);
       let assigned: string | null = null;
 
       if (drivers.length > 0) {
@@ -628,17 +735,23 @@ export async function POST(request: NextRequest) {
           return !times.some((t) => Math.abs(t - tripMin) < 30);
         });
         // Solo se tutti hanno hard conflict si usa il pool completo
-        const candidates = hardFree.length > 0 ? hardFree : timeAvailable;
+        const candidates = (hardFree.length > 0 ? hardFree : timeAvailable)
+          .map((driver) => ({
+            driver,
+            geoIssue: geographicScheduleIssue(driverGeoWindows.get(driver.user_id) ?? [], draftGeoWindow),
+          }))
+          .filter((candidate) => candidate.geoIssue?.severity !== "block");
 
         // Score: conflitto 30-75 min (100_000) >> num giri (×100) >> zona (0/2/5 tiebreaker)
         const best = candidates
-          .map((d) => {
-            const times = driverTimes.get(d.user_id) ?? [];
+          .map(({ driver, geoIssue }) => {
+            const times = driverTimes.get(driver.user_id) ?? [];
             const conflictPenalty = times.some((t) => Math.abs(t - tripMin) < 75) ? 100_000 : 0;
-            const lastArea = driverCurrentArea.get(d.user_id);
-            const zonePenalty = !lastArea || tripArea === "unknown" ? 2
+            const lastArea = driverCurrentArea.get(driver.user_id);
+            const zonePenalty = !lastArea || !tripArea ? 2
               : lastArea === tripArea ? 0 : 5;
-            return { driver: d, score: conflictPenalty + times.length * 100 + zonePenalty };
+            const warningPenalty = geoIssue?.severity === "warning" ? 20 : 0;
+            return { driver, score: conflictPenalty + times.length * 100 + zonePenalty + warningPenalty };
           })
           .sort((a, b) => a.score - b.score)[0];
 
@@ -647,7 +760,10 @@ export async function POST(request: NextRequest) {
           const times = driverTimes.get(assigned) ?? [];
           times.push(tripMin);
           driverTimes.set(assigned, times);
-          if (tripArea !== "unknown") driverCurrentArea.set(assigned, tripArea);
+          driverGeoWindows.set(assigned, [...(driverGeoWindows.get(assigned) ?? []), draftGeoWindow]);
+          if (tripArea) driverCurrentArea.set(assigned, tripArea);
+        } else if (timeAvailable.length > 0) {
+          geographicSkips.push(`${draft.time} ${draft.zoneLabel}: nessun autista compatibile geograficamente.`);
         }
       }
 
@@ -705,11 +821,13 @@ export async function POST(request: NextRequest) {
 
     if (draftAssignments.length > 0) {
       // Seleziona veicoli per tutti i giri, poi crea tutti i trip_groups in un unico insert
-      const prepared = draftAssignments.map(({ draft, driverId }) => ({
-        draft,
-        driverId,
-        vehicle: pickVehicle(draft.pax, draft, driverId),
-      }));
+      const prepared = draftAssignments
+        .filter(({ driverId }) => Boolean(driverId))
+        .map(({ draft, driverId }) => ({
+          draft,
+          driverId,
+          vehicle: pickVehicle(draft.pax, draft, driverId),
+        }));
 
       const groupRows = prepared.map(({ draft: _, driverId, vehicle }) => ({
         tenant_id: tenantId,
@@ -723,12 +841,14 @@ export async function POST(request: NextRequest) {
         updated_at: now,
       }));
 
-      const { data: groups, error: groupsErr } = await auth.admin
-        .from("trip_groups")
-        .insert(groupRows)
-        .select("id");
+      const { data: groups, error: groupsErr } = prepared.length > 0
+        ? await auth.admin
+            .from("trip_groups")
+            .insert(groupRows)
+            .select("id")
+        : { data: [] as Array<{ id: string }>, error: null };
 
-      if (groupsErr || !groups?.length) {
+      if (prepared.length > 0 && (groupsErr || !groups?.length)) {
         errors.push(`Errore creazione giri: ${groupsErr?.message ?? "nessun ID restituito"}`);
       } else {
         const allAssignRows: Array<{
@@ -740,9 +860,10 @@ export async function POST(request: NextRequest) {
           tenant_id: string; service_id: string; status: string; at: string; by_user_id: string;
         }> = [];
 
-        for (let i = 0; i < groups.length; i++) {
+        const createdGroups = groups ?? [];
+        for (let i = 0; i < createdGroups.length; i++) {
           const { draft, driverId, vehicle } = prepared[i];
-          const groupId = (groups[i] as { id: string }).id;
+          const groupId = (createdGroups[i] as { id: string }).id;
           for (const sid of draft.serviceIds) {
             allAssignRows.push({
               tenant_id: tenantId, service_id: sid,
@@ -755,16 +876,18 @@ export async function POST(request: NextRequest) {
           assignedCount += draft.serviceIds.length;
         }
 
-        // Tutti e tre i write in parallelo
-        const [assignRes, svcRes, statusRes] = await Promise.all([
-          batchAdmin.from("assignments").upsert(allAssignRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false }),
-          auth.admin.from("services").update({ status: "assigned" }).in("id", allServiceIds).eq("tenant_id", tenantId),
-          batchAdmin.from("status_events").insert(allStatusEvents),
-        ]);
+        if (allServiceIds.length > 0) {
+          // Tutti e tre i write in parallelo
+          const [assignRes, svcRes, statusRes] = await Promise.all([
+            batchAdmin.from("assignments").upsert(allAssignRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false }),
+            auth.admin.from("services").update({ status: "assigned" }).in("id", allServiceIds).eq("tenant_id", tenantId),
+            batchAdmin.from("status_events").insert(allStatusEvents),
+          ]);
 
-        if (assignRes.error) errors.push(`Assignments: ${assignRes.error.message}`);
-        if (svcRes.error) errors.push(`Services update: ${svcRes.error.message}`);
-        if (statusRes.error) errors.push(`Status events: ${statusRes.error.message}`);
+          if (assignRes.error) errors.push(`Assignments: ${assignRes.error.message}`);
+          if (svcRes.error) errors.push(`Services update: ${svcRes.error.message}`);
+          if (statusRes.error) errors.push(`Status events: ${statusRes.error.message}`);
+        }
       }
     }
 
@@ -785,6 +908,9 @@ export async function POST(request: NextRequest) {
       ...(unassignedCount > 0 ? [`${unassignedCount} servizi non assegnati.`] : []),
       ...(geoBlockedServices.length > 0
         ? [`${geoBlockedServices.length} servizi hanno hotel con geolocalizzazione dubbia: ${geoBlockedHotels.slice(0, 6).join(", ")}${geoBlockedHotels.length > 6 ? "..." : ""}.`]
+        : []),
+      ...(geographicSkips.length > 0
+        ? [`${geographicSkips.length} giri non assegnati per conflitto geografico: ${geographicSkips.slice(0, 3).join("; ")}${geographicSkips.length > 3 ? "..." : ""}`]
         : []),
       ...(errors.length > 0 ? [`${errors.length} errori: ${errors.slice(0, 2).join("; ")}`] : []),
     ];

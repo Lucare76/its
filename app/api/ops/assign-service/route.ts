@@ -6,6 +6,13 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import {
+  geographicBlockMessage,
+  strongestGeographicResult,
+  validateGeographicCompatibility,
+  type GeographicCompatibilityService,
+} from "@/lib/server/geo-assignment";
+import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
@@ -36,7 +43,7 @@ export async function POST(request: NextRequest) {
     // Recupera il servizio per avere la data
     const { data: service, error: serviceErr } = await auth.admin
       .from("services")
-      .select("id, date, status")
+      .select("id, date, status, time, pickup_hotel, direction, hotel_id, meeting_point")
       .eq("id", body.service_id)
       .eq("tenant_id", tenantId)
       .maybeSingle();
@@ -96,6 +103,20 @@ export async function POST(request: NextRequest) {
     }
 
     // ─── ASSIGN ───────────────────────────────────────────────────────────────
+    if (body.driver_user_id) {
+      const geoValidation = await validateSingleServiceGeography(auth.admin, tenantId, body.driver_user_id, {
+        id: service.id as string,
+        time: service.time as string,
+        pickup_hotel: service.pickup_hotel as string | null,
+        direction: service.direction as "arrival" | "departure",
+        hotel_id: service.hotel_id as string | null,
+        meeting_point: service.meeting_point as string | null,
+      });
+      if (!geoValidation.ok) {
+        return NextResponse.json({ ok: false, error: geoValidation.error }, { status: 409 });
+      }
+    }
+
     let groupId: string;
 
     if (existingAssignment?.group_id) {
@@ -167,4 +188,115 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+type AssignServiceGeoRow = {
+  id: string;
+  time: string;
+  pickup_hotel: string | null;
+  direction: "arrival" | "departure";
+  hotel_id: string | null;
+  meeting_point: string | null;
+};
+
+type AssignHotelGeoRow = {
+  id: string;
+  zone: string | null;
+};
+
+function assignServiceOperationalTime(service: AssignServiceGeoRow): string {
+  return service.direction === "departure"
+    ? (service.pickup_hotel ?? service.time).slice(0, 5)
+    : service.time.slice(0, 5);
+}
+
+function assignServiceToGeographicWindow(
+  service: AssignServiceGeoRow,
+  hotels: Map<string, AssignHotelGeoRow>
+): GeographicCompatibilityService {
+  const hotelZone = service.hotel_id ? hotels.get(service.hotel_id)?.zone ?? null : null;
+  const startTime = assignServiceOperationalTime(service);
+  if (service.direction === "departure") {
+    return { id: service.id, startTime, startZone: hotelZone, endZone: service.meeting_point };
+  }
+  return { id: service.id, startTime, startZone: service.meeting_point, endZone: hotelZone };
+}
+
+async function validateSingleServiceGeography(
+  admin: SupabaseClient,
+  tenantId: string,
+  driverUserId: string,
+  service: AssignServiceGeoRow
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { data: otherAssignments, error } = await admin
+    .from("assignments")
+    .select("group_id, services!inner(id, time, pickup_hotel, direction, hotel_id, meeting_point)")
+    .eq("tenant_id", tenantId)
+    .eq("driver_user_id", driverUserId)
+    .not("group_id", "is", null);
+
+  if (error) {
+    return { ok: false, error: `Errore validazione geografica autista: ${error.message}` };
+  }
+
+  const otherAssignmentsForGeo = (otherAssignments ?? [])
+    .filter((assignment) => ((assignment.services as unknown) as AssignServiceGeoRow).id !== service.id);
+  const otherServices = otherAssignmentsForGeo.map((assignment) => (assignment.services as unknown) as AssignServiceGeoRow);
+  const hotelIds = [...otherServices, service].map((row) => row.hotel_id).filter((id): id is string => Boolean(id));
+  const { data: hotelsData } = hotelIds.length > 0
+    ? await admin.from("hotels").select("id, zone").eq("tenant_id", tenantId).in("id", [...new Set(hotelIds)])
+    : { data: [] as AssignHotelGeoRow[] };
+  const hotelMap = new Map((hotelsData ?? []).map((hotel) => [hotel.id as string, hotel as AssignHotelGeoRow]));
+  const otherServicesByGroup = new Map<string, AssignServiceGeoRow[]>();
+  for (const assignment of otherAssignmentsForGeo) {
+    const groupId = (assignment.group_id as string | null) ?? `service:${((assignment.services as unknown) as AssignServiceGeoRow).id}`;
+    otherServicesByGroup.set(groupId, [
+      ...(otherServicesByGroup.get(groupId) ?? []),
+      (assignment.services as unknown) as AssignServiceGeoRow,
+    ]);
+  }
+  const windows = [
+    ...Array.from(otherServicesByGroup.values()).map((groupServices) => assignServicesToTripGeographicWindow(groupServices, hotelMap)),
+    assignServicesToTripGeographicWindow([service], hotelMap),
+  ]
+    .sort((a, b) => assignServiceOperationalMinutes(a.startTime) - assignServiceOperationalMinutes(b.startTime));
+  const issues = [];
+  for (let i = 1; i < windows.length; i++) {
+    issues.push(validateGeographicCompatibility(windows[i - 1]!, windows[i]!));
+  }
+  const strongest = strongestGeographicResult(issues.filter((issue) => issue.severity !== "ok"));
+  if (strongest?.severity === "block") {
+    const { data: driver } = await admin
+      .from("memberships")
+      .select("full_name")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", driverUserId)
+      .maybeSingle();
+    return { ok: false, error: geographicBlockMessage((driver?.full_name as string | null) ?? "selezionato", strongest) };
+  }
+  return { ok: true };
+}
+
+function assignServicesToTripGeographicWindow(
+  services: AssignServiceGeoRow[],
+  hotels: Map<string, AssignHotelGeoRow>
+): GeographicCompatibilityService {
+  const windows = [...services]
+    .sort((a, b) => assignServiceOperationalMinutes(assignServiceOperationalTime(a)) - assignServiceOperationalMinutes(assignServiceOperationalTime(b)))
+    .map((service) => assignServiceToGeographicWindow(service, hotels));
+  const first = windows[0];
+  const last = windows[windows.length - 1] ?? first;
+  return {
+    id: services.map((service) => service.id).join(","),
+    startTime: first?.startTime ?? "00:00",
+    startZone: first?.startZone ?? null,
+    startArea: first?.startArea ?? null,
+    endZone: last?.endZone ?? first?.endZone ?? null,
+    endArea: last?.endArea ?? first?.endArea ?? null,
+  };
+}
+
+function assignServiceOperationalMinutes(value: string): number {
+  const [h, m] = value.slice(0, 5).split(":").map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
 }
