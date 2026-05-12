@@ -187,6 +187,38 @@ function timeDiffMinutes(a: string, b: string) {
   if (left == null || right == null) return Infinity;
   return Math.abs(right - left);
 }
+function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const r = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * r * Math.asin(Math.sqrt(h));
+}
+function hotelPoint(hotel: Hotel | undefined) {
+  if (!hotel || hotel.lat == null || hotel.lng == null) return null;
+  if (!Number.isFinite(hotel.lat) || !Number.isFinite(hotel.lng)) return null;
+  return { lat: hotel.lat, lng: hotel.lng };
+}
+function tripGeoSpread(services: Service[], hotelMap: Map<string, Hotel>) {
+  const points = services
+    .map((service) => {
+      const hotel = hotelMap.get(service.hotel_id ?? "");
+      const point = hotelPoint(hotel);
+      return point ? { ...point, label: hotel?.zone || hotel?.name || "zona sconosciuta" } : null;
+    })
+    .filter(Boolean) as Array<{ lat: number; lng: number; label: string }>;
+  if (points.length < 2) return null;
+  let worst: { km: number; from: string; to: string } | null = null;
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      const km = distanceKm(points[i]!, points[j]!);
+      if (!worst || km > worst.km) worst = { km, from: points[i]!.label, to: points[j]!.label };
+    }
+  }
+  return worst;
+}
 function readableDate(iso: string) {
   const date = new Date(`${iso}T12:00:00Z`);
   if (Number.isNaN(date.getTime())) return "Data non valida";
@@ -1029,6 +1061,15 @@ function companyFromVessel(vessel: string | null | undefined): string {
   return vessel.split(" ")[0] ?? vessel;
 }
 
+function isFerryTransferService(service: Service) {
+  const kind = [
+    service.booking_service_kind,
+    service.service_type,
+    service.vessel
+  ].filter(Boolean).join(" ").toLowerCase();
+  return /\b(medmar|snav|caremar|alilauro|traghetto|aliscafo|porto|ferry|formula_)/.test(kind);
+}
+
 function cleanPortName(mp: string | null | undefined): string {
   if (!mp) return "";
   const l = mp.toLowerCase();
@@ -1077,23 +1118,33 @@ function printDriverPlans(drivers: DriverEntry[], tripGroups: TripGroup[], tripS
           let portZona: string;
           let arrivoIschia = "";
           if (isArr) {
-            const arrPorto = cleanPortName(svc.meeting_point) || "Ischia Porto";
-            const schedule = findFerryScheduleForService(svc, ferrySchedules);
-            const company = normalizeCompany(schedule?.company ?? svc.vessel);
-            const departurePort = schedule?.departure_port ?? inferDeparturePort(company, svc.vessel, svc.meeting_point);
-            const partenzaPorto = departurePort ? portLabel(departurePort) : "";
-            const travelMins = travelMinutes(company, departurePort);
-            arrivoIschia = addMinutes(fmt(svc.time), travelMins);
-            portZona = [
-              badge,
-              `<b>${companyFromVessel(svc.vessel)}</b> <span style="color:#666;font-size:8.5pt">(part. ${fmt(svc.time)}${partenzaPorto ? ` da ${partenzaPorto}` : ""})</span>`,
-              g("Arriva a", arrPorto),
-              g("Zona consegna", hotel?.zone),
-            ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+            if (isFerryTransferService(svc)) {
+              const arrPorto = cleanPortName(svc.meeting_point) || "Ischia Porto";
+              const schedule = findFerryScheduleForService(svc, ferrySchedules);
+              const company = normalizeCompany(schedule?.company ?? svc.vessel);
+              const departurePort = schedule?.departure_port ?? inferDeparturePort(company, svc.vessel, svc.meeting_point);
+              const partenzaPorto = departurePort ? portLabel(departurePort) : "";
+              const travelMins = travelMinutes(company, departurePort);
+              arrivoIschia = addMinutes(fmt(svc.time), travelMins);
+              portZona = [
+                badge,
+                `<b>${companyFromVessel(svc.vessel)}</b> <span style="color:#666;font-size:8.5pt">(part. ${fmt(svc.time)}${partenzaPorto ? ` da ${partenzaPorto}` : ""})</span>`,
+                g("Arriva a", arrPorto),
+                g("Zona consegna", hotel?.zone),
+              ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+            } else {
+              arrivoIschia = fmt(svc.time);
+              portZona = [
+                badge,
+                `<b>${companyFromVessel(svc.vessel)}</b>`,
+                g("Da", cleanPortName(svc.meeting_point) || svc.meeting_point),
+                g("Zona consegna", hotel?.zone),
+              ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+            }
           } else {
             const imbarco = cleanPortName(svc.meeting_point);
             const vesselTime = svc.vessel
-              ? `→ <b>${companyFromVessel(svc.vessel)}</b>${svc.pickup_hotel ? ` <span style="color:#666;font-size:8.5pt">ore ${fmt(svc.time)}</span>` : ""}`
+              ? `-> <b>${companyFromVessel(svc.vessel)}</b>${svc.pickup_hotel ? ` <span style="color:#666;font-size:8.5pt">ore ${fmt(svc.time)}</span>` : ""}`
               : "";
             portZona = [
               badge,
@@ -1530,6 +1581,15 @@ export default function PianoGiornoPage() {
           severity: "warning",
           title: `${missingHotelCount} clienti senza hotel`,
           detail: `${trip.time} · il percorso non puo essere ordinato bene.`,
+        });
+      }
+      const geoSpread = tripGeoSpread(trip.services, hotelMap);
+      if (geoSpread && geoSpread.km >= 5.5) {
+        issues.push({
+          id: `${trip.group.id}-geo-spread`,
+          severity: "warning",
+          title: `Giro geograficamente incoerente`,
+          detail: `${trip.driverName} - ${trip.time} - ${geoSpread.from} -> ${geoSpread.to} (${geoSpread.km.toFixed(1)} km in linea d'aria)`,
         });
       }
     }

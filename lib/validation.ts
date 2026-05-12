@@ -29,7 +29,7 @@ export const serviceCreateSchema = z.object({
   service_type: serviceTypeSchema.default("transfer"),
   direction: z.enum(["arrival", "departure"]),
   vessel: z.string().min(2).max(80),
-  pax: z.number().int().min(1).max(16),
+  pax: z.number().int().min(0).max(16),
   hotel_id: z.string().uuid(),
   customer_name: z.string().min(2).max(120),
   phone: z.string().min(6).max(30),

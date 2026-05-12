@@ -127,7 +127,7 @@ async function upsertManualThread(
 }
 
 export async function GET(request: NextRequest) {
-  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "assistenza"]);
   if (auth instanceof NextResponse) return auth;
 
   const tenantId = auth.membership.tenant_id;
@@ -274,7 +274,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "assistenza"]);
   if (auth instanceof NextResponse) return auth;
 
   const parsed = patchSchema.safeParse(await request.json().catch(() => null));
@@ -344,7 +344,7 @@ export async function PATCH(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "assistenza"]);
   if (auth instanceof NextResponse) return auth;
 
   const parsed = postSchema.safeParse(await request.json().catch(() => null));

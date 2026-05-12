@@ -481,7 +481,6 @@ export default function ArrivalsPage() {
   const { loading, errorMessage, data, refresh, tenantId: tenantIdFromHook } = useTenantOperationalData();
   const todayIso = new Date().toISOString().slice(0, 10);
   const [selectedDate, setSelectedDate] = useState(todayIso);
-  const [showAllDates, setShowAllDates] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
@@ -680,7 +679,7 @@ export default function ArrivalsPage() {
           || svc.agency_id === agencyFilter
           || (selectedAgencyName != null && (svc.billing_party_name ?? "").toLowerCase().includes(selectedAgencyName));
         return (
-          (showAllDates || !q ? (showAllDates || instance.date === selectedDate) : true) &&
+          instance.date === selectedDate &&
           matchAgency &&
           (!q || (svc.customer_name ?? "").toLowerCase().includes(q) || (svc.phone ?? "").toLowerCase().includes(q))
         );
@@ -701,12 +700,12 @@ export default function ArrivalsPage() {
         }
         return left.date !== right.date ? left.date.localeCompare(right.date) : left.time.localeCompare(right.time);
       });
-  }, [allArrivalInstances, selectedDate, showAllDates, agencyFilter, agencyById, search, sortBy]);
+  }, [allArrivalInstances, selectedDate, agencyFilter, agencyById, search, sortBy]);
 
   // Quanti arrivi ci sono in date diverse da quella selezionata (utile per suggerimento)
   const otherDatesCount = useMemo(() =>
-    !showAllDates ? allArrivalInstances.filter((i) => i.date !== selectedDate).length : 0,
-  [allArrivalInstances, selectedDate, showAllDates]);
+    allArrivalInstances.filter((i) => i.date !== selectedDate).length,
+  [allArrivalInstances, selectedDate]);
 
   const totalPax = arrivals.reduce((sum, item) => sum + item.service.pax, 0);
   const busCount = arrivals.filter(
@@ -716,7 +715,6 @@ export default function ArrivalsPage() {
 
   const buildRows = useCallback((): ExportRow[] =>
     arrivals.map((item) => ({
-      ...(showAllDates ? { Data: item.date.slice(5).replace("-", "/") } : {}),
       Ora: item.time,
       Cliente: getCustomerFullName(item.service),
       Pax: item.service.pax,
@@ -726,18 +724,16 @@ export default function ArrivalsPage() {
       Tipo: formatArrivalServiceTypeLabel(item.service),
       Agenzia: item.service.billing_party_name ?? agencyById.get(item.service.agency_id ?? "")?.name ?? "",
     }))
-  , [arrivals, showAllDates, agencyById, resolveHotelName]);
+  , [arrivals, agencyById, resolveHotelName]);
 
   const handleExcel = () => {
     const rows = buildRows();
-    const label = showAllDates ? "tutte-date" : selectedDate;
-    void exportToExcel(rows, `arrivi-${label}.xlsx`);
+    void exportToExcel(rows, `arrivi-${selectedDate}.xlsx`);
   };
 
   const handlePrint = () => {
     const rows = buildRows();
-    const label = showAllDates ? "Tutte le date" : formatIsoDateShort(selectedDate);
-    void printTable(rows, "Lista Arrivi", label);
+    void printTable(rows, "Lista Arrivi", formatIsoDateShort(selectedDate));
   };
 
   // Partenze della stessa data per export combinato
@@ -784,17 +780,13 @@ export default function ArrivalsPage() {
           <div className="grid w-full gap-3 rounded-2xl border border-slate-200 bg-white/80 px-3 py-3 shadow-sm backdrop-blur-sm sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_160px_minmax(0,1fr)_160px_auto]">
             <label className="text-sm">
               <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Data</span>
-              <DateInput value={selectedDate} onChange={(iso) => { setSelectedDate(iso); setShowAllDates(false); }} className="input-saas mt-1 w-full" disabled={showAllDates} />
+              <DateInput value={selectedDate} onChange={setSelectedDate} className="input-saas mt-1 w-full" />
             </label>
             <div className="flex flex-col gap-1 self-end">
               <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Visualizza</span>
-              <button
-                type="button"
-                onClick={() => setShowAllDates((v) => !v)}
-                className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${showAllDates ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
-              >
-                {showAllDates ? "📅 Tutte le date" : "Giornata"}
-              </button>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+                Giornata
+              </div>
             </div>
             <label className="text-sm">
               <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Agenzia</span>
@@ -864,10 +856,8 @@ export default function ArrivalsPage() {
               <button type="button" onClick={handlePrint} className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 transition">🖨 Stampa</button>
               <button type="button" onClick={handleExcel} className="rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-100 transition">📥 Excel</button>
             </>)}
-            {!showAllDates && (<>
               <button type="button" onClick={handleCombinedPrint} className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700 hover:bg-violet-100 transition">🖨 Stampa giornata</button>
               <button type="button" onClick={handleCombinedExcel} className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700 hover:bg-violet-100 transition">📄 Excel giornata</button>
-            </>)}
             {arrivals.length > 0 && (
               <button
                 type="button"
@@ -892,13 +882,6 @@ export default function ArrivalsPage() {
                 <span className="text-sm text-indigo-700">
                   Ci sono <strong>{otherDatesCount}</strong> arrivi in altre date nel sistema.
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setShowAllDates(true)}
-                  className="rounded-xl border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 transition"
-                >
-                  Mostra tutti
-                </button>
               </div>
             )}
           </div>
@@ -931,7 +914,7 @@ export default function ArrivalsPage() {
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
                     <p>Pax: <span className="font-semibold text-slate-800">{item.service.pax}</span></p>
-                    <p>{showAllDates ? `Data: ${formatIsoDateShort(item.date)}` : `Tipo: ${tipoLabel}`}</p>
+                    <p>Tipo: {tipoLabel}</p>
                   </div>
                   {meetingPoint ? <p className="mt-2 text-xs uppercase text-slate-400">{meetingPoint}</p> : null}
                   {riferimento ? <p className="mt-1 text-xs text-slate-500">{riferimento}</p> : null}
@@ -947,7 +930,7 @@ export default function ArrivalsPage() {
           <div className="table-card-scroll hidden md:block">
           <div className="min-w-[760px] rounded-2xl border border-slate-200 bg-white shadow-sm">
             {/* Header */}
-            <div className={`grid items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500 ${showAllDates ? "grid-cols-[28px_68px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]" : "grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]"}`}>
+            <div className="grid grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px] items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500">
               <div>
                 <input
                   type="checkbox"
@@ -957,7 +940,6 @@ export default function ArrivalsPage() {
                   title="Seleziona tutti"
                 />
               </div>
-              {showAllDates && <div>Data</div>}
               <div>Ora</div>
               <div>Cliente</div>
               <div>Pax</div>
@@ -974,7 +956,7 @@ export default function ArrivalsPage() {
                 return (
                 <div
                   key={item.instanceId}
-                  className={`grid items-center gap-3 px-4 py-3 transition hover:bg-slate-50/60 ${selectedIds.has(item.service.id) ? "bg-indigo-50/60" : ""} ${showAllDates ? "grid-cols-[28px_68px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]" : "grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]"}`}
+                  className={`grid grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px] items-center gap-3 px-4 py-3 transition hover:bg-slate-50/60 ${selectedIds.has(item.service.id) ? "bg-indigo-50/60" : ""}`}
                 >
                   {/* CHECKBOX */}
                   <div>
@@ -985,13 +967,6 @@ export default function ArrivalsPage() {
                       onChange={() => toggleSelect(item.service.id)}
                     />
                   </div>
-                  {showAllDates && (
-                    <div>
-                      <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                        {item.date.slice(5).replace("-", "/")}
-                      </span>
-                    </div>
-                  )}
                   {/* ORA */}
                   <div>
                     <span className="inline-flex min-w-[48px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-bold text-slate-800">

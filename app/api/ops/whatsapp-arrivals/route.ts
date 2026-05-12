@@ -18,7 +18,7 @@ function minutesUntilArrival(date: string, time: string | null | undefined) {
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "assistenza"]);
     if (auth instanceof NextResponse) return auth;
     const tenantId = auth.membership.tenant_id;
     const admin = createAdminClient();
@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "assistenza"]);
     if (auth instanceof NextResponse) return auth;
     const tenantId = auth.membership.tenant_id;
     const admin = createAdminClient();

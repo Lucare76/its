@@ -373,8 +373,24 @@ function isPlaceBasedRow(row: z.infer<typeof rowSchema>) {
   return Boolean(row.route_kind || row.origin_place_type || row.destination_place_type);
 }
 
-function directionForCategory(category: ImportCategory) {
-  return category === "departure" ? "departure" as const : "arrival" as const;
+function directionForTemplateRow(
+  category: ImportCategory,
+  routeKind: string | null | undefined,
+  originPlaceType?: string | null,
+  destinationPlaceType?: string | null
+) {
+  if (category === "arrival") return "arrival" as const;
+  if (category === "departure") return "departure" as const;
+  if (routeKind?.startsWith("hotel_")) return "departure" as const;
+  if (routeKind?.endsWith("_hotel")) return "arrival" as const;
+  if (originPlaceType === "hotel" && destinationPlaceType !== "hotel") return "departure" as const;
+  if (destinationPlaceType === "hotel" && originPlaceType !== "hotel") return "arrival" as const;
+  return "departure" as const;
+}
+
+function templatePassengerChunks(pax: number) {
+  if (!Number.isFinite(pax) || pax <= 0) return [];
+  return [Math.floor(pax)];
 }
 
 function placeErrorLabel(kind: "origine" | "destinazione", status: string, raw: string) {
@@ -579,12 +595,13 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      const paxChunks = splitPassengerChunks(row.pax);
+      const paxChunks = templatePassengerChunks(row.pax);
       const customerName = sanitizeImportCustomerName(row.customer_name, row.row_index);
       const phone = sanitizeImportPhone(row.phone);
       const importedStatus = mapImportedStatus(row.notes);
       const meta = inferTransferMeta(row.transport_code || row.company_name, row.pickup, row.destination, category);
       const confidence = Math.min(originMatch.confidence, destinationMatch.confidence);
+      const rowDirection = directionForTemplateRow(category, row.route_kind, originType, destinationType);
 
       for (const [chunkIndex, paxChunk] of paxChunks.entries()) {
         const baseNotes = appendSplitImportNote(row.notes, row.pax, chunkIndex + 1, paxChunks.length);
@@ -596,7 +613,7 @@ export async function POST(request: NextRequest) {
           date: row.date,
           time: row.time,
           service_type: meta.service_type,
-          direction: directionForCategory(category),
+          direction: rowDirection,
           vessel: row.company_name || meta.vessel,
           pax: paxChunk,
           hotel_id: resolvedHotelId,
@@ -618,10 +635,10 @@ export async function POST(request: NextRequest) {
           destination_place_type: destinationType,
           geo_status: "matched",
           geo_confidence: confidence,
-          arrival_date: row.date,
-          arrival_time: row.time,
-          departure_date: row.departure_date || null,
-          departure_time: row.departure_time || null,
+          arrival_date: rowDirection === "arrival" ? row.date : null,
+          arrival_time: rowDirection === "arrival" ? row.time : null,
+          departure_date: rowDirection === "departure" ? row.date : row.departure_date || null,
+          departure_time: rowDirection === "departure" ? row.departure_time || row.time : row.departure_time || null,
           pickup_time: row.pickup_time || null,
           transport_code: row.transport_code || null,
           bus_city_origin: null,
@@ -674,11 +691,11 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      const paxChunks = splitPassengerChunks(row.pax);
+      const paxChunks = templatePassengerChunks(row.pax);
       const customerName = sanitizeImportCustomerName(row.customer_name, row.row_index);
       const phone = sanitizeImportPhone(row.phone);
       const importedStatus = mapImportedStatus(row.notes);
-      const directDirection = category === "departure" ? "departure" : "arrival";
+      const directDirection = directionForTemplateRow(category, row.route_kind, row.origin_place_type, row.destination_place_type);
       const externalDestination = row.external_destination || row.pickup || row.destination;
       const meta = inferTransferMeta(row.transport_code, row.pickup, externalDestination, category);
 
@@ -703,10 +720,10 @@ export async function POST(request: NextRequest) {
           customer_email: null,
           booking_service_kind: meta.booking_service_kind,
           service_type_code: meta.service_type_code,
-          arrival_date: row.date,
-          arrival_time: row.time,
-          departure_date: row.departure_date || null,
-          departure_time: row.departure_time || null,
+          arrival_date: directDirection === "arrival" ? row.date : null,
+          arrival_time: directDirection === "arrival" ? row.time : null,
+          departure_date: directDirection === "departure" ? row.date : row.departure_date || null,
+          departure_time: directDirection === "departure" ? row.departure_time || row.time : row.departure_time || null,
           transport_code: row.transport_code || null,
           bus_city_origin: null,
           status: importedStatus,

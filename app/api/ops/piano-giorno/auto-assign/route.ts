@@ -385,7 +385,7 @@ export async function POST(request: NextRequest) {
           .order("capacity"),
         listDriverRegistry(auth.admin, tenantId),
         auth.admin.from("assignments")
-          .select("service_id, group_id, driver_user_id, driver_profile_id")
+          .select("service_id, group_id, driver_user_id, driver_profile_id, locked_by_operator")
           .eq("tenant_id", tenantId),
         auth.admin.from("trip_groups")
           .select("id, driver_user_id, driver_profile_id")
@@ -482,6 +482,14 @@ export async function POST(request: NextRequest) {
         .filter((a) => a.group_id && allDayServiceIds.has(a.service_id as string))
         .map((a) => [a.service_id as string, a.group_id as string])
     );
+    const lockedAssignments = (assignmentsRes.data ?? [])
+      .filter((a) => a.locked_by_operator === true && allDayServiceIds.has(a.service_id as string));
+    const lockedServiceIds = new Set(lockedAssignments.map((a) => a.service_id as string));
+    const lockedGroupIds = new Set(
+      lockedAssignments
+        .map((a) => a.group_id as string | null)
+        .filter((groupId): groupId is string => Boolean(groupId))
+    );
     const existingGroups = (groupsRes.data ?? []).map((g) => g.id as string);
     const activeGroupDriverByUserId = new Map(
       (groupsRes.data ?? []).map((group) => [group.id as string, (group.driver_user_id as string | null) ?? null])
@@ -489,6 +497,9 @@ export async function POST(request: NextRequest) {
     const activeGroupDriverByProfileId = new Map(
       (groupsRes.data ?? []).map((group) => [group.id as string, (group.driver_profile_id as string | null) ?? null])
     );
+    const groupIdsForExistingLoad = mode === "regenerate_all"
+      ? lockedGroupIds
+      : new Set(existingGroups);
     const userIdToProfileId = new Map(
       allDrivers.filter((d) => d.user_id).map((d) => [d.user_id!, d.profile_id])
     );
@@ -503,23 +514,41 @@ export async function POST(request: NextRequest) {
     const now = new Date().toISOString();
 
     if (mode === "regenerate_all" && existingGroups.length > 0) {
-      const dayIds = allServices.map((s) => s.id);
+      const unlockedGroupIds = existingGroups.filter((groupId) => !lockedGroupIds.has(groupId));
+      const unlockedServiceIds = (assignmentsRes.data ?? [])
+        .filter((a) =>
+          a.group_id &&
+          existingGroups.includes(a.group_id as string) &&
+          a.locked_by_operator !== true &&
+          allDayServiceIds.has(a.service_id as string)
+        )
+        .map((a) => a.service_id as string);
       await Promise.all([
-        auth.admin.from("assignments").delete().in("group_id", existingGroups).eq("tenant_id", tenantId),
-        auth.admin.from("trip_groups").update({ status: "cancelled", updated_at: now }).in("id", existingGroups).eq("tenant_id", tenantId),
+        auth.admin
+          .from("assignments")
+          .delete()
+          .in("group_id", existingGroups)
+          .eq("tenant_id", tenantId)
+          .or("locked_by_operator.is.null,locked_by_operator.eq.false"),
+        unlockedGroupIds.length > 0
+          ? auth.admin.from("trip_groups").update({ status: "cancelled", updated_at: now }).in("id", unlockedGroupIds).eq("tenant_id", tenantId)
+          : Promise.resolve({ error: null }),
       ]);
-      if (dayIds.length > 0) {
+      if (unlockedServiceIds.length > 0) {
         await auth.admin.from("services").update({ status: "new" })
-          .in("id", dayIds).eq("tenant_id", tenantId).eq("status", "assigned");
+          .in("id", unlockedServiceIds).eq("tenant_id", tenantId).eq("status", "assigned");
       }
       assignedMap.clear();
+      for (const assignment of lockedAssignments) {
+        if (assignment.group_id) assignedMap.set(assignment.service_id as string, assignment.group_id as string);
+      }
     }
 
     // ── 3. Seleziona servizi da assegnare ────────────────────────────────────
 
     const toAssign = mode === "unassigned_only"
-      ? allServices.filter((s) => !assignedMap.has(s.id))
-      : allServices;
+      ? allServices.filter((s) => !assignedMap.has(s.id) && !lockedServiceIds.has(s.id))
+      : allServices.filter((s) => !lockedServiceIds.has(s.id));
 
     if (!toAssign.length) {
       return NextResponse.json({
@@ -702,6 +731,7 @@ export async function POST(request: NextRequest) {
       const serviceId = assignment.service_id as string;
       const groupId = assignment.group_id as string | null;
       if (!groupId || !allDayServiceIds.has(serviceId)) continue;
+      if (!groupIdsForExistingLoad.has(groupId)) continue;
       const assignUserId = (assignment.driver_user_id as string | null) ?? activeGroupDriverByUserId.get(groupId) ?? null;
       const assignProfileId = (assignment.driver_profile_id as string | null)
         ?? activeGroupDriverByProfileId.get(groupId)
@@ -868,6 +898,7 @@ export async function POST(request: NextRequest) {
         const allAssignRows: Array<{
           tenant_id: string; service_id: string;
           driver_user_id: string | null; driver_profile_id: string | null; vehicle_label: string; group_id: string;
+          assignment_source: string; locked_by_operator: boolean; assigned_by: string; assigned_at: string; lock_reason: null;
         }> = [];
         const allServiceIds: string[] = [];
         const allStatusEvents: Array<{
@@ -884,6 +915,11 @@ export async function POST(request: NextRequest) {
               driver_user_id: driverUserId ?? null,
               driver_profile_id: profileId ?? null,
               vehicle_label: vehicle?.label ?? "", group_id: groupId,
+              assignment_source: "auto_assign",
+              locked_by_operator: false,
+              assigned_by: userId,
+              assigned_at: now,
+              lock_reason: null,
             });
             allServiceIds.push(sid);
             allStatusEvents.push({ tenant_id: tenantId, service_id: sid, status: "assigned", at: now, by_user_id: userId });

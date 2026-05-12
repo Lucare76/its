@@ -5,7 +5,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
-  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
+  const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "assistenza"]);
   if (auth instanceof NextResponse) return auth;
   const { membership } = auth;
   const tenantId = membership.tenant_id;

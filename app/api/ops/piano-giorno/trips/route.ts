@@ -220,6 +220,11 @@ export async function POST(request: NextRequest) {
           driver_user_id: driver_user_id ?? null,
           driver_profile_id: driver_profile_id ?? null,
           vehicle_label: vehicleCheck.vehicle?.label ?? vehicle_label ?? null,
+          assignment_source: "manual_piano_giorno",
+          locked_by_operator: true,
+          assigned_by: userId,
+          assigned_at: now,
+          lock_reason: "manual_assignment_from_daily_plan",
         })
         .eq("group_id", group_id)
         .eq("tenant_id", tenantId);
@@ -391,12 +396,13 @@ export async function POST(request: NextRequest) {
       // Ottieni driver/vehicle del giro destinazione
       const { data: destGroup } = await auth.admin
         .from("trip_groups")
-        .select("driver_user_id, vehicle_label, vehicle_capacity")
+        .select("driver_user_id, driver_profile_id, vehicle_label, vehicle_capacity")
         .eq("id", destGroupId)
         .eq("tenant_id", tenantId)
         .maybeSingle();
 
       const destDriver = destGroup?.driver_user_id ?? driver_user_id ?? null;
+      const destDriverProfile = destGroup?.driver_profile_id ?? driver_profile_id ?? null;
       const destVehicle = destGroup?.vehicle_label ?? vehicle_label ?? null;
       if (destDriver && destGroupId) {
         const targetServiceIds = [...new Set([...(await loadGroupServiceIds(auth.admin, tenantId, destGroupId)), ...service_ids])];
@@ -421,7 +427,17 @@ export async function POST(request: NextRequest) {
       // Aggiorna assignments (cambia group_id)
       await auth.admin
         .from("assignments")
-        .update({ group_id: destGroupId, driver_user_id: destDriver, vehicle_label: destVehicle })
+        .update({
+          group_id: destGroupId,
+          driver_user_id: destDriver,
+          driver_profile_id: destDriverProfile,
+          vehicle_label: destVehicle,
+          assignment_source: "manual_piano_giorno",
+          locked_by_operator: true,
+          assigned_by: userId,
+          assigned_at: now,
+          lock_reason: "manual_assignment_from_daily_plan",
+        })
         .in("service_id", service_ids)
         .eq("tenant_id", tenantId);
 
@@ -477,7 +493,14 @@ export async function POST(request: NextRequest) {
 
       await Promise.all([
         auth.admin.from("trip_groups").update({ driver_user_id: to_driver_id, updated_at: now }).in("id", groupIds).eq("tenant_id", tenantId),
-        auth.admin.from("assignments").update({ driver_user_id: to_driver_id }).in("group_id", groupIds).eq("tenant_id", tenantId),
+        auth.admin.from("assignments").update({
+          driver_user_id: to_driver_id,
+          assignment_source: "manual_piano_giorno",
+          locked_by_operator: true,
+          assigned_by: userId,
+          assigned_at: now,
+          lock_reason: "manual_assignment_from_daily_plan",
+        }).in("group_id", groupIds).eq("tenant_id", tenantId),
       ]);
 
       void sendPushToUser(tenantId, to_driver_id, {
@@ -520,7 +543,14 @@ export async function POST(request: NextRequest) {
 
       await Promise.all([
         auth.admin.from("trip_groups").update({ vehicle_label: to_vehicle_label, updated_at: now }).in("id", groupIds).eq("tenant_id", tenantId),
-        auth.admin.from("assignments").update({ vehicle_label: to_vehicle_label }).in("group_id", groupIds).eq("tenant_id", tenantId),
+        auth.admin.from("assignments").update({
+          vehicle_label: to_vehicle_label,
+          assignment_source: "manual_piano_giorno",
+          locked_by_operator: true,
+          assigned_by: userId,
+          assigned_at: now,
+          lock_reason: "manual_assignment_from_daily_plan",
+        }).in("group_id", groupIds).eq("tenant_id", tenantId),
       ]);
 
       return NextResponse.json({ ok: true, affected: groupIds.length, warnings });
@@ -622,6 +652,11 @@ async function _assignServicesToGroup(
     driver_profile_id: driverProfileId,
     vehicle_label: vehicleLabel ?? "",
     group_id: groupId,
+    assignment_source: "manual_piano_giorno",
+    locked_by_operator: true,
+    assigned_by: byUserId,
+    assigned_at: now,
+    lock_reason: "manual_assignment_from_daily_plan",
   }));
 
   await admin

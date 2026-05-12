@@ -19,7 +19,7 @@ function nextMondayIso() {
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "assistenza"]);
     if (auth instanceof NextResponse) return auth;
 
     const admin = createAdminClient();

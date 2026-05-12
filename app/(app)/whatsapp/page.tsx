@@ -377,7 +377,10 @@ function WhatsAppMediaAttachment({
         setBlobMimeType(media.contentType);
       } catch (error) {
         if (!active) return;
-        onError(error instanceof Error ? error.message : "Impossibile caricare l'anteprima immagine.");
+        console.warn("[whatsapp] media preview unavailable", {
+          messageId: message.id,
+          error: error instanceof Error ? error.message : "Impossibile caricare l'anteprima immagine."
+        });
       } finally {
         if (active) setLoadingPreview(false);
       }
