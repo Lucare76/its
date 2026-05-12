@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
 import { isVehicleManuallyBlockedOnDate } from "@/lib/server/vehicle-availability";
+import { listDriverRegistry } from "@/lib/server/driver-registry";
 
 export const runtime = "nodejs";
 
@@ -77,6 +78,7 @@ export async function GET(request: NextRequest) {
       vehiclesResult,
       ferryResult,
       commitments,
+      driverRegistry,
     ] = await Promise.all([
       todayGroupIds.length > 0
         ? auth.admin
@@ -111,6 +113,7 @@ export async function GET(request: NextRequest) {
         .eq("direction", "mainland_to_ischia")
         .order("departure_time"),
       loadVehicleCommitmentsForDate(auth.admin, tenantId, date),
+      listDriverRegistry(auth.admin, tenantId, { activeOnly: true }),
     ]);
 
     const errorSources = [
@@ -148,6 +151,7 @@ export async function GET(request: NextRequest) {
       assignments: dayAssignments,
       hotels: hotelsResult.data ?? [],
       memberships: membershipsResult.data ?? [],
+      driver_profiles: driverRegistry,
       vehicles: availableVehicles,
       vehicle_commitments: commitments.rows,
       ferry_schedules: ferrySchedules,

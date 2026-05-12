@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
       date?: string;
       service_ids?: string[];
       driver_user_id?: string | null;
+      driver_profile_id?: string | null;
       vehicle_label?: string | null;
       vehicle_id?: string | null;
       vehicle_capacity?: number | null;
@@ -52,6 +53,8 @@ export async function POST(request: NextRequest) {
       // swap_driver
       from_driver_id?: string;
       to_driver_id?: string;
+      from_driver_profile_id?: string;
+      to_driver_profile_id?: string;
       // swap_vehicle
       from_vehicle_label?: string;
       to_vehicle_label?: string;
@@ -70,7 +73,7 @@ export async function POST(request: NextRequest) {
 
     // ─── CREATE TRIP ──────────────────────────────────────────────────────────
     if (body.action === "create_trip") {
-      const { date, service_ids, driver_user_id, vehicle_label, vehicle_id, vehicle_capacity, notes } = body;
+      const { date, service_ids, driver_user_id, driver_profile_id, vehicle_label, vehicle_id, vehicle_capacity, notes } = body;
       if (!date || !service_ids?.length) {
         return NextResponse.json({ ok: false, error: "date e service_ids obbligatori." }, { status: 400 });
       }
@@ -102,6 +105,7 @@ export async function POST(request: NextRequest) {
           tenant_id: tenantId,
           date,
           driver_user_id: driver_user_id || null,
+          driver_profile_id: driver_profile_id || null,
           vehicle_label: (vehicleCheck.vehicle?.label ?? vehicle_label) || null,
           vehicle_capacity: (vehicleCheck.vehicle?.capacity ?? vehicle_capacity) || null,
           notes: notes || null,
@@ -125,6 +129,7 @@ export async function POST(request: NextRequest) {
         service_ids,
         groupId,
         driver_user_id ?? null,
+        driver_profile_id ?? null,
         vehicleCheck.vehicle?.label ?? vehicle_label ?? null,
         userId,
         now
@@ -155,7 +160,7 @@ export async function POST(request: NextRequest) {
 
     // ─── UPDATE TRIP ──────────────────────────────────────────────────────────
     if (body.action === "update_trip") {
-      const { group_id, driver_user_id, vehicle_label, vehicle_id, vehicle_capacity, notes, service_ids } = body;
+      const { group_id, driver_user_id, driver_profile_id, vehicle_label, vehicle_id, vehicle_capacity, notes, service_ids } = body;
       if (!group_id) {
         return NextResponse.json({ ok: false, error: "group_id obbligatorio." }, { status: 400 });
       }
@@ -199,6 +204,7 @@ export async function POST(request: NextRequest) {
         .from("trip_groups")
         .update({
           driver_user_id: driver_user_id ?? null,
+          driver_profile_id: driver_profile_id ?? null,
           vehicle_label: vehicleCheck.vehicle?.label ?? vehicle_label ?? null,
           vehicle_capacity: vehicleCheck.vehicle?.capacity ?? vehicle_capacity ?? null,
           notes: notes ?? null,
@@ -212,6 +218,7 @@ export async function POST(request: NextRequest) {
         .from("assignments")
         .update({
           driver_user_id: driver_user_id ?? null,
+          driver_profile_id: driver_profile_id ?? null,
           vehicle_label: vehicleCheck.vehicle?.label ?? vehicle_label ?? null,
         })
         .eq("group_id", group_id)
@@ -262,7 +269,7 @@ export async function POST(request: NextRequest) {
         // Servizi aggiunti → nuovi assignments
         const toAdd = service_ids.filter((id) => !existingIds.has(id));
         if (toAdd.length > 0) {
-          await _assignServicesToGroup(auth.admin, tenantId, toAdd, group_id, driver_user_id ?? null, vehicle_label ?? null, userId, now);
+          await _assignServicesToGroup(auth.admin, tenantId, toAdd, group_id, driver_user_id ?? null, driver_profile_id ?? null, vehicle_label ?? null, userId, now);
         }
       }
 
@@ -312,7 +319,7 @@ export async function POST(request: NextRequest) {
 
     // ─── MOVE SERVICES ────────────────────────────────────────────────────────
     if (body.action === "move_services") {
-      const { service_ids, target_group_id, group_id: source_group_id, driver_user_id, vehicle_label, vehicle_id, vehicle_capacity, notes, date } = body;
+      const { service_ids, target_group_id, group_id: source_group_id, driver_user_id, driver_profile_id, vehicle_label, vehicle_id, vehicle_capacity, notes, date } = body;
       if (!service_ids?.length) {
         return NextResponse.json({ ok: false, error: "service_ids obbligatori." }, { status: 400 });
       }
@@ -348,6 +355,7 @@ export async function POST(request: NextRequest) {
             tenant_id: tenantId,
             date,
             driver_user_id: driver_user_id || null,
+            driver_profile_id: driver_profile_id || null,
             vehicle_label: (vehicleCheck.vehicle?.label ?? vehicle_label) || null,
             vehicle_capacity: (vehicleCheck.vehicle?.capacity ?? vehicle_capacity) || null,
             notes: notes || null,
@@ -601,6 +609,7 @@ async function _assignServicesToGroup(
   serviceIds: string[],
   groupId: string,
   driverUserId: string | null,
+  driverProfileId: string | null,
   vehicleLabel: string | null,
   byUserId: string,
   now: string
@@ -610,6 +619,7 @@ async function _assignServicesToGroup(
     tenant_id: tenantId,
     service_id: sid,
     driver_user_id: driverUserId,
+    driver_profile_id: driverProfileId,
     vehicle_label: vehicleLabel ?? "",
     group_id: groupId,
   }));

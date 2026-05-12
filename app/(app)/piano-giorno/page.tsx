@@ -17,8 +17,8 @@ type Service = {
   booking_service_kind: string | null; service_type: string | null;
 };
 type TripGroup = {
-  id: string; date: string; driver_user_id: string | null; vehicle_label: string | null;
-  vehicle_capacity: number | null; notes: string | null; status: string;
+  id: string; date: string; driver_user_id: string | null; driver_profile_id: string | null;
+  vehicle_label: string | null; vehicle_capacity: number | null; notes: string | null; status: string;
 };
 type Assignment = {
   id: string; service_id: string; driver_user_id: string | null;
@@ -26,12 +26,19 @@ type Assignment = {
 };
 type Hotel = { id: string; name: string; zone: string | null; lat: number | null; lng: number | null };
 type Member = { user_id: string; full_name: string; role: string };
+type DriverProfile = {
+  id: string; user_id: string | null; full_name: string; phone: string | null;
+  active: boolean; has_access: boolean; access_suspended: boolean;
+};
+// Rappresentazione unificata usata nei dropdown autisti
+type DriverEntry = { profileId: string; userId: string | null; name: string };
 type Vehicle = { id: string; label: string; capacity: number | null; vehicle_size: string | null };
 type FerrySchedule = { id: string; company: string; departure_port: string; arrival_port: string; departure_time: string; notes: string | null };
 
 type DayData = {
   services: Service[]; trip_groups: TripGroup[]; assignments: Assignment[];
-  hotels: Hotel[]; memberships: Member[]; vehicles: Vehicle[]; ferry_schedules: FerrySchedule[];
+  hotels: Hotel[]; memberships: Member[]; driver_profiles: DriverProfile[];
+  vehicles: Vehicle[]; ferry_schedules: FerrySchedule[];
 };
 type PlanIssue = {
   id: string;
@@ -519,7 +526,7 @@ type BuilderProps = {
   selectedIds: Set<string>;
   services: Map<string, Service>;
   hotels: Map<string, Hotel>;
-  drivers: Member[];
+  drivers: DriverEntry[];
   vehicles: Vehicle[];
   tripGroups: TripGroup[];
   assignments: Map<string, Assignment>;
@@ -531,7 +538,7 @@ type BuilderProps = {
 };
 
 function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGroups, assignments, token, date, onRemove, onClear, onDone }: BuilderProps) {
-  const [driverId, setDriverId] = useState("");
+  const [selectedProfileId, setSelectedProfileId] = useState("");
   const [vehicleId, setVehicleId] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
@@ -542,36 +549,33 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
   const selectedVehicle = vehicles.find((v) => v.id === vehicleId);
   const overbooking = selectedVehicle?.capacity ? totalPax - selectedVehicle.capacity : 0;
 
-  // Occupazione autista: giri già assegnati nel giorno
+  // Occupazione autista: giri già assegnati nel giorno (keyed by profileId o userId)
   const driverBusy = useMemo(() => {
-    const map = new Map<string, string[]>(); // driver_user_id → orari
+    const map = new Map<string, string[]>();
     for (const tg of tripGroups) {
-      if (!tg.driver_user_id) continue;
-      map.set(tg.driver_user_id, [...(map.get(tg.driver_user_id) ?? []), tg.id]);
+      const key = tg.driver_profile_id ?? tg.driver_user_id;
+      if (!key) continue;
+      map.set(key, [...(map.get(key) ?? []), tg.id]);
     }
     return map;
   }, [tripGroups]);
 
-  // Orario del primo servizio selezionato (per conflict check)
-  const firstTime = selectedList.sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""))[0]?.time ?? "";
-
-  // Controlla se un autista ha un giro a meno di 30 min dal primo servizio selezionato
-  const driverConflict = useCallback((dId: string): "busy" | "close" | "ok" => {
-    const groupIds = driverBusy.get(dId) ?? [];
-    if (!groupIds.length) return "ok";
-    // Se ha giri che includono servizi allo stesso orario → busy
+  const driverConflict = useCallback((profileId: string): "busy" | "close" | "ok" => {
+    const groupIds = driverBusy.get(profileId) ?? [];
     return groupIds.length > 0 ? "close" : "ok";
   }, [driverBusy]);
 
   const confirm = async () => {
-    if (!selectedIds.size) return;
+    if (!selectedIds.size || !selectedProfileId) return;
     setSaving(true); setErr(null);
     const vehicle = vehicles.find((v) => v.id === vehicleId);
+    const selectedDriver = drivers.find((d) => d.profileId === selectedProfileId);
     const res = await tripAction(token, {
       action: "create_trip",
       date,
       service_ids: [...selectedIds],
-      driver_user_id: driverId || null,
+      driver_user_id: selectedDriver?.userId ?? null,
+      driver_profile_id: selectedProfileId || null,
       vehicle_id: vehicle?.id ?? vehicleId ?? null,
       vehicle_label: vehicle?.label ?? vehicleId ?? null,
       vehicle_capacity: vehicle?.capacity ?? null,
@@ -628,22 +632,22 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
         <span className="text-[11px] font-semibold text-slate-600 uppercase tracking-wide">Autista</span>
         <select
           className="input-saas mt-1 text-sm w-full"
-          value={driverId}
-          onChange={(e) => setDriverId(e.target.value)}
+          value={selectedProfileId}
+          onChange={(e) => setSelectedProfileId(e.target.value)}
         >
           <option value="">— Seleziona autista —</option>
-          {drivers.filter((d) => d.role === "driver" || d.role === "autista").map((d) => {
-            const conflict = driverConflict(d.user_id);
+          {drivers.map((d) => {
+            const conflict = driverConflict(d.profileId);
             return (
-              <option key={d.user_id} value={d.user_id}>
-                {d.full_name}
+              <option key={d.profileId} value={d.profileId}>
+                {d.name}
                 {conflict === "close" ? " ⚠" : ""}
-                {` (${driverBusy.get(d.user_id)?.length ?? 0} giri)`}
+                {` (${driverBusy.get(d.profileId)?.length ?? 0} giri)`}
               </option>
             );
           })}
         </select>
-        {driverId && driverConflict(driverId) === "close" && (
+        {selectedProfileId && driverConflict(selectedProfileId) === "close" && (
           <p className="text-[10px] text-amber-600 mt-0.5">⚠ Autista ha già giri assegnati oggi — verifica disponibilità</p>
         )}
       </label>
@@ -681,7 +685,7 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
 
       <button
         onClick={() => void confirm()}
-        disabled={saving}
+        disabled={saving || !selectedProfileId}
         className="btn-primary w-full text-sm disabled:opacity-50"
       >
         {saving ? "Salvataggio…" : "Conferma giro"}
@@ -693,7 +697,7 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
 // ─── Pannello AUTISTI (destra) ────────────────────────────────────────────────
 
 type DriverPanelProps = {
-  drivers: Member[];
+  drivers: DriverEntry[];
   tripGroups: TripGroup[];
   tripServices: Map<string, Service[]>;
   token: string;
@@ -704,25 +708,23 @@ type DriverPanelProps = {
 function DriverPanel({ drivers, tripGroups, tripServices, token, vehicles, onUpdated }: DriverPanelProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
-  const [editDriver, setEditDriver] = useState("");
+  const [editProfileId, setEditProfileId] = useState("");
   const [editVehicle, setEditVehicle] = useState("");
   const [saving, setSaving] = useState(false);
 
   const byDriver = useMemo(() => {
     const map = new Map<string, TripGroup[]>();
     for (const tg of tripGroups) {
-      const key = tg.driver_user_id ?? "__unassigned__";
+      const key = tg.driver_profile_id ?? tg.driver_user_id ?? "__unassigned__";
       map.set(key, [...(map.get(key) ?? []), tg]);
     }
     return map;
   }, [tripGroups]);
 
   const driverList = useMemo(() => {
-    const active = drivers.filter((d) => d.role === "driver" || d.role === "autista");
-    // Ordina: chi ha giri assegnati prima
-    return active.sort((a, b) => {
-      const aTrips = byDriver.get(a.user_id)?.length ?? 0;
-      const bTrips = byDriver.get(b.user_id)?.length ?? 0;
+    return [...drivers].sort((a, b) => {
+      const aTrips = byDriver.get(a.profileId)?.length ?? 0;
+      const bTrips = byDriver.get(b.profileId)?.length ?? 0;
       return bTrips - aTrips;
     });
   }, [drivers, byDriver]);
@@ -738,10 +740,12 @@ function DriverPanel({ drivers, tripGroups, tripServices, token, vehicles, onUpd
   const saveEdit = async (groupId: string) => {
     setSaving(true);
     const vehicle = vehicles.find((v) => v.id === editVehicle);
+    const selectedDriver = drivers.find((d) => d.profileId === editProfileId);
     await tripAction(token, {
       action: "update_trip",
       group_id: groupId,
-      driver_user_id: editDriver || null,
+      driver_user_id: selectedDriver?.userId ?? null,
+      driver_profile_id: editProfileId || null,
       vehicle_id: vehicle?.id ?? editVehicle ?? null,
       vehicle_label: vehicle?.label ?? editVehicle ?? null,
       vehicle_capacity: vehicle?.capacity ?? null,
@@ -777,21 +781,20 @@ function DriverPanel({ drivers, tripGroups, tripServices, token, vehicles, onUpd
 
         {/* Per ogni autista */}
         {driverList.map((driver) => {
-          const trips = byDriver.get(driver.user_id) ?? [];
+          const trips = byDriver.get(driver.profileId) ?? [];
           const totalPax = trips.flatMap((t) => tripServices.get(t.id) ?? []).reduce((n, s) => n + s.pax, 0);
-          const vehicles_used = [...new Set(trips.map((t) => t.vehicle_label).filter(Boolean))];
-          const isOpen = expandedId === driver.user_id;
+          const isOpen = expandedId === driver.profileId;
 
           return (
-            <div key={driver.user_id} className={`rounded-lg border overflow-hidden ${trips.length > 0 ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50"}`}>
+            <div key={driver.profileId} className={`rounded-lg border overflow-hidden ${trips.length > 0 ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50"}`}>
               {/* Header autista */}
               <button
                 className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 transition-colors text-left"
-                onClick={() => setExpandedId(isOpen ? null : driver.user_id)}
+                onClick={() => setExpandedId(isOpen ? null : driver.profileId)}
               >
                 <span className={`transition-transform text-xs text-slate-400 ${isOpen ? "rotate-90" : ""}`}>▶</span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold text-slate-800">{driver.full_name}</p>
+                  <p className="text-xs font-semibold text-slate-800">{driver.name}</p>
                   <div className="mt-0.5">
                     <DriverTimeline trips={trips} tripServices={tripServices} />
                   </div>
@@ -826,7 +829,7 @@ function DriverPanel({ drivers, tripGroups, tripServices, token, vehicles, onUpd
                           </span>
                           <button
                             className="text-[10px] text-slate-400 hover:text-blue-600 mr-1"
-                            onClick={() => { setEditingGroup(isEditing ? null : tg.id); setEditDriver(tg.driver_user_id ?? ""); setEditVehicle(""); }}
+                            onClick={() => { setEditingGroup(isEditing ? null : tg.id); setEditProfileId(tg.driver_profile_id ?? tg.driver_user_id ?? ""); setEditVehicle(""); }}
                           >
                             ✏
                           </button>
@@ -842,9 +845,9 @@ function DriverPanel({ drivers, tripGroups, tripServices, token, vehicles, onUpd
                         {/* Edit inline */}
                         {isEditing && (
                           <div className="bg-slate-50 rounded p-2 mb-1 space-y-1">
-                            <select className="input-saas text-xs w-full" value={editDriver} onChange={(e) => setEditDriver(e.target.value)}>
+                            <select className="input-saas text-xs w-full" value={editProfileId} onChange={(e) => setEditProfileId(e.target.value)}>
                               <option value="">— Autista —</option>
-                              {driverList.map((d) => <option key={d.user_id} value={d.user_id}>{d.full_name}</option>)}
+                              {driverList.map((d) => <option key={d.profileId} value={d.profileId}>{d.name}</option>)}
                             </select>
                             <select className="input-saas text-xs w-full" value={editVehicle} onChange={(e) => setEditVehicle(e.target.value)}>
                               <option value="">— Mezzo ({tg.vehicle_label ?? "invariato"}) —</option>
@@ -1038,11 +1041,13 @@ function cleanPortName(mp: string | null | undefined): string {
   return mp;
 }
 
-function printDriverPlans(drivers: Member[], tripGroups: TripGroup[], tripServices: Map<string, Service[]>, hotels: Map<string, Hotel>, date: string, ferrySchedules: FerrySchedule[] = []) {
+function printDriverPlans(drivers: DriverEntry[], tripGroups: TripGroup[], tripServices: Map<string, Service[]>, hotels: Map<string, Hotel>, date: string, ferrySchedules: FerrySchedule[] = []) {
   const pages = drivers
-    .filter((d) => d.role === "driver" || d.role === "autista")
     .map((driver) => {
-      const trips = tripGroups.filter((t) => t.driver_user_id === driver.user_id);
+      const trips = tripGroups.filter((t) =>
+        (t.driver_profile_id && t.driver_profile_id === driver.profileId) ||
+        (!t.driver_profile_id && t.driver_user_id && t.driver_user_id === driver.userId)
+      );
       if (!trips.length) return "";
       const rows = trips
         .sort((a, b) => {
@@ -1115,8 +1120,8 @@ function printDriverPlans(drivers: Member[], tripGroups: TripGroup[], tripServic
         }).join("");
 
       return `<div style="page-break-after:always;font-family:Arial,sans-serif;font-size:11pt;padding:20px">
-        <h2 style="margin:0 0 4px">${driver.full_name}</h2>
-        <p style="margin:0 0 12px;font-size:10pt;color:#555">Data: ${date} · Mezzo: ${trips[0]?.vehicle_label ?? "—"}</p>
+        <h2 style="margin:0 0 4px">${driver.name}</h2>
+        <p style="margin:0 0 12px;font-size:10pt;color:#555">Data: ${date} · Mezzo: ${[...new Set(trips.map(t => t.vehicle_label).filter(Boolean))].join(" / ") || "—"}</p>
         <table style="width:100%;border-collapse:collapse;font-size:10pt">
           <thead>
             <tr style="border-bottom:2px solid #000">
@@ -1285,10 +1290,33 @@ export default function PianoGiornoPage() {
   const hotelMap = useMemo(() => new Map((data?.hotels ?? []).map((h) => [h.id, h])), [data]);
   const assignmentMap = useMemo(() => new Map((data?.assignments ?? []).map((a) => [a.service_id, a])), [data]);
   const driversList = useMemo(() => (data?.memberships ?? []).filter((m) => m.role === "driver" || m.role === "autista"), [data]);
+
+  // Lista unificata: profili attivi non sospesi (include driver senza account)
+  const driverEntries = useMemo<DriverEntry[]>(() => {
+    const profiles = (data?.driver_profiles ?? []).filter((p) => !p.access_suspended);
+    if (profiles.length > 0) {
+      return profiles.map((p) => ({ profileId: p.id, userId: p.user_id ?? null, name: p.full_name }));
+    }
+    // Fallback: usa memberships se driver_profiles non presenti
+    return driversList.map((m) => ({ profileId: m.user_id, userId: m.user_id, name: m.full_name }));
+  }, [data, driversList]);
+
   const driverNameById = useMemo(
     () => new Map((data?.memberships ?? []).map((m) => [m.user_id, m.full_name])),
     [data]
   );
+
+  // Lookup nome da profile_id o user_id
+  const driverNameByProfileId = useMemo(
+    () => new Map((data?.driver_profiles ?? []).map((p) => [p.id, p.full_name])),
+    [data]
+  );
+
+  const resolveDriverName = useCallback((tg: TripGroup): string => {
+    if (tg.driver_profile_id) return driverNameByProfileId.get(tg.driver_profile_id) ?? driverNameById.get(tg.driver_user_id ?? "") ?? "Autista non trovato";
+    if (tg.driver_user_id) return driverNameById.get(tg.driver_user_id) ?? "Autista non trovato";
+    return "Da assegnare";
+  }, [driverNameByProfileId, driverNameById]);
 
   // Map group_id → servizi
   const tripServices = useMemo(() => {
@@ -1412,7 +1440,7 @@ export default function PianoGiornoPage() {
         );
         const missingHotel = services.filter((s) => !s.hotel_id || !hotelMap.get(s.hotel_id)).length;
         const issueCount =
-          (group.driver_user_id ? 0 : 1) +
+          (group.driver_user_id || group.driver_profile_id ? 0 : 1) +
           (group.vehicle_label ? 0 : 1) +
           (group.vehicle_capacity && pax > group.vehicle_capacity ? 1 : 0) +
           missingHotel;
@@ -1424,7 +1452,7 @@ export default function PianoGiornoPage() {
           direction,
           pax,
           status: tripServiceStatus(services),
-          driverName: group.driver_user_id ? driverNameById.get(group.driver_user_id) ?? "Autista non trovato" : "Da assegnare",
+          driverName: resolveDriverName(group),
           routeLabel: direction === "arrival"
             ? cleanPortName(services[0]?.meeting_point) || "Porto da verificare"
             : cleanPortName(services[0]?.meeting_point) || "Imbarco da verificare",
@@ -1471,7 +1499,7 @@ export default function PianoGiornoPage() {
           detail: "Eliminalo o sposta dentro i servizi corretti.",
         });
       }
-      if (!trip.group.driver_user_id) {
+      if (!trip.group.driver_user_id && !trip.group.driver_profile_id) {
         issues.push({
           id: `${trip.group.id}-driver`,
           severity: "blocker",
@@ -1508,8 +1536,9 @@ export default function PianoGiornoPage() {
 
     const byDriver = new Map<string, TripOverview[]>();
     for (const trip of tripRows) {
-      if (!trip.group.driver_user_id) continue;
-      byDriver.set(trip.group.driver_user_id, [...(byDriver.get(trip.group.driver_user_id) ?? []), trip]);
+      const key = trip.group.driver_profile_id ?? trip.group.driver_user_id;
+      if (!key) continue;
+      byDriver.set(key, [...(byDriver.get(key) ?? []), trip]);
     }
     for (const [driverId, trips] of byDriver.entries()) {
       const ordered = [...trips].sort((a, b) => a.time.localeCompare(b.time));
@@ -1524,7 +1553,7 @@ export default function PianoGiornoPage() {
             id: `${driverId}-${prev.group.id}-${current.group.id}`,
             severity: "warning",
             title: `Possibile sovrapposizione autista`,
-            detail: `${driverNameById.get(driverId) ?? "Autista"} · ${prev.time} e ${current.time}`,
+            detail: `${driverNameByProfileId.get(driverId) ?? driverNameById.get(driverId) ?? "Autista"} · ${prev.time} e ${current.time}`,
           });
         }
       }
@@ -1897,7 +1926,7 @@ export default function PianoGiornoPage() {
             <button
               className="btn-secondary text-xs"
               onClick={() => printDriverPlans(
-                data?.memberships ?? [],
+                driverEntries,
                 data?.trip_groups ?? [],
                 tripServices,
                 hotelMap,
@@ -1908,7 +1937,7 @@ export default function PianoGiornoPage() {
               Stampa piani
             </button>
             {(() => {
-              const missingDriver = tripRows.filter(t => !t.group.driver_user_id || !t.group.vehicle_label);
+              const missingDriver = tripRows.filter(t => (!t.group.driver_user_id && !t.group.driver_profile_id) || !t.group.vehicle_label);
               const canExport = unassignedServices.length === 0 && missingDriver.length === 0 && (data?.trip_groups.length ?? 0) > 0;
               const blockerDetail = unassignedServices.length > 0
                 ? `${unassignedServices.length} servizi senza giro`
@@ -2065,7 +2094,7 @@ export default function PianoGiornoPage() {
               <div className="card p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Giri</p>
                 <p className="mt-1 text-3xl font-bold text-slate-900">{tripRows.length}</p>
-                <p className="text-xs text-slate-500">{tripRows.filter((t) => t.group.driver_user_id).length} con autista</p>
+                <p className="text-xs text-slate-500">{tripRows.filter((t) => t.group.driver_user_id || t.group.driver_profile_id).length} con autista</p>
               </div>
               <div className="card p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Da sistemare</p>
@@ -2384,7 +2413,7 @@ export default function PianoGiornoPage() {
                           </div>
 
                           <div className="min-w-[180px] shrink-0 text-sm">
-                            <p className={trip.group.driver_user_id ? "font-semibold text-slate-800" : "font-semibold text-red-700"}>
+                            <p className={(trip.group.driver_user_id || trip.group.driver_profile_id) ? "font-semibold text-slate-800" : "font-semibold text-red-700"}>
                               {trip.driverName}
                             </p>
                             <p className={trip.group.vehicle_label ? "text-xs text-slate-500" : "text-xs text-amber-700"}>
@@ -2502,7 +2531,7 @@ export default function PianoGiornoPage() {
                 selectedIds={selectedIds}
                 services={serviceMap}
                 hotels={hotelMap}
-                drivers={data.memberships}
+                drivers={driverEntries}
                 vehicles={data.vehicles}
                 tripGroups={data.trip_groups}
                 assignments={assignmentMap}
@@ -2517,7 +2546,7 @@ export default function PianoGiornoPage() {
             {/* ── AUTISTI (destra) ── */}
             <div className="card p-3 flex flex-col min-h-0 overflow-hidden">
               <DriverPanel
-                drivers={data.memberships}
+                drivers={driverEntries}
                 tripGroups={data.trip_groups}
                 tripServices={tripServices}
                 token={token!}
