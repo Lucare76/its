@@ -194,7 +194,7 @@ type HotelRow = {
   geo_verified_at: string | null;
 };
 type VehicleRow = { id: string; label: string; capacity: number | null };
-type DriverRow = { profile_id: string; user_id: string; full_name: string; max_vehicle_capacity: number | null };
+type DriverRow = { profile_id: string; user_id: string | null; full_name: string; max_vehicle_capacity: number | null };
 
 // Verifica se un veicolo è disponibile in un certo orario tenendo conto dei blocchi orari
 function vehicleAvailableAtTime(
@@ -385,10 +385,10 @@ export async function POST(request: NextRequest) {
           .order("capacity"),
         listDriverRegistry(auth.admin, tenantId),
         auth.admin.from("assignments")
-          .select("service_id, group_id, driver_user_id")
+          .select("service_id, group_id, driver_user_id, driver_profile_id")
           .eq("tenant_id", tenantId),
         auth.admin.from("trip_groups")
-          .select("id, driver_user_id")
+          .select("id, driver_user_id, driver_profile_id")
           .eq("tenant_id", tenantId).eq("date", date).eq("status", "active"),
         // Vincoli rigidi hotel → capienza mezzo
         auth.admin.from("hotel_vehicle_limits")
@@ -462,10 +462,10 @@ export async function POST(request: NextRequest) {
     const vehicles = allVehicles.filter((v) => vehicleAvailByIdMap.get(v.id) !== false);
 
     const allDrivers = (driverRegistry ?? [])
-      .filter((driver) => driver.user_id && !driver.access_suspended)
+      .filter((driver) => !driver.access_suspended)
       .map((driver) => ({
         profile_id: driver.id,
-        user_id: driver.user_id!,
+        user_id: driver.user_id ?? null,
         full_name: driver.full_name,
         max_vehicle_capacity: driver.max_vehicle_capacity,
       })) as DriverRow[];
@@ -483,8 +483,14 @@ export async function POST(request: NextRequest) {
         .map((a) => [a.service_id as string, a.group_id as string])
     );
     const existingGroups = (groupsRes.data ?? []).map((g) => g.id as string);
-    const activeGroupDriverById = new Map(
+    const activeGroupDriverByUserId = new Map(
       (groupsRes.data ?? []).map((group) => [group.id as string, (group.driver_user_id as string | null) ?? null])
+    );
+    const activeGroupDriverByProfileId = new Map(
+      (groupsRes.data ?? []).map((group) => [group.id as string, (group.driver_profile_id as string | null) ?? null])
+    );
+    const userIdToProfileId = new Map(
+      allDrivers.filter((d) => d.user_id).map((d) => [d.user_id!, d.profile_id])
     );
 
     // Capacità massima disponibile (o 8 come fallback)
@@ -687,8 +693,8 @@ export async function POST(request: NextRequest) {
     const driverCurrentArea = new Map<string, "nord_ovest" | "est_sud" | null>();
     const driverGeoWindows = new Map<string, GeographicCompatibilityService[]>();
     for (const d of drivers) {
-      driverTimes.set(d.user_id, []);
-      driverGeoWindows.set(d.user_id, []);
+      driverTimes.set(d.profile_id, []);
+      driverGeoWindows.set(d.profile_id, []);
     }
 
     const existingServicesByDriverGroup = new Map<string, ServiceRow[]>();
@@ -696,32 +702,37 @@ export async function POST(request: NextRequest) {
       const serviceId = assignment.service_id as string;
       const groupId = assignment.group_id as string | null;
       if (!groupId || !allDayServiceIds.has(serviceId)) continue;
-      const driverId = (assignment.driver_user_id as string | null) ?? activeGroupDriverById.get(groupId) ?? null;
+      const assignUserId = (assignment.driver_user_id as string | null) ?? activeGroupDriverByUserId.get(groupId) ?? null;
+      const assignProfileId = (assignment.driver_profile_id as string | null)
+        ?? activeGroupDriverByProfileId.get(groupId)
+        ?? (assignUserId ? userIdToProfileId.get(assignUserId) : null)
+        ?? null;
       const service = serviceMap.get(serviceId);
-      if (!driverId || !service) continue;
-      const times = driverTimes.get(driverId) ?? [];
+      if (!assignProfileId || !service) continue;
+      const times = driverTimes.get(assignProfileId) ?? [];
       times.push(timeToMin(serviceOperationalTime(service)));
-      driverTimes.set(driverId, times);
-      const key = `${driverId}|${groupId}`;
+      driverTimes.set(assignProfileId, times);
+      const key = `${assignProfileId}|${groupId}`;
       existingServicesByDriverGroup.set(key, [...(existingServicesByDriverGroup.get(key) ?? []), service]);
     }
 
     for (const [key, services] of existingServicesByDriverGroup.entries()) {
-      const driverId = key.split("|")[0]!;
+      const profileId = key.split("|")[0]!;
       const window = servicesToExistingTripGeographicWindow(services, hotelMap);
-      driverGeoWindows.set(driverId, [...(driverGeoWindows.get(driverId) ?? []), window]);
+      driverGeoWindows.set(profileId, [...(driverGeoWindows.get(profileId) ?? []), window]);
       const area = zoneToGeoArea(window.endZone ?? window.startZone);
-      if (area) driverCurrentArea.set(driverId, area);
+      if (area) driverCurrentArea.set(profileId, area);
     }
 
-    const draftAssignments: Array<{ draft: TripDraft; driverId: string | null }> = [];
+    const draftAssignments: Array<{ draft: TripDraft; profileId: string | null; userId: string | null }> = [];
     const geographicSkips: string[] = [];
 
     for (const draft of drafts) {
       const tripMin = timeToMin(draft.time);
       const tripArea = zoneToGeoArea(draft.zoneLabel);
       const draftGeoWindow = draftToGeographicWindow(draft, serviceMap, hotelMap);
-      let assigned: string | null = null;
+      let assignedProfileId: string | null = null;
+      let assignedUserId: string | null = null;
 
       if (drivers.length > 0) {
         const timeAvailable = [...drivers].filter((d) =>
@@ -731,23 +742,23 @@ export async function POST(request: NextRequest) {
         // Hard block: < 30 min → fisicamente impossibile fare due giri
         // Soft penalty: 30-75 min → penalizzato ma usabile come ultima risorsa
         const hardFree = timeAvailable.filter((d) => {
-          const times = driverTimes.get(d.user_id) ?? [];
+          const times = driverTimes.get(d.profile_id) ?? [];
           return !times.some((t) => Math.abs(t - tripMin) < 30);
         });
         // Solo se tutti hanno hard conflict si usa il pool completo
         const candidates = (hardFree.length > 0 ? hardFree : timeAvailable)
           .map((driver) => ({
             driver,
-            geoIssue: geographicScheduleIssue(driverGeoWindows.get(driver.user_id) ?? [], draftGeoWindow),
+            geoIssue: geographicScheduleIssue(driverGeoWindows.get(driver.profile_id) ?? [], draftGeoWindow),
           }))
           .filter((candidate) => candidate.geoIssue?.severity !== "block");
 
         // Score: conflitto 30-75 min (100_000) >> num giri (×100) >> zona (0/2/5 tiebreaker)
         const best = candidates
           .map(({ driver, geoIssue }) => {
-            const times = driverTimes.get(driver.user_id) ?? [];
+            const times = driverTimes.get(driver.profile_id) ?? [];
             const conflictPenalty = times.some((t) => Math.abs(t - tripMin) < 75) ? 100_000 : 0;
-            const lastArea = driverCurrentArea.get(driver.user_id);
+            const lastArea = driverCurrentArea.get(driver.profile_id);
             const zonePenalty = !lastArea || !tripArea ? 2
               : lastArea === tripArea ? 0 : 5;
             const warningPenalty = geoIssue?.severity === "warning" ? 20 : 0;
@@ -756,23 +767,24 @@ export async function POST(request: NextRequest) {
           .sort((a, b) => a.score - b.score)[0];
 
         if (best) {
-          assigned = best.driver.user_id;
-          const times = driverTimes.get(assigned) ?? [];
+          assignedProfileId = best.driver.profile_id;
+          assignedUserId = best.driver.user_id;
+          const times = driverTimes.get(assignedProfileId) ?? [];
           times.push(tripMin);
-          driverTimes.set(assigned, times);
-          driverGeoWindows.set(assigned, [...(driverGeoWindows.get(assigned) ?? []), draftGeoWindow]);
-          if (tripArea) driverCurrentArea.set(assigned, tripArea);
+          driverTimes.set(assignedProfileId, times);
+          driverGeoWindows.set(assignedProfileId, [...(driverGeoWindows.get(assignedProfileId) ?? []), draftGeoWindow]);
+          if (tripArea) driverCurrentArea.set(assignedProfileId, tripArea);
         } else if (timeAvailable.length > 0) {
           geographicSkips.push(`${draft.time} ${draft.zoneLabel}: nessun autista compatibile geograficamente.`);
         }
       }
 
-      draftAssignments.push({ draft, driverId: assigned });
+      draftAssignments.push({ draft, profileId: assignedProfileId, userId: assignedUserId });
     }
 
     // ── 8. Assegna mezzi (il più piccolo che soddisfa PAX + vincoli hotel + autista) ─
 
-    const pickVehicle = (pax: number, draft: TripDraft, driverId: string | null): VehicleRow | null => {
+    const pickVehicle = (pax: number, draft: TripDraft, profileId: string | null): VehicleRow | null => {
       const tripMin = timeToMin(draft.time);
 
       // Calcola la capienza massima consentita per questo giro:
@@ -787,7 +799,7 @@ export async function POST(request: NextRequest) {
       }, null);
 
       // 2. Limite autista: max_vehicle_capacity del driver
-      const driver = driverId ? allDrivers.find((d) => d.user_id === driverId) : null;
+      const driver = profileId ? allDrivers.find((d) => d.profile_id === profileId) : null;
       const driverMaxCap = driver?.max_vehicle_capacity ?? null;
 
       // Capienza massima finale: il più restrittivo tra hotel e autista
@@ -822,17 +834,19 @@ export async function POST(request: NextRequest) {
     if (draftAssignments.length > 0) {
       // Seleziona veicoli per tutti i giri, poi crea tutti i trip_groups in un unico insert
       const prepared = draftAssignments
-        .filter(({ driverId }) => Boolean(driverId))
-        .map(({ draft, driverId }) => ({
+        .filter(({ profileId }) => Boolean(profileId))
+        .map(({ draft, profileId, userId: driverUserId }) => ({
           draft,
-          driverId,
-          vehicle: pickVehicle(draft.pax, draft, driverId),
+          profileId,
+          driverUserId,
+          vehicle: pickVehicle(draft.pax, draft, profileId),
         }));
 
-      const groupRows = prepared.map(({ draft: _, driverId, vehicle }) => ({
+      const groupRows = prepared.map(({ draft: _, driverUserId, profileId, vehicle }) => ({
         tenant_id: tenantId,
         date,
-        driver_user_id: driverId,
+        driver_user_id: driverUserId ?? null,
+        driver_profile_id: profileId ?? null,
         vehicle_label: vehicle?.label ?? null,
         vehicle_capacity: vehicle?.capacity ?? null,
         notes: null,
@@ -853,7 +867,7 @@ export async function POST(request: NextRequest) {
       } else {
         const allAssignRows: Array<{
           tenant_id: string; service_id: string;
-          driver_user_id: string | null; vehicle_label: string; group_id: string;
+          driver_user_id: string | null; driver_profile_id: string | null; vehicle_label: string; group_id: string;
         }> = [];
         const allServiceIds: string[] = [];
         const allStatusEvents: Array<{
@@ -862,12 +876,14 @@ export async function POST(request: NextRequest) {
 
         const createdGroups = groups ?? [];
         for (let i = 0; i < createdGroups.length; i++) {
-          const { draft, driverId, vehicle } = prepared[i];
+          const { draft, driverUserId, profileId, vehicle } = prepared[i]!;
           const groupId = (createdGroups[i] as { id: string }).id;
           for (const sid of draft.serviceIds) {
             allAssignRows.push({
               tenant_id: tenantId, service_id: sid,
-              driver_user_id: driverId, vehicle_label: vehicle?.label ?? "", group_id: groupId,
+              driver_user_id: driverUserId ?? null,
+              driver_profile_id: profileId ?? null,
+              vehicle_label: vehicle?.label ?? "", group_id: groupId,
             });
             allServiceIds.push(sid);
             allStatusEvents.push({ tenant_id: tenantId, service_id: sid, status: "assigned", at: now, by_user_id: userId });
