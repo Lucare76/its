@@ -547,6 +547,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
           </div>
           <div className="hidden md:block">
             <DataTable
+              minWidthClassName="min-w-[1320px]"
               toolbar={
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs text-muted">Risultati: {filtered.length}</p>
@@ -566,16 +567,16 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
             >
               <thead>
                 <tr>
-                  <th className="px-4 py-3">Andata/Ritorno</th>
-                  <th className="px-4 py-3">Cliente</th>
-                  <th className="px-4 py-3">Tipo</th>
-                  <th className="px-4 py-3">Nave</th>
-                  <th className="px-4 py-3">Hotel / Zona</th>
-                  <th className="px-4 py-3">Origine</th>
-                  <th className="px-4 py-3">Riferimento</th>
-                  <th className="px-4 py-3">Driver</th>
-                  <th className="px-4 py-3">Stato</th>
-                  <th className="px-4 py-3">Azione</th>
+                  <th className="w-[150px] px-4 py-3">Data / Ora</th>
+                  <th className="w-[210px] px-4 py-3">Cliente</th>
+                  <th className="w-[120px] px-4 py-3">Tipo</th>
+                  <th className="w-[150px] px-4 py-3">Mezzo</th>
+                  <th className="w-[220px] px-4 py-3">Hotel / Zona</th>
+                  <th className="w-[120px] px-4 py-3">Origine</th>
+                  <th className="w-[170px] px-4 py-3">Riferimento</th>
+                  <th className="w-[150px] px-4 py-3">Driver</th>
+                  <th className="w-[130px] px-4 py-3">Stato</th>
+                  <th className="w-[110px] px-4 py-3 text-right">Azione</th>
                 </tr>
               </thead>
               <tbody>
@@ -583,24 +584,25 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                   const { hotel, driverName, pdfMeta, source } = serviceMeta(service);
                   return (
                     <tr key={service.id}>
-                      <td className="whitespace-nowrap px-4 py-3">{formatServiceSlot(service)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-700">{formatServiceSlot(service)}</td>
                       <td className="px-4 py-3">
-                        <p className="line-clamp-2 max-w-[220px] text-safe-wrap" title={getCustomerFullName(service)}>
+                        <p className="line-clamp-2 text-sm font-semibold leading-5 text-slate-900" title={getCustomerFullName(service)}>
                           {getCustomerFullName(service)}
                         </p>
+                        <p className="mt-0.5 truncate text-xs text-slate-500">{service.phone || "telefono n/d"}</p>
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase tracking-[0.08em] ${getServiceTypeBadgeTone(service)}`}>
+                        <span className={`inline-flex max-w-full rounded px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.04em] ${getServiceTypeBadgeTone(service)}`}>
                           {SERVICE_TYPE_LABELS[(service.service_type ?? "transfer") as ServiceType]}
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <p className="line-clamp-2 max-w-[200px] text-safe-wrap" title={service.vessel}>
+                        <p className="line-clamp-2 text-xs leading-5 text-slate-700" title={service.vessel}>
                           {service.vessel}
                         </p>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="max-w-[220px] text-xs text-slate-700">
+                        <div className="text-xs text-slate-700">
                           <p className="truncate font-medium text-slate-900" title={hotel?.name ?? "N/D"}>
                             {hotel?.name ?? "N/D"}
                           </p>
@@ -611,19 +613,19 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                       </td>
                       <td className="px-4 py-3">
                         {source === "pdf" && pdfMeta ? (
-                          <div className="flex flex-wrap gap-1">
-                            <span className="rounded-full bg-blue-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-blue-700">PDF</span>
-                            {pdfMeta.manualReview ? <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700">Reviewed</span> : null}
-                            {pdfMeta.reviewRecommended ? <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700">Attenzione</span> : null}
+                          <div className="flex flex-col items-start gap-1">
+                            <span className="rounded bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-blue-700">PDF</span>
+                            {pdfMeta.manualReview ? <span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-emerald-700">Reviewed</span> : null}
+                            {pdfMeta.reviewRecommended ? <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-amber-700">Attenzione</span> : null}
                           </div>
                         ) : source === "agency" ? (
-                          <span className="rounded-full bg-violet-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-violet-700">Agenzia</span>
+                          <span className="rounded bg-violet-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-violet-700">Agenzia</span>
                         ) : (
                           <span className="text-xs text-muted">Manuale</span>
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="max-w-[200px] text-xs text-slate-700">
+                        <div className="text-xs leading-5 text-slate-700">
                           {source === "pdf" ? (
                             <>
                               <p className="truncate" title={pdfMeta?.externalReference ?? ""}>{pdfMeta?.externalReference ?? "-"}</p>
@@ -641,24 +643,24 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <p className="line-clamp-2 max-w-[200px] text-safe-wrap" title={driverName}>
+                        <p className="line-clamp-2 text-xs leading-5 text-slate-700" title={driverName}>
                           {driverName}
                         </p>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="space-y-1 px-4 py-3">
                         <span className={statusClass(service.status)}>{SERVICE_STATUS_LABELS[service.status]}</span>
                         {isUndeliveredReminder(service) ? (
-                          <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700">
+                          <span className="inline-flex rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-amber-700">
                             Non consegnato
                           </span>
                         ) : null}
                         {pdfMeta?.reviewRecommended ? (
-                          <span className="ml-2 inline-flex rounded-full bg-orange-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-orange-700">
+                          <span className="inline-flex rounded bg-orange-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-orange-700">
                             Review
                           </span>
                         ) : null}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 text-right">
                         <button
                           type="button"
                           onClick={() => setSelectedServiceId(service.id)}
