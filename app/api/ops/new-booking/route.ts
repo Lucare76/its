@@ -91,11 +91,12 @@ export async function POST(request: NextRequest) {
 
     // Limite 500 servizi giornalieri (arrivi + partenze)
     const DAILY_SERVICE_LIMIT = 500;
+    const serviceDateForLimit = tripLeg === "return_only" ? d.departure_date : d.arrival_date;
     const { count: dailyCount } = await auth.admin
       .from("services")
       .select("id", { count: "exact", head: true })
       .eq("tenant_id", tenantId)
-      .eq("date", d.arrival_date)
+      .eq("date", serviceDateForLimit)
       .eq("is_draft", false)
       .neq("status", "cancelled");
     if ((dailyCount ?? 0) >= DAILY_SERVICE_LIMIT) {
@@ -138,11 +139,11 @@ export async function POST(request: NextRequest) {
     // Data arrivo deve precedere partenza
     // Per SNAV/MEDMAR confronta solo le date (departure_time è pickup hotel, non ora traghetto)
     const isFerryKind = bookingKind === "formula_snav" || bookingKind === "formula_medmar_napoli" || bookingKind === "formula_medmar_pozzuoli";
-    if (isFerryKind) {
+    if (tripLeg === "round_trip" && isFerryKind) {
       if (d.departure_date < d.arrival_date) {
         return NextResponse.json({ error: "La data di partenza non può essere precedente alla data di arrivo." }, { status: 400 });
       }
-    } else {
+    } else if (tripLeg === "round_trip") {
       const arrivalMs = new Date(`${d.arrival_date}T${d.arrival_time}:00`).getTime();
       const departureMs = new Date(`${d.departure_date}T${d.departure_time}:00`).getTime();
       if (departureMs < arrivalMs) {
@@ -152,6 +153,8 @@ export async function POST(request: NextRequest) {
 
     // Direzione base per la tratta
     const baseDirection = tripLeg === "return_only" ? "departure" : "arrival";
+    const baseVessel = vesselFromKind(bookingKind, transportCode, busCityOrigin);
+    const ferryVesselTime = tripLeg === "return_only" ? ferryDepTime : d.arrival_time;
 
     const insert = {
       tenant_id: tenantId,
@@ -164,11 +167,10 @@ export async function POST(request: NextRequest) {
       service_type: bookingKind === "excursion" ? "bus_tour" : "transfer",
       direction: baseDirection,
       vessel: (() => {
-        const base = vesselFromKind(bookingKind, transportCode, busCityOrigin);
-        if ((bookingKind === "formula_snav" || bookingKind === "formula_medmar_napoli" || bookingKind === "formula_medmar_pozzuoli") && d.arrival_time) {
-          return `${base} ${d.arrival_time}`;
+        if (isFerryKind && ferryVesselTime) {
+          return `${baseVessel} ${ferryVesselTime}`;
         }
-        return base;
+        return baseVessel;
       })(),
       pax: d.pax,
       hotel_id: d.hotel_id || null,
@@ -235,6 +237,7 @@ export async function POST(request: NextRequest) {
         date: d.departure_date,
         time: d.departure_time,
         direction: "departure",
+        vessel: isFerryKind && ferryDepTime ? `${baseVessel} ${ferryDepTime}` : insert.vessel,
         pickup_time: pickupTimeReturn || null,
         linked_service_id: null,
         ...(bookingKind === "excursion" ? { meeting_point: excursionPickupPort } : {}),

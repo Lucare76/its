@@ -262,8 +262,6 @@ export function resolvePlaceType(
     : normalizeContinentPlaceType(row.origin_place_type);
   if (directionalType) return directionalType;
 
-  if (row.place_type === "airport" || row.place_type === "station") return row.place_type;
-
   const directionalText = row.direction === "departure" ? row.destination_label_raw : row.origin_label_raw;
   const textType = [
     directionalText,
@@ -272,6 +270,8 @@ export function resolvePlaceType(
     row.porto_bruno,
   ].map(inferPlaceTypeFromText).find(Boolean);
   if (textType) return textType;
+
+  if (row.place_type === "airport" || row.place_type === "station") return row.place_type;
 
   const kind = row.booking_service_kind ?? row.service_type_code ?? "";
   if (AIRPORT_TRANSFER_KINDS.includes(kind as (typeof AIRPORT_TRANSFER_KINDS)[number]) || row.service_type_code === "transfer_airport_hotel") {

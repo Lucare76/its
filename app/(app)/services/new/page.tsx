@@ -343,9 +343,9 @@ export default function OpsNewBookingPage() {
     setSubmitting(true);
 
     const extraFields = isSnavMedmar ? {
-      meeting_point: portoArrivo ?? undefined,
-      ferry_dep_time: ferryDepTime,
-      porto_partenza: depRuleInfo?.porto ?? undefined,
+      meeting_point: tripLeg !== "return_only" ? portoArrivo ?? undefined : undefined,
+      ferry_dep_time: tripLeg !== "outbound_only" ? ferryDepTime : undefined,
+      porto_partenza: tripLeg !== "outbound_only" ? depRuleInfo?.porto ?? undefined : undefined,
     } : isExcursionTitleRequired ? {
       excursion_departure_port: form.excursion_departure_port || undefined,
       excursion_pickup_port: form.excursion_pickup_port || undefined,
@@ -385,12 +385,12 @@ export default function OpsNewBookingPage() {
       if (!form.pax || isNaN(Number(form.pax)) || Number(form.pax) < 1) errs.pax = "Minimo 1 pax";
       if (Number(form.pet_count || "0") > 0 && !form.pet_notes.trim()) errs.pet_notes = "Indica tipo/taglia animale";
       if (!form.hotel_id && !isPrivateIsland) errs.hotel_id = "Seleziona la struttura";
-      if (!form.arrival_date) errs.arrival_date = "Campo obbligatorio";
-      if (!form.arrival_time) errs.arrival_time = "Campo obbligatorio";
-      if (!form.departure_date) errs.departure_date = "Campo obbligatorio";
-      if (!form.departure_time) errs.departure_time = "Campo obbligatorio";
-      if (isTransportCodeRequired && !form.transport_code.trim()) errs.transport_code = "Campo obbligatorio";
-      if (isTransportCodeRequired && contextLabels.transportCodeReturnLabel && !form.transport_code_return.trim()) errs.transport_code_return = "Campo obbligatorio";
+      if (!(showTripLeg && tripLeg === "return_only") && !form.arrival_date) errs.arrival_date = "Campo obbligatorio";
+      if (!(showTripLeg && tripLeg === "return_only") && !form.arrival_time) errs.arrival_time = "Campo obbligatorio";
+      if (!(showTripLeg && tripLeg === "outbound_only") && !form.departure_date) errs.departure_date = "Campo obbligatorio";
+      if (!(showTripLeg && tripLeg === "outbound_only") && !form.departure_time) errs.departure_time = "Campo obbligatorio";
+      if (isTransportCodeRequired && tripLeg !== "return_only" && !form.transport_code.trim()) errs.transport_code = "Campo obbligatorio";
+      if (isTransportCodeRequired && tripLeg !== "outbound_only" && contextLabels.transportCodeReturnLabel && !form.transport_code_return.trim()) errs.transport_code_return = "Campo obbligatorio";
       if (isBusOriginRequired && !form.bus_city_origin.trim()) errs.bus_city_origin = "Campo obbligatorio";
       if (isExcursionTitleRequired && !form.excursion_title.trim()) errs.excursion_title = "Campo obbligatorio";
       if (isExcursionTitleRequired && !form.excursion_departure_port) errs.excursion_departure_port = "Campo obbligatorio";
@@ -607,7 +607,7 @@ export default function OpsNewBookingPage() {
             <div className="mt-1 flex gap-2">
               {([
                 { value: "outbound_only", label: "Solo andata" },
-                { value: "round_trip", label: "A/R stesso giorno" },
+                { value: "round_trip", label: "Andata e ritorno" },
                 { value: "return_only", label: "Solo ritorno" },
               ] as const).map(({ value, label }) => (
                 <button
@@ -745,11 +745,14 @@ export default function OpsNewBookingPage() {
         {/* Porto e prelievo auto-calcolati per SNAV/MEDMAR */}
         {isSnavMedmar && (
           <div className="md:col-span-2 grid grid-cols-2 gap-3">
+            {tripLeg !== "return_only" ? (
             <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs">
               <p className="font-semibold text-indigo-700 mb-0.5">Porto arrivo a Ischia</p>
               <p className="text-indigo-900 font-bold text-sm">{portoArrivo ?? "—"}</p>
               <p className="text-indigo-500 mt-0.5">Orario traghetto: {form.arrival_time}</p>
             </div>
+            ) : null}
+            {tripLeg !== "outbound_only" ? (
             <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs">
               <p className="font-semibold text-emerald-700 mb-0.5">Porto partenza / Prelievo</p>
               {depRuleInfo ? (
@@ -764,6 +767,7 @@ export default function OpsNewBookingPage() {
                 <p className="text-emerald-500">Seleziona orario traghetto</p>
               )}
             </div>
+            ) : null}
           </div>
         )}
 
@@ -792,7 +796,8 @@ export default function OpsNewBookingPage() {
         {/* Codice trasporto */}
         {showTransportCodeField ? (
           <>
-            <label className={`text-sm ${contextLabels.transportCodeReturnLabel ? "" : "md:col-span-2"}`}>
+            {tripLeg !== "return_only" ? (
+            <label className={`text-sm ${contextLabels.transportCodeReturnLabel && tripLeg !== "outbound_only" ? "" : "md:col-span-2"}`}>
               {contextLabels.transportCodeLabel}
               <input className="input-saas mt-1" placeholder={contextLabels.transportCodePlaceholder} value={form.transport_code}
                 onChange={(e) => setForm((prev) => ({ ...prev, transport_code: e.target.value }))}
@@ -800,7 +805,8 @@ export default function OpsNewBookingPage() {
               {!isTransportCodeRequired ? <span className="mt-1 block text-xs text-slate-500">Campo facoltativo.</span> : null}
               {fieldErrors.transport_code ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.transport_code}</span> : null}
             </label>
-            {contextLabels.transportCodeReturnLabel ? (
+            ) : null}
+            {contextLabels.transportCodeReturnLabel && tripLeg !== "outbound_only" ? (
               <label className="text-sm">
                 {contextLabels.transportCodeReturnLabel}
                 <input className={`input-saas mt-1${fieldErrors.transport_code_return ? " border-rose-400" : ""}`} placeholder={contextLabels.transportCodeReturnPlaceholder ?? ""}

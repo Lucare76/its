@@ -188,14 +188,20 @@ export const agencyBookingCreateSchema = z
       }
     }
 
-    if (
-      (value.booking_service_kind === "transfer_airport_hotel" || value.booking_service_kind === "transfer_train_hotel") &&
-      (!value.transport_code || value.transport_code.trim().length < 2)
-    ) {
+    const tripLeg = value.trip_leg ?? "outbound_only";
+    const requiresTransportCode = value.booking_service_kind === "transfer_airport_hotel" || value.booking_service_kind === "transfer_train_hotel";
+    if (requiresTransportCode && tripLeg !== "return_only" && (!value.transport_code || value.transport_code.trim().length < 2)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Numero volo/treno obbligatorio per aeroporto/stazione.",
         path: ["transport_code"]
+      });
+    }
+    if (requiresTransportCode && tripLeg !== "outbound_only" && (!value.transport_code_return || value.transport_code_return.trim().length < 2)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Numero volo/treno ritorno obbligatorio per aeroporto/stazione.",
+        path: ["transport_code_return"]
       });
     }
     if (value.booking_service_kind === "bus_city_hotel" && (!value.bus_city_origin || value.bus_city_origin.trim().length < 2)) {
@@ -244,6 +250,9 @@ export const agencyBookingCreateSchema = z
     const isFerryKind = value.booking_service_kind === "formula_snav"
       || value.booking_service_kind === "formula_medmar_napoli"
       || value.booking_service_kind === "formula_medmar_pozzuoli";
+    if (tripLeg !== "round_trip") {
+      return;
+    }
     if (isFerryKind) {
       if (value.departure_date < value.arrival_date) {
         ctx.addIssue({

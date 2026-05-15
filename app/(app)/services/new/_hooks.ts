@@ -188,7 +188,20 @@ export function useServiceForm(opts: {
   const isTransportCodeRequired  = selectedKind === "transfer_airport_hotel" || selectedKind === "transfer_airport_hotel_aliscafo" || selectedKind === "transfer_train_hotel" || selectedKind === "transfer_train_hotel_aliscafo";
   const isPhoneRequired          = selectedKind !== "shuttle_hotel" && selectedKind !== "excursion";
   const showTransportCodeField   = ["transfer_airport_hotel", "transfer_airport_hotel_exclusive", "transfer_airport_hotel_aliscafo", "transfer_train_hotel", "transfer_train_hotel_exclusive", "transfer_train_hotel_aliscafo"].includes(selectedKind);
-  const showTripLeg     = ["transfer_port_hotel", "transfer_hotel_hotel", "shuttle_hotel"].includes(selectedKind);
+  const showTripLeg     = [
+    "formula_snav",
+    "formula_medmar_napoli",
+    "formula_medmar_pozzuoli",
+    "transfer_airport_hotel",
+    "transfer_airport_hotel_exclusive",
+    "transfer_airport_hotel_aliscafo",
+    "transfer_train_hotel",
+    "transfer_train_hotel_exclusive",
+    "transfer_train_hotel_aliscafo",
+    "transfer_port_hotel",
+    "transfer_hotel_hotel",
+    "shuttle_hotel",
+  ].includes(selectedKind);
   const isRoundTrip     = tripLeg === "round_trip" && showTripLeg;
   const showPickupTime  = !isSnavMedmar && !isBusOriginRequired && !isPrivateIsland;
 
@@ -264,18 +277,18 @@ export function useServiceForm(opts: {
     if (!form.pax || isNaN(paxNum) || paxNum < 1) w.push("Inserisci il numero di pax (min. 1).");
     if (Number(form.pet_count || "0") > 0 && !form.pet_notes.trim()) w.push("Indica tipo/taglia animale nelle note animali.");
     if (!form.hotel_id && !isPrivateIsland) w.push("Seleziona la struttura.");
-    if (!form.arrival_date) w.push("Data arrivo mancante.");
-    if (!form.arrival_time) w.push("Ora arrivo mancante.");
-    if (!form.departure_date) w.push("Data partenza mancante.");
-    if (!form.departure_time) w.push("Ora partenza mancante.");
-    if (isTransportCodeRequired && !form.transport_code.trim()) w.push("Numero mezzo andata mancante.");
-    if (isTransportCodeRequired && !form.transport_code_return.trim()) w.push("Numero mezzo ritorno mancante.");
+    if (!(showTripLeg && tripLeg === "return_only") && !form.arrival_date) w.push("Data arrivo mancante.");
+    if (!(showTripLeg && tripLeg === "return_only") && !form.arrival_time) w.push("Ora arrivo mancante.");
+    if (!(showTripLeg && tripLeg === "outbound_only") && !form.departure_date) w.push("Data partenza mancante.");
+    if (!(showTripLeg && tripLeg === "outbound_only") && !form.departure_time) w.push("Ora partenza mancante.");
+    if (isTransportCodeRequired && tripLeg !== "return_only" && !form.transport_code.trim()) w.push("Numero mezzo andata mancante.");
+    if (isTransportCodeRequired && tripLeg !== "outbound_only" && !form.transport_code_return.trim()) w.push("Numero mezzo ritorno mancante.");
     if (isBusOriginRequired && !form.bus_city_origin.trim()) w.push("Città di partenza bus mancante.");
     if (isExcursionTitleRequired && !form.excursion_title.trim()) w.push("Nome escursione mancante.");
     if (isExcursionTitleRequired && !form.excursion_departure_port) w.push("Seleziona il porto di partenza.");
     if (isExcursionTitleRequired && !form.excursion_pickup_port) w.push("Seleziona il porto di prelevamento.");
     return w;
-  }, [form, isSnavKind, isPhoneRequired, isPrivateIsland, isTransportCodeRequired, isBusOriginRequired, isExcursionTitleRequired]);
+  }, [form, isSnavKind, isPhoneRequired, isPrivateIsland, isTransportCodeRequired, isBusOriginRequired, isExcursionTitleRequired, showTripLeg, tripLeg]);
 
   const resetForm = useCallback((firstHotelId = "") => {
     setForm(initialForm(firstHotelId));

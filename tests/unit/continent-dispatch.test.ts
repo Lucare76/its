@@ -157,7 +157,7 @@ describe("continent dispatch Bruno rules", () => {
     const service = mapContinentDispatchRow(makeRow({
       id: "demo-cliente-007",
       customer_name: "DEMO_CLIENTE_007",
-      place_type: null,
+      place_type: "airport",
       origin_place_type: null,
       origin_label_raw: "Stazione Napoli Centrale",
       meeting_point: "Stazione Napoli Centrale",
@@ -294,7 +294,7 @@ describe("resolvePlaceType", () => {
   it("fa prevalere il testo reale stazione sul kind legacy airport", () => {
     expect(resolvePlaceType({
       direction: "arrival",
-      place_type: null,
+      place_type: "airport",
       service_type_code: "transfer_airport_hotel",
       booking_service_kind: "transfer_airport_hotel",
       origin_label_raw: "Stazione Napoli Centrale",
