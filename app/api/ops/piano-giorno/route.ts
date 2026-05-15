@@ -7,6 +7,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
 import { isVehicleManuallyBlockedOnDate } from "@/lib/server/vehicle-availability";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
+import { buildContinentDispatchBuckets, loadContinentDispatchServices } from "@/lib/server/continent-dispatch";
 
 export const runtime = "nodejs";
 
@@ -79,6 +80,7 @@ export async function GET(request: NextRequest) {
       ferryResult,
       commitments,
       driverRegistry,
+      continentDispatch,
     ] = await Promise.all([
       todayGroupIds.length > 0
         ? auth.admin
@@ -114,6 +116,7 @@ export async function GET(request: NextRequest) {
         .order("departure_time"),
       loadVehicleCommitmentsForDate(auth.admin, tenantId, date),
       listDriverRegistry(auth.admin, tenantId, { activeOnly: true }),
+      loadContinentDispatchServices(auth, date),
     ]);
 
     const errorSources = [
@@ -142,6 +145,7 @@ export async function GET(request: NextRequest) {
       }
       return true;
     });
+    const continentDispatchBuckets = buildContinentDispatchBuckets(continentDispatch.services, { date });
 
     return NextResponse.json({
       ok: true,
@@ -155,6 +159,7 @@ export async function GET(request: NextRequest) {
       vehicles: availableVehicles,
       vehicle_commitments: commitments.rows,
       ferry_schedules: ferrySchedules,
+      continent_dispatch: continentDispatchBuckets,
     });
   } catch (err) {
     console.error("[piano-giorno] unhandled exception:", err);

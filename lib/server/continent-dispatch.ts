@@ -70,6 +70,62 @@ export type BrunoDeparture = {
   dispatch_source: ContinentDispatchSource;
 };
 
+export type NormalizedContinentDispatchService = {
+  service_id: string;
+  customer_name: string;
+  phone: string;
+  phone_display: string;
+  pax: number;
+  date: string | null;
+  direction: "arrival" | "departure";
+  booking_service_kind: string | null;
+  service_type_code: string | null;
+  effective_target: ContinentDispatchTarget;
+  suggested_target: ContinentDispatchTarget;
+  target_source: ContinentDispatchSource;
+  continent_dispatch_vendor: string | null;
+  place_type: ContinentPlaceType;
+  meeting_point: string | null;
+  continent_hub: "napoli" | "pozzuoli" | null;
+  vessel: string;
+  boat_t: string | null;
+  connection_time: string | null;
+  arrival_at_porto: string | null;
+  arrival_at_ischia: string | null;
+  porto_bruno: string | null;
+  hotel_name: string | null;
+  hotel_zone: string | null;
+  time: string;
+  notes: string;
+  warnings: string[];
+};
+
+export type BrunoContinentDispatchBucket = {
+  label: "Bruno";
+  target: "bruno";
+  services: NormalizedContinentDispatchService[];
+};
+
+export type VendorContinentDispatchBucket = {
+  label: string;
+  target: "continent_dispatch";
+  vendor: string;
+  source: "manual";
+  services: NormalizedContinentDispatchService[];
+};
+
+export type UnassignedContinentDispatchBucket = {
+  label: "Da smistare";
+  target: "continent_dispatch";
+  services: NormalizedContinentDispatchService[];
+};
+
+export type ContinentDispatchBuckets = {
+  bruno: BrunoContinentDispatchBucket;
+  vendors: VendorContinentDispatchBucket[];
+  unassigned: UnassignedContinentDispatchBucket;
+};
+
 type ServiceRow = {
   id: string;
   customer_name: string;
@@ -85,6 +141,10 @@ type ServiceRow = {
   porto_bruno?: string | null;
   service_type_code?: string | null;
   booking_service_kind?: string | null;
+  origin_place_type?: string | null;
+  destination_place_type?: string | null;
+  origin_label_raw?: string | null;
+  destination_label_raw?: string | null;
   train_arrival_number?: string | null;
   train_departure_number?: string | null;
   continent_dispatch_target?: string | null;
@@ -151,8 +211,68 @@ export function computeArrivalAtIschia(vesselField: string): string | null {
   return addMinutes(departureTime, ferryTravelMinutes(co, porto));
 }
 
-export function resolvePlaceType(row: Pick<ServiceRow, "place_type" | "service_type_code" | "booking_service_kind">): ContinentPlaceType {
+function normalizeContinentPlaceType(value: string | null | undefined): ContinentPlaceType | null {
+  return value === "airport" || value === "station" ? value : null;
+}
+
+function inferPlaceTypeFromText(value: string | null | undefined): ContinentPlaceType | null {
+  const text = value?.toLowerCase() ?? "";
+  if (!text) return null;
+  if (
+    text.includes("stazione")
+    || text.includes("napoli centrale")
+    || text.includes("centrale napoli")
+    || text.includes("trenitalia")
+    || text.includes("italo")
+    || text.includes("frecciarossa")
+    || text.includes("flixbus")
+    || text.includes("treno")
+    || text.includes("bus")
+  ) {
+    return "station";
+  }
+  if (
+    text.includes("aeroporto")
+    || text.includes("airport")
+    || text.includes("capodichino")
+    || text.includes("nap t")
+    || text.includes("napoli international")
+  ) {
+    return "airport";
+  }
+  return null;
+}
+
+export function resolvePlaceType(
+  row: Pick<ServiceRow, "place_type" | "service_type_code" | "booking_service_kind">
+    & Partial<Pick<
+      ServiceRow,
+      | "direction"
+      | "origin_place_type"
+      | "destination_place_type"
+      | "origin_label_raw"
+      | "destination_label_raw"
+      | "meeting_point"
+      | "vessel"
+      | "porto_bruno"
+    >>
+): ContinentPlaceType {
+  const directionalType = row.direction === "departure"
+    ? normalizeContinentPlaceType(row.destination_place_type)
+    : normalizeContinentPlaceType(row.origin_place_type);
+  if (directionalType) return directionalType;
+
   if (row.place_type === "airport" || row.place_type === "station") return row.place_type;
+
+  const directionalText = row.direction === "departure" ? row.destination_label_raw : row.origin_label_raw;
+  const textType = [
+    directionalText,
+    row.meeting_point,
+    row.vessel,
+    row.porto_bruno,
+  ].map(inferPlaceTypeFromText).find(Boolean);
+  if (textType) return textType;
+
   const kind = row.booking_service_kind ?? row.service_type_code ?? "";
   if (AIRPORT_TRANSFER_KINDS.includes(kind as (typeof AIRPORT_TRANSFER_KINDS)[number]) || row.service_type_code === "transfer_airport_hotel") {
     return "airport";
@@ -160,8 +280,22 @@ export function resolvePlaceType(row: Pick<ServiceRow, "place_type" | "service_t
   return "station";
 }
 
-function isExclusiveOrHydrofoilKind(kind: string | null | undefined) {
-  return Boolean(kind && (kind.includes("exclusive") || kind.includes("aliscafo")));
+function isHydrofoilKind(kind: string | null | undefined) {
+  return Boolean(kind && kind.includes("aliscafo"));
+}
+
+function hasHydrofoilFormula(row: Pick<ServiceRow, "booking_service_kind" | "service_type_code">) {
+  return isHydrofoilKind(row.booking_service_kind) || isHydrofoilKind(row.service_type_code);
+}
+
+function isIslandOnlyFormulaKind(kind: string | null | undefined) {
+  return kind === "formula_snav"
+    || kind === "formula_medmar_napoli"
+    || kind === "formula_medmar_pozzuoli";
+}
+
+export function isContinentDispatchCandidate(row: Pick<ServiceRow, "booking_service_kind" | "service_type_code">) {
+  return !isIslandOnlyFormulaKind(row.booking_service_kind) && !isIslandOnlyFormulaKind(row.service_type_code);
 }
 
 function cleanNotes(raw: string | null): string {
@@ -257,11 +391,11 @@ export function resolveSuggestedTarget(
     return "bruno";
   }
 
-  if (row.direction === "arrival" && placeType === "station" && isExclusiveOrHydrofoilKind(row.booking_service_kind ?? row.service_type_code)) {
+  if (row.direction === "arrival" && placeType === "station" && hasHydrofoilFormula(row)) {
     return "bruno";
   }
 
-  if (row.direction === "departure" && (placeType === "airport" || placeType === "station") && isExclusiveOrHydrofoilKind(row.booking_service_kind ?? row.service_type_code)) {
+  if (row.direction === "departure" && (placeType === "airport" || placeType === "station") && hasHydrofoilFormula(row)) {
     return "bruno";
   }
 
@@ -278,7 +412,7 @@ function normalizeSource(value: string | null | undefined): ContinentDispatchSou
   return null;
 }
 
-function mapRow(row: ServiceRow & { direction: "arrival" | "departure" }): ContinentDispatchService {
+export function mapContinentDispatchRow(row: ServiceRow & { direction: "arrival" | "departure" }): ContinentDispatchService {
   const placeType = resolvePlaceType(row);
   const departureRouting = row.direction === "departure" ? computeDepartureRouting(row, placeType) : null;
   const continentHub = normalizeHubFromText(
@@ -326,6 +460,105 @@ function mapRow(row: ServiceRow & { direction: "arrival" | "departure" }): Conti
 
 export function isBrunoTarget(service: Pick<ContinentDispatchService, "effective_target">) {
   return service.effective_target === "bruno";
+}
+
+function normalizePhoneDisplay(phone: string | null | undefined): string {
+  const cleaned = phone?.trim();
+  return cleaned || "0000";
+}
+
+function normalizeBucketService(service: ContinentDispatchService, date: string | null): NormalizedContinentDispatchService {
+  return {
+    service_id: service.id,
+    customer_name: service.customer_name,
+    phone: service.phone,
+    phone_display: normalizePhoneDisplay(service.phone),
+    pax: service.pax,
+    date,
+    direction: service.direction,
+    booking_service_kind: service.booking_service_kind,
+    service_type_code: service.service_type_code,
+    effective_target: service.effective_target,
+    suggested_target: service.suggested_target,
+    target_source: service.target_source,
+    continent_dispatch_vendor: service.vendor_name,
+    place_type: service.place_type,
+    meeting_point: service.meeting_point,
+    continent_hub: service.continent_hub,
+    vessel: service.vessel,
+    boat_t: service.boat_t,
+    connection_time: service.connection_time,
+    arrival_at_porto: service.arrival_at_porto,
+    arrival_at_ischia: service.arrival_at_ischia,
+    porto_bruno: service.porto_bruno,
+    hotel_name: service.hotel_name,
+    hotel_zone: service.hotel_zone,
+    time: service.time,
+    notes: service.notes,
+    warnings: [],
+  };
+}
+
+function compareBucketServices(a: NormalizedContinentDispatchService, b: NormalizedContinentDispatchService) {
+  return (a.date ?? "").localeCompare(b.date ?? "")
+    || a.time.localeCompare(b.time)
+    || a.customer_name.localeCompare(b.customer_name)
+    || (a.hotel_name ?? "").localeCompare(b.hotel_name ?? "");
+}
+
+export function buildContinentDispatchBuckets(
+  services: ContinentDispatchService[],
+  options: { date?: string | null } = {}
+): ContinentDispatchBuckets {
+  const bruno: NormalizedContinentDispatchService[] = [];
+  const unassigned: NormalizedContinentDispatchService[] = [];
+  const vendorsByName = new Map<string, NormalizedContinentDispatchService[]>();
+
+  for (const service of services) {
+    if (!isContinentDispatchCandidate(service)) continue;
+
+    const normalized = normalizeBucketService(service, options.date ?? null);
+
+    if (service.effective_target === "bruno") {
+      bruno.push(normalized);
+      continue;
+    }
+
+    const vendor = service.target_source === "manual" ? service.vendor_name?.trim() : "";
+    if (vendor) {
+      const vendorServices = vendorsByName.get(vendor) ?? [];
+      vendorServices.push(normalized);
+      vendorsByName.set(vendor, vendorServices);
+      continue;
+    }
+
+    unassigned.push(normalized);
+  }
+
+  const sortServices = (bucketServices: NormalizedContinentDispatchService[]) => [...bucketServices].sort(compareBucketServices);
+  const vendors = [...vendorsByName.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([vendor, vendorServices]) => ({
+      label: vendor,
+      target: "continent_dispatch" as const,
+      vendor,
+      source: "manual" as const,
+      services: sortServices(vendorServices),
+    }));
+
+  return {
+    bruno: {
+      label: "Bruno",
+      target: "bruno",
+      services: sortServices(bruno),
+    },
+    vendors,
+    unassigned: {
+      label: "Da smistare",
+      target: "continent_dispatch",
+      services: sortServices(unassigned),
+    },
+  };
 }
 
 export function toBrunoArrival(service: ContinentDispatchService): BrunoArrival {
@@ -384,6 +617,10 @@ export async function loadContinentDispatchServices(auth: PricingAuthContext, da
     "porto_bruno",
     "service_type_code",
     "booking_service_kind",
+    "origin_place_type",
+    "destination_place_type",
+    "origin_label_raw",
+    "destination_label_raw",
     "train_arrival_number",
     "train_departure_number",
     "continent_dispatch_target",
@@ -424,8 +661,12 @@ export async function loadContinentDispatchServices(auth: PricingAuthContext, da
   if (arrivalsRes.error) throw new Error(arrivalsRes.error.message);
   if (departuresRes.error) throw new Error(departuresRes.error.message);
 
-  const arrivals = ((arrivalsRes.data ?? []) as unknown as ServiceRow[]).map((row) => mapRow({ ...row, direction: "arrival" }));
-  const departures = ((departuresRes.data ?? []) as unknown as ServiceRow[]).map((row) => mapRow({ ...row, direction: "departure" }));
+  const arrivals = ((arrivalsRes.data ?? []) as unknown as ServiceRow[])
+    .filter(isContinentDispatchCandidate)
+    .map((row) => mapContinentDispatchRow({ ...row, direction: "arrival" }));
+  const departures = ((departuresRes.data ?? []) as unknown as ServiceRow[])
+    .filter(isContinentDispatchCandidate)
+    .map((row) => mapContinentDispatchRow({ ...row, direction: "departure" }));
 
   return {
     arrivals,

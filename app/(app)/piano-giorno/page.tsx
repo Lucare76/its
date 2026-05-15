@@ -34,11 +34,55 @@ type DriverProfile = {
 type DriverEntry = { profileId: string; userId: string | null; name: string };
 type Vehicle = { id: string; label: string; capacity: number | null; vehicle_size: string | null };
 type FerrySchedule = { id: string; company: string; departure_port: string; arrival_port: string; departure_time: string; notes: string | null };
+type ContinentDispatchTarget = "bruno" | "continent_dispatch";
+type ContinentDispatchSource = "rule" | "manual";
+type ContinentDispatchService = {
+  service_id: string;
+  customer_name: string;
+  phone: string | null;
+  phone_display: string;
+  pax: number;
+  date: string | null;
+  direction: "arrival" | "departure";
+  booking_service_kind: string | null;
+  service_type_code: string | null;
+  effective_target: ContinentDispatchTarget;
+  suggested_target: ContinentDispatchTarget;
+  target_source: ContinentDispatchSource;
+  continent_dispatch_vendor: string | null;
+  place_type: "station" | "airport";
+  meeting_point: string | null;
+  continent_hub: "napoli" | "pozzuoli" | null;
+  vessel: string | null;
+  boat_t: string | null;
+  connection_time: string | null;
+  arrival_at_porto: string | null;
+  arrival_at_ischia: string | null;
+  porto_bruno: string | null;
+  hotel_name: string | null;
+  hotel_zone: string | null;
+  time: string;
+  notes: string | null;
+  warnings: string[];
+};
+type ContinentDispatchBucket = {
+  label: string;
+  target: ContinentDispatchTarget;
+  vendor?: string;
+  source?: ContinentDispatchSource;
+  services: ContinentDispatchService[];
+};
+type ContinentDispatchData = {
+  bruno: ContinentDispatchBucket;
+  vendors: ContinentDispatchBucket[];
+  unassigned: ContinentDispatchBucket;
+};
 
 type DayData = {
   services: Service[]; trip_groups: TripGroup[]; assignments: Assignment[];
   hotels: Hotel[]; memberships: Member[]; driver_profiles: DriverProfile[];
   vehicles: Vehicle[]; ferry_schedules: FerrySchedule[];
+  continent_dispatch?: ContinentDispatchData;
 };
 type PlanIssue = {
   id: string;
@@ -158,6 +202,9 @@ function directionLabel(direction: TripOverview["direction"]) {
   if (direction === "departure") return "Partenza";
   return "Misto";
 }
+function continentDirectionLabel(direction: ContinentDispatchService["direction"]) {
+  return direction === "arrival" ? "Arrivo" : "Partenza";
+}
 function statusLabel(status: TripOverview["status"]) {
   if (status === "done") return "Completato";
   if (status === "ongoing") return "In corso";
@@ -231,6 +278,147 @@ function readableDate(iso: string) {
 }
 function timeFromMinutes(total: number) {
   return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+function continentServiceDestination(service: ContinentDispatchService) {
+  return [service.hotel_name, service.hotel_zone].filter(Boolean).join(" · ") || "Hotel/destinazione da verificare";
+}
+function continentServiceOrigin(service: ContinentDispatchService) {
+  return [service.meeting_point, service.continent_hub].filter(Boolean).join(" · ") || service.vessel || "Origine da verificare";
+}
+
+function ContinentServiceRow({ service }: { service: ContinentDispatchService }) {
+  const kind = service.booking_service_kind ?? service.service_type_code;
+  const notes = service.notes?.trim();
+  const displayTime = service.time?.trim() ? fmt(service.time) : "—";
+  const displayPhone = service.phone?.trim() || service.phone_display || "Telefono mancante";
+  const warnings = service.warnings ?? [];
+
+  return (
+    <div className="rounded border border-slate-200 bg-white px-3 py-2">
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="w-14 shrink-0">
+          <p className="font-mono text-sm font-bold text-slate-900">{displayTime}</p>
+          <span className={`mt-1 inline-flex rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
+            service.direction === "arrival" ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"
+          }`}>
+            {continentDirectionLabel(service.direction)}
+          </span>
+        </div>
+
+        <div className="min-w-[180px] flex-1">
+          <p className="font-semibold text-slate-900">{service.customer_name} · {service.pax} pax</p>
+          <p className="text-xs text-slate-500">{displayPhone}</p>
+          {kind ? <p className="mt-1 text-[11px] font-semibold text-slate-500">{kind}</p> : null}
+        </div>
+
+        <div className="min-w-[180px] flex-1 text-xs">
+          <p className="font-semibold text-slate-700">{continentServiceDestination(service)}</p>
+          <p className="mt-1 text-slate-500">{continentServiceOrigin(service)}</p>
+        </div>
+      </div>
+
+      {(notes || warnings.length > 0) && (
+        <div className="mt-2 space-y-1 border-t border-slate-100 pt-2 text-xs">
+          {notes ? <p className="text-slate-600">{notes}</p> : null}
+          {warnings.map((warning, index) => (
+            <p key={`${service.service_id}-warning-${index}`} className="font-semibold text-amber-700">{warning}</p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ContinentBucketPanel({ bucket, tone }: { bucket: ContinentDispatchBucket; tone: "bruno" | "vendor" | "unassigned" }) {
+  const pax = bucket.services.reduce((total, service) => total + service.pax, 0);
+  const toneClasses = {
+    bruno: "border-blue-200 bg-blue-50/50 text-blue-900",
+    vendor: "border-emerald-200 bg-emerald-50/50 text-emerald-900",
+    unassigned: "border-amber-200 bg-amber-50/50 text-amber-900",
+  }[tone];
+
+  return (
+    <div className={`rounded border ${toneClasses}`}>
+      <div className="flex flex-wrap items-start justify-between gap-2 px-3 py-2">
+        <div>
+          <h3 className="text-sm font-bold">{bucket.label}</h3>
+          <p className="text-xs opacity-80">
+            {bucket.services.length} servizi · {pax} pax
+          </p>
+        </div>
+        {bucket.source === "manual" ? (
+          <span className="rounded bg-white/80 px-2 py-1 text-[10px] font-bold uppercase text-slate-600">manuale</span>
+        ) : null}
+      </div>
+
+      {bucket.services.length > 0 ? (
+        <div className="space-y-2 px-3 pb-3">
+          {bucket.services.map((service) => (
+            <ContinentServiceRow key={service.service_id} service={service} />
+          ))}
+        </div>
+      ) : (
+        <p className="px-3 pb-3 text-xs opacity-70">Nessun servizio in questo bucket.</p>
+      )}
+    </div>
+  );
+}
+
+function ContinentDispatchSection({ data }: { data: ContinentDispatchData | undefined }) {
+  const emptyData: ContinentDispatchData = {
+    bruno: { label: "Bruno", target: "bruno", services: [] },
+    vendors: [],
+    unassigned: { label: "Da smistare", target: "continent_dispatch", services: [] },
+  };
+  const continent = data ?? emptyData;
+  const totalServices =
+    continent.bruno.services.length +
+    continent.vendors.reduce((total, bucket) => total + bucket.services.length, 0) +
+    continent.unassigned.services.length;
+  const totalPax =
+    continent.bruno.services.reduce((total, service) => total + service.pax, 0) +
+    continent.vendors.reduce((total, bucket) => total + bucket.services.reduce((sum, service) => sum + service.pax, 0), 0) +
+    continent.unassigned.services.reduce((total, service) => total + service.pax, 0);
+
+  return (
+    <div className="card p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Continente</p>
+          <h2 className="mt-1 text-lg font-bold text-slate-900">Bruno, vendor e da smistare</h2>
+          <p className="text-xs text-slate-500">Sezione solo visuale: non modifica giri isola, autisti o assegnazioni.</p>
+        </div>
+        <span className="rounded border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700">
+          {totalServices} servizi · {totalPax} pax
+        </span>
+      </div>
+
+      {totalServices === 0 ? (
+        <p className="mt-3 rounded border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">
+          Nessun servizio continente per questa data.
+        </p>
+      ) : (
+        <div className="mt-3 grid gap-3 xl:grid-cols-3">
+          <ContinentBucketPanel bucket={continent.bruno} tone="bruno" />
+
+          <div className="space-y-3">
+            {continent.vendors.length > 0 ? (
+              continent.vendors.map((bucket) => (
+                <ContinentBucketPanel key={bucket.vendor ?? bucket.label} bucket={bucket} tone="vendor" />
+              ))
+            ) : (
+              <div className="rounded border border-emerald-200 bg-emerald-50/50 px-3 py-3">
+                <h3 className="text-sm font-bold text-emerald-900">Vendor manuali</h3>
+                <p className="mt-1 text-xs text-emerald-800">Nessun vendor manuale per questa data.</p>
+              </div>
+            )}
+          </div>
+
+          <ContinentBucketPanel bucket={continent.unassigned} tone="unassigned" />
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Hook caricamento dati ────────────────────────────────────────────────────
@@ -2171,6 +2359,8 @@ export default function PianoGiornoPage() {
                 <p className="text-xs text-slate-500">servizi non inseriti in un giro</p>
               </div>
             </div>
+
+            <ContinentDispatchSection data={data.continent_dispatch} />
 
             {planWindows.length > 0 && (
               <div className="card p-4">
