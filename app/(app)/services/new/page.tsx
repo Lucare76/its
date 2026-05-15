@@ -1001,7 +1001,7 @@ export default function OpsNewBookingPage() {
           </div>
         ) : null}
 
-        <button type="button" onClick={() => void submit()} disabled={submitting || !isFormValid}
+        <button type="button" onClick={() => void submit()} disabled={submitting || reviewWarnings.length > 0}
           className="btn-primary md:col-span-2 disabled:opacity-60">
           {submitting ? "Creazione in corso..." : "Conferma prenotazione"}
         </button>

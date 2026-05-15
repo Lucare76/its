@@ -12,6 +12,7 @@ import {
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { agencyBookingCreateSchema } from "@/lib/validation";
+import { getPickupRuleByRange, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 
 type BookingKind = z.infer<typeof agencyBookingCreateSchema>["booking_service_kind"];
 type AgencyRole = "admin" | "agency";
@@ -80,6 +81,14 @@ function nextSunday(fromDate: string, skipSame = false): string {
   const daysToAdd = day === 0 ? (skipSame ? 7 : 0) : 7 - day;
   date.setDate(date.getDate() + daysToAdd);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function kindToTransportType(kind: BookingKind): string | null {
+  if (kind === "transfer_airport_hotel" || kind === "transfer_airport_hotel_exclusive") return "volo_traghetto";
+  if (kind === "transfer_airport_hotel_aliscafo") return "volo_aliscafo";
+  if (kind === "transfer_train_hotel" || kind === "transfer_train_hotel_exclusive") return "treno_traghetto";
+  if (kind === "transfer_train_hotel_aliscafo") return "treno_aliscafo";
+  return null;
 }
 
 function bookingContext(kind: BookingKind) {
@@ -262,6 +271,7 @@ export default function AgencyNewBookingPage() {
   const [busReturnTimeLoading, setBusReturnTimeLoading] = useState(false);
   const [excursionLines, setExcursionLines] = useState<Array<{ id: string; name: string }>>([]);
   const [ferryScheduleRows, setFerryScheduleRows] = useState<FerryScheduleRow[]>([]);
+  const [tripLeg, setTripLeg] = useState<"round_trip" | "outbound_only" | "return_only">("round_trip");
 
   useEffect(() => {
     let active = true;
@@ -503,6 +513,13 @@ export default function AgencyNewBookingPage() {
     selectedKind === "transfer_train_hotel_aliscafo";
   const isBusOriginRequired = selectedKind === "bus_city_hotel";
   const isExcursionTitleRequired = selectedKind === "excursion";
+  const isTransferKindWithTripLeg =
+    selectedKind === "transfer_airport_hotel" ||
+    selectedKind === "transfer_airport_hotel_exclusive" ||
+    selectedKind === "transfer_airport_hotel_aliscafo" ||
+    selectedKind === "transfer_train_hotel" ||
+    selectedKind === "transfer_train_hotel_exclusive" ||
+    selectedKind === "transfer_train_hotel_aliscafo";
   const hasHotels = hotels.length > 0;
   const hasAgenciesIfAdmin = role !== "admin" || agencies.length > 0;
   const arrivalScheduleOptions = useMemo(
@@ -513,8 +530,8 @@ export default function AgencyNewBookingPage() {
     () => getDepartureScheduleOptions(selectedKind, form.departure_date, ferryScheduleRows),
     [selectedKind, form.departure_date, ferryScheduleRows]
   );
-  const normalizedPayload = useMemo(
-    () => ({
+  const normalizedPayload = useMemo(() => {
+    const base = {
       ...form,
       arrival_time: resolvedArrivalTime,
       departure_time: resolvedDepartureTime,
@@ -527,11 +544,30 @@ export default function AgencyNewBookingPage() {
       agency_quoted_price_cents: form.quoted_price_eur
         ? Math.round(Number(form.quoted_price_eur.replace(",", ".")) * 100)
         : null
-    }),
-    [form, resolvedArrivalTime, resolvedDepartureTime]
-  );
+    };
+    if (isTransferKindWithTripLeg) {
+      if (tripLeg === "outbound_only") {
+        return { ...base, departure_date: base.arrival_date, departure_time: base.arrival_time, transport_code_return: "" };
+      }
+      if (tripLeg === "return_only") {
+        return { ...base, arrival_date: base.departure_date, arrival_time: base.departure_time };
+      }
+    }
+    return base;
+  }, [form, resolvedArrivalTime, resolvedDepartureTime, isTransferKindWithTripLeg, tripLeg]);
   const parsedPreview = useMemo(() => agencyBookingCreateSchema.safeParse(normalizedPayload), [normalizedPayload]);
   const isFormValid = parsedPreview.success && hasHotels && hasAgenciesIfAdmin;
+
+  const pickupRule = useMemo(() => {
+    if (!isTransferKindWithTripLeg || tripLeg === "return_only") return null;
+    const transportType = kindToTransportType(selectedKind);
+    if (!transportType) return null;
+    const selectedHotel = hotels.find((h) => h.id === form.hotel_id);
+    const zona = normalizeZonaIschia(selectedHotel?.zone ?? null);
+    const agencyName = agencies.find((a) => a.id === form.agency_id)?.name ?? "";
+    if (!form.arrival_time) return null;
+    return getPickupRuleByRange(agencyName, transportType, form.arrival_time, zona);
+  }, [isTransferKindWithTripLeg, tripLeg, selectedKind, hotels, form.hotel_id, form.arrival_time, form.agency_id, agencies]);
 
   const serviceKindLabel = useMemo(
     () => kindOptions.find((item) => item.value === selectedKind)?.label ?? "Servizio",
@@ -550,7 +586,7 @@ export default function AgencyNewBookingPage() {
     if (!form.hotel_id) warnings.push("Seleziona la struttura.");
     if (!form.notes.trim()) warnings.push("Aggiungi una nota operativa.");
     if (isTransportCodeRequired && !form.transport_code.trim()) warnings.push(`${contextLabels.transportCodeLabel.replace("*", "")} mancante.`);
-    if (isTransportCodeRequired && contextLabels.transportCodeReturnLabel && !form.transport_code_return.trim()) warnings.push(`${contextLabels.transportCodeReturnLabel.replace("*", "")} mancante.`);
+    if (isTransportCodeRequired && contextLabels.transportCodeReturnLabel && (!isTransferKindWithTripLeg || tripLeg === "round_trip") && !form.transport_code_return.trim()) warnings.push(`${contextLabels.transportCodeReturnLabel.replace("*", "")} mancante.`);
     if (isBusOriginRequired && !form.bus_city_origin.trim()) warnings.push("Citta di partenza bus mancante.");
     if (isExcursionTitleRequired && !form.excursion_title.trim()) warnings.push("Nome escursione mancante.");
     return warnings;
@@ -571,7 +607,9 @@ export default function AgencyNewBookingPage() {
     isBusOriginRequired,
     isExcursionTitleRequired,
     isSnavKind,
-    isTransportCodeRequired
+    isTransportCodeRequired,
+    isTransferKindWithTripLeg,
+    tripLeg
   ]);
 
   const doSubmit = async () => {
@@ -794,6 +832,7 @@ export default function AgencyNewBookingPage() {
               setBusReturnTimeLoading(false);
               setBusCatalogRequested(shouldLoadBusCatalog);
               setBusLoading(shouldLoadBusCatalog);
+              setTripLeg("round_trip");
             }}
           >
             {kindOptions.map((item) => (
@@ -803,6 +842,27 @@ export default function AgencyNewBookingPage() {
             ))}
           </select>
         </label>
+        {isTransferKindWithTripLeg ? (
+          <div className="md:col-span-2">
+            <p className="mb-1 text-sm font-medium text-slate-700">Direzione viaggio*</p>
+            <div className="flex gap-2">
+              {(["round_trip", "outbound_only", "return_only"] as const).map((leg) => (
+                <button
+                  key={leg}
+                  type="button"
+                  onClick={() => setTripLeg(leg)}
+                  className={`flex-1 rounded-xl border py-2 text-xs font-semibold transition-all ${
+                    tripLeg === leg
+                      ? "border-blue-500 bg-blue-500 text-white"
+                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {leg === "round_trip" ? "Andata + Ritorno" : leg === "outbound_only" ? "Solo Andata" : "Solo Ritorno"}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {isSnavKind ? (
           <label className="text-sm md:col-span-2">
             Nome completo cliente*
@@ -962,6 +1022,7 @@ export default function AgencyNewBookingPage() {
           )}
         </div>
         {/* Arrivo: data + ora sulla stessa riga */}
+        {(!isTransferKindWithTripLeg || tripLeg !== "return_only") ? (
         <div className="md:col-span-2 grid grid-cols-2 gap-3">
           <label className="text-sm">
             {contextLabels.arrivalDateLabel}
@@ -1020,8 +1081,10 @@ export default function AgencyNewBookingPage() {
             )}
           </label>
         </div>
+        ) : null}
 
         {/* Ritorno: data + ora sulla stessa riga */}
+        {(!isTransferKindWithTripLeg || tripLeg !== "outbound_only") ? (
         <div className="md:col-span-2 grid grid-cols-2 gap-3">
           <label className="text-sm">
             {contextLabels.departureDateLabel}
@@ -1069,6 +1132,7 @@ export default function AgencyNewBookingPage() {
             )}
           </label>
         </div>
+        ) : null}
 
         {showTransportCodeField ? (
           <>
@@ -1085,7 +1149,7 @@ export default function AgencyNewBookingPage() {
               ) : null}
               {fieldErrors.transport_code ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.transport_code}</span> : null}
             </label>
-            {contextLabels.transportCodeReturnLabel ? (
+            {contextLabels.transportCodeReturnLabel && (!isTransferKindWithTripLeg || tripLeg === "round_trip") ? (
               <label className="text-sm">
                 {contextLabels.transportCodeReturnLabel}
                 <input
@@ -1301,10 +1365,26 @@ export default function AgencyNewBookingPage() {
               {Number(form.pet_count || "0") > 0 ? `Animali ${form.pet_count} max 10 kg, biglietto cliente` : null}
             </p>
           ) : null}
-          <p>
-            {contextLabels.arrivalDateLabel.replace("*", "")} {form.arrival_date} {form.arrival_time} - {contextLabels.departureDateLabel.replace("*", "")} {form.departure_date} {form.departure_time}
-          </p>
-          {form.transport_code ? <p>{contextLabels.transportCodeLabel.replace("*","")}: {form.transport_code}{form.transport_code_return ? ` / ritorno: ${form.transport_code_return}` : ""}</p> : null}
+          {(!isTransferKindWithTripLeg || tripLeg !== "return_only") && form.arrival_date ? (
+            <p>
+              {contextLabels.arrivalDateLabel.replace("*", "")}: {form.arrival_date} ore {form.arrival_time}
+              {pickupRule ? <span className="ml-2 font-medium text-blue-700">· Prelievo: {pickupRule.pickup} ({pickupRule.boat_co} {pickupRule.boat_t})</span> : null}
+            </p>
+          ) : null}
+          {(!isTransferKindWithTripLeg || tripLeg !== "outbound_only") && form.departure_date ? (
+            <p>
+              {contextLabels.departureDateLabel.replace("*", "")}: {form.departure_date} ore {form.departure_time}
+            </p>
+          ) : null}
+          {form.transport_code ? (
+            <p>
+              {contextLabels.transportCodeLabel.replace("*", "")}: {form.transport_code}
+              {tripLeg === "round_trip" && form.transport_code_return ? ` / ritorno: ${form.transport_code_return}` : ""}
+            </p>
+          ) : null}
+          {pickupRule ? (
+            <p className="mt-1 text-[10px] text-slate-400">Prelievo indicativo — da confermare con l&apos;operatore.</p>
+          ) : null}
           {form.notes.trim() ? <p className="line-clamp-2 text-safe-wrap">Note: {form.notes.trim()}</p> : null}
         </div>
 

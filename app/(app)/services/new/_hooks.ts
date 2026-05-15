@@ -272,7 +272,7 @@ export function useServiceForm(opts: {
     } else {
       if (!form.customer_first_name.trim() || !form.customer_last_name.trim()) w.push("Completa nome e cognome cliente.");
     }
-    if (isPhoneRequired && !form.customer_phone.trim()) w.push("Inserisci un telefono cliente.");
+    if (isPhoneRequired && form.customer_phone.trim().length < 6) w.push("Inserisci un telefono cliente (min 6 cifre).");
     const paxNum = Number(form.pax);
     if (!form.pax || isNaN(paxNum) || paxNum < 1) w.push("Inserisci il numero di pax (min. 1).");
     if (Number(form.pet_count || "0") > 0 && !form.pet_notes.trim()) w.push("Indica tipo/taglia animale nelle note animali.");
