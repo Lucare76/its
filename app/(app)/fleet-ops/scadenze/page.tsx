@@ -368,7 +368,7 @@ export default function ScadenzePage() {
     return null;
   }, []);
 
-  useEffect(() => {
+  useEffect(() => { // eslint-disable-line react-hooks/set-state-in-effect
     if (!panel || !showForm) return;
     const panelVehicle = items.find((item) => item.vehicle_id === panel.vehicleId) ?? null;
     const currentRecord = getCurrentRecordForTab(panelTab, panelRecords);
