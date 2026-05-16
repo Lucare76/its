@@ -186,7 +186,7 @@ export default function FleetReportsPage() {
               <div
                 key={report.id}
                 className={`card overflow-hidden transition ${
-                  report.status === "open" ? "border-rose-200" : ""
+                  report.status === "open" ? "border-l-4 border-l-rose-400" : ""
                 }`}
               >
                 {/* Header row */}
@@ -195,30 +195,43 @@ export default function FleetReportsPage() {
                   onClick={() => setExpanded(isExpanded ? null : report.id)}
                   className="w-full px-5 py-4 text-left"
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      {/* Badge row */}
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${sev.bg} ${sev.text}`}>
+                        <span className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-semibold ${sev.bg} ${sev.text}`}>
                           {sev.label}
                         </span>
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${sta.bg} ${sta.text}`}>
+                        <span className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-semibold ${sta.bg} ${sta.text}`}>
                           {sta.label}
                         </span>
                         {report.photo_urls?.length ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
-                            📷 {report.photo_urls.length} foto
+                          <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5" aria-hidden="true"><rect x="1" y="3" width="14" height="10" rx="2"/><circle cx="8" cy="8" r="2.5"/></svg>
+                            {report.photo_urls.length} foto
                           </span>
                         ) : null}
                       </div>
-                      <p className="mt-1.5 font-medium text-slate-900 line-clamp-2">{report.description}</p>
-                      <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
-                        <span>
-                          🚌 {report.vehicle?.label ?? "—"}{report.vehicle?.plate ? ` (${report.vehicle.plate})` : ""}
+                      {/* Descrizione */}
+                      <p className="text-sm font-medium leading-relaxed text-slate-900 line-clamp-2">
+                        {report.description}
+                      </p>
+                      {/* Metadata */}
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                        <span className="flex items-center gap-1">
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5 shrink-0" aria-hidden="true"><rect x="1" y="4" width="14" height="9" rx="1.5"/><path d="M4 4V3a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v1"/></svg>
+                          {report.vehicle?.label ?? "—"}{report.vehicle?.plate ? ` · ${report.vehicle.plate}` : ""}
                         </span>
                         {report.reporter_name && (
-                          <span>👤 {report.reporter_name}</span>
+                          <span className="flex items-center gap-1">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5 shrink-0" aria-hidden="true"><circle cx="8" cy="5" r="3"/><path d="M2 14c0-3.314 2.686-5 6-5s6 1.686 6 5"/></svg>
+                            {report.reporter_name}
+                          </span>
                         )}
-                        <span>🕐 {fmt(report.created_at)}</span>
+                        <span className="flex items-center gap-1">
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5 shrink-0" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.5l2 1.5"/></svg>
+                          {fmt(report.created_at)}
+                        </span>
                       </div>
                     </div>
                     <svg
