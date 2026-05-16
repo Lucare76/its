@@ -55,7 +55,7 @@
     "leaflet": "^1.9.4",
     "mailparser": "^3.9.3",
     "maplibre-gl": "^4.7.1",
-    "next": "^16.2.4",
+    "next": "^16.2.5",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^5.5.207",
     "protomaps-leaflet": "^5.1.0",
