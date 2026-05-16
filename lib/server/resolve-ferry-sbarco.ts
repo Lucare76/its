@@ -28,18 +28,25 @@ function bookingKindToBoatType(kind: string): "traghetto" | "aliscafo" {
   return kind.endsWith("_aliscafo") ? "aliscafo" : "traghetto";
 }
 
+export type FerrySbarcoResolution = {
+  company: string;
+  departure_time: string;
+  arrival_port: string;
+  arrival_time: string | null;
+};
+
 /**
  * Per prenotazioni transfer (treno/volo), cerca la regola di abbinamento corsa nave
- * e restituisce l'orario sbarco previsto a Ischia.
+ * e restituisce la corsa nave prevista verso Ischia.
  * Restituisce null se non applicabile o nessuna regola trovata.
  */
-export async function resolveFerryScbarcoTime(opts: {
+export async function resolveFerrySbarco(opts: {
   admin: SupabaseClient;
   bookingKind: string;
   transportArrivalTime: string;
   bookingDate: string;
   agencyId: string | null;
-}): Promise<string | null> {
+}): Promise<FerrySbarcoResolution | null> {
   const { admin, bookingKind, transportArrivalTime, bookingDate, agencyId } = opts;
   if (!TRANSFER_KINDS.has(bookingKind)) return null;
 
@@ -78,5 +85,26 @@ export async function resolveFerryScbarcoTime(opts: {
     bookingDate
   );
 
-  return match?.arrivalTime ?? null;
+  return match
+    ? {
+      company: match.company,
+      departure_time: match.departureTime,
+      arrival_port: match.arrivalPort,
+      arrival_time: match.arrivalTime,
+    }
+    : null;
+}
+
+/**
+ * Compatibilita: alcuni flussi esistenti consumano solo l'orario di sbarco.
+ */
+export async function resolveFerryScbarcoTime(opts: {
+  admin: SupabaseClient;
+  bookingKind: string;
+  transportArrivalTime: string;
+  bookingDate: string;
+  agencyId: string | null;
+}): Promise<string | null> {
+  const ferry = await resolveFerrySbarco(opts);
+  return ferry?.arrival_time ?? null;
 }

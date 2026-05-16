@@ -21,10 +21,21 @@ function normalizeTime(t: string): string {
   return t.slice(0, 5);
 }
 
+function normalizeRuleDate(value: string | null): string | null {
+  if (!value) return null;
+  const normalized = value.slice(0, 10);
+  const match = normalized.match(/^(\d{4})-\d{2}-\d{2}$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  return year >= 2000 ? normalized : null;
+}
+
 function isRuleActiveOnDate(rule: FerryPickupRule, isoDate: string): boolean {
   if (!isoDate) return true;
-  if (rule.valid_from && isoDate < rule.valid_from) return false;
-  if (rule.valid_to && isoDate > rule.valid_to) return false;
+  const validFrom = normalizeRuleDate(rule.valid_from);
+  const validTo = normalizeRuleDate(rule.valid_to);
+  if (validFrom && isoDate < validFrom) return false;
+  if (validTo && isoDate > validTo) return false;
   if (rule.days_of_week?.length) {
     const dow = new Date(`${isoDate}T12:00:00`).getDay();
     if (!rule.days_of_week.includes(dow)) return false;

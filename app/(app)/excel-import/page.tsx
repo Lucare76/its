@@ -1,9 +1,17 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { findBusStopsByCity, findNearestBusStop } from "@/lib/bus-lines-catalog";
+import {
+  isOperationalV2Header,
+  parseOperationalV2Rows,
+  type OperationalV2Direction,
+  type OperationalV2Status,
+  type OperationalV2Target,
+  type RawOperationalExcelRow,
+} from "@/lib/operational-excel-normalize";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { Hotel } from "@/lib/types";
 
@@ -113,11 +121,57 @@ type ImportResponse = {
   error?: string;
 };
 
+type OperationalV2ServerPreview = {
+  ok: boolean;
+  error?: string;
+  template_kind: "operational_v2";
+  summary: {
+    total_rows: number;
+    service_rows: number;
+    ready_count: number;
+    needs_review_count: number;
+    blocking_error_count: number;
+    duplicate_count: number;
+  };
+  rows: Array<{
+    row_number: number;
+    status: "ready" | "needs_review" | "blocking_error";
+    hotel_match: { id: string; name: string } | null;
+    agency_match: { id: string; name: string } | null;
+    duplicate_service_ids: string[];
+    computed: {
+      arrival_at_ischia: string | null;
+      pickup_hotel: string | null;
+      barca_compagnia: string | null;
+      orario_barca: string | null;
+      porto_bruno: string | null;
+      nave_db: string | null;
+    };
+    warnings: string[];
+    errors: string[];
+  }>;
+};
+
+type OperationalV2ImportResponse = {
+  ok: boolean;
+  error?: string;
+  blocking?: Array<{ row_number: number; message: string }>;
+  summary?: {
+    imported_rows?: number;
+    status_events_created?: number;
+    assignments_created?: number;
+    trip_groups_created?: number;
+  };
+  service_ids?: string[];
+};
+
 const IMPORT_TIMEOUT_MS = 45_000;
 const SESSION_TIMEOUT_MS = 10_000;
+const OPERATIONAL_V2_TABLE_MIN_WIDTH = 2920;
+type OperationalDbFilter = "all" | "ready" | "light_warning" | "needs_review" | "blocking_error" | "duplicates";
 
 type PresetKey = "generic_transfer" | "formula_snav" | "formula_medmar_napoli" | "formula_medmar_pozzuoli" | "transfer_airport" | "transfer_station" | "linea_bus";
-type SheetTemplate = "lista_operativa" | "dispatch_cliente" | "prenotazioni" | "linea_bus_arrivi_cliente" | "linea_bus_partenze_cliente" | "foglio_servizio" | "ischia_transfer_service" | "non_riconosciuto";
+type SheetTemplate = "lista_operativa" | "dispatch_cliente" | "prenotazioni" | "linea_bus_arrivi_cliente" | "linea_bus_partenze_cliente" | "foglio_servizio" | "ischia_transfer_service" | "operational_v2" | "non_riconosciuto";
 type SimulatedBusLoad = {
   label: string;
   pax: number;
@@ -209,6 +263,10 @@ function normalizeText(value: unknown) {
 }
 
 function detectTemplate(sheet: SheetPreview): SheetTemplate {
+  if (isOperationalV2Header(sheet.header)) {
+    return "operational_v2";
+  }
+
   const header = sheet.header.map(normalize);
   const headerText = header.join(" | ");
   const firstRow = sheet.sample[0]?.map(normalize).join(" | ") ?? "";
@@ -500,6 +558,76 @@ function buildHeaderPicker(header: string[]) {
   };
 }
 
+function buildOperationalV2RawRows(sheet: SheetPreview): RawOperationalExcelRow[] {
+  return sheet.allRows.slice(1).map((row, rowIndex) => {
+    const raw: RawOperationalExcelRow = { __row_number: rowIndex + 2 };
+    sheet.header.forEach((header, cellIndex) => {
+      if (header) raw[header] = row[cellIndex] ?? "";
+    });
+    return raw;
+  });
+}
+
+const operationalStatusLabel: Record<OperationalV2Status, string> = {
+  ready: "Pronto",
+  warning: "Warning",
+  needs_review: "Da verificare",
+  blocking_error: "Errore"
+};
+
+const operationalTargetLabel: Record<OperationalV2Target, string> = {
+  bruno: "Bruno",
+  continent_dispatch: "Da smistare continente",
+  island_only: "Solo isola",
+  excursion: "Escursione",
+  needs_review: "Da verificare"
+};
+
+const operationalDirectionLabel: Record<OperationalV2Direction, string> = {
+  arrival: "Arrivo",
+  departure: "Partenza",
+  excursion_outbound: "Escursione andata",
+  excursion_return: "Escursione ritorno",
+  unknown: "Da verificare"
+};
+
+function operationalStatusClass(status: OperationalV2Status) {
+  if (status === "ready") return "bg-emerald-50 text-emerald-700";
+  if (status === "warning") return "bg-amber-50 text-amber-700";
+  if (status === "needs_review") return "bg-sky-50 text-sky-700";
+  return "bg-rose-50 text-rose-700";
+}
+
+function operationalRowClass(status: OperationalV2Status) {
+  if (status === "blocking_error") return "border-rose-200 bg-rose-50/60";
+  if (status === "needs_review") return "border-sky-200 bg-sky-50/40";
+  if (status === "warning") return "border-amber-200 bg-amber-50/40";
+  return "border-border bg-surface/80";
+}
+
+function operationalDbWarningRequiresReview(warning: string) {
+  return warning.includes("Regola")
+    || warning.includes("Tipo transfer")
+    || warning.includes("Formula nave non riconosciuta")
+    || warning.includes("Tratta Formula Nave")
+    || warning.includes("Agenzia non trovata")
+    || warning.includes("richiede verifica")
+    || warning.includes("non riconosciut")
+    || warning.includes("Possibile duplicato");
+}
+
+function operationalDbRowStatus(
+  row: OperationalV2ServerPreview["rows"][number],
+  previewRow?: NonNullable<ReturnType<typeof parseOperationalV2Rows>["rows"]>[number]
+) {
+  const warnings = [...(previewRow?.warnings ?? []), ...row.warnings];
+  const errors = [...(previewRow?.errors ?? []), ...row.errors];
+  if (errors.length > 0 || row.status === "blocking_error") return "blocking_error";
+  if (warnings.some(operationalDbWarningRequiresReview)) return "needs_review";
+  if (warnings.length > 0) return "light_warning";
+  return "ready";
+}
+
 function localRowIssues(row: Omit<CandidateRow, "localIssues">, defaultHotelId: string) {
   const issues: string[] = [];
   if (!row.customer_name) issues.push("cliente mancante");
@@ -512,6 +640,8 @@ function localRowIssues(row: Omit<CandidateRow, "localIssues">, defaultHotelId: 
 }
 
 export default function ExcelImportPage() {
+  const operationalPreviewTableRef = useRef<HTMLDivElement | null>(null);
+  const operationalPreviewScrollRef = useRef<HTMLDivElement | null>(null);
   const [message, setMessage] = useState("Carica un Excel cliente o operativo per leggerlo e importare solo le righe valide.");
   const [sheets, setSheets] = useState<SheetPreview[]>([]);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -528,6 +658,10 @@ export default function ExcelImportPage() {
   const [processedRowIndexes, setProcessedRowIndexes] = useState<Set<number>>(new Set());
   const [inferredFileDate, setInferredFileDate] = useState("");
   const [rowDecisions, setRowDecisions] = useState<Map<number, "approved" | "skipped" | "pending">>(new Map());
+  const [operationalServerPreview, setOperationalServerPreview] = useState<OperationalV2ServerPreview | null>(null);
+  const [operationalPreviewLoading, setOperationalPreviewLoading] = useState(false);
+  const [operationalImportLoading, setOperationalImportLoading] = useState(false);
+  const [operationalDbFilter, setOperationalDbFilter] = useState<OperationalDbFilter>("all");
 
   useEffect(() => {
     let active = true;
@@ -671,9 +805,17 @@ export default function ExcelImportPage() {
 
   const templateType = selectedSheet ? detectTemplate(selectedSheet) : null;
   const mappingSuggestions = selectedSheet ? buildMappingSuggestions(selectedSheet) : [];
+  const isOperationalV2Template = templateType === "operational_v2";
+  const operationalPreview = useMemo(
+    () => selectedSheet && isOperationalV2Template
+      ? parseOperationalV2Rows(buildOperationalV2RawRows(selectedSheet))
+      : null,
+    [isOperationalV2Template, selectedSheet]
+  );
 
   const candidateRows = useMemo<CandidateRow[]>(() => {
     if (!selectedSheet) return [];
+    if (templateType === "operational_v2") return [];
     const headerIndexes = new Map<string, number>();
     selectedSheet.header.forEach((item, index) => { if (item) headerIndexes.set(item, index); });
     const pick = (row: string[], target: MappingTarget) => {
@@ -1242,6 +1384,51 @@ export default function ExcelImportPage() {
     () => candidateRows.filter((row) => !processedRowIndexes.has(row.row_index)),
     [candidateRows, processedRowIndexes]
   );
+  const operationalServerRowsByNumber = useMemo(() => {
+    const map = new Map<number, OperationalV2ServerPreview["rows"][number]>();
+    for (const row of operationalServerPreview?.rows ?? []) map.set(row.row_number, row);
+    return map;
+  }, [operationalServerPreview]);
+  const operationalDbSummary = useMemo(() => {
+    const rows = operationalPreview?.rows ?? [];
+    return {
+      ready_count: rows.filter((row) => {
+        const serverRow = operationalServerRowsByNumber.get(row.row_number);
+        return serverRow ? operationalDbRowStatus(serverRow, row) === "ready" : false;
+      }).length,
+      light_warning_count: rows.filter((row) => {
+        const serverRow = operationalServerRowsByNumber.get(row.row_number);
+        return serverRow ? operationalDbRowStatus(serverRow, row) === "light_warning" : false;
+      }).length,
+      needs_review_count: rows.filter((row) => {
+        const serverRow = operationalServerRowsByNumber.get(row.row_number);
+        return serverRow ? operationalDbRowStatus(serverRow, row) === "needs_review" : false;
+      }).length,
+      blocking_error_count: rows.filter((row) => {
+        const serverRow = operationalServerRowsByNumber.get(row.row_number);
+        return serverRow ? operationalDbRowStatus(serverRow, row) === "blocking_error" : false;
+      }).length,
+      duplicate_count: rows.filter((row) => (operationalServerRowsByNumber.get(row.row_number)?.duplicate_service_ids.length ?? 0) > 0).length,
+    };
+  }, [operationalPreview, operationalServerRowsByNumber]);
+  const operationalCanImport = Boolean(
+    operationalServerPreview
+      && operationalDbSummary.blocking_error_count === 0
+      && operationalDbSummary.needs_review_count === 0
+      && operationalDbSummary.duplicate_count === 0
+      && (operationalDbSummary.ready_count + operationalDbSummary.light_warning_count) > 0
+  );
+  const filteredOperationalRows = useMemo(() => {
+    if (!operationalPreview) return [];
+    if (!operationalServerPreview || operationalDbFilter === "all") return operationalPreview.rows;
+
+    return operationalPreview.rows.filter((row) => {
+      const serverRow = operationalServerRowsByNumber.get(row.row_number);
+      if (!serverRow) return false;
+      if (operationalDbFilter === "duplicates") return serverRow.duplicate_service_ids.length > 0;
+      return operationalDbRowStatus(serverRow, row) === operationalDbFilter;
+    });
+  }, [operationalDbFilter, operationalPreview, operationalServerPreview, operationalServerRowsByNumber]);
 
   const setDecision = (rowIndex: number, decision: "approved" | "skipped" | "pending") => {
     setRowDecisions((prev) => new Map(prev).set(rowIndex, decision));
@@ -1271,6 +1458,8 @@ export default function ExcelImportPage() {
     setFileName(file.name);
     setResult(null);
     setImportProgress("");
+    setOperationalServerPreview(null);
+    setOperationalDbFilter("all");
     setProcessedRowIndexes(new Set());
 
     try {
@@ -1278,15 +1467,16 @@ export default function ExcelImportPage() {
       const workbook = XLSX.read(buffer, { type: "array" });
       const nextSheets = workbook.SheetNames.map((sheetName) => {
         const sheet = workbook.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1, raw: false }) as string[][];
+        const rows = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1, raw: false, defval: "" }) as string[][];
         const maxCols = rows.reduce((max, row) => Math.max(max, row.length), 0);
+        const normalizeSheetRow = (row: string[]) => Array.from({ length: maxCols }, (_, index) => String(row[index] ?? ""));
         return {
           name: sheetName,
           rows: Math.max(0, rows.length - 1),
           cols: maxCols,
-          header: rows[0]?.map((item) => String(item ?? "").trim()) ?? [],
-          sample: rows.slice(0, 8).map((row) => row.map((item) => String(item ?? ""))),
-          allRows: rows.map((row) => row.map((item) => String(item ?? "")))
+          header: normalizeSheetRow(rows[0] ?? []).map((item) => item.trim()),
+          sample: rows.slice(0, 8).map(normalizeSheetRow),
+          allRows: rows.map(normalizeSheetRow)
         } satisfies SheetPreview;
       });
 
@@ -1335,6 +1525,11 @@ export default function ExcelImportPage() {
       setImportProgress(text);
       setMessage(text);
     };
+
+    if (isOperationalV2Template) {
+      updateProgress("Per operational_v2 usa il pulsante dedicato nella preview dopo la validazione DB.");
+      return;
+    }
 
     if (!hasSupabaseEnv || !supabase) {
       updateProgress("Supabase non configurato.");
@@ -1422,7 +1617,147 @@ export default function ExcelImportPage() {
     }
   };
 
+  const runOperationalV2ServerPreview = async () => {
+    if (!selectedSheet || !operationalPreview) {
+      setMessage("Nessuna preview operational_v2 disponibile.");
+      return;
+    }
+    if (!hasSupabaseEnv || !supabase) {
+      setMessage("Supabase non configurato.");
+      return;
+    }
+
+    setOperationalPreviewLoading(true);
+    setOperationalServerPreview(null);
+    setOperationalDbFilter("all");
+    setImportProgress("Validazione server read-only operational_v2 in corso...");
+    setMessage("Validazione server read-only operational_v2 in corso...");
+    try {
+      const session = await Promise.race([
+        supabase.auth.getSession(),
+        new Promise<never>((_, reject) => {
+          window.setTimeout(() => reject(new Error("Timeout verifica sessione Supabase.")), SESSION_TIMEOUT_MS);
+        })
+      ]);
+      if (session.error || !session.data.session?.access_token) {
+        setMessage("Sessione non valida. Rifai login.");
+        setImportProgress("Sessione non valida. Rifai login.");
+        return;
+      }
+
+      const response = await fetch("/api/excel/operational-v2-preview", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.data.session.access_token}`
+        },
+        body: JSON.stringify({ rows: buildOperationalV2RawRows(selectedSheet) })
+      });
+      const body = (await response.json().catch(() => null)) as OperationalV2ServerPreview | { error?: string } | null;
+      if (!response.ok || !body || !("summary" in body)) {
+        const error = (body as { error?: string } | null)?.error ?? "Validazione server operational_v2 non riuscita.";
+        setMessage(error);
+        setImportProgress(error);
+        return;
+      }
+
+      setOperationalServerPreview(body);
+      const progress = `Validazione read-only completata: ${body.summary.ready_count} pronte, ${body.summary.needs_review_count} da verificare, ${body.summary.blocking_error_count} errori, ${body.summary.duplicate_count} duplicati.`;
+      setMessage(progress);
+      setImportProgress(progress);
+    } catch (error) {
+      const text = error instanceof Error ? `Errore validazione operational_v2: ${error.message}` : "Errore validazione operational_v2.";
+      setMessage(text);
+      setImportProgress(text);
+    } finally {
+      setOperationalPreviewLoading(false);
+    }
+  };
+
+  const runOperationalV2Import = async () => {
+    if (!selectedSheet || !operationalPreview) {
+      setMessage("Nessuna preview operational_v2 disponibile.");
+      return;
+    }
+    if (!operationalServerPreview) {
+      setMessage("Prima valida le regole DB.");
+      setImportProgress("Prima valida le regole DB.");
+      return;
+    }
+    if (!operationalCanImport) {
+      const text = "Import bloccato: restano righe da verificare, errori o duplicati DB.";
+      setMessage(text);
+      setImportProgress(text);
+      return;
+    }
+    if (!hasSupabaseEnv || !supabase) {
+      setMessage("Supabase non configurato.");
+      return;
+    }
+
+    setOperationalImportLoading(true);
+    setImportProgress("Import operational_v2 in corso: creo solo services e status_events iniziali...");
+    setMessage("Import operational_v2 in corso: creo solo services e status_events iniziali...");
+    try {
+      const session = await Promise.race([
+        supabase.auth.getSession(),
+        new Promise<never>((_, reject) => {
+          window.setTimeout(() => reject(new Error("Timeout verifica sessione Supabase.")), SESSION_TIMEOUT_MS);
+        })
+      ]);
+      if (session.error || !session.data.session?.access_token) {
+        setMessage("Sessione non valida. Rifai login.");
+        setImportProgress("Sessione non valida. Rifai login.");
+        return;
+      }
+
+      const response = await fetch("/api/excel/operational-v2-import", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.data.session.access_token}`
+        },
+        body: JSON.stringify({ rows: buildOperationalV2RawRows(selectedSheet) })
+      });
+      const body = (await response.json().catch(() => null)) as OperationalV2ImportResponse | null;
+      if (!response.ok || !body?.ok) {
+        const blocking = body?.blocking?.length ? ` Righe bloccate: ${body.blocking.length}.` : "";
+        const error = `${body?.error ?? "Import operational_v2 non riuscito."}${blocking}`;
+        setMessage(error);
+        setImportProgress(error);
+        return;
+      }
+
+      const imported = body.summary?.imported_rows ?? body.service_ids?.length ?? 0;
+      const progress = `Import operational_v2 completato: ${imported} servizi creati, ${body.summary?.status_events_created ?? 0} status_events. Nessun assignment o trip_group creato.`;
+      setMessage(progress);
+      setImportProgress(progress);
+      setOperationalServerPreview(null);
+      setOperationalDbFilter("all");
+    } catch (error) {
+      const text = error instanceof Error ? `Errore import operational_v2: ${error.message}` : "Errore import operational_v2.";
+      setMessage(text);
+      setImportProgress(text);
+    } finally {
+      setOperationalImportLoading(false);
+    }
+  };
+
+  const syncOperationalPreviewScroll = (source: "table" | "bar") => {
+    const table = operationalPreviewTableRef.current;
+    const bar = operationalPreviewScrollRef.current;
+    if (!table || !bar) return;
+    const from = source === "table" ? table : bar;
+    const to = source === "table" ? bar : table;
+    if (to.scrollLeft !== from.scrollLeft) to.scrollLeft = from.scrollLeft;
+  };
+
   const approveAllAndImport = () => {
+    if (isOperationalV2Template) {
+      setMessage("Per operational_v2 usa il pulsante dedicato nella preview dopo la validazione DB.");
+      setImportProgress("Per operational_v2 usa il pulsante dedicato nella preview dopo la validazione DB.");
+      return;
+    }
     if (visibleCandidateRows.length === 0) {
       setMessage("Nessuna riga candidata da approvare.");
       setImportProgress("Nessuna riga candidata da approvare.");
@@ -1454,10 +1789,14 @@ export default function ExcelImportPage() {
           <p className="text-3xl font-semibold text-text">{totals.rows}</p>
         </SectionCard>
         <SectionCard title="Righe candidate">
-          <p className="text-3xl font-semibold text-text">{visibleCandidateRows.length}</p>
-          <p className="mt-1 text-xs text-muted">
-            {decisionCounts.approved} approvate / {decisionCounts.pending} da decidere
-          </p>
+          <p className="text-3xl font-semibold text-text">{operationalPreview ? operationalPreview.summary.service_rows : visibleCandidateRows.length}</p>
+          {operationalPreview ? (
+            <p className="mt-1 text-xs text-muted">Preview operational_v2 read-only</p>
+          ) : (
+            <p className="mt-1 text-xs text-muted">
+              {decisionCounts.approved} approvate / {decisionCounts.pending} da decidere
+            </p>
+          )}
         </SectionCard>
       </div>
 
@@ -1525,7 +1864,10 @@ export default function ExcelImportPage() {
           </div>
           {selectedSheet ? (
             <article className="mt-3 rounded-2xl border border-border bg-surface/80 p-3 text-sm text-muted">
-              Template rilevato: <span className="font-semibold text-text">{templateType}</span>. Il preset scelto ha priorita sul template.
+              Template rilevato: <span className="font-semibold text-text">{templateType}</span>.
+              {isOperationalV2Template
+                ? " Preview disponibile; import dedicato attivo dopo validazione DB pulita."
+                : " Il preset scelto ha priorita sul template."}
             </article>
           ) : null}
         </SectionCard>
@@ -1546,8 +1888,192 @@ export default function ExcelImportPage() {
         </SectionCard>
       </div>
 
+      {operationalPreview ? (
+        <SectionCard title="Preview operational_v2" subtitle="Anteprima del nuovo template operativo. L'import crea solo servizi dopo validazione DB pulita.">
+          <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-8">
+            {[
+              ["Righe", operationalPreview.summary.service_rows],
+              ["Transfer", operationalPreview.summary.transfer_count],
+              ["Formula nave", operationalPreview.summary.ferry_formula_count],
+              ["Escursioni", operationalPreview.summary.excursion_count],
+              ["Pronte", operationalPreview.summary.ready_count],
+              ["Warning", operationalPreview.summary.warning_count],
+              ["Da verificare", operationalPreview.summary.needs_review_count],
+              ["Errori", operationalPreview.summary.blocking_error_count],
+            ].map(([label, value]) => (
+              <article key={label} className="rounded-lg border border-border bg-surface/80 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">{label}</p>
+                <p className="mt-2 text-2xl font-semibold text-text">{value}</p>
+              </article>
+            ))}
+          </div>
+
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            Prima valida le regole DB. L&apos;import si abilita solo con 0 errori, 0 righe da verificare e 0 duplicati DB.
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white/80 p-3">
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={operationalPreviewLoading || operationalPreview.summary.service_rows === 0}
+              onClick={() => void runOperationalV2ServerPreview()}
+            >
+              {operationalPreviewLoading ? "Validazione..." : "Valida regole DB (read-only)"}
+            </button>
+            <p className="text-sm text-muted">
+              Controlla hotel/agenzie, duplicati e regole sbarco/pickup senza creare servizi.
+            </p>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={operationalPreviewLoading || operationalImportLoading || !operationalCanImport}
+              onClick={() => void runOperationalV2Import()}
+            >
+              {operationalImportLoading ? "Import in corso..." : `Importa servizi (${operationalDbSummary.ready_count + operationalDbSummary.light_warning_count})`}
+            </button>
+            <p className="text-xs text-muted">
+              Non crea assignment, trip_groups o allocazioni bus.
+            </p>
+          </div>
+
+          {operationalServerPreview ? (
+            <div className="mt-3 grid gap-3 md:grid-cols-5">
+              {[
+                ["ready", "Pronte DB", operationalDbSummary.ready_count],
+                ["light_warning", "Warning leggeri", operationalDbSummary.light_warning_count],
+                ["needs_review", "Da verificare DB", operationalDbSummary.needs_review_count],
+                ["blocking_error", "Errori DB", operationalDbSummary.blocking_error_count],
+                ["duplicates", "Duplicati DB", operationalDbSummary.duplicate_count],
+              ].map(([filter, label, value]) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => setOperationalDbFilter((current) => current === filter ? "all" : filter as OperationalDbFilter)}
+                  className={`rounded-lg border p-3 text-left transition hover:border-sky-300 hover:bg-sky-50/60 ${
+                    operationalDbFilter === filter ? "border-sky-400 bg-sky-50 shadow-sm" : "border-border bg-surface/80"
+                  }`}
+                >
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">{label}</p>
+                  <p className="mt-2 text-2xl font-semibold text-text">{value}</p>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {operationalServerPreview && operationalDbFilter !== "all" ? (
+            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
+              <span>
+                Filtro attivo: {operationalDbFilter === "ready" ? "Pronte DB" : operationalDbFilter === "light_warning" ? "Warning leggeri" : operationalDbFilter === "needs_review" ? "Da verificare DB" : operationalDbFilter === "blocking_error" ? "Errori DB" : "Duplicati DB"}.
+                {" "}
+                Righe visibili: {filteredOperationalRows.length}.
+              </span>
+              <button type="button" className="rounded-full border border-sky-300 bg-white px-3 py-1 text-xs font-semibold text-sky-700" onClick={() => setOperationalDbFilter("all")}>
+                Mostra tutte
+              </button>
+            </div>
+          ) : null}
+
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/60 p-2">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Scorri tabella a destra/sinistra</p>
+            <div
+              ref={operationalPreviewScrollRef}
+              className="overflow-x-auto pb-1 [scrollbar-width:thin]"
+              onScroll={() => syncOperationalPreviewScroll("bar")}
+            >
+              <div style={{ width: OPERATIONAL_V2_TABLE_MIN_WIDTH }} className="h-3" />
+            </div>
+          </div>
+
+          <div
+            ref={operationalPreviewTableRef}
+            className="mt-3 max-h-[70vh] max-w-full overflow-auto rounded-xl border border-slate-200 [scrollbar-width:thin]"
+            onScroll={() => syncOperationalPreviewScroll("table")}
+          >
+            <table style={{ minWidth: OPERATIONAL_V2_TABLE_MIN_WIDTH }} className="table-auto text-sm [&_td]:break-normal [&_td]:hyphens-none [&_td]:whitespace-nowrap [&_th]:break-normal [&_th]:hyphens-none [&_th]:whitespace-nowrap">
+              <thead className="sticky top-0 z-10 bg-slate-50 text-left text-xs uppercase tracking-[0.08em] text-slate-500 shadow-[0_1px_0_rgba(203,213,225,0.7)]">
+                <tr>
+                  {[
+                    "Riga Excel",
+                    "Stato",
+                    "Data",
+                    "Categoria",
+                    "Servizio",
+                    "Tipo",
+                    "Cliente",
+                    "Pax",
+                    "Telefono",
+                    "Agenzia",
+                    "Da",
+                    "A",
+                    "Orario",
+                    "Compagnia nave",
+                    "Booking kind",
+                    "Direction",
+                    "Target",
+                    "Hotel DB",
+                    "Nave DB",
+                    "Sbarco Ischia",
+                    "Pickup hotel",
+                    "Regole DB",
+                    "Warning",
+                    "Errori",
+                  ].map((header) => (
+                    <th key={header} className="px-3 py-2 font-semibold">{header}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredOperationalRows.map((row) => {
+                  const interpretedTime = row.normalized.ferry_time ?? row.normalized.departure_time ?? row.normalized.arrival_time ?? "";
+                  const serverRow = operationalServerRowsByNumber.get(row.row_number);
+                  const serverWarnings = serverRow?.warnings ?? [];
+                  const serverErrors = serverRow?.errors ?? [];
+                  return (
+                    <tr key={row.row_number} className={`border-t ${operationalRowClass(row.status)}`}>
+                      <td className="px-3 py-3 align-top font-semibold">{row.row_number}</td>
+                      <td className="px-3 py-2">
+                        <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] ${operationalStatusClass(row.status)}`}>
+                          {operationalStatusLabel[row.status]}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 align-top">{row.normalized.date ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{row.normalized.category ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{row.normalized.service ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{row.normalized.trip_type ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{row.normalized.customer_name ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{row.normalized.pax ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{row.normalized.phone}</td>
+                      <td className="px-3 py-3 align-top">{row.normalized.agency ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{row.normalized.from ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{row.normalized.to ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{interpretedTime || "-"}</td>
+                      <td className="px-3 py-3 align-top">{row.normalized.ferry_company ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{row.classification.booking_service_kind ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{operationalDirectionLabel[row.classification.direction]}</td>
+                      <td className="px-3 py-3 align-top">{operationalTargetLabel[row.classification.operational_target]}</td>
+                      <td className="px-3 py-3 align-top">{serverRow?.hotel_match?.name ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{serverRow?.computed.nave_db ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{serverRow?.computed.arrival_at_ischia ?? "-"}</td>
+                      <td className="px-3 py-3 align-top">{serverRow?.computed.pickup_hotel ?? "-"}</td>
+                      <td className="min-w-[280px] max-w-[360px] whitespace-normal px-3 py-3 align-top text-sky-800">
+                        {[...serverWarnings, serverRow && serverRow.duplicate_service_ids.length > 0 ? "Possibile duplicato gia presente nel DB" : ""].filter(Boolean).join(" | ") || "-"}
+                      </td>
+                      <td className="min-w-[280px] max-w-[360px] whitespace-normal px-3 py-3 align-top text-amber-800">{row.warnings.join(" | ") || "-"}</td>
+                      <td className="min-w-[240px] max-w-[320px] whitespace-normal px-3 py-3 align-top text-rose-800">{[...row.errors, ...serverErrors].join(" | ") || "-"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      ) : null}
+
       <SectionCard title="Mapping colonne" subtitle="Puoi correggere il mapping suggerito prima di generare le righe candidate.">
-        {!selectedSheet ? (
+        {isOperationalV2Template ? (
+          <EmptyState title="Mapping non necessario" description="Il template operational_v2 e stato riconosciuto automaticamente. Usa la preview dedicata e la validazione DB prima dell'import." compact />
+        ) : !selectedSheet ? (
           <EmptyState title="Nessun foglio selezionato" description="Carica un file Excel per vedere le colonne." compact />
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -1590,12 +2116,17 @@ export default function ExcelImportPage() {
 
       <SectionCard title="Azioni import" subtitle="Approva le righe nella sezione sotto, poi importa quelle approvate.">
         <div className="flex flex-wrap gap-3 items-center">
-          <button type="button" className="btn-secondary" disabled={submitting || candidateRows.length === 0} onClick={() => void runImport(true)}>
+          <button type="button" className="btn-secondary" disabled={isOperationalV2Template || submitting || candidateRows.length === 0} onClick={() => void runImport(true)}>
             {submitting ? "Elaborazione..." : "Dry run server (tutte)"}
           </button>
-          <button type="button" className="btn-primary" disabled={submitting || approvedCandidates.length === 0} onClick={() => void runImport(false)}>
+          <button type="button" className="btn-primary" disabled={isOperationalV2Template || submitting || approvedCandidates.length === 0} onClick={() => void runImport(false)}>
             {submitting ? "Import in corso..." : `Importa approvate (${approvedCandidates.length})`}
           </button>
+          {isOperationalV2Template ? (
+            <span className="rounded-full bg-amber-50 px-3 py-1 text-xs text-amber-700">
+              Usa il pulsante Importa servizi nella preview operational_v2
+            </span>
+          ) : null}
           {decisionCounts.pending > 0 ? (
             <span className="rounded-full bg-amber-50 px-3 py-1 text-xs text-amber-700">
               {decisionCounts.pending} righe da decidere
@@ -1667,7 +2198,9 @@ export default function ExcelImportPage() {
       </SectionCard>
 
       <SectionCard title="Righe candidate" subtitle="Approva o salta ogni riga. Solo le approvate verranno importate.">
-        {visibleCandidateRows.length === 0 ? (
+        {isOperationalV2Template ? (
+          <EmptyState title="Import dedicato operational_v2" description="Le righe del nuovo template si importano dal pulsante dedicato nella preview, dopo validazione DB." compact />
+        ) : visibleCandidateRows.length === 0 ? (
           <EmptyState title="Nessuna riga candidata" description="Carica un file e completa il mapping per generare una preview importabile." compact />
         ) : (
           <>
@@ -1803,13 +2336,13 @@ export default function ExcelImportPage() {
                     </p>
                   </div>
                 </div>
-                <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
-                  <table className="min-w-full text-sm">
+                <div className="mt-3 max-w-full overflow-x-auto rounded-xl border border-slate-200 [scrollbar-width:thin]">
+                  <table className="min-w-[1500px] table-auto text-sm [&_td]:break-normal [&_td]:hyphens-none [&_td]:whitespace-nowrap [&_th]:break-normal [&_th]:hyphens-none [&_th]:whitespace-nowrap">
                     <tbody>
                       {sheet.sample.map((row, index) => (
                         <tr key={`${sheet.name}-${index}`} className="border-t border-slate-100 first:border-t-0">
                           {row.map((cell, cellIndex) => (
-                            <td key={`${sheet.name}-${index}-${cellIndex}`} className="px-3 py-2">
+                            <td key={`${sheet.name}-${index}-${cellIndex}`} className="px-3 py-3 align-top">
                               {cell || <span className="text-slate-300">vuoto</span>}
                             </td>
                           ))}
