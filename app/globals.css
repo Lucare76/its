@@ -267,6 +267,21 @@ option {
   transform: scale(0.99);
 }
 
+.btn-primary:disabled {
+  background: #cbd5e1;
+  box-shadow: none;
+  color: #64748b;
+  cursor: not-allowed;
+  opacity: 1;
+  transform: none;
+}
+
+.btn-primary:disabled:hover {
+  background: #cbd5e1;
+  box-shadow: none;
+  transform: none;
+}
+
 .btn-secondary {
   @apply inline-flex items-center justify-center rounded-xl border px-4 py-2 font-medium transition-all duration-200;
   border-color: var(--color-border);

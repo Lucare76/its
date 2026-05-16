@@ -22,6 +22,7 @@ type SheetPreview = {
   header: string[];
   sample: string[][];
   allRows: string[][];
+  rawAllRows: unknown[][];
 };
 
 type MappingTarget =
@@ -561,8 +562,9 @@ function buildHeaderPicker(header: string[]) {
 function buildOperationalV2RawRows(sheet: SheetPreview): RawOperationalExcelRow[] {
   return sheet.allRows.slice(1).map((row, rowIndex) => {
     const raw: RawOperationalExcelRow = { __row_number: rowIndex + 2 };
+    const rawRow = sheet.rawAllRows[rowIndex + 1] ?? [];
     sheet.header.forEach((header, cellIndex) => {
-      if (header) raw[header] = row[cellIndex] ?? "";
+      if (header) raw[header] = rawRow[cellIndex] ?? row[cellIndex] ?? "";
     });
     return raw;
   });
@@ -605,25 +607,13 @@ function operationalRowClass(status: OperationalV2Status) {
   return "border-border bg-surface/80";
 }
 
-function operationalDbWarningRequiresReview(warning: string) {
-  return warning.includes("Regola")
-    || warning.includes("Tipo transfer")
-    || warning.includes("Formula nave non riconosciuta")
-    || warning.includes("Tratta Formula Nave")
-    || warning.includes("Agenzia non trovata")
-    || warning.includes("richiede verifica")
-    || warning.includes("non riconosciut")
-    || warning.includes("Possibile duplicato");
-}
-
 function operationalDbRowStatus(
   row: OperationalV2ServerPreview["rows"][number],
   previewRow?: NonNullable<ReturnType<typeof parseOperationalV2Rows>["rows"]>[number]
-) {
+): Exclude<OperationalDbFilter, "all" | "duplicates"> {
   const warnings = [...(previewRow?.warnings ?? []), ...row.warnings];
   const errors = [...(previewRow?.errors ?? []), ...row.errors];
   if (errors.length > 0 || row.status === "blocking_error") return "blocking_error";
-  if (warnings.some(operationalDbWarningRequiresReview)) return "needs_review";
   if (warnings.length > 0) return "light_warning";
   return "ready";
 }
@@ -1418,6 +1408,12 @@ export default function ExcelImportPage() {
       && operationalDbSummary.duplicate_count === 0
       && (operationalDbSummary.ready_count + operationalDbSummary.light_warning_count) > 0
   );
+  const operationalImportableCount = operationalDbSummary.ready_count + operationalDbSummary.light_warning_count;
+  const operationalImportButtonLabel = operationalImportLoading
+    ? "Import in corso..."
+    : operationalCanImport
+      ? `Importa servizi (${operationalImportableCount})`
+      : "Import bloccato";
   const filteredOperationalRows = useMemo(() => {
     if (!operationalPreview) return [];
     if (!operationalServerPreview || operationalDbFilter === "all") return operationalPreview.rows;
@@ -1468,15 +1464,18 @@ export default function ExcelImportPage() {
       const nextSheets = workbook.SheetNames.map((sheetName) => {
         const sheet = workbook.Sheets[sheetName];
         const rows = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1, raw: false, defval: "" }) as string[][];
-        const maxCols = rows.reduce((max, row) => Math.max(max, row.length), 0);
+        const rawRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" }) as unknown[][];
+        const maxCols = [...rows, ...rawRows].reduce((max, row) => Math.max(max, row.length), 0);
         const normalizeSheetRow = (row: string[]) => Array.from({ length: maxCols }, (_, index) => String(row[index] ?? ""));
+        const normalizeRawSheetRow = (row: unknown[]) => Array.from({ length: maxCols }, (_, index) => row[index] ?? "");
         return {
           name: sheetName,
           rows: Math.max(0, rows.length - 1),
           cols: maxCols,
           header: normalizeSheetRow(rows[0] ?? []).map((item) => item.trim()),
           sample: rows.slice(0, 8).map(normalizeSheetRow),
-          allRows: rows.map(normalizeSheetRow)
+          allRows: rows.map(normalizeSheetRow),
+          rawAllRows: rawRows.map(normalizeRawSheetRow)
         } satisfies SheetPreview;
       });
 
@@ -1721,8 +1720,13 @@ export default function ExcelImportPage() {
       });
       const body = (await response.json().catch(() => null)) as OperationalV2ImportResponse | null;
       if (!response.ok || !body?.ok) {
-        const blocking = body?.blocking?.length ? ` Righe bloccate: ${body.blocking.length}.` : "";
-        const error = `${body?.error ?? "Import operational_v2 non riuscito."}${blocking}`;
+        const blockingDetails = body?.blocking?.length
+          ? ` Righe bloccate: ${body.blocking.length}. ${body.blocking
+            .slice(0, 5)
+            .map((item) => `Riga ${item.row_number}: ${item.message}`)
+            .join(" | ")}${body.blocking.length > 5 ? " | ..." : ""}`
+          : "";
+        const error = `${body?.error ?? "Import operational_v2 non riuscito."}${blockingDetails}`;
         setMessage(error);
         setImportProgress(error);
         return;
@@ -1929,8 +1933,13 @@ export default function ExcelImportPage() {
               className="btn-primary"
               disabled={operationalPreviewLoading || operationalImportLoading || !operationalCanImport}
               onClick={() => void runOperationalV2Import()}
+              title={
+                operationalCanImport
+                  ? `Importa ${operationalImportableCount} servizi validati`
+                  : "Import abilitato solo con 0 errori DB, 0 righe da verificare DB e 0 duplicati DB."
+              }
             >
-              {operationalImportLoading ? "Import in corso..." : `Importa servizi (${operationalDbSummary.ready_count + operationalDbSummary.light_warning_count})`}
+              {operationalImportButtonLabel}
             </button>
             <p className="text-xs text-muted">
               Non crea assignment, trip_groups o allocazioni bus.

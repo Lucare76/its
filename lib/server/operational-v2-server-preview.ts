@@ -104,22 +104,10 @@ function formulaTransportType(kind: string | null) {
   return null;
 }
 
-function warningRequiresManualReview(warning: string) {
-  return warning.includes("Regola")
-    || warning.includes("Tipo transfer")
-    || warning.includes("Formula nave non riconosciuta")
-    || warning.includes("Tratta Formula Nave")
-    || warning.includes("Agenzia non trovata")
-    || warning.includes("richiede verifica")
-    || warning.includes("non riconosciut")
-    || warning.includes("Possibile duplicato");
-}
-
-export function operationalV2DbRowStatus(row: OperationalV2ServerPreviewRow, previewRow?: OperationalV2PreviewRow) {
+export function operationalV2DbRowStatus(row: OperationalV2ServerPreviewRow, previewRow?: OperationalV2PreviewRow): "ready" | "light_warning" | "needs_review" | "blocking_error" {
   const warnings = [...(previewRow?.warnings ?? []), ...row.warnings];
   const errors = [...(previewRow?.errors ?? []), ...row.errors];
   if (errors.length > 0 || row.status === "blocking_error") return "blocking_error" as const;
-  if (warnings.some(warningRequiresManualReview)) return "needs_review" as const;
   if (warnings.length > 0) return "light_warning" as const;
   return "ready" as const;
 }
@@ -285,13 +273,10 @@ export async function buildOperationalV2ServerPreview(
         );
     });
     if (duplicateMatches.length > 0) warnings.push("Possibile duplicato gia presente nel DB");
-    const requiresManualReview = warnings.some(warningRequiresManualReview);
 
     const status: OperationalV2ServerPreviewRow["status"] = errors.length > 0
       ? "blocking_error"
-      : requiresManualReview
-        ? "needs_review"
-        : "ready";
+      : "ready";
 
     return {
       row_number: row.row_number,

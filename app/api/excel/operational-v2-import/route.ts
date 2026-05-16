@@ -5,7 +5,7 @@ import {
   operationalV2DbRowStatus,
   type OperationalV2ServerPreviewRow,
 } from "@/lib/server/operational-v2-server-preview";
-import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { authorizePricingRequest, type PricingAuthContext } from "@/lib/server/pricing-auth";
 import type { OperationalV2PreviewRow } from "@/lib/operational-excel-normalize";
 
 export const runtime = "nodejs";
@@ -144,6 +144,51 @@ function sourceDetails(row: OperationalV2PreviewRow, serverRow: OperationalV2Ser
   };
 }
 
+function rowImportLabel(row: OperationalV2PreviewRow) {
+  return [
+    row.normalized.date,
+    row.normalized.category,
+    row.normalized.service,
+    row.normalized.trip_type,
+    row.normalized.customer_name,
+    row.normalized.agency,
+    row.normalized.pax ? `${row.normalized.pax} pax` : null,
+  ].filter(Boolean).join(" - ");
+}
+
+function missingSchemaColumn(message: string) {
+  return message.match(/Could not find the '([^']+)' column/)?.[1] ?? null;
+}
+
+async function insertServicesWithSchemaFallback(
+  admin: PricingAuthContext["admin"],
+  payloads: Record<string, unknown>[],
+) {
+  const omittedColumns: string[] = [];
+  let currentPayloads = payloads;
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const result = await admin
+      .from("services")
+      .insert(currentPayloads)
+      .select("id");
+
+    if (!result.error) return { ...result, omittedColumns };
+
+    const missingColumn = missingSchemaColumn(result.error.message);
+    if (!missingColumn) return { ...result, omittedColumns };
+
+    omittedColumns.push(missingColumn);
+    currentPayloads = currentPayloads.map(({ [missingColumn]: _omitted, ...payload }) => payload);
+  }
+
+  return {
+    data: null,
+    error: new Error(`Schema cache non allineata: troppe colonne mancanti (${omittedColumns.join(", ")}).`),
+    omittedColumns,
+  };
+}
+
 function buildServicePayload(
   tenantId: string,
   row: OperationalV2PreviewRow,
@@ -154,6 +199,7 @@ function buildServicePayload(
   if (!row.normalized.date) return { error: `Riga ${row.row_number}: data non disponibile.` };
   if (!row.normalized.customer_name) return { error: `Riga ${row.row_number}: cliente non disponibile.` };
   if (!row.normalized.pax) return { error: `Riga ${row.row_number}: pax non disponibile.` };
+  if (row.normalized.pax > 500) return { error: `Pax ${row.normalized.pax} supera il limite DB servizi (500).` };
 
   const direction = dbDirection(row);
   const time = operationalTime(row, serverRow, direction);
@@ -181,7 +227,7 @@ function buildServicePayload(
     customer_name: row.normalized.customer_name,
     billing_party_name: serverRow.agency_match?.name ?? row.normalized.agency,
     agency_id: serverRow.agency_match?.id ?? null,
-    phone: row.normalized.phone,
+    phone: row.normalized.phone || "0000",
     notes,
     meeting_point: row.normalized.from,
     booking_service_kind: kind,
@@ -193,10 +239,10 @@ function buildServicePayload(
     orario_barca: serverRow.computed.orario_barca,
     porto_bruno: serverRow.computed.porto_bruno,
     ferry_details: details,
+    excursion_details: {},
   };
 
   if (row.classification.category === "ESCURSIONE") {
-    payload.excursion_name = row.normalized.service ?? "Escursione";
     payload.tour_name = row.normalized.service ?? "Escursione";
     payload.excursion_details = details;
   }
@@ -259,7 +305,11 @@ export async function POST(request: NextRequest) {
 
       const built = buildServicePayload(tenantId, row, serverRow);
       if ("error" in built) {
-        blocking.push({ row_number: row.row_number, message: built.error ?? "Riga non importabile." });
+        const label = rowImportLabel(row);
+        blocking.push({
+          row_number: row.row_number,
+          message: `${label ? `${label}: ` : ""}${built.error ?? "Riga non importabile."}`,
+        });
         return;
       }
       payloads.push(built.payload);
@@ -269,7 +319,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           ok: false,
-          error: "Import bloccato: ci sono righe da verificare, errori o duplicati.",
+          error: "Import bloccato: ci sono righe da verificare, errori o duplicati DB.",
           blocking,
           summary: preview.summary,
         },
@@ -281,13 +331,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: false, error: "Nessuna riga importabile." }, { status: 400 });
     }
 
-    const { data, error } = await auth.admin
-      .from("services")
-      .insert(payloads)
-      .select("id");
+    const { data, error, omittedColumns } = await insertServicesWithSchemaFallback(auth.admin, payloads);
 
     if (error) {
-      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Import bloccato dal DB: ${error.message}`,
+          summary: preview.summary,
+        },
+        { status: 409 }
+      );
     }
 
     const serviceIds = (data ?? []).map((item) => String(item.id));
@@ -308,6 +362,7 @@ export async function POST(request: NextRequest) {
         status_events_created: serviceIds.length,
         assignments_created: 0,
         trip_groups_created: 0,
+        omitted_schema_columns: omittedColumns,
       },
       service_ids: serviceIds,
     });
