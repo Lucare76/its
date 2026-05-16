@@ -552,16 +552,42 @@ export default function ArrivalsPage() {
     if (!bulkDriverId || selectedIds.size === 0 || !supabase) return;
     setBulkAssigning(true);
     setBulkAssignError(null);
+    let successCount = 0;
     try {
-      const existingMap = new Map(data.assignments.map((a) => [a.service_id, a]));
-      for (const serviceId of selectedIds) {
-        const existing = existingMap.get(serviceId);
-        if (existing) {
-          await supabase.from("assignments").update({ driver_user_id: bulkDriverId }).eq("id", existing.id).eq("tenant_id", tenantId);
-        } else {
-          await supabase.from("assignments").insert({ tenant_id: tenantId, service_id: serviceId, driver_user_id: bulkDriverId, vehicle_label: "" });
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) {
+        setBulkAssignError("Sessione scaduta. Rifai login.");
+        return;
+      }
+
+      const serviceIds = Array.from(selectedIds);
+      for (const serviceId of serviceIds) {
+        const res = await fetch("/api/ops/assign-service", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            service_id: serviceId,
+            driver_user_id: bulkDriverId,
+            action: "assign",
+          }),
+        });
+        const body = await res.json().catch(() => null) as { error?: string } | null;
+        if (!res.ok) {
+          const apiError = body?.error ?? `Errore ${res.status}`;
+          const readableError = res.status === 409 && apiError.toLowerCase().includes("disponibilita")
+            ? "Disponibilità non confermata per questa data. Conferma la disponibilità prima di assegnare."
+            : apiError;
+          const failedCount = serviceIds.length - successCount;
+          setBulkAssignError(
+            successCount > 0
+              ? `${successCount} assegnati, ${failedCount} non assegnati. ${readableError}`
+              : readableError
+          );
+          if (successCount > 0) void refresh?.();
+          return;
         }
-        await supabase.from("services").update({ status: "assigned" }).eq("id", serviceId).eq("tenant_id", tenantId).neq("status", "assigned");
+        successCount += 1;
       }
       setSelectedIds(new Set());
       setBulkDriverId("");

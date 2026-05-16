@@ -39,6 +39,13 @@ export async function POST(request: NextRequest) {
 
     const action = body.action ?? "assign";
     const now = new Date().toISOString();
+    const manualAssignmentLock = {
+      assignment_source: "manual_assign_service",
+      locked_by_operator: true,
+      assigned_by: userId,
+      assigned_at: now,
+      lock_reason: "manual_assignment_from_assign_service",
+    };
 
     // Recupera il servizio per avere la data
     const { data: service, error: serviceErr } = await auth.admin
@@ -132,6 +139,7 @@ export async function POST(request: NextRequest) {
           driver_user_id: body.driver_user_id ?? null,
           driver_profile_id: body.driver_profile_id ?? null,
           vehicle_label: body.vehicle_label ?? "",
+          ...manualAssignmentLock,
         }).eq("id", existingAssignment.id).eq("tenant_id", tenantId),
       ]);
     } else {
@@ -168,6 +176,7 @@ export async function POST(request: NextRequest) {
         driver_profile_id: body.driver_profile_id ?? null,
         vehicle_label: body.vehicle_label ?? "",
         group_id: groupId,
+        ...manualAssignmentLock,
       });
     }
 
