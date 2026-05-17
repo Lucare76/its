@@ -1021,9 +1021,9 @@ export async function POST(request: NextRequest) {
         (usageCount(a.label) - usageCount(b.label)) ||
         a.label.localeCompare(b.label);
 
-      // Se l'autista ha già un mezzo preferito, proviamo prima quello.
-      // Se è in cooldown per questo slot, si scende alla selezione normale
-      // per quel singolo giro — il preferito resta invariato per i giri successivi.
+      // Se l'autista ha già un mezzo preferito, è l'unico che può usare.
+      // Se non è disponibile (cooldown, blocco orario, limite hotel), il giro
+      // resta senza mezzo — mai cambiare veicolo durante la giornata.
       if (preferredVehicleLabel) {
         const preferred = vehicles.find((v) => v.label === preferredVehicleLabel);
         if (preferred) {
@@ -1035,6 +1035,7 @@ export async function POST(request: NextRequest) {
             return preferred;
           }
         }
+        return null;
       }
 
       // Cerca il veicolo più piccolo che soddisfa i PAX, rispetta i limiti hotel,
