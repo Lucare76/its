@@ -59,6 +59,7 @@ function normalizedPlace(value: string | null | undefined) {
 function operationalZoneFromText(value: string | null | undefined): string | null {
   const text = normalizedPlace(value);
   if (!text) return null;
+  if (text.includes("san nicola") || text.includes("parroco d abundo") || text.includes("panza")) return "Forio";
   if (text.includes("mortella") || text === "la villa" || text.includes("hotel la villa")) return "Forio";
   if (text.includes("nitrodi")) return "Barano";
   if (text.includes("sant angelo")) return "Serrara Fontana";
@@ -80,7 +81,9 @@ function operationalZoneFromText(value: string | null | undefined): string | nul
 
 function hotelOperationalZone(hotel: HotelRow | undefined) {
   if (!hotel) return null;
-  return inferZoneFromText(hotel.zone ?? "")
+  const knownOperationalZone = operationalZoneFromText([hotel.name, hotel.address].filter(Boolean).join(" "));
+  return knownOperationalZone
+    ?? inferZoneFromText(hotel.zone ?? "")
     ?? operationalZoneFromText(hotel.address)
     ?? operationalZoneFromText(hotel.name);
 }
@@ -213,6 +216,8 @@ function batchByCapacity(
 
 const ARRIVAL_MERGE_WINDOW_MINUTES = 25;
 const DEPARTURE_SAME_HOTEL_MERGE_WINDOW_MINUTES = 30;
+const MIN_VEHICLE_CHANGE_MINUTES = 20;
+const MIN_SAME_VEHICLE_REUSE_MINUTES = 20;
 
 function arrivalMergeKey(service: ServiceRow): string {
   const port = cleanPortName(service.meeting_point) || "Ischia Porto";
@@ -226,12 +231,72 @@ function departureBaseGroupKey(service: ServiceRow, hotelMap: Map<string, HotelR
   return `${hotelKey}|${pickup}|${port.toLowerCase()}`;
 }
 
+function isNavettaService(service: ServiceRow) {
+  const kind = service.booking_service_kind ?? service.service_type_code ?? "";
+  return kind === "navetta" || kind === "shuttle_hotel" || kind === "bus_city_hotel";
+}
+
+function shuttlePairKey(service: ServiceRow) {
+  return service.hotel_id
+    ? `hotel:${service.hotel_id}`
+    : `customer:${normalizedPlace(service.customer_name)}|point:${normalizedPlace(service.meeting_point)}`;
+}
+
+function buildShuttlePairDrafts(services: ServiceRow[], hotelMap: Map<string, HotelRow>) {
+  const drafts: TripDraft[] = [];
+  const pairedIds = new Set<string>();
+  const byKey = new Map<string, ServiceRow[]>();
+
+  for (const service of services) {
+    if (!isNavettaService(service)) continue;
+    const key = shuttlePairKey(service);
+    byKey.set(key, [...(byKey.get(key) ?? []), service]);
+  }
+
+  for (const group of byKey.values()) {
+    const departures = group
+      .filter((service) => service.direction === "departure")
+      .sort((a, b) => serviceOperationalTime(a).localeCompare(serviceOperationalTime(b)));
+    const arrivals = group
+      .filter((service) => service.direction === "arrival")
+      .sort((a, b) => serviceOperationalTime(a).localeCompare(serviceOperationalTime(b)));
+
+    for (const departure of departures) {
+      if (pairedIds.has(departure.id)) continue;
+      const depMin = timeToMin(serviceOperationalTime(departure));
+      const arrival = arrivals.find((candidate) => {
+        if (pairedIds.has(candidate.id)) return false;
+        const diff = timeToMin(serviceOperationalTime(candidate)) - depMin;
+        return diff >= 0 && diff <= 10;
+      });
+      if (!arrival) continue;
+
+      pairedIds.add(departure.id);
+      pairedIds.add(arrival.id);
+      drafts.push({
+        serviceIds: [departure.id, arrival.id],
+        pax: departure.pax + arrival.pax,
+        time: serviceOperationalTime(departure),
+        direction: "arrival",
+        zoneLabel: serviceOperationalZone(arrival, hotelMap)
+          ?? serviceOperationalZone(departure, hotelMap)
+          ?? "Sconosciuto",
+      });
+    }
+  }
+
+  return { drafts, pairedIds };
+}
+
 // ─── Tipi interni ─────────────────────────────────────────────────────────────
 
 type ServiceRow = {
   id: string; time: string; direction: "arrival" | "departure";
   vessel: string | null; hotel_id: string | null; pax: number;
   status: string; meeting_point: string | null; pickup_hotel: string | null;
+  customer_name: string | null;
+  booking_service_kind: string | null;
+  service_type_code: string | null;
 };
 type HotelRow = {
   id: string;
@@ -246,7 +311,9 @@ type HotelRow = {
   geo_verified_at: string | null;
 };
 type VehicleRow = { id: string; label: string; capacity: number | null };
-type DriverRow = { profile_id: string; user_id: string | null; full_name: string; max_vehicle_capacity: number | null };
+type DriverRow = { profile_id: string; user_id: string | null; full_name: string };
+type DriverVehicleEvent = { time: number; vehicleLabel: string | null };
+type VehicleEvent = { time: number; driverProfileId: string | null };
 
 // Verifica se un veicolo è disponibile in un certo orario tenendo conto dei blocchi orari
 function vehicleAvailableAtTime(
@@ -330,6 +397,48 @@ function draftToGeographicWindow(
     endZone: last?.endZone ?? draft.zoneLabel,
     endArea: last?.endArea ?? zoneToGeoArea(last?.endZone ?? draft.zoneLabel),
   };
+}
+
+function vehicleChangeCompatible(
+  events: DriverVehicleEvent[],
+  tripMin: number,
+  nextVehicleLabel: string | null,
+) {
+  if (!nextVehicleLabel) return true;
+  return !events.some((event) =>
+    event.vehicleLabel &&
+    event.vehicleLabel !== nextVehicleLabel &&
+    Math.abs(event.time - tripMin) < MIN_VEHICLE_CHANGE_MINUTES
+  );
+}
+
+function vehicleScheduleCompatible(events: VehicleEvent[], tripMin: number) {
+  return !events.some((event) => Math.abs(event.time - tripMin) < MIN_SAME_VEHICLE_REUSE_MINUTES);
+}
+
+function serviceRouteLabel(service: ServiceRow, hotelMap: Map<string, HotelRow>) {
+  const hotel = service.hotel_id ? hotelMap.get(service.hotel_id) : null;
+  const hotelName = hotel?.name ?? "destinazione da verificare";
+  const meetingPoint = service.meeting_point ?? "punto da verificare";
+  if (service.direction === "arrival") return `${meetingPoint} -> ${hotelName}`;
+  return `${hotelName} -> ${meetingPoint}`;
+}
+
+function draftConflictLabel(draft: TripDraft, serviceMap: Map<string, ServiceRow>, hotelMap: Map<string, HotelRow>) {
+  const services = draft.serviceIds
+    .map((serviceId) => serviceMap.get(serviceId))
+    .filter((service): service is ServiceRow => Boolean(service));
+  const names = services
+    .map((service) => service.customer_name?.trim())
+    .filter(Boolean);
+  const uniqueNames = Array.from(new Set(names));
+  const routes = Array.from(new Set(services.map((service) => serviceRouteLabel(service, hotelMap))));
+  const pax = services.reduce((sum, service) => sum + service.pax, 0);
+  const nameLabel = uniqueNames.length > 0 ? uniqueNames.slice(0, 3).join(" + ") : `${services.length} servizi`;
+  const routeLabel = routes.length === 1
+    ? routes[0]
+    : routes.slice(0, 2).join(" / ") + (routes.length > 2 ? "..." : "");
+  return `${draft.time} ${draft.zoneLabel} - ${nameLabel}${pax ? ` (${pax} pax)` : ""}: ${routeLabel} - nessun autista compatibile geograficamente.`;
 }
 
 function servicesToExistingTripGeographicWindow(
@@ -427,7 +536,7 @@ export async function POST(request: NextRequest) {
            hotelLimitsRes, driverAvailRes, vehicleAvailRes, vehicleBlocksRes, availabilityConfirmRes, commitments] =
       await Promise.all([
         auth.admin.from("services")
-          .select("id, time, direction, vessel, hotel_id, pax, status, meeting_point, pickup_hotel")
+          .select("id, time, direction, vessel, hotel_id, pax, status, meeting_point, pickup_hotel, customer_name, booking_service_kind, service_type_code")
           .eq("tenant_id", tenantId).eq("date", date)
           .neq("status", "cancelled").neq("is_draft", true),
         auth.admin.from("hotels").select("id, name, address, zone, lat, lng, geo_status, geo_source, geo_accuracy, geo_verified_at").eq("tenant_id", tenantId),
@@ -437,7 +546,7 @@ export async function POST(request: NextRequest) {
           .order("capacity"),
         listDriverRegistry(auth.admin, tenantId),
         auth.admin.from("assignments")
-          .select("service_id, group_id, driver_user_id, driver_profile_id, locked_by_operator")
+          .select("service_id, group_id, driver_user_id, driver_profile_id, vehicle_label, locked_by_operator")
           .eq("tenant_id", tenantId),
         auth.admin.from("trip_groups")
           .select("id, driver_user_id, driver_profile_id")
@@ -512,6 +621,9 @@ export async function POST(request: NextRequest) {
 
     // Filtra veicoli globalmente non disponibili (available=false senza blocchi orari specifici)
     const vehicles = allVehicles.filter((v) => vehicleAvailByIdMap.get(v.id) !== false);
+    const vehicleScheduleEvents = new Map<string, VehicleEvent[]>(
+      vehicles.map((vehicle) => [vehicle.label, []])
+    );
 
     const allDrivers = (driverRegistry ?? [])
       .filter((driver) => !driver.access_suspended)
@@ -519,7 +631,6 @@ export async function POST(request: NextRequest) {
         profile_id: driver.id,
         user_id: driver.user_id ?? null,
         full_name: driver.full_name,
-        max_vehicle_capacity: driver.max_vehicle_capacity,
       })) as DriverRow[];
     // Filtra autisti dichiarati non disponibili (available=false)
     const drivers = allDrivers.filter((d) => {
@@ -617,10 +728,12 @@ export async function POST(request: NextRequest) {
       }, { status: 409 });
     }
 
-    const arrivals = toAssign.filter((s) => s.direction === "arrival");
-    const departures = toAssign.filter((s) => s.direction === "departure");
+    const shuttlePairs = buildShuttlePairDrafts(toAssign, hotelMap);
+    const unpairedToAssign = toAssign.filter((service) => !shuttlePairs.pairedIds.has(service.id));
+    const arrivals = unpairedToAssign.filter((s) => s.direction === "arrival");
+    const departures = unpairedToAssign.filter((s) => s.direction === "departure");
 
-    const drafts: TripDraft[] = [];
+    const drafts: TripDraft[] = [...shuttlePairs.drafts];
 
     // ── 4. Algoritmo ARRIVI ──────────────────────────────────────────────────
 
@@ -773,9 +886,11 @@ export async function POST(request: NextRequest) {
     const driverTimes = new Map<string, number[]>();
     const driverCurrentArea = new Map<string, "nord_ovest" | "est_sud" | null>();
     const driverGeoWindows = new Map<string, GeographicCompatibilityService[]>();
+    const driverVehicleEvents = new Map<string, DriverVehicleEvent[]>();
     for (const d of drivers) {
       driverTimes.set(d.profile_id, []);
       driverGeoWindows.set(d.profile_id, []);
+      driverVehicleEvents.set(d.profile_id, []);
     }
 
     const existingServicesByDriverGroup = new Map<string, ServiceRow[]>();
@@ -792,8 +907,20 @@ export async function POST(request: NextRequest) {
       const service = serviceMap.get(serviceId);
       if (!assignProfileId || !service) continue;
       const times = driverTimes.get(assignProfileId) ?? [];
-      times.push(timeToMin(serviceOperationalTime(service)));
+      const serviceMin = timeToMin(serviceOperationalTime(service));
+      times.push(serviceMin);
       driverTimes.set(assignProfileId, times);
+      const vehicleLabel = (assignment.vehicle_label as string | null) ?? null;
+      driverVehicleEvents.set(assignProfileId, [
+        ...(driverVehicleEvents.get(assignProfileId) ?? []),
+        { time: serviceMin, vehicleLabel },
+      ]);
+      if (vehicleLabel) {
+        vehicleScheduleEvents.set(vehicleLabel, [
+          ...(vehicleScheduleEvents.get(vehicleLabel) ?? []),
+          { time: serviceMin, driverProfileId: assignProfileId },
+        ]);
+      }
       const key = `${assignProfileId}|${groupId}`;
       existingServicesByDriverGroup.set(key, [...(existingServicesByDriverGroup.get(key) ?? []), service]);
     }
@@ -857,7 +984,7 @@ export async function POST(request: NextRequest) {
           driverGeoWindows.set(assignedProfileId, [...(driverGeoWindows.get(assignedProfileId) ?? []), draftGeoWindow]);
           if (tripArea) driverCurrentArea.set(assignedProfileId, tripArea);
         } else if (timeAvailable.length > 0) {
-          geographicSkips.push(`${draft.time} ${draft.zoneLabel}: nessun autista compatibile geograficamente.`);
+          geographicSkips.push(draftConflictLabel(draft, serviceMap, hotelMap));
         }
       }
 
@@ -866,11 +993,19 @@ export async function POST(request: NextRequest) {
 
     // ── 8. Assegna mezzi (il più piccolo che soddisfa PAX + vincoli hotel + autista) ─
 
-    const pickVehicle = (pax: number, draft: TripDraft, profileId: string | null): VehicleRow | null => {
+    const pickVehicle = (
+      pax: number,
+      draft: TripDraft,
+      profileId: string | null,
+      preferredVehicleLabel: string | null = null,
+      strictPreferred: boolean = false,
+      driverEvents: Map<string, DriverVehicleEvent[]> = driverVehicleEvents,
+      vehicleEvents: Map<string, VehicleEvent[]> = vehicleScheduleEvents,
+    ): VehicleRow | null => {
       const tripMin = timeToMin(draft.time);
+      const existingDriverVehicleEvents = profileId ? driverEvents.get(profileId) ?? [] : [];
 
-      // Calcola la capienza massima consentita per questo giro:
-      // 1. Limite hotel: minima max_capacity tra tutti gli hotel del giro
+      // Limite hotel: minima max_capacity tra tutti gli hotel del giro
       const hotelIds = draft.serviceIds
         .map((sid) => allServices.find((s) => s.id === sid)?.hotel_id)
         .filter((id): id is string => Boolean(id));
@@ -879,30 +1014,58 @@ export async function POST(request: NextRequest) {
         if (limit == null) return min;
         return min == null ? limit : Math.min(min, limit);
       }, null);
+      const hardMaxCap = hotelMaxCap ?? null;
 
-      // 2. Limite autista: max_vehicle_capacity del driver
-      const driver = profileId ? allDrivers.find((d) => d.profile_id === profileId) : null;
-      const driverMaxCap = driver?.max_vehicle_capacity ?? null;
+      const usageCount = (label: string) => vehicleEvents.get(label)?.length ?? 0;
+      const bySmallestAndLeastUsed = (a: VehicleRow, b: VehicleRow) =>
+        ((a.capacity ?? 0) - (b.capacity ?? 0)) ||
+        (usageCount(a.label) - usageCount(b.label)) ||
+        a.label.localeCompare(b.label);
 
-      // Capienza massima finale: il più restrittivo tra hotel e autista
-      const hardMaxCap = hotelMaxCap != null && driverMaxCap != null
-        ? Math.min(hotelMaxCap, driverMaxCap)
-        : hotelMaxCap ?? driverMaxCap ?? null;
+      // Se l'autista ha già un mezzo preferito, proviamo prima quello.
+      // In strict mode (già cambiato una volta) è l'unica opzione ammessa.
+      if (preferredVehicleLabel) {
+        const preferred = vehicles.find((v) => v.label === preferredVehicleLabel);
+        if (preferred) {
+          const cap = preferred.capacity ?? 0;
+          const scheduleOk =
+            vehicleAvailableAtTime(preferred.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap) &&
+            vehicleScheduleCompatible(vehicleEvents.get(preferred.label) ?? [], tripMin);
+          if (scheduleOk && cap >= pax && (hardMaxCap == null || cap <= hardMaxCap)) {
+            return preferred;
+          }
+        }
+        if (strictPreferred) return null;
+      }
 
-      // Cerca il veicolo più piccolo che soddisfa i PAX, rispetta i limiti e non ha blocchi orari
-      const candidate = vehicles.find((v) => {
-        const cap = v.capacity ?? 0;
-        if (cap < pax) return false;
-        if (hardMaxCap != null && cap > hardMaxCap) return false;
-        if (!vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap)) return false;
-        return true;
-      });
+      // Cerca il veicolo più piccolo che soddisfa i PAX, rispetta i limiti hotel,
+      // non ha blocchi orari e non è già impegnato in un giro troppo vicino.
+      const candidate = vehicles
+        .filter((v) => {
+          const cap = v.capacity ?? 0;
+          if (cap < pax) return false;
+          if (hardMaxCap != null && cap > hardMaxCap) return false;
+          if (!vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap)) return false;
+          if (!vehicleChangeCompatible(existingDriverVehicleEvents, tripMin, v.label)) return false;
+          if (!vehicleScheduleCompatible(vehicleEvents.get(v.label) ?? [], tripMin)) return false;
+          return true;
+        })
+        .sort(bySmallestAndLeastUsed)[0];
       if (candidate) return candidate;
 
-      // Fallback: veicolo più grande disponibile (anche se non soddisfa i vincoli di capienza)
+      // Fallback: qualsiasi veicolo con cap >= pax e slot libero (ignora hardMaxCap hotel).
+      // Non crea mai overbooking: se nessun veicolo ha cap >= pax il giro resta senza mezzo.
       const fallback = [...vehicles]
-        .filter((v) => vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap))
-        .sort((a, b) => (b.capacity ?? 0) - (a.capacity ?? 0))[0];
+        .filter((v) => {
+          const cap = v.capacity ?? 0;
+          if (cap < pax) return false;
+          return (
+            vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap) &&
+            vehicleChangeCompatible(existingDriverVehicleEvents, tripMin, v.label) &&
+            vehicleScheduleCompatible(vehicleEvents.get(v.label) ?? [], tripMin)
+          );
+        })
+        .sort(bySmallestAndLeastUsed)[0];
       return fallback ?? null;
     };
 
@@ -915,14 +1078,64 @@ export async function POST(request: NextRequest) {
 
     if (draftAssignments.length > 0) {
       // Seleziona veicoli per tutti i giri, poi crea tutti i trip_groups in un unico insert
-      const prepared = draftAssignments
-        .filter(({ profileId }) => Boolean(profileId))
-        .map(({ draft, profileId, userId: driverUserId }) => ({
+      const prepared: Array<{
+        draft: TripDraft;
+        profileId: string;
+        driverUserId: string | null;
+        vehicle: VehicleRow | null;
+      }> = [];
+      const plannedDriverVehicleEvents = new Map(
+        [...driverVehicleEvents.entries()].map(([profileId, events]) => [profileId, [...events]])
+      );
+      const plannedVehicleScheduleEvents = new Map(
+        [...vehicleScheduleEvents.entries()].map(([vehicleLabel, events]) => [vehicleLabel, [...events]])
+      );
+
+      // Traccia mezzo preferito per autista: minimizza i cambi, ammette al più 1 cambio/giorno.
+      // Inizializzato da eventi già presenti (unassigned_only con giri locked).
+      const driverPreferredVehicle = new Map<string, string>();
+      const driverHasChanged = new Map<string, boolean>();
+      for (const [pid, events] of driverVehicleEvents.entries()) {
+        const labels = events.map((e) => e.vehicleLabel).filter((l): l is string => Boolean(l));
+        if (labels.length > 0) driverPreferredVehicle.set(pid, labels[labels.length - 1]!);
+        const distinct = new Set(labels);
+        if (distinct.size > 1) driverHasChanged.set(pid, true);
+      }
+
+      for (const { draft, profileId, userId: driverUserId } of draftAssignments) {
+        if (!profileId) continue;
+        const preferredLabel = driverPreferredVehicle.get(profileId) ?? null;
+        const strictPreferred = driverHasChanged.get(profileId) === true;
+        const vehicle = pickVehicle(
+          draft.pax,
           draft,
           profileId,
-          driverUserId,
-          vehicle: pickVehicle(draft.pax, draft, profileId),
-        }));
+          preferredLabel,
+          strictPreferred,
+          plannedDriverVehicleEvents,
+          plannedVehicleScheduleEvents
+        );
+        prepared.push({ draft, profileId, driverUserId, vehicle });
+        const tripMin = timeToMin(draft.time);
+        plannedDriverVehicleEvents.set(profileId, [
+          ...(plannedDriverVehicleEvents.get(profileId) ?? []),
+          { time: tripMin, vehicleLabel: vehicle?.label ?? null },
+        ]);
+        if (vehicle?.label) {
+          plannedVehicleScheduleEvents.set(vehicle.label, [
+            ...(plannedVehicleScheduleEvents.get(vehicle.label) ?? []),
+            { time: tripMin, driverProfileId: profileId },
+          ]);
+          // Aggiorna tracking mezzo preferito
+          const prev = driverPreferredVehicle.get(profileId);
+          if (!prev) {
+            driverPreferredVehicle.set(profileId, vehicle.label);
+          } else if (prev !== vehicle.label && !driverHasChanged.get(profileId)) {
+            driverHasChanged.set(profileId, true);
+            driverPreferredVehicle.set(profileId, vehicle.label);
+          }
+        }
+      }
 
       const groupRows = prepared.map(({ draft: _, driverUserId, profileId, vehicle }) => ({
         tenant_id: tenantId,
