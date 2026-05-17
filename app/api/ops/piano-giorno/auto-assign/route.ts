@@ -219,10 +219,20 @@ const DEPARTURE_SAME_HOTEL_MERGE_WINDOW_MINUTES = 30;
 const MIN_VEHICLE_CHANGE_MINUTES = 20;
 const MIN_SAME_VEHICLE_REUSE_MINUTES = 20;
 
-// Stima tempo di percorrenza (andata) porto ↔ hotel in base alla zona.
-// Usato per calcolare il reuse time reale del mezzo: andata + ritorno + margine.
-function estimateZoneTravelMin(zone: string | null): number {
+// Stima tempo di percorrenza (andata) porto ↔ hotel in base alla zona e tipo servizio.
+// Navette: giri corti (Presidente/Cristallo ≈5 min, San Nicola ≈11 min).
+// Transfer normali: tempi più lunghi per i chilometri da percorrere.
+function estimateZoneTravelMin(zone: string | null, isNavetta: boolean): number {
   const z = (zone ?? "").toLowerCase();
+  if (isNavetta) {
+    if (z.includes("ischia")) return 5;           // Presidente/Cristallo area porto
+    if (z.includes("casamicciola")) return 7;
+    if (z.includes("lacco")) return 8;
+    if (z.includes("forio") || z.includes("citara") || z.includes("panza") || z.includes("cuotto")) return 11; // San Nicola
+    if (z.includes("barano") || z.includes("testaccio") || z.includes("nitrodi")) return 10;
+    if (z.includes("serrara") || z.includes("sant")) return 13;
+    return 8;
+  }
   if (z.includes("ischia")) return 10;
   if (z.includes("casamicciola")) return 12;
   if (z.includes("lacco")) return 15;
@@ -232,8 +242,8 @@ function estimateZoneTravelMin(zone: string | null): number {
   return 18;
 }
 
-function estimateVehicleReuseDurationMin(zoneLabel: string | null): number {
-  return estimateZoneTravelMin(zoneLabel) * 2 + 5; // andata + ritorno + margine operativo
+function estimateVehicleReuseDurationMin(zoneLabel: string | null, isNavetta: boolean): number {
+  return estimateZoneTravelMin(zoneLabel, isNavetta) * 2 + 3; // andata + ritorno + margine operativo
 }
 
 function arrivalMergeKey(service: ServiceRow): string {
@@ -298,6 +308,7 @@ function buildShuttlePairDrafts(services: ServiceRow[], hotelMap: Map<string, Ho
         zoneLabel: serviceOperationalZone(arrival, hotelMap)
           ?? serviceOperationalZone(departure, hotelMap)
           ?? "Sconosciuto",
+        isNavetta: true,
       });
     }
   }
@@ -377,6 +388,7 @@ type TripDraft = {
   time: string;
   direction: "arrival" | "departure";
   zoneLabel: string;
+  isNavetta: boolean;
 };
 
 function serviceOperationalTime(service: ServiceRow): string {
@@ -808,6 +820,7 @@ export async function POST(request: NextRequest) {
             time: [...ferryServices].sort((a, b) => a.time.localeCompare(b.time))[0]?.time ?? "00:00",
             direction: "arrival",
             zoneLabel: zone,
+            isNavetta: false,
           });
         }
       }
@@ -886,6 +899,7 @@ export async function POST(request: NextRequest) {
             time: batch[0]?.pickup ?? "00:00",
             direction: "departure",
             zoneLabel: batch[0]?.zone ?? "—",
+            isNavetta: false,
           });
         }
       }
@@ -939,7 +953,7 @@ export async function POST(request: NextRequest) {
         const existingZone = serviceOperationalZone(service, hotelMap);
         vehicleScheduleEvents.set(vehicleLabel, [
           ...(vehicleScheduleEvents.get(vehicleLabel) ?? []),
-          { time: serviceMin, reuseDurationMin: estimateVehicleReuseDurationMin(existingZone), driverProfileId: assignProfileId },
+          { time: serviceMin, reuseDurationMin: estimateVehicleReuseDurationMin(existingZone, isNavettaService(service)), driverProfileId: assignProfileId },
         ]);
       }
       const key = `${assignProfileId}|${groupId}`;
@@ -1036,8 +1050,8 @@ export async function POST(request: NextRequest) {
       }, null);
       const hardMaxCap = hotelMaxCap ?? null;
 
-      // Tempo di riutilizzo del mezzo basato sulla zona del giro (andata+ritorno+margine)
-      const tripReuseDurationMin = estimateVehicleReuseDurationMin(draft.zoneLabel);
+      // Tempo di riutilizzo del mezzo basato su zona e tipo servizio (navetta vs transfer)
+      const tripReuseDurationMin = estimateVehicleReuseDurationMin(draft.zoneLabel, draft.isNavetta);
 
       const usageCount = (label: string) => vehicleEvents.get(label)?.length ?? 0;
       const bySmallestAndLeastUsed = (a: VehicleRow, b: VehicleRow) =>
@@ -1145,7 +1159,7 @@ export async function POST(request: NextRequest) {
         if (vehicle?.label) {
           plannedVehicleScheduleEvents.set(vehicle.label, [
             ...(plannedVehicleScheduleEvents.get(vehicle.label) ?? []),
-            { time: tripMin, reuseDurationMin: estimateVehicleReuseDurationMin(draft.zoneLabel), driverProfileId: profileId },
+            { time: tripMin, reuseDurationMin: estimateVehicleReuseDurationMin(draft.zoneLabel, draft.isNavetta), driverProfileId: profileId },
           ]);
           // Imposta il preferito solo al primo giro assegnato
           if (!driverPreferredVehicle.has(profileId)) {
