@@ -199,6 +199,18 @@ function buildSuggestedTemplateVariables(thread: ThreadRow | null, template: Tem
   return base.slice(0, count);
 }
 
+function fillTemplatePreview(bodyText: string, variables: string[]): string {
+  let result = bodyText;
+  for (let i = 0; i < Math.max(variables.length, 9); i++) {
+    const val = variables[i]?.trim();
+    result = result.replace(
+      new RegExp(`\\{\\{${i + 1}\\}\\}`, "g"),
+      val ? val : `{{${i + 1}}}`,
+    );
+  }
+  return result;
+}
+
 async function getAccessToken() {
   if (!supabase) return null;
   const { data } = await supabase.auth.getSession();
@@ -578,6 +590,9 @@ export default function WhatsAppInboxPage() {
   const [newChatName, setNewChatName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
+    typeof Notification !== "undefined" ? Notification.permission : "default",
+  );
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<"list" | "chat">("list");
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
@@ -585,6 +600,7 @@ export default function WhatsAppInboxPage() {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const lastRenderedMessageKeyRef = useRef<string>("");
+  const prevThreadLastMsgRef = useRef<Map<string, string>>(new Map());
 
   const selectedThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -693,6 +709,24 @@ export default function WhatsAppInboxPage() {
         return;
       }
       const nextSelectedThreadId = body.selected_thread_id ?? null;
+      const prevMsgMap = prevThreadLastMsgRef.current;
+      for (const thread of (body.threads ?? [])) {
+        const prevLastAt = prevMsgMap.get(thread.id);
+        const currentLastAt = thread.last_message_at ?? "";
+        if (prevLastAt !== undefined && prevLastAt !== currentLastAt && thread.unread_count > 0 &&
+            (document.hidden || thread.id !== nextSelectedThreadId)) {
+          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            const name = thread.whatsapp_contacts?.profile_name || thread.service?.customer_name || thread.phone_e164 || thread.wa_id || "Cliente";
+            new Notification("Nuovo messaggio WhatsApp", {
+              body: `${name}: ${thread.last_message_preview ?? "Messaggio ricevuto"}`,
+              icon: "/favicon.ico",
+              tag: `wa-thread-${thread.id}`,
+              renotify: true,
+            });
+          }
+        }
+        prevMsgMap.set(thread.id, currentLastAt);
+      }
       setThreads(body.threads ?? []);
       setMessages(body.messages ?? []);
       setTemplateOptions(body.template_options ?? []);
@@ -722,6 +756,14 @@ export default function WhatsAppInboxPage() {
   }, [composerMode, selectedTemplate, selectedThread, templateVariablesText]);
 
   useEffect(() => {
+    if (typeof Notification === "undefined") return;
+    setNotifPermission(Notification.permission);
+    if (Notification.permission === "default") {
+      void Notification.requestPermission().then((perm) => setNotifPermission(perm));
+    }
+  }, []);
+
+  useEffect(() => {
     const timeout = window.setTimeout(() => void load(selectedThreadId), 250);
     return () => window.clearTimeout(timeout);
   }, [filter, search, selectedThreadId, load]);
@@ -729,6 +771,12 @@ export default function WhatsAppInboxPage() {
   useEffect(() => {
     if (!selectedThreadId) return;
     const interval = window.setInterval(() => { void load(selectedThreadId); }, 12000);
+    return () => window.clearInterval(interval);
+  }, [selectedThreadId, load]);
+
+  useEffect(() => {
+    if (selectedThreadId) return;
+    const interval = window.setInterval(() => { void load(null); }, 20000);
     return () => window.clearInterval(interval);
   }, [selectedThreadId, load]);
 
@@ -918,6 +966,34 @@ export default function WhatsAppInboxPage() {
             <IconPlus />
             Nuovo
           </button>
+
+          {/* Notification status pill */}
+          {notifPermission === "granted" ? (
+            <span className="flex shrink-0 items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+              <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 2a6 6 0 0 0-6 6v3.586l-.707.707A1 1 0 0 0 4 14h12a1 1 0 0 0 .707-1.707L16 11.586V8a6 6 0 0 0-6-6ZM10 18a3 3 0 0 1-2.83-2h5.66A3 3 0 0 1 10 18Z" />
+              </svg>
+              Notifiche attive
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof Notification === "undefined") return;
+                if (Notification.permission === "denied") {
+                  alert("Le notifiche sono bloccate dal browser.\n\nClicca sull'icona 🔒 (o ⚠️) a sinistra della barra URL → Impostazioni sito → Notifiche → Consenti.\nPoi ricarica la pagina.");
+                  return;
+                }
+                void Notification.requestPermission().then((perm) => setNotifPermission(perm));
+              }}
+              className="flex shrink-0 items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
+            >
+              <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 2a6 6 0 0 0-6 6v3.586l-.707.707A1 1 0 0 0 4 14h12a1 1 0 0 0 .707-1.707L16 11.586V8a6 6 0 0 0-6-6ZM10 18a3 3 0 0 1-2.83-2h5.66A3 3 0 0 1 10 18Z" />
+              </svg>
+              {notifPermission === "denied" ? "Notifiche bloccate" : "Abilita notifiche"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1391,106 +1467,173 @@ export default function WhatsAppInboxPage() {
                     ))}
                   </div>
 
-                  {/* Template studio — unchanged ─────────────────────────── */}
+                  {/* Template studio */}
                   {composerMode === "template" ? (
                     <div className="space-y-3">
-                      <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
-                        <div className="border-b border-slate-200 bg-[linear-gradient(135deg,rgba(255,255,255,1),rgba(240,253,250,1))] px-4 py-4">
-                          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                            <div>
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-emerald-700">Template Studio</p>
-                              <h3 className="mt-1 text-lg font-semibold text-slate-900">Selezione rapida, preview immediata</h3>
-                              <p className="mt-1 text-sm text-slate-600">Template approvati ordinati per priorità operativa, con focus sul contenuto vero del messaggio.</p>
+                      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        {/* Header compatto */}
+                        <div className="flex items-center justify-between gap-4 border-b border-slate-100 bg-slate-50/60 px-4 py-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-600 text-white">
+                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 0 1 .865-.501 48.172 48.172 0 0 0 3.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" />
+                              </svg>
                             </div>
-                            <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                              <div className="rounded-2xl border border-emerald-100 bg-white px-3 py-2">
-                                <div className="font-semibold text-slate-900">{sortedTemplateOptions.length}</div>
-                                <div className="text-slate-500">Visibili</div>
-                              </div>
-                              <div className="rounded-2xl border border-emerald-100 bg-white px-3 py-2">
-                                <div className="font-semibold text-slate-900">{sortedTemplateOptions.filter((o) => o.language_code === "it").length}</div>
-                                <div className="text-slate-500">Italiano</div>
-                              </div>
-                              <div className="rounded-2xl border border-emerald-100 bg-white px-3 py-2">
-                                <div className="font-semibold text-slate-900">{sortedTemplateOptions.filter((o) => o.status === "APPROVED").length}</div>
-                                <div className="text-slate-500">Approved</div>
-                              </div>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">Template approvati</p>
+                              <p className="text-[11px] text-slate-500">Seleziona e invia al cliente</p>
                             </div>
                           </div>
+                          <div className="flex items-center gap-3 text-xs">
+                            <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700">
+                              🇮🇹 {sortedTemplateOptions.filter((o) => o.language_code === "it").length}
+                            </span>
+                            <span className="flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600">
+                              🇬🇧 {sortedTemplateOptions.filter((o) => o.language_code !== "it").length}
+                            </span>
+                            <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-500">
+                              {sortedTemplateOptions.length} tot
+                            </span>
+                          </div>
                         </div>
-                        <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-                          <div className="space-y-2">
+
+                        <div className="grid xl:grid-cols-[minmax(0,1fr)_300px]">
+                          {/* Lista template */}
+                          <div className="max-h-[300px] divide-y divide-slate-100 overflow-y-auto">
                             {sortedTemplateOptions.map((option) => {
                               const active = selectedTemplate?.key === option.key;
+                              const accentColor = option.template.includes("aeroporto")
+                                ? "bg-sky-500"
+                                : option.template.includes("stazione")
+                                  ? "bg-amber-500"
+                                  : option.template.includes("medmar")
+                                    ? "bg-indigo-500"
+                                    : option.template.includes("snav")
+                                      ? "bg-teal-500"
+                                      : option.template.includes("reminder") || option.template.includes("48h")
+                                        ? "bg-violet-500"
+                                        : option.template.includes("assistenza") || option.template.includes("customer")
+                                          ? "bg-rose-500"
+                                          : "bg-slate-400";
                               return (
                                 <button
                                   key={option.key}
                                   type="button"
                                   onClick={() => setSelectedTemplateKey(option.key)}
                                   disabled={busyAction === "reply"}
-                                  className={`group flex w-full items-start gap-4 rounded-[22px] border px-4 py-4 text-left transition ${
-                                    active
-                                      ? "border-emerald-500 bg-emerald-50 shadow-[0_14px_40px_-28px_rgba(16,185,129,0.65)]"
-                                      : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                                  className={`group relative flex w-full items-stretch gap-0 text-left transition ${
+                                    active ? "bg-emerald-50" : "bg-white hover:bg-slate-50/80"
                                   }`}
                                 >
-                                  <div className={`mt-0.5 h-11 w-11 shrink-0 rounded-2xl bg-gradient-to-br ${templateTone(option.template)} ring-1 ring-black/5`} />
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <span className="text-sm font-semibold text-slate-900">{templateFriendlyLabel(option.template)}</span>
-                                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${option.language_code === "it" ? "bg-emerald-600 text-white" : "bg-slate-900 text-white"}`}>
-                                        {option.language_code.toUpperCase()}
-                                      </span>
-                                      {option.is_tenant_default && (
-                                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">Default</span>
+                                  {/* Accent bar sinistra */}
+                                  <div className={`w-1 shrink-0 rounded-none ${active ? accentColor : "bg-transparent group-hover:bg-slate-200"} transition`} />
+
+                                  <div className="flex flex-1 items-center gap-3 px-3 py-2.5">
+                                    {/* Icona tonda */}
+                                    <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white ${accentColor}`}>
+                                      {templateFriendlyLabel(option.template).charAt(0).toUpperCase()}
+                                    </div>
+
+                                    <div className="min-w-0 flex-1">
+                                      {/* Nome + lingua + badge */}
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        <span className={`text-sm font-semibold leading-tight ${active ? "text-emerald-800" : "text-slate-800"}`}>
+                                          {templateFriendlyLabel(option.template)}
+                                        </span>
+                                        <span className="text-xs">{option.language_code === "it" ? "🇮🇹" : "🇬🇧"}</span>
+                                        {option.is_tenant_default && (
+                                          <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Default</span>
+                                        )}
+                                        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400"}`}>
+                                          {option.body_parameter_count} var
+                                        </span>
+                                      </div>
+
+                                      {/* Body preview — 1 riga */}
+                                      {option.body_text ? (
+                                        <p className={`mt-0.5 truncate text-xs ${active ? "text-emerald-700/80" : "text-slate-500"}`}>
+                                          {option.body_text.slice(0, 120)}
+                                        </p>
+                                      ) : (
+                                        <p className="mt-0.5 font-mono text-[10px] text-slate-400 truncate">{option.template}</p>
                                       )}
                                     </div>
-                                    <div className="mt-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">{option.template}</div>
-                                    <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.12em]">
-                                      <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">{option.status}</span>
-                                      {option.category && <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">{option.category}</span>}
-                                      <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">{option.body_parameter_count} variabili</span>
+
+                                    {/* Checkmark */}
+                                    <div className="shrink-0">
+                                      {active ? (
+                                        <div className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500">
+                                          <svg className="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                            <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd" />
+                                          </svg>
+                                        </div>
+                                      ) : (
+                                        <div className="h-5 w-5 rounded-full border-2 border-slate-200 transition group-hover:border-emerald-300" />
+                                      )}
                                     </div>
-                                  </div>
-                                  <div className={`pt-1 text-[11px] font-semibold ${active ? "text-emerald-700" : "text-slate-400 group-hover:text-slate-700"}`}>
-                                    {active ? "Attivo" : "Apri"}
                                   </div>
                                 </button>
                               );
                             })}
                           </div>
+
+                          {/* Preview panel — stile bolla WhatsApp */}
                           {selectedTemplate && (
-                            <div className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(15,23,42,1),rgba(30,41,59,0.98))] p-5 text-slate-100 shadow-[0_20px_60px_-36px_rgba(15,23,42,0.85)]">
-                              <div className="flex items-start justify-between gap-4">
-                                <div>
-                                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-300">Template Preview</p>
-                                  <h4 className="mt-2 text-lg font-semibold text-white">{templateFriendlyLabel(selectedTemplate.template)}</h4>
-                                  <p className="mt-1 text-sm text-slate-300">{selectedTemplate.template} · {templateLanguageLabel(selectedTemplate.language_code)}</p>
+                            <div className="flex flex-col border-l border-slate-100 bg-[#ece5dd]">
+                              <div className="flex items-center gap-2 border-b border-black/10 bg-[#075e54] px-4 py-2.5">
+                                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-white/20 text-xs font-bold text-white">
+                                  {templateFriendlyLabel(selectedTemplate.template).charAt(0)}
                                 </div>
-                                <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-200">
+                                <div>
+                                  <p className="text-xs font-semibold text-white">{templateFriendlyLabel(selectedTemplate.template)}</p>
+                                  <p className="text-[10px] text-white/70">{templateLanguageLabel(selectedTemplate.language_code)}</p>
+                                </div>
+                                <span className="ml-auto rounded-full bg-emerald-400/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-200">
                                   {selectedTemplate.status}
                                 </span>
                               </div>
-                              <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-                                <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                                  <div className="text-slate-400">Variabili BODY</div>
-                                  <div className="mt-1 text-lg font-semibold text-white">{selectedTemplate.body_parameter_count}</div>
+                              <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
+                                {/* Bolla messaggio WhatsApp */}
+                                <div className="max-w-[88%] self-start">
+                                  <div className="relative rounded-2xl rounded-tl-none bg-white px-3.5 py-2.5 shadow-sm">
+                                    <div className="absolute -left-1.5 top-0 h-3 w-3 overflow-hidden">
+                                      <div className="absolute right-0 top-0 h-full w-full origin-top-right -rotate-45 bg-white" />
+                                    </div>
+                                    {selectedTemplate.header_format && selectedTemplate.header_format !== "NONE" && (
+                                      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                                        Header: {selectedTemplate.header_format}
+                                      </p>
+                                    )}
+                                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+                                      {fillTemplatePreview(
+                                        selectedTemplate.body_text ?? "Testo del template non disponibile.",
+                                        templateVariablesText.split(/\r?\n/).map((v) => v.trim()),
+                                      )}
+                                    </p>
+                                    <p className="mt-1.5 text-right text-[10px] text-slate-400">ora ✓✓</p>
+                                  </div>
                                 </div>
-                                <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                                  <div className="text-slate-400">Header</div>
-                                  <div className="mt-1 text-sm font-semibold text-white">{selectedTemplate.header_format ?? "Nessuno"}</div>
+                                {/* Metadati */}
+                                <div className="mt-auto space-y-1.5 rounded-xl border border-black/10 bg-white/60 p-3 text-xs">
+                                  <div className="flex justify-between text-slate-600">
+                                    <span className="text-slate-400">Variabili</span>
+                                    <span className="font-semibold">{selectedTemplate.body_parameter_count}</span>
+                                  </div>
+                                  <div className="flex justify-between text-slate-600">
+                                    <span className="text-slate-400">Categoria</span>
+                                    <span className="font-semibold">{selectedTemplate.category ?? "—"}</span>
+                                  </div>
+                                  <div className="flex justify-between text-slate-600">
+                                    <span className="text-slate-400">Nome API</span>
+                                    <span className="font-mono text-[10px] text-slate-500">{selectedTemplate.template}</span>
+                                  </div>
+                                  {(selectedTemplate.is_tenant_default || selectedTemplate.is_tenant_arrival) && (
+                                    <div className="flex flex-wrap gap-1 pt-1">
+                                      {selectedTemplate.is_tenant_default && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold text-amber-700">Default tenant</span>}
+                                      {selectedTemplate.is_tenant_arrival && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[9px] font-bold text-sky-700">Arrivi tenant</span>}
+                                    </div>
+                                  )}
                                 </div>
-                              </div>
-                              <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-300">Body Meta</p>
-                                <p className="whitespace-pre-wrap text-sm leading-6 text-slate-100">
-                                  {selectedTemplate.body_text ?? "Preview del body non disponibile."}
-                                </p>
-                              </div>
-                              <div className="mt-4 flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.12em]">
-                                {selectedTemplate.category && <span className="rounded-full bg-white/10 px-2 py-1 text-slate-200">{selectedTemplate.category}</span>}
-                                {selectedTemplate.is_tenant_default && <span className="rounded-full bg-amber-400/15 px-2 py-1 text-amber-200">Default tenant</span>}
-                                {selectedTemplate.is_tenant_arrival && <span className="rounded-full bg-sky-400/15 px-2 py-1 text-sky-200">Arrivi tenant</span>}
                               </div>
                             </div>
                           )}
@@ -1501,37 +1644,66 @@ export default function WhatsAppInboxPage() {
                           Template Meta non caricati: {templateFetchError}
                         </div>
                       )}
-                      <label htmlFor="whatsapp-template-vars" className="block text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                        Variabili template
-                      </label>
-                      <textarea
-                        id="whatsapp-template-vars"
-                        data-no-uppercase
-                        value={templateVariablesText}
-                        onChange={(e) => setTemplateVariablesText(e.target.value)}
-                        placeholder={"Una variabile per riga\nMario Rossi\n2026-05-03\n14:30"}
-                        rows={5}
-                        disabled={busyAction === "reply"}
-                        className="min-h-[120px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100"
-                      />
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={loadSuggestedTemplateVariables}
-                          disabled={busyAction === "reply" || !selectedThread}
-                          className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
-                        >
-                          Compila suggerite
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setTemplateVariablesText("")}
-                          disabled={busyAction === "reply"}
-                          className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
-                        >
-                          Svuota variabili
-                        </button>
-                      </div>
+                      {selectedTemplate && selectedTemplate.body_parameter_count > 0 ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                              Variabili ({selectedTemplate.body_parameter_count})
+                            </p>
+                            <div className="flex gap-1.5">
+                              <button
+                                type="button"
+                                onClick={loadSuggestedTemplateVariables}
+                                disabled={busyAction === "reply" || !selectedThread}
+                                className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                Compila suggerite
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setTemplateVariablesText("")}
+                                disabled={busyAction === "reply"}
+                                className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                Svuota
+                              </button>
+                            </div>
+                          </div>
+                          <div className="space-y-1.5">
+                            {Array.from({ length: selectedTemplate.body_parameter_count }, (_, i) => {
+                              const lines = templateVariablesText.split(/\r?\n/);
+                              const value = lines[i] ?? "";
+                              return (
+                                <div key={i} className="flex items-center gap-2">
+                                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-500">
+                                    {i + 1}
+                                  </span>
+                                  <input
+                                    data-no-uppercase
+                                    value={value}
+                                    onChange={(e) => {
+                                      const arr = templateVariablesText.split(/\r?\n/);
+                                      while (arr.length <= i) arr.push("");
+                                      arr[i] = e.target.value;
+                                      setTemplateVariablesText(arr.join("\n"));
+                                    }}
+                                    placeholder={`Variabile ${i + 1}`}
+                                    disabled={busyAction === "reply"}
+                                    className="input-saas flex-1 disabled:cursor-not-allowed disabled:bg-slate-100"
+                                  />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : selectedTemplate ? (
+                        <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
+                          <svg className="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm3.857-9.809a.75.75 0 0 0-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 1 0-1.06 1.061l2.5 2.5a.75.75 0 0 0 1.137-.089l4-5.5Z" clipRule="evenodd" />
+                          </svg>
+                          Nessuna variabile richiesta — pronto per l'invio.
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
                     /* Text composer ─────────────────────────────────────── */

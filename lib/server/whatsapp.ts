@@ -476,7 +476,10 @@ export async function listMetaWhatsAppTemplates() {
       | null;
 
     if (!response.ok) {
-      throw new Error(payload?.error?.message ?? `WhatsApp template list failed (${response.status})`);
+      const errMsg = payload?.error?.message ?? `WhatsApp template list failed (${response.status})`;
+      const errCode = (payload?.error as { code?: number } | undefined)?.code;
+      const errSubcode = (payload?.error as { error_subcode?: number } | undefined)?.error_subcode;
+      throw new Error(`${errMsg} [code=${errCode ?? "?"} subcode=${errSubcode ?? "?"}] WABA_ID=${businessAccountId}`);
     }
 
     for (const item of payload?.data ?? []) {
