@@ -219,6 +219,23 @@ const DEPARTURE_SAME_HOTEL_MERGE_WINDOW_MINUTES = 30;
 const MIN_VEHICLE_CHANGE_MINUTES = 20;
 const MIN_SAME_VEHICLE_REUSE_MINUTES = 20;
 
+// Stima tempo di percorrenza (andata) porto ↔ hotel in base alla zona.
+// Usato per calcolare il reuse time reale del mezzo: andata + ritorno + margine.
+function estimateZoneTravelMin(zone: string | null): number {
+  const z = (zone ?? "").toLowerCase();
+  if (z.includes("ischia")) return 10;
+  if (z.includes("casamicciola")) return 12;
+  if (z.includes("lacco")) return 15;
+  if (z.includes("forio") || z.includes("citara") || z.includes("cuotto") || z.includes("panza")) return 20;
+  if (z.includes("barano") || z.includes("testaccio") || z.includes("nitrodi")) return 20;
+  if (z.includes("serrara") || z.includes("sant")) return 25;
+  return 18;
+}
+
+function estimateVehicleReuseDurationMin(zoneLabel: string | null): number {
+  return estimateZoneTravelMin(zoneLabel) * 2 + 5; // andata + ritorno + margine operativo
+}
+
 function arrivalMergeKey(service: ServiceRow): string {
   const port = cleanPortName(service.meeting_point) || "Ischia Porto";
   return `${port.toLowerCase()}|${Math.floor(timeToMin(service.time) / ARRIVAL_MERGE_WINDOW_MINUTES)}`;
@@ -313,7 +330,7 @@ type HotelRow = {
 type VehicleRow = { id: string; label: string; capacity: number | null };
 type DriverRow = { profile_id: string; user_id: string | null; full_name: string };
 type DriverVehicleEvent = { time: number; vehicleLabel: string | null };
-type VehicleEvent = { time: number; driverProfileId: string | null };
+type VehicleEvent = { time: number; reuseDurationMin: number; driverProfileId: string | null };
 
 // Verifica se un veicolo è disponibile in un certo orario tenendo conto dei blocchi orari
 function vehicleAvailableAtTime(
@@ -412,8 +429,11 @@ function vehicleChangeCompatible(
   );
 }
 
-function vehicleScheduleCompatible(events: VehicleEvent[], tripMin: number) {
-  return !events.some((event) => Math.abs(event.time - tripMin) < MIN_SAME_VEHICLE_REUSE_MINUTES);
+function vehicleScheduleCompatible(events: VehicleEvent[], tripMin: number, tripReuseDurationMin: number = MIN_SAME_VEHICLE_REUSE_MINUTES): boolean {
+  return !events.some((event) => {
+    const gap = Math.max(event.reuseDurationMin, tripReuseDurationMin);
+    return Math.abs(event.time - tripMin) < gap;
+  });
 }
 
 function serviceRouteLabel(service: ServiceRow, hotelMap: Map<string, HotelRow>) {
@@ -916,9 +936,10 @@ export async function POST(request: NextRequest) {
         { time: serviceMin, vehicleLabel },
       ]);
       if (vehicleLabel) {
+        const existingZone = serviceOperationalZone(service, hotelMap);
         vehicleScheduleEvents.set(vehicleLabel, [
           ...(vehicleScheduleEvents.get(vehicleLabel) ?? []),
-          { time: serviceMin, driverProfileId: assignProfileId },
+          { time: serviceMin, reuseDurationMin: estimateVehicleReuseDurationMin(existingZone), driverProfileId: assignProfileId },
         ]);
       }
       const key = `${assignProfileId}|${groupId}`;
@@ -1015,6 +1036,9 @@ export async function POST(request: NextRequest) {
       }, null);
       const hardMaxCap = hotelMaxCap ?? null;
 
+      // Tempo di riutilizzo del mezzo basato sulla zona del giro (andata+ritorno+margine)
+      const tripReuseDurationMin = estimateVehicleReuseDurationMin(draft.zoneLabel);
+
       const usageCount = (label: string) => vehicleEvents.get(label)?.length ?? 0;
       const bySmallestAndLeastUsed = (a: VehicleRow, b: VehicleRow) =>
         ((a.capacity ?? 0) - (b.capacity ?? 0)) ||
@@ -1030,7 +1054,7 @@ export async function POST(request: NextRequest) {
           const cap = preferred.capacity ?? 0;
           const scheduleOk =
             vehicleAvailableAtTime(preferred.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap) &&
-            vehicleScheduleCompatible(vehicleEvents.get(preferred.label) ?? [], tripMin);
+            vehicleScheduleCompatible(vehicleEvents.get(preferred.label) ?? [], tripMin, tripReuseDurationMin);
           if (scheduleOk && cap >= pax && (hardMaxCap == null || cap <= hardMaxCap)) {
             return preferred;
           }
@@ -1047,7 +1071,7 @@ export async function POST(request: NextRequest) {
           if (hardMaxCap != null && cap > hardMaxCap) return false;
           if (!vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap)) return false;
           if (!vehicleChangeCompatible(existingDriverVehicleEvents, tripMin, v.label)) return false;
-          if (!vehicleScheduleCompatible(vehicleEvents.get(v.label) ?? [], tripMin)) return false;
+          if (!vehicleScheduleCompatible(vehicleEvents.get(v.label) ?? [], tripMin, tripReuseDurationMin)) return false;
           return true;
         })
         .sort(bySmallestAndLeastUsed)[0];
@@ -1062,7 +1086,7 @@ export async function POST(request: NextRequest) {
           return (
             vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap) &&
             vehicleChangeCompatible(existingDriverVehicleEvents, tripMin, v.label) &&
-            vehicleScheduleCompatible(vehicleEvents.get(v.label) ?? [], tripMin)
+            vehicleScheduleCompatible(vehicleEvents.get(v.label) ?? [], tripMin, tripReuseDurationMin)
           );
         })
         .sort(bySmallestAndLeastUsed)[0];
@@ -1121,7 +1145,7 @@ export async function POST(request: NextRequest) {
         if (vehicle?.label) {
           plannedVehicleScheduleEvents.set(vehicle.label, [
             ...(plannedVehicleScheduleEvents.get(vehicle.label) ?? []),
-            { time: tripMin, driverProfileId: profileId },
+            { time: tripMin, reuseDurationMin: estimateVehicleReuseDurationMin(draft.zoneLabel), driverProfileId: profileId },
           ]);
           // Imposta il preferito solo al primo giro assegnato
           if (!driverPreferredVehicle.has(profileId)) {
