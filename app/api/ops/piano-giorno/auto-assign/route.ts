@@ -998,7 +998,6 @@ export async function POST(request: NextRequest) {
       draft: TripDraft,
       profileId: string | null,
       preferredVehicleLabel: string | null = null,
-      strictPreferred: boolean = false,
       driverEvents: Map<string, DriverVehicleEvent[]> = driverVehicleEvents,
       vehicleEvents: Map<string, VehicleEvent[]> = vehicleScheduleEvents,
     ): VehicleRow | null => {
@@ -1023,7 +1022,8 @@ export async function POST(request: NextRequest) {
         a.label.localeCompare(b.label);
 
       // Se l'autista ha già un mezzo preferito, proviamo prima quello.
-      // In strict mode (già cambiato una volta) è l'unica opzione ammessa.
+      // Se è in cooldown per questo slot, si scende alla selezione normale
+      // per quel singolo giro — il preferito resta invariato per i giri successivi.
       if (preferredVehicleLabel) {
         const preferred = vehicles.find((v) => v.label === preferredVehicleLabel);
         if (preferred) {
@@ -1035,7 +1035,6 @@ export async function POST(request: NextRequest) {
             return preferred;
           }
         }
-        if (strictPreferred) return null;
       }
 
       // Cerca il veicolo più piccolo che soddisfa i PAX, rispetta i limiti hotel,
@@ -1091,27 +1090,24 @@ export async function POST(request: NextRequest) {
         [...vehicleScheduleEvents.entries()].map(([vehicleLabel, events]) => [vehicleLabel, [...events]])
       );
 
-      // Traccia mezzo preferito per autista: minimizza i cambi, ammette al più 1 cambio/giorno.
+      // Mezzo preferito per autista: impostato al primo giro, mai aggiornato.
+      // Se il mezzo è in cooldown (20 min) per uno slot specifico, l'algoritmo usa
+      // la selezione normale solo per quel giro e torna al preferito nel giro successivo.
       // Inizializzato da eventi già presenti (unassigned_only con giri locked).
       const driverPreferredVehicle = new Map<string, string>();
-      const driverHasChanged = new Map<string, boolean>();
       for (const [pid, events] of driverVehicleEvents.entries()) {
-        const labels = events.map((e) => e.vehicleLabel).filter((l): l is string => Boolean(l));
-        if (labels.length > 0) driverPreferredVehicle.set(pid, labels[labels.length - 1]!);
-        const distinct = new Set(labels);
-        if (distinct.size > 1) driverHasChanged.set(pid, true);
+        const firstLabel = events.map((e) => e.vehicleLabel).find((l): l is string => Boolean(l));
+        if (firstLabel) driverPreferredVehicle.set(pid, firstLabel);
       }
 
       for (const { draft, profileId, userId: driverUserId } of draftAssignments) {
         if (!profileId) continue;
         const preferredLabel = driverPreferredVehicle.get(profileId) ?? null;
-        const strictPreferred = driverHasChanged.get(profileId) === true;
         const vehicle = pickVehicle(
           draft.pax,
           draft,
           profileId,
           preferredLabel,
-          strictPreferred,
           plannedDriverVehicleEvents,
           plannedVehicleScheduleEvents
         );
@@ -1126,12 +1122,8 @@ export async function POST(request: NextRequest) {
             ...(plannedVehicleScheduleEvents.get(vehicle.label) ?? []),
             { time: tripMin, driverProfileId: profileId },
           ]);
-          // Aggiorna tracking mezzo preferito
-          const prev = driverPreferredVehicle.get(profileId);
-          if (!prev) {
-            driverPreferredVehicle.set(profileId, vehicle.label);
-          } else if (prev !== vehicle.label && !driverHasChanged.get(profileId)) {
-            driverHasChanged.set(profileId, true);
+          // Imposta il preferito solo al primo giro assegnato
+          if (!driverPreferredVehicle.has(profileId)) {
             driverPreferredVehicle.set(profileId, vehicle.label);
           }
         }
