@@ -378,20 +378,20 @@ function WhatsAppMediaAttachment({
     let active = true;
 
     async function loadPreview() {
-      if (!message.media_id || !isImage) return;
+      if (!message.media_id || (!isImage && !isAudio)) return;
       setLoadingPreview(true);
       try {
         const media = await fetchWhatsAppMediaBlob(message.id);
         if (!active) return;
         const nextUrl = URL.createObjectURL(media.blob);
-        setPreviewUrl(nextUrl);
+        if (isImage) setPreviewUrl(nextUrl);
         setBlobUrl((current) => current ?? nextUrl);
         setBlobMimeType(media.contentType);
       } catch (error) {
         if (!active) return;
         console.warn("[whatsapp] media preview unavailable", {
           messageId: message.id,
-          error: error instanceof Error ? error.message : "Impossibile caricare l'anteprima immagine."
+          error: error instanceof Error ? error.message : "Impossibile caricare il media."
         });
       } finally {
         if (active) setLoadingPreview(false);
@@ -402,7 +402,7 @@ function WhatsAppMediaAttachment({
     return () => {
       active = false;
     };
-  }, [isImage, message.id, message.media_id, onError]);
+  }, [isAudio, isImage, message.id, message.media_id, onError]);
 
   useEffect(() => () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -528,7 +528,24 @@ function WhatsAppMediaAttachment({
         </button>
       ) : null}
 
-      {!isImage ? (
+      {isAudio ? (
+        <div className="rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2.5">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="inline-flex rounded-full p-1.5 bg-amber-100 text-amber-600">
+              <IconVolume />
+            </span>
+            <p className="text-xs font-semibold text-amber-800">Messaggio vocale</p>
+          </div>
+          {blobUrl ? (
+            <audio controls src={blobUrl} className="w-full" style={{ accentColor: "#d97706" }} />
+          ) : (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs text-amber-600">
+              <div className="h-3 w-3 animate-spin rounded-full border-2 border-amber-200 border-t-amber-500 shrink-0" />
+              Caricamento vocale…
+            </div>
+          )}
+        </div>
+      ) : !isImage ? (
         <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
           <div className="flex items-start gap-2">
             <span className={`mt-0.5 inline-flex rounded-full p-1.5 ${pillTone}`}>
@@ -549,6 +566,7 @@ function WhatsAppMediaAttachment({
           <AttachmentIcon />
           {isImage ? "Foto" : isPdf ? "PDF" : isAudio ? "Audio" : isVideo ? "Video" : "File"}
         </span>
+        {!isAudio && (
         <button
           type="button"
           onClick={() => void openAttachment()}
@@ -557,6 +575,7 @@ function WhatsAppMediaAttachment({
         >
           {busyAction === "open" ? "Apertura..." : isPdf ? "Apri PDF" : "Apri allegato"}
         </button>
+        )}
         <button
           type="button"
           onClick={() => void downloadAttachment()}
