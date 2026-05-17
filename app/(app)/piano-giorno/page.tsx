@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase, hasSupabaseEnv } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { DateInput, PageHeader } from "@/components/ui";
+import { getPianoServiceDisplay } from "@/lib/piano-service-display";
+import { hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
 
 // ─── Tipi ─────────────────────────────────────────────────────────────────────
 
@@ -15,6 +17,14 @@ type Service = {
   status: string; meeting_point: string | null; place_type: string | null;
   pickup_hotel: string | null; phone: string | null;
   booking_service_kind: string | null; service_type: string | null;
+  service_type_code?: string | null; transport_code?: string | null; pickup_time?: string | null;
+  arrival_time?: string | null; departure_time?: string | null;
+  orario_barca?: string | null; porto_bruno?: string | null; barca_compagnia?: string | null;
+  ferry_details?: Record<string, unknown> | null; excursion_details?: Record<string, unknown> | null;
+  tour_name?: string | null; origin_place_type?: string | null; destination_place_type?: string | null;
+  origin_place_id?: string | null; destination_place_id?: string | null;
+  train_arrival_number?: string | null; train_arrival_time?: string | null;
+  train_departure_number?: string | null; train_departure_time?: string | null;
 };
 type TripGroup = {
   id: string; date: string; driver_user_id: string | null; driver_profile_id: string | null;
@@ -24,7 +34,11 @@ type Assignment = {
   id: string; service_id: string; driver_user_id: string | null;
   vehicle_label: string | null; group_id: string | null;
 };
-type Hotel = { id: string; name: string; zone: string | null; lat: number | null; lng: number | null };
+type Hotel = {
+  id: string; name: string; zone: string | null; lat: number | null; lng: number | null;
+  address?: string | null; geo_status?: string | null; geo_source?: string | null;
+  geo_accuracy?: string | null; geo_verified_at?: string | null;
+};
 type Member = { user_id: string; full_name: string; role: string };
 type DriverProfile = {
   id: string; user_id: string | null; full_name: string; phone: string | null;
@@ -89,6 +103,18 @@ type PlanIssue = {
   severity: "blocker" | "warning" | "info";
   title: string;
   detail: string;
+};
+type GeoPrecheckIssue = {
+  id: string;
+  time: string;
+  serviceLabel: string;
+  customer: string;
+  pax: number;
+  place: string;
+  hotelName: string;
+  reason: string;
+  importTag: string | null;
+  action: "geocode_hotel" | "link_operational_point";
 };
 type TripOverview = {
   group: TripGroup;
@@ -435,9 +461,12 @@ function usePianoGiornoData(date: string) {
     const res = await fetch(`/api/ops/piano-giorno?date=${date}`, {
       headers: { Authorization: `Bearer ${tok}` },
     });
-    if (!res.ok) { setError("Errore caricamento dati."); return; }
-    const json = (await res.json()) as DayData & { ok: boolean };
-    if (json.ok) setData(json);
+    const json = (await res.json().catch(() => null)) as (DayData & { ok?: boolean; error?: string }) | null;
+    if (!res.ok || json?.ok === false) {
+      setError(json?.error ? `Errore caricamento dati: ${json.error}` : "Errore caricamento dati.");
+      return;
+    }
+    if (json?.ok) setData(json as DayData & { ok: boolean });
   }, [date]);
 
   useEffect(() => {
@@ -701,6 +730,7 @@ function PoolPanel({ services, hotels, assignments, ferrySchedules, selectedIds,
                 <div className="border-t border-slate-100">
                   {svcs.map((svc) => {
                     const hotel = hotels.get(svc.hotel_id ?? "");
+                    const display = getPianoServiceDisplay(svc, hotel);
                     const isSelected = selectedIds.has(svc.id);
                     const isAssigned = assignments.has(svc.id);
                     return (
@@ -717,9 +747,15 @@ function PoolPanel({ services, hotels, assignments, ferrySchedules, selectedIds,
                           className="rounded accent-blue-600 shrink-0"
                         />
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-slate-800 truncate">{customerName(svc)}</p>
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-600">
+                              {display.serviceLabel}
+                            </span>
+                            <p className="truncate text-xs font-medium text-slate-800">{customerName(svc)}</p>
+                          </div>
                           <p className="text-[10px] text-slate-500 truncate">
-                            {hotel?.name ?? "—"} {hotel?.zone ? `(${hotel.zone})` : ""}
+                            {display.pickupLabel ?? display.placeLabel}
+                            {display.destinationLabel ? ` -> ${display.destinationLabel}` : ""}
                             {svc.phone ? ` · ${svc.phone}` : ""}
                           </p>
                         </div>
@@ -1270,6 +1306,166 @@ function cleanPortName(mp: string | null | undefined): string {
   return mp;
 }
 
+function htmlEscape(value: string | null | undefined) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function normalizeOperationalPlace(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function sameOperationalPlace(left: string | null | undefined, right: string | null | undefined) {
+  const a = normalizeOperationalPlace(left);
+  const b = normalizeOperationalPlace(right);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+function serviceStartPlace(display: ReturnType<typeof getPianoServiceDisplay>) {
+  const takeAt = display.actionLabel.match(/^Prendere a:\s*(.+)$/i)?.[1];
+  return display.pickupLabel ?? takeAt ?? display.placeLabel;
+}
+
+function serviceEndPlace(display: ReturnType<typeof getPianoServiceDisplay>) {
+  return display.destinationLabel ?? display.placeLabel;
+}
+
+function operationalAreaFromText(value: string | null | undefined) {
+  const text = normalizeOperationalPlace(value);
+  if (!text) return null;
+  if (text.includes("mortella") || text === "la villa" || text.includes("hotel la villa")) return "Forio";
+  if (text.includes("nitrodi")) return "Barano";
+  if (text.includes("sant angelo")) return "Serrara Fontana";
+  if (text.includes("forio")) return "Forio";
+  if (text.includes("casamicciola")) return "Casamicciola";
+  if (text.includes("lacco")) return "Lacco Ameno";
+  if (text.includes("barano")) return "Barano";
+  if (text.includes("serrara") || text.includes("sant angelo")) return "Serrara Fontana";
+  if (
+    text.includes("ischia") ||
+    text.includes("piazzale trieste") ||
+    text.includes("caffe del direttore") ||
+    text.includes("president") ||
+    text.includes("parco aurora") ||
+    text.includes("re ferdinando") ||
+    text.includes("felix") ||
+    text.includes("cristallo")
+  ) return "Ischia Porto";
+  return inferZoneFromText(value ?? "");
+}
+
+function operationalArea(row: { hotel: Hotel | undefined; display: ReturnType<typeof getPianoServiceDisplay> }, side: "start" | "end") {
+  const place = side === "start" ? serviceStartPlace(row.display) : serviceEndPlace(row.display);
+  const textArea = operationalAreaFromText(place);
+  if (textArea) return textArea;
+  const hotelName = normalizeOperationalPlace(row.hotel?.name);
+  const placeName = normalizeOperationalPlace(place);
+  if (row.hotel?.zone && hotelName && placeName && (hotelName.includes(placeName) || placeName.includes(hotelName))) {
+    return row.hotel.zone;
+  }
+  if (row.display.macroCategory === "ARRIVO" && side === "end") return row.hotel?.zone ?? null;
+  if ((row.display.macroCategory === "PARTENZA" || row.display.macroCategory === "NAVETTA") && side === "start") return row.hotel?.zone ?? null;
+  return null;
+}
+
+function driverSequenceWarning(
+  previous: { time: string; hotel: Hotel | undefined; display: ReturnType<typeof getPianoServiceDisplay> } | null,
+  current: { time: string; hotel: Hotel | undefined; display: ReturnType<typeof getPianoServiceDisplay> },
+) {
+  if (!previous) return null;
+  const prevMin = minutesFromTime(previous.time);
+  const currentMin = minutesFromTime(current.time);
+  if (prevMin == null || currentMin == null) return null;
+  const gap = currentMin - prevMin;
+  if (gap < 0 || gap >= 45) return null;
+  const from = serviceEndPlace(previous.display);
+  const to = serviceStartPlace(current.display);
+  if (sameOperationalPlace(from, to)) return null;
+  const fromArea = operationalArea(previous, "end");
+  const toArea = operationalArea(current, "start");
+  const sameArea = fromArea && toArea && sameOperationalPlace(fromArea, toArea);
+  const requiredGap = sameArea || !fromArea || !toArea ? 20 : 30;
+  if (gap >= requiredGap) return null;
+  return `ATTENZIONE: ${gap} min dal servizio precedente, servono almeno ${requiredGap} min (${from} -> ${to})`;
+}
+
+function geoIssueReason(issues: string[]) {
+  if (issues.includes("missing_coordinates")) return "Coordinate hotel mancanti";
+  if (issues.includes("outside_ischia")) return "Coordinate fuori Ischia";
+  if (issues.includes("default_centroid")) return "Coordinate generiche di zona";
+  if (issues.includes("zone_coordinate_mismatch")) return "Coordinate non coerenti con la zona";
+  return "Geolocalizzazione hotel da verificare";
+}
+
+function hotelHasUsableAddressOrZone(hotel: Hotel) {
+  const zone = inferZoneFromText(hotel.zone ?? "")
+    ?? operationalAreaFromText(hotel.address)
+    ?? operationalAreaFromText(hotel.name);
+  return Boolean(zone && (hotel.address || hotel.name));
+}
+
+function buildGeoPrecheckIssues(
+  services: Service[],
+  hotelMap: Map<string, Hotel>,
+  assignmentMap: Map<string, Assignment>,
+  mode: "unassigned_only" | "regenerate_all",
+) {
+  return services
+    .filter((service) => mode === "regenerate_all" || !assignmentMap.has(service.id))
+    .map((service): GeoPrecheckIssue | null => {
+      const hotel = hotelMap.get(service.hotel_id ?? "");
+      const display = getPianoServiceDisplay(service, hotel);
+      const place = display.pickupLabel ?? display.destinationLabel ?? display.placeLabel;
+
+      if (!service.hotel_id || !hotel) {
+        const area = operationalAreaFromText(place);
+        if (area) return null;
+        return {
+          id: service.id,
+          time: display.primaryTime ?? serviceDisplayTime(service),
+          serviceLabel: display.serviceLabel,
+          customer: customerName(service),
+          pax: service.pax,
+          place,
+          hotelName: "Hotel/punto non agganciato",
+          reason: area
+            ? `Punto operativo senza aggancio anagrafico; zona stimata: ${area}`
+            : "Punto operativo senza aggancio anagrafico e zona non riconosciuta",
+          importTag: display.importTag,
+          action: "link_operational_point",
+        };
+      }
+
+      const quality = hotelGeoQuality(hotel);
+      if (quality.routeUsable) return null;
+      if (hotelHasUsableAddressOrZone(hotel)) return null;
+      return {
+        id: service.id,
+        time: display.primaryTime ?? serviceDisplayTime(service),
+        serviceLabel: display.serviceLabel,
+        customer: customerName(service),
+        pax: service.pax,
+        place,
+        hotelName: hotel.name,
+        reason: geoIssueReason(quality.issues),
+        importTag: display.importTag,
+        action: "geocode_hotel",
+      };
+    })
+    .filter((issue): issue is GeoPrecheckIssue => Boolean(issue))
+    .sort((a, b) => a.time.localeCompare(b.time) || a.customer.localeCompare(b.customer));
+}
+
 function printDriverPlans(drivers: DriverEntry[], tripGroups: TripGroup[], tripServices: Map<string, Service[]>, hotels: Map<string, Hotel>, date: string, ferrySchedules: FerrySchedule[] = []) {
   const pages = drivers
     .map((driver) => {
@@ -1296,65 +1492,41 @@ function printDriverPlans(drivers: DriverEntry[], tripGroups: TripGroup[], tripS
         })
         .map((svc) => {
           const hotel = hotels.get(svc.hotel_id ?? "");
-          const isArr = svc.direction === "arrival";
-          const badge = isArr
-            ? `<span style="background:#dbeafe;color:#1e3a8a;padding:1px 5px;border-radius:3px;font-size:8.5pt;font-weight:bold">ARR</span>`
-            : `<span style="background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:3px;font-size:8.5pt;font-weight:bold">PAR</span>`;
-          const g = (lbl: string, val: string | null | undefined) =>
-            val ? `<span style="color:#444;font-size:8.5pt"><b>${lbl}:</b> ${val}</span>` : "";
-
-          let portZona: string;
-          let arrivoIschia = "";
-          if (isArr) {
-            if (isFerryTransferService(svc)) {
-              const arrPorto = cleanPortName(svc.meeting_point) || "Ischia Porto";
-              const schedule = findFerryScheduleForService(svc, ferrySchedules);
-              const company = normalizeCompany(schedule?.company ?? svc.vessel);
-              const departurePort = schedule?.departure_port ?? inferDeparturePort(company, svc.vessel, svc.meeting_point);
-              const partenzaPorto = departurePort ? portLabel(departurePort) : "";
-              const travelMins = travelMinutes(company, departurePort);
-              arrivoIschia = addMinutes(fmt(svc.time), travelMins);
-              portZona = [
-                badge,
-                `<b>${companyFromVessel(svc.vessel)}</b> <span style="color:#666;font-size:8.5pt">(part. ${fmt(svc.time)}${partenzaPorto ? ` da ${partenzaPorto}` : ""})</span>`,
-                g("Arriva a", arrPorto),
-                g("Zona consegna", hotel?.zone),
-              ].filter(Boolean).join(" &nbsp;·&nbsp; ");
-            } else {
-              arrivoIschia = fmt(svc.time);
-              portZona = [
-                badge,
-                `<b>${companyFromVessel(svc.vessel)}</b>`,
-                g("Da", cleanPortName(svc.meeting_point) || svc.meeting_point),
-                g("Zona consegna", hotel?.zone),
-              ].filter(Boolean).join(" &nbsp;·&nbsp; ");
-            }
-          } else {
-            const imbarco = cleanPortName(svc.meeting_point);
-            const vesselTime = svc.vessel
-              ? `-> <b>${companyFromVessel(svc.vessel)}</b>${svc.pickup_hotel ? ` <span style="color:#666;font-size:8.5pt">ore ${fmt(svc.time)}</span>` : ""}`
-              : "";
-            portZona = [
-              badge,
-              g("Pickup zona", hotel?.zone),
-              g("Porto imbarco", imbarco),
-              vesselTime,
-            ].filter(Boolean).join(" &nbsp;·&nbsp; ");
-          }
-
-          const orarioCell = isPrivateIslandService(svc)
-            ? serviceDisplayTime(svc)
-            : isArr
-              ? arrivoIschia
-              : fmt(svc.pickup_hotel ?? svc.time);
+          const display = getPianoServiceDisplay(svc, hotel);
+          return { svc, hotel, display, time: display.primaryTime ?? serviceDisplayTime(svc) };
+        })
+        .sort((a, b) => a.time.localeCompare(b.time))
+        .map((row, index, rows) => {
+          const { svc, hotel, display, time } = row;
+          const sequenceWarning = driverSequenceWarning(rows[index - 1] ?? null, row);
+          const badgeTone =
+            display.macroCategory === "ESCURSIONE" ? "background:#f3e8ff;color:#6b21a8"
+            : display.macroCategory === "ARRIVO" ? "background:#dbeafe;color:#1e3a8a"
+            : display.macroCategory === "PARTENZA" ? "background:#fef3c7;color:#92400e"
+            : display.macroCategory === "NAVETTA" ? "background:#dcfce7;color:#166534"
+            : "background:#f1f5f9;color:#475569";
+          const details = [
+            `<span style="${badgeTone};padding:1px 5px;border-radius:3px;font-size:8.5pt;font-weight:bold">${htmlEscape(display.serviceLabel)}</span>`,
+            `<span style="color:#111;font-size:9pt"><b>${htmlEscape(display.actionLabel)}</b></span>`,
+            display.pickupLabel ? `<span style="color:#444;font-size:8.5pt"><b>Pickup:</b> ${htmlEscape(display.pickupLabel)}</span>` : "",
+            display.destinationLabel ? `<span style="color:#444;font-size:8.5pt"><b>Destinazione:</b> ${htmlEscape(display.destinationLabel)}</span>` : "",
+            display.connectionLabel ? `<span style="color:#444;font-size:8.5pt"><b>Connessione:</b> ${htmlEscape(display.connectionLabel)}</span>` : "",
+            display.ferryLabel ? `<span style="color:#444;font-size:8.5pt"><b>Nave:</b> ${htmlEscape(display.ferryLabel)}</span>` : "",
+            ...display.warnings.map((warning) => `<span style="color:#b45309;font-size:8.5pt"><b>${htmlEscape(warning)}</b></span>`),
+            sequenceWarning ? `<span style="color:#b91c1c;font-size:8.5pt"><b>${htmlEscape(sequenceWarning)}</b></span>` : "",
+          ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+          const notes = display.noteLabel ?? "";
+          const hotelCell = hotel?.name
+            ?? (display.macroCategory === "ESCURSIONE" || display.macroCategory === "NAVETTA" ? display.pickupLabel : null)
+            ?? "—";
 
           return `<tr style="border-bottom:1px solid #eee">
-              <td style="padding:3px 6px;white-space:nowrap">${orarioCell}</td>
-              <td style="padding:3px 6px">${portZona}</td>
-              <td style="padding:3px 6px">${customerName(svc)} (${svc.pax}p)</td>
-              <td style="padding:3px 6px">${hotel?.name ?? "—"}</td>
-              <td style="padding:3px 6px">${svc.phone ?? "—"}</td>
-              <td style="padding:3px 6px">${svc.notes ?? ""}</td>
+              <td style="padding:3px 6px;white-space:nowrap">${htmlEscape(time)}</td>
+              <td style="padding:3px 6px">${details}</td>
+              <td style="padding:3px 6px">${htmlEscape(display.clientLabel)}</td>
+              <td style="padding:3px 6px">${htmlEscape(hotelCell)}</td>
+              <td style="padding:3px 6px">${htmlEscape(display.phoneLabel)}</td>
+              <td style="padding:3px 6px;color:#555;font-size:9pt">${htmlEscape(notes)}</td>
             </tr>`;
         }).join("");
 
@@ -1398,6 +1570,8 @@ export default function PianoGiornoPage() {
   const [aiPlan, setAiPlan] = useState<{ plan: AiPlanResult; usage: { input_tokens?: number; output_tokens?: number } | null } | null>(null);
   const [aiPlanError, setAiPlanError] = useState<string | null>(null);
   const [showAutoModal, setShowAutoModal] = useState(false);
+  const [showGeoPrecheckModal, setShowGeoPrecheckModal] = useState(false);
+  const [pendingAutoMode, setPendingAutoMode] = useState<"unassigned_only" | "regenerate_all" | null>(null);
   const [viewMode, setViewMode] = useState<"plan" | "manual">("plan");
   const [planFilter, setPlanFilter] = useState<"all" | "issues" | "missing_driver" | "departures" | "arrivals">("all");
   const [planSearch, setPlanSearch] = useState("");
@@ -1467,6 +1641,8 @@ export default function PianoGiornoPage() {
   const runAutoAssign = useCallback(async (mode: "unassigned_only" | "regenerate_all") => {
     if (!token || availabilityLocked) return;
     setShowAutoModal(false);
+    setShowGeoPrecheckModal(false);
+    setPendingAutoMode(null);
     setAutoAssigning(true);
     setAutoResult(null);
     try {
@@ -1518,16 +1694,30 @@ export default function PianoGiornoPage() {
     }
   }, [token, date]);
 
-  const handleAutoAssign = useCallback(() => {
-    if (availabilityLocked) return;
-    if (hasGroups) setShowAutoModal(true);
-    else void runAutoAssign("unassigned_only");
-  }, [availabilityLocked, hasGroups, runAutoAssign]);
-
   // Maps per lookup O(1)
   const serviceMap = useMemo(() => new Map((data?.services ?? []).map((s) => [s.id, s])), [data]);
   const hotelMap = useMemo(() => new Map((data?.hotels ?? []).map((h) => [h.id, h])), [data]);
   const assignmentMap = useMemo(() => new Map((data?.assignments ?? []).map((a) => [a.service_id, a])), [data]);
+  const geoPrecheckIssuesByMode = useMemo(() => ({
+    unassigned_only: buildGeoPrecheckIssues(data?.services ?? [], hotelMap, assignmentMap, "unassigned_only"),
+    regenerate_all: buildGeoPrecheckIssues(data?.services ?? [], hotelMap, assignmentMap, "regenerate_all"),
+  }), [data, hotelMap, assignmentMap]);
+  const requestAutoAssign = useCallback((mode: "unassigned_only" | "regenerate_all") => {
+    if (availabilityLocked) return;
+    const issues = geoPrecheckIssuesByMode[mode];
+    if (issues.length > 0) {
+      setShowAutoModal(false);
+      setPendingAutoMode(mode);
+      setShowGeoPrecheckModal(true);
+      return;
+    }
+    void runAutoAssign(mode);
+  }, [availabilityLocked, geoPrecheckIssuesByMode, runAutoAssign]);
+  const handleAutoAssign = useCallback(() => {
+    if (availabilityLocked) return;
+    if (hasGroups) setShowAutoModal(true);
+    else requestAutoAssign("unassigned_only");
+  }, [availabilityLocked, hasGroups, requestAutoAssign]);
   const driversList = useMemo(() => (data?.memberships ?? []).filter((m) => m.role === "driver" || m.role === "autista"), [data]);
 
   // Lista unificata: profili attivi non sospesi (include driver senza account)
@@ -1692,9 +1882,9 @@ export default function PianoGiornoPage() {
           pax,
           status: tripServiceStatus(services),
           driverName: resolveDriverName(group),
-          routeLabel: direction === "arrival"
-            ? cleanPortName(services[0]?.meeting_point) || "Porto da verificare"
-            : cleanPortName(services[0]?.meeting_point) || "Imbarco da verificare",
+          routeLabel: services[0]
+            ? getPianoServiceDisplay(services[0], hotelMap.get(services[0].hotel_id ?? "")).macroCategory
+            : "Servizio da verificare",
           hotelLabel: zones.size > 0
             ? Array.from(zones).slice(0, 2).join(" / ")
             : hotels.size > 0
@@ -1813,6 +2003,9 @@ export default function PianoGiornoPage() {
     });
   }, [tripRows, unassignedServices, hotelMap, driverNameById]);
   const blockerCount = planIssues.filter((issue) => issue.severity === "blocker").length;
+  const activeGeoPrecheckIssues = pendingAutoMode ? geoPrecheckIssuesByMode[pendingAutoMode] : [];
+  const activeGeoHotelIssues = activeGeoPrecheckIssues.filter((issue) => issue.action === "geocode_hotel");
+  const activeGeoPointIssues = activeGeoPrecheckIssues.filter((issue) => issue.action === "link_operational_point");
   const planWindows = useMemo<PlanWindow[]>(() => {
     const map = new Map<string, PlanWindow>();
     for (const trip of tripRows) {
@@ -2031,13 +2224,13 @@ export default function PianoGiornoPage() {
             </p>
             <div className="space-y-2">
               <button
-                onClick={() => void runAutoAssign("unassigned_only")}
+                onClick={() => requestAutoAssign("unassigned_only")}
                 className="btn-primary w-full text-sm"
               >
                 Assegna solo i servizi non ancora assegnati
               </button>
               <button
-                onClick={() => void runAutoAssign("regenerate_all")}
+                onClick={() => requestAutoAssign("regenerate_all")}
                 className="w-full text-sm border border-red-200 text-red-600 rounded px-3 py-2 hover:bg-red-50 transition-colors"
               >
                 Rigenera tutto — cancella assegnazioni esistenti
@@ -2048,6 +2241,93 @@ export default function PianoGiornoPage() {
               >
                 Annulla
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showGeoPrecheckModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center no-print">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-3xl w-full mx-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-bold text-slate-800 mb-1">Controllo geografia prima dell&apos;assegnazione</h3>
+                <p className="text-sm text-slate-500">
+                  Prima di applicare il piano ci sono {activeGeoPrecheckIssues.length} servizi con punto operativo non pronto per l&apos;assegnazione geografica.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowGeoPrecheckModal(false); setPendingAutoMode(null); }}
+                className="text-sm font-semibold text-slate-400 hover:text-slate-700"
+              >
+                Chiudi
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-lg border border-slate-200 px-3 py-2">
+                <p className="text-xs font-bold uppercase text-slate-400">Hotel da geolocalizzare</p>
+                <p className="text-2xl font-bold text-slate-800">{activeGeoHotelIssues.length}</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 px-3 py-2">
+                <p className="text-xs font-bold uppercase text-slate-400">Punti operativi non agganciati</p>
+                <p className="text-2xl font-bold text-slate-800">{activeGeoPointIssues.length}</p>
+              </div>
+            </div>
+
+            <div className="mt-4 max-h-80 overflow-y-auto rounded-lg border border-slate-200">
+              <table className="w-full text-left text-xs">
+                <thead className="sticky top-0 bg-slate-50 text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">Ora</th>
+                    <th className="px-3 py-2">Servizio</th>
+                    <th className="px-3 py-2">Cliente</th>
+                    <th className="px-3 py-2">Punto/Hotel</th>
+                    <th className="px-3 py-2">Da sistemare</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {activeGeoPrecheckIssues.slice(0, 60).map((issue) => (
+                    <tr key={issue.id}>
+                      <td className="px-3 py-2 font-mono font-semibold text-slate-700">{issue.time}</td>
+                      <td className="px-3 py-2">
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-bold text-slate-600">{issue.serviceLabel}</span>
+                        {issue.importTag ? <span className="ml-1 text-slate-400">{issue.importTag}</span> : null}
+                      </td>
+                      <td className="px-3 py-2 text-slate-700">{issue.customer} · {issue.pax} pax</td>
+                      <td className="px-3 py-2 text-slate-700">{issue.hotelName}<span className="block text-slate-400">{issue.place}</span></td>
+                      <td className="px-3 py-2 font-medium text-amber-700">{issue.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+              <a
+                href="/hotels"
+                className="rounded border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Geolocalizza hotel e punti
+              </a>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowGeoPrecheckModal(false); setPendingAutoMode(null); }}
+                  className="rounded border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-50"
+                >
+                  Annulla
+                </button>
+                <button
+                  type="button"
+                  onClick={() => pendingAutoMode && void runAutoAssign(pendingAutoMode)}
+                  disabled={!pendingAutoMode || autoAssigning}
+                  className="rounded bg-amber-600 px-3 py-2 text-sm font-bold text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  Procedi comunque
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2721,21 +3001,49 @@ export default function PianoGiornoPage() {
                             <div className="divide-y divide-slate-100">
                               {trip.services.map((svc) => {
                                 const hotel = hotelMap.get(svc.hotel_id ?? "");
+                                const display = getPianoServiceDisplay(svc, hotel);
                                 return (
-                                  <div key={svc.id} className="grid gap-2 px-3 py-2 text-xs sm:grid-cols-[70px_minmax(160px,1fr)_minmax(160px,1fr)_120px]">
+                                  <div key={svc.id} className="grid gap-2 px-3 py-2 text-xs sm:grid-cols-[76px_minmax(170px,1fr)_minmax(220px,1.4fr)_minmax(130px,0.8fr)]">
                                     <div className="font-mono font-semibold text-slate-700">
-                                      {serviceDisplayTime(svc)}
+                                      {display.primaryTime ?? serviceDisplayTime(svc)}
                                     </div>
                                     <div>
-                                      <p className="font-semibold text-slate-800">{customerName(svc)} · {svc.pax}p</p>
-                                      <p className="text-slate-500">{svc.phone ?? "telefono mancante"}</p>
+                                      <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                          display.macroCategory === "ESCURSIONE" ? "bg-purple-50 text-purple-700"
+                                          : display.macroCategory === "ARRIVO" ? "bg-blue-50 text-blue-700"
+                                          : display.macroCategory === "PARTENZA" ? "bg-amber-50 text-amber-700"
+                                          : display.macroCategory === "NAVETTA" ? "bg-emerald-50 text-emerald-700"
+                                          : "bg-slate-100 text-slate-600"
+                                        }`}>
+                                          {display.serviceLabel}
+                                        </span>
+                                        {display.importTag ? (
+                                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+                                            {display.importTag}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                      <p className="font-semibold text-slate-800">{display.clientLabel}</p>
+                                      <p className="text-slate-500">{display.phoneLabel}</p>
                                     </div>
                                     <div>
-                                      <p className="font-semibold text-slate-700">{hotel?.name ?? "hotel mancante"}</p>
-                                      <p className="text-slate-500">{hotel?.zone ?? "zona mancante"}</p>
+                                      <p className="font-semibold text-slate-700">{display.actionLabel}</p>
+                                      <div className="mt-0.5 space-y-0.5 text-slate-500">
+                                        {display.pickupLabel ? <p>Pickup: {display.pickupLabel}</p> : null}
+                                        {display.destinationLabel ? <p>Destinazione: {display.destinationLabel}</p> : null}
+                                        {display.connectionLabel ? <p>Connessione: {display.connectionLabel}</p> : null}
+                                        {display.ferryLabel ? <p>Nave: {display.ferryLabel}</p> : null}
+                                        {display.warnings.map((warning) => (
+                                          <p key={`${svc.id}-${warning}`} className="font-semibold text-amber-700">{warning}</p>
+                                        ))}
+                                      </div>
                                     </div>
                                     <div className="text-slate-500">
-                                      {svc.direction === "arrival" ? cleanPortName(svc.meeting_point) || svc.vessel || "arrivo" : cleanPortName(svc.meeting_point) || svc.vessel || "partenza"}
+                                      <p className="font-medium text-slate-600">{display.placeLabel}</p>
+                                      {display.noteLabel ? (
+                                        <p className="mt-1 text-[11px] italic text-slate-500">{display.noteLabel}</p>
+                                      ) : null}
                                     </div>
                                   </div>
                                 );

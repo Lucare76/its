@@ -15,6 +15,7 @@ import {
   toBrunoArrival,
   toBrunoDeparture,
 } from "@/lib/server/continent-dispatch";
+import { getPianoServiceDisplay, type PianoDisplayService } from "@/lib/piano-service-display";
 
 export const runtime = "nodejs";
 
@@ -64,6 +65,69 @@ function cleanNotes(raw: string | null): string {
   return raw.includes("[pdf_import]") ? "" : raw;
 }
 
+const BASE_SERVICE_COLUMNS = [
+  "id",
+  "time",
+  "direction",
+  "customer_name",
+  "customer_first_name",
+  "customer_last_name",
+  "pax",
+  "hotel_id",
+  "vessel",
+  "notes",
+  "status",
+  "meeting_point",
+  "pickup_hotel",
+  "phone",
+  "service_type",
+  "booking_service_kind",
+];
+
+const OPTIONAL_SERVICE_COLUMNS = [
+  "pickup_time",
+  "service_type_code",
+  "transport_code",
+  "arrival_time",
+  "departure_time",
+  "train_arrival_number",
+  "train_arrival_time",
+  "train_departure_number",
+  "train_departure_time",
+  "place_type",
+  "orario_barca",
+  "porto_bruno",
+  "barca_compagnia",
+  "ferry_details",
+  "excursion_details",
+  "tour_name",
+  "origin_place_type",
+  "destination_place_type",
+  "origin_place_id",
+  "destination_place_id",
+];
+
+function missingSchemaColumn(message: string) {
+  return message.match(/Could not find the '([^']+)' column/)?.[1]
+    ?? message.match(/column (?:public\.)?services\.([a-zA-Z0-9_]+) does not exist/)?.[1]
+    ?? message.match(/column "([a-zA-Z0-9_]+)" does not exist/)?.[1]
+    ?? null;
+}
+
+type ExportServiceRow = PianoDisplayService & {
+  id: string;
+  time: string;
+  direction: "arrival" | "departure";
+  customer_name: string;
+  customer_first_name?: string | null;
+  customer_last_name?: string | null;
+  pax: number;
+  hotel_id: string | null;
+  pickup_hotel: string | null;
+  phone: string | null;
+  notes: string | null;
+};
+
 // ─── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET(req: NextRequest) {
@@ -76,23 +140,34 @@ export async function GET(req: NextRequest) {
 
     // ─── Carica dati piano giorno + Bruno in parallelo ─────────────────────────
 
-    const [
-      servicesRes,
-      hotelsRes,
-      membershipsRes,
-      vehiclesRes,
-      brunoData,
-    ] = await Promise.all([
-      auth.admin
+    let serviceColumns = [...BASE_SERVICE_COLUMNS, ...OPTIONAL_SERVICE_COLUMNS];
+    let servicesRes: {
+      data: ExportServiceRow[] | null;
+      error: { message: string } | null;
+    } = { data: null, error: null };
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const result = await auth.admin
         .from("services")
-        .select("id, time, direction, customer_name, customer_first_name, customer_last_name, pax, hotel_id, vessel, notes, status, meeting_point, pickup_hotel, phone, service_type, booking_service_kind")
+        .select(serviceColumns.join(", "))
         .eq("tenant_id", tenantId)
         .eq("date", date)
         .neq("status", "cancelled")
         .neq("is_draft", true)
         .order("time")
-        .limit(2000),
+        .limit(2000);
+      servicesRes = result as typeof servicesRes;
+      if (!result.error) break;
+      const missingColumn = missingSchemaColumn(result.error.message);
+      if (!missingColumn || !serviceColumns.includes(missingColumn)) break;
+      serviceColumns = serviceColumns.filter((column) => column !== missingColumn);
+    }
 
+    const [
+      hotelsRes,
+      membershipsRes,
+      vehiclesRes,
+      brunoData,
+    ] = await Promise.all([
       auth.admin
         .from("hotels")
         .select("id, name, zone")
@@ -184,7 +259,7 @@ export async function GET(req: NextRequest) {
     ws1.getRow(1).height = 28;
     ws1.addRow([]);
 
-    const hdr1 = ws1.addRow(["Ora", "Tipo", "Porto", "Cliente", "Telefono", "N° Persone", "Hotel", "Autista", "Mezzo", "Capienza", "Note"]);
+    const hdr1 = ws1.addRow(["Ora", "Macro", "Servizio", "Azione", "Pickup", "Destinazione", "Connessione/Nave", "Cliente", "Telefono", "Pax", "Autista", "Mezzo", "Note"]);
     styleHeader(hdr1, "FF1E3A5F");
 
     let r1 = 0;
@@ -196,26 +271,28 @@ export async function GET(req: NextRequest) {
         ?? (grp?.driver_user_id ? memberMap.get(grp.driver_user_id)?.full_name : null)
         ?? "—";
       const vehicleLabel = asgn?.vehicle_label ?? grp?.vehicle_label ?? "—";
-      const capacity = grp?.vehicle_capacity ?? vehicleMap.get(vehicleLabel ?? "")?.capacity ?? "—";
-      const ora = svc.direction === "departure" ? fmt5(svc.pickup_hotel ?? svc.time) : fmt5(svc.time);
-      const porto = portLabel(svc.meeting_point) || (svc.vessel ? svc.vessel.split(" ")[0] ?? "" : "");
+      const display = getPianoServiceDisplay(svc, hotel);
+      const ora = display.primaryTime ?? (svc.direction === "departure" ? fmt5(svc.pickup_hotel ?? svc.time) : fmt5(svc.time));
+      const note = [display.noteLabel, display.importTag, ...display.warnings].filter(Boolean).join(" | ");
       const row = ws1.addRow([
         ora,
-        svc.direction === "arrival" ? "Arrivo" : "Partenza",
-        porto,
-        customerFullName(svc),
-        svc.phone ?? "—",
+        display.macroCategory,
+        display.serviceLabel,
+        display.actionLabel,
+        display.pickupLabel ?? "—",
+        display.destinationLabel ?? "—",
+        [display.connectionLabel, display.ferryLabel].filter(Boolean).join(" | ") || "—",
+        display.clientLabel || customerFullName(svc),
+        display.phoneLabel || svc.phone || "—",
         svc.pax,
-        hotel?.name ?? "—",
         driverName,
         vehicleLabel,
-        capacity,
-        svc.notes ?? "",
+        note,
       ]);
       styleDataRow(row, r1++ % 2 === 0);
     }
 
-    setColWidths(ws1, [8, 10, 16, 26, 14, 8, 22, 18, 12, 9, 28]);
+    setColWidths(ws1, [8, 12, 18, 24, 24, 28, 28, 26, 14, 8, 18, 12, 30]);
     ws1.views = [{ state: "frozen", ySplit: 3 }];
 
     // ── FOGLIO 2: Autisti ──────────────────────────────────────────────────────
@@ -249,12 +326,16 @@ export async function GET(req: NextRequest) {
       const driverName = grp.driver_user_id ? memberMap.get(grp.driver_user_id)?.full_name ?? "—" : "—";
       const vehicleLabel = grp.vehicle_label ?? "—";
       const capacity = grp.vehicle_capacity ?? vehicleMap.get(grp.vehicle_label ?? "")?.capacity ?? "—";
-      const firstTime = fmt5(svcs[0]?.pickup_hotel ?? svcs[0]?.time);
-      const clienti = svcs.map(s => customerFullName(s)).join(", ");
+      const firstDisplay = svcs[0] ? getPianoServiceDisplay(svcs[0], hotelMap.get(svcs[0].hotel_id ?? "")) : null;
+      const firstTime = firstDisplay?.primaryTime ?? fmt5(svcs[0]?.pickup_hotel ?? svcs[0]?.time);
+      const clienti = svcs.map(s => getPianoServiceDisplay(s, hotelMap.get(s.hotel_id ?? "")).clientLabel || customerFullName(s)).join(", ");
       const totalPax = svcs.reduce((s, c) => s + (c.pax ?? 0), 0);
-      const hotels = [...new Set(svcs.map(s => hotelMap.get(s.hotel_id ?? "")?.name).filter(Boolean))].join(", ") || "—";
-      const firstPhone = svcs[0]?.phone ?? "—";
-      const row = ws2.addRow([driverName, vehicleLabel, capacity, firstTime, clienti, totalPax, hotels, firstPhone]);
+      const places = [...new Set(svcs.map(s => {
+        const display = getPianoServiceDisplay(s, hotelMap.get(s.hotel_id ?? ""));
+        return [display.macroCategory, display.pickupLabel, display.destinationLabel].filter(Boolean).join(": ");
+      }).filter(Boolean))].join(", ") || "—";
+      const firstPhone = firstDisplay?.phoneLabel ?? svcs[0]?.phone ?? "—";
+      const row = ws2.addRow([driverName, vehicleLabel, capacity, firstTime, clienti, totalPax, places, firstPhone]);
       styleDataRow(row, r2++ % 2 === 0);
     }
 

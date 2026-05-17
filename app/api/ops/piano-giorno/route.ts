@@ -24,6 +24,58 @@ type FerryScheduleRow = {
   notes: string | null;
 };
 
+const BASE_SERVICE_COLUMNS = [
+  "id",
+  "date",
+  "time",
+  "time_from",
+  "time_to",
+  "direction",
+  "customer_name",
+  "customer_first_name",
+  "customer_last_name",
+  "pax",
+  "hotel_id",
+  "vessel",
+  "notes",
+  "status",
+  "meeting_point",
+  "place_type",
+  "pickup_hotel",
+  "booking_service_kind",
+  "service_type",
+  "phone",
+];
+
+const PIANO_OPTIONAL_SERVICE_COLUMNS = [
+  "service_type_code",
+  "transport_code",
+  "orario_barca",
+  "porto_bruno",
+  "barca_compagnia",
+  "ferry_details",
+  "excursion_details",
+  "tour_name",
+  "pickup_time",
+  "origin_place_type",
+  "destination_place_type",
+  "origin_place_id",
+  "destination_place_id",
+  "arrival_time",
+  "departure_time",
+  "train_arrival_number",
+  "train_arrival_time",
+  "train_departure_number",
+  "train_departure_time",
+];
+
+function missingSchemaColumn(message: string) {
+  return message.match(/Could not find the '([^']+)' column/)?.[1]
+    ?? message.match(/column (?:public\.)?services\.([a-zA-Z0-9_]+) does not exist/)?.[1]
+    ?? message.match(/column "([a-zA-Z0-9_]+)" does not exist/)?.[1]
+    ?? null;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
@@ -36,16 +88,32 @@ export async function GET(request: NextRequest) {
     // Giorno della settimana (0=dom, 1=lun, …) per ferry schedules
     const dow = new Date(date + "T12:00:00Z").getDay();
 
-    // Carica prima i servizi del giorno per filtrare assignments per service_id
-    const servicesResult = await auth.admin
-      .from("services")
-      .select("id, date, time, time_from, time_to, direction, customer_name, customer_first_name, customer_last_name, pax, hotel_id, vessel, notes, status, meeting_point, place_type, pickup_hotel, booking_service_kind, service_type, phone")
-      .eq("tenant_id", tenantId)
-      .eq("date", date)
-      .neq("status", "cancelled")
-      .neq("is_draft", true)
-      .order("time")
-      .limit(2000);
+    // Carica prima i servizi del giorno per filtrare assignments per service_id.
+    // Alcune colonne operational_v2 sono opzionali tra ambienti: se la schema cache
+    // non le conosce, riproviamo togliendo solo la colonna segnalata.
+    let serviceColumns = [...BASE_SERVICE_COLUMNS, ...PIANO_OPTIONAL_SERVICE_COLUMNS];
+    let servicesResult: {
+      data: Array<Record<string, unknown>> | null;
+      error: { message: string } | null;
+    } = { data: null, error: null };
+    const omittedServiceColumns: string[] = [];
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const result = await auth.admin
+        .from("services")
+        .select(serviceColumns.join(", "))
+        .eq("tenant_id", tenantId)
+        .eq("date", date)
+        .neq("status", "cancelled")
+        .neq("is_draft", true)
+        .order("time")
+        .limit(2000);
+      servicesResult = result as typeof servicesResult;
+      if (!result.error) break;
+      const missingColumn = missingSchemaColumn(result.error.message);
+      if (!missingColumn || !serviceColumns.includes(missingColumn)) break;
+      omittedServiceColumns.push(missingColumn);
+      serviceColumns = serviceColumns.filter((column) => column !== missingColumn);
+    }
 
     if (servicesResult.error) {
       console.error("[piano-giorno] services query error:", servicesResult.error.message, servicesResult.error);
@@ -93,7 +161,7 @@ export async function GET(request: NextRequest) {
 
       auth.admin
         .from("hotels")
-        .select("id, name, zone, lat, lng")
+        .select("id, name, zone, lat, lng, address, geo_status, geo_source, geo_accuracy, geo_verified_at")
         .eq("tenant_id", tenantId),
 
       auth.admin
@@ -151,6 +219,7 @@ export async function GET(request: NextRequest) {
       ok: true,
       date,
       services: servicesResult.data ?? [],
+      omitted_service_columns: omittedServiceColumns,
       trip_groups: tripGroups,
       assignments: dayAssignments,
       hotels: hotelsResult.data ?? [],

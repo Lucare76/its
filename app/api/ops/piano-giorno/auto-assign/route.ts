@@ -20,7 +20,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { hotelGeoQuality } from "@/lib/hotel-geocoding";
+import { hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
 import {
@@ -45,6 +45,58 @@ function zoneArea(zone: string | null): "nordovest" | "estsud" | "unknown" {
     z.includes("cuotto") || z.includes("citara")
   ) return "nordovest";
   return "unknown";
+}
+
+function normalizedPlace(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function operationalZoneFromText(value: string | null | undefined): string | null {
+  const text = normalizedPlace(value);
+  if (!text) return null;
+  if (text.includes("mortella") || text === "la villa" || text.includes("hotel la villa")) return "Forio";
+  if (text.includes("nitrodi")) return "Barano";
+  if (text.includes("sant angelo")) return "Serrara Fontana";
+  if (text.includes("casamicciola")) return "Casamicciola";
+  if (text.includes("lacco")) return "Lacco Ameno";
+  if (text.includes("forio")) return "Forio";
+  if (
+    text.includes("ischia") ||
+    text.includes("piazzale trieste") ||
+    text.includes("caffe del direttore") ||
+    text.includes("president") ||
+    text.includes("parco aurora") ||
+    text.includes("re ferdinando") ||
+    text.includes("felix") ||
+    text.includes("cristallo")
+  ) return "Ischia Porto";
+  return inferZoneFromText(value ?? "");
+}
+
+function hotelOperationalZone(hotel: HotelRow | undefined) {
+  if (!hotel) return null;
+  return inferZoneFromText(hotel.zone ?? "")
+    ?? operationalZoneFromText(hotel.address)
+    ?? operationalZoneFromText(hotel.name);
+}
+
+function serviceOperationalZone(service: ServiceRow, hotelMap: Map<string, HotelRow>) {
+  const hotel = service.hotel_id ? hotelMap.get(service.hotel_id) : undefined;
+  return hotelOperationalZone(hotel)
+    ?? operationalZoneFromText(service.meeting_point);
+}
+
+function hasUsableOperationalPosition(service: ServiceRow, hotelMap: Map<string, HotelRow>) {
+  const hotel = service.hotel_id ? hotelMap.get(service.hotel_id) : undefined;
+  if (!hotel) return Boolean(serviceOperationalZone(service, hotelMap));
+  const quality = hotelGeoQuality(hotel);
+  if (quality.routeUsable) return true;
+  return Boolean(hotelOperationalZone(hotel) && (hotel.address || hotel.name));
 }
 
 function portPriority(meetingPoint: string | null): "nordovest" | "estsud" {
@@ -168,7 +220,7 @@ function arrivalMergeKey(service: ServiceRow): string {
 }
 
 function departureBaseGroupKey(service: ServiceRow, hotelMap: Map<string, HotelRow>): string {
-  const hotelKey = service.hotel_id ?? `zone:${hotelMap.get(service.hotel_id ?? "")?.zone ?? "Sconosciuto"}`;
+  const hotelKey = service.hotel_id ?? `zone:${serviceOperationalZone(service, hotelMap) ?? "Sconosciuto"}`;
   const pickup = (service.pickup_hotel ?? service.time).slice(0, 5);
   const port = cleanPortName(service.meeting_point) || "Imbarco da verificare";
   return `${hotelKey}|${pickup}|${port.toLowerCase()}`;
@@ -250,7 +302,7 @@ function serviceOperationalTime(service: ServiceRow): string {
 }
 
 function serviceToGeographicWindow(service: ServiceRow, hotelMap: Map<string, HotelRow>): GeographicCompatibilityService {
-  const hotelZone = service.hotel_id ? hotelMap.get(service.hotel_id)?.zone ?? null : null;
+  const hotelZone = serviceOperationalZone(service, hotelMap);
   const startTime = serviceOperationalTime(service);
   if (service.direction === "departure") {
     return { id: service.id, startTime, startZone: hotelZone, endZone: service.meeting_point };
@@ -589,7 +641,7 @@ export async function POST(request: NextRequest) {
       // Raggruppa per zona hotel
       const byZone = new Map<string, ServiceRow[]>();
       for (const svc of ferryServices) {
-        const zone = hotelMap.get(svc.hotel_id ?? "")?.zone ?? "Sconosciuto";
+        const zone = serviceOperationalZone(svc, hotelMap) ?? "Sconosciuto";
         const list = byZone.get(zone) ?? [];
         list.push(svc);
         byZone.set(zone, list);
@@ -642,7 +694,7 @@ export async function POST(request: NextRequest) {
     const protectedBlocks = Array.from(depBaseGroups.values()).map((services) => {
       const sorted = routeSort(services, hotelMap, portCoords(services[0]?.meeting_point), "departure");
       const pickup = (sorted[0]?.pickup_hotel ?? sorted[0]?.time ?? "00:00").slice(0, 5);
-      const zone = hotelMap.get(sorted[0]?.hotel_id ?? "")?.zone ?? "Sconosciuto";
+      const zone = sorted[0] ? serviceOperationalZone(sorted[0], hotelMap) ?? "Sconosciuto" : "Sconosciuto";
       const port = cleanPortName(sorted[0]?.meeting_point) || "Imbarco da verificare";
       return {
         serviceIds: sorted.map((service) => service.id),
@@ -945,9 +997,10 @@ export async function POST(request: NextRequest) {
 
     const unassignedCount = toAssign.length - assignedCount;
     const geoBlockedServices = toAssign.filter((service) => {
-      if (!service.hotel_id) return true;
+      if (!service.hotel_id) return !hasUsableOperationalPosition(service, hotelMap);
       const hotel = hotelMap.get(service.hotel_id);
-      return !hotel || geoBlockedByHotelId.has(service.hotel_id);
+      if (!hotel) return !hasUsableOperationalPosition(service, hotelMap);
+      return geoBlockedByHotelId.has(service.hotel_id) && !hasUsableOperationalPosition(service, hotelMap);
     });
     const geoBlockedHotels = Array.from(new Set(
       geoBlockedServices
