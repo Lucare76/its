@@ -1343,10 +1343,11 @@ function serviceEndPlace(display: ReturnType<typeof getPianoServiceDisplay>) {
 function operationalAreaFromText(value: string | null | undefined) {
   const text = normalizeOperationalPlace(value);
   if (!text) return null;
+  if (text.includes("san nicola") || text.includes("parroco d abundo") || text.includes("panza")) return "Forio";
   if (text.includes("mortella") || text === "la villa" || text.includes("hotel la villa")) return "Forio";
   if (text.includes("nitrodi")) return "Barano";
   if (text.includes("sant angelo")) return "Serrara Fontana";
-  if (text.includes("forio")) return "Forio";
+  if (text.includes("forio") || text.includes("citara") || text.includes("cuotto") || text.includes("panza")) return "Forio";
   if (text.includes("casamicciola")) return "Casamicciola";
   if (text.includes("lacco")) return "Lacco Ameno";
   if (text.includes("barano")) return "Barano";
@@ -1378,6 +1379,16 @@ function operationalArea(row: { hotel: Hotel | undefined; display: ReturnType<ty
   return null;
 }
 
+function navettaZoneRequiredGap(area: string | null | undefined): number {
+  const z = (area ?? "").toLowerCase();
+  if (z.includes("ischia")) return 13;
+  if (z.includes("casamicciola")) return 17;
+  if (z.includes("lacco")) return 19;
+  if (z.includes("forio")) return 25;
+  if (z.includes("barano") || z.includes("serrara") || z.includes("sant")) return 27;
+  return 25;
+}
+
 function driverSequenceWarning(
   previous: { time: string; hotel: Hotel | undefined; display: ReturnType<typeof getPianoServiceDisplay> } | null,
   current: { time: string; hotel: Hotel | undefined; display: ReturnType<typeof getPianoServiceDisplay> },
@@ -1394,9 +1405,25 @@ function driverSequenceWarning(
   const fromArea = operationalArea(previous, "end");
   const toArea = operationalArea(current, "start");
   const sameArea = fromArea && toArea && sameOperationalPlace(fromArea, toArea);
-  const requiredGap = sameArea || !fromArea || !toArea ? 20 : 30;
+  const isNavetta = current.display.macroCategory === "NAVETTA" || previous.display.macroCategory === "NAVETTA";
+  const requiredGap = isNavetta
+    ? navettaZoneRequiredGap(toArea ?? fromArea)
+    : (sameArea || !fromArea || !toArea ? 20 : 30);
   if (gap >= requiredGap) return null;
   return `ATTENZIONE: ${gap} min dal servizio precedente, servono almeno ${requiredGap} min (${from} -> ${to})`;
+}
+
+function driverVehicleWarning(
+  previous: { time: string; vehicleLabel: string | null } | null,
+  current: { time: string; vehicleLabel: string | null },
+) {
+  if (!previous?.vehicleLabel || !current.vehicleLabel || previous.vehicleLabel === current.vehicleLabel) return null;
+  const prevMin = minutesFromTime(previous.time);
+  const currentMin = minutesFromTime(current.time);
+  if (prevMin == null || currentMin == null) return null;
+  const gap = currentMin - prevMin;
+  if (gap < 0 || gap >= 20) return null;
+  return `ATTENZIONE: cambio mezzo in ${gap} min (${previous.vehicleLabel} -> ${current.vehicleLabel}), servono almeno 20 min`;
 }
 
 function geoIssueReason(issues: string[]) {
@@ -1408,7 +1435,9 @@ function geoIssueReason(issues: string[]) {
 }
 
 function hotelHasUsableAddressOrZone(hotel: Hotel) {
-  const zone = inferZoneFromText(hotel.zone ?? "")
+  const knownOperationalZone = operationalAreaFromText([hotel.name, hotel.address].filter(Boolean).join(" "));
+  const zone = knownOperationalZone
+    ?? inferZoneFromText(hotel.zone ?? "")
     ?? operationalAreaFromText(hotel.address)
     ?? operationalAreaFromText(hotel.name);
   return Boolean(zone && (hotel.address || hotel.name));
@@ -1483,22 +1512,24 @@ function printDriverPlans(drivers: DriverEntry[], tripGroups: TripGroup[], tripS
         .flatMap((tg) => {
           const svcs = tripServices.get(tg.id) ?? [];
           const isArrivalGroup = svcs.length > 0 && svcs.every((s) => s.direction === "arrival");
+          const wrap = (svc: Service) => ({ svc, vehicleLabel: tg.vehicle_label });
           if (isArrivalGroup) {
             const arrPorto = cleanPortName(svcs[0]?.meeting_point) || "Ischia Porto";
             const { lat, lng } = portCoords(arrPorto);
-            return nearestNeighborSort(svcs, hotels, lat, lng);
+            return nearestNeighborSort(svcs, hotels, lat, lng).map(wrap);
           }
-          return [...svcs].sort((a, b) => serviceSortTime(a).localeCompare(serviceSortTime(b)));
+          return [...svcs].sort((a, b) => serviceSortTime(a).localeCompare(serviceSortTime(b))).map(wrap);
         })
-        .map((svc) => {
+        .map(({ svc, vehicleLabel }) => {
           const hotel = hotels.get(svc.hotel_id ?? "");
           const display = getPianoServiceDisplay(svc, hotel);
-          return { svc, hotel, display, time: display.primaryTime ?? serviceDisplayTime(svc) };
+          return { svc, hotel, display, time: display.primaryTime ?? serviceDisplayTime(svc), vehicleLabel };
         })
         .sort((a, b) => a.time.localeCompare(b.time))
         .map((row, index, rows) => {
-          const { svc, hotel, display, time } = row;
+          const { svc, hotel, display, time, vehicleLabel } = row;
           const sequenceWarning = driverSequenceWarning(rows[index - 1] ?? null, row);
+          const vehicleWarning = driverVehicleWarning(rows[index - 1] ?? null, row);
           const badgeTone =
             display.macroCategory === "ESCURSIONE" ? "background:#f3e8ff;color:#6b21a8"
             : display.macroCategory === "ARRIVO" ? "background:#dbeafe;color:#1e3a8a"
@@ -1512,8 +1543,10 @@ function printDriverPlans(drivers: DriverEntry[], tripGroups: TripGroup[], tripS
             display.destinationLabel ? `<span style="color:#444;font-size:8.5pt"><b>Destinazione:</b> ${htmlEscape(display.destinationLabel)}</span>` : "",
             display.connectionLabel ? `<span style="color:#444;font-size:8.5pt"><b>Connessione:</b> ${htmlEscape(display.connectionLabel)}</span>` : "",
             display.ferryLabel ? `<span style="color:#444;font-size:8.5pt"><b>Nave:</b> ${htmlEscape(display.ferryLabel)}</span>` : "",
+            vehicleLabel ? `<span style="color:#111;font-size:8.5pt"><b>Mezzo:</b> ${htmlEscape(vehicleLabel)}</span>` : "",
             ...display.warnings.map((warning) => `<span style="color:#b45309;font-size:8.5pt"><b>${htmlEscape(warning)}</b></span>`),
             sequenceWarning ? `<span style="color:#b91c1c;font-size:8.5pt"><b>${htmlEscape(sequenceWarning)}</b></span>` : "",
+            vehicleWarning ? `<span style="color:#b91c1c;font-size:8.5pt"><b>${htmlEscape(vehicleWarning)}</b></span>` : "",
           ].filter(Boolean).join(" &nbsp;·&nbsp; ");
           const notes = display.noteLabel ?? "";
           const hotelCell = hotel?.name
@@ -1577,6 +1610,8 @@ export default function PianoGiornoPage() {
   const [planSearch, setPlanSearch] = useState("");
   const [expandedTripId, setExpandedTripId] = useState<string | null>(null);
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
+  const tripListRef = useRef<HTMLDivElement | null>(null);
+  const unassignedSectionRef = useRef<HTMLDivElement | null>(null);
 
   // ─── Pannello imprevisti ───────────────────────────────────────────────────
   const [showImprevisti, setShowImprevisti] = useState(false);
@@ -1718,6 +1753,24 @@ export default function PianoGiornoPage() {
     if (hasGroups) setShowAutoModal(true);
     else requestAutoAssign("unassigned_only");
   }, [availabilityLocked, hasGroups, requestAutoAssign]);
+  const showAllTrips = useCallback(() => {
+    setPlanFilter("all");
+    setPlanSearch("");
+    setActiveWindowId(null);
+    setTimeout(() => tripListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  }, []);
+  const showIssues = useCallback(() => {
+    setPlanFilter("issues");
+    setPlanSearch("");
+    setActiveWindowId(null);
+    setTimeout(() => tripListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  }, []);
+  const showUnassigned = useCallback(() => {
+    setPlanFilter("all");
+    setPlanSearch("");
+    setActiveWindowId(null);
+    setTimeout(() => unassignedSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  }, []);
   const driversList = useMemo(() => (data?.memberships ?? []).filter((m) => m.role === "driver" || m.role === "autista"), [data]);
 
   // Lista unificata: profili attivi non sospesi (include driver senza account)
@@ -2614,30 +2667,46 @@ export default function PianoGiornoPage() {
         {data && viewMode === "plan" && (
           <div className="space-y-4">
             <div className="grid gap-3 md:grid-cols-4">
-              <div className="card p-4">
+              <button
+                type="button"
+                onClick={showAllTrips}
+                className="card p-4 text-left transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Servizi</p>
                 <p className="mt-1 text-3xl font-bold text-slate-900">{totalServices}</p>
                 <p className="text-xs text-slate-500">{assignedServices} gia pianificati</p>
-              </div>
-              <div className="card p-4">
+              </button>
+              <button
+                type="button"
+                onClick={showAllTrips}
+                className="card p-4 text-left transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Giri</p>
                 <p className="mt-1 text-3xl font-bold text-slate-900">{tripRows.length}</p>
                 <p className="text-xs text-slate-500">{tripRows.filter((t) => t.group.driver_user_id || t.group.driver_profile_id).length} con autista</p>
-              </div>
-              <div className="card p-4">
+              </button>
+              <button
+                type="button"
+                onClick={showIssues}
+                className="card p-4 text-left transition hover:-translate-y-0.5 hover:border-red-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-red-500"
+              >
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Da sistemare</p>
                 <p className={`mt-1 text-3xl font-bold ${blockerCount > 0 ? "text-red-600" : "text-emerald-600"}`}>
                   {planIssues.length}
                 </p>
                 <p className="text-xs text-slate-500">{blockerCount} bloccanti</p>
-              </div>
-              <div className="card p-4">
+              </button>
+              <button
+                type="button"
+                onClick={showUnassigned}
+                className="card p-4 text-left transition hover:-translate-y-0.5 hover:border-amber-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-amber-500"
+              >
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Fuori piano</p>
                 <p className={`mt-1 text-3xl font-bold ${unassignedServices.length > 0 ? "text-amber-600" : "text-slate-900"}`}>
                   {unassignedServices.length}
                 </p>
                 <p className="text-xs text-slate-500">servizi non inseriti in un giro</p>
-              </div>
+              </button>
             </div>
 
             <ContinentDispatchSection data={data.continent_dispatch} />
@@ -2710,7 +2779,7 @@ export default function PianoGiornoPage() {
             )}
 
             {unassignedServices.length > 0 && (
-              <div className="card p-4">
+              <div ref={unassignedSectionRef} className="card p-4 scroll-mt-24">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="text-sm font-bold text-slate-800">Carico da organizzare</h2>
@@ -2892,7 +2961,7 @@ export default function PianoGiornoPage() {
                   </p>
                 </div>
 
-                <div className="max-h-[calc(100vh-360px)] min-h-[420px] overflow-y-auto divide-y divide-slate-100">
+                <div ref={tripListRef} className="max-h-[calc(100vh-360px)] min-h-[420px] scroll-mt-24 overflow-y-auto divide-y divide-slate-100">
                   {tripRows.length === 0 ? (
                     <div className="flex min-h-[300px] flex-col items-center justify-center px-6 text-center">
                       <p className="text-lg font-bold text-slate-800">Nessun giro pianificato</p>

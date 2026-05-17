@@ -325,7 +325,7 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
       macroCategory: macro,
       serviceLabel: "NAVETTA",
       primaryTime: basePrimaryTime,
-      actionLabel: "Da dove parto e dove vado",
+      actionLabel: service.direction === "arrival" ? "Porto → Hotel" : "Hotel → Porto",
       pickupLabel: pickup ?? "Pickup da verificare",
       destinationLabel: destination ?? "Destinazione da verificare",
       connectionLabel: null,
