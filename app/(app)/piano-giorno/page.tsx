@@ -6,6 +6,7 @@ import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { DateInput, PageHeader } from "@/components/ui";
 import { getPianoServiceDisplay } from "@/lib/piano-service-display";
 import { hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
+import { buildResolutionPreview, resolutionConfirmationLabel, type ResolutionPreview } from "@/lib/piano-conflict-resolution-preview";
 
 // ─── Tipi ─────────────────────────────────────────────────────────────────────
 
@@ -181,6 +182,123 @@ type AiPlanResult = {
   }>;
   warnings: string[];
 };
+type ConflictResolutionSuggestion = {
+  conflict_id: string;
+  group_id: string;
+  driver_name: string | null;
+  vehicle_label: string | null;
+  conflict_type: "CONFLICT_REAL" | "OVERLAP";
+  severity: "alta" | "media" | "bassa";
+  involved_services: Array<{
+    service_id: string;
+    customer_name: string | null;
+    macro_category: string;
+    operational_time: string | null;
+    pickup_label: string | null;
+    destination_label: string | null;
+    pax: number | null;
+  }>;
+  root_cause:
+    | "different_ports_same_time"
+    | "multi_drop_candidate"
+    | "insufficient_buffer_same_pickup"
+    | "true_overlap"
+    | "locked_manual"
+    | "unknown";
+  recommended_action:
+    | "SEPARARE"
+    | "SPOSTARE"
+    | "CREARE_NUOVO_GIRO"
+    | "MULTI_DROP"
+    | "ACCORPARE_CON_CONFERMA"
+    | "DA_VERIFICARE_OPERATORE"
+    | "OK_NON_INTERVENIRE";
+  explanation: string[];
+  suggested_order: string[];
+  alternative_action: "SEPARARE_SE_NON_CONFERMATO" | null;
+  candidate_moves: Array<{
+    service_id: string;
+    from_driver: string | null;
+    to_driver: string | null;
+    to_group_id: string;
+    confidence: number;
+    reason: string;
+    risks: string[];
+  }>;
+  operator_confirmation_required: boolean;
+  operator_confirmed?: boolean;
+  operator_decision_id?: string | null;
+  operator_confirmed_by?: string | null;
+  operator_confirmed_at?: string | null;
+};
+type GroupDiagnosticsResponse = {
+  ok: boolean;
+  error?: string;
+  summary?: {
+    groups_with_conflicts: number;
+    total_conflicts: number;
+    total_needs_review: number;
+  };
+  resolution_suggestions?: ConflictResolutionSuggestion[];
+};
+type ApplyResolutionResponse = {
+  ok: boolean;
+  apply_status?: string;
+  message?: string;
+  error?: string;
+  required_model_change?: string;
+  diagnostics?: GroupDiagnosticsResponse;
+};
+type VehicleBindingPreviewChange = {
+  group_id: string;
+  driver_name: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  pax: number;
+  current_vehicle_label: string | null;
+  current_vehicle_capacity: number | null;
+  proposed_vehicle_label: string | null;
+  proposed_vehicle_capacity: number | null;
+  reason: string;
+  large_vehicle_shared: boolean;
+  buffer_from_previous: number | null;
+  service_ids: string[];
+};
+type VehicleBindingPreviewResponse = {
+  ok: boolean;
+  error?: string;
+  date?: string;
+  preview_reference?: string;
+  changes?: VehicleBindingPreviewChange[];
+  large_vehicle_usage?: Array<{
+    vehicle_label: string | null;
+    driver_name: string | null;
+    group_id: string;
+    start_time: string | null;
+    end_time: string | null;
+    pax: number;
+    buffer_from_previous: number | null;
+    status: string;
+  }>;
+  summary?: {
+    conflicts_before: number;
+    conflicts_after: number;
+    overbooking_after: number;
+    eligibility_blockers: number;
+    changes_needed: number;
+    large_vehicle_shared_ok: number;
+  };
+  warnings?: string[];
+  info?: string[];
+};
+type ApplyVehicleBindingResponse = {
+  ok: boolean;
+  applied?: number;
+  idempotent?: boolean;
+  message?: string;
+  error?: string;
+  audit_saved?: boolean;
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -212,6 +330,67 @@ function portLabel(p: string) {
   if (p === "napoli_beverello") return "Napoli Bev.";
   if (p === "pozzuoli") return "Pozzuoli";
   return p;
+}
+function conflictActionLabel(action: ConflictResolutionSuggestion["recommended_action"]) {
+  const labels: Record<ConflictResolutionSuggestion["recommended_action"], string> = {
+    SEPARARE: "SEPARARE",
+    SPOSTARE: "SPOSTARE",
+    CREARE_NUOVO_GIRO: "CREARE NUOVO GIRO",
+    MULTI_DROP: "MULTI-DROP DA CONFERMARE",
+    ACCORPARE_CON_CONFERMA: "ACCORPARE CON CONFERMA",
+    DA_VERIFICARE_OPERATORE: "DA VERIFICARE OPERATORE",
+    OK_NON_INTERVENIRE: "OK - NON INTERVENIRE",
+  };
+  return labels[action];
+}
+function conflictRootCauseLabel(rootCause: ConflictResolutionSuggestion["root_cause"]) {
+  const labels: Record<ConflictResolutionSuggestion["root_cause"], string> = {
+    different_ports_same_time: "Porti diversi allo stesso orario",
+    multi_drop_candidate: "Possibile multi-drop",
+    insufficient_buffer_same_pickup: "Buffer stretto stesso pickup",
+    true_overlap: "Sovrapposizione reale",
+    locked_manual: "Assegnazione manuale bloccata",
+    unknown: "Da verificare",
+  };
+  return labels[rootCause];
+}
+function prettyConflictPlace(value: string | null | undefined) {
+  const normalized = (value ?? "").trim().replace(/\s+/g, " ");
+  const key = normalized.toUpperCase();
+  const known: Record<string, string> = {
+    "LA VILLA": "La Villa",
+    MORTELLA: "Mortella",
+    CRISTALLO: "Cristallo",
+    "RE FERDINANDO": "Re Ferdinando",
+    "ISCHIA PORTO": "Ischia Porto",
+    CASAMICCIOLA: "Casamicciola",
+  };
+  return known[key] ?? normalized;
+}
+function conflictTimeRange(services: ConflictResolutionSuggestion["involved_services"]) {
+  const times = Array.from(new Set(services.map((service) => service.operational_time).filter(Boolean) as string[])).sort();
+  if (times.length === 0) return null;
+  if (times.length === 1) return times[0] ?? null;
+  return `${times[0]}–${times[times.length - 1]}`;
+}
+function conflictRouteLine(suggestion: ConflictResolutionSuggestion) {
+  const time = conflictTimeRange(suggestion.involved_services);
+  const pickup = prettyConflictPlace(suggestion.involved_services.find((service) => service.pickup_label)?.pickup_label);
+  const destinations = Array.from(new Set(
+    suggestion.involved_services
+      .map((service) => prettyConflictPlace(service.destination_label))
+      .filter(Boolean)
+  ));
+  const route = [pickup, destinations.join(" / ")].filter(Boolean).join(" → ");
+  return [time, route].filter(Boolean).join(" · ");
+}
+function simulationStatusLabel(status: ResolutionPreview["simulated_status"]) {
+  if (status === "NON_OPERATIVO") return "NON OPERATIVO";
+  return status;
+}
+function resolutionRouteLine(preview: ResolutionPreview) {
+  return (preview.final_stops[0]?.detail ?? "percorso proposto")
+    .replace(/\s+·\s+\d+\s+pax totali$/i, "");
 }
 function customerName(s: Service) {
   return [s.customer_first_name, s.customer_last_name].filter(Boolean).join(" ") || s.customer_name;
@@ -1602,6 +1781,17 @@ export default function PianoGiornoPage() {
   const [aiPlanning, setAiPlanning] = useState(false);
   const [aiPlan, setAiPlan] = useState<{ plan: AiPlanResult; usage: { input_tokens?: number; output_tokens?: number } | null } | null>(null);
   const [aiPlanError, setAiPlanError] = useState<string | null>(null);
+  const [groupDiagnostics, setGroupDiagnostics] = useState<GroupDiagnosticsResponse | null>(null);
+  const [groupDiagnosticsError, setGroupDiagnosticsError] = useState<string | null>(null);
+  const [resolutionPreview, setResolutionPreview] = useState<ResolutionPreview | null>(null);
+  const [resolutionApplyConfirm, setResolutionApplyConfirm] = useState<ResolutionPreview | null>(null);
+  const [resolutionApplyBusy, setResolutionApplyBusy] = useState(false);
+  const [resolutionApplyResult, setResolutionApplyResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [vehicleBindingPreview, setVehicleBindingPreview] = useState<VehicleBindingPreviewResponse | null>(null);
+  const [vehicleBindingError, setVehicleBindingError] = useState<string | null>(null);
+  const [vehicleBindingConfirmOpen, setVehicleBindingConfirmOpen] = useState(false);
+  const [vehicleBindingApplyBusy, setVehicleBindingApplyBusy] = useState(false);
+  const [vehicleBindingApplyResult, setVehicleBindingApplyResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [showAutoModal, setShowAutoModal] = useState(false);
   const [showGeoPrecheckModal, setShowGeoPrecheckModal] = useState(false);
   const [pendingAutoMode, setPendingAutoMode] = useState<"unassigned_only" | "regenerate_all" | null>(null);
@@ -1625,6 +1815,152 @@ export default function PianoGiornoPage() {
   const [impDelayMinutes, setImpDelayMinutes] = useState("");
   const [impSaving, setImpSaving] = useState(false);
   const [impResult, setImpResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const conflictSuggestions = groupDiagnostics?.resolution_suggestions ?? [];
+  const vehicleBindingChanges = vehicleBindingPreview?.changes ?? [];
+  const showVehicleBindingPanel = Boolean(
+    vehicleBindingPreview?.ok
+      && (vehicleBindingPreview.summary?.conflicts_before ?? 0) > 0
+      && (vehicleBindingPreview.summary?.conflicts_after ?? 1) === 0
+      && (vehicleBindingPreview.summary?.overbooking_after ?? 1) === 0
+      && vehicleBindingChanges.length > 0
+  );
+
+  useEffect(() => {
+    let active = true;
+    const loadDiagnostics = async () => {
+      if (!token || !data) {
+        setGroupDiagnostics(null);
+        setGroupDiagnosticsError(null);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/ops/piano-giorno/group-diagnostics?date=${date}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const json = (await res.json().catch(() => null)) as GroupDiagnosticsResponse | null;
+        if (!active) return;
+        if (!res.ok || json?.ok === false) {
+          setGroupDiagnostics(null);
+          setGroupDiagnosticsError(json?.error ?? "Diagnostica giri non disponibile.");
+          return;
+        }
+        setGroupDiagnostics(json);
+        setGroupDiagnosticsError(null);
+      } catch {
+        if (!active) return;
+        setGroupDiagnostics(null);
+        setGroupDiagnosticsError("Errore rete durante la diagnostica giri.");
+      }
+    };
+    void loadDiagnostics();
+    return () => {
+      active = false;
+    };
+  }, [token, data, date]);
+
+  useEffect(() => {
+    let active = true;
+    const loadVehicleBindingPreview = async () => {
+      if (!token || !data) {
+        setVehicleBindingPreview(null);
+        setVehicleBindingError(null);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/ops/piano-giorno/vehicle-binding-preview?date=${date}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const json = (await res.json().catch(() => null)) as VehicleBindingPreviewResponse | null;
+        if (!active) return;
+        if (!res.ok || json?.ok === false) {
+          setVehicleBindingPreview(null);
+          setVehicleBindingError(json?.error ?? "Preview riallineamento mezzi non disponibile.");
+          return;
+        }
+        setVehicleBindingPreview(json);
+        setVehicleBindingError(null);
+      } catch {
+        if (!active) return;
+        setVehicleBindingPreview(null);
+        setVehicleBindingError("Errore rete durante la preview mezzi.");
+      }
+    };
+    void loadVehicleBindingPreview();
+    return () => {
+      active = false;
+    };
+  }, [token, data, date]);
+
+  const prepareResolutionPreview = useCallback((suggestion: ConflictResolutionSuggestion) => {
+    setResolutionApplyResult(null);
+    setResolutionApplyConfirm(null);
+    setResolutionPreview(buildResolutionPreview(suggestion));
+  }, []);
+
+  const closeResolutionPreview = useCallback(() => {
+    setResolutionPreview(null);
+    setResolutionApplyConfirm(null);
+    setResolutionApplyResult(null);
+  }, []);
+
+  const submitResolutionApply = useCallback(async () => {
+    if (!token || !resolutionApplyConfirm) return;
+    setResolutionApplyBusy(true);
+    setResolutionApplyResult(null);
+    try {
+      const res = await fetch("/api/ops/piano-giorno/apply-resolution-suggestion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          date,
+          suggestion_id: resolutionApplyConfirm.suggestion_id,
+          group_id: resolutionApplyConfirm.group_id,
+          action: resolutionApplyConfirm.action,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as ApplyResolutionResponse;
+      const detail = [json.message, json.error, json.required_model_change].filter(Boolean).join(" ");
+      setResolutionApplyResult({
+        ok: Boolean(res.ok && json.ok),
+        text: detail || (res.ok ? "Suggerimento applicato." : "Applicazione non disponibile."),
+      });
+      if (res.ok && json.ok) {
+        if (json.diagnostics) {
+          setGroupDiagnostics(json.diagnostics);
+          setGroupDiagnosticsError(null);
+        }
+        await reload();
+      }
+    } catch {
+      setResolutionApplyResult({ ok: false, text: "Errore rete durante la verifica applicazione." });
+    } finally {
+      setResolutionApplyBusy(false);
+    }
+  }, [date, reload, resolutionApplyConfirm, token]);
+
+  const submitVehicleBindingApply = useCallback(async () => {
+    if (!token || !vehicleBindingPreview?.preview_reference) return;
+    setVehicleBindingApplyBusy(true);
+    setVehicleBindingApplyResult(null);
+    try {
+      const res = await fetch("/api/ops/piano-giorno/apply-vehicle-binding", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ date, preview_reference: vehicleBindingPreview.preview_reference }),
+      });
+      const json = (await res.json().catch(() => ({}))) as ApplyVehicleBindingResponse;
+      const text = json.message ?? json.error ?? (res.ok ? `${json.applied ?? 0} giri riallineati.` : "Applicazione non disponibile.");
+      setVehicleBindingApplyResult({ ok: Boolean(res.ok && json.ok), text });
+      if (res.ok && json.ok) {
+        setVehicleBindingConfirmOpen(false);
+        await reload();
+      }
+    } catch {
+      setVehicleBindingApplyResult({ ok: false, text: "Errore rete durante l'applicazione mezzi." });
+    } finally {
+      setVehicleBindingApplyBusy(false);
+    }
+  }, [date, reload, token, vehicleBindingPreview?.preview_reference]);
 
   const runImprevisto = async (action: "swap_driver" | "swap_vehicle" | "delay_vessel") => {
     if (!token) return;
@@ -2150,12 +2486,108 @@ export default function PianoGiornoPage() {
     setAutoResult(null);
     setAiPlan(null);
     setAiPlanError(null);
+    setVehicleBindingPreview(null);
+    setVehicleBindingError(null);
+    setVehicleBindingConfirmOpen(false);
+    setVehicleBindingApplyResult(null);
   }, []);
 
   return (
     <>
       {/* Stile stampa */}
       <style>{`@media print { .no-print { display: none !important; } }`}</style>
+
+      {vehicleBindingConfirmOpen && vehicleBindingPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 no-print">
+          <div className="max-h-[86vh] w-full max-w-3xl overflow-auto rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-blue-600">Seconda conferma</p>
+                <h3 className="text-lg font-bold text-slate-900">Riallineamento mezzi</h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  Aggiorna solo i campi mezzo dei trip_groups. Servizi, assignments e stati non vengono modificati.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setVehicleBindingConfirmOpen(false)}
+                className="text-xl leading-none text-slate-400 hover:text-slate-600"
+              >
+                ×
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-xs font-semibold text-slate-500">Conflitti prima</p>
+                  <p className="text-2xl font-bold text-slate-900">{vehicleBindingPreview.summary?.conflicts_before ?? 0}</p>
+                </div>
+                <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2">
+                  <p className="text-xs font-semibold text-emerald-700">Conflitti dopo</p>
+                  <p className="text-2xl font-bold text-emerald-900">{vehicleBindingPreview.summary?.conflicts_after ?? 0}</p>
+                </div>
+                <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2">
+                  <p className="text-xs font-semibold text-emerald-700">Overbooking dopo</p>
+                  <p className="text-2xl font-bold text-emerald-900">{vehicleBindingPreview.summary?.overbooking_after ?? 0}</p>
+                </div>
+              </div>
+              <div className="overflow-hidden rounded-lg border border-slate-200">
+                <table className="min-w-full divide-y divide-slate-200 text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Autista</th>
+                      <th className="px-3 py-2 text-left">Giro</th>
+                      <th className="px-3 py-2 text-left">Prima</th>
+                      <th className="px-3 py-2 text-left">Dopo</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {vehicleBindingChanges.map((change) => (
+                      <tr key={change.group_id}>
+                        <td className="px-3 py-2 font-semibold text-slate-800">{change.driver_name ?? "Autista non indicato"}</td>
+                        <td className="px-3 py-2 text-slate-600">
+                          {change.start_time ?? "--:--"} · {change.pax} pax
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">
+                          {change.current_vehicle_label ?? "Mezzo non assegnato"}
+                        </td>
+                        <td className="px-3 py-2 text-slate-900">
+                          <span className="font-semibold">{change.proposed_vehicle_label ?? "—"}</span>
+                          {change.large_vehicle_shared ? (
+                            <span className="ml-2 rounded bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-700">timeline</span>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {vehicleBindingApplyResult ? (
+                <p className={`rounded px-3 py-2 text-sm font-semibold ${vehicleBindingApplyResult.ok ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"}`}>
+                  {vehicleBindingApplyResult.text}
+                </p>
+              ) : null}
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setVehicleBindingConfirmOpen(false)}
+                  className="rounded border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Annulla
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void submitVehicleBindingApply()}
+                  disabled={vehicleBindingApplyBusy}
+                  className="rounded bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {vehicleBindingApplyBusy ? "Verifica server-side..." : "Conferma riallineamento mezzi"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal imprevisti */}
       {showImprevisti && (
@@ -2293,6 +2725,176 @@ export default function PianoGiornoPage() {
                 className="w-full text-xs text-slate-400 hover:text-slate-600 mt-1 py-1"
               >
                 Annulla
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resolutionPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 no-print">
+          <div className="w-full max-w-2xl rounded-xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-rose-600">Prepara modifica</p>
+                <h3 className="mt-1 text-lg font-bold text-slate-900">{conflictActionLabel(resolutionPreview.action === "SEPARARE_SE_NON_CONFERMATO" ? "SEPARARE" : resolutionPreview.action)}</h3>
+                <p className="mt-1 text-sm text-slate-600">Nessuna modifica verra applicata in questo step.</p>
+              </div>
+              <button
+                type="button"
+                onClick={closeResolutionPreview}
+                className="rounded border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-500 hover:bg-slate-50"
+              >
+                Chiudi
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Prima</p>
+                <div className="mt-2 space-y-2">
+                  {resolutionPreview.before.map((line, index) => (
+                    <div key={`${line.label}-${index}`} className="rounded bg-white px-2 py-1.5">
+                      <p className="text-xs font-bold text-slate-900">{line.label}</p>
+                      <p className="text-xs text-slate-600">{line.detail}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Dopo proposto</p>
+                <div className="mt-2 space-y-2">
+                  {resolutionPreview.after.map((line, index) => (
+                    <div key={`${line.label}-${index}`} className="rounded bg-white px-2 py-1.5">
+                      <p className="text-xs font-bold text-slate-900">{line.label}</p>
+                      <p className="text-xs text-slate-600">{line.detail}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
+                  resolutionPreview.simulated_status === "OK" ? "bg-emerald-100 text-emerald-700" : resolutionPreview.simulated_status === "WARNING" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700"
+                }`}>
+                  Esito simulato: {simulationStatusLabel(resolutionPreview.simulated_status)}
+                </span>
+                <span className="text-xs font-semibold text-slate-600">{resolutionPreview.total_pax} pax totali</span>
+                <span className="text-xs font-semibold text-slate-600">{resolutionPreview.residual_conflicts} conflitti residui</span>
+                <span className="text-xs font-semibold text-slate-600">{resolutionPreview.residual_warnings} warning residui</span>
+              </div>
+              <div className="mt-3 space-y-2">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Stop finali proposti</p>
+                {resolutionPreview.final_stops.map((line, index) => (
+                  <div key={`${line.label}-${index}`} className="rounded bg-slate-50 px-2 py-1.5">
+                    <p className="text-xs font-bold text-slate-900">{line.label}</p>
+                    <p className="text-xs text-slate-600">{line.detail}</p>
+                  </div>
+                ))}
+              </div>
+              {resolutionPreview.requires_operator_confirmation ? (
+                <p className="mt-2 text-xs font-semibold text-amber-700">Serve conferma operatore prima di applicare qualsiasi modifica.</p>
+              ) : null}
+            </div>
+
+            {resolutionPreview.warnings.length > 0 && (
+              <div className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-2">
+                <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Avvisi</p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-amber-800">
+                  {resolutionPreview.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}
+                </ul>
+              </div>
+            )}
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              {resolutionConfirmationLabel(resolutionPreview) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResolutionApplyResult(null);
+                    setResolutionApplyConfirm(resolutionPreview);
+                  }}
+                  className="rounded bg-emerald-700 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-600"
+                >
+                  {resolutionConfirmationLabel(resolutionPreview)}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={closeResolutionPreview}
+                className="rounded bg-slate-900 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800"
+              >
+                Chiudi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resolutionApplyConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 no-print">
+          <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Conferma esplicita</p>
+                <h3 className="mt-1 text-lg font-bold text-slate-900">
+                  {resolutionApplyConfirm.action === "MULTI_DROP" ? "Confermi questo multi-drop?" : "Conferma e applica"}
+                </h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  {resolutionApplyConfirm.action === "MULTI_DROP"
+                    ? "Questa decisione non modifica servizi, giri o assegnazioni. Salva solo una conferma operatore che indica che il percorso e accettato."
+                    : `Stai per accorpare questi servizi in uno stop unico: ${resolutionApplyConfirm.final_stops[0]?.detail ?? "stop unico proposto"}.`}
+                </p>
+                {resolutionApplyConfirm.action === "MULTI_DROP" ? (
+                  <p className="mt-2 text-sm font-semibold text-slate-800">
+                    Confermi il percorso {resolutionRouteLine(resolutionApplyConfirm)}?
+                  </p>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setResolutionApplyConfirm(null);
+                  setResolutionApplyResult(null);
+                }}
+                className="rounded border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-500 hover:bg-slate-50"
+              >
+                Chiudi
+              </button>
+            </div>
+
+            <div className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Il server ricalcolera la diagnostica da DB prima di qualunque modifica. Se il suggerimento non e piu valido o manca un campo sicuro di persistenza, l&apos;operazione viene bloccata.
+            </div>
+
+            {resolutionApplyResult ? (
+              <div className={`mt-4 rounded border px-3 py-2 text-sm ${
+                resolutionApplyResult.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"
+              }`}>
+                {resolutionApplyResult.text}
+              </div>
+            ) : null}
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setResolutionApplyConfirm(null);
+                  setResolutionApplyResult(null);
+                }}
+                className="rounded border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                Annulla
+              </button>
+              <button
+                type="button"
+                onClick={submitResolutionApply}
+                disabled={resolutionApplyBusy}
+                className="rounded bg-emerald-700 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-600 disabled:opacity-50"
+              >
+                {resolutionApplyBusy ? "Verifica..." : resolutionApplyConfirm.action === "MULTI_DROP" ? "Conferma multi-drop" : "Confermo esplicitamente"}
               </button>
             </div>
           </div>
@@ -2655,6 +3257,192 @@ export default function PianoGiornoPage() {
                 Token usati: input {aiPlan.usage.input_tokens ?? "n/d"}, output {aiPlan.usage.output_tokens ?? "n/d"}.
               </p>
             ) : null}
+          </div>
+        )}
+
+        {groupDiagnosticsError && (
+          <div className="rounded border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+            Diagnostica conflitti non disponibile: {groupDiagnosticsError}
+          </div>
+        )}
+
+        {vehicleBindingError && (
+          <div className="rounded border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+            Preview riallineamento mezzi non disponibile: {vehicleBindingError}
+          </div>
+        )}
+
+        {showVehicleBindingPanel && (
+          <div className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-blue-600">Riallineamento mezzi</p>
+                <h2 className="mt-1 text-lg font-bold text-slate-900">Preview hybrid vehicle binding</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  {vehicleBindingPreview?.summary?.conflicts_before ?? 0} conflitti prima · {vehicleBindingPreview?.summary?.conflicts_after ?? 0} dopo · {vehicleBindingChanges.length} cambi mezzo
+                </p>
+              </div>
+              <span className="rounded bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">preview read-only</span>
+            </div>
+
+            <div className="mt-3 overflow-hidden rounded-lg border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Autista</th>
+                    <th className="px-3 py-2 text-left">Giro/orario</th>
+                    <th className="px-3 py-2 text-left">Mezzo attuale</th>
+                    <th className="px-3 py-2 text-left">Mezzo proposto</th>
+                    <th className="px-3 py-2 text-left">Motivo</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {vehicleBindingChanges.map((change) => (
+                    <tr key={change.group_id}>
+                      <td className="px-3 py-2 font-semibold text-slate-800">{change.driver_name ?? "Autista non indicato"}</td>
+                      <td className="px-3 py-2 text-slate-600">
+                        {change.start_time ?? "--:--"}{change.end_time ? `-${change.end_time}` : ""} · {change.pax} pax
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">
+                        {change.current_vehicle_label ?? "—"}{change.current_vehicle_capacity ? ` (${change.current_vehicle_capacity})` : ""}
+                      </td>
+                      <td className="px-3 py-2 font-semibold text-slate-900">
+                        {change.proposed_vehicle_label ?? "—"}{change.proposed_vehicle_capacity ? ` (${change.proposed_vehicle_capacity})` : ""}
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">
+                        {change.reason}
+                        {change.large_vehicle_shared ? (
+                          <span className="ml-2 rounded bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-700">
+                            Mezzo capiente condiviso a timeline
+                          </span>
+                        ) : null}
+                        {change.buffer_from_previous != null ? (
+                          <span className="ml-2 text-xs text-slate-500">buffer {change.buffer_from_previous} min</span>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {(vehicleBindingPreview?.warnings?.length ?? 0) > 0 ? (
+              <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-amber-700">
+                {vehicleBindingPreview?.warnings?.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}
+              </ul>
+            ) : null}
+            {vehicleBindingApplyResult ? (
+              <p className={`mt-3 rounded px-3 py-2 text-sm font-semibold ${vehicleBindingApplyResult.ok ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"}`}>
+                {vehicleBindingApplyResult.text}
+              </p>
+            ) : null}
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={() => { setVehicleBindingApplyResult(null); setVehicleBindingConfirmOpen(true); }}
+                className="rounded bg-blue-600 px-3 py-2 text-sm font-bold text-white hover:bg-blue-700"
+              >
+                Prepara riallineamento mezzi
+              </button>
+            </div>
+          </div>
+        )}
+
+        {conflictSuggestions.length > 0 && (
+          <div className="rounded-xl border border-rose-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-rose-600">Diagnostica giri read-only</p>
+                <h2 className="mt-1 text-lg font-bold text-slate-900">Suggerimenti conflitti operativi</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  {groupDiagnostics?.summary?.groups_with_conflicts ?? 0} giri non operativi · {groupDiagnostics?.summary?.total_conflicts ?? 0} conflitti · {groupDiagnostics?.summary?.total_needs_review ?? 0} servizi da verificare
+                </p>
+              </div>
+              <span className="rounded bg-rose-50 px-2 py-1 text-xs font-bold text-rose-700">sola lettura</span>
+            </div>
+
+            <div className="mt-3 grid gap-3 lg:grid-cols-3">
+              {conflictSuggestions.map((suggestion) => {
+                const move = suggestion.candidate_moves[0] ?? null;
+                const primaryService = move
+                  ? suggestion.involved_services.find((service) => service.service_id === move.service_id)
+                  : null;
+                const routePreview = suggestion.involved_services
+                  .map((service) => `${service.operational_time ?? "--:--"} ${prettyConflictPlace(service.pickup_label) || "Pickup"} → ${prettyConflictPlace(service.destination_label) || "destinazione"}`)
+                  .filter(Boolean)
+                  .join(" / ");
+                const pickupLabel = prettyConflictPlace(suggestion.involved_services.find((service) => service.pickup_label)?.pickup_label) || "pickup";
+                const suggestedOrder = suggestion.suggested_order.map(prettyConflictPlace).join(" → ");
+                const routeLine = conflictRouteLine(suggestion);
+                return (
+                  <div key={suggestion.conflict_id} className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
+                        suggestion.severity === "alta" ? "bg-rose-100 text-rose-700" : suggestion.severity === "media" ? "bg-amber-100 text-amber-700" : "bg-slate-200 text-slate-600"
+                      }`}>
+                        {suggestion.severity}
+                      </span>
+                      <span className="rounded bg-white px-2 py-0.5 text-[10px] font-bold uppercase text-slate-700">
+                        {conflictActionLabel(suggestion.recommended_action)}
+                      </span>
+                      {suggestion.operator_confirmation_required ? (
+                        <span className="rounded bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-700">conferma</span>
+                      ) : null}
+                      {suggestion.operator_confirmed ? (
+                        <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">confermato operatore</span>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-sm font-bold text-slate-900">
+                      {suggestion.driver_name ?? "Autista non indicato"} · {suggestion.vehicle_label ?? "mezzo non indicato"}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-700">
+                      {conflictRootCauseLabel(suggestion.root_cause)}
+                    </p>
+                    <p className="mt-2 text-xs text-slate-600">{suggestion.explanation[0]}</p>
+                    {suggestion.operator_confirmed ? (
+                      <p className="mt-2 rounded border border-emerald-100 bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-800">
+                        {suggestion.recommended_action === "MULTI_DROP" ? "Multi-drop confermato dall'operatore" : "Accorpamento gia confermato dall'operatore"}
+                        {suggestion.operator_confirmed_at ? ` · ${new Date(suggestion.operator_confirmed_at).toLocaleString("it-IT")}` : ""}
+                      </p>
+                    ) : null}
+                    {suggestion.recommended_action === "MULTI_DROP" && suggestedOrder ? (
+                      <p className="mt-2 rounded bg-white px-2 py-1 text-xs font-medium text-slate-700">
+                        Pickup unico da {pickupLabel}. Ordine fermate: {suggestedOrder}
+                      </p>
+                    ) : suggestion.recommended_action === "ACCORPARE_CON_CONFERMA" && routeLine ? (
+                      <p className="mt-2 rounded bg-white px-2 py-1 text-xs font-medium text-slate-700">{routeLine}</p>
+                    ) : routePreview ? (
+                      <p className="mt-2 rounded bg-white px-2 py-1 text-xs font-medium text-slate-700">{routePreview}</p>
+                    ) : null}
+                    {primaryService && move ? (
+                      <div className="mt-2 rounded border border-emerald-100 bg-emerald-50 px-2 py-1.5 text-xs text-emerald-800">
+                        Spostare suggerito: <strong>{primaryService.customer_name ?? move.service_id}</strong>
+                        <span className="block">verso {move.to_driver ?? "autista candidato"} · confidenza {move.confidence}</span>
+                      </div>
+                    ) : suggestion.recommended_action === "MULTI_DROP" ? (
+                      <div className="mt-2 rounded border border-amber-100 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                        Possibile multi-drop da confermare con operatore.
+                        {suggestion.alternative_action ? <span className="block">Alternativa: separare se non confermato.</span> : null}
+                      </div>
+                    ) : suggestion.recommended_action === "ACCORPARE_CON_CONFERMA" ? (
+                      <div className="mt-2 rounded border border-amber-100 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                        Possibile accorpamento con conferma operatore.
+                      </div>
+                    ) : null}
+                    <div className="mt-3 flex justify-end">
+                      {suggestion.operator_confirmed ? null : (
+                        <button
+                          type="button"
+                          onClick={() => prepareResolutionPreview(suggestion)}
+                          className="rounded border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                        >
+                          Prepara modifica
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

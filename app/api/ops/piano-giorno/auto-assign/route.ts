@@ -29,9 +29,12 @@ import {
   zoneToGeoArea,
   type GeographicCompatibilityService,
 } from "@/lib/server/geo-assignment";
+import { vehicleIntervalsOverlap, vehicleResourceKey } from "@/lib/piano-vehicle-timeline";
+import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
+const LARGE_GROUP_PAX_THRESHOLD = 21;
 
 // ─── Mapping zona → area geografica ──────────────────────────────────────────
 
@@ -339,9 +342,9 @@ type HotelRow = {
   geo_verified_at: string | null;
 };
 type VehicleRow = { id: string; label: string; capacity: number | null };
-type DriverRow = { profile_id: string; user_id: string | null; full_name: string };
+type DriverRow = { profile_id: string; user_id: string | null; full_name: string; max_vehicle_capacity: number | null };
 type DriverVehicleEvent = { time: number; vehicleLabel: string | null };
-type VehicleEvent = { time: number; reuseDurationMin: number; driverProfileId: string | null };
+type VehicleEvent = { startMin: number; endMin: number; vehicleId: string | null; vehicleLabel: string | null; driverProfileId: string | null };
 
 // Verifica se un veicolo è disponibile in un certo orario tenendo conto dei blocchi orari
 function vehicleAvailableAtTime(
@@ -442,10 +445,12 @@ function vehicleChangeCompatible(
 }
 
 function vehicleScheduleCompatible(events: VehicleEvent[], tripMin: number, tripReuseDurationMin: number = MIN_SAME_VEHICLE_REUSE_MINUTES): boolean {
-  return !events.some((event) => {
-    const gap = Math.max(event.reuseDurationMin, tripReuseDurationMin);
-    return Math.abs(event.time - tripMin) < gap;
-  });
+  const candidate = { start_min: tripMin, end_min: tripMin + Math.max(tripReuseDurationMin, MIN_SAME_VEHICLE_REUSE_MINUTES) };
+  return !events.some((event) => vehicleIntervalsOverlap(
+    { start_min: event.startMin, end_min: event.endMin },
+    candidate,
+    MIN_SAME_VEHICLE_REUSE_MINUTES
+  ));
 }
 
 function serviceRouteLabel(service: ServiceRow, hotelMap: Map<string, HotelRow>) {
@@ -654,8 +659,10 @@ export async function POST(request: NextRequest) {
     // Filtra veicoli globalmente non disponibili (available=false senza blocchi orari specifici)
     const vehicles = allVehicles.filter((v) => vehicleAvailByIdMap.get(v.id) !== false);
     const vehicleScheduleEvents = new Map<string, VehicleEvent[]>(
-      vehicles.map((vehicle) => [vehicle.label, []])
+      vehicles.map((vehicle) => [vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key ?? vehicle.label, []])
     );
+    const vehicleByLabel = new Map(vehicles.map((vehicle) => [vehicle.label, vehicle]));
+    const vehicleDailyDriverBinding = new Map<string, string>();
 
     const allDrivers = (driverRegistry ?? [])
       .filter((driver) => !driver.access_suspended)
@@ -663,12 +670,14 @@ export async function POST(request: NextRequest) {
         profile_id: driver.id,
         user_id: driver.user_id ?? null,
         full_name: driver.full_name,
+        max_vehicle_capacity: driver.max_vehicle_capacity ?? null,
       })) as DriverRow[];
     // Filtra autisti dichiarati non disponibili (available=false)
     const drivers = allDrivers.filter((d) => {
       const avail = driverAvailMap.get(d.profile_id);
       return !avail || avail.available;
     });
+    const fixedVehicleMode = vehicles.length >= drivers.length;
 
     const allDayServiceIds = new Set(allServices.map((s) => s.id));
     const serviceMap = new Map(allServices.map((service) => [service.id, service]));
@@ -950,10 +959,22 @@ export async function POST(request: NextRequest) {
         { time: serviceMin, vehicleLabel },
       ]);
       if (vehicleLabel) {
+        const vehicle = vehicleByLabel.get(vehicleLabel) ?? null;
+        const vehicleKey = vehicleResourceKey({ id: vehicle?.id ?? null, label: vehicleLabel }).key ?? vehicleLabel;
+        if (!vehicleDailyDriverBinding.has(vehicleKey)) {
+          vehicleDailyDriverBinding.set(vehicleKey, assignProfileId);
+        }
         const existingZone = serviceOperationalZone(service, hotelMap);
-        vehicleScheduleEvents.set(vehicleLabel, [
-          ...(vehicleScheduleEvents.get(vehicleLabel) ?? []),
-          { time: serviceMin, reuseDurationMin: estimateVehicleReuseDurationMin(existingZone, isNavettaService(service)), driverProfileId: assignProfileId },
+        const reuseDurationMin = estimateVehicleReuseDurationMin(existingZone, isNavettaService(service));
+        vehicleScheduleEvents.set(vehicleKey, [
+          ...(vehicleScheduleEvents.get(vehicleKey) ?? []),
+          {
+            startMin: serviceMin,
+            endMin: serviceMin + reuseDurationMin,
+            vehicleId: vehicle?.id ?? null,
+            vehicleLabel,
+            driverProfileId: assignProfileId,
+          },
         ]);
       }
       const key = `${assignProfileId}|${groupId}`;
@@ -1038,6 +1059,8 @@ export async function POST(request: NextRequest) {
     ): VehicleRow | null => {
       const tripMin = timeToMin(draft.time);
       const existingDriverVehicleEvents = profileId ? driverEvents.get(profileId) ?? [] : [];
+      const driver = profileId ? drivers.find((item) => item.profile_id === profileId) ?? null : null;
+      const driverEligible = (vehicle: VehicleRow) => !driver || canDriverUseVehicle(driver, vehicle).allowed;
 
       // Limite hotel: minima max_capacity tra tutti gli hotel del giro
       const hotelIds = draft.serviceIds
@@ -1053,10 +1076,13 @@ export async function POST(request: NextRequest) {
       // Tempo di riutilizzo del mezzo basato su zona e tipo servizio (navetta vs transfer)
       const tripReuseDurationMin = estimateVehicleReuseDurationMin(draft.zoneLabel, draft.isNavetta);
 
-      const usageCount = (label: string) => vehicleEvents.get(label)?.length ?? 0;
+      const usageCount = (vehicle: VehicleRow) => {
+        const key = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key ?? vehicle.label;
+        return vehicleEvents.get(key)?.length ?? 0;
+      };
       const bySmallestAndLeastUsed = (a: VehicleRow, b: VehicleRow) =>
+        (usageCount(a) - usageCount(b)) ||
         ((a.capacity ?? 0) - (b.capacity ?? 0)) ||
-        (usageCount(a.label) - usageCount(b.label)) ||
         a.label.localeCompare(b.label);
 
       // Se l'autista ha già un mezzo preferito, è l'unico che può usare.
@@ -1066,10 +1092,14 @@ export async function POST(request: NextRequest) {
         const preferred = vehicles.find((v) => v.label === preferredVehicleLabel);
         if (preferred) {
           const cap = preferred.capacity ?? 0;
+          const preferredKey = vehicleResourceKey({ id: preferred.id, label: preferred.label }).key ?? preferred.label;
+          const boundDriver = vehicleDailyDriverBinding.get(preferredKey);
+          const largeSharedCandidate = pax >= LARGE_GROUP_PAX_THRESHOLD && (preferred.capacity ?? 0) >= LARGE_GROUP_PAX_THRESHOLD;
+          if (fixedVehicleMode && boundDriver && boundDriver !== profileId && !largeSharedCandidate) return null;
           const scheduleOk =
             vehicleAvailableAtTime(preferred.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap) &&
-            vehicleScheduleCompatible(vehicleEvents.get(preferred.label) ?? [], tripMin, tripReuseDurationMin);
-          if (scheduleOk && cap >= pax && (hardMaxCap == null || cap <= hardMaxCap)) {
+            vehicleScheduleCompatible(vehicleEvents.get(preferredKey) ?? [], tripMin, tripReuseDurationMin);
+          if (scheduleOk && cap >= pax && (hardMaxCap == null || cap <= hardMaxCap) && driverEligible(preferred)) {
             return preferred;
           }
         }
@@ -1082,10 +1112,15 @@ export async function POST(request: NextRequest) {
         .filter((v) => {
           const cap = v.capacity ?? 0;
           if (cap < pax) return false;
+          if (!driverEligible(v)) return false;
           if (hardMaxCap != null && cap > hardMaxCap) return false;
           if (!vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap)) return false;
           if (!vehicleChangeCompatible(existingDriverVehicleEvents, tripMin, v.label)) return false;
-          if (!vehicleScheduleCompatible(vehicleEvents.get(v.label) ?? [], tripMin, tripReuseDurationMin)) return false;
+          const vehicleKey = vehicleResourceKey({ id: v.id, label: v.label }).key ?? v.label;
+          const boundDriver = vehicleDailyDriverBinding.get(vehicleKey);
+          const largeSharedCandidate = pax >= LARGE_GROUP_PAX_THRESHOLD && (v.capacity ?? 0) >= LARGE_GROUP_PAX_THRESHOLD;
+          if (fixedVehicleMode && boundDriver && boundDriver !== profileId && !largeSharedCandidate) return false;
+          if (!vehicleScheduleCompatible(vehicleEvents.get(vehicleKey) ?? [], tripMin, tripReuseDurationMin)) return false;
           return true;
         })
         .sort(bySmallestAndLeastUsed)[0];
@@ -1097,10 +1132,15 @@ export async function POST(request: NextRequest) {
         .filter((v) => {
           const cap = v.capacity ?? 0;
           if (cap < pax) return false;
+          if (!driverEligible(v)) return false;
+          const vehicleKey = vehicleResourceKey({ id: v.id, label: v.label }).key ?? v.label;
+          const boundDriver = vehicleDailyDriverBinding.get(vehicleKey);
+          const largeSharedCandidate = pax >= LARGE_GROUP_PAX_THRESHOLD && (v.capacity ?? 0) >= LARGE_GROUP_PAX_THRESHOLD;
+          if (fixedVehicleMode && boundDriver && boundDriver !== profileId && !largeSharedCandidate) return false;
           return (
             vehicleAvailableAtTime(v.id, tripMin, vehicleAvailByIdMap, vehicleBlocksByIdMap) &&
             vehicleChangeCompatible(existingDriverVehicleEvents, tripMin, v.label) &&
-            vehicleScheduleCompatible(vehicleEvents.get(v.label) ?? [], tripMin, tripReuseDurationMin)
+            vehicleScheduleCompatible(vehicleEvents.get(vehicleKey) ?? [], tripMin, tripReuseDurationMin)
           );
         })
         .sort(bySmallestAndLeastUsed)[0];
@@ -1157,14 +1197,23 @@ export async function POST(request: NextRequest) {
           { time: tripMin, vehicleLabel: vehicle?.label ?? null },
         ]);
         if (vehicle?.label) {
-          plannedVehicleScheduleEvents.set(vehicle.label, [
-            ...(plannedVehicleScheduleEvents.get(vehicle.label) ?? []),
-            { time: tripMin, reuseDurationMin: estimateVehicleReuseDurationMin(draft.zoneLabel, draft.isNavetta), driverProfileId: profileId },
+          const vehicleKey = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key ?? vehicle.label;
+          const reuseDurationMin = estimateVehicleReuseDurationMin(draft.zoneLabel, draft.isNavetta);
+          plannedVehicleScheduleEvents.set(vehicleKey, [
+            ...(plannedVehicleScheduleEvents.get(vehicleKey) ?? []),
+            {
+              startMin: tripMin,
+              endMin: tripMin + reuseDurationMin,
+              vehicleId: vehicle.id,
+              vehicleLabel: vehicle.label,
+              driverProfileId: profileId,
+            },
           ]);
           // Imposta il preferito solo al primo giro assegnato
           if (!driverPreferredVehicle.has(profileId)) {
             driverPreferredVehicle.set(profileId, vehicle.label);
           }
+          vehicleDailyDriverBinding.set(vehicleKey, profileId);
         }
       }
 

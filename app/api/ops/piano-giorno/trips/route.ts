@@ -23,9 +23,12 @@ import {
   validateGeographicCompatibility,
   type GeographicCompatibilityService,
 } from "@/lib/server/geo-assignment";
+import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
+const LARGE_GROUP_PAX_THRESHOLD = 21;
+const VEHICLE_SHARE_BUFFER_MINUTES = 20;
 
 export async function POST(request: NextRequest) {
   try {
@@ -97,6 +100,25 @@ export async function POST(request: NextRequest) {
       if (vehicleCheck.vehicle?.capacity != null && validation.totalPax > vehicleCheck.vehicle.capacity) {
         return NextResponse.json({ ok: false, error: `Overbooking bloccante: ${validation.totalPax} pax su mezzo da ${vehicleCheck.vehicle.capacity}.` }, { status: 409 });
       }
+      const driverVehicleEligibility = await validateDriverVehicleEligibilityPayload(auth.admin, tenantId, {
+        driverUserId: driver_user_id ?? null,
+        driverProfileId: driver_profile_id ?? null,
+        vehicle: vehicleCheck.vehicle,
+      });
+      if (!driverVehicleEligibility.ok) {
+        return NextResponse.json({ ok: false, error: driverVehicleEligibility.error }, { status: 409 });
+      }
+      const effectiveVehicleLabel = vehicleCheck.vehicle?.label ?? vehicle_label ?? null;
+      const vehicleConflict = await validateVehicleTimelinePayload(auth.admin, tenantId, {
+        date,
+        serviceIds: service_ids,
+        vehicleLabel: effectiveVehicleLabel,
+        driverUserId: driver_user_id ?? null,
+        driverProfileId: driver_profile_id ?? null,
+      });
+      if (!vehicleConflict.ok) {
+        return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: 409 });
+      }
 
       // 1. Crea trip_group
       const { data: group, error: groupErr } = await auth.admin
@@ -106,7 +128,7 @@ export async function POST(request: NextRequest) {
           date,
           driver_user_id: driver_user_id || null,
           driver_profile_id: driver_profile_id || null,
-          vehicle_label: (vehicleCheck.vehicle?.label ?? vehicle_label) || null,
+          vehicle_label: effectiveVehicleLabel || null,
           vehicle_capacity: (vehicleCheck.vehicle?.capacity ?? vehicle_capacity) || null,
           notes: notes || null,
           created_by: userId,
@@ -130,7 +152,7 @@ export async function POST(request: NextRequest) {
         groupId,
         driver_user_id ?? null,
         driver_profile_id ?? null,
-        vehicleCheck.vehicle?.label ?? vehicle_label ?? null,
+        effectiveVehicleLabel,
         userId,
         now
       );
@@ -198,6 +220,26 @@ export async function POST(request: NextRequest) {
       if (vehicleCheck.vehicle?.capacity != null && validation.totalPax > vehicleCheck.vehicle.capacity) {
         return NextResponse.json({ ok: false, error: `Overbooking bloccante: ${validation.totalPax} pax su mezzo da ${vehicleCheck.vehicle.capacity}.` }, { status: 409 });
       }
+      const driverVehicleEligibility = await validateDriverVehicleEligibilityPayload(auth.admin, tenantId, {
+        driverUserId: driver_user_id ?? null,
+        driverProfileId: driver_profile_id ?? null,
+        vehicle: vehicleCheck.vehicle,
+      });
+      if (!driverVehicleEligibility.ok) {
+        return NextResponse.json({ ok: false, error: driverVehicleEligibility.error }, { status: 409 });
+      }
+      const effectiveVehicleLabel = vehicleCheck.vehicle?.label ?? vehicle_label ?? null;
+      const vehicleConflict = await validateVehicleTimelinePayload(auth.admin, tenantId, {
+        date: groupDate,
+        serviceIds: effectiveServiceIds,
+        vehicleLabel: effectiveVehicleLabel,
+        driverUserId: driver_user_id ?? null,
+        driverProfileId: driver_profile_id ?? null,
+        excludeGroupId: group_id,
+      });
+      if (!vehicleConflict.ok) {
+        return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: 409 });
+      }
 
       // Aggiorna trip_group
       await auth.admin
@@ -205,7 +247,7 @@ export async function POST(request: NextRequest) {
         .update({
           driver_user_id: driver_user_id ?? null,
           driver_profile_id: driver_profile_id ?? null,
-          vehicle_label: vehicleCheck.vehicle?.label ?? vehicle_label ?? null,
+          vehicle_label: effectiveVehicleLabel,
           vehicle_capacity: vehicleCheck.vehicle?.capacity ?? vehicle_capacity ?? null,
           notes: notes ?? null,
           updated_at: now,
@@ -219,7 +261,7 @@ export async function POST(request: NextRequest) {
         .update({
           driver_user_id: driver_user_id ?? null,
           driver_profile_id: driver_profile_id ?? null,
-          vehicle_label: vehicleCheck.vehicle?.label ?? vehicle_label ?? null,
+          vehicle_label: effectiveVehicleLabel,
           assignment_source: "manual_piano_giorno",
           locked_by_operator: true,
           assigned_by: userId,
@@ -354,6 +396,25 @@ export async function POST(request: NextRequest) {
         if (vehicleCheck.vehicle?.capacity != null && validation.totalPax > vehicleCheck.vehicle.capacity) {
           return NextResponse.json({ ok: false, error: `Overbooking bloccante: ${validation.totalPax} pax su mezzo da ${vehicleCheck.vehicle.capacity}.` }, { status: 409 });
         }
+        const driverVehicleEligibility = await validateDriverVehicleEligibilityPayload(auth.admin, tenantId, {
+          driverUserId: driver_user_id ?? null,
+          driverProfileId: driver_profile_id ?? null,
+          vehicle: vehicleCheck.vehicle,
+        });
+        if (!driverVehicleEligibility.ok) {
+          return NextResponse.json({ ok: false, error: driverVehicleEligibility.error }, { status: 409 });
+        }
+        const effectiveVehicleLabel = vehicleCheck.vehicle?.label ?? vehicle_label ?? null;
+        const vehicleConflict = await validateVehicleTimelinePayload(auth.admin, tenantId, {
+          date,
+          serviceIds: service_ids,
+          vehicleLabel: effectiveVehicleLabel,
+          driverUserId: driver_user_id ?? null,
+          driverProfileId: driver_profile_id ?? null,
+        });
+        if (!vehicleConflict.ok) {
+          return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: 409 });
+        }
         const { data: newGroup, error: newGroupErr } = await auth.admin
           .from("trip_groups")
           .insert({
@@ -361,7 +422,7 @@ export async function POST(request: NextRequest) {
             date,
             driver_user_id: driver_user_id || null,
             driver_profile_id: driver_profile_id || null,
-            vehicle_label: (vehicleCheck.vehicle?.label ?? vehicle_label) || null,
+            vehicle_label: effectiveVehicleLabel || null,
             vehicle_capacity: (vehicleCheck.vehicle?.capacity ?? vehicle_capacity) || null,
             notes: notes || null,
             created_by: userId,
@@ -421,6 +482,29 @@ export async function POST(request: NextRequest) {
         });
         if (!validation.ok) {
           return NextResponse.json({ ok: false, error: validation.error }, { status: 409 });
+        }
+        const destVehicleCheck = await resolveVehicleAssignment(auth.admin, tenantId, (destGroupDate?.date as string | undefined) ?? date ?? "", null, destVehicle);
+        if (!destVehicleCheck.ok) {
+          return NextResponse.json({ ok: false, error: destVehicleCheck.error }, { status: 409 });
+        }
+        const driverVehicleEligibility = await validateDriverVehicleEligibilityPayload(auth.admin, tenantId, {
+          driverUserId: destDriver,
+          driverProfileId: destDriverProfile,
+          vehicle: destVehicleCheck.vehicle,
+        });
+        if (!driverVehicleEligibility.ok) {
+          return NextResponse.json({ ok: false, error: driverVehicleEligibility.error }, { status: 409 });
+        }
+        const vehicleConflict = await validateVehicleTimelinePayload(auth.admin, tenantId, {
+          date: (destGroupDate?.date as string | undefined) ?? date ?? "",
+          serviceIds: targetServiceIds,
+          vehicleLabel: destVehicle,
+          driverUserId: destDriver,
+          driverProfileId: destDriverProfile,
+          excludeGroupId: destGroupId,
+        });
+        if (!vehicleConflict.ok) {
+          return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: 409 });
         }
       }
 
@@ -807,6 +891,58 @@ async function loadGroupServiceIds(
   return (data ?? []).map((row) => row.service_id as string);
 }
 
+async function validateDriverVehicleEligibilityPayload(
+  admin: SupabaseClient,
+  tenantId: string,
+  params: {
+    driverUserId: string | null;
+    driverProfileId: string | null;
+    vehicle: { capacity: number | null; label?: string | null } | null;
+  }
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!params.vehicle || (!params.driverUserId && !params.driverProfileId)) return { ok: true };
+
+  let driverUserId = params.driverUserId;
+  if (!driverUserId && params.driverProfileId) {
+    const { data: profile, error: profileError } = await admin
+      .from("driver_profiles")
+      .select("user_id")
+      .eq("tenant_id", tenantId)
+      .eq("id", params.driverProfileId)
+      .maybeSingle();
+    if (profileError) return { ok: false, error: `Errore verifica abilitazione autista: ${profileError.message}` };
+    driverUserId = (profile?.user_id as string | null) ?? null;
+  }
+
+  if (!driverUserId) return { ok: true };
+
+  const { data: membership, error: membershipError } = await admin
+    .from("memberships")
+    .select("max_vehicle_capacity, full_name")
+    .eq("tenant_id", tenantId)
+    .eq("user_id", driverUserId)
+    .maybeSingle();
+
+  if (membershipError) {
+    return { ok: false, error: `Errore verifica abilitazione autista: ${membershipError.message}` };
+  }
+
+  const result = canDriverUseVehicle(
+    {
+      max_vehicle_capacity: (membership?.max_vehicle_capacity as number | null) ?? null,
+      driver_name: (membership?.full_name as string | null) ?? null,
+    },
+    params.vehicle,
+    { blockUnknownVehicleCapacity: true }
+  );
+
+  if (!result.allowed) {
+    return { ok: false, error: result.reason ?? "Autista non abilitato a guidare questo mezzo." };
+  }
+
+  return { ok: true };
+}
+
 async function validateTripPayload(
   admin: SupabaseClient,
   tenantId: string,
@@ -932,6 +1068,119 @@ async function validateTripPayload(
   return { ok: true, totalPax };
 }
 
+async function validateVehicleTimelinePayload(
+  admin: SupabaseClient,
+  tenantId: string,
+  params: {
+    date: string;
+    serviceIds: string[];
+    vehicleLabel: string | null;
+    driverUserId: string | null;
+    driverProfileId: string | null;
+    excludeGroupId?: string;
+  }
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!params.vehicleLabel) return { ok: true };
+
+  const { data: services, error: servicesError } = await admin
+    .from("services")
+    .select("id, time, pickup_hotel, direction, pax, hotel_id, meeting_point")
+    .eq("tenant_id", tenantId)
+    .in("id", params.serviceIds);
+
+  if (servicesError) {
+    return { ok: false, error: `Errore validazione mezzo: ${servicesError.message}` };
+  }
+
+  const serviceRows = (services ?? []) as ServiceValidationRow[];
+  const candidateTotalPax = serviceRows.reduce((sum, service) => sum + (service.pax ?? 0), 0);
+  const candidateTimes = serviceRows.map((service) => toMinutes(serviceOperationalTime(service)));
+  if (candidateTimes.length === 0) return { ok: true };
+
+  const candidateStart = Math.min(...candidateTimes);
+  const candidateEnd = Math.max(...candidateTimes) + 30;
+
+  const { data: vehicle } = await admin
+    .from("vehicles")
+    .select("id, label, capacity")
+    .eq("tenant_id", tenantId)
+    .eq("label", params.vehicleLabel)
+    .maybeSingle();
+  const vehicleCapacity = (vehicle?.capacity as number | null) ?? null;
+  const isLargeVehicle = vehicleCapacity != null && vehicleCapacity >= LARGE_GROUP_PAX_THRESHOLD;
+  const isCandidateLargeGroup = candidateTotalPax >= LARGE_GROUP_PAX_THRESHOLD;
+
+  let groupsQuery = admin
+    .from("trip_groups")
+    .select("id, driver_user_id, driver_profile_id")
+    .eq("tenant_id", tenantId)
+    .eq("date", params.date)
+    .eq("status", "active")
+    .eq("vehicle_label", params.vehicleLabel);
+
+  if (params.excludeGroupId) groupsQuery = groupsQuery.neq("id", params.excludeGroupId);
+
+  const { data: groups, error: groupsError } = await groupsQuery;
+  if (groupsError) {
+    return { ok: false, error: `Errore validazione mezzo: ${groupsError.message}` };
+  }
+
+  const groupIds = (groups ?? []).map((group) => group.id as string);
+  if (groupIds.length === 0) return { ok: true };
+
+  const { data: assignments, error: assignmentsError } = await admin
+    .from("assignments")
+    .select("group_id, services!inner(id, time, pickup_hotel, direction, pax, hotel_id, meeting_point)")
+    .eq("tenant_id", tenantId)
+    .in("group_id", groupIds);
+
+  if (assignmentsError) {
+    return { ok: false, error: `Errore validazione mezzo: ${assignmentsError.message}` };
+  }
+
+  const servicesByGroup = new Map<string, ServiceValidationRow[]>();
+  for (const assignment of assignments ?? []) {
+    const groupId = assignment.group_id as string;
+    servicesByGroup.set(groupId, [
+      ...(servicesByGroup.get(groupId) ?? []),
+      (assignment.services as unknown) as ServiceValidationRow,
+    ]);
+  }
+
+  for (const group of groups ?? []) {
+    const sameProfile = params.driverProfileId && group.driver_profile_id === params.driverProfileId;
+    const sameUser = !params.driverProfileId && params.driverUserId && group.driver_user_id === params.driverUserId;
+    const groupId = group.id as string;
+    const groupServices = servicesByGroup.get(groupId) ?? [];
+    const otherTimes = groupServices.map((service) => toMinutes(serviceOperationalTime(service)));
+    if (otherTimes.length === 0) continue;
+    const otherStart = Math.min(...otherTimes);
+    const otherEnd = Math.max(...otherTimes) + 30;
+    const otherTotalPax = groupServices.reduce((sum, service) => sum + (service.pax ?? 0), 0);
+    const otherLargeGroup = otherTotalPax >= LARGE_GROUP_PAX_THRESHOLD;
+    const canShareLargeVehicle = isLargeVehicle && isCandidateLargeGroup && otherLargeGroup;
+
+    if (!sameProfile && !sameUser && !canShareLargeVehicle) {
+      return {
+        ok: false,
+        error: "Mezzo già assegnato a un altro autista per questa giornata.",
+      };
+    }
+
+    const overlaps = candidateStart < otherEnd + VEHICLE_SHARE_BUFFER_MINUTES && otherStart < candidateEnd + VEHICLE_SHARE_BUFFER_MINUTES;
+    if (!overlaps) continue;
+
+    return {
+      ok: false,
+      error: canShareLargeVehicle
+        ? "Mezzo capiente condiviso non disponibile con buffer sufficiente."
+        : "Mezzo già assegnato a un altro autista per questa giornata.",
+    };
+  }
+
+  return { ok: true };
+}
+
 function serviceToGeographicWindow(
   service: ServiceValidationRow,
   hotels: Map<string, HotelValidationRow>
@@ -982,4 +1231,26 @@ async function loadDriverName(admin: SupabaseClient, tenantId: string, driverUse
     .eq("user_id", driverUserId)
     .maybeSingle();
   return (data?.full_name as string | null) ?? "selezionato";
+}
+
+async function loadDriverNameForGroup(
+  admin: SupabaseClient,
+  tenantId: string,
+  params: { driverUserId: string | null; driverProfileId: string | null }
+): Promise<string> {
+  if (params.driverProfileId) {
+    const { data } = await admin
+      .from("driver_profiles")
+      .select("full_name")
+      .eq("tenant_id", tenantId)
+      .eq("id", params.driverProfileId)
+      .maybeSingle();
+    if (data?.full_name) return data.full_name as string;
+  }
+
+  if (params.driverUserId) {
+    return loadDriverName(admin, tenantId, params.driverUserId);
+  }
+
+  return "autista non indicato";
 }
