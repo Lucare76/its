@@ -947,17 +947,18 @@ export default function WhatsAppInboxPage() {
     <section className="page-section">
 
       {/* ── Compact page header ── */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <div className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
-            <span>Operazioni</span>
-            <span>/</span>
-            <span className="font-medium text-slate-600">WhatsApp</span>
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+              <span>Operazioni</span>
+              <span>/</span>
+              <span className="font-medium text-slate-600">WhatsApp</span>
+            </div>
+            <h1 className="text-xl font-bold text-slate-900">Inbox WhatsApp</h1>
+            <p className="mt-0.5 text-sm text-slate-500">Risposte clienti ricevute da WhatsApp Business Platform.</p>
           </div>
-          <h1 className="text-xl font-bold text-slate-900">Inbox WhatsApp</h1>
-          <p className="mt-0.5 text-sm text-slate-500">Risposte clienti ricevute da WhatsApp Business Platform.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => {
@@ -1002,44 +1003,45 @@ export default function WhatsAppInboxPage() {
               {notifPermission === "denied" ? "Notifiche bloccate" : "Abilita notifiche"}
             </button>
           )}
+          </div>
         </div>
-      </div>
 
-      {/* ── Filter tabs + search ── */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative">
-          <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
-            <IconSearch />
-          </span>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="input-saas w-48 pl-9 sm:w-56"
-            placeholder="Cerca nome, telefono…"
-          />
+        {/* ── Filter tabs + search ── */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
+              <IconSearch />
+            </span>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="input-saas w-48 pl-9 sm:w-56"
+              placeholder="Cerca nome, telefono…"
+            />
+          </div>
+          {filters.map((item) => {
+            const active = filter === item.value;
+            return (
+              <button
+                key={item.value}
+                type="button"
+                onClick={() => setFilter(item.value)}
+                className={`flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition ${
+                  active
+                    ? "border-indigo-600 bg-indigo-600 text-white shadow-sm"
+                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+                }`}
+              >
+                {item.label}
+                {active && !loading && (
+                  <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-white/25 px-1 text-[10px] font-bold text-white">
+                    {threads.length}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
-        {filters.map((item) => {
-          const active = filter === item.value;
-          return (
-            <button
-              key={item.value}
-              type="button"
-              onClick={() => setFilter(item.value)}
-              className={`flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition ${
-                active
-                  ? "border-indigo-600 bg-indigo-600 text-white shadow-sm"
-                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
-              }`}
-            >
-              {item.label}
-              {active && !loading && (
-                <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-white/25 px-1 text-[10px] font-bold text-white">
-                  {threads.length}
-                </span>
-              )}
-            </button>
-          );
-        })}
       </div>
 
       {/* ── Error banner ── */}
