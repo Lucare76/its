@@ -1,0 +1,33 @@
+{
+  "generated_at": "2026-05-15T15:01:07.626Z",
+  "environment": {
+    "baseURL": "http://localhost:3010",
+    "user": "***",
+    "browser": "chromium",
+    "db_checks": false
+  },
+  "data": {
+    "tenant_id": null,
+    "test_date": null,
+    "driver_user_id": null,
+    "driver_label": null,
+    "arrivals": [],
+    "departures": []
+  },
+  "menu": [],
+  "pages": {},
+  "api_calls": [],
+  "db_checks": [],
+  "console_errors": [],
+  "network_errors": [],
+  "problems": [
+    {
+      "severity": "bloccante",
+      "area": "Ambiente",
+      "problem": "Base URL non raggiungibile: http://localhost:3010",
+      "fix": "Avviare il server locale sulla porta indicata da E2E_BASE_URL."
+    }
+  ],
+  "steps": [],
+  "screenshots": []
+}

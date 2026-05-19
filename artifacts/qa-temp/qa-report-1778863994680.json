@@ -1,0 +1,1357 @@
+{
+  "generated_at": "2026-05-15T16:49:45.935Z",
+  "environment": {
+    "baseURL": "http://localhost:3010",
+    "user": "te***@ischiatransferservice.it",
+    "browser": "chromium"
+  },
+  "auth": {
+    "login_ok": true,
+    "user_id": "23b9c5c5-9ab1-4a07-84a3-8d00440c219f"
+  },
+  "db": {
+    "tenant_id": "d200b89a-64c7-4f8d-a430-95a33b83047a",
+    "role": "operator",
+    "full_name_present": true,
+    "drivers": 11,
+    "services": 8570,
+    "availability_confirmations": 12,
+    "safe_services_sample": 38,
+    "safe_arrivals_sample": 0,
+    "safe_departures_sample": 0,
+    "db_errors": []
+  },
+  "menu": [
+    {
+      "label": "Cruscotto",
+      "path": "/dashboard",
+      "final_url": "/dashboard",
+      "opened": true,
+      "content_match": true,
+      "console_errors": 2,
+      "network_errors": 2,
+      "body_chars": 2011
+    },
+    {
+      "label": "Control Room",
+      "path": "/mappa-live",
+      "final_url": "/mappa-live",
+      "opened": true,
+      "content_match": true,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 5133
+    },
+    {
+      "label": "Arrivi",
+      "path": "/arrivals",
+      "final_url": "/arrivals",
+      "opened": true,
+      "content_match": true,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 4927
+    },
+    {
+      "label": "Partenze",
+      "path": "/departures",
+      "final_url": "/departures",
+      "opened": true,
+      "content_match": true,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 3735
+    },
+    {
+      "label": "Prenotazioni",
+      "path": "/inbox",
+      "final_url": "/inbox",
+      "opened": true,
+      "content_match": true,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 799
+    },
+    {
+      "label": "Disponibilita",
+      "path": "/disponibilita",
+      "final_url": "/disponibilita",
+      "opened": true,
+      "content_match": true,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 1964
+    },
+    {
+      "label": "Piano del Giorno",
+      "path": "/piano-giorno",
+      "final_url": "/piano-giorno",
+      "opened": true,
+      "content_match": true,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 3245
+    }
+  ],
+  "pages": {
+    "piano_giorno": {
+      "has_continente": true,
+      "has_bruno": true,
+      "has_vendor": true,
+      "has_da_smistare": true
+    }
+  },
+  "api_calls": [
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/settings/users",
+      "method": "GET",
+      "status": 403,
+      "ok": false
+    },
+    {
+      "api": "/api/admin/agency-reviews?status=modified",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=true",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=true",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/settings/users",
+      "method": "GET",
+      "status": 403,
+      "ok": false
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/admin/agency-reviews?status=modified",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=true",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "https://api.panoramax.xyz/api/search?bbox=13.934965%2C40.728308%2C13.958965%2C40.752308&limit=30",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "https://api.panoramax.xyz/api/search?bbox=13.934965%2C40.728308%2C13.958965%2C40.752308&limit=30",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "https://api.panoramax.xyz/api/search?bbox=13.934965%2C40.728308%2C13.958965%2C40.752308&limit=30",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "https://api.panoramax.xyz/api/search?bbox=13.934965%2C40.728308%2C13.958965%2C40.752308&limit=30",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/dispatch-data",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/dispatch-data",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/disponibilita?date=2026-05-16",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/disponibilita?date=2026-05-16",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/disponibilita?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/piano-giorno?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/piano-giorno?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/disponibilita?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/piano-giorno?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/piano-giorno?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/settings/users",
+      "method": "GET",
+      "status": 403,
+      "ok": false
+    },
+    {
+      "api": "/api/admin/agency-reviews?status=modified",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=true",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/suggestions",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=true",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/suggestions",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/gps/control-room",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "https://api.panoramax.xyz/api/search?bbox=13.928332%2C40.730857%2C13.952332%2C40.754857&limit=30",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "https://api.panoramax.xyz/api/search?bbox=13.928332%2C40.730857%2C13.952332%2C40.754857&limit=30",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/tenant-data?include_inbound_emails=false",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/dispatch-data",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/disponibilita?date=2026-05-16",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/disponibilita?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/piano-giorno?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/piano-giorno?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/quotes/access",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/whatsapp-inbox/summary",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/onboarding/tenant",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/disponibilita?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/piano-giorno?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/ops/piano-giorno?date=2026-05-15",
+      "method": "GET",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "api": "/api/email/operational-import",
+      "method": "POST",
+      "status": 200,
+      "ok": true
+    }
+  ],
+  "console_errors": [
+    {
+      "type": "error",
+      "text": "TypeError: Failed to fetch\n    at http://localhost:3010/_next/static/chunks/node_modules__pnpm_10eejrt._.js:14469:23\n    at _handleRequest (http://localhost:3010/_next/static/chunks/node_modules__pnpm_10eejrt._.js:14823:24)\n    at _request (http://localhost:3010/_next/static/chunks/node_modules__pnpm_10eejrt._.js:14810:24)\n    at http://localhost:3010/_next/static/chunks/node_modules__pnpm_10eejrt._.js:18178:290\n    at SupabaseAuthClient._useSession (http://localhost:3010/_next/static/chunks/node_modules__pnpm_10eejrt._.js:18047:26)\n    at async SupabaseAuthClient._getUser (http://localhost:3010/_next/static/chunks/node_modules__pnpm_10eejrt._.js:18163:20)\n    at async http://localhost:3010/_next/static/chunks/node_modules__pnpm_10eejrt._.js:18147:20",
+      "url": "http://localhost:3010/dashboard"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "url": "http://localhost:3010/dashboard"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "url": "http://localhost:3010/dashboard"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "url": "http://localhost:3010/dashboard"
+    }
+  ],
+  "network_errors": [
+    {
+      "api": "/api/settings/users",
+      "method": "GET",
+      "status": 403,
+      "ok": false
+    },
+    {
+      "api": "/api/settings/users",
+      "method": "GET",
+      "status": 403,
+      "ok": false
+    },
+    {
+      "api": "/api/settings/users",
+      "method": "GET",
+      "status": 403,
+      "ok": false
+    }
+  ],
+  "problems": [
+    {
+      "severity": "alto",
+      "area": "Login UI",
+      "problem": "Login Supabase valido, ma la UI resta su /login. Per completare QA e2e e stata iniettata la sessione test nel localStorage del browser."
+    },
+    {
+      "severity": "medio",
+      "area": "Network",
+      "problem": "GET /api/settings/users -> 403"
+    },
+    {
+      "severity": "medio",
+      "area": "Network",
+      "problem": "GET /api/settings/users -> 403"
+    },
+    {
+      "severity": "medio",
+      "area": "Network",
+      "problem": "GET /api/settings/users -> 403"
+    }
+  ],
+  "steps": [
+    {
+      "title": "Login UI",
+      "ok": false,
+      "notes": [],
+      "error": "Fallback sessione localStorage non ha aperto /dashboard"
+    },
+    {
+      "title": "Menu e pagine protette",
+      "ok": true,
+      "notes": [],
+      "error": null
+    },
+    {
+      "title": "Click non distruttivi",
+      "ok": true,
+      "notes": [
+        "/dashboard: click fallito locator.click: Timeout 3000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /aggiorna|refresh|esporta|export/i }).first()\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" class=\"btn-secondary\">Esporta</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div class=\"fixed inset-0 z-50 flex items-center justify-center px-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div class=\"fixed inset-0 z-50 flex items-center justify-center px-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    5 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div class=\"fixed inset-0 z-50 flex items-center justify-center px-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 500ms\u001b[22m\n",
+        "/dashboard: click non distruttivo eseguito",
+        "/mappa-live: click fallito locator.click: Timeout 3000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /aggiorna|refresh|critici|offline/i }).first()\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" class=\"btn-primary w-full px-4 py-2 text-sm xl:w-auto\">Aggiorna ora</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div class=\"fixed inset-0 z-50 flex items-center justify-center px-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div class=\"fixed inset-0 z-50 flex items-center justify-center px-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    5 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div class=\"fixed inset-0 z-50 flex items-center justify-center px-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 500ms\u001b[22m\n",
+        "/mappa-live: click non distruttivo eseguito",
+        "/arrivals: nessun bottone non distruttivo riconosciuto",
+        "/departures: nessun bottone non distruttivo riconosciuto",
+        "/inbox: nessun bottone non distruttivo riconosciuto",
+        "/disponibilita: nessun bottone non distruttivo riconosciuto",
+        "/piano-giorno: nessun bottone non distruttivo riconosciuto"
+      ],
+      "error": null
+    },
+    {
+      "title": "Assegnazioni Arrivi/Partenze",
+      "ok": true,
+      "notes": [
+        "Saltate: nessun servizio DEMO/TEST/E2E nel campione letto. Evitato uso di dati reali."
+      ],
+      "error": null
+    },
+    {
+      "title": "Piano del Giorno Continente",
+      "ok": true,
+      "notes": [],
+      "error": null
+    }
+  ],
+  "screenshots": [
+    "C:\\Users\\DELL-DESK\\Downloads\\its\\artifacts\\qa-temp\\qa-final-1778863994041.png"
+  ]
+}

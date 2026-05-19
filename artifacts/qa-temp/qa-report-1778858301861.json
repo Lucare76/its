@@ -1,0 +1,190 @@
+{
+  "generated_at": "2026-05-15T15:17:50.505Z",
+  "environment": {
+    "baseURL": "http://localhost:3010",
+    "user": "***",
+    "browser": "chromium",
+    "db_checks": true
+  },
+  "data": {
+    "tenant_id": null,
+    "test_date": null,
+    "driver_user_id": null,
+    "driver_label": null,
+    "arrivals": [],
+    "departures": []
+  },
+  "menu": [
+    {
+      "label": "Cruscotto",
+      "path": "/dashboard",
+      "final_url": "/login?redirect=%2Fdashboard",
+      "ok": false,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "label": "Control Room",
+      "path": "/mappa-live",
+      "final_url": "/login?redirect=%2Fmappa-live",
+      "ok": false,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "label": "Arrivi",
+      "path": "/arrivals",
+      "final_url": "/login?redirect=%2Farrivals",
+      "ok": false,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "label": "Partenze",
+      "path": "/departures",
+      "final_url": "/login?redirect=%2Fdepartures",
+      "ok": false,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "label": "Prenotazioni",
+      "path": "/inbox",
+      "final_url": "/login?redirect=%2Finbox",
+      "ok": false,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "label": "Disponibilita",
+      "path": "/disponibilita",
+      "final_url": "/login?redirect=%2Fdisponibilita",
+      "ok": false,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "label": "Piano del Giorno",
+      "path": "/piano-giorno",
+      "final_url": "/login?redirect=%2Fpiano-giorno",
+      "ok": false,
+      "console_errors": 0,
+      "network_errors": 0
+    }
+  ],
+  "pages": {
+    "dashboard": {
+      "has_kpi_like_text": false,
+      "body_chars": 431
+    },
+    "control_room": {
+      "gps_api_seen": false,
+      "gps_not_configured": false,
+      "body_chars": 431
+    },
+    "disponibilita": {
+      "date": null,
+      "has_drivers_or_vehicles_text": false,
+      "body_chars": 431
+    },
+    "piano_giorno": {
+      "date": null,
+      "has_giro_text": false,
+      "has_continente": false,
+      "has_bruno": false,
+      "has_vendor": false,
+      "has_da_smistare": false,
+      "assigned_arrival_visible": false,
+      "assigned_departure_visible": false
+    },
+    "inbox": {
+      "body_chars": 431,
+      "has_inbox_or_booking_text": true
+    }
+  },
+  "api_calls": [],
+  "db_checks": [],
+  "console_errors": [],
+  "network_errors": [],
+  "problems": [
+    {
+      "severity": "bloccante",
+      "area": "Auth Supabase",
+      "problem": "fetch failed",
+      "fix": "Verificare credenziali test o configurazione Supabase anon key."
+    }
+  ],
+  "steps": [
+    {
+      "title": "Login UI",
+      "ok": false,
+      "notes": [],
+      "error": "Login rimasto su /login"
+    },
+    {
+      "title": "Navigazione menu e refresh",
+      "ok": true,
+      "notes": [],
+      "error": null
+    },
+    {
+      "title": "Cruscotto",
+      "ok": true,
+      "notes": [
+        "Pagina aperta e contenuto letto; click distruttivi non eseguiti."
+      ],
+      "error": null
+    },
+    {
+      "title": "Control Room",
+      "ok": true,
+      "notes": [],
+      "error": null
+    },
+    {
+      "title": "Disponibilita",
+      "ok": true,
+      "notes": [
+        "Nessun toggle non necessario eseguito via UI."
+      ],
+      "error": null
+    },
+    {
+      "title": "Arrivi assegnazione singola e bulk",
+      "ok": false,
+      "notes": [],
+      "error": "Autista test non disponibile"
+    },
+    {
+      "title": "Partenze assegnazione singola e bulk",
+      "ok": false,
+      "notes": [],
+      "error": "Autista test non disponibile"
+    },
+    {
+      "title": "Piano del Giorno e Continente",
+      "ok": true,
+      "notes": [],
+      "error": null
+    },
+    {
+      "title": "Prenotazioni Inbox",
+      "ok": true,
+      "notes": [
+        "Click distruttivi/import reali non eseguiti."
+      ],
+      "error": null
+    },
+    {
+      "title": "Disponibilita non confermata",
+      "ok": true,
+      "notes": [
+        "Saltato: DB/admin o driver non disponibili."
+      ],
+      "error": null
+    }
+  ],
+  "screenshots": [
+    "C:\\Users\\DELL-DESK\\Downloads\\its\\artifacts\\qa-temp\\qa-final-1778858301548.png"
+  ]
+}

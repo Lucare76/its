@@ -1,0 +1,153 @@
+{
+  "generated_at": "2026-05-15T16:47:01.824Z",
+  "environment": {
+    "baseURL": "http://localhost:3010",
+    "user": "te***@ischiatransferservice.it",
+    "browser": "chromium"
+  },
+  "auth": {
+    "login_ok": true,
+    "user_id": "23b9c5c5-9ab1-4a07-84a3-8d00440c219f"
+  },
+  "db": {
+    "tenant_id": "d200b89a-64c7-4f8d-a430-95a33b83047a",
+    "role": "operator",
+    "full_name_present": true,
+    "drivers": 11,
+    "services": 8570,
+    "availability_confirmations": 12,
+    "safe_services_sample": 38,
+    "safe_arrivals_sample": 0,
+    "safe_departures_sample": 0,
+    "db_errors": []
+  },
+  "menu": [
+    {
+      "label": "Cruscotto",
+      "path": "/dashboard",
+      "final_url": "/login?redirect=%2Fdashboard",
+      "opened": false,
+      "content_match": false,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 431
+    },
+    {
+      "label": "Control Room",
+      "path": "/mappa-live",
+      "final_url": "/login?redirect=%2Fmappa-live",
+      "opened": false,
+      "content_match": false,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 431
+    },
+    {
+      "label": "Arrivi",
+      "path": "/arrivals",
+      "final_url": "/login?redirect=%2Farrivals",
+      "opened": false,
+      "content_match": true,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 431
+    },
+    {
+      "label": "Partenze",
+      "path": "/departures",
+      "final_url": "/login?redirect=%2Fdepartures",
+      "opened": false,
+      "content_match": false,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 431
+    },
+    {
+      "label": "Prenotazioni",
+      "path": "/inbox",
+      "final_url": "/login?redirect=%2Finbox",
+      "opened": false,
+      "content_match": true,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 431
+    },
+    {
+      "label": "Disponibilita",
+      "path": "/disponibilita",
+      "final_url": "/login?redirect=%2Fdisponibilita",
+      "opened": false,
+      "content_match": false,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 431
+    },
+    {
+      "label": "Piano del Giorno",
+      "path": "/piano-giorno",
+      "final_url": "/login?redirect=%2Fpiano-giorno",
+      "opened": false,
+      "content_match": false,
+      "console_errors": 0,
+      "network_errors": 0,
+      "body_chars": 431
+    }
+  ],
+  "pages": {
+    "piano_giorno": {
+      "has_continente": false,
+      "has_bruno": false,
+      "has_vendor": false,
+      "has_da_smistare": false
+    }
+  },
+  "api_calls": [],
+  "console_errors": [],
+  "network_errors": [],
+  "problems": [],
+  "steps": [
+    {
+      "title": "Login UI",
+      "ok": false,
+      "notes": [],
+      "error": "Login rimasto su /login"
+    },
+    {
+      "title": "Menu e pagine protette",
+      "ok": true,
+      "notes": [],
+      "error": null
+    },
+    {
+      "title": "Click non distruttivi",
+      "ok": true,
+      "notes": [
+        "/dashboard: nessun bottone non distruttivo riconosciuto",
+        "/mappa-live: nessun bottone non distruttivo riconosciuto",
+        "/arrivals: click non distruttivo eseguito",
+        "/departures: click non distruttivo eseguito",
+        "/inbox: nessun bottone non distruttivo riconosciuto",
+        "/disponibilita: nessun bottone non distruttivo riconosciuto",
+        "/piano-giorno: nessun bottone non distruttivo riconosciuto"
+      ],
+      "error": null
+    },
+    {
+      "title": "Assegnazioni Arrivi/Partenze",
+      "ok": true,
+      "notes": [
+        "Saltate: nessun servizio DEMO/TEST/E2E nel campione letto. Evitato uso di dati reali."
+      ],
+      "error": null
+    },
+    {
+      "title": "Piano del Giorno Continente",
+      "ok": true,
+      "notes": [],
+      "error": null
+    }
+  ],
+  "screenshots": [
+    "C:\\Users\\DELL-DESK\\Downloads\\its\\artifacts\\qa-temp\\qa-final-1778863669771.png"
+  ]
+}
