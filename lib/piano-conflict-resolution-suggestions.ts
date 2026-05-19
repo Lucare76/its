@@ -54,8 +54,10 @@ export interface ConflictResolutionSuggestion {
   operator_confirmation_required: boolean;
   operator_confirmed?: boolean;
   operator_decision_id?: string | null;
+  operator_decision_type?: string | null;
   operator_confirmed_by?: string | null;
   operator_confirmed_at?: string | null;
+  operator_confirmed_severity?: "info" | "confirmed_warning";
 }
 
 function clean(value?: string | number | null) {

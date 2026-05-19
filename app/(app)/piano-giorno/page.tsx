@@ -259,6 +259,8 @@ type VehicleBindingPreviewChange = {
   current_vehicle_capacity: number | null;
   proposed_vehicle_label: string | null;
   proposed_vehicle_capacity: number | null;
+  proposed_vehicle_id?: string | null;
+  current_group_updated_at?: string | null;
   reason: string;
   large_vehicle_shared: boolean;
   buffer_from_previous: number | null;

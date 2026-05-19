@@ -67,9 +67,11 @@ export async function POST(request: NextRequest) {
       group_id: change.group_id,
       vehicle_label: change.current_vehicle_label,
       vehicle_capacity: change.current_vehicle_capacity,
+      updated_at: change.current_group_updated_at,
     }));
     const after = preview.changes.map((change) => ({
       group_id: change.group_id,
+      vehicle_id: change.proposed_vehicle_id,
       vehicle_label: change.proposed_vehicle_label,
       vehicle_capacity: change.proposed_vehicle_capacity,
     }));
@@ -102,7 +104,7 @@ export async function POST(request: NextRequest) {
 
     const updatedGroups: Array<{ id: string; vehicle_label: string | null; vehicle_capacity: number | null }> = [];
     for (const change of preview.changes) {
-      const { data, error } = await auth.admin
+      let updateQuery = auth.admin
         .from("trip_groups")
         .update({
           vehicle_label: change.proposed_vehicle_label,
@@ -110,14 +112,26 @@ export async function POST(request: NextRequest) {
           updated_at: new Date().toISOString(),
         })
         .eq("tenant_id", auth.membership.tenant_id)
-        .eq("id", change.group_id)
-        .select("id, vehicle_label, vehicle_capacity")
-        .single();
+        .eq("id", change.group_id);
 
-      if (error) {
+      if (change.current_group_updated_at) {
+        updateQuery = updateQuery.eq("updated_at", change.current_group_updated_at);
+      }
+
+      const { data, error } = await updateQuery
+        .select("id, vehicle_label, vehicle_capacity")
+        .maybeSingle();
+
+      if (error || !data?.id) {
         return NextResponse.json(
-          { ok: false, error: `Aggiornamento trip_group ${change.group_id}: ${error.message}`, applied: updatedGroups.length },
-          { status: 500 }
+          {
+            ok: false,
+            error: error
+              ? `Aggiornamento trip_group ${change.group_id}: ${error.message}`
+              : `Preview stale: trip_group ${change.group_id} cambiato durante l'applicazione.`,
+            applied: updatedGroups.length,
+          },
+          { status: error ? 500 : 409 }
         );
       }
       updatedGroups.push(data as { id: string; vehicle_label: string | null; vehicle_capacity: number | null });

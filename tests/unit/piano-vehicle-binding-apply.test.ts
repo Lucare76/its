@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   buildVehicleBindingPreviewReference,
   validateVehicleBindingPreviewForApply,
@@ -39,6 +41,51 @@ function preview(overrides: Partial<VehicleBindingPreviewPayload> = {}): Vehicle
 }
 
 describe("vehicle binding apply guard", () => {
+  it("keeps the apply route scoped to trip_groups and server-side recalculation", () => {
+    const source = readFileSync(join(process.cwd(), "app/api/ops/piano-giorno/apply-vehicle-binding/route.ts"), "utf8");
+
+    expect(source).toContain("buildVehicleBindingPreview");
+    expect(source).toContain("preview_reference");
+    expect(source).toContain('.from("trip_groups")');
+    expect(source).not.toContain('.from("services").update');
+    expect(source).not.toContain('.from("services")\n        .update');
+    expect(source).not.toContain('.from("assignments").update');
+    expect(source).not.toContain('.from("assignments")\n        .update');
+    expect(source).not.toContain("services.status");
+    expect(source).not.toContain("auto-assign");
+  });
+
+  it("records the controlled operator decision with the hybrid binding action", () => {
+    const source = readFileSync(join(process.cwd(), "app/api/ops/piano-giorno/apply-vehicle-binding/route.ts"), "utf8");
+
+    expect(source).toContain("HYBRID_BINDING_DECISION_TYPE");
+    expect(source).toContain("HYBRID_BINDING_ACTION");
+    expect(source).toContain("insertOperatorDecision");
+    expect(source).toContain("duplicate");
+  });
+
+  it("uses trip_group updated_at as an apply-time stale guard", () => {
+    const source = readFileSync(join(process.cwd(), "app/api/ops/piano-giorno/apply-vehicle-binding/route.ts"), "utf8");
+
+    expect(source).toContain("current_group_updated_at");
+    expect(source).toContain('.eq("updated_at", change.current_group_updated_at)');
+    expect(source).toContain("Preview stale");
+  });
+
+  it("keeps manual trip mutations guarded by eligibility, capacity and vehicle timeline validation", () => {
+    const source = readFileSync(join(process.cwd(), "app/api/ops/piano-giorno/trips/route.ts"), "utf8");
+
+    for (const action of ["create_trip", "update_trip", "move_services"]) {
+      expect(source).toContain(`body.action === "${action}"`);
+    }
+    expect(source).toContain("validateDriverVehicleEligibilityPayload");
+    expect(source).toContain("validateVehicleTimelinePayload");
+    expect(source).toContain("Overbooking bloccante");
+    expect(source).toContain("canShareLargeVehicle");
+    expect(source).toContain("Mezzo capiente condiviso non disponibile con buffer sufficiente.");
+    expect(source).toContain("assegnato a un altro autista per questa giornata.");
+  });
+
   it("allows a clean hybrid preview with large vehicle sharing on timeline", () => {
     const result = validateVehicleBindingPreviewForApply(preview({
       large_vehicle_usage: [{

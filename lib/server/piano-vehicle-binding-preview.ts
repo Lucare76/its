@@ -77,6 +77,8 @@ export type VehicleBindingPreviewChange = {
   current_vehicle_capacity: number | null;
   proposed_vehicle_label: string | null;
   proposed_vehicle_capacity: number | null;
+  proposed_vehicle_id: string | null;
+  current_group_updated_at: string | null;
   reason: string;
   large_vehicle_shared: boolean;
   buffer_from_previous: number | null;
@@ -365,6 +367,8 @@ export async function buildVehicleBindingPreview(args: {
         current_vehicle_capacity: original.current_vehicle_capacity ?? null,
         proposed_vehicle_label: trip.proposed_vehicle_label ?? null,
         proposed_vehicle_capacity: trip.proposed_vehicle_label ? proposedVehicleCapacity.get(trip.proposed_vehicle_label) ?? null : null,
+        proposed_vehicle_id: trip.proposed_vehicle_id ?? null,
+        current_group_updated_at: (tripGroups.find((group) => group.id === trip.group_id)?.updated_at ?? null),
         reason: trip.is_large_group ? "Mezzo capiente condiviso a timeline" : "Riallineamento mezzo fisso/compatibile",
         large_vehicle_shared: Boolean(largeUsage && largeUsage.status === "large_vehicle_shared_timeline_ok"),
         buffer_from_previous: largeUsage?.buffer_from_previous ?? null,

@@ -48,7 +48,152 @@ function service(overrides: Partial<AutoAssignPreviewService>): AutoAssignPrevie
   };
 }
 
+function vehicleInput(overrides: {
+  groups: Array<{ id: string; driver_profile_id: string; vehicle_label: string | null }>;
+  services: Array<Partial<AutoAssignPreviewService> & { id: string; group_id: string }>;
+  vehicles: Array<{ id: string; label: string; capacity: number }>;
+  drivers?: Array<{ driver_profile_id: string; driver_name: string; max_vehicle_capacity?: number | null }>;
+}) {
+  const drivers = overrides.drivers ?? overrides.groups.map((item) => ({
+    driver_profile_id: item.driver_profile_id,
+    driver_name: item.driver_profile_id,
+    max_vehicle_capacity: null,
+  }));
+  return {
+    date: "2026-05-07",
+    services: overrides.services.map(({ group_id: _groupId, ...item }) => service({
+      customer_name: item.id,
+      hotel_id: "re-ferdinando",
+      pickup_hotel: item.pickup_hotel ?? item.time ?? "09:00",
+      booking_service_kind: "formula_medmar",
+      service_type_code: "ferry_transfer",
+      pax: item.pax ?? 2,
+      ...item,
+    })),
+    hotels,
+    assignments: overrides.services.map((item) => ({
+      service_id: item.id,
+      group_id: item.group_id,
+      driver_profile_id: overrides.groups.find((groupItem) => groupItem.id === item.group_id)?.driver_profile_id ?? null,
+      driver_user_id: null,
+      vehicle_label: overrides.groups.find((groupItem) => groupItem.id === item.group_id)?.vehicle_label ?? null,
+    })),
+    tripGroups: overrides.groups.map((item) => group({
+      id: item.id,
+      driver_profile_id: item.driver_profile_id,
+      driver_user_id: null,
+      vehicle_label: item.vehicle_label,
+    })),
+    driverNamesByProfileId: new Map(drivers.map((driver) => [driver.driver_profile_id, driver.driver_name])),
+    vehicles: overrides.vehicles,
+    drivers,
+  };
+}
+
 describe("buildRealGiroDiagnostics", () => {
+  it("does not count a large vehicle shared on a valid timeline as vehicle conflict", () => {
+    const result = buildRealGiroDiagnostics(vehicleInput({
+      groups: [
+        { id: "large-a", driver_profile_id: "driver-a", vehicle_label: "BUS 25" },
+        { id: "large-b", driver_profile_id: "driver-b", vehicle_label: "BUS 25" },
+      ],
+      services: [
+        { id: "svc-a", group_id: "large-a", pickup_hotel: "09:00", pax: 21 },
+        { id: "svc-b", group_id: "large-b", pickup_hotel: "12:00", pax: 21 },
+      ],
+      vehicles: [{ id: "bus-25", label: "BUS 25", capacity: 25 }],
+    }));
+
+    expect(result.summary.vehicle_conflict_count).toBe(0);
+    expect(result.vehicle_diagnostics.vehicle_binding.large_vehicle_shared_timeline_ok).toHaveLength(1);
+  });
+
+  it("counts a large vehicle shared with overlap as blocker", () => {
+    const result = buildRealGiroDiagnostics(vehicleInput({
+      groups: [
+        { id: "large-a", driver_profile_id: "driver-a", vehicle_label: "BUS 25" },
+        { id: "large-b", driver_profile_id: "driver-b", vehicle_label: "BUS 25" },
+      ],
+      services: [
+        { id: "svc-a", group_id: "large-a", pickup_hotel: "09:00", pax: 21 },
+        { id: "svc-b", group_id: "large-b", pickup_hotel: "09:10", pax: 21 },
+      ],
+      vehicles: [{ id: "bus-25", label: "BUS 25", capacity: 25 }],
+    }));
+
+    expect(result.summary.vehicle_conflict_count).toBe(1);
+    expect(result.vehicle_diagnostics.vehicle_binding.large_vehicle_shared_timeline_conflict).toHaveLength(1);
+  });
+
+  it("counts a standard vehicle shared between different drivers as blocker", () => {
+    const result = buildRealGiroDiagnostics(vehicleInput({
+      groups: [
+        { id: "std-a", driver_profile_id: "driver-a", vehicle_label: "VITO" },
+        { id: "std-b", driver_profile_id: "driver-b", vehicle_label: "VITO" },
+      ],
+      services: [
+        { id: "svc-a", group_id: "std-a", pickup_hotel: "09:00", pax: 2 },
+        { id: "svc-b", group_id: "std-b", pickup_hotel: "12:00", pax: 2 },
+      ],
+      vehicles: [{ id: "vito", label: "VITO", capacity: 8 }],
+    }));
+
+    expect(result.summary.vehicle_conflict_count).toBe(1);
+    expect(result.vehicle_diagnostics.vehicle_binding.standard_vehicle_same_day_conflict).toHaveLength(1);
+  });
+
+  it("counts a vehicle with insufficient capacity as blocker", () => {
+    const result = buildRealGiroDiagnostics(vehicleInput({
+      groups: [{ id: "under-capacity", driver_profile_id: "driver-a", vehicle_label: "VITO" }],
+      services: [{ id: "svc-a", group_id: "under-capacity", pickup_hotel: "09:00", pax: 9 }],
+      vehicles: [{ id: "vito", label: "VITO", capacity: 8 }],
+    }));
+
+    expect(result.summary.vehicle_conflict_count).toBe(1);
+    expect(result.vehicle_diagnostics.vehicle_binding.vehicle_capacity_insufficient).toHaveLength(1);
+  });
+
+  it("counts a driver not eligible for the proposed vehicle as blocker", () => {
+    const result = buildRealGiroDiagnostics(vehicleInput({
+      groups: [{ id: "not-eligible", driver_profile_id: "driver-a", vehicle_label: "BUS 25" }],
+      services: [{ id: "svc-a", group_id: "not-eligible", pickup_hotel: "09:00", pax: 21 }],
+      vehicles: [{ id: "bus-25", label: "BUS 25", capacity: 25 }],
+      drivers: [{ driver_profile_id: "driver-a", driver_name: "Driver A", max_vehicle_capacity: 8 }],
+    }));
+
+    expect(result.summary.vehicle_conflict_count).toBe(1);
+    expect(result.vehicle_diagnostics.vehicle_binding.driver_vehicle_eligibility_blocker).toHaveLength(1);
+  });
+
+  it("keeps vehicle diagnostics clean after vehicle_binding_confirmed when binding is already aligned", () => {
+    const result = buildRealGiroDiagnostics({
+      ...vehicleInput({
+        groups: [
+          { id: "large-a", driver_profile_id: "driver-a", vehicle_label: "BUS 25" },
+          { id: "large-b", driver_profile_id: "driver-b", vehicle_label: "BUS 25" },
+        ],
+        services: [
+          { id: "svc-a", group_id: "large-a", pickup_hotel: "09:00", pax: 21 },
+          { id: "svc-b", group_id: "large-b", pickup_hotel: "12:00", pax: 21 },
+        ],
+        vehicles: [{ id: "bus-25", label: "BUS 25", capacity: 25 }],
+      }),
+      operatorDecisions: [{
+        id: "vehicle-binding-decision",
+        tenant_id: "tenant-1",
+        service_date: "2026-05-07",
+        trip_group_id: null,
+        suggestion_hash: "hash",
+        confirmed_by: "operator-1",
+        confirmed_at: "2026-05-19T12:00:00.000Z",
+        status: "confirmed",
+      }],
+    });
+
+    expect(result.summary.vehicle_conflict_count).toBe(0);
+    expect(result.vehicle_diagnostics.vehicle_binding.changes_needed).toBe(0);
+  });
+
   it("merges same-stop services inside a real group without zero-minute conflict", () => {
     const result = buildRealGiroDiagnostics({
       date: "2026-05-07",
@@ -255,6 +400,206 @@ describe("buildRealGiroDiagnostics", () => {
     expect(confirmed.resolution_suggestions[0]?.operator_decision_id).toBe("decision-multidrop");
   });
 
+  it("matches confirmed multi-drop decisions by service ids when the original trip group changed", () => {
+    const baseInput = {
+      tenantId: "tenant-1",
+      date: "2026-05-07",
+      services: [
+        service({
+          id: "catullo",
+          time: "08:30",
+          direction: "arrival",
+          customer_name: "CATULLO",
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "LA VILLA", to: "Casamicciola" },
+        }),
+        service({
+          id: "lodi",
+          time: "08:30",
+          direction: "arrival",
+          customer_name: "LODI",
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "LA VILLA", to: "Casamicciola" },
+        }),
+        service({
+          id: "paoletti",
+          time: "08:30",
+          direction: "arrival",
+          customer_name: "PAOLETTI",
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "LA VILLA", to: "Ischia Porto" },
+        }),
+        service({
+          id: "lamantia",
+          time: "08:30",
+          direction: "arrival",
+          customer_name: "LA MANTIA",
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "LA VILLA", to: "Casamicciola" },
+        }),
+      ],
+      hotels,
+      assignments: [
+        assignment("catullo", "current-group"),
+        assignment("lodi", "current-group"),
+        assignment("paoletti", "current-group"),
+        assignment("lamantia", "current-group"),
+      ],
+      tripGroups: [group({ id: "current-group" })],
+    };
+    const first = buildRealGiroDiagnostics(baseInput);
+    const suggestion = first.resolution_suggestions.find((item) => item.recommended_action === "MULTI_DROP")!;
+
+    const confirmed = buildRealGiroDiagnostics({
+      ...baseInput,
+      operatorDecisions: [{
+        id: "decision-riccardo",
+        tenant_id: "tenant-1",
+        service_date: "2026-05-07",
+        trip_group_id: "old-group",
+        decision_type: "multi_drop_confirmed",
+        action: "MULTI_DROP",
+        suggestion_hash: "old-hash",
+        payload_json: { suggestion: { involved_services: suggestion.involved_services } },
+        before_json: null,
+        after_json: null,
+        confirmed_by: "operator-1",
+        confirmed_at: "2026-05-18T12:00:00.000Z",
+        status: "confirmed",
+      }],
+    });
+
+    expect(first.groups[0]?.status).toBe("NOT_OPERATIONAL");
+    expect(confirmed.groups[0]?.status).toBe("OK");
+    expect(confirmed.summary.total_conflicts).toBe(0);
+    expect(confirmed.resolution_suggestions[0]?.operator_confirmed).toBe(true);
+    expect(confirmed.resolution_suggestions[0]?.operator_decision_type).toBe("multi_drop_confirmed");
+  });
+
+  it("matches confirmed accorpamento decisions by service ids when the original trip group changed", () => {
+    const baseInput = {
+      tenantId: "tenant-1",
+      date: "2026-05-07",
+      services: [
+        service({
+          id: "iori",
+          customer_name: "IORI",
+          hotel_id: "re-ferdinando",
+          pickup_hotel: "12:15",
+          booking_service_kind: "formula_medmar",
+          service_type_code: "ferry_transfer",
+          barca_compagnia: "Medmar",
+          orario_barca: "13:30",
+          ferry_details: { departure_port: "Casamicciola" },
+        }),
+        service({
+          id: "rossi",
+          customer_name: "ROSSI",
+          hotel_id: "re-ferdinando",
+          pickup_hotel: "12:30",
+          booking_service_kind: "formula_snav",
+          service_type_code: "ferry_transfer",
+          barca_compagnia: "SNAV",
+          orario_barca: "14:00",
+          ferry_details: { departure_port: "Casamicciola" },
+        }),
+      ],
+      hotels,
+      assignments: [assignment("iori", "current-accorpamento"), assignment("rossi", "current-accorpamento")],
+      tripGroups: [group({ id: "current-accorpamento" })],
+    };
+    const first = buildRealGiroDiagnostics(baseInput);
+    const suggestion = first.resolution_suggestions.find((item) => item.recommended_action === "ACCORPARE_CON_CONFERMA")!;
+
+    const confirmed = buildRealGiroDiagnostics({
+      ...baseInput,
+      operatorDecisions: [{
+        id: "decision-accorpamento",
+        tenant_id: "tenant-1",
+        service_date: "2026-05-07",
+        trip_group_id: "old-accorpamento",
+        decision_type: "accorpamento_confirmed",
+        action: "ACCORPARE_CON_CONFERMA",
+        suggestion_hash: "old-hash",
+        payload_json: { suggestion: { involved_services: suggestion.involved_services } },
+        before_json: null,
+        after_json: null,
+        confirmed_by: "operator-1",
+        confirmed_at: "2026-05-18T12:00:00.000Z",
+        status: "confirmed",
+      }],
+    });
+
+    expect(first.groups[0]?.status).toBe("NOT_OPERATIONAL");
+    expect(confirmed.groups[0]?.status).toBe("OK");
+    expect(confirmed.summary.groups_with_conflicts).toBe(0);
+    expect(confirmed.resolution_suggestions[0]?.operator_decision_type).toBe("accorpamento_confirmed");
+  });
+
+  it("does not suppress a conflict with a superseded decision", () => {
+    const baseInput = {
+      tenantId: "tenant-1",
+      date: "2026-05-07",
+      services: [
+        service({
+          id: "polillo",
+          time: "17:15",
+          direction: "arrival",
+          customer_name: "POLILLO",
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "MORTELLA", to: "RE FERDINANDO" },
+        }),
+        service({
+          id: "cam335",
+          time: "17:15",
+          direction: "arrival",
+          customer_name: "CAM 335",
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "MORTELLA", to: "CRISTALLO" },
+        }),
+      ],
+      hotels,
+      assignments: [assignment("polillo"), assignment("cam335")],
+      tripGroups: [group()],
+    };
+    const first = buildRealGiroDiagnostics(baseInput);
+    const suggestion = first.resolution_suggestions[0]!;
+    const result = buildRealGiroDiagnostics({
+      ...baseInput,
+      operatorDecisions: [{
+        id: "decision-superseded",
+        tenant_id: "tenant-1",
+        service_date: "2026-05-07",
+        trip_group_id: suggestion.group_id,
+        decision_type: "multi_drop_confirmed",
+        action: "MULTI_DROP",
+        suggestion_hash: "old-hash",
+        payload_json: { suggestion: { involved_services: suggestion.involved_services } },
+        before_json: null,
+        after_json: null,
+        confirmed_by: "operator-1",
+        confirmed_at: "2026-05-18T12:00:00.000Z",
+        status: "superseded",
+      }],
+    });
+
+    expect(result.groups[0]?.status).toBe("NOT_OPERATIONAL");
+    expect(result.summary.groups_with_conflicts).toBe(1);
+    expect(result.resolution_suggestions[0]?.operator_confirmed).toBeUndefined();
+  });
+
   it("turns President outbound/inbound into shuttle-pair instead of internal overlap", () => {
     const result = buildRealGiroDiagnostics({
       date: "2026-05-07",
@@ -333,7 +678,7 @@ describe("buildRealGiroDiagnostics", () => {
     expect(result.groups[0]?.conflict_count).toBeGreaterThan(0);
   });
 
-  it("does not turn San Nicola delta 25 into shuttle-pair", () => {
+  it("turns San Nicola / Citara recurring cycles into shuttle-pair", () => {
     const result = buildRealGiroDiagnostics({
       date: "2026-05-07",
       services: [
@@ -361,8 +706,11 @@ describe("buildRealGiroDiagnostics", () => {
       tripGroups: [group()],
     });
 
-    expect(result.groups[0]?.shuttle_pair_count).toBe(0);
-    expect(result.summary.total_shuttle_pairs).toBe(0);
+    expect(result.groups[0]?.status).toBe("OK");
+    expect(result.groups[0]?.shuttle_pair_count).toBe(1);
+    expect(result.groups[0]?.conflict_count).toBe(0);
+    expect(result.groups[0]?.shuttle_pairs[0]?.loop_label).toContain("San Nicola / Citara");
+    expect(result.summary.total_shuttle_pairs).toBe(1);
   });
 
   it("does not turn Cristallo realistic timing into shuttle-pair", () => {

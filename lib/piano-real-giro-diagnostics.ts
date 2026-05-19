@@ -8,9 +8,9 @@ import { generateConflictResolutionSuggestions, type ConflictResolutionSuggestio
 import { mergeSameStops, type MergedStop, type ResolvedServiceForSameStop } from "@/lib/piano-same-stop-merge";
 import { detectShuttlePairs, type ShuttlePairGroup } from "@/lib/piano-shuttle-pair";
 import { buildSuggestionHash, type PianoOperatorDecisionRow } from "@/lib/server/piano-operator-decisions";
-import { vehicleIntervalsOverlap } from "@/lib/piano-vehicle-timeline";
-import { buildVehicleDailyBinding, driverDailyBindingKey, type VehicleDailyBindingDriver } from "@/lib/piano-vehicle-daily-binding";
+import { driverDailyBindingKey, type VehicleDailyBindingDriver } from "@/lib/piano-vehicle-daily-binding";
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
+import { buildHybridVehicleBinding, type HybridVehicleBindingConflict, type HybridVehicleBindingLargeUsage } from "@/lib/piano-hybrid-vehicle-binding";
 import type {
   AutoAssignPreviewAssignment,
   AutoAssignPreviewHotel,
@@ -39,6 +39,9 @@ export type RealGiroDiagnosticGroup = {
   driver_name: string | null;
   vehicle_label: string | null;
   services_count: number;
+  pax: number;
+  start_time: string | null;
+  end_time: string | null;
   stops_count: number;
   same_stop_count: number;
   shuttle_pair_count: number;
@@ -94,6 +97,21 @@ export type RealGiroDiagnosticsResult = {
     invalid_driver_vehicle_assignments: Array<{ group_id: string; driver_name: string | null; vehicle_label: string | null; message: string }>;
     daily_binding_conflicts: Array<{ type: string; message: string; vehicle_label: string | null; driver_name: string | null; other_driver_name: string | null }>;
     suggestions: Array<{ driver_name: string | null; from_vehicle_label: string | null; to_vehicle_label: string | null; reason: string }>;
+    vehicle_binding: {
+      changes_needed: number;
+      conflicts_after: number;
+      overbooking_after: number;
+      driver_vehicle_eligibility_blockers: number;
+      large_vehicle_shared_timeline_ok: HybridVehicleBindingLargeUsage[];
+      large_vehicle_usage: HybridVehicleBindingLargeUsage[];
+      vehicle_binding_conflicts: HybridVehicleBindingConflict[];
+      vehicle_binding_warnings: HybridVehicleBindingConflict[];
+      vehicle_binding_info: HybridVehicleBindingConflict[];
+      standard_vehicle_same_day_conflict: HybridVehicleBindingConflict[];
+      large_vehicle_shared_timeline_conflict: HybridVehicleBindingConflict[];
+      vehicle_capacity_insufficient: HybridVehicleBindingConflict[];
+      driver_vehicle_eligibility_blocker: HybridVehicleBindingConflict[];
+    };
     conflicts: Array<{
       vehicle_label: string;
       first_group_id: string;
@@ -110,8 +128,25 @@ export type RealGiroDiagnosticsResult = {
 
 export type RealGiroConfirmedDecision = Pick<
   PianoOperatorDecisionRow,
-  "id" | "tenant_id" | "service_date" | "trip_group_id" | "suggestion_hash" | "confirmed_by" | "confirmed_at" | "status"
->;
+  | "id"
+  | "tenant_id"
+  | "service_date"
+  | "trip_group_id"
+  | "suggestion_hash"
+  | "confirmed_by"
+  | "confirmed_at"
+  | "status"
+> & Partial<Pick<
+  PianoOperatorDecisionRow,
+  | "decision_type"
+  | "action"
+  | "payload_json"
+  | "before_json"
+  | "after_json"
+>>;
+
+const LARGE_GROUP_PAX_THRESHOLD = 21;
+const MIN_BUFFER_MINUTES = 20;
 
 function confidenceScore(resolution: AssignableServiceResolution) {
   const severe = resolution.macro_category === "DA_VERIFICARE"
@@ -250,12 +285,27 @@ function shuttlePairToStop(pair: ShuttlePairGroup): MergedStop {
     port_arrival: null,
     is_merged: false,
     merge_reason: null,
-    warnings: ["Shuttle-pair President rappresentato come ciclo navetta"],
+    warnings: ["Shuttle-pair rappresentato come ciclo navetta"],
   };
 }
 
 function presidentShuttlePairCount(pairs: ReturnType<typeof publicShuttlePair>[]) {
   return pairs.filter((pair) => pair.loop_label.toLowerCase().includes("president")).length;
+}
+
+function clean(value?: string | number | null) {
+  const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeText(value?: string | number | null) {
+  return clean(value)
+    ?.toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim() ?? "";
 }
 
 function minutes(value?: string | null) {
@@ -269,6 +319,79 @@ function minutes(value?: string | null) {
 function formatMinutes(total: number) {
   const normalized = ((total % 1440) + 1440) % 1440;
   return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
+}
+
+function stopIsAssignableNavetta(stop: MergedStop) {
+  return stop.macro_category === "NAVETTA"
+    && stop.services.length > 0
+    && stop.services.every((service) => service.assignable !== false && service.needs_review !== true);
+}
+
+function stopTextValues(stop: MergedStop) {
+  return [
+    stop.pickup_label,
+    ...stop.destination_labels,
+    ...stop.services.flatMap((service) => [
+      service.customer_name,
+      service.pickup_label,
+      service.destination_label,
+      service.booking_service_kind,
+      service.service_type_code,
+    ]),
+  ].map(normalizeText);
+}
+
+function isSanNicolaCitaraStop(stop: MergedStop) {
+  if (!stopIsAssignableNavetta(stop)) return false;
+  const values = stopTextValues(stop);
+  return values.some((value) => value.includes("san nicola"))
+    && values.some((value) => value.includes("citara"));
+}
+
+function makeSanNicolaCitaraPair(first: MergedStop, second: MergedStop, index: number): ShuttlePairGroup {
+  return {
+    pair_id: `san-nicola-citara-shuttle-${String(index).padStart(4, "0")}`,
+    type: "SHUTTLE_PAIR",
+    outbound: first,
+    inbound: second,
+    start_time: first.operational_time,
+    end_time: second.operational_time,
+    loop_label: `NAVETTA CICLO - Hotel San Nicola / Citara - ore ${first.operational_time.slice(0, 5)}`,
+    total_pax: first.total_pax + second.total_pax,
+    explanation: [
+      "Navetta ricorrente San Nicola / Citara",
+      "Regola specifica: San Nicola serve Citara e viceversa",
+      "Delta orario compatibile con ciclo navetta",
+    ],
+  };
+}
+
+function detectSanNicolaCitaraShuttleCycles(stops: MergedStop[]): {
+  shuttle_pairs: ShuttlePairGroup[];
+  remaining_stops: MergedStop[];
+} {
+  const ordered = [...stops].sort((a, b) => a.operational_time.localeCompare(b.operational_time));
+  const used = new Set<string>();
+  const shuttlePairs: ShuttlePairGroup[] = [];
+
+  for (const stop of ordered) {
+    if (used.has(stop.stop_id) || !isSanNicolaCitaraStop(stop)) continue;
+    const stopMinutes = minutes(stop.operational_time);
+    const match = ordered.find((candidate) => {
+      if (candidate.stop_id === stop.stop_id || used.has(candidate.stop_id) || !isSanNicolaCitaraStop(candidate)) return false;
+      const delta = minutes(candidate.operational_time) - stopMinutes;
+      return delta >= 20 && delta <= 40;
+    });
+    if (!match) continue;
+    used.add(stop.stop_id);
+    used.add(match.stop_id);
+    shuttlePairs.push(makeSanNicolaCitaraPair(stop, match, shuttlePairs.length + 1));
+  }
+
+  return {
+    shuttle_pairs: shuttlePairs.sort((a, b) => a.start_time.localeCompare(b.start_time)),
+    remaining_stops: ordered.filter((stop) => !used.has(stop.stop_id)),
+  };
 }
 
 function vehicleGroupInterval(group: RealGiroDiagnosticGroup) {
@@ -318,6 +441,69 @@ function buildVehicleDiagnostics(args: {
     .filter((group) => group.vehicle_label)
     .map((group) => `Giro ${group.group_id}: vehicle_id non disponibile sullo schema trip_groups/assignments, validazione mezzo basata su vehicle_label "${group.vehicle_label}".`);
 
+  const hybridDrivers = (args.drivers ?? [])
+    .map((driver) => {
+      const driverKey = driverDailyBindingKey(driver);
+      return driverKey
+        ? {
+            driver_key: driverKey,
+            driver_name: driver.driver_name ?? null,
+            max_vehicle_capacity: driver.max_vehicle_capacity ?? null,
+          }
+        : null;
+    })
+    .filter((driver): driver is { driver_key: string; driver_name: string | null; max_vehicle_capacity: number | null } => Boolean(driver));
+
+  const hybrid = buildHybridVehicleBinding({
+    drivers: hybridDrivers,
+    vehicles: availableVehicles,
+    trips: args.groups.map((group) => ({
+      group_id: group.group_id,
+      driver_key: group.driver_key,
+      driver_name: group.driver_name,
+      start_time: group.start_time,
+      end_time: group.end_time,
+      pax: group.pax,
+      current_vehicle_label: group.vehicle_label,
+    })),
+    config: {
+      largeGroupPaxThreshold: LARGE_GROUP_PAX_THRESHOLD,
+      minBufferMinutes: MIN_BUFFER_MINUTES,
+      preferFixedVehicleForStandardTrips: true,
+    },
+  });
+
+  const proposedByGroupId = new Map(hybrid.trips.map((trip) => [trip.group_id, trip]));
+  const changesNeeded = args.groups.filter((group) => {
+    const proposed = proposedByGroupId.get(group.group_id);
+    return Boolean(proposed?.proposed_vehicle_label && proposed.proposed_vehicle_label !== group.vehicle_label);
+  }).length;
+  const vehicleBindingConflicts = hybrid.conflicts.filter((conflict) => conflict.severity === "blocker");
+  const vehicleBindingWarnings = hybrid.conflicts.filter((conflict) => conflict.severity === "warning");
+  const vehicleBindingInfo = hybrid.conflicts.filter((conflict) => conflict.severity === "info");
+
+  const driverVehicleBindings = hybrid.standard_vehicle_bindings.map((binding) => ({
+    driver_key: binding.driver_key,
+    driver_name: binding.driver_name,
+    vehicle_label: binding.vehicle_label ?? null,
+  }));
+  const driversWithoutVehicle = hybrid.standard_vehicle_bindings
+    .filter((binding) => !binding.vehicle_label)
+    .map((binding) => ({
+      driver_key: binding.driver_key,
+      driver_name: binding.driver_name,
+    }));
+  const legacyConflicts = vehicleBindingConflicts.map((conflict) => ({
+    vehicle_label: String(conflict.vehicle_label ?? ""),
+    first_group_id: conflict.group_id,
+    second_group_id: conflict.group_id,
+    first_driver_name: conflict.driver_name,
+    second_driver_name: conflict.driver_name,
+    first_interval: "",
+    second_interval: "",
+    message: conflict.message,
+  }));
+
   const conflicts: Array<{
     vehicle_label: string;
     first_group_id: string;
@@ -327,32 +513,46 @@ function buildVehicleDiagnostics(args: {
     first_interval: string;
     second_interval: string;
     message: string;
-  }> = [];
-  const binding = buildVehicleDailyBinding({
-    drivers: args.drivers ?? [],
-    vehicles: availableVehicles,
-    assignments: args.groups
-      .filter((group) => group.driver_name || group.vehicle_label)
-      .map((group) => ({
-        driver_profile_id: group.driver_key?.startsWith("profile:") ? group.driver_key.slice("profile:".length) : null,
-        driver_user_id: group.driver_key?.startsWith("user:") ? group.driver_key.slice("user:".length) : null,
-        driver_id: group.driver_key && !group.driver_key.startsWith("profile:") && !group.driver_key.startsWith("user:")
-          ? group.driver_key
-          : null,
+  }> = legacyConflicts;
+  const legacyDailyBindingConflicts = vehicleBindingConflicts.map((conflict) => ({
+    type: conflict.type,
+    message: conflict.message,
+    vehicle_label: conflict.vehicle_label,
+    driver_name: conflict.driver_name,
+    other_driver_name: null,
+  }));
+  const suggestions = args.groups
+    .map((group) => {
+      const proposed = proposedByGroupId.get(group.group_id);
+      if (!proposed?.proposed_vehicle_label || proposed.proposed_vehicle_label === group.vehicle_label) return null;
+      return {
         driver_name: group.driver_name,
-        label: group.vehicle_label,
-        group_id: group.group_id,
-      })),
-  });
-  const driverVehicleBindings = Array.from(binding.driver_to_vehicle.entries()).map(([driverKey, vehicle]) => ({
-    driver_key: driverKey,
-    driver_name: args.drivers?.find((driver) => driverDailyBindingKey(driver) === driverKey)?.driver_name ?? null,
-    vehicle_label: vehicle.label ?? null,
-  }));
-  const driversWithoutVehicle = binding.unassigned_drivers.map((driver) => ({
-    driver_key: driverDailyBindingKey(driver) ?? "",
-    driver_name: driver.driver_name ?? null,
-  }));
+        from_vehicle_label: group.vehicle_label,
+        to_vehicle_label: proposed.proposed_vehicle_label,
+        reason: proposed.is_large_group
+          ? "Mezzo capiente condiviso a timeline secondo hybrid_vehicle_binding."
+          : "Riallineamento mezzo fisso/compatibile secondo hybrid_vehicle_binding.",
+      };
+    })
+    .filter((suggestion): suggestion is { driver_name: string | null; from_vehicle_label: string | null; to_vehicle_label: string; reason: string } => Boolean(suggestion));
+
+  const mode: "fixed_vehicle_per_driver" | "shared_vehicles" =
+    availableVehicles.length < hybridDrivers.length ? "shared_vehicles" : "fixed_vehicle_per_driver";
+  const hybridVehicleBinding = {
+    changes_needed: changesNeeded,
+    conflicts_after: hybrid.summary.conflicts_after,
+    overbooking_after: hybrid.summary.overbooking_after,
+    driver_vehicle_eligibility_blockers: hybrid.summary.driver_vehicle_eligibility_blockers,
+    large_vehicle_shared_timeline_ok: hybrid.large_vehicle_usage.filter((usage) => usage.status === "large_vehicle_shared_timeline_ok"),
+    large_vehicle_usage: hybrid.large_vehicle_usage,
+    vehicle_binding_conflicts: vehicleBindingConflicts,
+    vehicle_binding_warnings: vehicleBindingWarnings,
+    vehicle_binding_info: vehicleBindingInfo,
+    standard_vehicle_same_day_conflict: vehicleBindingConflicts.filter((conflict) => conflict.type === "standard_vehicle_same_day_conflict"),
+    large_vehicle_shared_timeline_conflict: vehicleBindingConflicts.filter((conflict) => conflict.type === "large_vehicle_shared_timeline_conflict"),
+    vehicle_capacity_insufficient: vehicleBindingConflicts.filter((conflict) => conflict.type === "vehicle_capacity_insufficient"),
+    driver_vehicle_eligibility_blocker: vehicleBindingConflicts.filter((conflict) => conflict.type === "driver_vehicle_eligibility_blocker"),
+  };
   const driverVehicleEligibility = (args.drivers ?? []).map((driver) => ({
     driver_key: driverDailyBindingKey(driver) ?? "",
     driver_name: driver.driver_name ?? null,
@@ -391,41 +591,13 @@ function buildVehicleDiagnostics(args: {
     set.add(group.driver_name);
     vehicleDrivers.set(group.vehicle_label, set);
   }
-  const groupsByVehicle = new Map<string, RealGiroDiagnosticGroup[]>();
-  for (const group of args.groups) {
-    if (!group.vehicle_label) continue;
-    groupsByVehicle.set(group.vehicle_label, [...(groupsByVehicle.get(group.vehicle_label) ?? []), group]);
-  }
-
-  for (const [vehicleLabel, vehicleGroups] of groupsByVehicle.entries()) {
-    for (let i = 0; i < vehicleGroups.length; i += 1) {
-      for (let j = i + 1; j < vehicleGroups.length; j += 1) {
-        const first = vehicleGroups[i]!;
-        const second = vehicleGroups[j]!;
-        const firstInterval = vehicleGroupInterval(first);
-        const secondInterval = vehicleGroupInterval(second);
-        if (!vehicleIntervalsOverlap(firstInterval, secondInterval, 20)) continue;
-        conflicts.push({
-          vehicle_label: vehicleLabel,
-          first_group_id: first.group_id,
-          second_group_id: second.group_id,
-          first_driver_name: first.driver_name,
-          second_driver_name: second.driver_name,
-          first_interval: firstInterval.label,
-          second_interval: secondInterval.label,
-          message: `Mezzo ${vehicleLabel} assegnato a ${first.driver_name ?? "autista non indicato"} e ${second.driver_name ?? "autista non indicato"} nello stesso intervallo.`,
-        });
-      }
-    }
-  }
-
   return {
     available_vehicles: availableVehicles,
     used_vehicles: usedVehicles,
     unused_vehicles: availableVehicles.length > 0 ? unusedVehicles : [],
     duplicated_vehicles: duplicatedVehicles.filter((label) => availableLabels.size === 0 || availableLabels.has(label)),
     warnings,
-    mode: binding.mode,
+    mode,
     driver_vehicle_bindings: driverVehicleBindings,
     drivers_without_vehicle: driversWithoutVehicle,
     vehicles_assigned_to_multiple_drivers: Array.from(vehicleDrivers.entries())
@@ -433,19 +605,9 @@ function buildVehicleDiagnostics(args: {
       .map(([vehicleLabel, drivers]) => ({ vehicle_label: vehicleLabel, drivers: Array.from(drivers) })),
     driver_vehicle_eligibility: driverVehicleEligibility,
     invalid_driver_vehicle_assignments: invalidDriverVehicleAssignments,
-    daily_binding_conflicts: binding.conflicts.map((conflict) => ({
-      type: conflict.conflict_type,
-      message: conflict.message,
-      vehicle_label: conflict.vehicle_label,
-      driver_name: conflict.driver_name,
-      other_driver_name: conflict.other_driver_name,
-    })),
-    suggestions: binding.suggestions.map((suggestion) => ({
-      driver_name: suggestion.driver_name,
-      from_vehicle_label: suggestion.from_vehicle_label,
-      to_vehicle_label: suggestion.to_vehicle_label,
-      reason: suggestion.reason,
-    })),
+    daily_binding_conflicts: legacyDailyBindingConflicts,
+    suggestions,
+    vehicle_binding: hybridVehicleBinding,
     conflicts,
   };
 }
@@ -465,6 +627,67 @@ function suggestionHashForDiagnostics(input: {
     before_json: preview.before,
     after_json: preview.after,
   });
+}
+
+function collectDecisionServiceIds(value: unknown, ids = new Set<string>()) {
+  if (!value || typeof value !== "object") return ids;
+  if (Array.isArray(value)) {
+    for (const item of value) collectDecisionServiceIds(item, ids);
+    return ids;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.service_id === "string" && record.service_id.length > 0) ids.add(record.service_id);
+  for (const item of Object.values(record)) collectDecisionServiceIds(item, ids);
+  return ids;
+}
+
+function sameStringSet(left: string[], right: string[]) {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
+}
+
+function isSubset(left: string[], right: string[]) {
+  if (left.length === 0) return false;
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
+}
+
+function decisionMatchesSuggestion(args: {
+  decision: RealGiroConfirmedDecision;
+  suggestion: ConflictResolutionSuggestion;
+  hash: string | null;
+}) {
+  const { decision, suggestion, hash } = args;
+  if (decision.status !== "confirmed") return false;
+  if (hash && decision.suggestion_hash === hash) return true;
+  if (decision.action !== suggestion.recommended_action) return false;
+
+  const decisionServiceIds = Array.from(collectDecisionServiceIds({
+    payload_json: decision.payload_json,
+    before_json: decision.before_json,
+    after_json: decision.after_json,
+  })).sort();
+  const suggestionServiceIds = suggestion.involved_services
+    .map((service) => service.service_id)
+    .filter(Boolean)
+    .sort();
+
+  if (suggestionServiceIds.length < 2 || decisionServiceIds.length < 2) return false;
+  return sameStringSet(decisionServiceIds, suggestionServiceIds)
+    || isSubset(suggestionServiceIds, decisionServiceIds);
+}
+
+function findConfirmedDecisionForSuggestion(args: {
+  decisions: RealGiroConfirmedDecision[];
+  suggestion: ConflictResolutionSuggestion;
+  hash: string | null;
+}) {
+  return args.decisions.find((decision) => decisionMatchesSuggestion({
+    decision,
+    suggestion: args.suggestion,
+    hash: args.hash,
+  })) ?? null;
 }
 
 export function buildRealGiroDiagnostics(args: {
@@ -510,14 +733,26 @@ export function buildRealGiroDiagnostics(args: {
       enabledHotelNames: ["hotel terme president"],
       maxDeltaMinutes: 10,
     });
-    const remainingStopIds = new Set(shuttlePairResult.remaining_stops.map((stop) => stop.stop_id));
-    const remainingStops = stops.filter((stop) => remainingStopIds.has(stop.stop_id));
-    const shuttlePairStops = shuttlePairResult.shuttle_pairs.map(shuttlePairToStop);
+    const presidentRemainingStopIds = new Set(shuttlePairResult.remaining_stops.map((stop) => stop.stop_id));
+    const presidentRemainingStops = stops.filter((stop) => presidentRemainingStopIds.has(stop.stop_id));
+    const sanNicolaShuttlePairResult = detectSanNicolaCitaraShuttleCycles(presidentRemainingStops);
+    const remainingStopIds = new Set(sanNicolaShuttlePairResult.remaining_stops.map((stop) => stop.stop_id));
+    const remainingStops = presidentRemainingStops.filter((stop) => remainingStopIds.has(stop.stop_id));
+    const allShuttlePairs = [...shuttlePairResult.shuttle_pairs, ...sanNicolaShuttlePairResult.shuttle_pairs];
+    const shuttlePairStops = allShuttlePairs.map(shuttlePairToStop);
     const diagnosticStops = [...remainingStops, ...shuttlePairStops]
       .sort((a, b) => a.operational_time.localeCompare(b.operational_time));
+    const groupPax = rows.reduce((sum, row) => sum + (Number(row.pax) || 0), 0);
+    const stopMinutes = rows
+      .map((row) => row.operational_time)
+      .filter((value): value is string => Boolean(value))
+      .map((value) => minutes(value))
+      .filter((value) => Number.isFinite(value));
+    const startMin = stopMinutes.length > 0 ? Math.min(...stopMinutes) : null;
+    const endMin = stopMinutes.length > 0 ? Math.max(...stopMinutes) + 30 : null;
     const analysis = analyzeGiro(group.id, null, diagnosticStops);
     const sameStopCount = diagnosticStops.filter((stop) => stop.is_merged).length;
-    const shuttlePairs = shuttlePairResult.shuttle_pairs.map(publicShuttlePair);
+    const shuttlePairs = allShuttlePairs.map(publicShuttlePair);
     const status = groupStatus({
       needsReviewCount: needsReview.length,
       conflictCount: analysis.conflict_count,
@@ -540,6 +775,9 @@ export function buildRealGiroDiagnostics(args: {
       driver_name: driverName,
       vehicle_label: group.vehicle_label ?? null,
       services_count: rows.length,
+      pax: groupPax,
+      start_time: startMin == null ? null : formatMinutes(startMin),
+      end_time: endMin == null ? null : formatMinutes(endMin),
       stops_count: diagnosticStops.length,
       shuttle_pair_count: shuttlePairs.length,
       same_stop_count: sameStopCount,
@@ -559,11 +797,7 @@ export function buildRealGiroDiagnostics(args: {
     return aFirst.localeCompare(bFirst) || String(a.driver_name ?? "").localeCompare(String(b.driver_name ?? ""));
   });
 
-  const confirmedByHash = new Map(
-    (args.operatorDecisions ?? [])
-      .filter((decision) => decision.status === "confirmed")
-      .map((decision) => [decision.suggestion_hash, decision])
-  );
+  const confirmedDecisions = (args.operatorDecisions ?? []).filter((decision) => decision.status === "confirmed");
   const confirmedSuggestionCountsByGroup = new Map<string, number>();
   const totalSuggestionCountsByGroup = new Map<string, number>();
   const baseResolutionSuggestions = generateConflictResolutionSuggestions(groups);
@@ -574,9 +808,14 @@ export function buildRealGiroDiagnostics(args: {
     );
   }
   const resolutionSuggestions = baseResolutionSuggestions.map((suggestion) => {
-    if (!args.tenantId) return suggestion;
-    const hash = suggestionHashForDiagnostics({ tenantId: args.tenantId, date: args.date, suggestion });
-    const decision = confirmedByHash.get(hash);
+    const hash = args.tenantId
+      ? suggestionHashForDiagnostics({ tenantId: args.tenantId, date: args.date, suggestion })
+      : null;
+    const decision = findConfirmedDecisionForSuggestion({
+      decisions: confirmedDecisions,
+      suggestion,
+      hash,
+    });
     if (!decision) return suggestion;
     confirmedSuggestionCountsByGroup.set(
       suggestion.group_id,
@@ -586,8 +825,10 @@ export function buildRealGiroDiagnostics(args: {
       ...suggestion,
       operator_confirmed: true,
       operator_decision_id: decision.id,
+      operator_decision_type: decision.decision_type,
       operator_confirmed_by: decision.confirmed_by,
       operator_confirmed_at: decision.confirmed_at,
+      operator_confirmed_severity: "confirmed_warning" as const,
     };
   });
   const adjustedGroups = groups.map((group) => {
