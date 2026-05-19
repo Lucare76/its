@@ -10,7 +10,8 @@ type AuthorizedPricingRequest = Exclude<Awaited<ReturnType<typeof authorizePrici
 
 const patchSchema = z.object({
   thread_id: z.string().uuid(),
-  action: z.enum(["mark_read", "close", "reopen", "delete"])
+  action: z.enum(["mark_read", "close", "reopen", "delete", "associate"]),
+  booking_id: z.string().uuid().nullable().optional(),
 });
 
 const postSchema = z.object({
@@ -280,6 +281,33 @@ export async function PATCH(request: NextRequest) {
   const parsed = patchSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid payload" }, { status: 400 });
+  }
+
+  if (parsed.data.action === "associate") {
+    const bookingId = parsed.data.booking_id ?? null;
+    let customerId: string | null = null;
+    if (bookingId) {
+      const { data: svc } = await auth.admin
+        .from("services")
+        .select("customer_id")
+        .eq("tenant_id", auth.membership.tenant_id)
+        .eq("id", bookingId)
+        .maybeSingle();
+      customerId = (svc as { customer_id?: string | null } | null)?.customer_id ?? null;
+    }
+    const { error } = await auth.admin
+      .from("whatsapp_threads")
+      .update({
+        booking_id: bookingId,
+        customer_id: customerId,
+        match_status: bookingId ? "matched" : "unmatched",
+        match_suggestions: [],
+        updated_at: new Date().toISOString(),
+      })
+      .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
+      .eq("id", parsed.data.thread_id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true });
   }
 
   if (parsed.data.action === "delete") {

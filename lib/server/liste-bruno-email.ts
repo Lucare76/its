@@ -11,6 +11,7 @@ export type BrunoArrival = {
   time: string;
   vessel: string;
   arrival_at_ischia: string | null;  // orario arrivo traghetto a Ischia (per autisti sull'isola)
+  connection_time?: string | null;   // orario arrivo volo/treno da mostrare a Bruno
   place_type: "station" | "airport";
   meeting_point: string | null;
   phone: string;

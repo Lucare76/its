@@ -42,6 +42,7 @@ export type BrunoArrival = {
   time: string;
   vessel: string;
   arrival_at_ischia: string | null;
+  connection_time: string | null;
   place_type: ContinentPlaceType;
   meeting_point: string | null;
   phone: string;
@@ -132,7 +133,10 @@ type ServiceRow = {
   pax: number;
   time: string;
   direction?: "arrival" | "departure" | null;
+  arrival_time?: string | null;
   departure_time?: string | null;
+  transport_code?: string | null;
+  train_arrival_time?: string | null;
   vessel: string;
   place_type: string | null;
   meeting_point: string | null;
@@ -300,7 +304,11 @@ export function isContinentDispatchCandidate(row: Pick<ServiceRow, "booking_serv
 
 function cleanNotes(raw: string | null): string {
   if (!raw) return "";
-  return raw.includes("[pdf_import]") ? "" : raw;
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.includes("[pdf_import]") && !/^Import operational_v2 riga\s+\d+/i.test(line))
+    .join(" ");
 }
 
 function normalizeHubFromText(value: string | null | undefined): "napoli" | "pozzuoli" | null {
@@ -430,7 +438,9 @@ export function mapContinentDispatchRow(row: ServiceRow & { direction: "arrival"
     direction: row.direction,
     customer_name: row.customer_name,
     pax: row.pax,
-    time: row.direction === "departure" ? row.departure_time ?? row.time : row.time,
+    time: row.direction === "departure"
+      ? row.departure_time ?? row.time
+      : row.arrival_time ?? row.train_arrival_time ?? row.time,
     vessel: row.direction === "departure" ? departureRouting?.vessel ?? row.vessel : row.vessel,
     boat_t: row.direction === "departure" ? departureRouting?.boat_t ?? null : null,
     place_type: placeType,
@@ -441,14 +451,16 @@ export function mapContinentDispatchRow(row: ServiceRow & { direction: "arrival"
     hotel_zone: row.hotels?.zone ?? null,
     booking_service_kind: row.booking_service_kind ?? null,
     service_type_code: row.service_type_code ?? null,
-    connection_time: row.direction === "departure" ? departureRouting?.connection_time ?? null : null,
+    connection_time: row.direction === "departure"
+      ? departureRouting?.connection_time ?? null
+      : row.arrival_time?.slice(0, 5) ?? row.train_arrival_time?.slice(0, 5) ?? null,
     arrival_at_porto: row.direction === "departure" && departureRouting?.boat_t
       ? computeArrivalAtPorto(departureRouting.boat_t, departureRouting.vessel, departureRouting.porto ?? "")
       : null,
     arrival_at_ischia: row.direction === "arrival" ? computeArrivalAtIschia(row.vessel ?? "") : null,
     porto_bruno: row.direction === "departure" ? departureRouting?.porto ?? row.porto_bruno ?? null : row.porto_bruno ?? null,
     continent_hub: continentHub,
-    train_arrival_number: row.train_arrival_number ?? null,
+    train_arrival_number: row.train_arrival_number ?? row.transport_code ?? null,
     train_departure_number: row.train_departure_number ?? null,
     suggested_target: suggestedTarget,
     effective_target: effectiveTarget,
@@ -566,9 +578,10 @@ export function toBrunoArrival(service: ContinentDispatchService): BrunoArrival 
     id: service.id,
     customer_name: service.customer_name,
     pax: service.pax,
-    time: service.time,
+    time: service.connection_time ?? service.time,
     vessel: service.vessel,
     arrival_at_ischia: service.arrival_at_ischia,
+    connection_time: service.connection_time,
     place_type: service.place_type,
     meeting_point: service.meeting_point,
     phone: service.phone,
@@ -608,7 +621,10 @@ export async function loadContinentDispatchServices(auth: PricingAuthContext, da
     "customer_name",
     "pax",
     "time",
+    "arrival_time",
     "departure_time",
+    "transport_code",
+    "train_arrival_time",
     "vessel",
     "place_type",
     "meeting_point",
