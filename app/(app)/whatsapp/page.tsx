@@ -958,17 +958,6 @@ export default function WhatsAppInboxPage() {
           <p className="mt-0.5 text-sm text-slate-500">Risposte clienti ricevute da WhatsApp Business Platform.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-0">
-            <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
-              <IconSearch />
-            </span>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="input-saas w-full pl-9 sm:w-56"
-              placeholder="Cerca nome, telefono, hotel…"
-            />
-          </div>
           <button
             type="button"
             onClick={() => {
@@ -1016,8 +1005,19 @@ export default function WhatsAppInboxPage() {
         </div>
       </div>
 
-      {/* ── Filter tabs ── */}
-      <div className="flex flex-wrap gap-1.5">
+      {/* ── Filter tabs + search ── */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative">
+          <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
+            <IconSearch />
+          </span>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="input-saas w-48 pl-9 sm:w-56"
+            placeholder="Cerca nome, telefono…"
+          />
+        </div>
         {filters.map((item) => {
           const active = filter === item.value;
           return (
