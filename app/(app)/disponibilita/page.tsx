@@ -7,7 +7,7 @@ import { DateInput } from "@/components/ui/date-input";
 // ─── Tipi ─────────────────────────────────────────────────────────────────────
 
 type Driver = { id: string; user_id: string | null; full_name: string; max_vehicle_capacity: number | null; has_access: boolean; access_suspended: boolean };
-type Vehicle = { id: string; label: string; capacity: number | null; vehicle_size: string | null };
+type Vehicle = { id: string; label: string; plate: string | null; capacity: number | null; vehicle_size: string | null };
 type DriverAvail = { driver_profile_id: string; driver_user_id: string | null; available: boolean; available_from: string | null; available_to: string | null; notes: string | null };
 type VehicleAvail = { vehicle_id: string; available: boolean; notes: string | null };
 type TimeBlock = { id: string; vehicle_id: string; block_from: string; block_to: string; reason: string; reason_notes: string | null };
@@ -346,7 +346,12 @@ export default function DisponibilitaPage() {
                       <span className={`block w-4 h-4 rounded-full bg-white shadow mx-1 transition-transform ${isAvailable ? "translate-x-4" : ""}`} />
                     </button>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-slate-800">{vehicle.label}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-800">{vehicle.label}</p>
+                        {vehicle.plate && (
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-500">{vehicle.plate}</span>
+                        )}
+                      </div>
                       {vehicle.capacity ? <p className="text-xs text-slate-500">{vehicle.capacity} posti</p> : null}
                       {commitment ? (
                         <p className="mt-1 text-xs font-semibold text-rose-700">

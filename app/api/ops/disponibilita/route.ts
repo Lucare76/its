@@ -69,7 +69,7 @@ export async function GET(req: NextRequest) {
       await Promise.all([
         listDriverRegistry(auth.admin, tenantId),
         auth.admin.from("vehicles")
-          .select("id, label, capacity, vehicle_size")
+          .select("id, label, plate, capacity, vehicle_size")
           .eq("tenant_id", tenantId)
           .eq("active", true)
           .order("capacity", { ascending: false }),
