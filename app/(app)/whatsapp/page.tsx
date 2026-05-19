@@ -957,15 +957,15 @@ export default function WhatsAppInboxPage() {
           <h1 className="text-xl font-bold text-slate-900">Inbox WhatsApp</h1>
           <p className="mt-0.5 text-sm text-slate-500">Risposte clienti ricevute da WhatsApp Business Platform.</p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <div className="relative">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-0">
             <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
               <IconSearch />
             </span>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="input-saas w-full pl-9 sm:w-72"
+              className="input-saas w-full pl-9 sm:w-56"
               placeholder="Cerca nome, telefono, hotel…"
             />
           </div>
