@@ -7,6 +7,7 @@
  * NON scrive DB.
  */
 import { NextRequest, NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { listDriverRegistry, type DriverRegistryEntry } from "@/lib/server/driver-registry";
 import { loadConfirmedOperatorDecisions } from "@/lib/server/piano-operator-decisions";
@@ -483,7 +484,7 @@ function diagnostics(args: {
 
 // Resilient service loading: removes unknown columns until query succeeds
 async function loadServices(
-  admin: ReturnType<typeof import("@supabase/supabase-js").createClient>,
+  admin: SupabaseClient,
   tenantId: string,
   ids: string[],
 ): Promise<ServiceRow[]> {
