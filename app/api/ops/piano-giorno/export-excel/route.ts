@@ -53,7 +53,6 @@ function styleDataRow(row: ExcelJS.Row, even: boolean) {
     cell.alignment = { vertical: "middle", wrapText: true };
     cell.border = { bottom: { style: "hair", color: { argb: "FFE2E8F0" } } };
   });
-  row.height = 18;
 }
 
 function setColWidths(ws: ExcelJS.Worksheet, widths: number[]) {

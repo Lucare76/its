@@ -741,7 +741,7 @@ export default function WhatsAppInboxPage() {
               icon: "/favicon.ico",
               tag: `wa-thread-${thread.id}`,
               renotify: true,
-            });
+            } as unknown as NotificationOptions);
           }
         }
         prevMsgMap.set(thread.id, currentLastAt);

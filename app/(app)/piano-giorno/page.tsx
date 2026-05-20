@@ -317,6 +317,45 @@ type ApplyVehicleBindingResponse = {
   error?: string;
   audit_saved?: boolean;
 };
+type GlobalPlannerPreviewUnit = {
+  unit_id: string;
+  orario: string;
+  tipo_operativo: string;
+  pax: number;
+  pickup: string | null;
+  destinazione: string;
+  autista_proposto: string | null;
+  mezzo_proposto: string | null;
+  motivo: string | null;
+  assigned: boolean;
+  needs_review: boolean;
+  duration_source: "route_duration_config" | "fallback";
+  warnings: string[];
+};
+type GlobalPlannerPreviewResponse = {
+  date: string;
+  summary: {
+    total_units: number;
+    assigned_units: number;
+    needs_review: number;
+    total_conflicts: number;
+    driver_conflicts: number;
+    vehicle_conflicts: number;
+    eligibility_blockers: number;
+    availability_blockers: number;
+    overbooking: number;
+  };
+  units: GlobalPlannerPreviewUnit[];
+  changes_vs_current: Array<{
+    giro: string;
+    da_autista: string | null;
+    a_autista: string | null;
+    da_mezzo: string | null;
+    a_mezzo: string | null;
+    motivo: string | null;
+  }>;
+  operator_required?: Array<{ unit_id: string; reason: string }>;
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1833,6 +1872,10 @@ export default function PianoGiornoPage() {
   const [impDelayMinutes, setImpDelayMinutes] = useState("");
   const [impSaving, setImpSaving] = useState(false);
   const [impResult, setImpResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [gppOpen, setGppOpen] = useState(false);
+  const [gppLoading, setGppLoading] = useState(false);
+  const [gppData, setGppData] = useState<GlobalPlannerPreviewResponse | null>(null);
+  const [gppError, setGppError] = useState<string | null>(null);
   const conflictSuggestions = groupDiagnostics?.resolution_suggestions ?? [];
   const operatorRequiredDecisions = groupDiagnostics?.operator_required_decisions ?? [];
   const vehicleBindingChanges = vehicleBindingPreview?.changes ?? [];
@@ -2081,6 +2124,27 @@ export default function PianoGiornoPage() {
       setAiPlanError("Errore di rete durante l'analisi AI.");
     } finally {
       setAiPlanning(false);
+    }
+  }, [token, date]);
+
+  const loadGlobalPlannerPreview = useCallback(async () => {
+    if (!token) return;
+    setGppLoading(true);
+    setGppError(null);
+    try {
+      const res = await fetch(`/api/ops/piano-giorno/global-planner-preview?date=${date}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json() as GlobalPlannerPreviewResponse & { error?: string };
+      if (!res.ok || json.error) {
+        setGppError(json.error ?? `Errore ${res.status}`);
+      } else {
+        setGppData(json);
+      }
+    } catch {
+      setGppError("Errore di rete.");
+    } finally {
+      setGppLoading(false);
     }
   }, [token, date]);
 
@@ -2518,6 +2582,9 @@ export default function PianoGiornoPage() {
     setVehicleBindingError(null);
     setVehicleBindingConfirmOpen(false);
     setVehicleBindingApplyResult(null);
+    setGppData(null);
+    setGppError(null);
+    setGppOpen(false);
   }, []);
 
   return (
@@ -3149,17 +3216,18 @@ export default function PianoGiornoPage() {
             </button>
             {(() => {
               const missingDriver = tripRows.filter(t => (!t.group.driver_user_id && !t.group.driver_profile_id) || !t.group.vehicle_label);
-              const canExport = unassignedServices.length === 0 && missingDriver.length === 0 && (data?.trip_groups.length ?? 0) > 0;
-              const blockerDetail = unassignedServices.length > 0
+              const hasData = (data?.trip_groups.length ?? 0) > 0 && !!token;
+              const warningDetail = unassignedServices.length > 0
                 ? `${unassignedServices.length} servizi senza giro`
                 : missingDriver.length > 0
                   ? `${missingDriver.length} giri senza autista/mezzo`
                   : "";
               return (
-                <a
-                  href={canExport ? `/api/ops/piano-giorno/export-excel?date=${date}&token=${token ?? ""}` : undefined}
-                  onClick={e => {
-                    if (!canExport || !token) { e.preventDefault(); return; }
+                <button
+                  type="button"
+                  disabled={!hasData}
+                  onClick={() => {
+                    if (!token) return;
                     const url = `/api/ops/piano-giorno/export-excel?date=${date}`;
                     void fetch(url, { headers: { Authorization: `Bearer ${token}` } })
                       .then(r => r.blob())
@@ -3169,14 +3237,13 @@ export default function PianoGiornoPage() {
                         a.download = `piano-giorno-${date.replace(/-/g, "")}.xlsx`;
                         a.click();
                       });
-                    e.preventDefault();
                   }}
-                  title={canExport ? "Scarica Excel completo del giorno" : `Non disponibile: ${blockerDetail}`}
-                  className={`btn-secondary text-xs ${canExport ? "cursor-pointer" : "opacity-40 cursor-not-allowed pointer-events-auto"}`}
+                  title={hasData ? "Scarica piano del giorno in formato Excel (.xlsx)" : "Nessun dato disponibile"}
+                  className="btn-secondary text-xs disabled:opacity-40"
                 >
-                  📥 Genera file del giorno
-                  {!canExport && blockerDetail ? <span className="ml-1 text-amber-600">({blockerDetail})</span> : null}
-                </a>
+                  📥 Esporta Excel
+                  {warningDetail ? <span className="ml-1 text-amber-600">({warningDetail})</span> : null}
+                </button>
               );
             })()}
           </div>
@@ -3299,6 +3366,201 @@ export default function PianoGiornoPage() {
             Preview riallineamento mezzi non disponibile: {vehicleBindingError}
           </div>
         )}
+
+        {/* ── Preview piano globale ── */}
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+            onClick={() => {
+              const next = !gppOpen;
+              setGppOpen(next);
+              if (next && !gppData && !gppLoading) void loadGlobalPlannerPreview();
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Preview piano globale</span>
+              {gppData && (
+                <span className={`rounded px-2 py-0.5 text-xs font-bold ${
+                  (gppData.summary.total_conflicts + gppData.summary.eligibility_blockers + gppData.summary.availability_blockers) === 0
+                    ? "bg-green-50 text-green-700"
+                    : gppData.summary.eligibility_blockers > 0 || gppData.summary.availability_blockers > 0
+                      ? "bg-red-50 text-red-700"
+                      : "bg-yellow-50 text-yellow-700"
+                }`}>
+                  {(gppData.summary.total_conflicts + gppData.summary.eligibility_blockers + gppData.summary.availability_blockers) === 0
+                    ? "Piano chiudibile"
+                    : gppData.summary.eligibility_blockers > 0 || gppData.summary.availability_blockers > 0
+                      ? "Blockers presenti"
+                      : "Attenzione"}
+                </span>
+              )}
+            </div>
+            <span className="text-slate-400">{gppOpen ? "▲" : "▼"}</span>
+          </button>
+
+          {gppOpen && (
+            <div className="border-t border-slate-100 px-4 py-4 space-y-4">
+              {gppLoading && (
+                <p className="text-sm text-slate-500">Caricamento preview…</p>
+              )}
+              {gppError && (
+                <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {gppError}
+                  <button
+                    type="button"
+                    className="ml-3 underline text-red-600 text-xs"
+                    onClick={() => void loadGlobalPlannerPreview()}
+                  >
+                    Riprova
+                  </button>
+                </div>
+              )}
+              {gppData && (
+                <>
+                  {/* 1 — Summary bar */}
+                  <div className="flex flex-wrap gap-4 text-sm">
+                    <span className="font-medium text-slate-700">
+                      Unità: <span className="font-bold">{gppData.summary.assigned_units}/{gppData.summary.total_units}</span>
+                    </span>
+                    <span className={`font-medium ${gppData.summary.total_conflicts > 0 ? "text-red-600" : "text-slate-500"}`}>
+                      Conflitti: <span className="font-bold">{gppData.summary.total_conflicts}</span>
+                    </span>
+                    <span className={`font-medium ${gppData.summary.needs_review > 0 ? "text-yellow-600" : "text-slate-500"}`}>
+                      Da revisionare: <span className="font-bold">{gppData.summary.needs_review}</span>
+                    </span>
+                    <span className={`font-medium ${(gppData.summary.eligibility_blockers + gppData.summary.availability_blockers) > 0 ? "text-red-600" : "text-slate-500"}`}>
+                      Blockers: <span className="font-bold">{gppData.summary.eligibility_blockers + gppData.summary.availability_blockers}</span>
+                    </span>
+                    {gppData.summary.overbooking > 0 && (
+                      <span className="font-medium text-red-600">
+                        Overbooking: <span className="font-bold">{gppData.summary.overbooking}</span>
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 2 — Duration warnings note */}
+                  {gppData.units.some((u) => u.duration_source === "fallback") && (
+                    <div className="rounded border border-yellow-200 bg-yellow-50 px-3 py-2 text-xs text-yellow-800">
+                      <span className="font-semibold">Durate stimate:</span>{" "}
+                      {gppData.units.filter((u) => u.duration_source === "fallback").length} unità usano durata di default (nessuna route-duration config). Le stime possono differire dalla realtà.
+                    </div>
+                  )}
+
+                  {/* 3 — Changes vs current */}
+                  {gppData.changes_vs_current.length > 0 && (
+                    <div>
+                      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Cambi rispetto al piano attuale</p>
+                      <div className="overflow-hidden rounded-lg border border-slate-200">
+                        <table className="min-w-full divide-y divide-slate-200 text-sm">
+                          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                            <tr>
+                              <th className="px-3 py-2 text-left">Giro</th>
+                              <th className="px-3 py-2 text-left">Autista attuale → proposto</th>
+                              <th className="px-3 py-2 text-left">Mezzo attuale → proposto</th>
+                              <th className="px-3 py-2 text-left">Motivo</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {gppData.changes_vs_current.map((c, i) => (
+                              <tr key={i}>
+                                <td className="px-3 py-2 font-mono text-xs">{c.giro}</td>
+                                <td className="px-3 py-2 text-xs">
+                                  <span className="text-slate-400">{c.da_autista ?? "—"}</span>
+                                  {" → "}
+                                  <span className="font-medium text-slate-700">{c.a_autista ?? "—"}</span>
+                                </td>
+                                <td className="px-3 py-2 text-xs">
+                                  <span className="text-slate-400">{c.da_mezzo ?? "—"}</span>
+                                  {" → "}
+                                  <span className="font-medium text-slate-700">{c.a_mezzo ?? "—"}</span>
+                                </td>
+                                <td className="px-3 py-2 text-xs text-slate-500">{c.motivo ?? "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                  {gppData.changes_vs_current.length === 0 && (
+                    <p className="text-sm text-slate-500">Nessun cambio rispetto al piano attuale.</p>
+                  )}
+
+                  {/* 4 — Units needing review */}
+                  {gppData.units.filter((u) => u.needs_review || u.warnings.length > 0).length > 0 && (
+                    <div>
+                      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Unità da revisionare</p>
+                      <div className="space-y-1">
+                        {gppData.units.filter((u) => u.needs_review || u.warnings.length > 0).map((u) => (
+                          <div key={u.unit_id} className="rounded border border-yellow-200 bg-yellow-50 px-3 py-2 text-xs">
+                            <span className="font-mono font-semibold text-slate-700">{u.orario}</span>
+                            {" — "}
+                            <span className="text-slate-600">{u.tipo_operativo}</span>
+                            {" · "}
+                            <span className="text-slate-500">{u.destinazione}</span>
+                            {u.warnings.length > 0 && (
+                              <ul className="mt-1 list-inside list-disc text-yellow-700">
+                                {u.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                              </ul>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 5 — Navette/cicli */}
+                  {gppData.units.filter((u) => ["navetta", "shuttle", "ciclo"].some((t) => u.tipo_operativo.toLowerCase().includes(t))).length > 0 && (
+                    <div>
+                      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Navette / cicli riconosciuti</p>
+                      <div className="overflow-hidden rounded-lg border border-slate-200">
+                        <table className="min-w-full divide-y divide-slate-200 text-sm">
+                          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                            <tr>
+                              <th className="px-3 py-2 text-left">Orario</th>
+                              <th className="px-3 py-2 text-left">Tipo</th>
+                              <th className="px-3 py-2 text-left">Pax</th>
+                              <th className="px-3 py-2 text-left">Autista proposto</th>
+                              <th className="px-3 py-2 text-left">Mezzo</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {gppData.units
+                              .filter((u) => ["navetta", "shuttle", "ciclo"].some((t) => u.tipo_operativo.toLowerCase().includes(t)))
+                              .map((u) => (
+                                <tr key={u.unit_id}>
+                                  <td className="px-3 py-2 font-mono text-xs">{u.orario}</td>
+                                  <td className="px-3 py-2 text-xs">{u.tipo_operativo}</td>
+                                  <td className="px-3 py-2 text-xs">{u.pax}</td>
+                                  <td className="px-3 py-2 text-xs">{u.autista_proposto ?? <span className="text-slate-400">—</span>}</td>
+                                  <td className="px-3 py-2 text-xs">{u.mezzo_proposto ?? <span className="text-slate-400">—</span>}</td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 6 — Operator required blockers */}
+                  {(gppData.operator_required?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-red-600">Decisioni operatore richieste</p>
+                      <div className="space-y-1">
+                        {gppData.operator_required!.map((b, i) => (
+                          <div key={i} className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                            <span className="font-mono font-semibold">{b.unit_id}</span>: {b.reason}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
 
         {showVehicleBindingPanel && (
           <div className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm">

@@ -20,6 +20,9 @@ export interface ResolvedServiceForSameStop {
   port_arrival?: string | null;
   booking_service_kind?: string | null;
   service_type_code?: string | null;
+  route_kind?: string | null;
+  origin_place_id?: string | null;
+  destination_place_id?: string | null;
 }
 
 export interface MergedStop {
