@@ -368,63 +368,66 @@ export default function ScadenzePage() {
     return null;
   }, []);
 
-  useEffect(() => { // eslint-disable-line react-hooks/set-state-in-effect
+  useEffect(() => {
     if (!panel || !showForm) return;
-    const panelVehicle = items.find((item) => item.vehicle_id === panel.vehicleId) ?? null;
-    const currentRecord = getCurrentRecordForTab(panelTab, panelRecords);
+    const timeout = window.setTimeout(() => {
+      const panelVehicle = items.find((item) => item.vehicle_id === panel.vehicleId) ?? null;
+      const currentRecord = getCurrentRecordForTab(panelTab, panelRecords);
 
-    if (panelTab === "road_tax") {
-      if (panelVehicle?.road_tax?.expiry_date) {
-        setRoadTaxForm({ expiry_date: panelVehicle.road_tax.expiry_date, notes: "" });
-        setFormMode("update");
-      } else {
-        setRoadTaxForm({ expiry_date: "", notes: "" });
-        setFormMode("insert");
+      if (panelTab === "road_tax") {
+        if (panelVehicle?.road_tax?.expiry_date) {
+          setRoadTaxForm({ expiry_date: panelVehicle.road_tax.expiry_date, notes: "" });
+          setFormMode("update");
+        } else {
+          setRoadTaxForm({ expiry_date: "", notes: "" });
+          setFormMode("insert");
+        }
+        return;
       }
-      return;
-    }
 
-    if (!currentRecord) {
-      resetForms();
-      setFormMode("insert");
-      return;
-    }
+      if (!currentRecord) {
+        resetForms();
+        setFormMode("insert");
+        return;
+      }
 
-    if (panelTab === "insurance") {
-      setInsuranceForm({
-        company: String(currentRecord.company ?? ""),
-        policy_number: String(currentRecord.policy_number ?? ""),
-        expiry_date: String(currentRecord.expiry_date ?? ""),
-        annual_amount_cents: currentRecord.annual_amount_cents != null ? String(Number(currentRecord.annual_amount_cents) / 100) : "",
-        notes: String(currentRecord.notes ?? ""),
-      });
-    } else if (panelTab === "inspection") {
-      setInspectionForm({
-        inspection_date: String(currentRecord.inspection_date ?? new Date().toISOString().slice(0, 10)),
-        expiry_date: String(currentRecord.expiry_date ?? ""),
-        inspection_center: String(currentRecord.inspection_center ?? ""),
-        outcome: (currentRecord.outcome as "passed" | "failed" | "pending" | undefined) ?? "passed",
-        outcome_notes: String(currentRecord.outcome_notes ?? ""),
-        notes: String(currentRecord.notes ?? ""),
-      });
-    } else if (panelTab === "extinguisher") {
-      setExtinguisherForm({
-        serial_number: String(currentRecord.serial_number ?? ""),
-        last_revision_date: String(currentRecord.last_revision_date ?? ""),
-        expiry_date: String(currentRecord.expiry_date ?? ""),
-        notes: String(currentRecord.notes ?? ""),
-      });
-    } else if (panelTab === "tachograph") {
-      setTachographForm({
-        calibration_date: String(currentRecord.calibration_date ?? new Date().toISOString().slice(0, 10)),
-        expiry_date: String(currentRecord.expiry_date ?? ""),
-        center: String(currentRecord.center ?? ""),
-        certificate_number: String(currentRecord.certificate_number ?? ""),
-        notes: String(currentRecord.notes ?? ""),
-      });
-    }
+      if (panelTab === "insurance") {
+        setInsuranceForm({
+          company: String(currentRecord.company ?? ""),
+          policy_number: String(currentRecord.policy_number ?? ""),
+          expiry_date: String(currentRecord.expiry_date ?? ""),
+          annual_amount_cents: currentRecord.annual_amount_cents != null ? String(Number(currentRecord.annual_amount_cents) / 100) : "",
+          notes: String(currentRecord.notes ?? ""),
+        });
+      } else if (panelTab === "inspection") {
+        setInspectionForm({
+          inspection_date: String(currentRecord.inspection_date ?? new Date().toISOString().slice(0, 10)),
+          expiry_date: String(currentRecord.expiry_date ?? ""),
+          inspection_center: String(currentRecord.inspection_center ?? ""),
+          outcome: (currentRecord.outcome as "passed" | "failed" | "pending" | undefined) ?? "passed",
+          outcome_notes: String(currentRecord.outcome_notes ?? ""),
+          notes: String(currentRecord.notes ?? ""),
+        });
+      } else if (panelTab === "extinguisher") {
+        setExtinguisherForm({
+          serial_number: String(currentRecord.serial_number ?? ""),
+          last_revision_date: String(currentRecord.last_revision_date ?? ""),
+          expiry_date: String(currentRecord.expiry_date ?? ""),
+          notes: String(currentRecord.notes ?? ""),
+        });
+      } else if (panelTab === "tachograph") {
+        setTachographForm({
+          calibration_date: String(currentRecord.calibration_date ?? new Date().toISOString().slice(0, 10)),
+          expiry_date: String(currentRecord.expiry_date ?? ""),
+          center: String(currentRecord.center ?? ""),
+          certificate_number: String(currentRecord.certificate_number ?? ""),
+          notes: String(currentRecord.notes ?? ""),
+        });
+      }
 
-    setFormMode("update");
+      setFormMode("update");
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [getCurrentRecordForTab, items, panel, panelRecords, panelTab, resetForms, showForm]);
 
   const handleOverride = useCallback(async (clear?: boolean) => {

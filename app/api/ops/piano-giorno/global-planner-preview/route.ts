@@ -484,7 +484,7 @@ function diagnostics(args: {
 
 // Resilient service loading: removes unknown columns until query succeeds
 async function loadServices(
-  admin: SupabaseClient,
+  admin: SupabaseClient<any, "public", "public", any, any>,
   tenantId: string,
   ids: string[],
 ): Promise<ServiceRow[]> {
@@ -504,7 +504,7 @@ async function loadServices(
       .select(columns.join(","))
       .eq("tenant_id", tenantId)
       .in("id", ids);
-    if (!result.error) return (result.data ?? []) as ServiceRow[];
+    if (!result.error) return (result.data ?? []) as unknown as ServiceRow[];
     const message = result.error.message;
     const missing =
       message.match(/Could not find the '([^']+)' column/)?.[1] ??

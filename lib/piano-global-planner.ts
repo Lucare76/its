@@ -236,7 +236,7 @@ function tryLocalBacktrack<TUnit extends GlobalPlannerUnit>(
           assigned: true,
           reason: "spostato da backtracking locale per liberare unita piu vincolante",
           blocker: null,
-        });
+        } as GlobalPlannerAssignment<TUnit>);
       }
       if (!ok) continue;
       const candidatePlan = [...remaining, ...moved];

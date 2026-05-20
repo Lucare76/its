@@ -776,10 +776,11 @@ export default function WhatsAppInboxPage() {
 
   useEffect(() => {
     if (typeof Notification === "undefined") return;
-    setNotifPermission(Notification.permission);
+    const timeout = window.setTimeout(() => setNotifPermission(Notification.permission), 0);
     if (Notification.permission === "default") {
       void Notification.requestPermission().then((perm) => setNotifPermission(perm));
     }
+    return () => window.clearTimeout(timeout);
   }, []);
 
   useEffect(() => {
@@ -1722,7 +1723,7 @@ export default function WhatsAppInboxPage() {
                           <svg className="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm3.857-9.809a.75.75 0 0 0-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 1 0-1.06 1.061l2.5 2.5a.75.75 0 0 0 1.137-.089l4-5.5Z" clipRule="evenodd" />
                           </svg>
-                          Nessuna variabile richiesta — pronto per l'invio.
+                          Nessuna variabile richiesta — pronto per l&apos;invio.
                         </div>
                       ) : null}
                     </div>

@@ -12,6 +12,18 @@ import { buildVehicleBindingPreview } from "@/lib/server/piano-vehicle-binding-p
 import { insertOperatorDecision, loadConfirmedOperatorDecisions, type PianoOperatorDecisionRow } from "@/lib/server/piano-operator-decisions";
 import type { PricingAuthContext } from "@/lib/server/pricing-auth";
 
+type TenantOption = {
+  id: string | null;
+  name: string | null;
+};
+
+type OperatorOption = {
+  user_id: string | null;
+  role: string | null;
+  full_name: string | null;
+  suspended: boolean | null;
+};
+
 function loadEnv() {
   for (const file of [".env.local", ".env"]) {
     try {
@@ -37,9 +49,10 @@ function norm(value: unknown) {
 async function resolveTenant(admin: ReturnType<typeof createClient>) {
   const { data, error } = await admin.from("tenants").select("id,name").limit(50);
   if (error) throw error;
-  const tenant = (data ?? []).find((row) => norm(row.name).includes("ISCHIA TRANSFER")) ?? data?.[0];
+  const tenants = (data ?? []) as TenantOption[];
+  const tenant = tenants.find((row) => norm(row.name).includes("ISCHIA TRANSFER")) ?? tenants[0];
   if (!tenant?.id) throw new Error("Tenant non trovato.");
-  return { id: tenant.id as string, name: tenant.name as string | null };
+  return { id: tenant.id, name: tenant.name };
 }
 
 async function resolveOperator(admin: ReturnType<typeof createClient>, tenantId: string) {
@@ -50,9 +63,10 @@ async function resolveOperator(admin: ReturnType<typeof createClient>, tenantId:
     .in("role", ["admin", "operator", "supervisor"])
     .order("role");
   if (error) throw error;
-  const operator = (data ?? []).find((row) => row.suspended !== true && row.user_id);
+  const operators = (data ?? []) as OperatorOption[];
+  const operator = operators.find((row) => row.suspended !== true && row.user_id);
   if (!operator?.user_id) throw new Error("Nessun admin/operator/supervisor disponibile per audit.");
-  return { id: operator.user_id as string, role: operator.role as string, full_name: operator.full_name as string | null };
+  return { id: operator.user_id, role: operator.role ?? "operator", full_name: operator.full_name };
 }
 
 async function snapshotProtected(admin: ReturnType<typeof createClient>, tenantId: string) {
