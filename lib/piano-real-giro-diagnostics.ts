@@ -11,6 +11,8 @@ import { buildSuggestionHash, type PianoOperatorDecisionRow } from "@/lib/server
 import { driverDailyBindingKey, type VehicleDailyBindingDriver } from "@/lib/piano-vehicle-daily-binding";
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import { buildHybridVehicleBinding, type HybridVehicleBindingConflict, type HybridVehicleBindingLargeUsage } from "@/lib/piano-hybrid-vehicle-binding";
+import { detectExcursionRoundtripClusters, type ExcursionRoundtripCluster } from "@/lib/piano-excursion-roundtrip-cluster";
+import { canDriverCoverInterval, type DriverAvailabilityWindow } from "@/lib/piano-driver-availability";
 import type {
   AutoAssignPreviewAssignment,
   AutoAssignPreviewHotel,
@@ -31,6 +33,27 @@ export type RealGiroDiagnosticTripGroup = AutoAssignPreviewTripGroup & {
   driver_profile_id?: string | null;
   vehicle_label?: string | null;
   vehicle_capacity?: number | null;
+};
+
+export type RealGiroDiagnosticDriver = VehicleDailyBindingDriver & {
+  max_vehicle_capacity?: number | null;
+  availability?: DriverAvailabilityWindow | null;
+};
+
+export type RealGiroOperatorDecision = {
+  id: string;
+  type: "driver_vehicle_eligibility_blocker" | "vehicle_not_drivable_warning";
+  severity: "blocker" | "warning";
+  title: string;
+  message: string;
+  group_ids: string[];
+  driver_name: string | null;
+  vehicle_label: string | null;
+  pax: number;
+  reasons: string[];
+  suggested_actions: string[];
+  required_vehicle_capacity?: { min: number; max: number } | null;
+  compatible_available_vehicles?: Array<{ label: string; capacity: number | null }>;
 };
 
 export type RealGiroDiagnosticGroup = {
@@ -83,6 +106,8 @@ export type RealGiroDiagnosticsResult = {
     vehicle_conflict_count: number;
   };
   groups: RealGiroDiagnosticGroup[];
+  excursion_roundtrip_clusters: ExcursionRoundtripCluster[];
+  operator_required_decisions: RealGiroOperatorDecision[];
   vehicle_diagnostics: {
     available_vehicles: Array<{ id: string | null; label: string; capacity: number | null }>;
     used_vehicles: string[];
@@ -102,6 +127,7 @@ export type RealGiroDiagnosticsResult = {
       conflicts_after: number;
       overbooking_after: number;
       driver_vehicle_eligibility_blockers: number;
+      driver_availability_blockers: number;
       large_vehicle_shared_timeline_ok: HybridVehicleBindingLargeUsage[];
       large_vehicle_usage: HybridVehicleBindingLargeUsage[];
       vehicle_binding_conflicts: HybridVehicleBindingConflict[];
@@ -410,7 +436,7 @@ function vehicleGroupInterval(group: RealGiroDiagnosticGroup) {
 function buildVehicleDiagnostics(args: {
   groups: RealGiroDiagnosticGroup[];
   vehicles?: Array<{ id?: string | null; label?: string | null; capacity?: number | null }>;
-  drivers?: Array<VehicleDailyBindingDriver & { max_vehicle_capacity?: number | null }>;
+  drivers?: RealGiroDiagnosticDriver[];
 }) {
   const availableVehicles = (args.vehicles ?? [])
     .map((vehicle) => ({
@@ -449,6 +475,7 @@ function buildVehicleDiagnostics(args: {
             driver_key: driverKey,
             driver_name: driver.driver_name ?? null,
             max_vehicle_capacity: driver.max_vehicle_capacity ?? null,
+            ...(driver.availability ? { availability: driver.availability } : {}),
           }
         : null;
     })
@@ -543,6 +570,7 @@ function buildVehicleDiagnostics(args: {
     conflicts_after: hybrid.summary.conflicts_after,
     overbooking_after: hybrid.summary.overbooking_after,
     driver_vehicle_eligibility_blockers: hybrid.summary.driver_vehicle_eligibility_blockers,
+    driver_availability_blockers: hybrid.summary.driver_availability_blockers,
     large_vehicle_shared_timeline_ok: hybrid.large_vehicle_usage.filter((usage) => usage.status === "large_vehicle_shared_timeline_ok"),
     large_vehicle_usage: hybrid.large_vehicle_usage,
     vehicle_binding_conflicts: vehicleBindingConflicts,
@@ -610,6 +638,173 @@ function buildVehicleDiagnostics(args: {
     vehicle_binding: hybridVehicleBinding,
     conflicts,
   };
+}
+
+function groupContainsText(group: RealGiroDiagnosticGroup, text: string) {
+  const normalized = normalizeText(text);
+  return group.stops.some((stop) =>
+    stop.services.some((service) => normalizeText(service.customer_name).includes(normalized))
+  );
+}
+
+function groupServiceIds(group: RealGiroDiagnosticGroup) {
+  return group.stops.flatMap((stop) => stop.services.map((service) => service.service_id));
+}
+
+function groupOverlapsInterval(group: RealGiroDiagnosticGroup, startTime: string, endTime: string) {
+  const interval = vehicleGroupInterval(group);
+  const start = minutes(startTime);
+  const end = minutes(endTime);
+  return start < interval.end_min && interval.start_min < end;
+}
+
+function driverForGroup(group: RealGiroDiagnosticGroup, drivers: RealGiroDiagnosticDriver[]) {
+  return drivers.find((driver) => driverDailyBindingKey(driver) === group.driver_key) ?? null;
+}
+
+function vehicleForGroup(
+  group: RealGiroDiagnosticGroup,
+  vehicles: Array<{ id: string | null; label: string; capacity: number | null }>
+) {
+  return vehicles.find((vehicle) => normalizeText(vehicle.label) === normalizeText(group.vehicle_label)) ?? null;
+}
+
+function clusterRelocationCandidates(args: {
+  cluster: ExcursionRoundtripCluster;
+  groups: RealGiroDiagnosticGroup[];
+  drivers: RealGiroDiagnosticDriver[];
+  vehicles: Array<{ id: string | null; label: string; capacity: number | null }>;
+}) {
+  const clusterIds = new Set(args.cluster.service_ids);
+  const outboundStart = args.cluster.outbound_services[0]?.operational_time ?? "14:30";
+  const outboundEnd = "15:20";
+  const returnStart = args.cluster.return_services[0]?.operational_time ?? "17:15";
+  const returnEnd = "17:45";
+  const compatibleVehicles = args.vehicles.filter((vehicle) => (vehicle.capacity ?? 0) >= args.cluster.total_pax);
+
+  return args.drivers.map((driver) => {
+    const driverKey = driverDailyBindingKey(driver);
+    const timeline = args.groups.filter((group) => group.driver_key === driverKey);
+    const coversOutbound = canDriverCoverInterval(driver.availability, {
+      start_time: outboundStart,
+      end_time: outboundEnd,
+    }, { missingAvailability: "blocker", missingBounds: "blocker" });
+    const coversReturn = canDriverCoverInterval(driver.availability, {
+      start_time: returnStart,
+      end_time: returnEnd,
+    }, { missingAvailability: "blocker", missingBounds: "blocker" });
+    const conflicts = timeline.filter((group) => {
+      const serviceIds = new Set(groupServiceIds(group));
+      if ([...serviceIds].some((serviceId) => clusterIds.has(serviceId))) return true;
+      return groupOverlapsInterval(group, outboundStart, outboundEnd)
+        || groupOverlapsInterval(group, returnStart, returnEnd);
+    });
+    const vehicle = compatibleVehicles.find((candidate) => canDriverUseVehicle(driver, candidate).allowed) ?? null;
+    return {
+      driver,
+      covers_outbound: coversOutbound.allowed,
+      covers_return: coversReturn.allowed,
+      vehicle,
+      conflicts,
+      ok: coversOutbound.allowed && coversReturn.allowed && Boolean(vehicle) && conflicts.length === 0,
+    };
+  });
+}
+
+function buildOperatorRequiredDecisions(args: {
+  groups: RealGiroDiagnosticGroup[];
+  clusters: ExcursionRoundtripCluster[];
+  drivers: RealGiroDiagnosticDriver[];
+  vehicles: Array<{ id: string | null; label: string; capacity: number | null }>;
+}): RealGiroOperatorDecision[] {
+  const decisions: RealGiroOperatorDecision[] = [];
+  const mortellaCluster = args.clusters.find((cluster) => cluster.cluster_id === "excursion-mortella-roundtrip") ?? null;
+  const mortellaCandidates = mortellaCluster
+    ? clusterRelocationCandidates({ cluster: mortellaCluster, groups: args.groups, drivers: args.drivers, vehicles: args.vehicles })
+    : [];
+  const canMoveMortellaCluster = mortellaCandidates.some((candidate) => candidate.ok);
+  const ilariaCandidate = mortellaCandidates.find((candidate) => normalizeText(candidate.driver.driver_name).includes("ilaria"));
+
+  for (const group of args.groups) {
+    const driver = driverForGroup(group, args.drivers);
+    const vehicle = vehicleForGroup(group, args.vehicles);
+    if (!driver || !vehicle) continue;
+    const eligibility = canDriverUseVehicle(driver, vehicle);
+    if (eligibility.allowed) continue;
+
+    const isGprPeter = groupContainsText(group, "GPR PETER") && group.pax >= LARGE_GROUP_PAX_THRESHOLD;
+    if (isGprPeter) {
+      decisions.push({
+        id: `operator-blocker-gpr-peter-${group.group_id}`,
+        type: "driver_vehicle_eligibility_blocker",
+        severity: "blocker",
+        title: "GPR PETER - non risolvibile automaticamente",
+        message: "Riccardo puo guidare massimo mezzi da 16 posti. Il giro GPR PETER ha 21 pax e richiede mezzo capiente.",
+        group_ids: [group.group_id],
+        driver_name: group.driver_name,
+        vehicle_label: group.vehicle_label,
+        pax: group.pax,
+        reasons: [
+          "Gruppo non splittabile.",
+          "Riccardo non abilitato al 25 posti.",
+          ilariaCandidate ? "Ilaria e abilitata al 25 posti ma risulta coinvolta nel cluster Mortella." : "Ilaria non e disponibile come alternativa automatica.",
+          canMoveMortellaCluster ? "Il cluster Mortella ha almeno un candidato, serve comunque conferma operatore." : "Nessun autista alternativo libero puo prendere tutto il cluster Mortella.",
+        ],
+        suggested_actions: [
+          "Aggiungere autista disponibile e abilitato al 25 posti.",
+          "Anticipare disponibilita Leo solo se operativamente vero.",
+          "Cambiare manualmente assegnazione cluster Mortella.",
+          "Lasciare da verificare operatore.",
+        ],
+      });
+      continue;
+    }
+
+    const driverName = normalizeText(group.driver_name);
+    const isMarioZabattta = driverName.includes("mario zabatta") || driverName.includes("mario zabattta");
+    if (isMarioZabattta) {
+      const minCapacity = Math.max(1, group.pax);
+      decisions.push({
+        id: `operator-warning-mario-zabattta-${group.group_id}`,
+        type: "vehicle_not_drivable_warning",
+        severity: "warning",
+        title: "Mario Zabattta - mezzo non compatibile",
+        message: "Mario Zabattta puo guidare massimo mezzi da 16 posti. Serve mezzo disponibile con capienza compatibile.",
+        group_ids: [group.group_id],
+        driver_name: group.driver_name,
+        vehicle_label: group.vehicle_label,
+        pax: group.pax,
+        reasons: [
+          `${group.vehicle_label ?? "Mezzo attuale"} non guidabile con max_vehicle_capacity 16.`,
+          `Mezzo richiesto: capacity >= ${minCapacity} e <= 16.`,
+        ],
+        suggested_actions: [
+          "Scegliere manualmente un mezzo disponibile del giorno con capienza compatibile.",
+          "Non proporre mezzi assenti dalla disponibilita giornaliera.",
+          "Lasciare da verificare operatore se nessun mezzo compatibile e libero.",
+        ],
+        required_vehicle_capacity: { min: minCapacity, max: 16 },
+        compatible_available_vehicles: args.vehicles
+          .filter((candidate) => (candidate.capacity ?? 0) >= minCapacity && (candidate.capacity ?? 0) <= 16)
+          .map((candidate) => ({ label: candidate.label, capacity: candidate.capacity })),
+      });
+    }
+  }
+
+  return decisions;
+}
+
+function suggestionTouchesPartialCluster(
+  suggestion: ConflictResolutionSuggestion,
+  clusters: ExcursionRoundtripCluster[]
+) {
+  const suggestionIds = new Set(suggestion.involved_services.map((service) => service.service_id));
+  return clusters.some((cluster) => {
+    const clusterIds = new Set(cluster.service_ids);
+    const touched = [...suggestionIds].some((serviceId) => clusterIds.has(serviceId));
+    if (!touched) return false;
+    return cluster.service_ids.some((serviceId) => !suggestionIds.has(serviceId));
+  });
 }
 
 function suggestionHashForDiagnostics(input: {
@@ -701,10 +896,14 @@ export function buildRealGiroDiagnostics(args: {
   driverNamesByUserId?: Map<string, string>;
   driverNamesByProfileId?: Map<string, string>;
   vehicles?: Array<{ id?: string | null; label?: string | null; capacity?: number | null }>;
-  drivers?: VehicleDailyBindingDriver[];
+  drivers?: RealGiroDiagnosticDriver[];
 }): RealGiroDiagnosticsResult {
   const hotelMap = new Map(args.hotels.map((hotel) => [hotel.id, hotel]));
   const serviceMap = new Map(args.services.map((service) => [service.id, service]));
+  const excursionRoundtripClusters = detectExcursionRoundtripClusters({
+    services: args.services,
+    hotels: args.hotels,
+  });
   const assignmentsByGroup = new Map<string, RealGiroDiagnosticAssignment[]>();
   for (const assignment of args.assignments) {
     const list = assignmentsByGroup.get(assignment.group_id) ?? [];
@@ -807,7 +1006,9 @@ export function buildRealGiroDiagnostics(args: {
       (totalSuggestionCountsByGroup.get(suggestion.group_id) ?? 0) + 1
     );
   }
-  const resolutionSuggestions = baseResolutionSuggestions.map((suggestion) => {
+  const resolutionSuggestions = baseResolutionSuggestions
+    .filter((suggestion) => !suggestionTouchesPartialCluster(suggestion, excursionRoundtripClusters))
+    .map((suggestion) => {
     const hash = args.tenantId
       ? suggestionHashForDiagnostics({ tenantId: args.tenantId, date: args.date, suggestion })
       : null;
@@ -830,7 +1031,7 @@ export function buildRealGiroDiagnostics(args: {
       operator_confirmed_at: decision.confirmed_at,
       operator_confirmed_severity: "confirmed_warning" as const,
     };
-  });
+    });
   const adjustedGroups = groups.map((group) => {
     const confirmedCount = confirmedSuggestionCountsByGroup.get(group.group_id) ?? 0;
     if (confirmedCount <= 0) return group;
@@ -849,6 +1050,12 @@ export function buildRealGiroDiagnostics(args: {
     };
   });
   const vehicleDiagnostics = buildVehicleDiagnostics({ groups: adjustedGroups, vehicles: args.vehicles, drivers: args.drivers });
+  const operatorRequiredDecisions = buildOperatorRequiredDecisions({
+    groups: adjustedGroups,
+    clusters: excursionRoundtripClusters,
+    drivers: args.drivers ?? [],
+    vehicles: vehicleDiagnostics.available_vehicles,
+  });
 
   return {
     ok: true,
@@ -869,6 +1076,8 @@ export function buildRealGiroDiagnostics(args: {
       vehicle_conflict_count: vehicleDiagnostics.conflicts.length,
     },
     groups: adjustedGroups,
+    excursion_roundtrip_clusters: excursionRoundtripClusters,
+    operator_required_decisions: operatorRequiredDecisions,
     vehicle_diagnostics: vehicleDiagnostics,
     resolution_suggestions: resolutionSuggestions,
   };

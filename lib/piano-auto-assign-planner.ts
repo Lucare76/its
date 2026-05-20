@@ -8,6 +8,7 @@ import {
 } from "@/lib/piano-vehicle-timeline";
 import { buildVehicleDailyBinding } from "@/lib/piano-vehicle-daily-binding";
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
+import { canDriverCoverInterval } from "@/lib/piano-driver-availability";
 
 export type PlannerDriver = {
   id: string;
@@ -254,12 +255,16 @@ function evaluateAppend(group: PlannerProposedGroup, service: AutoAssignPreviewS
   return { ok: score >= 50, score, buffer: buffer.minutes, warnings, explanation };
 }
 
-function driverAvailable(driver: PlannerDriver, time: string) {
-  if (driver.available === false) return false;
-  const value = minutes(time);
-  if (driver.available_from && value < minutes(driver.available_from)) return false;
-  if (driver.available_to && value >= minutes(driver.available_to)) return false;
-  return true;
+function driverAvailable(driver: PlannerDriver, time: string, endTime?: string | null) {
+  return canDriverCoverInterval(
+    {
+      available: driver.available,
+      available_from: driver.available_from,
+      available_to: driver.available_to,
+    },
+    { start_time: time, end_time: endTime ?? formatMinutes(minutes(time) + 30) },
+    { missingAvailability: "blocker", missingBounds: "warning" }
+  ).allowed;
 }
 
 function vehicleAvailable(vehicle: PlannerVehicle) {

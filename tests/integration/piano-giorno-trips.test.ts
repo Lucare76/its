@@ -107,4 +107,41 @@ describe("piano-giorno/trips — blocker server-side", () => {
     expect(body.ok).toBe(false);
     expect(body.error).toContain("Overbooking");
   });
+
+  it("blocca la creazione se l'autista e fuori fascia disponibilita", async () => {
+    await seedAvailabilityConfirmation(ctx.admin, ctx.tenantId, TEST_DATE, ctx.userId);
+    const hotelId = await seedHotel(ctx.admin, ctx.tenantId, { name: "Hotel Driver Window" });
+    const driverId = await seedDriver(ctx.admin, ctx.tenantId, additionalUsers);
+    const vehicleId = await seedVehicle(ctx.admin, ctx.tenantId, { label: "Van Driver Window", capacity: 8 });
+    const serviceId = await seedService(ctx.admin, ctx.tenantId, hotelId, {
+      date: TEST_DATE,
+      time: "14:50",
+      direction: "arrival",
+      pax: 1,
+    });
+    await ctx.admin.from("driver_daily_availability").insert({
+      tenant_id: ctx.tenantId,
+      date: TEST_DATE,
+      driver_user_id: driverId,
+      available: true,
+      available_from: "16:00",
+      available_to: "23:00",
+    });
+
+    const req = makeNextRequest("POST", {
+      action: "create_trip",
+      date: TEST_DATE,
+      service_ids: [serviceId],
+      driver_user_id: driverId,
+      vehicle_id: vehicleId,
+      vehicle_capacity: 8,
+      vehicle_label: "Van Driver Window",
+    }, ctx.token);
+    const res = await POST(req);
+    const body = await json<{ ok: boolean; error?: string }>(res);
+
+    expect(res.status).toBe(409);
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("Autista non disponibile in questa fascia oraria.");
+  });
 });

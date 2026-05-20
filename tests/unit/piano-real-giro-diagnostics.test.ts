@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildResolutionPreview } from "@/lib/piano-conflict-resolution-preview";
 import { buildRealGiroDiagnostics, type RealGiroDiagnosticAssignment, type RealGiroDiagnosticTripGroup } from "@/lib/piano-real-giro-diagnostics";
 import { buildSuggestionHash } from "@/lib/server/piano-operator-decisions";
+import { canDriverCoverInterval } from "@/lib/piano-driver-availability";
 import type { AutoAssignPreviewHotel, AutoAssignPreviewService } from "@/lib/piano-assignable-preview";
 
 const hotels: AutoAssignPreviewHotel[] = [
@@ -779,6 +780,222 @@ describe("buildRealGiroDiagnostics", () => {
     expect(result.groups[0]?.shuttle_pair_count).toBe(0);
     expect(result.groups[0]?.status).toBe("NOT_OPERATIONAL");
     expect(result.groups[0]?.conflict_count).toBeGreaterThan(0);
+  });
+
+  it("reports Mortella outbound and return excursions as a roundtrip cluster", () => {
+    const result = buildRealGiroDiagnostics({
+      date: "2026-05-07",
+      services: [
+        service({
+          id: "mortella-out-re",
+          time: "14:30",
+          customer_name: "POLILLO",
+          pax: 4,
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "RE FERDINANDO", to: "MORTELLA" },
+        }),
+        service({
+          id: "mortella-out-cristallo",
+          time: "14:50",
+          customer_name: "CAM 335",
+          pax: 1,
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "CRISTALLO", to: "MORTELLA" },
+        }),
+        service({
+          id: "mortella-return-cristallo",
+          time: "17:15",
+          customer_name: "CAM 335",
+          pax: 1,
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "MORTELLA", to: "CRISTALLO" },
+        }),
+        service({
+          id: "mortella-return-re",
+          time: "17:15",
+          customer_name: "POLILLO",
+          pax: 4,
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "MORTELLA", to: "RE FERDINANDO" },
+        }),
+      ],
+      hotels,
+      assignments: [
+        assignment("mortella-out-re", "outbound"),
+        assignment("mortella-out-cristallo", "outbound"),
+        assignment("mortella-return-cristallo", "return"),
+        assignment("mortella-return-re", "return"),
+      ],
+      tripGroups: [group({ id: "outbound" }), group({ id: "return" })],
+    });
+
+    expect(result.excursion_roundtrip_clusters).toHaveLength(1);
+    expect(result.excursion_roundtrip_clusters[0]?.total_pax).toBe(5);
+    expect(result.excursion_roundtrip_clusters[0]?.outbound_route).toEqual(["RE FERDINANDO", "CRISTALLO", "MORTELLA"]);
+  });
+
+  it("reports GPR Peter as an operator blocker when the large group is not splittable and the driver max is 16", () => {
+    const result = buildRealGiroDiagnostics({
+      date: "2026-05-07",
+      services: [
+        service({
+          id: "gpr-peter",
+          time: "15:00",
+          customer_name: "GPR PETER",
+          pax: 21,
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "PARCO AURORA", to: "MORTELLA" },
+        }),
+        service({
+          id: "mortella-out-re",
+          time: "14:30",
+          customer_name: "POLILLO",
+          pax: 4,
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "RE FERDINANDO", to: "MORTELLA" },
+        }),
+        service({
+          id: "mortella-out-cristallo",
+          time: "14:50",
+          customer_name: "CAM 335",
+          pax: 1,
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "CRISTALLO", to: "MORTELLA" },
+        }),
+        service({
+          id: "mortella-return-cristallo",
+          time: "17:15",
+          customer_name: "CAM 335",
+          pax: 1,
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "MORTELLA", to: "CRISTALLO" },
+        }),
+        service({
+          id: "mortella-return-re",
+          time: "17:15",
+          customer_name: "POLILLO",
+          pax: 4,
+          booking_service_kind: "excursion",
+          service_type_code: "excursion",
+          service_type: "bus_tour",
+          excursion_details: { from: "MORTELLA", to: "RE FERDINANDO" },
+        }),
+      ],
+      hotels,
+      assignments: [
+        { ...assignment("gpr-peter", "gpr"), driver_profile_id: "riccardo", vehicle_label: "25 BIANCO" },
+        { ...assignment("mortella-out-re", "mortella-re"), driver_profile_id: "riccardo", vehicle_label: "DUCATO MAXI" },
+        { ...assignment("mortella-out-cristallo", "mortella-cam-out"), driver_profile_id: "ilaria", vehicle_label: "TRASPORTER" },
+        { ...assignment("mortella-return-cristallo", "mortella-return"), driver_profile_id: "ilaria", vehicle_label: "TRASPORTER" },
+        { ...assignment("mortella-return-re", "mortella-return"), driver_profile_id: "ilaria", vehicle_label: "TRASPORTER" },
+      ],
+      tripGroups: [
+        group({ id: "gpr", driver_profile_id: "riccardo", vehicle_label: "25 BIANCO" }),
+        group({ id: "mortella-re", driver_profile_id: "riccardo", vehicle_label: "DUCATO MAXI" }),
+        group({ id: "mortella-cam-out", driver_profile_id: "ilaria", vehicle_label: "TRASPORTER" }),
+        group({ id: "mortella-return", driver_profile_id: "ilaria", vehicle_label: "TRASPORTER" }),
+      ],
+      driverNamesByProfileId: new Map([
+        ["riccardo", "RICCARDO"],
+        ["ilaria", "ILARIA"],
+        ["leo", "LEO"],
+      ]),
+      vehicles: [
+        { id: "bus-25", label: "25 BIANCO", capacity: 25 },
+        { id: "ducato", label: "DUCATO MAXI", capacity: 14 },
+        { id: "transporter", label: "TRASPORTER", capacity: 8 },
+      ],
+      drivers: [
+        {
+          driver_profile_id: "riccardo",
+          driver_name: "RICCARDO",
+          max_vehicle_capacity: 16,
+          availability: { available: true, available_from: "08:30", available_to: "19:00" },
+        },
+        {
+          driver_profile_id: "ilaria",
+          driver_name: "ILARIA",
+          max_vehicle_capacity: 40,
+          availability: { available: true, available_from: "08:30", available_to: "18:30" },
+        },
+        {
+          driver_profile_id: "leo",
+          driver_name: "LEO",
+          max_vehicle_capacity: null,
+          availability: { available: true, available_from: "16:00", available_to: "22:30" },
+        },
+      ],
+    });
+
+    const blocker = result.operator_required_decisions.find((decision) => decision.id.includes("gpr-peter"));
+    expect(blocker?.type).toBe("driver_vehicle_eligibility_blocker");
+    expect(blocker?.severity).toBe("blocker");
+    expect(blocker?.message).toContain("21 pax");
+    expect(blocker?.reasons.join(" ")).toContain("Gruppo non splittabile");
+    expect(blocker?.reasons.join(" ")).toContain("Nessun autista alternativo");
+    expect(
+      result.resolution_suggestions.some((suggestion) =>
+        suggestion.involved_services.some((candidate) => candidate.service_id === "mortella-out-cristallo")
+      )
+    ).toBe(false);
+  });
+
+  it("does not propose Leo for the Mortella outbound when Leo starts at 16:00", () => {
+    const result = canDriverCoverInterval(
+      { available: true, available_from: "16:00", available_to: "22:30" },
+      { start_time: "14:30", end_time: "15:20" },
+      { missingAvailability: "blocker" }
+    );
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("fascia oraria");
+  });
+
+  it("reports Mario Zabattta on a 25-seat vehicle and only lists available compatible vehicles", () => {
+    const result = buildRealGiroDiagnostics({
+      date: "2026-05-07",
+      services: [
+        service({
+          id: "mario-9-pax",
+          time: "17:25",
+          customer_name: "D'ARIA PLACIDO",
+          pax: 9,
+          booking_service_kind: "formula_medmar",
+          service_type_code: "ferry_transfer",
+        }),
+      ],
+      hotels,
+      assignments: [{ ...assignment("mario-9-pax", "mario-z-9"), driver_profile_id: "mario-zabattta", vehicle_label: "25 NAVARRA" }],
+      tripGroups: [group({ id: "mario-z-9", driver_profile_id: "mario-zabattta", vehicle_label: "25 NAVARRA" })],
+      driverNamesByProfileId: new Map([["mario-zabattta", "MARIO ZABATTTA"]]),
+      vehicles: [
+        { id: "navarra", label: "25 NAVARRA", capacity: 25 },
+        { id: "ducato", label: "DUCATO MAXI", capacity: 14 },
+      ],
+      drivers: [{ driver_profile_id: "mario-zabattta", driver_name: "MARIO ZABATTTA", max_vehicle_capacity: 16 }],
+    });
+
+    const warning = result.operator_required_decisions[0];
+    expect(warning?.type).toBe("vehicle_not_drivable_warning");
+    expect(warning?.required_vehicle_capacity).toEqual({ min: 9, max: 16 });
+    expect(warning?.compatible_available_vehicles).toEqual([{ label: "DUCATO MAXI", capacity: 14 }]);
+    expect(warning?.compatible_available_vehicles?.some((vehicle) => vehicle.label === "TOMMASINI")).toBe(false);
   });
 
   it("uses island arrival time for FEST ROMON inside group diagnostics", () => {

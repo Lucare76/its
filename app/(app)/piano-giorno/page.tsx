@@ -105,6 +105,21 @@ type PlanIssue = {
   title: string;
   detail: string;
 };
+type OperatorRequiredDecision = {
+  id: string;
+  type: "driver_vehicle_eligibility_blocker" | "vehicle_not_drivable_warning";
+  severity: "blocker" | "warning";
+  title: string;
+  message: string;
+  group_ids: string[];
+  driver_name: string | null;
+  vehicle_label: string | null;
+  pax: number;
+  reasons: string[];
+  suggested_actions: string[];
+  required_vehicle_capacity?: { min: number; max: number } | null;
+  compatible_available_vehicles?: Array<{ label: string; capacity: number | null }>;
+};
 type GeoPrecheckIssue = {
   id: string;
   time: string;
@@ -239,6 +254,7 @@ type GroupDiagnosticsResponse = {
     total_conflicts: number;
     total_needs_review: number;
   };
+  operator_required_decisions?: OperatorRequiredDecision[];
   resolution_suggestions?: ConflictResolutionSuggestion[];
 };
 type ApplyResolutionResponse = {
@@ -1818,6 +1834,7 @@ export default function PianoGiornoPage() {
   const [impSaving, setImpSaving] = useState(false);
   const [impResult, setImpResult] = useState<{ ok: boolean; text: string } | null>(null);
   const conflictSuggestions = groupDiagnostics?.resolution_suggestions ?? [];
+  const operatorRequiredDecisions = groupDiagnostics?.operator_required_decisions ?? [];
   const vehicleBindingChanges = vehicleBindingPreview?.changes ?? [];
   const showVehicleBindingPanel = Boolean(
     vehicleBindingPreview?.ok
@@ -2388,11 +2405,20 @@ export default function PianoGiornoPage() {
       }
     }
 
+    for (const decision of operatorRequiredDecisions) {
+      issues.push({
+        id: decision.id,
+        severity: decision.severity,
+        title: decision.title,
+        detail: decision.message,
+      });
+    }
+
     return issues.sort((a, b) => {
       const score = { blocker: 0, warning: 1, info: 2 };
       return score[a.severity] - score[b.severity];
     });
-  }, [tripRows, unassignedServices, hotelMap, driverNameById]);
+  }, [tripRows, unassignedServices, hotelMap, driverNameById, operatorRequiredDecisions]);
   const blockerCount = planIssues.filter((issue) => issue.severity === "blocker").length;
   const activeGeoPrecheckIssues = pendingAutoMode ? geoPrecheckIssuesByMode[pendingAutoMode] : [];
   const activeGeoHotelIssues = activeGeoPrecheckIssues.filter((issue) => issue.action === "geocode_hotel");
@@ -3345,6 +3371,89 @@ export default function PianoGiornoPage() {
               >
                 Prepara riallineamento mezzi
               </button>
+            </div>
+          </div>
+        )}
+
+        {operatorRequiredDecisions.length > 0 && (
+          <div className="rounded-xl border border-amber-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Diagnostica read-only</p>
+                <h2 className="mt-1 text-lg font-bold text-slate-900">Decisioni operatore richieste</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Casi non risolvibili automaticamente senza conferma operativa.
+                </p>
+              </div>
+              <span className="rounded bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700">no apply automatico</span>
+            </div>
+
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              {operatorRequiredDecisions.map((decision) => (
+                <div
+                  key={decision.id}
+                  className={`rounded-lg border p-3 ${
+                    decision.severity === "blocker" ? "border-red-200 bg-red-50/60" : "border-amber-200 bg-amber-50/60"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
+                      decision.severity === "blocker" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"
+                    }`}>
+                      {decision.severity === "blocker" ? "bloccante" : "warning"}
+                    </span>
+                    <span className="rounded bg-white px-2 py-0.5 text-[10px] font-bold uppercase text-slate-700">
+                      decisione operatore
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm font-bold text-slate-900">{decision.title}</p>
+                  <p className="mt-1 text-xs text-slate-700">{decision.message}</p>
+                  <div className="mt-2 grid gap-2 text-xs text-slate-700 sm:grid-cols-2">
+                    <div className="rounded bg-white px-2 py-1.5">
+                      <span className="font-semibold">Autista:</span> {decision.driver_name ?? "non indicato"}
+                    </div>
+                    <div className="rounded bg-white px-2 py-1.5">
+                      <span className="font-semibold">Mezzo:</span> {decision.vehicle_label ?? "non indicato"} · {decision.pax} pax
+                    </div>
+                  </div>
+                  {decision.required_vehicle_capacity ? (
+                    <p className="mt-2 rounded bg-white px-2 py-1.5 text-xs font-semibold text-slate-700">
+                      Mezzo richiesto: capacity &gt;= {decision.required_vehicle_capacity.min} e &lt;= {decision.required_vehicle_capacity.max}
+                    </p>
+                  ) : null}
+                  {decision.compatible_available_vehicles && decision.compatible_available_vehicles.length > 0 ? (
+                    <p className="mt-2 rounded bg-white px-2 py-1.5 text-xs text-slate-700">
+                      Mezzi disponibili compatibili: {decision.compatible_available_vehicles.map((vehicle) => `${vehicle.label}${vehicle.capacity ? ` (${vehicle.capacity})` : ""}`).join(", ")}
+                    </p>
+                  ) : null}
+                  <div className="mt-2 space-y-1">
+                    {decision.reasons.map((reason) => (
+                      <p key={reason} className="text-xs text-slate-700">- {reason}</p>
+                    ))}
+                  </div>
+                  <div className="mt-2 space-y-1 rounded bg-white px-2 py-1.5">
+                    {decision.suggested_actions.map((action) => (
+                      <p key={action} className="text-xs font-medium text-slate-700">- {action}</p>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("manual")}
+                      className="rounded border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                    >
+                      Segna da verificare
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("manual")}
+                      className="rounded bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-slate-800"
+                    >
+                      Risolvi manualmente
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}

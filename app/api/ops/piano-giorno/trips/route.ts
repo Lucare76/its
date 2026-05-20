@@ -24,6 +24,7 @@ import {
   type GeographicCompatibilityService,
 } from "@/lib/server/geo-assignment";
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
+import { canDriverCoverInterval } from "@/lib/piano-driver-availability";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -88,6 +89,7 @@ export async function POST(request: NextRequest) {
         date,
         serviceIds: service_ids,
         driverUserId: driver_user_id ?? null,
+        driverProfileId: driver_profile_id ?? null,
         vehicleCapacity: vehicle_capacity ?? null,
       });
       if (!validation.ok) {
@@ -205,6 +207,7 @@ export async function POST(request: NextRequest) {
         date: groupDate,
         serviceIds: effectiveServiceIds,
         driverUserId: driver_user_id ?? null,
+        driverProfileId: driver_profile_id ?? null,
         vehicleCapacity: vehicle_capacity ?? null,
         excludeGroupId: group_id,
       });
@@ -384,6 +387,7 @@ export async function POST(request: NextRequest) {
           date,
           serviceIds: service_ids,
           driverUserId: driver_user_id ?? null,
+          driverProfileId: driver_profile_id ?? null,
           vehicleCapacity: vehicle_capacity ?? null,
         });
         if (!validation.ok) {
@@ -477,6 +481,7 @@ export async function POST(request: NextRequest) {
           date: (destGroupDate?.date as string | undefined) ?? date ?? "",
           serviceIds: targetServiceIds,
           driverUserId: destDriver,
+          driverProfileId: destDriverProfile,
           vehicleCapacity: (destGroup?.vehicle_capacity as number | null) ?? vehicle_capacity ?? null,
           excludeGroupId: destGroupId,
         });
@@ -569,6 +574,7 @@ export async function POST(request: NextRequest) {
         date,
         serviceIds: movedServiceIds,
         driverUserId: to_driver_id,
+        driverProfileId: null,
         vehicleCapacity: null,
       });
       if (!validation.ok) {
@@ -878,6 +884,10 @@ function toMinutes(value: string): number {
   return (h ?? 0) * 60 + (m ?? 0);
 }
 
+function hhmm(value: number): string {
+  return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+}
+
 async function loadGroupServiceIds(
   admin: SupabaseClient,
   tenantId: string,
@@ -889,6 +899,77 @@ async function loadGroupServiceIds(
     .eq("tenant_id", tenantId)
     .eq("group_id", groupId);
   return (data ?? []).map((row) => row.service_id as string);
+}
+
+async function validateDriverAvailabilityPayload(
+  admin: SupabaseClient,
+  tenantId: string,
+  params: {
+    date: string;
+    serviceRows: ServiceValidationRow[];
+    driverUserId: string | null;
+    driverProfileId: string | null;
+  }
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!params.driverUserId && !params.driverProfileId) return { ok: true };
+  const times = params.serviceRows.map((service) => toMinutes(serviceOperationalTime(service)));
+  if (times.length === 0) return { ok: false, error: "Orario giro mancante." };
+  const start = Math.min(...times);
+  const end = Math.max(...times) + 30;
+
+  let driverProfileId = params.driverProfileId;
+  let driverUserId = params.driverUserId;
+  if (!driverProfileId && driverUserId) {
+    const { data: profile, error: profileError } = await admin
+      .from("driver_profiles")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", driverUserId)
+      .maybeSingle();
+    if (profileError) return { ok: false, error: `Errore verifica disponibilita autista: ${profileError.message}` };
+    driverProfileId = (profile?.id as string | null) ?? null;
+  }
+  if (!driverUserId && driverProfileId) {
+    const { data: profile, error: profileError } = await admin
+      .from("driver_profiles")
+      .select("user_id")
+      .eq("tenant_id", tenantId)
+      .eq("id", driverProfileId)
+      .maybeSingle();
+    if (profileError) return { ok: false, error: `Errore verifica disponibilita autista: ${profileError.message}` };
+    driverUserId = (profile?.user_id as string | null) ?? null;
+  }
+
+  let query = admin
+    .from("driver_daily_availability")
+    .select("available, available_from, available_to, notes")
+    .eq("tenant_id", tenantId)
+    .eq("date", params.date)
+    .limit(1);
+  if (driverProfileId) {
+    query = query.eq("driver_profile_id", driverProfileId);
+  } else if (driverUserId) {
+    query = query.eq("driver_user_id", driverUserId);
+  }
+
+  const { data, error } = await query.maybeSingle();
+  if (error) return { ok: false, error: `Errore verifica disponibilita autista: ${error.message}` };
+
+  const result = canDriverCoverInterval(
+    data
+      ? {
+          available: data.available as boolean | null,
+          available_from: data.available_from as string | null,
+          available_to: data.available_to as string | null,
+        }
+      : null,
+    { start_time: hhmm(start), end_time: hhmm(end) },
+    { missingAvailability: "blocker", missingBounds: "warning" }
+  );
+  if (!result.allowed) {
+    return { ok: false, error: result.reason ?? "Autista non disponibile in questa fascia oraria." };
+  }
+  return { ok: true };
 }
 
 async function validateDriverVehicleEligibilityPayload(
@@ -950,6 +1031,7 @@ async function validateTripPayload(
     date: string;
     serviceIds: string[];
     driverUserId: string | null;
+    driverProfileId?: string | null;
     vehicleCapacity: number | null;
     excludeGroupId?: string;
   }
@@ -976,6 +1058,16 @@ async function validateTripPayload(
 
   if (params.vehicleCapacity != null && totalPax > params.vehicleCapacity) {
     return { ok: false, error: `Overbooking bloccante: ${totalPax} pax su mezzo da ${params.vehicleCapacity}.` };
+  }
+
+  const driverAvailability = await validateDriverAvailabilityPayload(admin, tenantId, {
+    date: params.date,
+    serviceRows,
+    driverUserId: params.driverUserId,
+    driverProfileId: params.driverProfileId ?? null,
+  });
+  if (!driverAvailability.ok) {
+    return { ok: false, error: driverAvailability.error };
   }
 
   const hotelIds = serviceRows.map((service) => service.hotel_id).filter((id): id is string => Boolean(id));

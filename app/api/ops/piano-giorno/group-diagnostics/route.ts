@@ -111,7 +111,7 @@ async function handleDiagnostics(request: NextRequest) {
       );
     }
 
-    const [hotelsResult, tripGroupsResult, vehiclesResult, driverRegistry, operatorDecisions] = await Promise.all([
+    const [hotelsResult, tripGroupsResult, vehiclesResult, vehicleDailyAvailabilityResult, vehicleTimeBlocksResult, driverDailyAvailabilityResult, driverRegistry, operatorDecisions] = await Promise.all([
       auth.admin
         .from("hotels")
         .select("id, name, zone, lat, lng")
@@ -129,6 +129,20 @@ async function handleDiagnostics(request: NextRequest) {
         .eq("tenant_id", tenantId)
         .eq("active", true)
         .order("label"),
+      auth.admin
+        .from("vehicle_daily_availability")
+        .select("vehicle_id, available")
+        .eq("tenant_id", tenantId)
+        .eq("date", date),
+      auth.admin
+        .from("vehicle_time_blocks")
+        .select("vehicle_id, date, block_from, block_to")
+        .eq("tenant_id", tenantId),
+      auth.admin
+        .from("driver_daily_availability")
+        .select("driver_profile_id, driver_user_id, available, available_from, available_to")
+        .eq("tenant_id", tenantId)
+        .eq("date", date),
       listDriverRegistry(auth.admin, tenantId, { activeOnly: true }),
       loadConfirmedOperatorDecisions(auth, date),
     ]);
@@ -137,6 +151,9 @@ async function handleDiagnostics(request: NextRequest) {
       hotelsResult.error ? `hotels: ${hotelsResult.error.message}` : null,
       tripGroupsResult.error ? `trip_groups: ${tripGroupsResult.error.message}` : null,
       vehiclesResult.error ? `vehicles: ${vehiclesResult.error.message}` : null,
+      vehicleDailyAvailabilityResult.error ? `vehicle_daily_availability: ${vehicleDailyAvailabilityResult.error.message}` : null,
+      vehicleTimeBlocksResult.error ? `vehicle_time_blocks: ${vehicleTimeBlocksResult.error.message}` : null,
+      driverDailyAvailabilityResult.error ? `driver_daily_availability: ${driverDailyAvailabilityResult.error.message}` : null,
     ].filter(Boolean);
     if (errors.length > 0) {
       return NextResponse.json({ ok: false, error: errors.join("; ") }, { status: 500 });
@@ -166,6 +183,33 @@ async function handleDiagnostics(request: NextRequest) {
         .filter((driver) => driver.user_id)
         .map((driver) => [driver.user_id!, driver.full_name])
     );
+    const vehicleAvailabilityById = new Map(
+      (vehicleDailyAvailabilityResult.data ?? []).map((row) => [row.vehicle_id, row])
+    );
+    const blockedVehicleIds = new Set(
+      (vehicleTimeBlocksResult.data ?? [])
+        .filter((block) => {
+          const singleDate = String(block.date ?? "").slice(0, 10);
+          return singleDate === date;
+        })
+        .map((block) => block.vehicle_id)
+    );
+    const availableVehicles = ((vehiclesResult.data ?? []) as Array<{ id: string | null; label: string | null; capacity: number | null }>)
+      .filter((vehicle) => {
+        if (!vehicle.id) return true;
+        if (blockedVehicleIds.has(vehicle.id)) return false;
+        return vehicleAvailabilityById.get(vehicle.id)?.available !== false;
+      });
+    const driverAvailabilityByProfileId = new Map(
+      (driverDailyAvailabilityResult.data ?? [])
+        .filter((row) => row.driver_profile_id)
+        .map((row) => [row.driver_profile_id, row])
+    );
+    const driverAvailabilityByUserId = new Map(
+      (driverDailyAvailabilityResult.data ?? [])
+        .filter((row) => row.driver_user_id)
+        .map((row) => [row.driver_user_id, row])
+    );
 
     const diagnostics = buildRealGiroDiagnostics({
       tenantId,
@@ -177,12 +221,24 @@ async function handleDiagnostics(request: NextRequest) {
       operatorDecisions,
       driverNamesByProfileId,
       driverNamesByUserId,
-      vehicles: (vehiclesResult.data ?? []) as Array<{ id: string | null; label: string | null; capacity: number | null }>,
+      vehicles: availableVehicles,
       drivers: driverRegistry.map((driver) => ({
         driver_profile_id: driver.id,
         driver_user_id: driver.user_id ?? null,
         driver_name: driver.full_name,
         max_vehicle_capacity: driver.max_vehicle_capacity ?? null,
+        availability: (() => {
+          const availability = driverAvailabilityByProfileId.get(driver.id)
+            ?? (driver.user_id ? driverAvailabilityByUserId.get(driver.user_id) : null);
+          return availability
+            ? {
+                available: availability.available,
+                available_from: availability.available_from,
+                available_to: availability.available_to,
+                blocks: [],
+              }
+            : null;
+        })(),
       })),
     });
 

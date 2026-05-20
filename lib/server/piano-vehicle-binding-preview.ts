@@ -54,6 +54,9 @@ type DriverAvailabilityRow = {
   driver_profile_id?: string | null;
   driver_user_id?: string | null;
   available?: boolean | null;
+  available_from?: string | null;
+  available_to?: string | null;
+  notes?: string | null;
 };
 
 type VehicleBlockRow = {
@@ -127,7 +130,13 @@ export type VehicleBindingPreviewPayload = {
   warnings: string[];
   info: string[];
   audit: {
-    available_drivers: Array<{ driver_key: string; driver_name: string | null; max_vehicle_capacity: number | null }>;
+    available_drivers: Array<{
+      driver_key: string;
+      driver_name: string | null;
+      max_vehicle_capacity: number | null;
+      available_from: string | null;
+      available_to: string | null;
+    }>;
     available_vehicles: Array<{ id: string | null; label: string | null; capacity: number | null }>;
     eligibility_matrix: Array<{
       driver_key: string;
@@ -192,6 +201,7 @@ export function validateVehicleBindingPreviewForApply(preview: VehicleBindingPre
   if (preview.summary.conflicts_after > 0) blockers.push("La preview contiene ancora conflitti mezzo.");
   if (preview.summary.overbooking_after > 0) blockers.push("La preview contiene ancora overbooking.");
   if (preview.summary.eligibility_blockers > 0) blockers.push("La preview contiene autisti non abilitati al mezzo proposto.");
+  if (preview.summary.driver_availability_blockers > 0) blockers.push("La preview contiene autisti fuori disponibilita oraria.");
   if (preview.conflicts.some((conflict) => conflict.type === "standard_vehicle_same_day_conflict" && conflict.severity === "blocker")) {
     blockers.push("Un mezzo standard risulta condiviso tra autisti.");
   }
@@ -258,10 +268,24 @@ export async function buildVehicleBindingPreview(args: {
             driver_key: driverKey,
             driver_name: driver?.full_name ?? null,
             max_vehicle_capacity: driver?.max_vehicle_capacity ?? null,
+            available_from: row.available_from ?? null,
+            available_to: row.available_to ?? null,
+            availability: {
+              available: row.available ?? true,
+              available_from: row.available_from ?? null,
+              available_to: row.available_to ?? null,
+            },
           }
         : null;
     })
-    .filter((driver): driver is { driver_key: string; driver_name: string | null; max_vehicle_capacity: number | null } => Boolean(driver));
+    .filter((driver): driver is {
+      driver_key: string;
+      driver_name: string | null;
+      max_vehicle_capacity: number | null;
+      available_from: string | null;
+      available_to: string | null;
+      availability: { available: boolean; available_from: string | null; available_to: string | null };
+    } => Boolean(driver));
 
   const availabilityByVehicleId = new Map(((vehicleAvailabilityResult.data ?? []) as VehicleAvailabilityRow[]).map((row) => [row.vehicle_id, row]));
   const blockedVehicleIds = new Set(((vehicleBlocksResult.data ?? []) as VehicleBlockRow[]).filter((block) => vehicleBlockedOnDate(block, date)).map((block) => block.vehicle_id));

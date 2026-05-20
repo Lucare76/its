@@ -28,6 +28,7 @@ function preview(overrides: Partial<VehicleBindingPreviewPayload> = {}): Vehicle
       large_vehicle_shared_conflicts: 0,
       standard_vehicle_conflicts: 0,
       driver_vehicle_eligibility_blockers: 0,
+      driver_availability_blockers: 0,
       eligibility_blockers: 0,
       changes_needed: 0,
       services_involved: 0,

@@ -1,10 +1,12 @@
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
+import { canDriverCoverInterval, type DriverAvailabilityWindow } from "@/lib/piano-driver-availability";
 import { vehicleIntervalsOverlap, vehicleResourceKey, type VehicleTimelineIdentity } from "@/lib/piano-vehicle-timeline";
 
 export type HybridVehicleBindingDriver = {
   driver_key: string;
   driver_name: string | null;
   max_vehicle_capacity?: number | null;
+  availability?: DriverAvailabilityWindow | null;
 };
 
 export type HybridVehicleBindingVehicle = VehicleTimelineIdentity & {
@@ -33,6 +35,7 @@ export type HybridVehicleBindingConflict = {
     | "standard_vehicle_same_day_conflict"
     | "large_vehicle_shared_timeline_conflict"
     | "driver_vehicle_eligibility_blocker"
+    | "driver_availability_blocker"
     | "vehicle_capacity_insufficient"
     | "vehicle_missing"
     | "driver_missing";
@@ -86,6 +89,7 @@ export type HybridVehicleBindingResult = {
     large_vehicle_shared_conflicts: number;
     standard_vehicle_conflicts: number;
     driver_vehicle_eligibility_blockers: number;
+    driver_availability_blockers: number;
   };
 };
 
@@ -170,6 +174,7 @@ export function buildHybridVehicleBinding(args: {
     const driver = trip.driver_key ? driversByKey.get(trip.driver_key) : null;
     const driverName = driverNameForTrip(trip, driver);
     const currentVehicle = vehicles.find((vehicle) => vehicleMatches(vehicle, trip)) ?? null;
+    const interval = tripInterval(trip);
 
     if (!driver) {
       conflicts.push({
@@ -180,6 +185,24 @@ export function buildHybridVehicleBinding(args: {
         vehicle_label: trip.current_vehicle_label ?? null,
         message: "Autista mancante o non disponibile per il giro.",
       });
+    }
+    const availability = driver && "availability" in driver
+      ? canDriverCoverInterval(driver.availability, trip, {
+          missingAvailability: "blocker",
+          missingBounds: "warning",
+        })
+      : { allowed: true, severity: "ok" as const, reason: null };
+    if (driver && !availability.allowed) {
+      conflicts.push({
+        type: "driver_availability_blocker",
+        severity: "blocker",
+        group_id: trip.group_id,
+        driver_name: driverName,
+        vehicle_label: trip.current_vehicle_label ?? null,
+        message: availability.reason ?? "Autista non disponibile in questa fascia oraria.",
+      });
+      assignedTrips.push({ ...trip, is_large_group: isLargeGroup, proposed_vehicle_id: null, proposed_vehicle_label: null });
+      continue;
     }
 
     const candidatePool = isLargeGroup ? largeVehicles : vehicles;
@@ -199,7 +222,6 @@ export function buildHybridVehicleBinding(args: {
         if (!canUse(driver, vehicle)) continue;
         const key = vehicleKey(vehicle);
         if (!key) continue;
-        const interval = tripInterval(trip);
         const timeline = vehicleUsageIntervals.get(key) ?? [];
         const hasConflict = timeline.some((usage) => vehicleIntervalsOverlap(
           usage,
@@ -218,7 +240,6 @@ export function buildHybridVehicleBinding(args: {
         if (!canUse(driver, vehicle)) continue;
         const key = vehicleKey(vehicle);
         if (!key) continue;
-        const interval = tripInterval(trip);
         if ((vehicle.capacity ?? 0) >= config.largeGroupPaxThreshold) {
           const largeVehicleBusy = (vehicleUsageIntervals.get(key) ?? []).some((usage) => usage.is_large_group && vehicleIntervalsOverlap(usage, interval, config.minBufferMinutes));
           if (largeVehicleBusy) continue;
@@ -260,7 +281,6 @@ export function buildHybridVehicleBinding(args: {
 
     if (isLargeGroup) {
       const key = vehicleKey(chosen)!;
-      const interval = tripInterval(trip);
       const previous = (largeTimeline.get(key) ?? [])
         .filter((usage) => (minutes(usage.end_time) ?? 0) <= interval.start_min)
         .sort((a, b) => (minutes(b.end_time) ?? 0) - (minutes(a.end_time) ?? 0))[0] ?? null;
@@ -282,7 +302,6 @@ export function buildHybridVehicleBinding(args: {
       largeUsage.push(usage);
     } else if (trip.driver_key) {
       const key = vehicleKey(chosen)!;
-      const interval = tripInterval(trip);
       standardBindings.set(trip.driver_key, chosen);
       standardVehicleDrivers.set(key, trip.driver_key);
       vehicleUsageIntervals.set(key, [...(vehicleUsageIntervals.get(key) ?? []), { ...interval, driver_key: trip.driver_key, is_large_group: false }]);
@@ -328,6 +347,7 @@ export function buildHybridVehicleBinding(args: {
       large_vehicle_shared_conflicts: conflicts.filter((conflict) => conflict.type === "large_vehicle_shared_timeline_conflict").length,
       standard_vehicle_conflicts: conflicts.filter((conflict) => conflict.type === "standard_vehicle_same_day_conflict").length,
       driver_vehicle_eligibility_blockers: conflicts.filter((conflict) => conflict.type === "driver_vehicle_eligibility_blocker").length,
+      driver_availability_blockers: conflicts.filter((conflict) => conflict.type === "driver_availability_blocker").length,
     },
   };
 }
