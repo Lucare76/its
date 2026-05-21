@@ -26,6 +26,8 @@ import {
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import { canDriverCoverInterval } from "@/lib/piano-driver-availability";
 import { type SupabaseClient } from "@supabase/supabase-js";
+import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
+import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
 
 export const runtime = "nodejs";
 const LARGE_GROUP_PAX_THRESHOLD = 21;
@@ -190,11 +192,13 @@ export async function POST(request: NextRequest) {
       }
       const { data: groupMeta } = await auth.admin
         .from("trip_groups")
-        .select("date")
+        .select("date, driver_profile_id, driver_user_id, vehicle_label")
         .eq("id", group_id)
         .eq("tenant_id", tenantId)
         .maybeSingle();
       const groupDate = groupMeta?.date as string | undefined;
+      const prevDriverProfileId = groupMeta?.driver_profile_id as string | null ?? null;
+      const prevVehicleLabel = groupMeta?.vehicle_label as string | null ?? null;
       const effectiveServiceIds = service_ids ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
       if (!groupDate) {
         return NextResponse.json({ ok: false, error: "Data giro non trovata." }, { status: 404 });
@@ -321,6 +325,37 @@ export async function POST(request: NextRequest) {
         if (toAdd.length > 0) {
           await _assignServicesToGroup(auth.admin, tenantId, toAdd, group_id, driver_user_id ?? null, driver_profile_id ?? null, vehicle_label ?? null, userId, now);
         }
+      }
+
+      // Log driver swap se il driver_profile_id è cambiato
+      if ((driver_profile_id ?? null) !== prevDriverProfileId) {
+        const allServiceIds = service_ids ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
+        const entries = allServiceIds.map((serviceId) => {
+          const features = extractFeatures({
+            serviceDate: groupDate!,
+            changeType: "driver_swap",
+            fromDriverProfileId: prevDriverProfileId,
+            toDriverProfileId: driver_profile_id ?? null,
+            fromVehicleLabel: prevVehicleLabel,
+            toVehicleLabel: vehicle_label ?? null,
+          });
+          return {
+            tenantId,
+            serviceDate: groupDate!,
+            serviceId,
+            groupId: group_id,
+            changeType: "driver_swap" as const,
+            fromDriverProfileId: prevDriverProfileId,
+            toDriverProfileId: driver_profile_id ?? null,
+            fromVehicleLabel: prevVehicleLabel,
+            toVehicleLabel: vehicle_label ?? null,
+            features,
+            operatorId: userId,
+          };
+        });
+        void logAssignmentChange(auth.admin, entries).then(() =>
+          updateLearnedPatterns(auth.admin, tenantId).catch(() => undefined)
+        );
       }
 
       return NextResponse.json({ ok: true });

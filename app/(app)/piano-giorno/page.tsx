@@ -1876,6 +1876,11 @@ export default function PianoGiornoPage() {
   const [gppLoading, setGppLoading] = useState(false);
   const [gppData, setGppData] = useState<GlobalPlannerPreviewResponse | null>(null);
   const [gppError, setGppError] = useState<string | null>(null);
+  const [planSavingGroupId, setPlanSavingGroupId] = useState<string | null>(null);
+  const [planSavingServiceId, setPlanSavingServiceId] = useState<string | null>(null);
+  const [planMoveMenuSvcId, setPlanMoveMenuSvcId] = useState<string | null>(null);
+  const [planToasts, setPlanToasts] = useState<Array<{ id: string; text: string; type: "ok" | "err" }>>([]);
+  const [planModCount, setPlanModCount] = useState(0);
   const conflictSuggestions = groupDiagnostics?.resolution_suggestions ?? [];
   const operatorRequiredDecisions = groupDiagnostics?.operator_required_decisions ?? [];
   const vehicleBindingChanges = vehicleBindingPreview?.changes ?? [];
@@ -2147,6 +2152,107 @@ export default function PianoGiornoPage() {
       setGppLoading(false);
     }
   }, [token, date]);
+
+  const addPlanToast = useCallback((text: string, type: "ok" | "err") => {
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    setPlanToasts((prev) => [...prev, { id, text, type }]);
+    setTimeout(() => setPlanToasts((prev) => prev.filter((t) => t.id !== id)), 3000);
+  }, []);
+
+  const handlePlanUpdateDriver = useCallback(async (group: TripGroup, serviceIds: string[], entry: DriverEntry) => {
+    if (!token) return;
+    setPlanSavingGroupId(group.id);
+    const res = await tripAction(token, {
+      action: "update_trip",
+      group_id: group.id,
+      date,
+      driver_user_id: entry.userId,
+      driver_profile_id: entry.profileId || null,
+      vehicle_label: group.vehicle_label,
+      vehicle_capacity: group.vehicle_capacity,
+      service_ids: serviceIds,
+    }).catch(() => ({ ok: false as const, error: "Errore di rete." }));
+    setPlanSavingGroupId(null);
+    if (res.ok) {
+      addPlanToast("Autista aggiornato.", "ok");
+      setPlanModCount((n) => n + 1);
+      void reload();
+    } else {
+      addPlanToast(res.error ?? "Errore aggiornamento autista.", "err");
+    }
+  }, [token, date, reload, addPlanToast]);
+
+  const handlePlanUpdateVehicle = useCallback(async (group: TripGroup, serviceIds: string[], vehicle: Vehicle) => {
+    if (!token) return;
+    setPlanSavingGroupId(group.id);
+    const res = await tripAction(token, {
+      action: "update_trip",
+      group_id: group.id,
+      date,
+      driver_user_id: group.driver_user_id,
+      driver_profile_id: group.driver_profile_id,
+      vehicle_label: vehicle.label,
+      vehicle_capacity: vehicle.capacity,
+      service_ids: serviceIds,
+    }).catch(() => ({ ok: false as const, error: "Errore di rete." }));
+    setPlanSavingGroupId(null);
+    if (res.ok) {
+      addPlanToast("Mezzo aggiornato.", "ok");
+      setPlanModCount((n) => n + 1);
+      void reload();
+    } else {
+      addPlanToast(res.error ?? "Errore aggiornamento mezzo.", "err");
+    }
+  }, [token, date, reload, addPlanToast]);
+
+  const handlePlanMoveService = useCallback(async (serviceId: string, fromGroupId: string, toGroupId: string) => {
+    if (!token) return;
+    setPlanSavingServiceId(serviceId);
+    setPlanMoveMenuSvcId(null);
+    const res = await tripAction(token, {
+      action: "move_services",
+      service_ids: [serviceId],
+      group_id: fromGroupId,
+      target_group_id: toGroupId,
+      date,
+    }).catch(() => ({ ok: false as const, error: "Errore di rete." }));
+    setPlanSavingServiceId(null);
+    if (res.ok) {
+      addPlanToast("Servizio spostato.", "ok");
+      setPlanModCount((n) => n + 1);
+      void reload();
+    } else {
+      addPlanToast(res.error ?? "Errore spostamento servizio.", "err");
+    }
+  }, [token, date, reload, addPlanToast]);
+
+  const handlePlanRemoveService = useCallback(async (serviceId: string, group: TripGroup, allGroupServiceIds: string[]) => {
+    if (!token) return;
+    const remaining = allGroupServiceIds.filter((id) => id !== serviceId);
+    if (remaining.length === 0) {
+      addPlanToast("Impossibile rimuovere: giro con un solo servizio. Eliminalo dalla vista manuale.", "err");
+      return;
+    }
+    setPlanSavingServiceId(serviceId);
+    const res = await tripAction(token, {
+      action: "update_trip",
+      group_id: group.id,
+      date,
+      driver_user_id: group.driver_user_id,
+      driver_profile_id: group.driver_profile_id,
+      vehicle_label: group.vehicle_label,
+      vehicle_capacity: group.vehicle_capacity,
+      service_ids: remaining,
+    }).catch(() => ({ ok: false as const, error: "Errore di rete." }));
+    setPlanSavingServiceId(null);
+    if (res.ok) {
+      addPlanToast("Servizio rimosso dal giro.", "ok");
+      setPlanModCount((n) => n + 1);
+      void reload();
+    } else {
+      addPlanToast(res.error ?? "Errore rimozione servizio.", "err");
+    }
+  }, [token, date, reload, addPlanToast]);
 
   // Maps per lookup O(1)
   const serviceMap = useMemo(() => new Map((data?.services ?? []).map((s) => [s.id, s])), [data]);
@@ -3827,7 +3933,7 @@ export default function PianoGiornoPage() {
 
         {data && viewMode === "plan" && (
           <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className={`grid gap-3 ${planModCount > 0 ? "md:grid-cols-5" : "md:grid-cols-4"}`}>
               <button
                 type="button"
                 onClick={showAllTrips}
@@ -3868,6 +3974,13 @@ export default function PianoGiornoPage() {
                 </p>
                 <p className="text-xs text-slate-500">servizi non inseriti in un giro</p>
               </button>
+              {planModCount > 0 && (
+                <div className="card p-4 text-left border-emerald-200">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">Modifiche</p>
+                  <p className="mt-1 text-3xl font-bold text-emerald-700">{planModCount}</p>
+                  <p className="text-xs text-slate-500">apportate oggi</p>
+                </div>
+              )}
             </div>
 
             <ContinentDispatchSection data={data.continent_dispatch} />
@@ -4217,11 +4330,45 @@ export default function PianoGiornoPage() {
                         {isExpanded && (
                           <div className="mt-3 rounded border border-slate-200 bg-white">
                             <div className="grid gap-2 border-b border-slate-100 px-3 py-2 text-xs text-slate-600 sm:grid-cols-3">
-                              <div>
-                                <span className="font-semibold text-slate-800">Autista:</span> {trip.driverName}
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className="font-semibold text-slate-800">Autista:</span>
+                                {planSavingGroupId === trip.group.id ? (
+                                  <span className="text-slate-400 italic">Salvataggio...</span>
+                                ) : (
+                                  <select
+                                    className="rounded border border-slate-200 px-1.5 py-0.5 text-xs text-slate-800 focus:border-blue-400 focus:outline-none"
+                                    defaultValue={trip.group.driver_profile_id ?? trip.group.driver_user_id ?? ""}
+                                    onChange={(e) => {
+                                      const entry = driverEntries.find((d) => d.profileId === e.target.value);
+                                      if (entry) void handlePlanUpdateDriver(trip.group, trip.services.map((s) => s.id), entry);
+                                    }}
+                                  >
+                                    <option value="">— Nessun autista —</option>
+                                    {driverEntries.map((d) => (
+                                      <option key={d.profileId} value={d.profileId}>{d.name}</option>
+                                    ))}
+                                  </select>
+                                )}
                               </div>
-                              <div>
-                                <span className="font-semibold text-slate-800">Mezzo:</span> {trip.group.vehicle_label ?? "Da assegnare"}
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className="font-semibold text-slate-800">Mezzo:</span>
+                                {planSavingGroupId === trip.group.id ? (
+                                  <span className="text-slate-400 italic">Salvataggio...</span>
+                                ) : (
+                                  <select
+                                    className="rounded border border-slate-200 px-1.5 py-0.5 text-xs text-slate-800 focus:border-blue-400 focus:outline-none"
+                                    defaultValue={trip.group.vehicle_label ?? ""}
+                                    onChange={(e) => {
+                                      const vehicle = (data?.vehicles ?? []).find((v) => v.label === e.target.value);
+                                      if (vehicle) void handlePlanUpdateVehicle(trip.group, trip.services.map((s) => s.id), vehicle);
+                                    }}
+                                  >
+                                    <option value="">— Da assegnare —</option>
+                                    {(data?.vehicles ?? []).map((v) => (
+                                      <option key={v.id} value={v.label ?? ""}>{v.label}{v.capacity ? ` (${v.capacity})` : ""}</option>
+                                    ))}
+                                  </select>
+                                )}
                               </div>
                               <div>
                                 <span className="font-semibold text-slate-800">Totale:</span> {trip.pax} pax
@@ -4233,7 +4380,7 @@ export default function PianoGiornoPage() {
                                 const hotel = hotelMap.get(svc.hotel_id ?? "");
                                 const display = getPianoServiceDisplay(svc, hotel);
                                 return (
-                                  <div key={svc.id} className="grid gap-2 px-3 py-2 text-xs sm:grid-cols-[76px_minmax(170px,1fr)_minmax(220px,1.4fr)_minmax(130px,0.8fr)]">
+                                  <div key={svc.id} className="grid gap-2 px-3 py-2 text-xs sm:grid-cols-[76px_minmax(170px,1fr)_minmax(220px,1.4fr)_minmax(130px,0.8fr)_80px]">
                                     <div className="font-mono font-semibold text-slate-700">
                                       {display.primaryTime ?? serviceDisplayTime(svc)}
                                     </div>
@@ -4274,6 +4421,48 @@ export default function PianoGiornoPage() {
                                       {display.noteLabel ? (
                                         <p className="mt-1 text-[11px] italic text-slate-500">{display.noteLabel}</p>
                                       ) : null}
+                                    </div>
+                                    <div className="flex flex-col gap-1">
+                                      {planSavingServiceId === svc.id ? (
+                                        <span className="text-[10px] text-slate-400 italic">Salvataggio...</span>
+                                      ) : (
+                                        <>
+                                          <div className="relative">
+                                            <button
+                                              className="w-full rounded border border-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                                              disabled={planSavingServiceId != null}
+                                              onClick={() => setPlanMoveMenuSvcId(planMoveMenuSvcId === svc.id ? null : svc.id)}
+                                            >
+                                              Sposta ↗
+                                            </button>
+                                            {planMoveMenuSvcId === svc.id && (
+                                              <div className="absolute right-0 top-full z-20 mt-1 w-52 rounded border border-slate-200 bg-white shadow-lg">
+                                                <p className="border-b border-slate-100 px-2 py-1 text-[10px] font-bold uppercase text-slate-500">Sposta verso</p>
+                                                {tripRows.filter((t) => t.group.id !== trip.group.id).length === 0 ? (
+                                                  <p className="px-2 py-2 text-[10px] text-slate-400">Nessun altro giro disponibile</p>
+                                                ) : (
+                                                  tripRows.filter((t) => t.group.id !== trip.group.id).map((t) => (
+                                                    <button
+                                                      key={t.group.id}
+                                                      className="w-full px-2 py-1.5 text-left text-[10px] hover:bg-slate-50"
+                                                      onClick={() => void handlePlanMoveService(svc.id, trip.group.id, t.group.id)}
+                                                    >
+                                                      <span className="font-semibold">{t.time}</span> · {t.driverName}
+                                                    </button>
+                                                  ))
+                                                )}
+                                              </div>
+                                            )}
+                                          </div>
+                                          <button
+                                            className="rounded border border-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
+                                            disabled={planSavingServiceId != null}
+                                            onClick={() => void handlePlanRemoveService(svc.id, trip.group, trip.services.map((s) => s.id))}
+                                          >
+                                            × Rimuovi
+                                          </button>
+                                        </>
+                                      )}
                                     </div>
                                   </div>
                                 );
@@ -4345,6 +4534,23 @@ export default function PianoGiornoPage() {
           </div>
         )}
       </section>
+
+      {planToasts.length > 0 && (
+        <div className="pointer-events-none fixed bottom-6 right-6 z-50 flex flex-col gap-2">
+          {planToasts.map((toast) => (
+            <div
+              key={toast.id}
+              className={`rounded-lg px-4 py-2.5 text-sm font-semibold shadow-lg ${
+                toast.type === "ok"
+                  ? "bg-emerald-600 text-white"
+                  : "bg-red-600 text-white"
+              }`}
+            >
+              {toast.text}
+            </div>
+          ))}
+        </div>
+      )}
     </>
   );
 }
