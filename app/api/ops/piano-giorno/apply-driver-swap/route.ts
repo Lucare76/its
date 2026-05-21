@@ -16,6 +16,7 @@ import {
 import { insertOperatorDecision, loadConfirmedOperatorDecisions } from "@/lib/server/piano-operator-decisions";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
+import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
 
 export const runtime = "nodejs";
 
@@ -186,7 +187,7 @@ export async function POST(request: NextRequest) {
       toVehicleLabel: preview.proposed.vehicle_label,
       features,
       operatorId: auth.user.id,
-    })));
+    }))).then(() => updateLearnedPatterns(auth.admin, auth.membership.tenant_id).catch(() => undefined));
 
     return NextResponse.json({
       ok: true,

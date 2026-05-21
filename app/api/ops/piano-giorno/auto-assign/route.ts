@@ -33,7 +33,7 @@ import { vehicleIntervalsOverlap, vehicleResourceKey } from "@/lib/piano-vehicle
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import { assignGlobalPlanner, type GlobalPlannerDriver, type GlobalPlannerUnit, type GlobalPlannerVehicle } from "@/lib/piano-global-planner";
 import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
-import { loadLearnedPatterns } from "@/lib/server/learned-patterns";
+import { loadLearnedPatterns, updateLearnedPatterns } from "@/lib/server/learned-patterns";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -1430,7 +1430,9 @@ export async function POST(request: NextRequest) {
                 };
               });
             });
-            void logAssignmentChange(batchAdmin, historyEntries);
+            void logAssignmentChange(batchAdmin, historyEntries).then(() =>
+              updateLearnedPatterns(batchAdmin, tenantId).catch(() => undefined)
+            );
           }
         }
       }
