@@ -13,6 +13,7 @@ import { validateResolutionSuggestionApply } from "@/lib/piano-resolution-apply-
 import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { insertOperatorDecision, loadConfirmedOperatorDecisions, supersedeOverlappingOperatorDecisions } from "@/lib/server/piano-operator-decisions";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
 
 export const runtime = "nodejs";
 
@@ -258,6 +259,20 @@ export async function POST(request: NextRequest) {
       before_json: preview.before,
       after_json: preview.after,
     });
+    const features = extractFeatures({
+      serviceDate: date,
+      changeType: "resolution_suggestion",
+    });
+    void logAssignmentChange(auth.admin, serviceIds.map((serviceId) => ({
+      tenantId: auth.membership.tenant_id,
+      serviceDate: date,
+      serviceId,
+      groupId: decision.suggestion.group_id,
+      changeType: "resolution_suggestion" as const,
+      features: { ...features, action: decision.suggestion.recommended_action },
+      operatorId: auth.user.id,
+    })));
+
     const superseded = await supersedeOverlappingOperatorDecisions(auth, {
       service_date: date,
       trip_group_id: decision.suggestion.group_id,

@@ -14,6 +14,7 @@ import {
   validateVehicleBindingPreviewForApply,
 } from "@/lib/server/piano-vehicle-binding-preview";
 import { insertOperatorDecision } from "@/lib/server/piano-operator-decisions";
+import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
 
 export const runtime = "nodejs";
 
@@ -136,6 +137,29 @@ export async function POST(request: NextRequest) {
       }
       updatedGroups.push(data as { id: string; vehicle_label: string | null; vehicle_capacity: number | null });
     }
+
+    const historyEntries = preview.changes.flatMap((change) =>
+      change.service_ids.map((serviceId) => {
+        const features = extractFeatures({
+          serviceDate: body.data.date,
+          changeType: "vehicle_binding",
+          fromVehicleLabel: change.current_vehicle_label,
+          toVehicleLabel: change.proposed_vehicle_label,
+        });
+        return {
+          tenantId: auth.membership.tenant_id,
+          serviceDate: body.data.date,
+          serviceId,
+          groupId: change.group_id,
+          changeType: "vehicle_binding" as const,
+          fromVehicleLabel: change.current_vehicle_label,
+          toVehicleLabel: change.proposed_vehicle_label,
+          features,
+          operatorId: auth.user.id,
+        };
+      })
+    );
+    void logAssignmentChange(auth.admin, historyEntries);
 
     return NextResponse.json({
       ok: true,

@@ -14,6 +14,7 @@ export type GlobalPlannerUnit = {
   locked?: boolean;
   protected_from_backtracking?: boolean;
   dense_shuttle?: boolean;
+  learned_driver_scores?: Record<string, number> | null;
 };
 
 export type GlobalPlannerDriver = {
@@ -179,6 +180,9 @@ function chooseCandidate<TUnit extends GlobalPlannerUnit>(
       if (driver.key === unit.current_driver_key) score -= 100;
       if (norm(vehicle.label) === norm(unit.current_vehicle_label)) score -= 80;
       if (unit.pax >= 9 && unit.pax <= 14 && norm(vehicle.label).includes("DUCATO MAXI")) score -= 15;
+      const existingLoad = assignments.filter((a) => a.assigned && a.proposed_driver_key === driver.key).length;
+      score += existingLoad * 3;
+      score += unit.learned_driver_scores?.[driver.key] ?? 0;
       candidates.push({ driver, vehicle, score });
     }
   }

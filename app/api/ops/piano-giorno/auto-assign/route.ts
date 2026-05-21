@@ -31,6 +31,9 @@ import {
 } from "@/lib/server/geo-assignment";
 import { vehicleIntervalsOverlap, vehicleResourceKey } from "@/lib/piano-vehicle-timeline";
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
+import { assignGlobalPlanner, type GlobalPlannerDriver, type GlobalPlannerUnit, type GlobalPlannerVehicle } from "@/lib/piano-global-planner";
+import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
+import { loadLearnedPatterns } from "@/lib/server/learned-patterns";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -112,6 +115,12 @@ function portPriority(meetingPoint: string | null): "nordovest" | "estsud" {
 function timeToMin(t: string): number {
   const parts = (t ?? "").split(":");
   return (parseInt(parts[0] ?? "0", 10)) * 60 + (parseInt(parts[1] ?? "0", 10));
+}
+
+function minutesToHHMM(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
 const PORT_COORDS: Record<string, { lat: number; lng: number }> = {
@@ -989,62 +998,163 @@ export async function POST(request: NextRequest) {
       if (area) driverCurrentArea.set(profileId, area);
     }
 
-    const draftAssignments: Array<{ draft: TripDraft; profileId: string | null; userId: string | null }> = [];
+    const draftAssignments: Array<{ draft: TripDraft; profileId: string | null; userId: string | null; suggestedVehicleLabel: string | null }> = [];
     const geographicSkips: string[] = [];
 
-    for (const draft of drafts) {
-      const tripMin = timeToMin(draft.time);
-      const tripArea = zoneToGeoArea(draft.zoneLabel);
-      const draftGeoWindow = draftToGeographicWindow(draft, serviceMap, hotelMap);
-      let assignedProfileId: string | null = null;
-      let assignedUserId: string | null = null;
+    let plannerUsed: "global" | "greedy_fallback" = "global";
 
-      if (drivers.length > 0) {
-        const timeAvailable = [...drivers].filter((d) =>
-          driverAvailableAtTime(d.profile_id, tripMin, driverAvailMap)
-        );
+    try {
+      const gpUnits: GlobalPlannerUnit[] = drafts.map((draft, i) => {
+        const startMin = timeToMin(draft.time);
+        const durationMin = estimateVehicleReuseDurationMin(draft.zoneLabel, draft.isNavetta);
+        const hotelIds = draft.serviceIds
+          .map((sid) => allServices.find((s) => s.id === sid)?.hotel_id)
+          .filter((id): id is string => Boolean(id));
+        const hotelMaxCap = hotelIds.reduce<number | null>((min, hid) => {
+          const limit = hotelVehicleLimitMap.get(hid);
+          if (limit == null) return min;
+          return min == null ? limit : Math.min(min, limit);
+        }, null);
+        return {
+          id: `draft_${i}`,
+          type: draft.isNavetta ? "navetta_speciale" : draft.direction === "arrival" ? "arrival" : "departure",
+          label: `${draft.zoneLabel} ${draft.time}`,
+          start: minutesToHHMM(startMin),
+          end: minutesToHHMM(startMin + durationMin),
+          pax: draft.pax,
+          min_vehicle_capacity: draft.pax,
+          max_vehicle_capacity: hotelMaxCap,
+          nonsplittable: draft.serviceIds.length > 1,
+          buffer_minutes: 5,
+          locked: false,
+        };
+      });
 
-        // Hard block: < 30 min → fisicamente impossibile fare due giri
-        // Soft penalty: 30-75 min → penalizzato ma usabile come ultima risorsa
-        const hardFree = timeAvailable.filter((d) => {
-          const times = driverTimes.get(d.profile_id) ?? [];
-          return !times.some((t) => Math.abs(t - tripMin) < 30);
-        });
-        // Solo se tutti hanno hard conflict si usa il pool completo
-        const candidates = (hardFree.length > 0 ? hardFree : timeAvailable)
-          .map((driver) => ({
-            driver,
-            geoIssue: geographicScheduleIssue(driverGeoWindows.get(driver.profile_id) ?? [], draftGeoWindow),
-          }))
-          .filter((candidate) => candidate.geoIssue?.severity !== "block");
+      const gpDrivers: GlobalPlannerDriver[] = drivers.map((d) => {
+        const avail = driverAvailMap.get(d.profile_id);
+        return {
+          key: d.profile_id,
+          name: d.full_name ?? d.profile_id,
+          max_vehicle_capacity: d.max_vehicle_capacity ?? null,
+          available_from: avail?.available_from ?? null,
+          available_to: avail?.available_to ?? null,
+        };
+      });
 
-        // Score: conflitto 30-75 min (100_000) >> num giri (×100) >> zona (0/2/5 tiebreaker)
-        const best = candidates
-          .map(({ driver, geoIssue }) => {
-            const times = driverTimes.get(driver.profile_id) ?? [];
-            const conflictPenalty = times.some((t) => Math.abs(t - tripMin) < 75) ? 100_000 : 0;
-            const lastArea = driverCurrentArea.get(driver.profile_id);
-            const zonePenalty = !lastArea || !tripArea ? 2
-              : lastArea === tripArea ? 0 : 5;
-            const warningPenalty = geoIssue?.severity === "warning" ? 20 : 0;
-            return { driver, score: conflictPenalty + times.length * 100 + zonePenalty + warningPenalty };
-          })
-          .sort((a, b) => a.score - b.score)[0];
+      const gpVehicles: GlobalPlannerVehicle[] = vehicles.map((v) => ({
+        key: vehicleResourceKey({ id: v.id, label: v.label }).key ?? v.label,
+        label: v.label,
+        capacity: v.capacity,
+      }));
 
-        if (best) {
-          assignedProfileId = best.driver.profile_id;
-          assignedUserId = best.driver.user_id;
-          const times = driverTimes.get(assignedProfileId) ?? [];
-          times.push(tripMin);
-          driverTimes.set(assignedProfileId, times);
-          driverGeoWindows.set(assignedProfileId, [...(driverGeoWindows.get(assignedProfileId) ?? []), draftGeoWindow]);
-          if (tripArea) driverCurrentArea.set(assignedProfileId, tripArea);
-        } else if (timeAvailable.length > 0) {
-          geographicSkips.push(draftConflictLabel(draft, serviceMap, hotelMap));
+      // Carica pattern appresi e applica learned_driver_scores per ogni unit
+      const learnedPatterns = await loadLearnedPatterns(auth.admin, tenantId);
+      if (learnedPatterns.length > 0) {
+        const patternMap = new Map<string, Map<string, number>>();
+        for (const lp of learnedPatterns) {
+          const rate = lp.total_count > 0 ? (lp.total_count - lp.correction_count) / lp.total_count : 0;
+          const adjustment = rate >= 0.8 ? -50 : rate >= 0.6 ? -25 : rate < 0.4 ? 50 : 25;
+          const driverMap = patternMap.get(lp.pattern_key) ?? new Map<string, number>();
+          driverMap.set(lp.driver_profile_id, adjustment);
+          patternMap.set(lp.pattern_key, driverMap);
+        }
+        for (let i = 0; i < gpUnits.length; i++) {
+          const unit = gpUnits[i]!;
+          const draft = drafts[i]!;
+          const firstService = draft.serviceIds.length > 0 ? serviceMap.get(draft.serviceIds[0]!) : null;
+          const hotel = firstService?.hotel_id ? hotelMap.get(firstService.hotel_id) : null;
+          const zone = hotel?.zone ?? draft.zoneLabel;
+          const startMin = timeToMin(draft.time);
+          const h = Math.floor(startMin / 60);
+          const slot = h >= 6 && h < 12 ? "mattina" : h >= 12 && h < 16 ? "pomeriggio" : h >= 16 && h < 20 ? "sera" : "notte";
+          const category = draft.isNavetta
+            ? (draft.direction === "arrival" ? "navetta_arrivo" : "navetta_partenza")
+            : (draft.direction === "arrival" ? "arrivo" : "partenza");
+          const vessel = firstService?.vessel ?? null;
+          const patternKey = `${category}:${zone ?? "*"}:${slot}:${vessel ?? "*"}`;
+          const driverMap = patternMap.get(patternKey);
+          if (driverMap) unit.learned_driver_scores = Object.fromEntries(driverMap);
         }
       }
 
-      draftAssignments.push({ draft, profileId: assignedProfileId, userId: assignedUserId });
+      const gpAssignments = assignGlobalPlanner({
+        units: gpUnits,
+        drivers: gpDrivers,
+        vehicles: gpVehicles,
+        enableBacktracking: true,
+      });
+
+      for (let i = 0; i < drafts.length; i++) {
+        const draft = drafts[i]!;
+        const gpa = gpAssignments.find((a) => a.id === `draft_${i}`);
+        const profileId = gpa?.assigned ? (gpa.proposed_driver_key ?? null) : null;
+        const driverRow = profileId ? drivers.find((d) => d.profile_id === profileId) : null;
+        const userId = driverRow?.user_id ?? null;
+        const suggestedVehicleLabel = gpa?.assigned ? gpa.proposed_vehicle_label : null;
+        if (profileId) {
+          const times = driverTimes.get(profileId) ?? [];
+          times.push(timeToMin(draft.time));
+          driverTimes.set(profileId, times);
+          const area = zoneToGeoArea(draft.zoneLabel);
+          if (area) driverCurrentArea.set(profileId, area);
+          const draftGeoWindow = draftToGeographicWindow(draft, serviceMap, hotelMap);
+          driverGeoWindows.set(profileId, [...(driverGeoWindows.get(profileId) ?? []), draftGeoWindow]);
+        }
+        draftAssignments.push({ draft, profileId, userId, suggestedVehicleLabel });
+      }
+    } catch {
+      plannerUsed = "greedy_fallback";
+
+      for (const draft of drafts) {
+        const tripMin = timeToMin(draft.time);
+        const tripArea = zoneToGeoArea(draft.zoneLabel);
+        const draftGeoWindow = draftToGeographicWindow(draft, serviceMap, hotelMap);
+        let assignedProfileId: string | null = null;
+        let assignedUserId: string | null = null;
+
+        if (drivers.length > 0) {
+          const timeAvailable = [...drivers].filter((d) =>
+            driverAvailableAtTime(d.profile_id, tripMin, driverAvailMap)
+          );
+
+          const hardFree = timeAvailable.filter((d) => {
+            const times = driverTimes.get(d.profile_id) ?? [];
+            return !times.some((t) => Math.abs(t - tripMin) < 30);
+          });
+          const candidates = (hardFree.length > 0 ? hardFree : timeAvailable)
+            .map((driver) => ({
+              driver,
+              geoIssue: geographicScheduleIssue(driverGeoWindows.get(driver.profile_id) ?? [], draftGeoWindow),
+            }))
+            .filter((candidate) => candidate.geoIssue?.severity !== "block");
+
+          const best = candidates
+            .map(({ driver, geoIssue }) => {
+              const times = driverTimes.get(driver.profile_id) ?? [];
+              const conflictPenalty = times.some((t) => Math.abs(t - tripMin) < 75) ? 100_000 : 0;
+              const lastArea = driverCurrentArea.get(driver.profile_id);
+              const zonePenalty = !lastArea || !tripArea ? 2
+                : lastArea === tripArea ? 0 : 5;
+              const warningPenalty = geoIssue?.severity === "warning" ? 20 : 0;
+              return { driver, score: conflictPenalty + times.length * 100 + zonePenalty + warningPenalty };
+            })
+            .sort((a, b) => a.score - b.score)[0];
+
+          if (best) {
+            assignedProfileId = best.driver.profile_id;
+            assignedUserId = best.driver.user_id;
+            const times = driverTimes.get(assignedProfileId) ?? [];
+            times.push(tripMin);
+            driverTimes.set(assignedProfileId, times);
+            driverGeoWindows.set(assignedProfileId, [...(driverGeoWindows.get(assignedProfileId) ?? []), draftGeoWindow]);
+            if (tripArea) driverCurrentArea.set(assignedProfileId, tripArea);
+          } else if (timeAvailable.length > 0) {
+            geographicSkips.push(draftConflictLabel(draft, serviceMap, hotelMap));
+          }
+        }
+
+        draftAssignments.push({ draft, profileId: assignedProfileId, userId: assignedUserId, suggestedVehicleLabel: null });
+      }
     }
 
     // ── 8. Assegna mezzi (il più piccolo che soddisfa PAX + vincoli hotel + autista) ─
@@ -1178,6 +1288,12 @@ export async function POST(request: NextRequest) {
         const firstLabel = events.map((e) => e.vehicleLabel).find((l): l is string => Boolean(l));
         if (firstLabel) driverPreferredVehicle.set(pid, firstLabel);
       }
+      // Pre-seed preferred vehicle from global-planner suggestions (only new drivers without locked vehicles)
+      for (const { profileId, suggestedVehicleLabel } of draftAssignments) {
+        if (profileId && suggestedVehicleLabel && !driverPreferredVehicle.has(profileId)) {
+          driverPreferredVehicle.set(profileId, suggestedVehicleLabel);
+        }
+      }
 
       for (const { draft, profileId, userId: driverUserId } of draftAssignments) {
         if (!profileId) continue;
@@ -1284,6 +1400,38 @@ export async function POST(request: NextRequest) {
           if (assignRes.error) errors.push(`Assignments: ${assignRes.error.message}`);
           if (svcRes.error) errors.push(`Services update: ${svcRes.error.message}`);
           if (statusRes.error) errors.push(`Status events: ${statusRes.error.message}`);
+
+          if (!assignRes.error && !svcRes.error) {
+            const historyEntries = prepared.flatMap(({ draft, profileId, vehicle }, idx) => {
+              const groupId = (createdGroups[idx] as { id: string } | undefined)?.id ?? null;
+              return draft.serviceIds.map((serviceId) => {
+                const service = serviceMap.get(serviceId);
+                const hotel = service?.hotel_id ? hotelMap.get(service.hotel_id) : undefined;
+                const features = extractFeatures({
+                  serviceDate: date,
+                  changeType: "auto_assign_accepted",
+                  toDriverProfileId: profileId,
+                  toVehicleLabel: vehicle?.label ?? null,
+                  direction: draft.direction,
+                  zone: hotel?.zone ?? draft.zoneLabel,
+                  time: draft.time,
+                  isNavetta: draft.isNavetta,
+                });
+                return {
+                  tenantId,
+                  serviceDate: date,
+                  serviceId,
+                  groupId,
+                  changeType: "auto_assign_accepted" as const,
+                  toDriverProfileId: profileId,
+                  toVehicleLabel: vehicle?.label ?? null,
+                  features,
+                  operatorId: userId,
+                };
+              });
+            });
+            void logAssignmentChange(batchAdmin, historyEntries);
+          }
         }
       }
     }
@@ -1313,7 +1461,7 @@ export async function POST(request: NextRequest) {
       ...(errors.length > 0 ? [`${errors.length} errori: ${errors.slice(0, 2).join("; ")}`] : []),
     ];
 
-    return NextResponse.json({ ok: true, assigned: assignedCount, trips: tripsCreated, skipped: unassignedCount, report });
+    return NextResponse.json({ ok: true, assigned: assignedCount, trips: tripsCreated, skipped: unassignedCount, report, planner_used: plannerUsed });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : "Errore." },

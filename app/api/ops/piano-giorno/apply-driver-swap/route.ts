@@ -15,6 +15,7 @@ import {
 } from "@/lib/server/piano-driver-swap-preview";
 import { insertOperatorDecision, loadConfirmedOperatorDecisions } from "@/lib/server/piano-operator-decisions";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
 
 export const runtime = "nodejs";
 
@@ -164,6 +165,28 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+
+    const features = extractFeatures({
+      serviceDate: body.data.date,
+      changeType: "driver_swap",
+      fromDriverProfileId: preview.current.driver_profile_id,
+      toDriverProfileId: preview.proposed.driver_profile_id,
+      fromVehicleLabel: preview.current.vehicle_label,
+      toVehicleLabel: preview.proposed.vehicle_label,
+    });
+    void logAssignmentChange(auth.admin, preview.trip.service_ids.map((serviceId) => ({
+      tenantId: auth.membership.tenant_id,
+      serviceDate: body.data.date,
+      serviceId,
+      groupId: preview.trip_group_id,
+      changeType: "driver_swap",
+      fromDriverProfileId: preview.current.driver_profile_id,
+      toDriverProfileId: preview.proposed.driver_profile_id,
+      fromVehicleLabel: preview.current.vehicle_label,
+      toVehicleLabel: preview.proposed.vehicle_label,
+      features,
+      operatorId: auth.user.id,
+    })));
 
     return NextResponse.json({
       ok: true,
