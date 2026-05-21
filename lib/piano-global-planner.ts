@@ -6,6 +6,7 @@ export type GlobalPlannerUnit = {
   end: string | null;
   pax: number;
   min_vehicle_capacity: number;
+  max_vehicle_capacity?: number | null;
   nonsplittable: boolean;
   current_driver_key?: string | null;
   current_vehicle_label?: string | null;
@@ -96,6 +97,7 @@ function driverCanUseVehicle(driver: GlobalPlannerDriver, vehicle: GlobalPlanner
 function hardCompatible(unit: GlobalPlannerUnit, driver: GlobalPlannerDriver, vehicle: GlobalPlannerVehicle) {
   return inDriverAvailability(unit, driver)
     && (vehicle.capacity ?? -1) >= unit.min_vehicle_capacity
+    && (unit.max_vehicle_capacity == null || (vehicle.capacity ?? 0) <= unit.max_vehicle_capacity)
     && driverCanUseVehicle(driver, vehicle);
 }
 

@@ -311,6 +311,14 @@ function makeUnit(args: {
     ...new Set(args.stops.map((s) => s.destination_label).filter((d): d is string => Boolean(d))),
   ];
 
+  // Hotels with physical road/access constraints: max vehicle capacity regardless of pax
+  const accessConstrainedLabels = ["SAN NICOLA"];
+  const hasAccessConstraint = args.stops.some((s) =>
+    accessConstrainedLabels.some(
+      (label) => norm(s.pickup_label ?? "").includes(label) || norm(s.destination_label ?? "").includes(label),
+    ),
+  );
+
   return {
     id: args.id,
     type: args.type,
@@ -322,6 +330,7 @@ function makeUnit(args: {
     pax,
     nonsplittable: true,
     min_vehicle_capacity: pax,
+    max_vehicle_capacity: hasAccessConstraint ? 16 : null,
     buffer_minutes: dur.buffer_minutes,
     current_driver_key: args.group ? groupDriverKey(args.group) : null,
     current_driver_name: args.group ? driverNameForGroup(args.group, args.drivers) : null,
@@ -438,7 +447,8 @@ function diagnostics(args: {
     if (
       !driver ||
       !vehicle ||
-      !canDriverUseVehicle(driver, vehicle, { blockUnknownVehicleCapacity: true }).allowed
+      !canDriverUseVehicle(driver, vehicle, { blockUnknownVehicleCapacity: true }).allowed ||
+      (left.max_vehicle_capacity != null && (vehicle.capacity ?? 0) > left.max_vehicle_capacity)
     ) {
       eligibilityBlockers += 1;
     }
