@@ -123,99 +123,108 @@ async function runCron(request: NextRequest) {
     "bus_city_hotel",
   ];
 
-  const { data: candidates, error: candidatesError } = await admin
-    .from("services")
-    .select("id, tenant_id, customer_name, phone, phone_e164, booking_service_kind, status, date")
-    .gte("date", dateFrom)
-    .lte("date", dateTo)
-    .neq("status", "cancelled")
-    .in("booking_service_kind", infoKinds)
-    .not("phone", "is", null)
-    .limit(2000);
+  const { data: tenants } = await admin.from("tenants").select("id").limit(50);
 
-  if (candidatesError) {
-    return NextResponse.json({ error: "Query fallita: " + candidatesError.message }, { status: 500 });
-  }
+  let totalScanned = 0;
+  let totalToSend = 0;
+  let totalSent = 0;
+  let totalSkipped = 0;
+  let totalFailed = 0;
 
-  // Filtra solo quelli il cui "send day" è oggi
-  const services = (candidates ?? []).filter((svc) => {
-    const arrivalDate = svc.date as string;
-    const daysAhead   = sendDaysAhead(svc.id as string);
-    const sendDate    = new Date(new Date(arrivalDate).getTime() - daysAhead * 86_400_000)
-      .toISOString().slice(0, 10);
-    return sendDate === todayStr;
-  });
+  for (const tenant of tenants ?? []) {
+    const tenantId = tenant.id as string;
 
-  if (services.length === 0) {
-    return NextResponse.json({ ok: true, todayStr, scanned: candidates?.length ?? 0, toSend: 0, sent: 0, skipped: 0, failed: 0 });
-  }
+    const { data: candidates, error: candidatesError } = await admin
+      .from("services")
+      .select("id, tenant_id, customer_name, phone, phone_e164, booking_service_kind, status, date")
+      .eq("tenant_id", tenantId)
+      .gte("date", dateFrom)
+      .lte("date", dateTo)
+      .neq("status", "cancelled")
+      .in("booking_service_kind", infoKinds)
+      .not("phone", "is", null)
+      .limit(2000);
 
-  // Deduplicazione
-  const serviceIds = services.map((s) => s.id);
-  const { data: priorEvents } = await admin
-    .from("whatsapp_events")
-    .select("service_id")
-    .in("service_id", serviceIds)
-    .eq("kind", "info_3d")
-    .in("status", ["sent", "delivered", "read"]);
+    if (candidatesError) continue;
 
-  const alreadySent = new Set((priorEvents ?? []).map((e) => e.service_id).filter(Boolean));
+    totalScanned += candidates?.length ?? 0;
 
-  let sent = 0;
-  let skipped = 0;
-  let failed = 0;
-
-  for (const svc of services) {
-    if (alreadySent.has(svc.id)) { skipped++; continue; }
-
-    const phone    = (svc.phone_e164 as string | null) ?? normalizeE164(svc.phone as string);
-    const lang     = detectLanguage(phone) === "it" ? defaultLang : "en";
-    const info     = selectInfoTemplate(svc.booking_service_kind, lang);
-    if (!info) { skipped++; continue; }
-
-    const nowIso  = new Date().toISOString();
-    const appUrl  = process.env.NEXT_PUBLIC_APP_URL ?? "";
-    const qrUrl   = (info as { hasQrHeader?: boolean }).hasQrHeader && appUrl
-      ? `${appUrl}/api/public/qr/${svc.id as string}`
-      : null;
-
-    const extraParams = info.needsDate
-      ? [...info.parameters, svc.date as string]
-      : info.parameters;
-
-    const result = await sendInfoTemplate(
-      phoneNumberId,
-      accessToken,
-      phone,
-      info.templateName,
-      (svc.customer_name as string) ?? "",
-      extraParams,
-      lang,
-      qrUrl
-    );
-
-    await logWhatsAppEvent(admin, {
-      tenant_id: svc.tenant_id as string,
-      service_id: svc.id,
-      to_phone: phone,
-      kind: "info_3d",
-      template: info.templateName,
-      status: result.ok ? "sent" : "failed",
-      provider_message_id: result.messageId,
-      happened_at: nowIso,
-      payload_json: {
-        source: "api/cron/whatsapp-info",
-        booking_service_kind: svc.booking_service_kind,
-        lang,
-        arrival_date: svc.date,
-        error: result.error ?? undefined,
-      },
+    // Filtra solo quelli il cui "send day" è oggi
+    const services = (candidates ?? []).filter((svc) => {
+      const arrivalDate = svc.date as string;
+      const daysAhead   = sendDaysAhead(svc.id as string);
+      const sendDate    = new Date(new Date(arrivalDate).getTime() - daysAhead * 86_400_000)
+        .toISOString().slice(0, 10);
+      return sendDate === todayStr;
     });
 
-    if (result.ok) { sent++; } else { failed++; }
+    if (services.length === 0) continue;
+
+    totalToSend += services.length;
+
+    // Deduplicazione
+    const serviceIds = services.map((s) => s.id);
+    const { data: priorEvents } = await admin
+      .from("whatsapp_events")
+      .select("service_id")
+      .in("service_id", serviceIds)
+      .eq("kind", "info_3d")
+      .in("status", ["sent", "delivered", "read"]);
+
+    const alreadySent = new Set((priorEvents ?? []).map((e) => e.service_id).filter(Boolean));
+
+    for (const svc of services) {
+      if (alreadySent.has(svc.id)) { totalSkipped++; continue; }
+
+      const phone    = (svc.phone_e164 as string | null) ?? normalizeE164(svc.phone as string);
+      const lang     = detectLanguage(phone) === "it" ? defaultLang : "en";
+      const info     = selectInfoTemplate(svc.booking_service_kind, lang);
+      if (!info) { totalSkipped++; continue; }
+
+      const nowIso  = new Date().toISOString();
+      const appUrl  = process.env.NEXT_PUBLIC_APP_URL ?? "";
+      const qrUrl   = (info as { hasQrHeader?: boolean }).hasQrHeader && appUrl
+        ? `${appUrl}/api/public/qr/${svc.id as string}`
+        : null;
+
+      const extraParams = info.needsDate
+        ? [...info.parameters, svc.date as string]
+        : info.parameters;
+
+      const result = await sendInfoTemplate(
+        phoneNumberId,
+        accessToken,
+        phone,
+        info.templateName,
+        (svc.customer_name as string) ?? "",
+        extraParams,
+        lang,
+        qrUrl
+      );
+
+      await logWhatsAppEvent(admin, {
+        tenant_id: svc.tenant_id as string,
+        service_id: svc.id,
+        to_phone: phone,
+        kind: "info_3d",
+        template: info.templateName,
+        status: result.ok ? "sent" : "failed",
+        provider_message_id: result.messageId,
+        happened_at: nowIso,
+        payload_json: {
+          source: "api/cron/whatsapp-info",
+          booking_service_kind: svc.booking_service_kind,
+          lang,
+          arrival_date: svc.date,
+          error: result.error ?? undefined,
+        },
+      });
+
+      if (result.ok) { totalSent++; } else { totalFailed++; }
+    }
   }
 
-  return NextResponse.json({ ok: true, todayStr, scanned: candidates?.length ?? 0, toSend: services.length, sent, skipped, failed });
+  return NextResponse.json({ ok: true, todayStr, scanned: totalScanned, toSend: totalToSend, sent: totalSent, skipped: totalSkipped, failed: totalFailed });
 }
 
 export async function GET(request: NextRequest) { return runCron(request); }

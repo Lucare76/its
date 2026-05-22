@@ -46,86 +46,92 @@ export async function GET(request: NextRequest) {
   const now = new Date();
   const windowEnd = new Date(now.getTime() + 12 * 60 * 60_000);
 
-  const todayIso   = isoDate(now);
+  const todayIso    = isoDate(now);
   const tomorrowIso = isoDate(windowEnd);
-  const nowTime    = isoTime(now);
-  const endTime    = isoTime(windowEnd);
+  const nowTime     = isoTime(now);
+  const endTime     = isoTime(windowEnd);
 
-  // Servizi nella finestra 12h, esclusi quelli terminati
-  let query = admin
-    .from("services")
-    .select("id, tenant_id, date, time, customer_name, pax, direction, status")
-    .not("status", "in", "(completato,cancelled,pending_cancellation)")
-    .order("date")
-    .order("time");
+  const { data: tenants } = await admin.from("tenants").select("id").limit(50);
 
-  if (todayIso === tomorrowIso) {
-    query = query.eq("date", todayIso).gte("time", nowTime).lte("time", endTime);
-  } else {
-    // La finestra supera la mezzanotte
-    query = query.or(
-      `and(date.eq.${todayIso},time.gte.${nowTime}),and(date.eq.${tomorrowIso},time.lte.${endTime})`
-    );
-  }
+  let totalChecked = 0;
+  let totalOrphans = 0;
+  let totalSent = 0;
 
-  const { data: services, error: svcErr } = await query;
-  if (svcErr) return NextResponse.json({ ok: false, error: svcErr.message }, { status: 500 });
-  if (!services?.length) return NextResponse.json({ ok: true, checked: 0, alerts: 0 });
+  for (const tenant of tenants ?? []) {
+    const tenantId = tenant.id as string;
 
-  const serviceIds = services.map((s) => s.id as string);
+    let query = admin
+      .from("services")
+      .select("id, tenant_id, date, time, customer_name, pax, direction, status")
+      .eq("tenant_id", tenantId)
+      .not("status", "in", "(completato,cancelled,pending_cancellation)")
+      .order("date")
+      .order("time");
 
-  // Carica assignments con driver valorizzato
-  const { data: assignments } = await admin
-    .from("assignments")
-    .select("service_id")
-    .in("service_id", serviceIds)
-    .not("driver_user_id", "is", null);
+    if (todayIso === tomorrowIso) {
+      query = query.eq("date", todayIso).gte("time", nowTime).lte("time", endTime);
+    } else {
+      // La finestra supera la mezzanotte
+      query = query.or(
+        `and(date.eq.${todayIso},time.gte.${nowTime}),and(date.eq.${tomorrowIso},time.lte.${endTime})`
+      );
+    }
 
-  const assignedIds = new Set((assignments ?? []).map((a) => a.service_id as string));
-  const orphans = services.filter((s) => !assignedIds.has(s.id as string));
+    const { data: services, error: svcErr } = await query;
+    if (svcErr || !services?.length) continue;
 
-  if (!orphans.length) {
-    return NextResponse.json({ ok: true, checked: services.length, alerts: 0 });
-  }
+    totalChecked += services.length;
 
-  let sent = 0;
+    const serviceIds = services.map((s) => s.id as string);
 
-  for (const svc of orphans) {
-    const tenantId  = svc.tenant_id as string;
-    const serviceId = svc.id as string;
+    const { data: assignments } = await admin
+      .from("assignments")
+      .select("service_id")
+      .eq("tenant_id", tenantId)
+      .in("service_id", serviceIds)
+      .not("driver_user_id", "is", null);
 
-    // Dedup: già notificato in questa finestra?
-    const { data: existing } = await admin
-      .from("push_notification_log")
-      .select("id")
-      .eq("service_id", serviceId)
-      .eq("kind", "sla_12h")
-      .maybeSingle();
+    const assignedIds = new Set((assignments ?? []).map((a) => a.service_id as string));
+    const orphans = services.filter((s) => !assignedIds.has(s.id as string));
 
-    if (existing) continue;
+    totalOrphans += orphans.length;
 
-    const direction = svc.direction === "arrival" ? "Arrivo" : "Partenza";
-    const hoursLeft = Math.max(0, Math.round(hoursUntil(svc.date as string, svc.time as string, now)));
+    for (const svc of orphans) {
+      const serviceId = svc.id as string;
 
-    await sendPushToTenantRoles(tenantId, ["admin", "operator"], {
-      title: `🚨 Senza autista — ${direction} ${svc.time as string}`,
-      body:  `${svc.customer_name as string} · ${svc.pax as number} pax · fra ${hoursLeft}h`,
-      url:   "/dispatch",
-      tag:   `sla-${serviceId}`,
-    });
+      // Dedup: già notificato in questa finestra?
+      const { data: existing } = await admin
+        .from("push_notification_log")
+        .select("id")
+        .eq("service_id", serviceId)
+        .eq("kind", "sla_12h")
+        .maybeSingle();
 
-    // Log dedup — user_id = sistema (ignora errori di conflitto)
-    try {
-      await admin.from("push_notification_log").insert({
-        tenant_id:  tenantId,
-        user_id:    SYSTEM_USER_ID,
-        service_id: serviceId,
-        kind:       "sla_12h",
+      if (existing) continue;
+
+      const direction = svc.direction === "arrival" ? "Arrivo" : "Partenza";
+      const hoursLeft = Math.max(0, Math.round(hoursUntil(svc.date as string, svc.time as string, now)));
+
+      await sendPushToTenantRoles(tenantId, ["admin", "operator"], {
+        title: `🚨 Senza autista — ${direction} ${svc.time as string}`,
+        body:  `${svc.customer_name as string} · ${svc.pax as number} pax · fra ${hoursLeft}h`,
+        url:   "/dispatch",
+        tag:   `sla-${serviceId}`,
       });
-    } catch { /* conflitto unique constraint: già loggato */ }
 
-    sent++;
+      // Log dedup — user_id = sistema (ignora errori di conflitto)
+      try {
+        await admin.from("push_notification_log").insert({
+          tenant_id:  tenantId,
+          user_id:    SYSTEM_USER_ID,
+          service_id: serviceId,
+          kind:       "sla_12h",
+        });
+      } catch { /* conflitto unique constraint: già loggato */ }
+
+      totalSent++;
+    }
   }
 
-  return NextResponse.json({ ok: true, checked: services.length, orphans: orphans.length, sent });
+  return NextResponse.json({ ok: true, checked: totalChecked, orphans: totalOrphans, sent: totalSent });
 }

@@ -43,66 +43,64 @@ export async function GET(request: NextRequest) {
   const timeStart = `${padTime(winStart.getHours())}:${padTime(winStart.getMinutes())}`;
   const timeEnd   = `${padTime(winEnd.getHours())}:${padTime(winEnd.getMinutes())}`;
 
-  // Prendo tutte le assegnazioni con il servizio corrispondente nella finestra
-  const { data: assignments, error } = await admin
-    .from("assignments")
-    .select("id, service_id, driver_user_id, tenant_id, services!inner(id, date, time, status, customer_name, pax, direction, tenant_id)")
-    .eq("services.date", todayIso)
-    .gte("services.time", timeStart)
-    .lte("services.time", timeEnd)
-    .not("driver_user_id", "is", null);
-
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-  }
-
-  if (!assignments?.length) {
-    return NextResponse.json({ ok: true, sent: 0, window: `${timeStart}–${timeEnd}` });
-  }
-
+  const { data: tenants } = await admin.from("tenants").select("id").limit(50);
   let sent = 0;
 
-  for (const asgn of assignments) {
-    const svc = asgn.services as unknown as Record<string, unknown>;
-    const status = svc.status as string;
+  for (const tenant of tenants ?? []) {
+    const tenantId = tenant.id as string;
 
-    // Salta servizi già completati/cancellati
-    if (status === "completato" || status === "cancelled") continue;
+    const { data: assignments, error } = await admin
+      .from("assignments")
+      .select("id, service_id, driver_user_id, tenant_id, services!inner(id, date, time, status, customer_name, pax, direction, tenant_id)")
+      .eq("tenant_id", tenantId)
+      .eq("services.date", todayIso)
+      .gte("services.time", timeStart)
+      .lte("services.time", timeEnd)
+      .not("driver_user_id", "is", null);
 
-    const tenantId  = svc.tenant_id as string;
-    const serviceId = asgn.service_id as string;
-    const driverUid = asgn.driver_user_id as string;
+    if (error || !assignments?.length) continue;
 
-    // Controlla duplicato nel log
-    const { data: existing } = await admin
-      .from("push_notification_log")
-      .select("id")
-      .eq("service_id", serviceId)
-      .eq("user_id", driverUid)
-      .eq("kind", "reminder_2h")
-      .maybeSingle();
+    for (const asgn of assignments) {
+      const svc = asgn.services as unknown as Record<string, unknown>;
+      const status = svc.status as string;
 
-    if (existing) continue;
+      // Salta servizi già completati/cancellati
+      if (status === "completato" || status === "cancelled") continue;
 
-    const direction = svc.direction === "arrival" ? "Arrivo" : "Partenza";
-    const time = svc.time as string;
-    const name = svc.customer_name as string;
-    const pax  = svc.pax as number;
+      const serviceId = asgn.service_id as string;
+      const driverUid = asgn.driver_user_id as string;
 
-    await sendPushToUser(tenantId, driverUid, {
-      title: `⏰ Tra 2 ore — ${direction} ${time}`,
-      body: `${name} · ${pax} pax`,
-      url: `/driver/${serviceId}`,
-      tag: `reminder-${serviceId}`,
-    });
+      // Controlla duplicato nel log
+      const { data: existing } = await admin
+        .from("push_notification_log")
+        .select("id")
+        .eq("service_id", serviceId)
+        .eq("user_id", driverUid)
+        .eq("kind", "reminder_2h")
+        .maybeSingle();
 
-    // Log per evitare duplicati (ignora conflitto se già esiste)
-    await admin.from("push_notification_log").upsert(
-      { tenant_id: tenantId, user_id: driverUid, service_id: serviceId, kind: "reminder_2h" },
-      { onConflict: "service_id,user_id,kind", ignoreDuplicates: true }
-    );
+      if (existing) continue;
 
-    sent++;
+      const direction = svc.direction === "arrival" ? "Arrivo" : "Partenza";
+      const time = svc.time as string;
+      const name = svc.customer_name as string;
+      const pax  = svc.pax as number;
+
+      await sendPushToUser(tenantId, driverUid, {
+        title: `⏰ Tra 2 ore — ${direction} ${time}`,
+        body: `${name} · ${pax} pax`,
+        url: `/driver/${serviceId}`,
+        tag: `reminder-${serviceId}`,
+      });
+
+      // Log per evitare duplicati (ignora conflitto se già esiste)
+      await admin.from("push_notification_log").upsert(
+        { tenant_id: tenantId, user_id: driverUid, service_id: serviceId, kind: "reminder_2h" },
+        { onConflict: "service_id,user_id,kind", ignoreDuplicates: true }
+      );
+
+      sent++;
+    }
   }
 
   return NextResponse.json({ ok: true, sent, window: `${timeStart}–${timeEnd}` });
