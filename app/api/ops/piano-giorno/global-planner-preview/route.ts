@@ -30,6 +30,7 @@ import {
 import { mergeSameStops, type ResolvedServiceForSameStop } from "@/lib/piano-same-stop-merge";
 
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 // ─── Local DB row types ──────────────────────────────────────────────────────
 

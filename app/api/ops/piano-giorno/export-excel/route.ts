@@ -18,6 +18,7 @@ import {
 import { getPianoServiceDisplay, type PianoDisplayService } from "@/lib/piano-service-display";
 
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

@@ -17,6 +17,7 @@ import { extractWithHaiku } from "@/lib/server/pdf-extract-haiku";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator"]);

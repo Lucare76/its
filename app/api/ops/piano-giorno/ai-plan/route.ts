@@ -4,6 +4,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { hotelGeoQuality } from "@/lib/hotel-geocoding";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const MODEL = "claude-haiku-4-5-20251001";
 const MAX_CLUSTERS = 20;

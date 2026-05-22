@@ -37,6 +37,7 @@ import { loadLearnedPatterns, updateLearnedPatterns } from "@/lib/server/learned
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 const LARGE_GROUP_PAX_THRESHOLD = 21;
 
 // ─── Mapping zona → area geografica ──────────────────────────────────────────
