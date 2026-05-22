@@ -873,19 +873,22 @@ export default function WhatsAppInboxPage() {
     if (!token) return;
     setBusyAction("update_phone");
     setError("");
-    const response = await fetch("/api/ops/whatsapp-inbox", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ thread_id: selectedThreadId, action: "update_phone", phone: nextPhone }),
-    });
-    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
-    if (!response.ok || !body?.ok) {
-      setError(body?.error ?? "Aggiornamento numero non riuscito.");
-    } else {
-      setPhoneEditThreadId(null);
-      await load(selectedThreadId);
+    try {
+      const response = await fetch("/api/ops/whatsapp-inbox", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ thread_id: selectedThreadId, action: "update_phone", phone: nextPhone }),
+      });
+      const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!response.ok || !body?.ok) {
+        setError(body?.error ?? "Aggiornamento numero non riuscito.");
+      } else {
+        setPhoneEditThreadId(null);
+        await load(selectedThreadId);
+      }
+    } finally {
+      setBusyAction(null);
     }
-    setBusyAction(null);
   };
 
   const deleteChat = async () => {
