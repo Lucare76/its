@@ -168,6 +168,13 @@ export function normalizeE164(input: string, defaultCountryCode = "+39") {
   return `${defaultCountryCode}${compact}`;
 }
 
+export function normalizeWhatsAppWaId(input: string) {
+  const compact = input.replace(/[^\d+]/g, "");
+  if (compact.startsWith("+")) return compact;
+  if (compact.startsWith("00")) return `+${compact.slice(2)}`;
+  return compact ? `+${compact}` : "";
+}
+
 function parseDateTime(date: string, time: string) {
   const normalizedTime = time.length >= 5 ? time.slice(0, 5) : "00:00";
   return new Date(`${date}T${normalizedTime}:00`);

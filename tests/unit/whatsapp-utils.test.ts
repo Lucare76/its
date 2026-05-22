@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   normalizeE164,
+  normalizeWhatsAppWaId,
   mapWebhookStatus,
   isReminderDueInWindow,
   extractDriverPhoneFromNotes,
@@ -45,6 +46,28 @@ describe("normalizeE164", () => {
 
   it("preserva + iniziale anche con spazi intorno alle cifre", () => {
     expect(normalizeE164("+1 800 555 0100")).toBe("+18005550100");
+  });
+});
+
+describe("normalizeWhatsAppWaId", () => {
+  it("tratta il wa_id Meta come numero internazionale gia completo", () => {
+    expect(normalizeWhatsAppWaId("491725404319")).toBe("+491725404319");
+  });
+
+  it("non aggiunge un secondo prefisso italiano ai wa_id esteri", () => {
+    expect(normalizeWhatsAppWaId("+49 172 5404319")).toBe("+491725404319");
+  });
+
+  it("preserva i wa_id italiani aggiungendo solo il +", () => {
+    expect(normalizeWhatsAppWaId("393331234567")).toBe("+393331234567");
+  });
+
+  it("corregge numeri con doppio prefisso: rimuove solo spazi, non altera le cifre", () => {
+    expect(normalizeWhatsAppWaId("34491725404319")).toBe("+34491725404319");
+  });
+
+  it("converte formato 00XX in +XX senza aggiungere prefisso paese", () => {
+    expect(normalizeWhatsAppWaId("004917254043")).toBe("+4917254043");
   });
 });
 

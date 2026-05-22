@@ -607,6 +607,8 @@ export default function WhatsAppInboxPage() {
   const [newChatMode, setNewChatMode] = useState(false);
   const [newChatPhone, setNewChatPhone] = useState("");
   const [newChatName, setNewChatName] = useState("");
+  const [phoneEditThreadId, setPhoneEditThreadId] = useState<string | null>(null);
+  const [phoneDraft, setPhoneDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
@@ -855,6 +857,32 @@ export default function WhatsAppInboxPage() {
     if (!response.ok || !body?.ok) {
       setError(body?.error ?? "Azione non riuscita.");
     } else {
+      await load(selectedThreadId);
+    }
+    setBusyAction(null);
+  };
+
+  const saveThreadPhone = async () => {
+    if (!selectedThreadId) return;
+    const nextPhone = phoneDraft.trim();
+    if (nextPhone.length < 6) {
+      setError("Inserisci un numero di telefono valido.");
+      return;
+    }
+    const token = await getAccessToken();
+    if (!token) return;
+    setBusyAction("update_phone");
+    setError("");
+    const response = await fetch("/api/ops/whatsapp-inbox", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ thread_id: selectedThreadId, action: "update_phone", phone: nextPhone }),
+    });
+    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    if (!response.ok || !body?.ok) {
+      setError(body?.error ?? "Aggiornamento numero non riuscito.");
+    } else {
+      setPhoneEditThreadId(null);
       await load(selectedThreadId);
     }
     setBusyAction(null);
@@ -1196,8 +1224,59 @@ export default function WhatsAppInboxPage() {
                               </span>
                             );
                           })()}
-                          {selectedThread.phone_e164 && (
-                            <span className="font-mono text-[11px] text-slate-400">{selectedThread.phone_e164}</span>
+                          {phoneEditThreadId === selectedThread.id ? (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <input
+                                data-no-uppercase
+                                type="tel"
+                                value={phoneDraft}
+                                onChange={(e) => setPhoneDraft(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") void saveThreadPhone();
+                                  if (e.key === "Escape") {
+                                    setPhoneDraft(selectedThread.phone_e164 ?? selectedThread.wa_id ?? "");
+                                    setPhoneEditThreadId(null);
+                                  }
+                                }}
+                                placeholder="+49 172 5404319"
+                                disabled={busyAction !== null}
+                                className="h-7 w-44 rounded-lg border border-slate-200 bg-white px-2 font-mono text-[11px] text-slate-700 outline-none transition focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-100"
+                                aria-label="Numero WhatsApp internazionale"
+                                title="Inserisci il numero con prefisso internazionale, es. +49 172 5404319"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void saveThreadPhone()}
+                                disabled={busyAction !== null || !phoneDraft.trim()}
+                                className="rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                              >
+                                {busyAction === "update_phone" ? "..." : "Salva"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPhoneDraft(selectedThread.phone_e164 ?? selectedThread.wa_id ?? "");
+                                  setPhoneEditThreadId(null);
+                                }}
+                                disabled={busyAction !== null}
+                                className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+                              >
+                                Annulla
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPhoneDraft(selectedThread.phone_e164 ?? selectedThread.wa_id ?? "");
+                                setPhoneEditThreadId(selectedThread.id);
+                              }}
+                              disabled={busyAction !== null}
+                              className="rounded-lg border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] text-slate-500 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-50"
+                              title="Modifica numero WhatsApp"
+                            >
+                              {selectedThread.phone_e164 ?? selectedThread.wa_id ?? "Aggiungi numero"}
+                            </button>
                           )}
                         </div>
                       )}

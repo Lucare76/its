@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { normalizeE164, logWhatsAppEvent, mapWebhookStatus } from "@/lib/server/whatsapp";
+import { normalizeWhatsAppWaId, logWhatsAppEvent, mapWebhookStatus } from "@/lib/server/whatsapp";
 import { sendPushToTenantRoles } from "@/lib/server/web-push";
 import { matchWhatsAppInboundMessage } from "./matching";
 import type { MetaChangeValue, MetaContact, MetaMessage, MetaStatus, MetaWebhookPayload } from "./types";
@@ -199,7 +199,7 @@ async function upsertThread(
 async function processMessage(admin: SupabaseClient, value: MetaChangeValue, message: MetaMessage) {
   if (!message.id || !message.from) return null;
   const contact = value.contacts?.find((item) => item.wa_id === message.from) ?? value.contacts?.[0];
-  const phoneE164 = normalizeE164(message.from);
+  const phoneE164 = normalizeWhatsAppWaId(message.from);
   console.info("WhatsApp inbound message received", {
     hasWaId: Boolean(message.from),
     normalizedPhonePresent: Boolean(phoneE164)

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { getTenantWhatsAppSettings, isWhatsAppCustomerCareWindowOpen, loadSyncedWhatsAppTemplates, logWhatsAppEvent, normalizeE164, sendWhatsAppMessage, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
+import { getTenantWhatsAppSettings, isWhatsAppCustomerCareWindowOpen, loadSyncedWhatsAppTemplates, logWhatsAppEvent, normalizeE164, normalizeWhatsAppWaId, sendWhatsAppMessage, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
 import { matchWhatsAppInboundMessage } from "@/lib/server/whatsapp/matching";
 
 export const runtime = "nodejs";
@@ -10,8 +10,9 @@ type AuthorizedPricingRequest = Exclude<Awaited<ReturnType<typeof authorizePrici
 
 const patchSchema = z.object({
   thread_id: z.string().uuid(),
-  action: z.enum(["mark_read", "close", "reopen", "delete", "associate"]),
+  action: z.enum(["mark_read", "close", "reopen", "delete", "associate", "update_phone"]),
   booking_id: z.string().uuid().nullable().optional(),
+  phone: z.string().trim().min(6, "Numero troppo corto").max(30, "Numero troppo lungo").optional(),
 });
 
 const postSchema = z.object({
@@ -354,6 +355,59 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  if (parsed.data.action === "update_phone") {
+    const normalizedPhone = normalizeWhatsAppWaId(parsed.data.phone ?? "");
+    const digits = normalizedPhone.replace(/\D/g, "");
+    if (digits.length < 8) {
+      return NextResponse.json({ error: "Inserisci il numero in formato internazionale con prefisso (es. +49 172 5404319)." }, { status: 400 });
+    }
+
+    const { data: thread, error: threadError } = await auth.admin
+      .from("whatsapp_threads")
+      .select("id, tenant_id, contact_id, booking_id")
+      .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
+      .eq("id", parsed.data.thread_id)
+      .maybeSingle();
+    if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
+    if (!thread?.id) return NextResponse.json({ error: "Conversazione non trovata" }, { status: 404 });
+
+    const nextWaId = normalizedPhone.replace(/^\+/, "");
+    const updateTimestamp = new Date().toISOString();
+    const { error: contactError } = thread.contact_id
+      ? await auth.admin
+        .from("whatsapp_contacts")
+        .update({ wa_id: nextWaId, phone_e164: normalizedPhone, updated_at: updateTimestamp })
+        .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
+        .eq("id", thread.contact_id)
+      : { error: null };
+    if (contactError) return NextResponse.json({ error: contactError.message }, { status: 500 });
+
+    const { error: threadUpdateError } = await auth.admin
+      .from("whatsapp_threads")
+      .update({ wa_id: nextWaId, phone_e164: normalizedPhone, updated_at: updateTimestamp })
+      .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
+      .eq("id", thread.id);
+    if (threadUpdateError) return NextResponse.json({ error: threadUpdateError.message }, { status: 500 });
+
+    const { error: messagesUpdateError } = await auth.admin
+      .from("whatsapp_messages")
+      .update({ wa_id: nextWaId, phone_e164: normalizedPhone })
+      .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
+      .eq("thread_id", thread.id);
+    if (messagesUpdateError) return NextResponse.json({ error: messagesUpdateError.message }, { status: 500 });
+
+    if (thread.booking_id) {
+      const { error: serviceUpdateError } = await auth.admin
+        .from("services")
+        .update({ phone: normalizedPhone, phone_e164: normalizedPhone })
+        .eq("tenant_id", auth.membership.tenant_id)
+        .eq("id", thread.booking_id);
+      if (serviceUpdateError) return NextResponse.json({ error: serviceUpdateError.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ ok: true, phone_e164: normalizedPhone, wa_id: nextWaId });
+  }
+
   const update =
     parsed.data.action === "mark_read"
       ? { unread_count: 0, updated_at: new Date().toISOString() }
@@ -470,7 +524,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const targetPhone = normalizeE164(thread.wa_id);
+  const targetPhone = normalizeWhatsAppWaId(thread.wa_id);
   const sendResult = sendMode === "template"
     ? await sendWhatsAppMessage({
         to: targetPhone,

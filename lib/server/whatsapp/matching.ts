@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { normalizeE164 } from "@/lib/server/whatsapp";
+import { normalizeWhatsAppWaId } from "@/lib/server/whatsapp";
 import type { WhatsAppMatchResult, WhatsAppServiceSuggestion } from "./types";
 
 type ServiceRow = {
@@ -108,7 +108,7 @@ export async function matchWhatsAppInboundMessage(
   admin: SupabaseClient,
   input: { waId: string; phoneE164: string | null; textBody?: string | null; timestamp?: string | null }
 ): Promise<WhatsAppMatchResult> {
-  const normalizedPhone = input.phoneE164 ?? normalizeE164(input.waId);
+  const normalizedPhone = input.phoneE164 ?? normalizeWhatsAppWaId(input.waId);
   const exactPhones = Array.from(new Set([input.waId, normalizedPhone].filter(Boolean)));
   const serviceColumns = "id, tenant_id, customer_name, phone, phone_e164, date, time, notes, message_id, external_code, source_quote_id, booking_service_kind, hotel_id";
   const [exactPhone, exactPhoneE164] = await Promise.all([
