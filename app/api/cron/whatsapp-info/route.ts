@@ -123,7 +123,7 @@ async function runCron(request: NextRequest) {
     "bus_city_hotel",
   ];
 
-  const { data: tenants } = await admin.from("tenants").select("id").limit(50);
+  const { data: tenants } = await admin.from("tenants").select("id");
 
   let totalScanned = 0;
   let totalToSend = 0;
@@ -167,6 +167,7 @@ async function runCron(request: NextRequest) {
     const { data: priorEvents } = await admin
       .from("whatsapp_events")
       .select("service_id")
+      .eq("tenant_id", tenantId)
       .in("service_id", serviceIds)
       .eq("kind", "info_3d")
       .in("status", ["sent", "delivered", "read"]);

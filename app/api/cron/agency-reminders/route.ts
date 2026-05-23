@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
   const isSunday48h = isSunday(date48h);
 
   // Recupera tutti i tenant
-  const { data: tenants } = await admin.from("tenants").select("id").limit(50);
+  const { data: tenants } = await admin.from("tenants").select("id");
   let sent = 0;
   let errors = 0;
 

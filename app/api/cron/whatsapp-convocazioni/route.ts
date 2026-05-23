@@ -214,6 +214,7 @@ async function runCron(request: NextRequest) {
   const { data: priorEvents } = await admin
     .from("whatsapp_events")
     .select("service_id")
+    .eq("tenant_id", effectiveTenantId)
     .in("service_id", serviceIds)
     .eq("kind", "bus_convocazione")
     .in("status", ["sent", "delivered", "read"]);

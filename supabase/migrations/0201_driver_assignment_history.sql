@@ -40,4 +40,39 @@ create index if not exists dah_features_pattern_key
   on public.driver_assignment_history using gin (features);
 
 alter table public.driver_assignment_history enable row level security;
-create policy "tenant_rw" on public.driver_assignment_history for all using (true);
+
+create policy dah_select_ops
+  on public.driver_assignment_history
+  for select
+  using (
+    tenant_id = public.current_tenant_id()
+    and public.current_user_role() in ('admin', 'operator', 'supervisor')
+  );
+
+create policy dah_insert_ops
+  on public.driver_assignment_history
+  for insert
+  with check (
+    tenant_id = public.current_tenant_id()
+    and public.current_user_role() in ('admin', 'operator', 'supervisor')
+  );
+
+create policy dah_update_ops
+  on public.driver_assignment_history
+  for update
+  using (
+    tenant_id = public.current_tenant_id()
+    and public.current_user_role() in ('admin', 'operator', 'supervisor')
+  )
+  with check (
+    tenant_id = public.current_tenant_id()
+    and public.current_user_role() in ('admin', 'operator', 'supervisor')
+  );
+
+create policy dah_delete_ops
+  on public.driver_assignment_history
+  for delete
+  using (
+    tenant_id = public.current_tenant_id()
+    and public.current_user_role() in ('admin', 'operator', 'supervisor')
+  );

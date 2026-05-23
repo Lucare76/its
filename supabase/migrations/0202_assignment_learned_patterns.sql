@@ -21,4 +21,39 @@ create index if not exists alp_tenant_driver
   on public.assignment_learned_patterns (tenant_id, driver_profile_id);
 
 alter table public.assignment_learned_patterns enable row level security;
-create policy "tenant_rw" on public.assignment_learned_patterns for all using (true);
+
+create policy alp_select_ops
+  on public.assignment_learned_patterns
+  for select
+  using (
+    tenant_id = public.current_tenant_id()
+    and public.current_user_role() in ('admin', 'operator', 'supervisor')
+  );
+
+create policy alp_insert_ops
+  on public.assignment_learned_patterns
+  for insert
+  with check (
+    tenant_id = public.current_tenant_id()
+    and public.current_user_role() in ('admin', 'operator', 'supervisor')
+  );
+
+create policy alp_update_ops
+  on public.assignment_learned_patterns
+  for update
+  using (
+    tenant_id = public.current_tenant_id()
+    and public.current_user_role() in ('admin', 'operator', 'supervisor')
+  )
+  with check (
+    tenant_id = public.current_tenant_id()
+    and public.current_user_role() in ('admin', 'operator', 'supervisor')
+  );
+
+create policy alp_delete_ops
+  on public.assignment_learned_patterns
+  for delete
+  using (
+    tenant_id = public.current_tenant_id()
+    and public.current_user_role() in ('admin', 'operator', 'supervisor')
+  );

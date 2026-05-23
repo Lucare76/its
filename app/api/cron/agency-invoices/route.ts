@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
   const today = new Date();
   const todayIso = today.toISOString().slice(0, 10);
 
-  const { data: tenants } = await admin.from("tenants").select("id").limit(50);
+  const { data: tenants } = await admin.from("tenants").select("id");
   let sent = 0;
   let skipped = 0;
 

@@ -33,7 +33,7 @@ async function runCron(request: NextRequest) {
   const toDate = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const windowMinutes = Number(process.env.WHATSAPP_REMINDER_WINDOW_MINUTES ?? "15");
 
-  const { data: tenants } = await admin.from("tenants").select("id").limit(50);
+  const { data: tenants } = await admin.from("tenants").select("id");
 
   let totalScanned = 0;
   let totalSent = 0;
@@ -71,6 +71,7 @@ async function runCron(request: NextRequest) {
         : await admin
             .from("whatsapp_events")
             .select("service_id, status, payload_json")
+            .eq("tenant_id", tenantId)
             .in("service_id", candidateServiceIds)
             .in("status", ["sent", "delivered", "read"]);
 

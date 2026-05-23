@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
   const fromDate = now.toISOString().slice(0, 10);
   const toDate = in24h.toISOString().slice(0, 10);
 
-  const { data: tenants } = await admin.from("tenants").select("id").limit(50);
+  const { data: tenants } = await admin.from("tenants").select("id");
 
   let processed = 0;
   let sent = 0;
@@ -63,6 +63,7 @@ export async function GET(request: NextRequest) {
         : await admin
             .from("whatsapp_events")
             .select("service_id")
+            .eq("tenant_id", tenantId)
             .in("service_id", serviceIds)
             .eq("kind", "24h_reminder");
 

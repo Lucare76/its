@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
   const sundayIso = nextSunday(todayIso);
   const sundayFormatted = sundayIso.split("-").reverse().join("/");
 
-  const { data: tenants } = await admin.from("tenants").select("id").limit(50);
+  const { data: tenants } = await admin.from("tenants").select("id");
   let sent = 0;
   let errors = 0;
 

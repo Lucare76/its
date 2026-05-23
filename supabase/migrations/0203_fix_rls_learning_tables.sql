@@ -1,11 +1,15 @@
 -- Fix RLS cross-tenant leak su driver_assignment_history e assignment_learned_patterns.
--- Le policy precedenti usavano using (true), che consente a qualsiasi utente
+-- Le policy precedenti consentivano accesso tenant troppo ampio, lasciando qualsiasi utente
 -- autenticato di leggere/scrivere dati di qualsiasi tenant via REST API.
--- Pattern identico a piano_operator_decisions (migration 0199).
+-- Mantiene idempotenza se 0201/0202 sono gia' stati corretti.
 
 -- ─── driver_assignment_history ───────────────────────────────────────────────
 
 drop policy if exists "tenant_rw" on public.driver_assignment_history;
+drop policy if exists dah_select_ops on public.driver_assignment_history;
+drop policy if exists dah_insert_ops on public.driver_assignment_history;
+drop policy if exists dah_update_ops on public.driver_assignment_history;
+drop policy if exists dah_delete_ops on public.driver_assignment_history;
 
 create policy dah_select_ops
   on public.driver_assignment_history
@@ -46,6 +50,10 @@ create policy dah_delete_ops
 -- ─── assignment_learned_patterns ─────────────────────────────────────────────
 
 drop policy if exists "tenant_rw" on public.assignment_learned_patterns;
+drop policy if exists alp_select_ops on public.assignment_learned_patterns;
+drop policy if exists alp_insert_ops on public.assignment_learned_patterns;
+drop policy if exists alp_update_ops on public.assignment_learned_patterns;
+drop policy if exists alp_delete_ops on public.assignment_learned_patterns;
 
 create policy alp_select_ops
   on public.assignment_learned_patterns

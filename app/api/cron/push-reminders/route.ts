@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
   const timeStart = `${padTime(winStart.getHours())}:${padTime(winStart.getMinutes())}`;
   const timeEnd   = `${padTime(winEnd.getHours())}:${padTime(winEnd.getMinutes())}`;
 
-  const { data: tenants } = await admin.from("tenants").select("id").limit(50);
+  const { data: tenants } = await admin.from("tenants").select("id");
   let sent = 0;
 
   for (const tenant of tenants ?? []) {
@@ -74,6 +74,7 @@ export async function GET(request: NextRequest) {
       const { data: existing } = await admin
         .from("push_notification_log")
         .select("id")
+        .eq("tenant_id", tenantId)
         .eq("service_id", serviceId)
         .eq("user_id", driverUid)
         .eq("kind", "reminder_2h")

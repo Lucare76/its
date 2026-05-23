@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
   const nowTime     = isoTime(now);
   const endTime     = isoTime(windowEnd);
 
-  const { data: tenants } = await admin.from("tenants").select("id").limit(50);
+  const { data: tenants } = await admin.from("tenants").select("id");
 
   let totalChecked = 0;
   let totalOrphans = 0;
@@ -103,6 +103,7 @@ export async function GET(request: NextRequest) {
       const { data: existing } = await admin
         .from("push_notification_log")
         .select("id")
+        .eq("tenant_id", tenantId)
         .eq("service_id", serviceId)
         .eq("kind", "sla_12h")
         .maybeSingle();
