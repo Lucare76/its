@@ -551,9 +551,31 @@ export async function POST(request: NextRequest) {
 
   const templateName = sendMode === "template" ? parsed.data.template_name!.trim() : null;
   const templateVariables = sendMode === "template" ? parsed.data.template_variables ?? [] : [];
-  const previewText = sendMode === "template"
-    ? `[Template] ${templateName}${templateVariables.length ? ` · ${templateVariables.join(" | ").slice(0, 180)}` : ""}`.slice(0, 240)
-    : text.slice(0, 240);
+
+  let templateBodyText: string | null = null;
+  if (sendMode === "template" && templateName) {
+    const templateLang = parsed.data.template_language?.trim() || settings.template_language;
+    const { data: tplRow } = await auth.admin
+      .from("whatsapp_synced_templates")
+      .select("body_text")
+      .eq("tenant_id", tenantId)
+      .eq("name", templateName)
+      .eq("language_code", templateLang)
+      .maybeSingle();
+    if (tplRow?.body_text) {
+      let filled = tplRow.body_text as string;
+      for (let i = 0; i < templateVariables.length; i++) {
+        filled = filled.replace(new RegExp(`\\{\\{${i + 1}\\}\\}`, "g"), templateVariables[i] ?? "");
+      }
+      templateBodyText = filled;
+    }
+  }
+
+  const previewText = templateBodyText
+    ? templateBodyText.slice(0, 240)
+    : sendMode === "template"
+      ? `[Template] ${templateName}${templateVariables.length ? ` · ${templateVariables.join(" | ").slice(0, 180)}` : ""}`.slice(0, 240)
+      : text.slice(0, 240);
 
   const messagePayload = {
     tenant_id: thread.tenant_id ?? tenantId,
@@ -567,7 +589,7 @@ export async function POST(request: NextRequest) {
     booking_id: thread.booking_id ?? null,
     transfer_id: thread.transfer_id ?? null,
     message_type: sendMode === "template" ? "template" : "text",
-    text_body: sendMode === "template" ? previewText : text,
+    text_body: sendMode === "template" ? (templateBodyText ?? previewText) : text,
     media_id: null,
     media_mime_type: null,
     media_sha256: null,
