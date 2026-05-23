@@ -294,7 +294,8 @@ export const MARIO_BOSS_GROUP: NavMainGroup = {
     { href: "/bus-network", label: "Linea Bus", icon: "B" },
     { href: "/rete-ischia", label: "Transfer Ischia", icon: "O" },
     { href: "/escursioni", label: "Escursioni", icon: "E" },
-    { href: "/preventivo-ops", label: "Area preventivi", icon: "%", requiresQuotesAccess: true }
+    { href: "/preventivo-ops", label: "Area preventivi", icon: "%", requiresQuotesAccess: true },
+    { href: "/preventivi", label: "Preventivi clienti", icon: "Q" }
   ]
 };
 

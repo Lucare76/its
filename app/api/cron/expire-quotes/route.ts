@@ -41,5 +41,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true, expired: data?.length ?? 0 });
+  const nowIso = new Date().toISOString();
+  const { data: sqData, error: sqError } = await admin
+    .from("service_quotes")
+    .update({ status: "expired", updated_at: nowIso })
+    .eq("status", "offer_sent")
+    .not("expires_at", "is", null)
+    .lt("expires_at", nowIso)
+    .select("id");
+
+  if (sqError) {
+    return NextResponse.json({ ok: false, error: sqError.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true, expired: data?.length ?? 0, service_quotes_expired: sqData?.length ?? 0 });
 }
