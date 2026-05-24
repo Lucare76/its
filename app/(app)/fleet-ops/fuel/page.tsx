@@ -33,6 +33,20 @@ type FuelDocumentModalState = {
   mode: "approve" | "edit";
 };
 
+type EditModalState = {
+  record: FuelRecord;
+  form: {
+    vehicle_id: string;
+    fuel_date: string;
+    liters: string;
+    cost: string;
+    km_at_fuel: string;
+    fuel_type: string;
+    station: string;
+    notes: string;
+  };
+};
+
 type FuelRole = "admin" | "operator" | "supervisor" | string;
 
 async function accessToken() {
@@ -83,6 +97,10 @@ export default function FleetFuelPage() {
   const [documentModalSaving, setDocumentModalSaving] = useState(false);
   const [documentModalUrl, setDocumentModalUrl] = useState("");
   const [documentModalName, setDocumentModalName] = useState("");
+  const [editModal, setEditModal] = useState<EditModalState | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<FuelRecord | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
 
@@ -270,6 +288,71 @@ export default function FleetFuelPage() {
     return !hasFiscalDocument(record);
   }
 
+  function openEditModal(record: FuelRecord) {
+    setEditModal({
+      record,
+      form: {
+        vehicle_id: record.vehicle_id,
+        fuel_date:  record.fuel_date,
+        liters:     record.liters != null ? String(record.liters) : "",
+        cost:       record.cost != null ? String(record.cost) : "",
+        km_at_fuel: record.km_at_fuel != null ? String(record.km_at_fuel) : "",
+        fuel_type:  record.fuel_type ?? "diesel",
+        station:    record.station ?? "",
+        notes:      record.notes ?? "",
+      },
+    });
+  }
+
+  async function saveEdit() {
+    if (!editModal) return;
+    const token = await accessToken();
+    if (!token) return;
+    setEditSaving(true);
+    const f = editModal.form;
+    const res = await fetch("/api/ops/fuel-entries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        action: "edit",
+        data: {
+          id:         editModal.record.id,
+          vehicle_id: f.vehicle_id,
+          fuel_date:  f.fuel_date,
+          liters:     f.liters ? Number(f.liters) : null,
+          cost:       f.cost ? Number(f.cost) : null,
+          km_at_fuel: f.km_at_fuel ? Number(f.km_at_fuel) : null,
+          fuel_type:  f.fuel_type || null,
+          station:    f.station || null,
+          notes:      f.notes || null,
+        },
+      }),
+    });
+    const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+    setEditSaving(false);
+    if (!res.ok || !json?.ok) { showToast(json?.error ?? "Salvataggio fallito.", false); return; }
+    setEditModal(null);
+    showToast("Rifornimento modificato.", true);
+    void load();
+  }
+
+  async function deleteRecord(record: FuelRecord) {
+    const token = await accessToken();
+    if (!token) return;
+    setDeleteLoading(true);
+    const res = await fetch("/api/ops/fuel-entries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "delete", data: { id: record.id } }),
+    });
+    const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+    setDeleteLoading(false);
+    if (!res.ok || !json?.ok) { showToast(json?.error ?? "Eliminazione fallita.", false); return; }
+    setDeleteConfirm(null);
+    showToast("Rifornimento eliminato.", true);
+    void load();
+  }
+
   function documentEditHint(record: FuelRecord) {
     if (record.approval_status !== "approved" || !hasFiscalDocument(record)) return null;
     if (currentRole === "admin") return "Documento fiscale modificabile da admin.";
@@ -346,6 +429,106 @@ export default function FleetFuelPage() {
                 className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
               >
                 {documentModalSaving ? "Salvataggio..." : documentModal.mode === "approve" ? "Approva rifornimento" : "Salva documento"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Modale modifica rifornimento ────────────────────────────────── */}
+      {editModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4">
+          <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-100 px-5 py-4">
+              <p className="text-sm font-semibold text-slate-900">Modifica rifornimento</p>
+              <p className="mt-1 text-xs text-slate-500">{editModal.record.vehicle?.label ?? "Veicolo"}</p>
+            </div>
+            <div className="grid gap-3 px-5 py-4">
+              <label className="text-xs font-semibold text-slate-500">
+                Mezzo
+                <select className="input-saas mt-1 w-full" value={editModal.form.vehicle_id}
+                  onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, vehicle_id: e.target.value } } : null)}>
+                  {vehicles.map(v => <option key={v.id} value={v.id}>{v.label}{v.plate ? ` · ${v.plate}` : ""}</option>)}
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-slate-500">
+                Data
+                <DateInput className="input-saas mt-1 w-full" value={editModal.form.fuel_date}
+                  onChange={iso => setEditModal(m => m ? { ...m, form: { ...m.form, fuel_date: iso } } : null)} />
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-xs font-semibold text-slate-500">
+                  Litri
+                  <input className="input-saas mt-1 w-full" type="number" min="0" value={editModal.form.liters}
+                    onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, liters: e.target.value } } : null)} />
+                </label>
+                <label className="text-xs font-semibold text-slate-500">
+                  Costo
+                  <input className="input-saas mt-1 w-full" type="number" min="0" value={editModal.form.cost}
+                    onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, cost: e.target.value } } : null)} />
+                </label>
+                <label className="text-xs font-semibold text-slate-500">
+                  Km al rifornimento
+                  <input className="input-saas mt-1 w-full" type="number" min="0" value={editModal.form.km_at_fuel}
+                    onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, km_at_fuel: e.target.value } } : null)} />
+                </label>
+                <label className="text-xs font-semibold text-slate-500">
+                  Tipo carburante
+                  <select className="input-saas mt-1 w-full" value={editModal.form.fuel_type}
+                    onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, fuel_type: e.target.value } } : null)}>
+                    <option value="diesel">Diesel</option>
+                    <option value="benzina">Benzina</option>
+                    <option value="gas">Gas</option>
+                    <option value="elettrico">Elettrico</option>
+                    <option value="ibrido">Ibrido</option>
+                  </select>
+                </label>
+              </div>
+              <label className="text-xs font-semibold text-slate-500">
+                Distributore
+                <input className="input-saas mt-1 w-full" value={editModal.form.station}
+                  onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, station: e.target.value } } : null)} />
+              </label>
+              <label className="text-xs font-semibold text-slate-500">
+                Note
+                <textarea className="input-saas mt-1 w-full resize-none" rows={2} value={editModal.form.notes}
+                  onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, notes: e.target.value } } : null)} />
+              </label>
+            </div>
+            <div className="flex gap-2 border-t border-slate-100 px-5 py-4 sm:justify-end">
+              <button type="button" onClick={() => setEditModal(null)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
+                Annulla
+              </button>
+              <button type="button" disabled={editSaving} onClick={() => void saveEdit()}
+                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+                {editSaving ? "Salvataggio..." : "Salva modifiche"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Conferma eliminazione ────────────────────────────────────────── */}
+      {deleteConfirm ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4">
+          <div className="w-full max-w-sm rounded-3xl border border-slate-200 bg-white shadow-2xl">
+            <div className="px-6 py-5">
+              <p className="text-sm font-semibold text-slate-900">Eliminare questo rifornimento?</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {deleteConfirm.vehicle?.label ?? "Veicolo"} · {new Date(deleteConfirm.fuel_date).toLocaleDateString("it-IT")}
+                {deleteConfirm.cost != null ? ` · €${deleteConfirm.cost.toFixed(2)}` : ""}
+              </p>
+              <p className="mt-2 text-xs text-rose-600">L&apos;operazione è irreversibile.</p>
+            </div>
+            <div className="flex gap-2 border-t border-slate-100 px-5 py-4 sm:justify-end">
+              <button type="button" onClick={() => setDeleteConfirm(null)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
+                Annulla
+              </button>
+              <button type="button" disabled={deleteLoading} onClick={() => void deleteRecord(deleteConfirm)}
+                className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50">
+                {deleteLoading ? "Eliminazione..." : "Elimina"}
               </button>
             </div>
           </div>
@@ -429,6 +612,18 @@ export default function FleetFuelPage() {
                   {record.notes ? <p className="mt-3 text-sm text-slate-500">{record.notes}</p> : null}
 
                   <div className="mt-3 flex flex-wrap gap-2">
+                    {currentRole === "admin" ? (
+                      <>
+                        <button type="button" onClick={() => openEditModal(record)}
+                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                          ✏️ Modifica
+                        </button>
+                        <button type="button" onClick={() => setDeleteConfirm(record)}
+                          className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100">
+                          🗑️ Elimina
+                        </button>
+                      </>
+                    ) : null}
                     {record.fiscal_document_url ? (
                       <button
                         type="button"

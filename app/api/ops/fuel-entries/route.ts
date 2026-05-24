@@ -24,6 +24,20 @@ const updateFuelDocumentSchema = fuelApprovalSchema.pick({
   id: z.string().uuid(),
 });
 
+const editFuelSchema = z.object({
+  id:           z.string().uuid(),
+  vehicle_id:   z.string().uuid(),
+  fuel_date:    z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  liters:       z.number().min(0).nullable().optional(),
+  cost:         z.number().min(0).nullable().optional(),
+  km_at_fuel:   z.number().int().min(0).nullable().optional(),
+  fuel_type:    z.string().max(40).nullable().optional(),
+  station:      z.string().max(160).nullable().optional(),
+  notes:        z.string().max(1000).nullable().optional(),
+});
+
+const deleteFuelSchema = z.object({ id: z.string().uuid() });
+
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
   if (auth instanceof NextResponse) return auth;
@@ -106,6 +120,8 @@ export async function POST(request: NextRequest) {
     | { action: "create"; data: z.infer<typeof createFuelSchema> }
     | { action: "approve"; data: z.infer<typeof fuelApprovalSchema> }
     | { action: "update_document"; data: z.infer<typeof updateFuelDocumentSchema> }
+    | { action: "edit"; data: z.infer<typeof editFuelSchema> }
+    | { action: "delete"; data: z.infer<typeof deleteFuelSchema> }
     | null;
 
   if (!body?.action || !body.data) {
@@ -130,6 +146,39 @@ export async function POST(request: NextRequest) {
       submitted_via_qr: parsed.submitted_via_qr ?? false,
       created_by: auth.user.id,
     });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "edit") {
+    if (auth.membership.role !== "admin") return NextResponse.json({ error: "Solo admin può modificare un rifornimento." }, { status: 403 });
+    const parsed = editFuelSchema.parse(body.data);
+    const { error } = await auth.admin
+      .from("vehicle_fuel")
+      .update({
+        vehicle_id: parsed.vehicle_id,
+        fuel_date:  parsed.fuel_date,
+        liters:     parsed.liters ?? null,
+        cost:       parsed.cost ?? null,
+        km_at_fuel: parsed.km_at_fuel ?? null,
+        fuel_type:  parsed.fuel_type ?? null,
+        station:    parsed.station ?? null,
+        notes:      parsed.notes ?? null,
+      })
+      .eq("tenant_id", auth.membership.tenant_id)
+      .eq("id", parsed.id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "delete") {
+    if (auth.membership.role !== "admin") return NextResponse.json({ error: "Solo admin può eliminare un rifornimento." }, { status: 403 });
+    const parsed = deleteFuelSchema.parse(body.data);
+    const { error } = await auth.admin
+      .from("vehicle_fuel")
+      .delete()
+      .eq("tenant_id", auth.membership.tenant_id)
+      .eq("id", parsed.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
   }
