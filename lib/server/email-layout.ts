@@ -3,7 +3,7 @@
  * Design professionale responsive mobile-first.
  */
 
-export function emailHtml(body: string, options?: { title?: string; preheader?: string }): string {
+export function emailHtml(body: string, options?: { title?: string; preheader?: string; footerPhone?: string | null }): string {
   // Logo sempre da ischia-transfer.vercel.app: è l'unico dominio che serve i file statici
   // correttamente (ischiatransferservice.it restituisce 403, localhost non è raggiungibile).
   // logo-email-header.png = 220x150px RGBA ritagliato (no sfondo bianco, no crop CSS necessario)
@@ -107,8 +107,7 @@ ${preheader}
       <div style="font-size:12px;color:#94a3b8;line-height:1.8;">
         Via Cilento 14/C, 80077 Ischia (NA)<br />
         <a href="mailto:info@ischiatransferservice.it" style="color:#3b82f6;text-decoration:none;">info@ischiatransferservice.it</a>
-        &nbsp;·&nbsp;
-        <a href="tel:+390813334445" style="color:#3b82f6;text-decoration:none;">+39 081 333 4445</a>
+        ${options?.footerPhone ? `&nbsp;·&nbsp;<a href="tel:${options.footerPhone.replace(/[\s]/g, '')}" style="color:#3b82f6;text-decoration:none;">${options.footerPhone}</a>` : ""}
       </div>
       <div style="margin-top:14px;font-size:11px;color:#cbd5e1;">
         Messaggio generato automaticamente — si prega di non rispondere a questa email.

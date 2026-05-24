@@ -15,9 +15,20 @@ type TenantProfile = {
   website_url: string | null;
 };
 
+type BankSettings = {
+  iban: string;
+  swift_code: string;
+  bank_account_holder: string;
+  payment_instructions: string;
+};
+
 const EMPTY: TenantProfile = {
   id: "", name: "", legal_name: "", address: "",
   vat_number: "", contact_email: "", contact_phone: "", website_url: "",
+};
+
+const EMPTY_BANK: BankSettings = {
+  iban: "", swift_code: "", bank_account_holder: "", payment_instructions: "",
 };
 
 
@@ -28,16 +39,21 @@ export default function TenantSettingsPage() {
   const [saving, setSaving]   = useState(false);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
 
+  const [bank, setBank]       = useState<BankSettings>(EMPTY_BANK);
+  const [savingBank, setSavingBank] = useState(false);
+  const [bankMsg, setBankMsg] = useState<{ text: string; ok: boolean } | null>(null);
+
   useEffect(() => {
     if (!hasSupabaseEnv) return;
     void (async () => {
       const token = await getToken();
       if (!token) return;
-      const res = await fetch("/api/admin/tenant-settings", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = (await res.json()) as TenantProfile;
+      const [profileRes, bankRes] = await Promise.all([
+        fetch("/api/admin/tenant-settings",       { headers: { Authorization: `Bearer ${token}` } }),
+        fetch("/api/ops/tenant-quote-settings",   { headers: { Authorization: `Bearer ${token}` } }),
+      ]);
+      if (profileRes.ok) {
+        const data = (await profileRes.json()) as TenantProfile;
         setForm({
           ...data,
           legal_name:    data.legal_name    ?? "",
@@ -48,12 +64,50 @@ export default function TenantSettingsPage() {
           website_url:   data.website_url   ?? "",
         });
       }
+      if (bankRes.ok) {
+        const bd = (await bankRes.json()) as { iban?: string | null; swift_code?: string | null; bank_account_holder?: string | null; payment_instructions?: string | null };
+        setBank({
+          iban:                 bd.iban                 ?? "",
+          swift_code:           bd.swift_code           ?? "",
+          bank_account_holder:  bd.bank_account_holder  ?? "",
+          payment_instructions: bd.payment_instructions ?? "",
+        });
+      }
       setLoading(false);
     })();
   }, []);
 
   const set = (field: keyof TenantProfile) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [field]: e.target.value }));
+
+  const setB = (field: keyof BankSettings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setBank((f) => ({ ...f, [field]: e.target.value }));
+
+  const handleBankSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingBank(true);
+    setBankMsg(null);
+    try {
+      const token = await getToken();
+      if (!token) { setBankMsg({ text: "Sessione non valida.", ok: false }); return; }
+      const res = await fetch("/api/ops/tenant-quote-settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          iban:                 bank.iban                 || null,
+          swift_code:           bank.swift_code           || null,
+          bank_account_holder:  bank.bank_account_holder  || null,
+          payment_instructions: bank.payment_instructions || null,
+        }),
+      });
+      const body = (await res.json()) as { ok?: boolean; error?: string };
+      setBankMsg(res.ok ? { text: "Dati bancari salvati.", ok: true } : { text: body.error ?? "Errore salvataggio.", ok: false });
+    } catch {
+      setBankMsg({ text: "Errore di rete.", ok: false });
+    } finally {
+      setSavingBank(false);
+    }
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -95,6 +149,7 @@ export default function TenantSettingsPage() {
       {loading ? (
         <div className="card p-6 text-sm text-slate-500">Caricamento...</div>
       ) : (
+        <>
         <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
 
           {/* Nome operativo */}
@@ -203,6 +258,71 @@ export default function TenantSettingsPage() {
             </button>
           </div>
         </form>
+
+        {/* ── Dati bancari per i preventivi ─────────────────────────────── */}
+        <form onSubmit={(e) => void handleBankSubmit(e)} className="space-y-4 mt-4">
+          <div className="card p-5 space-y-4">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-500">Dati bancari per preventivi</h2>
+              <p className="text-xs text-slate-400 mt-0.5">Pre-compilati automaticamente in ogni nuovo preventivo. Sempre modificabili sul singolo preventivo.</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="text-sm sm:col-span-2">
+                IBAN
+                <input
+                  type="text"
+                  className="input-saas mt-1 w-full font-mono"
+                  value={bank.iban}
+                  onChange={setB("iban")}
+                  placeholder="IT60 X054 2811 1010 0000 0123 456"
+                />
+              </label>
+              <label className="text-sm">
+                SWIFT / BIC
+                <input
+                  type="text"
+                  className="input-saas mt-1 w-full font-mono uppercase"
+                  value={bank.swift_code}
+                  onChange={setB("swift_code")}
+                  placeholder="BCITITMM"
+                />
+              </label>
+              <label className="text-sm">
+                Intestatario conto
+                <input
+                  type="text"
+                  className="input-saas mt-1 w-full"
+                  value={bank.bank_account_holder}
+                  onChange={setB("bank_account_holder")}
+                  placeholder="ISCHIA TRANSFER SERVICE SRL"
+                />
+              </label>
+              <label className="text-sm sm:col-span-2">
+                Istruzioni pagamento aggiuntive
+                <textarea
+                  className="input-saas mt-1 w-full resize-none"
+                  rows={2}
+                  value={bank.payment_instructions}
+                  onChange={setB("payment_instructions")}
+                  placeholder="Es: Indicare cognome e numero preventivo nella causale."
+                />
+              </label>
+            </div>
+          </div>
+
+          {bankMsg && (
+            <p className={`rounded-xl px-4 py-2 text-sm font-medium ${bankMsg.ok ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+              {bankMsg.ok ? "✓" : "✗"} {bankMsg.text}
+            </p>
+          )}
+
+          <div className="flex justify-end">
+            <button type="submit" disabled={savingBank} className="btn-primary px-6 py-2 disabled:opacity-50">
+              {savingBank ? "Salvataggio…" : "Salva dati bancari"}
+            </button>
+          </div>
+        </form>
+        </>
       )}
     </section>
   );

@@ -20,6 +20,8 @@ export interface SendEmailOptions {
   cc?: string | string[];
   /** BCC esplicita (si somma al NOTIFY_BCC_EMAIL automatico) */
   bcc?: string | string[];
+  /** Reply-To esplicito (sovrascrive EMAIL_REPLY_TO da env) */
+  replyTo?: string;
 }
 
 export interface SendEmailResult {
@@ -61,11 +63,9 @@ export async function resendFetch(apiKey: string, payload: Record<string, unknow
     : [];
   let finalPayload = payload;
   if (testRedirectList.length > 0) {
-    const originalTo = Array.isArray(payload.to) ? (payload.to as string[]) : [payload.to as string];
     finalPayload = {
       ...payload,
       to: testRedirectList,
-      subject: `[TEST → ${originalTo.join(", ")}] ${payload.subject as string}`,
       cc: undefined,
       bcc: undefined,
     };
@@ -88,6 +88,8 @@ export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult
   const autoBcc = process.env.NOTIFY_BCC_EMAIL ? [process.env.NOTIFY_BCC_EMAIL] : [];
   const bcc = [...autoBcc, ...normalize(opts.bcc)];
 
+  const replyTo = opts.replyTo ?? process.env.EMAIL_REPLY_TO?.trim() ?? null;
+
   const payload: Record<string, unknown> = {
     from,
     to: normalize(opts.to),
@@ -95,6 +97,7 @@ export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult
     html: opts.html,
   };
   if (opts.text) payload.text = opts.text;
+  if (replyTo) payload.reply_to = replyTo;
   if (opts.cc && normalize(opts.cc).length > 0) payload.cc = normalize(opts.cc);
   if (bcc.length > 0) payload.bcc = bcc;
 

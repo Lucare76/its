@@ -29,7 +29,7 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   const { data: tenant } = await auth.admin
     .from("tenants")
-    .select("quote_offer_validity_days,quote_company_phone,quote_company_whatsapp,quote_iban,quote_bank_holder,quote_payment_instructions")
+    .select("quote_offer_validity_days,quote_company_phone,quote_company_whatsapp,quote_iban,quote_bank_holder,quote_payment_instructions,quote_swift_code,contact_phone")
     .eq("id", tenantId)
     .single();
 
@@ -63,12 +63,14 @@ export async function POST(request: NextRequest, { params }: Params) {
     priceNotes:        quote.price_notes ?? null,
     emailIntro:        quote.email_intro ?? null,
     iban:              quote.iban ?? tenant?.quote_iban ?? null,
+    swiftCode:         (quote.swift_code ?? tenant?.quote_swift_code) ?? null,
     bankAccountHolder: quote.bank_account_holder ?? tenant?.quote_bank_holder ?? null,
     paymentInstructions: quote.payment_instructions ?? tenant?.quote_payment_instructions ?? null,
     expiresAt,
     acceptUrl,
     companyPhone:     tenant?.quote_company_phone ?? null,
     companyWhatsapp:  tenant?.quote_company_whatsapp ?? null,
+    footerPhone:      tenant?.contact_phone ?? null,
   };
 
   const result = await sendQuoteOfferEmail(emailData);

@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
   const admin = adminClient();
   const { data: quote, error } = await admin
     .from("service_quotes")
-    .select("id,quote_number,status,customer_first_name,customer_last_name,customer_language,service_type,direction,arrival_date,arrival_time,arrival_flight_train,departure_date,departure_time,departure_flight_train,hotel_name,hotel_address,pax,luggage_notes,special_requests,price_cents,currency,price_notes,email_intro,iban,bank_account_holder,payment_instructions,expires_at,accept_token_expires_at")
+    .select("id,quote_number,status,customer_first_name,customer_last_name,customer_language,service_type,direction,arrival_date,arrival_time,arrival_flight_train,departure_date,departure_time,departure_flight_train,hotel_name,hotel_address,pax,luggage_notes,special_requests,price_cents,currency,price_notes,email_intro,iban,swift_code,bank_account_holder,payment_instructions,expires_at,accept_token_expires_at")
     .eq("accept_token", token)
     .single();
 

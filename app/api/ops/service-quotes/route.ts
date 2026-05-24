@@ -37,6 +37,7 @@ const createSchema = z.object({
 
   email_intro:          z.string().max(2000).nullable().optional(),
   payment_method:       z.string().max(40).nullable().optional(),
+  swift_code:           z.string().max(20).nullable().optional(),
   payment_instructions: z.string().max(2000).nullable().optional(),
 
   notes_internal: z.string().max(5000).nullable().optional(),
@@ -77,7 +78,7 @@ export async function POST(request: NextRequest) {
   // Fetch tenant settings for payment defaults
   const { data: tenant } = await auth.admin
     .from("tenants")
-    .select("quote_iban,quote_bank_holder,quote_payment_instructions,quote_company_phone,quote_company_whatsapp")
+    .select("quote_iban,quote_bank_holder,quote_payment_instructions,quote_company_phone,quote_company_whatsapp,quote_swift_code")
     .eq("id", tenantId)
     .single();
 
@@ -113,6 +114,7 @@ export async function POST(request: NextRequest) {
     email_intro:         d.email_intro?.trim() || null,
     payment_method:      d.payment_method || "bank_transfer",
     iban:                tenant?.quote_iban || null,
+    swift_code:          d.swift_code?.trim() || tenant?.quote_swift_code || null,
     bank_account_holder: tenant?.quote_bank_holder || null,
     payment_instructions: d.payment_instructions?.trim() || tenant?.quote_payment_instructions || null,
     notes_internal:      d.notes_internal?.trim() || null,

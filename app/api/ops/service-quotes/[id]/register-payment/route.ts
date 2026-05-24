@@ -39,7 +39,7 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   const { data: tenant } = await auth.admin
     .from("tenants")
-    .select("quote_company_phone,quote_company_whatsapp")
+    .select("quote_company_phone,quote_company_whatsapp,contact_phone")
     .eq("id", tenantId)
     .single();
 
@@ -85,10 +85,12 @@ export async function POST(request: NextRequest, { params }: Params) {
     priceNotes:        quote.price_notes ?? null,
     emailIntro:        quote.email_intro ?? null,
     iban:              quote.iban ?? null,
+    swiftCode:         (quote.swift_code as string | null) ?? null,
     bankAccountHolder: quote.bank_account_holder ?? null,
     paymentInstructions: quote.payment_instructions ?? null,
     companyPhone:      tenant?.quote_company_phone ?? null,
     companyWhatsapp:   tenant?.quote_company_whatsapp ?? null,
+    footerPhone:       tenant?.contact_phone ?? null,
     totalPaidCents,
   };
 

@@ -28,6 +28,7 @@ const patchSchema = z.object({
   email_intro:          z.string().max(2000).nullable().optional(),
   payment_method:       z.string().max(40).nullable().optional(),
   iban:                 z.string().max(60).nullable().optional(),
+  swift_code:           z.string().max(20).nullable().optional(),
   bank_account_holder:  z.string().max(200).nullable().optional(),
   payment_instructions: z.string().max(2000).nullable().optional(),
   notes_internal:       z.string().max(5000).nullable().optional(),
@@ -102,6 +103,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   if (d.email_intro         !== undefined) updates.email_intro         = d.email_intro?.trim() || null;
   if (d.payment_method      !== undefined) updates.payment_method      = d.payment_method;
   if (d.iban                !== undefined) updates.iban                = d.iban?.trim() || null;
+  if (d.swift_code          !== undefined) updates.swift_code          = d.swift_code?.trim() || null;
   if (d.bank_account_holder !== undefined) updates.bank_account_holder = d.bank_account_holder?.trim() || null;
   if (d.payment_instructions !== undefined) updates.payment_instructions = d.payment_instructions?.trim() || null;
   if (d.notes_internal      !== undefined) updates.notes_internal      = d.notes_internal?.trim() || null;

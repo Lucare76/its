@@ -30,12 +30,14 @@ export interface ServiceQuoteEmailData {
   priceNotes: string | null;
   emailIntro: string | null; // messaggio apertura personalizzato
   iban: string | null;
+  swiftCode: string | null;
   bankAccountHolder: string | null;
   paymentInstructions: string | null;
   expiresAt: string | null;  // ISO date
   acceptUrl: string;         // URL con token
   companyPhone: string | null;
   companyWhatsapp: string | null;
+  footerPhone: string | null;
 }
 
 export interface QuoteConfirmEmailData extends Omit<ServiceQuoteEmailData, "acceptUrl" | "expiresAt"> {
@@ -116,8 +118,9 @@ function buildOfferBody(d: ServiceQuoteEmailData): string {
 
   const paymentRows: Array<[string, string]> = [
     ...(d.iban ? [["IBAN", `<span style="font-family:monospace;font-weight:600;">${e(d.iban)}</span>`] as [string, string]] : []),
+    ...(d.swiftCode ? [["SWIFT/BIC", `<span style="font-family:monospace;font-weight:600;">${e(d.swiftCode)}</span>`] as [string, string]] : []),
     ...(d.bankAccountHolder ? [[it ? "Intestatario" : "Account holder", e(d.bankAccountHolder)] as [string, string]] : []),
-    [it ? "Causale" : "Reference", `Preventivo ${e(d.quoteNumber)} — ${e(d.customerLastName)}`],
+    [it ? "Causale" : "Reference", `${it ? "Preventivo" : "Quote"} ${e(d.quoteNumber)} — ${e(d.customerLastName)}`],
   ];
 
   const intro = d.emailIntro
@@ -275,6 +278,25 @@ function buildConfirmBody(d: QuoteConfirmEmailData): string {
 
 // ─── Funzioni di invio ────────────────────────────────────────────────────────
 
+// ─── Preview (HTML senza invio) ──────────────────────────────────────────────
+
+export function buildQuoteOfferHtml(data: ServiceQuoteEmailData): { html: string; subject: string } {
+  const it = data.customerLanguage === "it";
+  const subject = it
+    ? `Preventivo N° ${data.quoteNumber} — Ischia Transfer Service`
+    : `Transfer Quote #${data.quoteNumber} — Ischia Transfer Service`;
+  const html = emailHtml(buildOfferBody(data), {
+    title: subject,
+    preheader: it
+      ? `Preventivo transfer — ${data.hotelName ?? ""} ${data.arrivalDate ? fmtDate(data.arrivalDate) : ""}`
+      : `Transfer quote — ${data.hotelName ?? ""} ${data.arrivalDate ? fmtDate(data.arrivalDate) : ""}`,
+    footerPhone: data.footerPhone,
+  });
+  return { html, subject };
+}
+
+// ─── Invio email offerta ──────────────────────────────────────────────────────
+
 export async function sendQuoteOfferEmail(data: ServiceQuoteEmailData): Promise<QuoteEmailResult> {
   const it = data.customerLanguage === "it";
   const subject = it
@@ -286,6 +308,7 @@ export async function sendQuoteOfferEmail(data: ServiceQuoteEmailData): Promise<
     preheader: it
       ? `Preventivo transfer — ${data.hotelName ?? ""} ${data.arrivalDate ? fmtDate(data.arrivalDate) : ""}`
       : `Transfer quote — ${data.hotelName ?? ""} ${data.arrivalDate ? fmtDate(data.arrivalDate) : ""}`,
+    footerPhone: data.footerPhone,
   });
 
   const result = await sendEmail({ to: data.customerEmail, subject, html });
@@ -302,6 +325,7 @@ export async function sendQuoteConfirmEmail(data: QuoteConfirmEmailData): Promis
   const html = emailHtml(buildConfirmBody(data), {
     title: subject,
     preheader: it ? "La sua prenotazione è stata confermata." : "Your booking has been confirmed.",
+    footerPhone: data.footerPhone,
   });
 
   const result = await sendEmail({ to: data.customerEmail, subject, html });

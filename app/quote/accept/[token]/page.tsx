@@ -28,6 +28,7 @@ type QuoteDetails = {
   price_notes: string | null;
   email_intro: string | null;
   iban: string | null;
+  swift_code: string | null;
   bank_account_holder: string | null;
   payment_instructions: string | null;
   expires_at: string | null;
@@ -63,6 +64,7 @@ const T = {
     total: "Totale",
     payment: "MODALITÀ DI PAGAMENTO (Bonifico bancario)",
     iban: "IBAN",
+    swift: "SWIFT/BIC",
     holder: "Intestatario",
     reference: "Causale",
     validity: (d: string) => `Offerta valida fino al ${d}`,
@@ -101,6 +103,7 @@ const T = {
     total: "Total",
     payment: "PAYMENT DETAILS (Bank transfer)",
     iban: "IBAN",
+    swift: "SWIFT/BIC",
     holder: "Account holder",
     reference: "Reference",
     validity: (d: string) => `Offer valid until ${d}`,
@@ -324,6 +327,12 @@ export default function AcceptQuotePage({ params }: { params: Promise<{ token: s
                 <div className="flex justify-between gap-4 py-2 border-b border-slate-100 text-sm">
                   <span className="text-slate-500">{t.iban}</span>
                   <span className="font-mono font-semibold text-slate-800 text-right break-all">{quote.iban}</span>
+                </div>
+              )}
+              {quote.swift_code && (
+                <div className="flex justify-between gap-4 py-2 border-b border-slate-100 text-sm">
+                  <span className="text-slate-500">{t.swift}</span>
+                  <span className="font-mono font-semibold text-slate-800 text-right">{quote.swift_code}</span>
                 </div>
               )}
               {quote.bank_account_holder && <Row label={t.holder} value={quote.bank_account_holder} />}
