@@ -6,21 +6,52 @@ import { DateInput } from "@/components/ui/date-input";
 
 // ─── Tipi ─────────────────────────────────────────────────────────────────────
 
-type Driver = { id: string; user_id: string | null; full_name: string; max_vehicle_capacity: number | null; has_access: boolean; access_suspended: boolean };
-type Vehicle = { id: string; label: string; plate: string | null; capacity: number | null; vehicle_size: string | null };
-type DriverAvail = { driver_profile_id: string; driver_user_id: string | null; available: boolean; available_from: string | null; available_to: string | null; notes: string | null };
+type Driver = {
+  id: string;
+  user_id: string | null;
+  full_name: string;
+  phone: string | null;
+  max_vehicle_capacity: number | null;
+  has_access: boolean;
+  access_suspended: boolean;
+};
+
+type Vehicle = {
+  id: string;
+  label: string;
+  plate: string | null;
+  capacity: number | null;
+  vehicle_size: string | null;
+};
+
+type DriverAvail = {
+  driver_profile_id: string;
+  driver_user_id: string | null;
+  available: boolean;
+  available_from: string | null;
+  available_to: string | null;
+  notes: string | null;
+  vehicle_1_id: string | null;
+  vehicle_1_from: string | null;
+  vehicle_1_to: string | null;
+  vehicle_2_id: string | null;
+  vehicle_2_from: string | null;
+  vehicle_2_to: string | null;
+};
+
 type VehicleAvail = { vehicle_id: string; available: boolean; notes: string | null };
 type TimeBlock = { id: string; vehicle_id: string; block_from: string; block_to: string; reason: string; reason_notes: string | null };
 type VehicleCommitment = { id: string; vehicle_id: string; commitment_date: string; commitment_type: string; notes: string | null };
 
 const BLOCK_REASONS: Record<string, string> = {
-  escursione:              "Escursione",
-  manutenzione:            "Manutenzione",
-  fuori_servizio:          "Fuori servizio",
-  rientro_porto_ischia:    "Rientro porto Ischia",
+  escursione: "Escursione",
+  manutenzione: "Manutenzione",
+  fuori_servizio: "Fuori servizio",
+  rientro_porto_ischia: "Rientro porto Ischia",
   rientro_porto_casamicciola: "Rientro porto Casamicciola",
-  altro:                   "Altro",
+  altro: "Altro",
 };
+
 const COMMITMENT_LABELS: Record<string, string> = {
   collaudo: "Collaudo",
   officina: "Officina",
@@ -39,16 +70,33 @@ function isoToIt(iso: string) {
   return `${d}/${m}/${y}`;
 }
 
+function emptyAvail(driverId: string, userId: string | null): DriverAvail {
+  return {
+    driver_profile_id: driverId,
+    driver_user_id: userId,
+    available: true,
+    available_from: null,
+    available_to: null,
+    notes: null,
+    vehicle_1_id: null,
+    vehicle_1_from: null,
+    vehicle_1_to: null,
+    vehicle_2_id: null,
+    vehicle_2_from: null,
+    vehicle_2_to: null,
+  };
+}
+
 // ─── Componente principale ────────────────────────────────────────────────────
 
 export default function DisponibilitaPage() {
-
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [date, setDate] = useState(tomorrowIso());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -59,9 +107,23 @@ export default function DisponibilitaPage() {
   const [confirmed, setConfirmed] = useState(false);
   const [confirmedAt, setConfirmedAt] = useState<string | null>(null);
 
-  // Form aggiunta blocco
+  // Stato "cambio mezzo" (mostra seconda fascia): derive da vehicle_2_id oppure attivato manualmente
+  const [vehicleChangeEnabled, setVehicleChangeEnabled] = useState<Set<string>>(new Set());
+
+  // Stato form aggiunta blocco mezzo
   const [addingBlockFor, setAddingBlockFor] = useState<string | null>(null);
   const [newBlock, setNewBlock] = useState({ block_from: "09:00", block_to: "13:00", reason: "escursione" as string, reason_notes: "" });
+
+  // Stato form creazione account autista
+  const [creatingAccessFor, setCreatingAccessFor] = useState<string | null>(null);
+  const [createAccessPhone, setCreateAccessPhone] = useState("");
+  const [createAccessLoading, setCreateAccessLoading] = useState(false);
+
+  // Stato form creazione nuovo profilo autista
+  const [showAddDriver, setShowAddDriver] = useState(false);
+  const [newDriverName, setNewDriverName] = useState("");
+  const [newDriverPhone, setNewDriverPhone] = useState("");
+  const [addingDriver, setAddingDriver] = useState(false);
 
   useEffect(() => {
     supabase?.auth.getSession().then(({ data }: { data: { session: { access_token: string } | null } }) => {
@@ -87,9 +149,16 @@ export default function DisponibilitaPage() {
         confirmed: boolean; confirmed_at: string | null;
       };
       if (!body.ok) { setError(body.error ?? "Errore"); return; }
-      setDrivers(body.drivers);
+      setDrivers(body.drivers.sort((a, b) => a.full_name.localeCompare(b.full_name, "it")));
       setVehicles(body.vehicles);
-      setDriverAvail(new Map(body.driver_availability.map(a => [a.driver_profile_id, a])));
+      const availMap = new Map(body.driver_availability.map(a => [a.driver_profile_id, a]));
+      setDriverAvail(availMap);
+      // Inizializza vehicleChangeEnabled dai dati DB
+      const cambio = new Set<string>();
+      for (const [pid, a] of availMap.entries()) {
+        if (a.vehicle_2_id) cambio.add(pid);
+      }
+      setVehicleChangeEnabled(cambio);
       setVehicleAvail(new Map(body.vehicle_availability.map(a => [a.vehicle_id, a])));
       setBlocks(body.vehicle_blocks);
       setCommitments(body.vehicle_commitments ?? []);
@@ -103,21 +172,13 @@ export default function DisponibilitaPage() {
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
-    const refreshOnFocus = () => {
-      if (document.visibilityState === "visible") {
-        void load();
-      }
-    };
-
-    window.addEventListener("focus", refreshOnFocus);
-    document.addEventListener("visibilitychange", refreshOnFocus);
-    return () => {
-      window.removeEventListener("focus", refreshOnFocus);
-      document.removeEventListener("visibilitychange", refreshOnFocus);
-    };
+    const refresh = () => { if (document.visibilityState === "visible") void load(); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
   }, [load]);
 
-  const post = async (body: Record<string, unknown>) => {
+  const post = useCallback(async (body: Record<string, unknown>) => {
     if (!accessToken) return;
     const res = await fetch("/api/ops/disponibilita", {
       method: "POST",
@@ -125,27 +186,142 @@ export default function DisponibilitaPage() {
       body: JSON.stringify(body),
     });
     return res.json() as Promise<{ ok: boolean; error?: string; id?: string }>;
-  };
+  }, [accessToken]);
 
-  const toggleDriver = async (driverId: string, currentAvail: boolean) => {
+  // ── Salvataggio disponibilità autista (con tutti i campi) ─────────────────
+
+  const saveDriverAvail = useCallback(async (driverId: string, overrides: Partial<DriverAvail> = {}) => {
+    const driver = drivers.find(d => d.id === driverId);
+    const current = driverAvail.get(driverId) ?? emptyAvail(driverId, driver?.user_id ?? null);
+    const merged = { ...current, ...overrides };
     setSaving(driverId);
-    const current = driverAvail.get(driverId);
     await post({
-      action: "save_driver", date,
+      action: "save_driver",
+      date,
       driver_profile_id: driverId,
-      available: !currentAvail,
-      available_from: current?.available_from ?? null,
-      available_to: current?.available_to ?? null,
-      notes: current?.notes ?? null,
+      available: merged.available,
+      available_from: merged.available_from,
+      available_to: merged.available_to,
+      notes: merged.notes,
+      vehicle_1_id: merged.vehicle_1_id,
+      vehicle_1_from: merged.vehicle_1_from,
+      vehicle_1_to: merged.vehicle_1_to,
+      vehicle_2_id: merged.vehicle_2_id,
+      vehicle_2_from: merged.vehicle_2_from,
+      vehicle_2_to: merged.vehicle_2_to,
     });
     setDriverAvail(prev => {
       const next = new Map(prev);
-      const existing = next.get(driverId);
-      next.set(driverId, { driver_profile_id: driverId, driver_user_id: existing?.driver_user_id ?? null, available: !currentAvail, available_from: existing?.available_from ?? null, available_to: existing?.available_to ?? null, notes: existing?.notes ?? null });
+      next.set(driverId, merged);
       return next;
     });
     setSaving(null);
+  }, [date, driverAvail, drivers, post]);
+
+  const toggleDriver = async (driverId: string) => {
+    const driver = drivers.find(d => d.id === driverId);
+    const current = driverAvail.get(driverId) ?? emptyAvail(driverId, driver?.user_id ?? null);
+    await saveDriverAvail(driverId, { available: !current.available });
   };
+
+  // ── Gestione mezzo ────────────────────────────────────────────────────────
+
+  function updateAvailLocal(driverId: string, fields: Partial<DriverAvail>) {
+    setDriverAvail(prev => {
+      const next = new Map(prev);
+      const driver = drivers.find(d => d.id === driverId);
+      const ex = next.get(driverId) ?? emptyAvail(driverId, driver?.user_id ?? null);
+      next.set(driverId, { ...ex, ...fields });
+      return next;
+    });
+  }
+
+  function toggleVehicleChange(driverId: string, checked: boolean) {
+    setVehicleChangeEnabled(prev => {
+      const next = new Set(prev);
+      checked ? next.add(driverId) : next.delete(driverId);
+      return next;
+    });
+    if (!checked) {
+      // Azzera mezzo 2 e salva
+      updateAvailLocal(driverId, { vehicle_2_id: null, vehicle_2_from: null, vehicle_2_to: null, vehicle_1_to: null });
+      void saveDriverAvail(driverId, { vehicle_2_id: null, vehicle_2_from: null, vehicle_2_to: null, vehicle_1_to: null });
+    }
+  }
+
+  // ── Validazione mezzo ────────────────────────────────────────────────────
+
+  function vehicleWarning(driverId: string, vehicleId: string | null | undefined): string | null {
+    if (!vehicleId) return null;
+    const vehicle = vehicles.find(v => v.id === vehicleId);
+    const driver = drivers.find(d => d.id === driverId);
+    if (!vehicle) return null;
+    if (driver?.max_vehicle_capacity && vehicle.capacity && vehicle.capacity > driver.max_vehicle_capacity) {
+      return `${driver.full_name} non può guidare veicoli oltre ${driver.max_vehicle_capacity} posti (${vehicle.label}: ${vehicle.capacity} posti)`;
+    }
+    for (const [pid, av] of driverAvail.entries()) {
+      if (pid === driverId || !av.available) continue;
+      if (av.vehicle_1_id === vehicleId || av.vehicle_2_id === vehicleId) {
+        const other = drivers.find(d => d.id === pid);
+        return `${vehicle.label} è già assegnato a ${other?.full_name ?? "altro autista"}`;
+      }
+    }
+    return null;
+  }
+
+  // ── Creazione account autista ────────────────────────────────────────────
+
+  const handleCreateAccess = async (driverId: string) => {
+    if (!accessToken) return;
+    const phone = createAccessPhone.trim();
+    if (!phone || phone.replace(/\D/g, "").length < 6) {
+      alert("Inserisci un numero di telefono valido (minimo 6 cifre).");
+      return;
+    }
+    setCreateAccessLoading(true);
+    try {
+      const res = await fetch(`/api/ops/driver-profiles/${driverId}/create-access`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ phone }),
+      });
+      const body = await res.json() as { ok: boolean; error?: string; username?: string; temporaryPassword?: string; created?: boolean };
+      if (!body.ok) { alert(body.error ?? "Errore nella creazione dell'account."); return; }
+      const action = body.created ? "creato" : "già esistente, aggiornato";
+      setSuccessMsg(`Account ${action} per ${drivers.find(d => d.id === driverId)?.full_name}. Username: ${body.username} — Password: ${body.temporaryPassword}`);
+      setCreatingAccessFor(null);
+      setCreateAccessPhone("");
+      await load();
+    } finally {
+      setCreateAccessLoading(false);
+    }
+  };
+
+  // ── Aggiunta nuovo autista ───────────────────────────────────────────────
+
+  const handleAddDriver = async () => {
+    if (!accessToken || !newDriverName.trim()) return;
+    setAddingDriver(true);
+    try {
+      const res = await fetch("/api/ops/driver-profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ full_name: newDriverName.trim(), phone: newDriverPhone.trim() || null }),
+      });
+      const body = await res.json() as { ok: boolean; error?: string; reactivated?: boolean };
+      if (!body.ok) { alert(body.error ?? "Errore nella creazione del profilo."); return; }
+      const msg = body.reactivated ? "Profilo riattivato." : "Profilo autista creato.";
+      setSuccessMsg(`${msg} Ora crea l'account dalla schermata autisti.`);
+      setShowAddDriver(false);
+      setNewDriverName("");
+      setNewDriverPhone("");
+      await load();
+    } finally {
+      setAddingDriver(false);
+    }
+  };
+
+  // ── Mezzi ─────────────────────────────────────────────────────────────────
 
   const toggleVehicle = async (vehicleId: string, currentAvail: boolean) => {
     setSaving(vehicleId);
@@ -153,8 +329,7 @@ export default function DisponibilitaPage() {
     await post({ action: "save_vehicle", date, vehicle_id: vehicleId, available: !currentAvail, notes: current?.notes ?? null });
     setVehicleAvail(prev => {
       const next = new Map(prev);
-      const existing = next.get(vehicleId);
-      next.set(vehicleId, { vehicle_id: vehicleId, available: !currentAvail, notes: existing?.notes ?? null });
+      next.set(vehicleId, { vehicle_id: vehicleId, available: !currentAvail, notes: next.get(vehicleId)?.notes ?? null });
       return next;
     });
     setSaving(null);
@@ -186,20 +361,22 @@ export default function DisponibilitaPage() {
     setConfirming(true);
     const action = confirmed ? "unconfirm" : "confirm";
     const res = await post({ action, date });
-    if (res?.ok) {
-      setConfirmed(!confirmed);
-      setConfirmedAt(!confirmed ? new Date().toISOString() : null);
-    }
+    if (res?.ok) { setConfirmed(!confirmed); setConfirmedAt(!confirmed ? new Date().toISOString() : null); }
     setConfirming(false);
   };
 
+  // ── Statistiche ───────────────────────────────────────────────────────────
+
   const availableDrivers = drivers.filter(d => driverAvail.get(d.id)?.available !== false).length;
-  const commitmentByVehicleId = new Map(commitments.map((item) => [item.vehicle_id, item]));
+  const commitmentByVehicleId = new Map(commitments.map(c => [c.vehicle_id, c]));
   const availableVehicles = vehicles.filter(v => vehicleAvail.get(v.id)?.available !== false && !commitmentByVehicleId.has(v.id)).length;
+  const availableVehiclesList = vehicles.filter(v => vehicleAvail.get(v.id)?.available !== false && !commitmentByVehicleId.has(v.id));
+
+  // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
     <section className="mx-auto max-w-6xl page-section">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Operativo giornaliero</p>
           <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-slate-950">Disponibilità del giorno</h1>
@@ -225,6 +402,13 @@ export default function DisponibilitaPage() {
       </div>
 
       {error ? <div className="card p-4 text-rose-600 text-sm mb-4">{error}</div> : null}
+
+      {successMsg ? (
+        <div className="card p-4 mb-4 border-emerald-300 bg-emerald-50 flex items-start justify-between gap-2">
+          <p className="text-sm text-emerald-800 font-medium">{successMsg}</p>
+          <button type="button" onClick={() => setSuccessMsg(null)} className="text-emerald-500 hover:text-emerald-700 text-xs">✕</button>
+        </div>
+      ) : null}
 
       {/* Banner conferma */}
       <div className={`card p-4 mb-6 flex flex-col sm:flex-row items-start sm:items-center gap-3 ${confirmed ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"}`}>
@@ -252,9 +436,52 @@ export default function DisponibilitaPage() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* AUTISTI */}
+
+        {/* ══ AUTISTI ══════════════════════════════════════════════════════════ */}
         <div>
-          <h2 className="text-base font-bold text-slate-700 mb-3">Autisti ({availableDrivers}/{drivers.length} disponibili)</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-base font-bold text-slate-700">Autisti ({availableDrivers}/{drivers.length} disponibili)</h2>
+            <button
+              type="button"
+              onClick={() => setShowAddDriver(!showAddDriver)}
+              className="text-xs border border-slate-300 rounded-lg px-2 py-1 text-slate-600 hover:bg-slate-50"
+            >
+              + Aggiungi autista
+            </button>
+          </div>
+
+          {/* Form aggiunta autista */}
+          {showAddDriver ? (
+            <div className="card p-3 mb-3 border-blue-200 bg-blue-50 space-y-2">
+              <p className="text-xs font-semibold text-blue-700">Nuovo autista (solo profilo — crea l&apos;account dopo)</p>
+              <input
+                type="text"
+                placeholder="Nome completo (es. RICCARDO ESPOSITO)"
+                value={newDriverName}
+                onChange={e => setNewDriverName(e.target.value.toUpperCase())}
+                className="w-full border rounded-lg px-2 py-1.5 text-xs uppercase"
+              />
+              <input
+                type="tel"
+                placeholder="Telefono (usato come password temporanea)"
+                value={newDriverPhone}
+                onChange={e => setNewDriverPhone(e.target.value)}
+                className="w-full border rounded-lg px-2 py-1.5 text-xs"
+              />
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setShowAddDriver(false)} className="flex-1 text-xs border border-slate-200 rounded-lg py-1.5 text-slate-600">Annulla</button>
+                <button
+                  type="button"
+                  disabled={addingDriver || !newDriverName.trim()}
+                  onClick={() => void handleAddDriver()}
+                  className="flex-1 text-xs bg-blue-600 text-white rounded-lg py-1.5 font-semibold disabled:opacity-60"
+                >
+                  {addingDriver ? "..." : "Crea profilo"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <div className="space-y-2">
             {loading ? (
               <div className="card p-4 text-sm text-slate-400">Caricamento...</div>
@@ -263,13 +490,18 @@ export default function DisponibilitaPage() {
             ) : drivers.map(driver => {
               const avail = driverAvail.get(driver.id);
               const isAvailable = avail?.available !== false;
+              const hasCambio = vehicleChangeEnabled.has(driver.id);
+              const w1 = vehicleWarning(driver.id, avail?.vehicle_1_id);
+              const w2 = vehicleWarning(driver.id, avail?.vehicle_2_id);
+
               return (
                 <div key={driver.id} className={`card p-3 transition ${isAvailable ? "" : "opacity-60 bg-slate-50"}`}>
+                  {/* ── Riga nome + toggle ─────────────────────────────── */}
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
                       disabled={saving === driver.id}
-                      onClick={() => void toggleDriver(driver.id, isAvailable)}
+                      onClick={() => void toggleDriver(driver.id)}
                       className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${isAvailable ? "bg-emerald-500" : "bg-slate-300"}`}
                     >
                       <span className={`block w-4 h-4 rounded-full bg-white shadow mx-1 transition-transform ${isAvailable ? "translate-x-4" : ""}`} />
@@ -277,43 +509,179 @@ export default function DisponibilitaPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-slate-800">{driver.full_name}</p>
                       {driver.max_vehicle_capacity ? (
-                        <p className="text-xs text-slate-500">Max {driver.max_vehicle_capacity} posti</p>
-                      ) : null}
-                      {!driver.has_access ? (
-                        <p className="text-xs text-amber-600">Senza accesso utente collegato</p>
-                      ) : driver.access_suspended ? (
-                        <p className="text-xs text-rose-600">Accesso sospeso</p>
+                        <p className="text-xs text-slate-400">Max {driver.max_vehicle_capacity} posti</p>
                       ) : null}
                     </div>
+                    {/* Orari disponibilità */}
                     {isAvailable ? (
                       <div className="flex items-center gap-1 text-xs text-slate-500">
-                        <input type="time" value={avail?.available_from ?? ""} className="border rounded px-1 py-0.5 text-xs w-20"
-                          onChange={e => {
-                            const val = e.target.value || null;
-                            setDriverAvail(prev => { const next = new Map(prev); const ex = next.get(driver.id); next.set(driver.id, { driver_profile_id: driver.id, driver_user_id: ex?.driver_user_id ?? driver.user_id, available: true, available_from: val, available_to: ex?.available_to ?? null, notes: ex?.notes ?? null }); return next; });
-                          }}
-                          onBlur={() => void post({ action: "save_driver", date, driver_profile_id: driver.id, available: true, available_from: avail?.available_from ?? null, available_to: avail?.available_to ?? null, notes: avail?.notes ?? null })}
+                        <input
+                          type="time"
+                          value={avail?.available_from ?? ""}
+                          className="border rounded px-1 py-0.5 text-xs w-20"
+                          onChange={e => updateAvailLocal(driver.id, { available_from: e.target.value || null })}
+                          onBlur={() => void saveDriverAvail(driver.id)}
                         />
                         <span>–</span>
-                        <input type="time" value={avail?.available_to ?? ""} className="border rounded px-1 py-0.5 text-xs w-20"
-                          onChange={e => {
-                            const val = e.target.value || null;
-                            setDriverAvail(prev => { const next = new Map(prev); const ex = next.get(driver.id); next.set(driver.id, { driver_profile_id: driver.id, driver_user_id: ex?.driver_user_id ?? driver.user_id, available: true, available_from: ex?.available_from ?? null, available_to: val, notes: ex?.notes ?? null }); return next; });
-                          }}
-                          onBlur={() => void post({ action: "save_driver", date, driver_profile_id: driver.id, available: true, available_from: avail?.available_from ?? null, available_to: avail?.available_to ?? null, notes: avail?.notes ?? null })}
+                        <input
+                          type="time"
+                          value={avail?.available_to ?? ""}
+                          className="border rounded px-1 py-0.5 text-xs w-20"
+                          onChange={e => updateAvailLocal(driver.id, { available_to: e.target.value || null })}
+                          onBlur={() => void saveDriverAvail(driver.id)}
                         />
                       </div>
                     ) : null}
                   </div>
+
+                  {/* ── Note ─────────────────────────────────────────── */}
                   {isAvailable ? (
-                    <input type="text" placeholder="Note (opzionale)" value={avail?.notes ?? ""} maxLength={200}
+                    <input
+                      type="text"
+                      placeholder="Note (opzionale)"
+                      value={avail?.notes ?? ""}
+                      maxLength={200}
                       className="mt-2 w-full border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-600 placeholder:text-slate-300"
-                      onChange={e => {
-                        const val = e.target.value;
-                        setDriverAvail(prev => { const next = new Map(prev); const ex = next.get(driver.id); next.set(driver.id, { driver_profile_id: driver.id, driver_user_id: ex?.driver_user_id ?? driver.user_id, available: true, available_from: ex?.available_from ?? null, available_to: ex?.available_to ?? null, notes: val || null }); return next; });
-                      }}
-                      onBlur={() => void post({ action: "save_driver", date, driver_profile_id: driver.id, available: true, available_from: avail?.available_from ?? null, available_to: avail?.available_to ?? null, notes: avail?.notes ?? null })}
+                      onChange={e => updateAvailLocal(driver.id, { notes: e.target.value || null })}
+                      onBlur={() => void saveDriverAvail(driver.id)}
                     />
+                  ) : null}
+
+                  {/* ── Assegnazione mezzo ────────────────────────────── */}
+                  {isAvailable ? (
+                    <div className="mt-2 space-y-1.5 border-t border-slate-100 pt-2">
+                      {/* Mezzo 1 */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-slate-500 w-14 flex-shrink-0">Mezzo:</span>
+                        <select
+                          value={avail?.vehicle_1_id ?? ""}
+                          className={`flex-1 min-w-0 border rounded-lg px-2 py-1 text-xs ${!avail?.vehicle_1_id ? "border-amber-300 bg-amber-50" : "border-slate-200"}`}
+                          onChange={e => {
+                            updateAvailLocal(driver.id, { vehicle_1_id: e.target.value || null });
+                            void saveDriverAvail(driver.id, { vehicle_1_id: e.target.value || null });
+                          }}
+                        >
+                          <option value="">— seleziona mezzo —</option>
+                          {availableVehiclesList.map(v => {
+                            const warn = vehicleWarning(driver.id, v.id);
+                            const isOtherDriver = warn?.includes("già assegnato");
+                            return (
+                              <option key={v.id} value={v.id} disabled={Boolean(isOtherDriver)}>
+                                {v.label}{v.capacity ? ` — ${v.capacity} posti` : ""}
+                                {isOtherDriver ? ` (già assegnato)` : ""}
+                              </option>
+                            );
+                          })}
+                        </select>
+                        {hasCambio && (
+                          <input
+                            type="time"
+                            title="Fine utilizzo mezzo 1"
+                            value={avail?.vehicle_1_to ?? ""}
+                            className="border rounded px-1 py-0.5 text-xs w-20 flex-shrink-0"
+                            onChange={e => updateAvailLocal(driver.id, { vehicle_1_to: e.target.value || null, vehicle_2_from: e.target.value || null })}
+                            onBlur={() => void saveDriverAvail(driver.id)}
+                          />
+                        )}
+                      </div>
+                      {w1 ? <p className="text-xs text-amber-600 pl-16">{w1}</p> : null}
+
+                      {/* Cambio mezzo checkbox */}
+                      <label className="flex items-center gap-2 text-xs text-slate-500 cursor-pointer pl-16">
+                        <input
+                          type="checkbox"
+                          checked={hasCambio}
+                          onChange={e => toggleVehicleChange(driver.id, e.target.checked)}
+                          className="accent-blue-600"
+                        />
+                        Cambio mezzo durante la giornata
+                      </label>
+
+                      {/* Mezzo 2 */}
+                      {hasCambio ? (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs text-slate-500 w-14 flex-shrink-0">Mezzo 2:</span>
+                          <input
+                            type="time"
+                            title="Inizio utilizzo mezzo 2"
+                            value={avail?.vehicle_2_from ?? avail?.vehicle_1_to ?? ""}
+                            className="border rounded px-1 py-0.5 text-xs w-20 flex-shrink-0 bg-slate-50"
+                            readOnly
+                            tabIndex={-1}
+                          />
+                          <select
+                            value={avail?.vehicle_2_id ?? ""}
+                            className={`flex-1 min-w-0 border rounded-lg px-2 py-1 text-xs ${hasCambio && !avail?.vehicle_2_id ? "border-amber-300 bg-amber-50" : "border-slate-200"}`}
+                            onChange={e => {
+                              updateAvailLocal(driver.id, { vehicle_2_id: e.target.value || null });
+                              void saveDriverAvail(driver.id, { vehicle_2_id: e.target.value || null });
+                            }}
+                          >
+                            <option value="">— seleziona mezzo —</option>
+                            {availableVehiclesList
+                              .filter(v => v.id !== avail?.vehicle_1_id)
+                              .map(v => {
+                                const warn = vehicleWarning(driver.id, v.id);
+                                const isOtherDriver = warn?.includes("già assegnato");
+                                return (
+                                  <option key={v.id} value={v.id} disabled={Boolean(isOtherDriver)}>
+                                    {v.label}{v.capacity ? ` — ${v.capacity} posti` : ""}
+                                    {isOtherDriver ? ` (già assegnato)` : ""}
+                                  </option>
+                                );
+                              })}
+                          </select>
+                        </div>
+                      ) : null}
+                      {w2 ? <p className="text-xs text-amber-600 pl-16">{w2}</p> : null}
+                    </div>
+                  ) : null}
+
+                  {/* ── Badge accesso + form crea account ────────────── */}
+                  {driver.access_suspended ? (
+                    <p className="mt-1.5 text-xs text-rose-600 font-medium">Accesso sospeso</p>
+                  ) : !driver.has_access ? (
+                    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2">
+                      {creatingAccessFor === driver.id ? (
+                        <div className="space-y-2">
+                          <p className="text-xs font-semibold text-amber-700">Crea account per {driver.full_name}</p>
+                          <div className="flex gap-2">
+                            <input
+                              type="tel"
+                              placeholder="+39 3xx xxxxxxx"
+                              value={createAccessPhone}
+                              onChange={e => setCreateAccessPhone(e.target.value)}
+                              className="flex-1 border rounded-lg px-2 py-1 text-xs"
+                            />
+                            <button
+                              type="button"
+                              disabled={createAccessLoading}
+                              onClick={() => void handleCreateAccess(driver.id)}
+                              className="text-xs bg-amber-500 text-white rounded-lg px-3 py-1 font-semibold disabled:opacity-60"
+                            >
+                              {createAccessLoading ? "..." : "Crea"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setCreatingAccessFor(null); setCreateAccessPhone(""); }}
+                              className="text-xs text-slate-500"
+                            >✕</button>
+                          </div>
+                          <p className="text-xs text-amber-500">Il telefono sarà usato come password temporanea.</p>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs text-amber-600">Senza accesso utente collegato</p>
+                          <button
+                            type="button"
+                            onClick={() => { setCreatingAccessFor(driver.id); setCreateAccessPhone(driver.phone ?? ""); }}
+                            className="text-xs bg-amber-500 text-white rounded-lg px-2 py-1 hover:bg-amber-600"
+                          >
+                            Crea account
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   ) : null}
                 </div>
               );
@@ -321,7 +689,7 @@ export default function DisponibilitaPage() {
           </div>
         </div>
 
-        {/* MEZZI */}
+        {/* ══ MEZZI ════════════════════════════════════════════════════════════ */}
         <div>
           <h2 className="text-base font-bold text-slate-700 mb-3">Mezzi ({availableVehicles}/{vehicles.length} disponibili)</h2>
           <div className="space-y-2">
@@ -334,6 +702,18 @@ export default function DisponibilitaPage() {
               const commitment = commitmentByVehicleId.get(vehicle.id);
               const isAvailable = avail?.available !== false && !commitment;
               const vehicleBlocks = blocks.filter(b => b.vehicle_id === vehicle.id);
+
+              // Mostra a quale autista è assegnato
+              const assignedTo = (() => {
+                for (const [pid, da] of driverAvail.entries()) {
+                  if (!da.available) continue;
+                  if (da.vehicle_1_id === vehicle.id || da.vehicle_2_id === vehicle.id) {
+                    return drivers.find(d => d.id === pid)?.full_name ?? null;
+                  }
+                }
+                return null;
+              })();
+
               return (
                 <div key={vehicle.id} className={`card p-3 transition ${isAvailable ? "" : "opacity-60 bg-slate-50"}`}>
                   <div className="flex items-center gap-3">
@@ -346,11 +726,14 @@ export default function DisponibilitaPage() {
                       <span className={`block w-4 h-4 rounded-full bg-white shadow mx-1 transition-transform ${isAvailable ? "translate-x-4" : ""}`} />
                     </button>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-sm font-semibold text-slate-800">{vehicle.label}</p>
                         {vehicle.plate && (
                           <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-500">{vehicle.plate}</span>
                         )}
+                        {assignedTo ? (
+                          <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[11px] font-semibold text-blue-700">{assignedTo}</span>
+                        ) : null}
                       </div>
                       {vehicle.capacity ? <p className="text-xs text-slate-500">{vehicle.capacity} posti</p> : null}
                       {commitment ? (
@@ -376,7 +759,7 @@ export default function DisponibilitaPage() {
                     <div className="mt-2 space-y-1">
                       {vehicleBlocks.map(block => (
                         <div key={block.id} className="flex items-center gap-2 rounded-lg bg-orange-50 border border-orange-200 px-2 py-1.5 text-xs">
-                          <span className="font-mono font-semibold text-orange-700">{block.block_from.slice(0,5)}–{block.block_to.slice(0,5)}</span>
+                          <span className="font-mono font-semibold text-orange-700">{block.block_from.slice(0, 5)}–{block.block_to.slice(0, 5)}</span>
                           <span className="flex-1 text-orange-600">{BLOCK_REASONS[block.reason] ?? block.reason}{block.reason_notes ? `: ${block.reason_notes}` : ""}</span>
                           <button type="button" disabled={saving === block.id} onClick={() => void removeBlock(block.id)} className="text-orange-400 hover:text-rose-600">✕</button>
                         </div>
@@ -410,6 +793,11 @@ export default function DisponibilitaPage() {
             })}
           </div>
         </div>
+      </div>
+
+      {/* Legenda date */}
+      <div className="mt-6 flex items-center justify-end gap-1 text-xs text-slate-400">
+        <span>Oggi: {isoToIt(todayIso())}</span>
       </div>
     </section>
   );

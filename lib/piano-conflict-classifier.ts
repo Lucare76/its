@@ -195,9 +195,39 @@ function classifyTransition(from: MergedStop, to: MergedStop, options?: Conflict
   const fromZone = stopDestinationZone(from);
   const toZone = stopPickupZone(to);
   const samePoint = from.destination_labels.some((destination) => samePlace(destination, to.pickup_label));
-  const geo = getGeoBuffer(fromZone, toZone, { ...options, samePoint: options?.samePoint ?? samePoint });
   const paxBuffer = getPaxBuffer(from.total_pax);
   const minutesAvailable = toStart - fromEnd.minutes;
+
+  // Regola escursioni consecutive: direzioni opposte → CONFLICT_REAL
+  if (from.macro_category === "ESCURSIONE" && to.macro_category === "ESCURSIONE") {
+    const destAreaFrom = getMacroArea(stopDestinationZone(from));
+    const destAreaTo = getMacroArea(stopDestinationZone(to));
+    if (destAreaFrom && destAreaTo && destAreaFrom !== destAreaTo) {
+      const requiredMin = 30 + paxBuffer;
+      return {
+        type: "CONFLICT_REAL",
+        minutes_available: minutesAvailable,
+        minutes_required: requiredMin,
+        margin: minutesAvailable - requiredMin,
+        from_macro_area: destAreaFrom,
+        to_macro_area: destAreaTo,
+        from_stop_label: stopLabel(from),
+        to_stop_label: stopLabel(to),
+        reason: `Escursioni in direzioni opposte: ${stopDestinationZone(from) ?? destAreaFrom} (${destAreaFrom}) → ${stopDestinationZone(to) ?? destAreaTo} (${destAreaTo})`,
+        pax_buffer: paxBuffer,
+        geo_buffer: 30,
+        warnings: [...fromEnd.warnings],
+      };
+    }
+  }
+
+  // Per escursioni stessa area: buffer minimo 30 min (più alto del normale 15)
+  const effectiveOptions: ConflictClassifierOptions =
+    from.macro_category === "ESCURSIONE" && to.macro_category === "ESCURSIONE"
+      ? { ...options, sameMacroAreaBufferMinutes: Math.max(30, options?.sameMacroAreaBufferMinutes ?? 15) }
+      : options ?? {};
+
+  const geo = getGeoBuffer(fromZone, toZone, { ...effectiveOptions, samePoint: effectiveOptions.samePoint ?? samePoint });
   const minutesRequired = geo.minutes + paxBuffer;
   const margin = minutesAvailable - minutesRequired;
   const warnings = [...fromEnd.warnings, ...geo.warnings];

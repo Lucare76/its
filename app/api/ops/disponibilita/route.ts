@@ -17,14 +17,23 @@ export const revalidate = 0;
 
 // ─── Schemi ───────────────────────────────────────────────────────────────────
 
+const timeRe = /^\d{2}:\d{2}$/;
+
 const saveDriverSchema = z.object({
   action: z.literal("save_driver"),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   driver_profile_id: z.string().uuid(),
   available: z.boolean(),
-  available_from: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
-  available_to: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+  available_from: z.string().regex(timeRe).nullable().optional(),
+  available_to: z.string().regex(timeRe).nullable().optional(),
   notes: z.string().max(500).optional().nullable(),
+  // Regola 3: mezzo fisso per fascia oraria
+  vehicle_1_id: z.string().uuid().nullable().optional(),
+  vehicle_1_from: z.string().regex(timeRe).nullable().optional(),
+  vehicle_1_to: z.string().regex(timeRe).nullable().optional(),
+  vehicle_2_id: z.string().uuid().nullable().optional(),
+  vehicle_2_from: z.string().regex(timeRe).nullable().optional(),
+  vehicle_2_to: z.string().regex(timeRe).nullable().optional(),
 });
 
 const saveVehicleSchema = z.object({
@@ -39,8 +48,8 @@ const addBlockSchema = z.object({
   action: z.literal("add_block"),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   vehicle_id: z.string().uuid(),
-  block_from: z.string().regex(/^\d{2}:\d{2}$/),
-  block_to: z.string().regex(/^\d{2}:\d{2}$/),
+  block_from: z.string().regex(timeRe),
+  block_to: z.string().regex(timeRe),
   reason: z.enum(["escursione", "manutenzione", "fuori_servizio", "rientro_porto_ischia", "rientro_porto_casamicciola", "altro"]),
   reason_notes: z.string().max(500).optional().nullable(),
 });
@@ -72,9 +81,9 @@ export async function GET(req: NextRequest) {
           .select("id, label, plate, capacity, vehicle_size")
           .eq("tenant_id", tenantId)
           .eq("active", true)
-          .order("capacity", { ascending: false }),
+          .order("label"),
         auth.admin.from("driver_daily_availability")
-          .select("driver_profile_id, driver_user_id, available, available_from, available_to, notes")
+          .select("driver_profile_id, driver_user_id, available, available_from, available_to, notes, vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to")
           .eq("tenant_id", tenantId)
           .eq("date", date),
         auth.admin.from("vehicle_daily_availability")
@@ -94,21 +103,35 @@ export async function GET(req: NextRequest) {
         loadVehicleCommitmentsForDate(auth.admin, tenantId, date),
       ]);
 
+    // Fallback: se la migrazione 0207 non è ancora applicata, ometti i campi veicolo
+    const driverAvailData = (driverAvailRes.data ?? []).map((row) => ({
+      driver_profile_id: row.driver_profile_id as string,
+      driver_user_id: row.driver_user_id as string | null,
+      available: row.available as boolean,
+      available_from: row.available_from as string | null,
+      available_to: row.available_to as string | null,
+      notes: row.notes as string | null,
+      vehicle_1_id: (row as Record<string, unknown>).vehicle_1_id as string | null ?? null,
+      vehicle_1_from: (row as Record<string, unknown>).vehicle_1_from as string | null ?? null,
+      vehicle_1_to: (row as Record<string, unknown>).vehicle_1_to as string | null ?? null,
+      vehicle_2_id: (row as Record<string, unknown>).vehicle_2_id as string | null ?? null,
+      vehicle_2_from: (row as Record<string, unknown>).vehicle_2_from as string | null ?? null,
+      vehicle_2_to: (row as Record<string, unknown>).vehicle_2_to as string | null ?? null,
+    }));
+
     return NextResponse.json({
       ok: true,
       date,
       drivers,
       vehicles: vehiclesRes.data ?? [],
-      driver_availability: driverAvailRes.data ?? [],
+      driver_availability: driverAvailData,
       vehicle_availability: vehicleAvailRes.data ?? [],
       vehicle_blocks: blocksRes.data ?? [],
       vehicle_commitments: commitments.rows,
       confirmed: confirmRes.data?.confirmed ?? false,
       confirmed_at: confirmRes.data?.confirmed_at ?? null,
     }, {
-      headers: {
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-      },
+      headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
     });
   } catch (err) {
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore" }, { status: 500 });
@@ -131,6 +154,7 @@ export async function POST(req: NextRequest) {
       const p = saveDriverSchema.safeParse(body);
       if (!p.success) return NextResponse.json({ ok: false, error: p.error.issues[0]?.message }, { status: 400 });
       const d = p.data;
+
       const profileResult = await auth.admin
         .from("driver_profiles")
         .select("id, user_id, active")
@@ -143,14 +167,22 @@ export async function POST(req: NextRequest) {
       if (profileResult.data.active === false) {
         return NextResponse.json({ ok: false, error: "Autista disattivato." }, { status: 409 });
       }
-      const payload = {
+
+      const payload: Record<string, unknown> = {
         driver_user_id: profileResult.data.user_id ?? null,
         available: d.available,
         available_from: d.available_from ?? null,
         available_to: d.available_to ?? null,
         notes: d.notes ?? null,
+        vehicle_1_id: d.vehicle_1_id ?? null,
+        vehicle_1_from: d.vehicle_1_from ?? null,
+        vehicle_1_to: d.vehicle_1_to ?? null,
+        vehicle_2_id: d.vehicle_2_id ?? null,
+        vehicle_2_from: d.vehicle_2_from ?? null,
+        vehicle_2_to: d.vehicle_2_to ?? null,
         updated_at: new Date().toISOString(),
       };
+
       const existing = await auth.admin
         .from("driver_daily_availability")
         .select("id")
@@ -166,7 +198,22 @@ export async function POST(req: NextRequest) {
           .eq("tenant_id", tenantId)
           .eq("driver_profile_id", d.driver_profile_id)
           .eq("date", d.date);
-        if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+        if (error) {
+          // Fallback: se i campi veicolo non esistono nel DB, salva senza di essi
+          if (error.message.includes("vehicle_")) {
+            const { vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to, ...basePayload } = payload;
+            void [vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to];
+            const { error: err2 } = await auth.admin
+              .from("driver_daily_availability")
+              .update(basePayload)
+              .eq("tenant_id", tenantId)
+              .eq("driver_profile_id", d.driver_profile_id)
+              .eq("date", d.date);
+            if (err2) return NextResponse.json({ ok: false, error: err2.message }, { status: 500 });
+            return NextResponse.json({ ok: true, vehicle_fields_skipped: true });
+          }
+          return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+        }
         return NextResponse.json({ ok: true });
       }
 
@@ -176,7 +223,21 @@ export async function POST(req: NextRequest) {
         date: d.date,
         ...payload,
       });
-      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      if (error) {
+        if (error.message.includes("vehicle_")) {
+          const { vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to, ...basePayload } = payload;
+          void [vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to];
+          const { error: err2 } = await auth.admin.from("driver_daily_availability").insert({
+            tenant_id: tenantId,
+            driver_profile_id: d.driver_profile_id,
+            date: d.date,
+            ...basePayload,
+          });
+          if (err2) return NextResponse.json({ ok: false, error: err2.message }, { status: 500 });
+          return NextResponse.json({ ok: true, vehicle_fields_skipped: true });
+        }
+        return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      }
       return NextResponse.json({ ok: true });
     }
 
@@ -214,7 +275,6 @@ export async function POST(req: NextRequest) {
       const d = p.data;
       if (d.block_to <= d.block_from)
         return NextResponse.json({ ok: false, error: "L'orario di fine deve essere successivo all'inizio." }, { status: 400 });
-
       const { data: block, error } = await auth.admin.from("vehicle_time_blocks").insert({
         tenant_id: tenantId,
         vehicle_id: d.vehicle_id,
