@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase, hasSupabaseEnv } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { DateInput, PageHeader } from "@/components/ui";
+import { WhatsAppButton } from "@/components/whatsapp-button";
 import { getPianoServiceDisplay } from "@/lib/piano-service-display";
 import { hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
 import { buildResolutionPreview, resolutionConfirmationLabel, type ResolutionPreview } from "@/lib/piano-conflict-resolution-preview";
@@ -11,7 +12,7 @@ import { buildResolutionPreview, resolutionConfirmationLabel, type ResolutionPre
 // ─── Tipi ─────────────────────────────────────────────────────────────────────
 
 type Service = {
-  id: string; date: string; time: string; direction: "arrival" | "departure";
+  id: string; tenant_id?: string | null; date: string; time: string; direction: "arrival" | "departure";
   time_from: string | null; time_to: string | null;
   customer_name: string; customer_first_name?: string | null; customer_last_name?: string | null;
   pax: number; hotel_id: string | null; vessel: string | null; notes: string | null;
@@ -548,7 +549,7 @@ function continentServiceOrigin(service: ContinentDispatchService) {
   return [service.meeting_point, service.continent_hub].filter(Boolean).join(" · ") || service.vessel || "Origine da verificare";
 }
 
-function ContinentServiceRow({ service }: { service: ContinentDispatchService }) {
+function ContinentServiceRow({ service, tenantId }: { service: ContinentDispatchService; tenantId: string | null }) {
   const kind = service.booking_service_kind ?? service.service_type_code;
   const notes = service.notes?.trim();
   const displayTime = service.time?.trim() ? fmt(service.time) : "—";
@@ -569,7 +570,10 @@ function ContinentServiceRow({ service }: { service: ContinentDispatchService })
 
         <div className="min-w-[180px] flex-1">
           <p className="font-semibold text-slate-900">{service.customer_name} · {service.pax} pax</p>
-          <p className="text-xs text-slate-500">{displayPhone}</p>
+          <div className="flex items-center gap-1.5">
+            <p className="text-xs text-slate-500">{displayPhone}</p>
+            <WhatsAppButton phone={service.phone} name={service.customer_name} tenantId={tenantId} />
+          </div>
           {kind ? <p className="mt-1 text-[11px] font-semibold text-slate-500">{kind}</p> : null}
         </div>
 
@@ -591,7 +595,7 @@ function ContinentServiceRow({ service }: { service: ContinentDispatchService })
   );
 }
 
-function ContinentBucketPanel({ bucket, tone }: { bucket: ContinentDispatchBucket; tone: "bruno" | "vendor" | "unassigned" }) {
+function ContinentBucketPanel({ bucket, tone, tenantId }: { bucket: ContinentDispatchBucket; tone: "bruno" | "vendor" | "unassigned"; tenantId: string | null }) {
   const pax = bucket.services.reduce((total, service) => total + service.pax, 0);
   const toneClasses = {
     bruno: "border-blue-200 bg-blue-50/50 text-blue-900",
@@ -616,7 +620,7 @@ function ContinentBucketPanel({ bucket, tone }: { bucket: ContinentDispatchBucke
       {bucket.services.length > 0 ? (
         <div className="space-y-2 px-3 pb-3">
           {bucket.services.map((service) => (
-            <ContinentServiceRow key={service.service_id} service={service} />
+            <ContinentServiceRow key={service.service_id} service={service} tenantId={tenantId} />
           ))}
         </div>
       ) : (
@@ -626,7 +630,7 @@ function ContinentBucketPanel({ bucket, tone }: { bucket: ContinentDispatchBucke
   );
 }
 
-function ContinentDispatchSection({ data }: { data: ContinentDispatchData | undefined }) {
+function ContinentDispatchSection({ data, tenantId }: { data: ContinentDispatchData | undefined; tenantId: string | null }) {
   const emptyData: ContinentDispatchData = {
     bruno: { label: "Bruno", target: "bruno", services: [] },
     vendors: [],
@@ -661,12 +665,12 @@ function ContinentDispatchSection({ data }: { data: ContinentDispatchData | unde
         </p>
       ) : (
         <div className="mt-3 grid gap-3 xl:grid-cols-3">
-          <ContinentBucketPanel bucket={continent.bruno} tone="bruno" />
+          <ContinentBucketPanel bucket={continent.bruno} tone="bruno" tenantId={tenantId} />
 
           <div className="space-y-3">
             {continent.vendors.length > 0 ? (
               continent.vendors.map((bucket) => (
-                <ContinentBucketPanel key={bucket.vendor ?? bucket.label} bucket={bucket} tone="vendor" />
+                <ContinentBucketPanel key={bucket.vendor ?? bucket.label} bucket={bucket} tone="vendor" tenantId={tenantId} />
               ))
             ) : (
               <div className="rounded border border-emerald-200 bg-emerald-50/50 px-3 py-3">
@@ -676,7 +680,7 @@ function ContinentDispatchSection({ data }: { data: ContinentDispatchData | unde
             )}
           </div>
 
-          <ContinentBucketPanel bucket={continent.unassigned} tone="unassigned" />
+          <ContinentBucketPanel bucket={continent.unassigned} tone="unassigned" tenantId={tenantId} />
         </div>
       )}
     </div>
@@ -1880,6 +1884,7 @@ export default function PianoGiornoPage() {
   const [planSavingServiceId, setPlanSavingServiceId] = useState<string | null>(null);
   const [planMoveMenuSvcId, setPlanMoveMenuSvcId] = useState<string | null>(null);
   const [planToasts, setPlanToasts] = useState<Array<{ id: string; text: string; type: "ok" | "err" }>>([]);
+  const activeTenantId = data?.services.find((service) => service.tenant_id)?.tenant_id ?? null;
   const [planModCount, setPlanModCount] = useState(0);
   const conflictSuggestions = groupDiagnostics?.resolution_suggestions ?? [];
   const operatorRequiredDecisions = groupDiagnostics?.operator_required_decisions ?? [];
@@ -3983,7 +3988,7 @@ export default function PianoGiornoPage() {
               )}
             </div>
 
-            <ContinentDispatchSection data={data.continent_dispatch} />
+            <ContinentDispatchSection data={data.continent_dispatch} tenantId={activeTenantId} />
 
             {planWindows.length > 0 && (
               <div className="card p-4">
@@ -4402,7 +4407,10 @@ export default function PianoGiornoPage() {
                                         ) : null}
                                       </div>
                                       <p className="font-semibold text-slate-800">{display.clientLabel}</p>
-                                      <p className="text-slate-500">{display.phoneLabel}</p>
+                                      <div className="flex items-center gap-1.5 text-slate-500">
+                                        <p>{display.phoneLabel}</p>
+                                        <WhatsAppButton phone={svc.phone} name={customerName(svc)} tenantId={activeTenantId} />
+                                      </div>
                                     </div>
                                     <div>
                                       <p className="font-semibold text-slate-700">{display.actionLabel}</p>

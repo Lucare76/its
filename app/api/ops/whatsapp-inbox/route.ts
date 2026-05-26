@@ -144,7 +144,7 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const filter = url.searchParams.get("filter") ?? "open";
   const search = (url.searchParams.get("q") ?? "").trim();
-  const selectedThreadId = url.searchParams.get("thread_id");
+  const selectedThreadId = url.searchParams.get("thread_id") ?? url.searchParams.get("thread");
 
   let threadQuery = auth.admin
     .from("whatsapp_threads")
@@ -473,7 +473,12 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    const normalizedPhone = normalizeE164(parsed.data.phone ?? "");
+    let normalizedPhone: string;
+    try {
+      normalizedPhone = normalizeE164(parsed.data.phone ?? "");
+    } catch {
+      return NextResponse.json({ error: "Numero non valido. Usa il formato +393391234567 o 3391234567." }, { status: 400 });
+    }
     const waId = normalizedPhone.replace(/^\+/, "");
     const match = await matchWhatsAppInboundMessage(auth.admin, {
       waId,
@@ -556,7 +561,7 @@ export async function POST(request: NextRequest) {
   if (sendMode === "template" && templateName) {
     const templateLang = parsed.data.template_language?.trim() || settings.template_language;
     const { data: tplRow } = await auth.admin
-      .from("whatsapp_synced_templates")
+      .from("whatsapp_templates")
       .select("body_text")
       .eq("tenant_id", tenantId)
       .eq("name", templateName)

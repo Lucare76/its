@@ -15,6 +15,7 @@ import { auditLog } from "@/lib/server/ops-audit";
 import { appUrlFromRequest, ensureBusBookingQrCodes } from "@/lib/server/bus-booking-qr";
 import { computeIschiaArrivalTime } from "@/lib/ferry-schedule-options";
 import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
+import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 
 export const runtime = "nodejs";
 
@@ -220,6 +221,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: insertError?.message ?? "Inserimento non riuscito." }, { status: 500 });
     }
     const serviceId: string = firstInsert.id;
+
+    ensureWhatsAppContact(auth.admin, {
+      tenantId,
+      phone: d.customer_phone,
+      profileName: customerName,
+    }).catch((error) => console.error("WhatsApp contact creation failed:", error));
 
     await auth.admin.from("status_events").insert({
       tenant_id: tenantId,

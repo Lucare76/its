@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { DateInput, PageHeader } from "@/components/ui";
+import { WhatsAppButton } from "@/components/whatsapp-button";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 
@@ -324,6 +325,13 @@ export default function ServiceEditPage() {
       .eq("tenant_id", tenantId);
     setSaving(false);
     if (err) { setError(err.message); return; }
+    if (accessToken && phone.trim()) {
+      void fetch("/api/ops/whatsapp-contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ phone: phone.trim(), name: customerName.trim(), tenantId }),
+      }).catch(() => {});
+    }
     setSaved(true);
     setTimeout(() => router.back(), 1200);
   };
@@ -444,7 +452,10 @@ export default function ServiceEditPage() {
 
           {/* Telefono */}
           <label className="text-xs font-medium text-slate-600 sm:col-span-2">
-            Telefono
+            <span className="flex items-center gap-2">
+              Telefono
+              <WhatsAppButton phone={phone} name={customerName} tenantId={tenantId} />
+            </span>
             <input
               autoFocus={!service.phone}
               value={phone}

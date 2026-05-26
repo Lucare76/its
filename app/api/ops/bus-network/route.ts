@@ -20,6 +20,7 @@ import { getCustomerFullName } from "@/lib/service-display";
 import type { AgencyBookingServiceKind, OperationalServiceType } from "@/lib/types";
 import { validateBusAllocationRequest, validateBusMoveRequest } from "@/lib/server/bus-network-validation";
 import { sendBusLowSeatAlertEmail } from "@/lib/server/bus-alert-email";
+import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 
 // ── Helper geografico per ordinamento fermate Ischia ────────────────────────
 const PORTO_ISCHIA = { lat: 40.7427, lng: 13.9567 };
@@ -1209,6 +1210,12 @@ export async function POST(request: NextRequest) {
             });
             if (allocErr) { pending++; continue; }
 
+            ensureWhatsAppContact(auth.admin, {
+              tenantId,
+              phone: row.phone,
+              profileName: row.name,
+            }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
+
             datePaxMap.set(bus.id, (datePaxMap.get(bus.id) ?? 0) + row.pax);
             assigned++;
           } else {
@@ -1456,6 +1463,12 @@ export async function POST(request: NextRequest) {
               continue;
             }
 
+            ensureWhatsAppContact(auth.admin, {
+              tenantId,
+              phone: row.phone,
+              profileName: row.name,
+            }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
+
             datePaxMap2.set(bus.id, (datePaxMap2.get(bus.id) ?? 0) + row.pax);
             assigned2++;
           } else {
@@ -1548,6 +1561,12 @@ export async function POST(request: NextRequest) {
         p_created_by_user_id: auth.user.id,
       });
       if (allocErr) throw new Error(allocErr.message);
+
+      ensureWhatsAppContact(auth.admin, {
+        tenantId,
+        phone: pRow.passenger_phone,
+        profileName: pRow.passenger_name,
+      }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
 
       await auth.admin.from("bus_import_pending").update({ status: "approved" }).eq("id", parsed.pending_id);
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });

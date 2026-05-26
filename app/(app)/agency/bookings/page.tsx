@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { DateInput, EmptyState, FilterBar, PageHeader, SectionCard } from "@/components/ui";
+import { WhatsAppButton } from "@/components/whatsapp-button";
 import { formatIsoDateShort, formatIsoDateTimeShort } from "@/lib/service-display";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
@@ -153,6 +154,7 @@ function AgencyBookingsPageInner() {
   const [cancelLeg, setCancelLeg]       = useState<"arrival" | "departure" | "both">("both");
   const [cancelNote, setCancelNote]     = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const [tenantId, setTenantId] = useState<string | null>(null);
 
   const currentMonthKey = new Date().toISOString().slice(0, 7);
   const [expandedMonths, setExpandedMonths] = useState<Set<string>>(() => new Set([currentMonthKey]));
@@ -180,6 +182,7 @@ function AgencyBookingsPageInner() {
         setLoading(false);
         return;
       }
+      setTenantId(session.tenantId);
 
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
@@ -584,6 +587,10 @@ function AgencyBookingsPageInner() {
                       <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-semibold text-amber-700 uppercase tracking-wide">Canc. in attesa</span>
                     )}
                   </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  <span>Telefono: {selectedBooking.phone || "N/D"}</span>
+                  <WhatsAppButton phone={selectedBooking.phone} name={selectedBooking.customer_name} tenantId={tenantId} />
                 </div>
 
                 {/* Esito ultima modifica */}

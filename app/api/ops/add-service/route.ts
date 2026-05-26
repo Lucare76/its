@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 
 export const runtime = "nodejs";
 
@@ -79,6 +80,12 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error || !data?.id) return NextResponse.json({ error: error?.message ?? "Inserimento fallito." }, { status: 500 });
+
+  ensureWhatsAppContact(auth.admin, {
+    tenantId,
+    phone: d.phone,
+    profileName: d.customer_name,
+  }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
 
   await auth.admin.from("status_events").insert({
     tenant_id: tenantId,

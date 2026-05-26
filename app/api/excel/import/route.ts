@@ -26,6 +26,7 @@ import {
   type BusAllocationPlan,
   type BusResolverContext
 } from "@/lib/server/bus-service-resolver";
+import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 
 export const runtime = "nodejs";
 
@@ -1023,6 +1024,12 @@ export async function POST(request: NextRequest) {
     }
 
     insertedIds.push(insertResult.data.id);
+    ensureWhatsAppContact(auth.admin, {
+      tenantId: auth.membership.tenant_id,
+      phone: typeof (payload as Record<string, unknown>).phone === "string" ? (payload as Record<string, unknown>).phone as string : null,
+      profileName: typeof (payload as Record<string, unknown>).customer_name === "string" ? (payload as Record<string, unknown>).customer_name as string : null,
+    }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
+
     const eventStatus = item.mode === "legacy" ? "new" : item.status;
     const statusEventResult = await auth.admin.from("status_events").insert({
       tenant_id: auth.membership.tenant_id,

@@ -8,6 +8,7 @@ import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/serv
 import { auditLog } from "@/lib/server/ops-audit";
 import { extractPdfHeaderTextFromBase64, extractPdfTextFromBase64 } from "@/lib/server/pdf-text";
 import { tryMatchAndApplyPricing } from "@/lib/server/pricing-matching";
+import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 
 type AuthContext = {
   admin: SupabaseClient;
@@ -1604,6 +1605,12 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
       throw new Error(statusInsert.error.message);
     }
   }
+
+  ensureWhatsAppContact(auth.admin, {
+    tenantId,
+    phone: normalized.customer_phone,
+    profileName: normalized.customer_full_name,
+  }).catch((error) => console.error("WhatsApp contact creation failed:", error));
 
   if (normalized.service_type === "bus_line" || normalized.booking_kind === "bus_city_hotel") {
     await ensureDefaultBusLotConfig(auth.admin, {

@@ -69,6 +69,17 @@ type TemplateOption = {
   is_tenant_arrival?: boolean;
 };
 
+type ServiceSearchResult = {
+  id: string;
+  customer_name?: string | null;
+  phone?: string | null;
+  phone_e164?: string | null;
+  date?: string | null;
+  time?: string | null;
+  booking_service_kind?: string | null;
+  hotels?: { name?: string | null } | null;
+};
+
 const filters = [
   { value: "open", label: "Aperte" },
   { value: "needs_review", label: "Da rivedere" },
@@ -607,6 +618,10 @@ export default function WhatsAppInboxPage() {
   const [newChatMode, setNewChatMode] = useState(false);
   const [newChatPhone, setNewChatPhone] = useState("");
   const [newChatName, setNewChatName] = useState("");
+  const [associateMode, setAssociateMode] = useState(false);
+  const [associateQuery, setAssociateQuery] = useState("");
+  const [associateResults, setAssociateResults] = useState<ServiceSearchResult[]>([]);
+  const [associateLoading, setAssociateLoading] = useState(false);
   const [phoneEditThreadId, setPhoneEditThreadId] = useState<string | null>(null);
   const [phoneDraft, setPhoneDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -777,6 +792,28 @@ export default function WhatsAppInboxPage() {
   }, [composerMode, selectedTemplate, selectedThread, templateVariablesText]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const threadParam = params.get("thread") ?? params.get("thread_id");
+    const newPhoneParam = params.get("new");
+    const nameParam = params.get("name");
+    if (newPhoneParam) {
+      setNewChatMode(true);
+      setSelectedThreadId(null);
+      setNewChatPhone(newPhoneParam);
+      setNewChatName(nameParam ?? "");
+      setComposerMode("template");
+      setTemplateVariablesText("");
+      setMobileView("chat");
+      return;
+    }
+    if (threadParam) {
+      setNewChatMode(false);
+      setSelectedThreadId(threadParam);
+      setMobileView("chat");
+    }
+  }, []);
+
+  useEffect(() => {
     if (typeof Notification === "undefined") return;
     const timeout = window.setTimeout(() => setNotifPermission(Notification.permission), 0);
     if (Notification.permission === "default") {
@@ -914,6 +951,57 @@ export default function WhatsAppInboxPage() {
       await load(null);
     }
     setBusyAction(null);
+  };
+
+  const searchServicesForAssociation = async (queryOverride?: string) => {
+    const q = (queryOverride ?? associateQuery).trim();
+    if (q.length < 2) {
+      setAssociateResults([]);
+      return;
+    }
+    const token = await getAccessToken();
+    if (!token) return;
+    setAssociateLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/ops/whatsapp-inbox/search-services?q=${encodeURIComponent(q)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = (await response.json().catch(() => null)) as { services?: ServiceSearchResult[]; error?: string } | null;
+      if (!response.ok) {
+        setError(body?.error ?? "Ricerca prenotazioni non riuscita.");
+        setAssociateResults([]);
+      } else {
+        setAssociateResults(body?.services ?? []);
+      }
+    } finally {
+      setAssociateLoading(false);
+    }
+  };
+
+  const associateBooking = async (bookingId: string | null) => {
+    if (!selectedThreadId) return;
+    const token = await getAccessToken();
+    if (!token) return;
+    setBusyAction("associate");
+    setError("");
+    try {
+      const response = await fetch("/api/ops/whatsapp-inbox", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ thread_id: selectedThreadId, action: "associate", booking_id: bookingId }),
+      });
+      const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!response.ok || !body?.ok) {
+        setError(body?.error ?? "Associazione prenotazione non riuscita.");
+      } else {
+        setAssociateMode(false);
+        setAssociateResults([]);
+        await load(selectedThreadId);
+      }
+    } finally {
+      setBusyAction(null);
+    }
   };
 
   const sendReply = async () => {
@@ -1292,9 +1380,19 @@ export default function WhatsAppInboxPage() {
                       {/* Primary action */}
                       <button
                         type="button"
-                        disabled
-                        title="Associazione manuale — prossimo step"
-                        className="flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 opacity-60"
+                        onClick={() => {
+                          const initialQuery =
+                            selectedThread.service?.customer_name ||
+                            selectedThread.phone_e164 ||
+                            selectedThread.whatsapp_contacts?.profile_name ||
+                            selectedThread.wa_id;
+                          setAssociateMode((current) => !current);
+                          setAssociateQuery(initialQuery ?? "");
+                          if (initialQuery) void searchServicesForAssociation(initialQuery);
+                        }}
+                        disabled={busyAction !== null}
+                        title="Cerca e associa una prenotazione"
+                        className="flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                       >
                         <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
@@ -1376,6 +1474,64 @@ export default function WhatsAppInboxPage() {
                         </div>
                       ) : (
                         <p className="mt-0.5 text-xs text-amber-700">Nessun suggerimento disponibile.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {!newChatMode && selectedThread && associateMode && (
+                  <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        data-no-uppercase
+                        value={associateQuery}
+                        onChange={(e) => setAssociateQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void searchServicesForAssociation();
+                        }}
+                        placeholder="Cerca per nome, telefono o numero prenotazione"
+                        className="input-saas flex-1"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void searchServicesForAssociation()}
+                        disabled={associateLoading || associateQuery.trim().length < 2}
+                        className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                      >
+                        {associateLoading ? "Ricerca..." : "Cerca"}
+                      </button>
+                      {selectedThread.booking_id && (
+                        <button
+                          type="button"
+                          onClick={() => void associateBooking(null)}
+                          disabled={busyAction !== null}
+                          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          Rimuovi
+                        </button>
+                      )}
+                    </div>
+                    <div className="mt-2 max-h-44 overflow-y-auto rounded-lg border border-emerald-100 bg-white">
+                      {associateResults.length > 0 ? associateResults.map((service) => (
+                        <button
+                          key={service.id}
+                          type="button"
+                          onClick={() => void associateBooking(service.id)}
+                          disabled={busyAction !== null}
+                          className="flex w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-2 text-left text-xs last:border-b-0 hover:bg-emerald-50 disabled:opacity-50"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate font-semibold text-slate-800">{service.customer_name ?? "Cliente senza nome"}</span>
+                            <span className="block truncate text-slate-500">
+                              {[service.date, String(service.time ?? "").slice(0, 5), service.hotels?.name, service.phone_e164 ?? service.phone].filter(Boolean).join(" · ")}
+                            </span>
+                          </span>
+                          <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-1 font-semibold text-emerald-700">Associa</span>
+                        </button>
+                      )) : (
+                        <p className="px-3 py-3 text-xs text-slate-500">
+                          {associateQuery.trim().length >= 2 ? "Nessuna prenotazione trovata." : "Inserisci almeno 2 caratteri."}
+                        </p>
                       )}
                     </div>
                   </div>

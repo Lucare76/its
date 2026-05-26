@@ -4,6 +4,7 @@ import { z } from "zod";
 import { parseRole } from "@/lib/rbac";
 import { auditLog } from "@/lib/server/ops-audit";
 import { sendEmail } from "@/lib/server/send-email";
+import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 
 export const runtime = "nodejs";
 
@@ -65,7 +66,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const { id: serviceId } = await params;
     let existingQuery = admin
       .from("services")
-      .select("id, tenant_id, customer_first_name, customer_last_name, booking_service_kind")
+      .select("id, tenant_id, customer_first_name, customer_last_name, phone, booking_service_kind")
       .eq("id", serviceId)
       .eq("tenant_id", membership.tenant_id);
 
@@ -135,6 +136,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     if (updateError) {
       return NextResponse.json({ error: updateError.message }, { status: 500 });
+    }
+
+    if (patch.customer_phone !== undefined || patch.customer_first_name !== undefined || patch.customer_last_name !== undefined) {
+      ensureWhatsAppContact(admin, {
+        tenantId: membership.tenant_id,
+        phone: patch.customer_phone ?? (existing.phone as string | null),
+        profileName: `${firstName} ${lastName}`.trim(),
+      }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
     }
 
     // Notifica operatore della modifica

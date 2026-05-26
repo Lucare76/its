@@ -7,6 +7,7 @@ import {
 } from "@/lib/server/operational-v2-server-preview";
 import { authorizePricingRequest, type PricingAuthContext } from "@/lib/server/pricing-auth";
 import type { OperationalV2PreviewRow } from "@/lib/operational-excel-normalize";
+import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 
 export const runtime = "nodejs";
 
@@ -346,6 +347,12 @@ export async function POST(request: NextRequest) {
 
     const serviceIds = (data ?? []).map((item) => String(item.id));
     if (serviceIds.length > 0) {
+      void Promise.allSettled(payloads.map((payload) => ensureWhatsAppContact(auth.admin, {
+        tenantId,
+        phone: typeof payload.phone === "string" ? payload.phone : null,
+        profileName: typeof payload.customer_name === "string" ? payload.customer_name : null,
+      }))).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
+
       await auth.admin.from("status_events").insert(serviceIds.map((serviceId) => ({
         tenant_id: tenantId,
         service_id: serviceId,

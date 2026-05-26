@@ -157,15 +157,32 @@ export function createAdminClient() {
 }
 
 export function normalizeE164(input: string, defaultCountryCode = "+39") {
-  const compact = input.replace(/[^\d+]/g, "");
-  if (compact.startsWith("+")) return compact;
-  if (compact.startsWith("00")) return `+${compact.slice(2)}`;
-  if (compact.startsWith("0")) return `${defaultCountryCode}${compact.slice(1)}`;
-  const defaultCountryDigits = defaultCountryCode.replace(/[^\d]/g, "");
-  if (defaultCountryDigits && compact.startsWith(defaultCountryDigits) && compact.length >= defaultCountryDigits.length + 6) {
-    return `+${compact}`;
+  let cleaned = input.trim().replace(/[\s\-().]/g, "");
+  if (!cleaned) throw new Error("Numero non valido");
+  if (!/^\+?\d+$/.test(cleaned)) throw new Error("Numero non valido");
+
+  if (cleaned.startsWith("00")) {
+    cleaned = `+${cleaned.slice(2)}`;
   }
-  return `${defaultCountryCode}${compact}`;
+
+  if (!cleaned.startsWith("+")) {
+    const defaultCountryDigits = defaultCountryCode.replace(/\D/g, "");
+    if (defaultCountryDigits && defaultCountryDigits !== "39") {
+      cleaned = `+${defaultCountryDigits}${cleaned.replace(/^0+/, "")}`;
+    } else if (/^3\d{9}$/.test(cleaned)) {
+      cleaned = `+39${cleaned}`;
+    } else if (defaultCountryDigits && cleaned.startsWith(defaultCountryDigits) && cleaned.length >= defaultCountryDigits.length + 7) {
+      cleaned = `+${cleaned}`;
+    } else {
+      cleaned = `+${cleaned}`;
+    }
+  }
+
+  if (!/^\+\d{7,15}$/.test(cleaned)) {
+    throw new Error("Numero non valido");
+  }
+
+  return cleaned;
 }
 
 export function normalizeWhatsAppWaId(input: string) {

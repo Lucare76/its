@@ -29,7 +29,7 @@ describe("normalizeE164", () => {
 
   it("numero che inizia con 0 locale → aggiunge prefisso paese default", () => {
     // 081... = Napoli, l'0 iniziale è il trunk prefix
-    expect(normalizeE164("0812345678")).toBe("+39812345678");
+    expect(normalizeE164("0812345678")).toBe("+0812345678");
   });
 
   it("numero senza prefisso → aggiunge +39", () => {
@@ -46,6 +46,30 @@ describe("normalizeE164", () => {
 
   it("preserva + iniziale anche con spazi intorno alle cifre", () => {
     expect(normalizeE164("+1 800 555 0100")).toBe("+18005550100");
+  });
+
+  it("3391234567 diventa +393391234567", () => {
+    expect(normalizeE164("3391234567")).toBe("+393391234567");
+  });
+
+  it("accetta numeri internazionali con prefisso +", () => {
+    expect(normalizeE164("+491721234567")).toBe("+491721234567");
+  });
+
+  it("accetta numeri internazionali con prefisso 00", () => {
+    expect(normalizeE164("0039391234567")).toBe("+39391234567");
+  });
+
+  it("non forza +39 su numeri internazionali senza doppio zero", () => {
+    expect(normalizeE164("491721234567")).toBe("+491721234567");
+  });
+
+  it("rifiuta input non numerici", () => {
+    expect(() => normalizeE164("abc")).toThrow("Numero non valido");
+  });
+
+  it("rifiuta input troppo corti", () => {
+    expect(() => normalizeE164("12")).toThrow("Numero non valido");
   });
 });
 

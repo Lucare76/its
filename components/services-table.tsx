@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ExportServicesButton } from "@/components/export-services-button";
+import { WhatsAppButton } from "@/components/whatsapp-button";
 import { Timeline } from "@/components/timeline";
 import { DataTable, EmptyState, FilterBar } from "@/components/ui";
 import { getBrowserAppUrl } from "@/lib/app-url";
@@ -589,7 +590,10 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                         <p className="line-clamp-2 text-sm font-semibold leading-5 text-slate-900" title={getCustomerFullName(service)}>
                           {getCustomerFullName(service)}
                         </p>
-                        <p className="mt-0.5 truncate text-xs text-slate-500">{service.phone || "telefono n/d"}</p>
+                        <div className="mt-0.5 flex items-center gap-1.5">
+                          <p className="truncate text-xs text-slate-500">{service.phone || "telefono n/d"}</p>
+                          <WhatsAppButton phone={service.phone_e164 ?? service.phone} name={getCustomerFullName(service)} tenantId={service.tenant_id} />
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex max-w-full rounded px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.04em] ${getServiceTypeBadgeTone(service)}`}>
@@ -709,6 +713,10 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
             ) : null;
           })()}
           <p className="text-sm">Cliente: {getCustomerFullName(selectedService)}</p>
+          <div className="flex items-center gap-2 text-sm">
+            <span>Telefono: {selectedService.phone || "N/D"}</span>
+            <WhatsAppButton phone={selectedService.phone_e164 ?? selectedService.phone} name={getCustomerFullName(selectedService)} tenantId={selectedService.tenant_id} size="md" />
+          </div>
           <p className="text-sm">Data andata: {formatIsoDateShort(selectedService.arrival_date ?? selectedService.date)}</p>
           <p className="text-sm">{getOutwardTimeLabel(selectedService)}: {getOutboundTime(selectedService) ?? "N/D"}</p>
           {selectedService.departure_date || getReturnTime(selectedService) ? (
