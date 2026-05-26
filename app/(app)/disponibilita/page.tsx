@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { DateInput } from "@/components/ui/date-input";
 
@@ -102,6 +102,12 @@ export default function DisponibilitaPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [driverAvail, setDriverAvail] = useState<Map<string, DriverAvail>>(new Map());
   const [vehicleAvail, setVehicleAvail] = useState<Map<string, VehicleAvail>>(new Map());
+
+  // Refs for always-fresh state access inside async callbacks (avoids stale closures)
+  const driverAvailRef = useRef<Map<string, DriverAvail>>(new Map());
+  const driversRef = useRef<Driver[]>([]);
+  useEffect(() => { driverAvailRef.current = driverAvail; }, [driverAvail]);
+  useEffect(() => { driversRef.current = drivers; }, [drivers]);
   const [blocks, setBlocks] = useState<TimeBlock[]>([]);
   const [commitments, setCommitments] = useState<VehicleCommitment[]>([]);
   const [confirmed, setConfirmed] = useState(false);
@@ -191,8 +197,8 @@ export default function DisponibilitaPage() {
   // ── Salvataggio disponibilità autista (con tutti i campi) ─────────────────
 
   const saveDriverAvail = useCallback(async (driverId: string, overrides: Partial<DriverAvail> = {}) => {
-    const driver = drivers.find(d => d.id === driverId);
-    const current = driverAvail.get(driverId) ?? emptyAvail(driverId, driver?.user_id ?? null);
+    const driver = driversRef.current.find(d => d.id === driverId);
+    const current = driverAvailRef.current.get(driverId) ?? emptyAvail(driverId, driver?.user_id ?? null);
     const merged = { ...current, ...overrides };
     setSaving(driverId);
     await post({
@@ -216,11 +222,11 @@ export default function DisponibilitaPage() {
       return next;
     });
     setSaving(null);
-  }, [date, driverAvail, drivers, post]);
+  }, [date, post]);
 
   const toggleDriver = async (driverId: string) => {
-    const driver = drivers.find(d => d.id === driverId);
-    const current = driverAvail.get(driverId) ?? emptyAvail(driverId, driver?.user_id ?? null);
+    const driver = driversRef.current.find(d => d.id === driverId);
+    const current = driverAvailRef.current.get(driverId) ?? emptyAvail(driverId, driver?.user_id ?? null);
     await saveDriverAvail(driverId, { available: !current.available });
   };
 
