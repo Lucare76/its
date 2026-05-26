@@ -194,21 +194,39 @@ export default function DisponibilitaPage() {
     const current = driverAvailRef.current.get(driverId) ?? emptyAvail(driverId, driver?.user_id ?? null);
     const merged = { ...current, ...overrides };
     setSaving(driverId);
-    await post({
-      action: "save_driver",
-      date,
-      driver_profile_id: driverId,
-      available: merged.available,
-      available_from: merged.available_from,
-      available_to: merged.available_to,
-      notes: merged.notes,
-      vehicle_1_id: merged.vehicle_1_id,
-      vehicle_1_from: merged.vehicle_1_from,
-      vehicle_1_to: merged.vehicle_1_to,
-      vehicle_2_id: merged.vehicle_2_id,
-      vehicle_2_from: merged.vehicle_2_from,
-      vehicle_2_to: merged.vehicle_2_to,
-    });
+    let result: { ok: boolean; error?: string } | undefined;
+    try {
+      result = await post({
+        action: "save_driver",
+        date,
+        driver_profile_id: driverId,
+        available: merged.available,
+        available_from: merged.available_from,
+        available_to: merged.available_to,
+        notes: merged.notes,
+        vehicle_1_id: merged.vehicle_1_id,
+        vehicle_1_from: merged.vehicle_1_from,
+        vehicle_1_to: merged.vehicle_1_to,
+        vehicle_2_id: merged.vehicle_2_id,
+        vehicle_2_from: merged.vehicle_2_from,
+        vehicle_2_to: merged.vehicle_2_to,
+      });
+    } catch {
+      setError("Errore di rete nel salvataggio disponibilità.");
+      setSaving(null);
+      return;
+    }
+    if (!result?.ok) {
+      setError(result?.error ?? "Errore nel salvataggio disponibilità.");
+      // Ripristina lo stato locale al valore prima della modifica
+      setDriverAvail(prev => {
+        const next = new Map(prev);
+        next.set(driverId, current);
+        return next;
+      });
+      setSaving(null);
+      return;
+    }
     setDriverAvail(prev => {
       const next = new Map(prev);
       next.set(driverId, merged);

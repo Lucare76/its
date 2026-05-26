@@ -198,22 +198,7 @@ export async function POST(req: NextRequest) {
           .eq("tenant_id", tenantId)
           .eq("driver_profile_id", d.driver_profile_id)
           .eq("date", d.date);
-        if (error) {
-          // Fallback: se i campi veicolo non esistono nel DB, salva senza di essi
-          if (error.message.includes("vehicle_")) {
-            const { vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to, ...basePayload } = payload;
-            void [vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to];
-            const { error: err2 } = await auth.admin
-              .from("driver_daily_availability")
-              .update(basePayload)
-              .eq("tenant_id", tenantId)
-              .eq("driver_profile_id", d.driver_profile_id)
-              .eq("date", d.date);
-            if (err2) return NextResponse.json({ ok: false, error: err2.message }, { status: 500 });
-            return NextResponse.json({ ok: true, vehicle_fields_skipped: true });
-          }
-          return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-        }
+        if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
         return NextResponse.json({ ok: true });
       }
 
@@ -223,21 +208,7 @@ export async function POST(req: NextRequest) {
         date: d.date,
         ...payload,
       });
-      if (error) {
-        if (error.message.includes("vehicle_")) {
-          const { vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to, ...basePayload } = payload;
-          void [vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to];
-          const { error: err2 } = await auth.admin.from("driver_daily_availability").insert({
-            tenant_id: tenantId,
-            driver_profile_id: d.driver_profile_id,
-            date: d.date,
-            ...basePayload,
-          });
-          if (err2) return NextResponse.json({ ok: false, error: err2.message }, { status: 500 });
-          return NextResponse.json({ ok: true, vehicle_fields_skipped: true });
-        }
-        return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-      }
+      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
       return NextResponse.json({ ok: true });
     }
 
