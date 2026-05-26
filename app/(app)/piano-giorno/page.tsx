@@ -1839,6 +1839,7 @@ export default function PianoGiornoPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [autoAssigning, setAutoAssigning] = useState(false);
   const [autoResult, setAutoResult] = useState<{ assigned: number; trips: number; skipped: number; report: string[] } | null>(null);
+  const [patchingVehicles, setPatchingVehicles] = useState(false);
   const [aiPlanning, setAiPlanning] = useState(false);
   const [aiPlan, setAiPlan] = useState<{ plan: AiPlanResult; usage: { input_tokens?: number; output_tokens?: number } | null } | null>(null);
   const [aiPlanError, setAiPlanError] = useState<string | null>(null);
@@ -2283,6 +2284,35 @@ export default function PianoGiornoPage() {
     if (hasGroups) setShowAutoModal(true);
     else requestAutoAssign("unassigned_only");
   }, [availabilityLocked, hasGroups, requestAutoAssign]);
+
+  const handlePatchVehicles = useCallback(async () => {
+    if (!token) return;
+    setPatchingVehicles(true);
+    try {
+      const res = await fetch("/api/ops/piano-giorno/patch-vehicles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ date }),
+      });
+      const json = await res.json() as { ok: boolean; updated?: number; total?: number; message?: string; error?: string };
+      if (json.ok) {
+        addPlanToast(
+          json.updated === 0
+            ? (json.message ?? "Nessun giro aggiornato.")
+            : `Aggiornati ${json.updated} giri su ${json.total} senza mezzo.`,
+          "ok"
+        );
+        if ((json.updated ?? 0) > 0) reload();
+      } else {
+        addPlanToast(json.error ?? "Errore aggiornamento mezzi.", "err");
+      }
+    } catch {
+      addPlanToast("Errore di rete.", "err");
+    } finally {
+      setPatchingVehicles(false);
+    }
+  }, [token, date, reload]);
+
   const showAllTrips = useCallback(() => {
     setPlanFilter("all");
     setPlanSearch("");
@@ -3296,6 +3326,14 @@ export default function PianoGiornoPage() {
               title="Claude analizza il carico del giorno e propone priorita operative senza applicare modifiche"
             >
               {aiPlanning ? "AI al lavoro..." : "Analizza con AI"}
+            </button>
+            <button
+              onClick={() => void handlePatchVehicles()}
+              disabled={patchingVehicles || autoAssigning || !token || !data}
+              className="btn-secondary text-sm px-3 disabled:opacity-50"
+              title="Assegna il mezzo dichiarato in Disponibilità ai giri che ne sono privi"
+            >
+              {patchingVehicles ? "Aggiornamento…" : "🚌 Assegna mezzi"}
             </button>
             <button
               onClick={handleAutoAssign}
