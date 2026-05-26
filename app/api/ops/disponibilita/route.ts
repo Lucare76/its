@@ -17,7 +17,7 @@ export const revalidate = 0;
 
 // ─── Schemi ───────────────────────────────────────────────────────────────────
 
-const timeRe = /^\d{2}:\d{2}$/;
+const timeRe = /^\d{2}:\d{2}(:\d{2})?$/;
 
 const saveDriverSchema = z.object({
   action: z.literal("save_driver"),
@@ -104,19 +104,24 @@ export async function GET(req: NextRequest) {
       ]);
 
     // Fallback: se la migrazione 0207 non è ancora applicata, ometti i campi veicolo
+    // PostgreSQL time columns come back as "HH:MM:SS" from PostgREST — normalise to "HH:MM"
+    function sliceTime(v: unknown): string | null {
+      if (typeof v !== "string" || !v) return null;
+      return v.slice(0, 5);
+    }
     const driverAvailData = (driverAvailRes.data ?? []).map((row) => ({
       driver_profile_id: row.driver_profile_id as string,
       driver_user_id: row.driver_user_id as string | null,
       available: row.available as boolean,
-      available_from: row.available_from as string | null,
-      available_to: row.available_to as string | null,
+      available_from: sliceTime(row.available_from),
+      available_to: sliceTime(row.available_to),
       notes: row.notes as string | null,
       vehicle_1_id: (row as Record<string, unknown>).vehicle_1_id as string | null ?? null,
-      vehicle_1_from: (row as Record<string, unknown>).vehicle_1_from as string | null ?? null,
-      vehicle_1_to: (row as Record<string, unknown>).vehicle_1_to as string | null ?? null,
+      vehicle_1_from: sliceTime((row as Record<string, unknown>).vehicle_1_from),
+      vehicle_1_to: sliceTime((row as Record<string, unknown>).vehicle_1_to),
       vehicle_2_id: (row as Record<string, unknown>).vehicle_2_id as string | null ?? null,
-      vehicle_2_from: (row as Record<string, unknown>).vehicle_2_from as string | null ?? null,
-      vehicle_2_to: (row as Record<string, unknown>).vehicle_2_to as string | null ?? null,
+      vehicle_2_from: sliceTime((row as Record<string, unknown>).vehicle_2_from),
+      vehicle_2_to: sliceTime((row as Record<string, unknown>).vehicle_2_to),
     }));
 
     return NextResponse.json({
@@ -198,7 +203,22 @@ export async function POST(req: NextRequest) {
           .eq("tenant_id", tenantId)
           .eq("driver_profile_id", d.driver_profile_id)
           .eq("date", d.date);
-        if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+        if (error) {
+          // Fallback: migrazione 0207 non ancora applicata → riprova senza campi veicolo
+          if (error.message.includes("vehicle_")) {
+            const { vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to, ...basePayload } = payload;
+            void [vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to];
+            const { error: err2 } = await auth.admin
+              .from("driver_daily_availability")
+              .update(basePayload)
+              .eq("tenant_id", tenantId)
+              .eq("driver_profile_id", d.driver_profile_id)
+              .eq("date", d.date);
+            if (err2) return NextResponse.json({ ok: false, error: err2.message }, { status: 500 });
+            return NextResponse.json({ ok: true, vehicle_fields_skipped: true });
+          }
+          return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+        }
         return NextResponse.json({ ok: true });
       }
 
@@ -208,7 +228,21 @@ export async function POST(req: NextRequest) {
         date: d.date,
         ...payload,
       });
-      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      if (error) {
+        if (error.message.includes("vehicle_")) {
+          const { vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to, ...basePayload } = payload;
+          void [vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to];
+          const { error: err2 } = await auth.admin.from("driver_daily_availability").insert({
+            tenant_id: tenantId,
+            driver_profile_id: d.driver_profile_id,
+            date: d.date,
+            ...basePayload,
+          });
+          if (err2) return NextResponse.json({ ok: false, error: err2.message }, { status: 500 });
+          return NextResponse.json({ ok: true, vehicle_fields_skipped: true });
+        }
+        return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      }
       return NextResponse.json({ ok: true });
     }
 
