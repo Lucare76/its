@@ -155,10 +155,13 @@ export default function DisponibilitaPage() {
         confirmed: boolean; confirmed_at: string | null;
       };
       if (!body.ok) { setError(body.error ?? "Errore"); return; }
-      setDrivers(body.drivers.sort((a, b) => a.full_name.localeCompare(b.full_name, "it")));
+      const sortedDrivers = body.drivers.sort((a, b) => a.full_name.localeCompare(b.full_name, "it"));
+      setDrivers(sortedDrivers);
+      driversRef.current = sortedDrivers;
       setVehicles(body.vehicles);
       const availMap = new Map(body.driver_availability.map(a => [a.driver_profile_id, a]));
       setDriverAvail(availMap);
+      driverAvailRef.current = availMap;
       // Inizializza vehicleChangeEnabled dai dati DB
       const cambio = new Set<string>();
       for (const [pid, a] of availMap.entries()) {
@@ -219,19 +222,17 @@ export default function DisponibilitaPage() {
     if (!result?.ok) {
       setError(result?.error ?? "Errore nel salvataggio disponibilità.");
       // Ripristina lo stato locale al valore prima della modifica
-      setDriverAvail(prev => {
-        const next = new Map(prev);
-        next.set(driverId, current);
-        return next;
-      });
+      const next = new Map(driverAvailRef.current);
+      next.set(driverId, current);
+      driverAvailRef.current = next;
+      setDriverAvail(next);
       setSaving(null);
       return;
     }
-    setDriverAvail(prev => {
-      const next = new Map(prev);
-      next.set(driverId, merged);
-      return next;
-    });
+    const next = new Map(driverAvailRef.current);
+    next.set(driverId, merged);
+    driverAvailRef.current = next;
+    setDriverAvail(next);
     setSaving(null);
   }, [date, post]);
 
@@ -244,13 +245,12 @@ export default function DisponibilitaPage() {
   // ── Gestione mezzo ────────────────────────────────────────────────────────
 
   function updateAvailLocal(driverId: string, fields: Partial<DriverAvail>) {
-    setDriverAvail(prev => {
-      const next = new Map(prev);
-      const driver = drivers.find(d => d.id === driverId);
-      const ex = next.get(driverId) ?? emptyAvail(driverId, driver?.user_id ?? null);
-      next.set(driverId, { ...ex, ...fields });
-      return next;
-    });
+    const next = new Map(driverAvailRef.current);
+    const driver = driversRef.current.find(d => d.id === driverId);
+    const ex = next.get(driverId) ?? emptyAvail(driverId, driver?.user_id ?? null);
+    next.set(driverId, { ...ex, ...fields });
+    driverAvailRef.current = next;
+    setDriverAvail(next);
   }
 
   function toggleVehicleChange(driverId: string, checked: boolean) {
@@ -376,10 +376,45 @@ export default function DisponibilitaPage() {
 
   const handleConfirm = async () => {
     setConfirming(true);
-    const action = confirmed ? "unconfirm" : "confirm";
-    const res = await post({ action, date });
-    if (res?.ok) { setConfirmed(!confirmed); setConfirmedAt(!confirmed ? new Date().toISOString() : null); }
-    setConfirming(false);
+    setError(null);
+    try {
+      if (!confirmed) {
+        for (const driver of driversRef.current) {
+          const current = driverAvailRef.current.get(driver.id) ?? emptyAvail(driver.id, driver.user_id);
+          const res = await post({
+            action: "save_driver",
+            date,
+            driver_profile_id: driver.id,
+            available: current.available,
+            available_from: current.available_from,
+            available_to: current.available_to,
+            notes: current.notes,
+            vehicle_1_id: current.vehicle_1_id,
+            vehicle_1_from: current.vehicle_1_from,
+            vehicle_1_to: current.vehicle_1_to,
+            vehicle_2_id: current.vehicle_2_id,
+            vehicle_2_from: current.vehicle_2_from,
+            vehicle_2_to: current.vehicle_2_to,
+          });
+          if (!res?.ok) {
+            setError(res?.error ?? `Salvataggio disponibilita fallito per ${driver.full_name}.`);
+            return;
+          }
+        }
+      }
+
+      const action = confirmed ? "unconfirm" : "confirm";
+      const res = await post({ action, date });
+      if (res?.ok) {
+        setConfirmed(!confirmed);
+        setConfirmedAt(!confirmed ? new Date().toISOString() : null);
+        if (!confirmed) await load();
+      } else {
+        setError(res?.error ?? "Conferma disponibilita fallita.");
+      }
+    } finally {
+      setConfirming(false);
+    }
   };
 
   // ── Statistiche ───────────────────────────────────────────────────────────
