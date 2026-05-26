@@ -177,13 +177,6 @@ export default function DisponibilitaPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  useEffect(() => {
-    const refresh = () => { if (document.visibilityState === "visible") void load(); };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
-  }, [load]);
-
   const post = useCallback(async (body: Record<string, unknown>) => {
     if (!accessToken) return;
     const res = await fetch("/api/ops/disponibilita", {
