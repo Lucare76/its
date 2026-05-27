@@ -120,6 +120,21 @@ function portLabel(value?: string | null) {
   return raw;
 }
 
+function readablePlaceLabel(value?: string | null) {
+  const raw = clean(value);
+  if (!raw) return null;
+  const text = normalize(raw).replace(/[_-]+/g, " ");
+  if (text === "station" || text === "stazione") return "Stazione";
+  if (text === "airport" || text === "aeroporto") return "Aeroporto";
+  if (text.includes("casamicciola")) return "Casamicciola";
+  if (text === "forio") return "Forio";
+  if (text.includes("napoli beverello")) return "Napoli Beverello";
+  if (text === "napoli") return "Napoli";
+  if (text.includes("pozzuoli")) return "Pozzuoli";
+  if (text.includes("ischia porto") || text === "ischia") return "Ischia Porto";
+  return raw.replace(/[_-]+/g, " ");
+}
+
 function companyLabel(service: PianoDisplayService) {
   const raw = clean(service.barca_compagnia) ?? clean(service.vessel) ?? detailValue(service.ferry_details, "ferry_company");
   if (!raw) return null;
@@ -203,6 +218,17 @@ function connectionLabel(service: PianoDisplayService, badge: PianoDisplayBadge)
   return [kind, ref, time].filter(Boolean).join(" ");
 }
 
+function connectionTransportLabel(service: PianoDisplayService, badge: PianoDisplayBadge) {
+  const isFlight = badge === "TRANSFER AEROPORTO";
+  const kind = isFlight ? "Volo" : "Treno";
+  const ref = clean(service.transport_code)
+    ?? clean(service.train_arrival_number)
+    ?? clean(service.train_departure_number);
+  const time = fmtTime(isFlight ? service.arrival_time : service.train_arrival_time ?? service.arrival_time);
+  if (!ref && !time) return null;
+  return [kind, ref, time].filter(Boolean).join(" ");
+}
+
 function ferryLabel(service: PianoDisplayService) {
   const company = companyLabel(service);
   const ferryTime = fmtTime(service.orario_barca)
@@ -216,6 +242,72 @@ function ferryLabel(service: PianoDisplayService) {
 function islandArrivalTime(service: PianoDisplayService) {
   return fmtTime(nestedDetailValue(service.ferry_details, "db_computed", "arrival_at_ischia"))
     ?? fmtTime(detailValue(service.ferry_details, "arrival_at_ischia"));
+}
+
+function ferryDeparturePort(service: PianoDisplayService) {
+  return readablePlaceLabel(detailValue(service.ferry_details, "departure_port"))
+    ?? readablePlaceLabel(detailValue(service.ferry_details, "departurePort"))
+    ?? readablePlaceLabel(detailValue(service.ferry_details, "source_departure_port"))
+    ?? readablePlaceLabel(detailValue(service.ferry_details, "from"))
+    ?? readablePlaceLabel(detailValue(service.ferry_details, "porto_bruno"))
+    ?? readablePlaceLabel(nestedDetailValue(service.ferry_details, "db_computed", "port_departure"))
+    ?? readablePlaceLabel(service.porto_bruno);
+}
+
+function vesselRouteArrivalPort(service: PianoDisplayService) {
+  const raw = nestedDetailValue(service.ferry_details, "db_computed", "nave_db")
+    ?? detailValue(service.ferry_details, "nave_db")
+    ?? clean(service.vessel);
+  const parts = raw?.split(/\s+-\s+/).map((part) => clean(part)).filter(Boolean);
+  return parts && parts.length >= 4 ? readablePlaceLabel(parts[parts.length - 1]) : null;
+}
+
+function departureEmbarkPort(service: PianoDisplayService) {
+  return vesselRouteArrivalPort(service)
+    ?? readablePlaceLabel(nestedDetailValue(service.ferry_details, "db_computed", "porto_bruno"))
+    ?? readablePlaceLabel(detailValue(service.ferry_details, "departure_port"))
+    ?? readablePlaceLabel(detailValue(service.ferry_details, "departurePort"))
+    ?? readablePlaceLabel(detailValue(service.ferry_details, "porto_bruno"))
+    ?? readablePlaceLabel(service.porto_bruno);
+}
+
+function arrivalConnectionLabel(args: {
+  service: PianoDisplayService;
+  badge: PianoDisplayBadge;
+  pickup: string | null;
+  origin: string | null;
+  ferry: string | null;
+  arrivalAtIsland: string | null;
+}) {
+  const origin = readablePlaceLabel(args.origin);
+  const showOrigin = origin && !samePlace(origin, args.pickup) ? `Da ${origin}` : null;
+  const transport = args.badge === "TRANSFER AEROPORTO" || args.badge === "TRANSFER STAZIONE"
+    ? connectionTransportLabel(args.service, args.badge)
+    : null;
+  const ferryTime = fmtTime(args.service.orario_barca)
+    ?? fmtTime(detailValue(args.service.ferry_details, "source_ferry_time"))
+    ?? fmtTime(detailValue(args.service.ferry_details, "ferry_time"));
+  const ferryPort = ferryDeparturePort(args.service);
+  const ferryCompany = companyLabel(args.service) ?? (ferryTime ? args.ferry?.replace(ferryTime, "").trim() : args.ferry);
+  const ferryPart = ferryCompany || ferryTime || ferryPort
+    ? [`Traghetto`, ferryCompany, ferryTime, ferryPort ? `da ${ferryPort}` : null].filter(Boolean).join(" ")
+    : null;
+  const arrival = args.arrivalAtIsland ? `Arrivo Ischia ${args.arrivalAtIsland}` : null;
+  const first = [showOrigin, transport].filter(Boolean).join(" · ") || null;
+  return [first, ferryPart, arrival].filter(Boolean).join(" → ") || null;
+}
+
+function departureConnectionLabel(args: {
+  service: PianoDisplayService;
+  ferry: string | null;
+}) {
+  const ferryTime = fmtTime(args.service.orario_barca)
+    ?? fmtTime(detailValue(args.service.ferry_details, "source_ferry_time"))
+    ?? fmtTime(detailValue(args.service.ferry_details, "ferry_time"));
+  const ferryCompany = companyLabel(args.service) ?? (ferryTime ? args.ferry?.replace(ferryTime, "").trim() : args.ferry);
+  return ferryCompany || ferryTime
+    ? [`Traghetto`, ferryCompany, ferryTime].filter(Boolean).join(" ")
+    : null;
 }
 
 function samePlace(left?: string | null, right?: string | null) {
@@ -373,13 +465,7 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
     const primaryTime = arrivalAtIsland ?? fmtTime(service.arrival_time) ?? fmtTime(service.time);
     const pickup = port ?? portLabel(service.meeting_point);
     const destination = hotelWithZone(hotel) ?? hotelName;
-    const ferryConnection = ferry ? `traghetto ${ferry}${arrivalAtIsland ? `, arrivo ${arrivalAtIsland}` : ""}` : null;
-    const originLabel = sourceFrom && !samePlace(sourceFrom, pickup) ? `origine ${sourceFrom}` : null;
-    const connection = [
-      badge === "TRANSFER AEROPORTO" || badge === "TRANSFER STAZIONE" ? connectionLabel(service, badge) : null,
-      ferryConnection,
-      originLabel,
-    ].filter(Boolean).join(" | ") || null;
+    const connection = arrivalConnectionLabel({ service, badge, pickup, origin: sourceFrom, ferry, arrivalAtIsland });
     const warnings = [
       pickup ? null : "Prendere a: arrivo isola da verificare",
       destination ? null : "Destinazione da verificare",
@@ -406,11 +492,8 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
   }
 
   const pickup = hotelName ?? clean(service.meeting_point);
-  const destination = port ?? sourceTo;
-  const connection = [
-    ferry ? `nave ${ferry}` : null,
-    badge === "TRANSFER AEROPORTO" || badge === "TRANSFER STAZIONE" ? connectionLabel(service, badge) : null,
-  ].filter(Boolean).join(" | ") || null;
+  const destination = departureEmbarkPort(service) ?? port ?? sourceTo;
+  const connection = departureConnectionLabel({ service, ferry });
   const warnings = [
     pickup ? null : "Pickup da verificare",
     destination ? null : "Porto/destinazione da verificare",
@@ -420,11 +503,11 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
       macroCategory: "PARTENZA",
       serviceLabel: "PARTENZA",
       primaryTime: basePrimaryTime,
-      actionLabel: `Pickup: ${pickup ?? "da verificare"}`,
-      pickupLabel: null,
+      actionLabel: "",
+      pickupLabel: pickup ?? "Pickup da verificare",
       destinationLabel: destination ?? "Porto/destinazione da verificare",
       connectionLabel: connection,
-      ferryLabel: ferry,
+      ferryLabel: connection ? null : ferry,
       clientLabel: client,
       paxLabel: pax,
       phoneLabel,

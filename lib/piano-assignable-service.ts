@@ -1,3 +1,5 @@
+import { effectiveDisembarkTime } from "@/lib/piano-arrival-time";
+
 export type AssignableMacroCategory = "NAVETTA" | "ARRIVO" | "PARTENZA" | "ESCURSIONE" | "DA_VERIFICARE";
 
 export type AssignablePlaceType =
@@ -260,6 +262,19 @@ function ferryArrivalTime(service: AssignableService) {
     ?? time(detailValue(service.ferry_details, "arrival_time"));
 }
 
+function inferBoatType(service: AssignableService) {
+  const text = normalize([
+    detailValue(service.ferry_details, "boat_type"),
+    detailValue(service.ferry_details, "boatType"),
+    detailValue(service.ferry_details, "transport_type"),
+    service.booking_service_kind,
+    service.service_type_code,
+    service.vessel,
+    service.barca_compagnia,
+  ].filter(Boolean).join(" "));
+  return text.includes("aliscafo") ? "aliscafo" : "traghetto";
+}
+
 function minutesFromTime(value?: string | null) {
   const match = clean(value)?.match(/([01]?\d|2[0-3]):([0-5]\d)/);
   if (!match) return null;
@@ -493,6 +508,14 @@ export function resolveAssignableService(
   const explicitFerryArrTime = ferryArrivalTime(service);
   const ferryArrTime = explicitFerryArrTime ?? (macro === "ARRIVO" ? computedIslandArrivalTime(ferryCompany, ferryDepTime) : null);
   const portDeparture = ferryDeparturePort(service);
+  const effectiveArrivalTime = macro === "ARRIVO"
+    ? effectiveDisembarkTime({
+      arrivalTime: ferryArrTime,
+      departureTime: ferryDepTime,
+      departurePort: portDeparture,
+      boatType: inferBoatType(service),
+    }) ?? ferryArrTime
+    : ferryArrTime;
   const portArrival = ferryArrivalPort(service);
   const hotel = hotelName(context);
   const zone = hotelZone(context);
@@ -564,7 +587,7 @@ export function resolveAssignableService(
       || service.place_type === "station"
       || service.origin_place_type === "airport"
       || service.origin_place_type === "station";
-    const operationalTime = ferryArrTime ?? (!isConnectionFromContinent ? time(service.arrival_time) ?? time(service.time) : null);
+    const operationalTime = effectiveArrivalTime ?? (!isConnectionFromContinent ? time(service.arrival_time) ?? time(service.time) : null);
     const pickup = portArrival ?? (!isConnectionFromContinent ? portLabel(service.meeting_point) : null);
     const destination = hotel;
     const connectionParts = [

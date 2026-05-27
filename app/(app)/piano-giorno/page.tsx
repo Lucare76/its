@@ -1630,14 +1630,31 @@ function navettaZoneRequiredGap(area: string | null | undefined): number {
   return 25;
 }
 
+type DriverSequenceRow = {
+  svc: Service;
+  time: string;
+  hotel: Hotel | undefined;
+  display: ReturnType<typeof getPianoServiceDisplay>;
+};
+
+function sameDepartureMultiDropWindow(previous: DriverSequenceRow, current: DriverSequenceRow, prevMin: number, currentMin: number) {
+  if (previous.display.macroCategory !== "PARTENZA" || current.display.macroCategory !== "PARTENZA") return false;
+  if (Math.abs(currentMin - prevMin) > 5) return false;
+
+  const previousPickup = previous.svc.pickup_hotel ?? previous.display.pickupLabel ?? previous.svc.meeting_point;
+  const currentPickup = current.svc.pickup_hotel ?? current.display.pickupLabel ?? current.svc.meeting_point;
+  return sameOperationalPlace(previousPickup, currentPickup);
+}
+
 function driverSequenceWarning(
-  previous: { time: string; hotel: Hotel | undefined; display: ReturnType<typeof getPianoServiceDisplay> } | null,
-  current: { time: string; hotel: Hotel | undefined; display: ReturnType<typeof getPianoServiceDisplay> },
+  previous: DriverSequenceRow | null,
+  current: DriverSequenceRow,
 ) {
   if (!previous) return null;
   const prevMin = minutesFromTime(previous.time);
   const currentMin = minutesFromTime(current.time);
   if (prevMin == null || currentMin == null) return null;
+  if (sameDepartureMultiDropWindow(previous, current, prevMin, currentMin)) return null;
   const gap = currentMin - prevMin;
   if (gap < 0 || gap >= 45) return null;
   const from = serviceEndPlace(previous.display);

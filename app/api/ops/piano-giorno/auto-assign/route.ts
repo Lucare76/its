@@ -32,6 +32,7 @@ import {
 import { vehicleIntervalsOverlap, vehicleResourceKey } from "@/lib/piano-vehicle-timeline";
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import { assignGlobalPlanner, type GlobalPlannerDriver, type GlobalPlannerUnit, type GlobalPlannerVehicle } from "@/lib/piano-global-planner";
+import { effectiveServiceDisembarkTime } from "@/lib/piano-arrival-time";
 import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
 import { loadLearnedPatterns, updateLearnedPatterns } from "@/lib/server/learned-patterns";
 import { type SupabaseClient } from "@supabase/supabase-js";
@@ -498,6 +499,11 @@ type ServiceRow = {
   customer_name: string | null;
   booking_service_kind: string | null;
   service_type_code: string | null;
+  arrival_time: string | null;
+  orario_barca: string | null;
+  porto_bruno: string | null;
+  barca_compagnia: string | null;
+  ferry_details: Record<string, unknown> | null;
 };
 type HotelRow = {
   id: string;
@@ -568,10 +574,7 @@ function serviceOperationalTime(service: ServiceRow): string {
   if (service.direction === "departure") {
     return (service.pickup_hotel ?? service.time).slice(0, 5);
   }
-  // Regola 2: aggiungi buffer sbarco all'orario arrivo traghetto
-  const baseMin = timeToMin(service.time.slice(0, 5));
-  const buf = disembarkBufferMin(service.vessel);
-  return minutesToHHMM(baseMin + buf);
+  return effectiveServiceDisembarkTime(service) ?? service.time.slice(0, 5);
 }
 
 function serviceToGeographicWindow(service: ServiceRow, hotelMap: Map<string, HotelRow>): GeographicCompatibilityService {
@@ -747,7 +750,7 @@ export async function POST(request: NextRequest) {
            hotelLimitsRes, driverAvailRes, vehicleAvailRes, vehicleBlocksRes, availabilityConfirmRes, commitments] =
       await Promise.all([
         auth.admin.from("services")
-          .select("id, time, direction, vessel, hotel_id, pax, status, meeting_point, pickup_hotel, customer_name, booking_service_kind, service_type_code")
+          .select("id, time, direction, vessel, hotel_id, pax, status, meeting_point, pickup_hotel, customer_name, booking_service_kind, service_type_code, arrival_time, orario_barca, porto_bruno, barca_compagnia, ferry_details")
           .eq("tenant_id", tenantId).eq("date", date)
           .neq("status", "cancelled").neq("is_draft", true),
         auth.admin.from("hotels").select("id, name, address, zone, lat, lng, geo_status, geo_source, geo_accuracy, geo_verified_at").eq("tenant_id", tenantId),

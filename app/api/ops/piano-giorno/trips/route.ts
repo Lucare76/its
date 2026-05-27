@@ -25,6 +25,7 @@ import {
 } from "@/lib/server/geo-assignment";
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import { canDriverCoverInterval } from "@/lib/piano-driver-availability";
+import { effectiveServiceDisembarkTime } from "@/lib/piano-arrival-time";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
 import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
@@ -32,6 +33,8 @@ import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
 export const runtime = "nodejs";
 const LARGE_GROUP_PAX_THRESHOLD = 21;
 const VEHICLE_SHARE_BUFFER_MINUTES = 20;
+const SERVICE_VALIDATION_COLUMNS = "id, time, pickup_hotel, direction, pax, hotel_id, meeting_point, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details";
+const ASSIGNMENT_SERVICE_VALIDATION_COLUMNS = `group_id, services!inner(${SERVICE_VALIDATION_COLUMNS})`;
 
 export async function POST(request: NextRequest) {
   try {
@@ -901,6 +904,14 @@ type ServiceValidationRow = {
   pax: number;
   hotel_id: string | null;
   meeting_point: string | null;
+  arrival_time: string | null;
+  orario_barca: string | null;
+  porto_bruno: string | null;
+  barca_compagnia: string | null;
+  booking_service_kind: string | null;
+  service_type_code: string | null;
+  vessel: string | null;
+  ferry_details: Record<string, unknown> | null;
 };
 
 type HotelValidationRow = {
@@ -911,7 +922,7 @@ type HotelValidationRow = {
 function serviceOperationalTime(service: ServiceValidationRow): string {
   return service.direction === "departure"
     ? (service.pickup_hotel ?? service.time).slice(0, 5)
-    : service.time.slice(0, 5);
+    : effectiveServiceDisembarkTime(service) ?? service.time.slice(0, 5);
 }
 
 function toMinutes(value: string): number {
@@ -1080,7 +1091,7 @@ async function validateTripPayload(
 
   const { data: services, error } = await admin
     .from("services")
-    .select("id, time, pickup_hotel, direction, pax, hotel_id, meeting_point")
+    .select(SERVICE_VALIDATION_COLUMNS)
     .eq("tenant_id", tenantId)
     .in("id", params.serviceIds);
 
@@ -1113,7 +1124,7 @@ async function validateTripPayload(
 
   const { data: otherAssignments, error: otherAssignmentsError } = await admin
     .from("assignments")
-    .select("group_id, services!inner(id, time, pickup_hotel, direction, hotel_id, meeting_point)")
+    .select(ASSIGNMENT_SERVICE_VALIDATION_COLUMNS)
     .eq("tenant_id", tenantId)
     .eq("driver_user_id", params.driverUserId)
     .not("group_id", "is", null);
@@ -1211,7 +1222,7 @@ async function validateVehicleTimelinePayload(
 
   const { data: services, error: servicesError } = await admin
     .from("services")
-    .select("id, time, pickup_hotel, direction, pax, hotel_id, meeting_point")
+    .select(SERVICE_VALIDATION_COLUMNS)
     .eq("tenant_id", tenantId)
     .in("id", params.serviceIds);
 
@@ -1257,7 +1268,7 @@ async function validateVehicleTimelinePayload(
 
   const { data: assignments, error: assignmentsError } = await admin
     .from("assignments")
-    .select("group_id, services!inner(id, time, pickup_hotel, direction, pax, hotel_id, meeting_point)")
+    .select(ASSIGNMENT_SERVICE_VALIDATION_COLUMNS)
     .eq("tenant_id", tenantId)
     .in("group_id", groupIds);
 

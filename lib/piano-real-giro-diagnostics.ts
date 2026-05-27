@@ -174,6 +174,10 @@ export type RealGiroConfirmedDecision = Pick<
 const LARGE_GROUP_PAX_THRESHOLD = 21;
 const MIN_BUFFER_MINUTES = 20;
 
+type MultiDropMergedStop = MergedStop & {
+  multi_drop?: true;
+};
+
 function confidenceScore(resolution: AssignableServiceResolution) {
   const severe = resolution.macro_category === "DA_VERIFICARE"
     || resolution.review_reasons.some((reason) =>
@@ -245,6 +249,90 @@ function rowToSameStopService(row: AutoAssignPreviewServiceRow): ResolvedService
     booking_service_kind: row.booking_service_kind,
     service_type_code: row.service_type_code,
   };
+}
+
+function uniqueStopLabels(values: Array<string | null | undefined>) {
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const value of values) {
+    const label = clean(value);
+    const key = normalizeText(label);
+    if (!label || seen.has(key)) continue;
+    seen.add(key);
+    labels.push(label);
+  }
+  return labels;
+}
+
+function sameTextValue(left?: string | null, right?: string | null) {
+  const a = normalizeText(left);
+  const b = normalizeText(right);
+  return Boolean(a && b && a === b);
+}
+
+function sameMultiDropDeparture(anchor: MergedStop, candidate: MergedStop) {
+  return anchor.macro_category === "PARTENZA"
+    && candidate.macro_category === "PARTENZA"
+    && sameTextValue(anchor.pickup_label, candidate.pickup_label)
+    && Math.abs(minutes(anchor.operational_time) - minutes(candidate.operational_time)) <= 5;
+}
+
+function makeMultiDropStop(stops: MergedStop[], index: number): MergedStop {
+  const ordered = [...stops].sort((a, b) => a.operational_time.localeCompare(b.operational_time));
+  const first = ordered[0]!;
+  const services = ordered.flatMap((stop) => stop.services);
+  const merged: MultiDropMergedStop = {
+    ...first,
+    stop_id: `multi-drop-${String(index).padStart(4, "0")}`,
+    services,
+    total_pax: services.reduce((sum, service) => sum + (service.pax ?? 0), 0),
+    operational_time: first.operational_time,
+    destination_labels: uniqueStopLabels(ordered.flatMap((stop) => stop.destination_labels)),
+    is_merged: true,
+    merge_reason: "Multi-drop partenza: stesso pickup e destinazioni sequenziali",
+    warnings: ordered.flatMap((stop) => stop.warnings ?? []),
+    multi_drop: true,
+  };
+  return merged;
+}
+
+function mergeMultiDropStops(stops: MergedStop[]): MergedStop[] {
+  const ordered = [...stops].sort((a, b) => a.operational_time.localeCompare(b.operational_time));
+  const used = new Set<string>();
+  const merged: MergedStop[] = [];
+  let multiDropIndex = 1;
+
+  for (const stop of ordered) {
+    if (used.has(stop.stop_id)) continue;
+    if (stop.macro_category !== "PARTENZA") {
+      merged.push(stop);
+      used.add(stop.stop_id);
+      continue;
+    }
+
+    const group = ordered.filter((candidate) =>
+      !used.has(candidate.stop_id) && sameMultiDropDeparture(stop, candidate)
+    );
+    const destinationCount = new Set(
+      group.flatMap((candidate) => candidate.destination_labels).map(normalizeText).filter(Boolean)
+    ).size;
+
+    if (group.length > 1 && destinationCount > 1) {
+      for (const item of group) used.add(item.stop_id);
+      merged.push(makeMultiDropStop(group, multiDropIndex));
+      multiDropIndex += 1;
+      continue;
+    }
+
+    used.add(stop.stop_id);
+    merged.push(stop);
+  }
+
+  return merged.sort((a, b) =>
+    a.operational_time.localeCompare(b.operational_time)
+      || String(a.pickup_label ?? "").localeCompare(String(b.pickup_label ?? ""))
+      || a.stop_id.localeCompare(b.stop_id)
+  );
 }
 
 function groupStatus(input: {
@@ -927,7 +1015,7 @@ export function buildRealGiroDiagnostics(args: {
     const assignableStopsInput = rows
       .filter((row) => row.assignable && !row.needs_review)
       .map(rowToSameStopService);
-    const stops = mergeSameStops(assignableStopsInput);
+    const stops = mergeMultiDropStops(mergeSameStops(assignableStopsInput));
     const shuttlePairResult = detectShuttlePairs(stops, {
       enabledHotelNames: ["hotel terme president"],
       maxDeltaMinutes: 10,
