@@ -252,6 +252,42 @@ export default function MappaLivePage() {
   const [streetViewResult, setStreetViewResult] = useState<PanoramaxResult>({ status: "idle" });
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [driverByVehicleId, setDriverByVehicleId] = useState<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDriverAssociations() {
+      const token = await accessToken();
+      if (!token) return;
+      const today = new Date().toISOString().slice(0, 10);
+      try {
+        const res = await fetch(`/api/ops/disponibilita?date=${today}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!res.ok || cancelled) return;
+        const body = (await res.json()) as {
+          ok?: boolean;
+          drivers?: Array<{ id: string; full_name: string }>;
+          driver_availability?: Array<{ driver_profile_id: string; vehicle_1_id: string | null; vehicle_2_id: string | null }>;
+        };
+        if (!body.ok || cancelled) return;
+        const driverById = new Map((body.drivers ?? []).map((d) => [d.id, d.full_name]));
+        const map = new Map<string, string>();
+        for (const avail of body.driver_availability ?? []) {
+          const name = driverById.get(avail.driver_profile_id);
+          if (!name) continue;
+          if (avail.vehicle_1_id) map.set(avail.vehicle_1_id, name);
+          if (avail.vehicle_2_id) map.set(avail.vehicle_2_id, name);
+        }
+        setDriverByVehicleId(map);
+      } catch {
+        // silently ignore — GPS view works without driver associations
+      }
+    }
+    void loadDriverAssociations();
+    return () => { cancelled = true; };
+  }, []);
 
   const fetchControlRoom = useEffectEvent(async (initial = false) => {
     const token = await accessToken();
@@ -319,14 +355,27 @@ export default function MappaLivePage() {
     };
   }, [refreshSeconds]);
 
+  const annotatedEntries = useMemo(
+    () =>
+      driverByVehicleId.size === 0
+        ? entries
+        : entries.map((entry) => {
+            if (!entry.pms_vehicle_id) return entry;
+            const dailyDriverName = driverByVehicleId.get(entry.pms_vehicle_id);
+            if (!dailyDriverName || dailyDriverName === entry.driver_name) return entry;
+            return { ...entry, driver_name: dailyDriverName };
+          }),
+    [entries, driverByVehicleId]
+  );
+
   const lineOptions = useMemo(
-    () => Array.from(new Set(entries.map((entry) => entry.line_name).filter(Boolean) as string[])).sort(),
-    [entries]
+    () => Array.from(new Set(annotatedEntries.map((entry) => entry.line_name).filter(Boolean) as string[])).sort(),
+    [annotatedEntries]
   );
 
   const filteredEntries = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return entries
+    return annotatedEntries
       .filter((entry) => {
         const byLine = lineFilter === "all" || entry.line_name === lineFilter;
         const byStatus = statusFilter === "all" || entry.status_key === statusFilter;
@@ -344,7 +393,7 @@ export default function MappaLivePage() {
         if (byActiveService !== 0) return byActiveService;
         return left.last_update_seconds - right.last_update_seconds;
       });
-  }, [entries, lineFilter, search, statusFilter]);
+  }, [annotatedEntries, lineFilter, search, statusFilter]);
 
   const selected = useMemo(
     () => filteredEntries.find((entry) => entry.radius_vehicle_id === selectedId) ?? filteredEntries[0] ?? null,

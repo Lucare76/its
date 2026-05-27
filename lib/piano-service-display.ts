@@ -421,7 +421,7 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
       serviceLabel: "PARTENZA",
       primaryTime: basePrimaryTime,
       actionLabel: `Pickup: ${pickup ?? "da verificare"}`,
-      pickupLabel: pickup ?? "Pickup da verificare",
+      pickupLabel: null,
       destinationLabel: destination ?? "Porto/destinazione da verificare",
       connectionLabel: connection,
       ferryLabel: ferry,
@@ -431,6 +431,6 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
       noteLabel: operationalNote,
       importTag: compactImportTag,
       warnings,
-      placeLabel: [pickup, destination].filter(Boolean).join(" -> ") || "Partenza da verificare",
+      placeLabel: pickup ?? "Partenza da verificare",
     });
 }

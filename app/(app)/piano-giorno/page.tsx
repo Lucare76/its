@@ -1573,7 +1573,8 @@ function sameOperationalPlace(left: string | null | undefined, right: string | n
 
 function serviceStartPlace(display: ReturnType<typeof getPianoServiceDisplay>) {
   const takeAt = display.actionLabel.match(/^Prendere a:\s*(.+)$/i)?.[1];
-  return display.pickupLabel ?? takeAt ?? display.placeLabel;
+  const pickupAt = display.actionLabel.match(/^Pickup:\s*(.+)$/i)?.[1];
+  return display.pickupLabel ?? takeAt ?? pickupAt ?? display.placeLabel;
 }
 
 function serviceEndPlace(display: ReturnType<typeof getPianoServiceDisplay>) {

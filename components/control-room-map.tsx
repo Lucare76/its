@@ -58,6 +58,7 @@ function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
   const accent = palette.bg;
   const label = escapeHtml((entry.pms_label ?? entry.label).slice(0, selected ? 18 : 12));
   const line = escapeHtml((entry.line_name ?? "").slice(0, selected ? 16 : 11));
+  const driver = escapeHtml((entry.driver_name ?? "").slice(0, selected ? 18 : 13));
   const critical = entry.status_key === "warning" || entry.status_key === "stopped" || offlineWithActiveService;
   const showDetails = selected || critical;
   const size = selected ? 48 : critical ? 42 : 36;
@@ -136,6 +137,7 @@ function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
           ">
             <div style="font-size:11px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</div>
             ${selected ? `<div style="margin-top:2px;font-size:10px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${line || "Bus live"}</div>` : ""}
+            ${selected && driver ? `<div style="margin-top:1px;font-size:10px;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${driver}</div>` : ""}
             <div style="margin-top:4px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:${accent};padding:3px 8px;font-size:10px;font-weight:800;color:${palette.text};">${speed !== null ? `${speed} km/h` : "-- km/h"}</div>
           </div>
         ` : ""}

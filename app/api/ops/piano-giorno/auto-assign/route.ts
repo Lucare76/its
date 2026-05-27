@@ -952,14 +952,27 @@ export async function POST(request: NextRequest) {
 
     // ── 3. Seleziona servizi da assegnare ────────────────────────────────────
 
-    const toAssign = mode === "unassigned_only"
+    const candidateServices = mode === "unassigned_only"
       ? allServices.filter((s) => !assignedMap.has(s.id) && !lockedServiceIds.has(s.id))
       : allServices.filter((s) => !lockedServiceIds.has(s.id));
 
-    if (!toAssign.length) {
+    // Scarta i servizi privi di dati operativi minimi (nessun orario, nessun pax, nessuna location)
+    const incompleteServices = candidateServices.filter(
+      (s) => !serviceOperationalTime(s) || !s.pax || s.pax <= 0 || (!s.hotel_id && !s.meeting_point)
+    );
+    const incompleteIds = new Set(incompleteServices.map((s) => s.id));
+    const toAssign = candidateServices.filter((s) => !incompleteIds.has(s.id));
+
+    if (!toAssign.length && !incompleteServices.length) {
       return NextResponse.json({
         ok: true, assigned: 0, trips: 0, skipped: 0,
         report: ["Nessun servizio da assegnare per questa data."],
+      });
+    }
+    if (!toAssign.length) {
+      return NextResponse.json({
+        ok: true, assigned: 0, trips: 0, skipped: incompleteServices.length,
+        report: [`Nessun servizio assegnabile: ${incompleteServices.length} servizi con dati incompleti (orario, pax o location mancanti).`],
       });
     }
 
@@ -1700,6 +1713,7 @@ export async function POST(request: NextRequest) {
     const report: string[] = [
       `${assignedCount} servizi assegnati in ${tripsCreated} giri.`,
       ...sanNicolaResult.warnings,
+      ...(incompleteServices.length > 0 ? [`${incompleteServices.length} servizi esclusi per dati incompleti (orario/pax/location mancanti).`] : []),
       ...(unassignedCount > 0 ? [`${unassignedCount} servizi non assegnati.`] : []),
       ...(geoBlockedServices.length > 0
         ? [`${geoBlockedServices.length} servizi hanno hotel con geolocalizzazione dubbia: ${geoBlockedHotels.slice(0, 6).join(", ")}${geoBlockedHotels.length > 6 ? "..." : ""}.`]
