@@ -314,9 +314,12 @@ export default function FleetReportsPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {payload.summary.map((row) => {
-                  const cpk = row.logged_km > 0 ? row.total_cost / row.logged_km : null;
                   const rowFuelIntervalKm = safeNumber(row.fuel_interval_km);
                   const rowFuelLiters = safeNumber(row.fuel_liters);
+                  // Usa fuel_interval_km come fallback se non ci sono km_logs manuali
+                  const effectiveKm = row.logged_km > 0 ? row.logged_km : rowFuelIntervalKm;
+                  const kmFromFuel = row.logged_km === 0 && rowFuelIntervalKm > 0;
+                  const cpk = effectiveKm > 0 ? row.total_cost / effectiveKm : null;
                   const averageKmPerLiter = rowFuelIntervalKm > 0 && rowFuelLiters > 0 ? rowFuelIntervalKm / rowFuelLiters : null;
                   const averageLitersPer100Km = rowFuelIntervalKm > 0 && rowFuelLiters > 0 ? (rowFuelLiters / rowFuelIntervalKm) * 100 : null;
                   const isTop = row.total_cost === maxCost;
@@ -330,7 +333,10 @@ export default function FleetReportsPage() {
                       <td className="py-2.5 pr-4 text-right text-amber-700">{fmt(row.fuel_cost)}</td>
                       <td className="py-2.5 pr-4 text-right text-orange-700">{fmt(row.maintenance_cost)}</td>
                       <td className="py-2.5 pr-4 text-right font-bold text-slate-900">{fmt(row.total_cost)}</td>
-                      <td className="hidden py-2.5 pr-4 text-right text-slate-600 md:table-cell">{row.logged_km.toLocaleString("it-IT")}</td>
+                      <td className="hidden py-2.5 pr-4 text-right text-slate-600 md:table-cell" title={kmFromFuel ? "Km stimati da rifornimenti (nessun log km manuale)" : undefined}>
+                        {effectiveKm > 0 ? effectiveKm.toLocaleString("it-IT") : "0"}
+                        {kmFromFuel && <span className="ml-1 text-[10px] text-slate-400">~</span>}
+                      </td>
                       <td className="hidden py-2.5 pr-4 text-right text-sky-700 lg:table-cell">
                         {averageKmPerLiter != null ? formatKmPerLiter(rowFuelIntervalKm, rowFuelLiters) : "—"}
                       </td>
