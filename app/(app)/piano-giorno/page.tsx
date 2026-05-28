@@ -1800,6 +1800,7 @@ function printDriverPlans(drivers: DriverEntry[], tripGroups: TripGroup[], tripS
             display.pickupLabel ? `<span style="color:#444;font-size:8.5pt"><b>Pickup:</b> ${htmlEscape(display.pickupLabel)}</span>` : "",
             display.destinationLabel ? `<span style="color:#444;font-size:8.5pt"><b>Destinazione:</b> ${htmlEscape(display.destinationLabel)}</span>` : "",
             display.connectionLabel ? `<span style="color:#444;font-size:8.5pt"><b>Connessione:</b> ${htmlEscape(display.connectionLabel)}</span>` : "",
+            display.transportRef ? `<span style="color:#444;font-size:8.5pt">${htmlEscape(display.transportRef)}</span>` : "",
             display.ferryLabel ? `<span style="color:#444;font-size:8.5pt"><b>Nave:</b> ${htmlEscape(display.ferryLabel)}</span>` : "",
             vehicleLabel ? `<span style="color:#111;font-size:8.5pt"><b>Mezzo:</b> ${htmlEscape(vehicleLabel)}</span>` : "",
             ...display.warnings.map((warning) => `<span style="color:#b45309;font-size:8.5pt"><b>${htmlEscape(warning)}</b></span>`),
@@ -4474,6 +4475,7 @@ export default function PianoGiornoPage() {
                                         {display.pickupLabel ? <p>Pickup: {display.pickupLabel}</p> : null}
                                         {display.destinationLabel ? <p>Destinazione: {display.destinationLabel}</p> : null}
                                         {display.connectionLabel ? <p>Connessione: {display.connectionLabel}</p> : null}
+                                        {display.transportRef ? <p>{display.transportRef}</p> : null}
                                         {display.ferryLabel ? <p>Nave: {display.ferryLabel}</p> : null}
                                         {display.warnings.map((warning) => (
                                           <p key={`${svc.id}-${warning}`} className="font-semibold text-amber-700">{warning}</p>

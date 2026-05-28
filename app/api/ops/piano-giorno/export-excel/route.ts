@@ -281,7 +281,7 @@ export async function GET(req: NextRequest) {
         display.actionLabel,
         display.pickupLabel ?? "—",
         display.destinationLabel ?? "—",
-        [display.connectionLabel, display.ferryLabel].filter(Boolean).join(" | ") || "—",
+        [display.connectionLabel, display.transportRef, display.ferryLabel].filter(Boolean).join(" | ") || "—",
         display.clientLabel || customerFullName(svc),
         display.phoneLabel || svc.phone || "—",
         svc.pax,

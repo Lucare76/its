@@ -142,7 +142,7 @@ export async function GET(req: NextRequest) {
       const ora = display.primaryTime ?? fmt5(svc.direction === "departure" ? (svc.pickup_hotel ?? svc.time) : svc.time);
       const clienti = customerFullName(svc);
       const telefono = display.phoneLabel ?? svc.phone ?? null;
-      const connessione = display.connectionLabel ?? display.ferryLabel ?? null;
+      const connessione = [display.connectionLabel, display.transportRef, display.ferryLabel].filter(Boolean).join(" · ") || null;
       const note = [display.noteLabel, display.importTag].filter(Boolean).join(" · ") || null;
       const pickup = display.pickupLabel ?? "—";
       const destination = display.destinationLabel ?? "—";
