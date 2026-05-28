@@ -35,6 +35,7 @@ export async function GET(request: NextRequest) {
       const { data, error } = await admin
         .from("ops_bus_allocation_details")
         .select("*")
+        .eq("tenant_id", tenantId)
         .eq("service_date", targetDate);
       if (error) throw new Error(error.message);
 
