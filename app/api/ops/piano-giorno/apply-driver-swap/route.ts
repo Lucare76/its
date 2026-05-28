@@ -17,6 +17,7 @@ import { insertOperatorDecision, loadConfirmedOperatorDecisions } from "@/lib/se
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
 import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
+import { effectiveServiceDisembarkTime } from "@/lib/piano-arrival-time";
 
 export const runtime = "nodejs";
 
@@ -24,6 +25,42 @@ const BodySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   preview_reference: z.string().min(16),
 });
+
+const SERVICE_FEATURE_COLUMNS = "id, time, pickup_hotel, direction, pax, hotel_id, meeting_point, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details";
+
+type ServiceFeatureRow = {
+  id: string;
+  time: string;
+  pickup_hotel: string | null;
+  direction: "arrival" | "departure";
+  pax: number;
+  hotel_id: string | null;
+  meeting_point: string | null;
+  arrival_time: string | null;
+  orario_barca: string | null;
+  porto_bruno: string | null;
+  barca_compagnia: string | null;
+  booking_service_kind: string | null;
+  service_type_code: string | null;
+  vessel: string | null;
+  ferry_details: Record<string, unknown> | null;
+};
+
+type HotelFeatureRow = {
+  id: string;
+  zone: string | null;
+};
+
+function serviceOperationalTime(service: ServiceFeatureRow): string {
+  return service.direction === "departure"
+    ? (service.pickup_hotel ?? service.time).slice(0, 5)
+    : effectiveServiceDisembarkTime(service) ?? service.time.slice(0, 5);
+}
+
+function isNavettaService(service: Pick<ServiceFeatureRow, "booking_service_kind" | "service_type_code">): boolean {
+  const kind = service.booking_service_kind ?? service.service_type_code ?? "";
+  return kind === "navetta" || kind === "shuttle_hotel" || kind === "bus_city_hotel";
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -167,14 +204,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const features = extractFeatures({
-      serviceDate: body.data.date,
-      changeType: "driver_swap",
-      fromDriverProfileId: preview.current.driver_profile_id,
-      toDriverProfileId: preview.proposed.driver_profile_id,
-      fromVehicleLabel: preview.current.vehicle_label,
-      toVehicleLabel: preview.proposed.vehicle_label,
-    });
+    const { data: featureServices } = preview.trip.service_ids.length > 0
+      ? await auth.admin
+          .from("services")
+          .select(SERVICE_FEATURE_COLUMNS)
+          .eq("tenant_id", auth.membership.tenant_id)
+          .in("id", preview.trip.service_ids)
+      : { data: [] };
+    const featureServiceRows = (featureServices ?? []) as ServiceFeatureRow[];
+    const featureHotelIds = Array.from(new Set(featureServiceRows.map((service) => service.hotel_id).filter((id): id is string => Boolean(id))));
+    const { data: featureHotels } = featureHotelIds.length > 0
+      ? await auth.admin
+          .from("hotels")
+          .select("id, zone")
+          .eq("tenant_id", auth.membership.tenant_id)
+          .in("id", featureHotelIds)
+      : { data: [] };
+    const featureServiceMap = new Map(featureServiceRows.map((service) => [service.id, service]));
+    const featureHotelMap = new Map((featureHotels ?? []).map((hotel) => [hotel.id as string, hotel as HotelFeatureRow]));
+
     void logAssignmentChange(auth.admin, preview.trip.service_ids.map((serviceId) => ({
       tenantId: auth.membership.tenant_id,
       serviceDate: body.data.date,
@@ -185,7 +233,24 @@ export async function POST(request: NextRequest) {
       toDriverProfileId: preview.proposed.driver_profile_id,
       fromVehicleLabel: preview.current.vehicle_label,
       toVehicleLabel: preview.proposed.vehicle_label,
-      features,
+      features: (() => {
+        const service = featureServiceMap.get(serviceId);
+        const hotel = service?.hotel_id ? featureHotelMap.get(service.hotel_id) : null;
+        return extractFeatures({
+          serviceDate: body.data.date,
+          changeType: "driver_swap",
+          fromDriverProfileId: preview.current.driver_profile_id,
+          toDriverProfileId: preview.proposed.driver_profile_id,
+          fromVehicleLabel: preview.current.vehicle_label,
+          toVehicleLabel: preview.proposed.vehicle_label,
+          direction: service?.direction ?? null,
+          zone: hotel?.zone ?? service?.meeting_point ?? null,
+          time: service ? serviceOperationalTime(service) : null,
+          vessel: service?.vessel ?? service?.barca_compagnia ?? null,
+          pax: service?.pax ?? null,
+          isNavetta: service ? isNavettaService(service) : false,
+        });
+      })(),
       operatorId: auth.user.id,
     }))).then(() => updateLearnedPatterns(auth.admin, auth.membership.tenant_id).catch(() => undefined));
 

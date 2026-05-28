@@ -18,8 +18,6 @@ import {
 } from "@/lib/server/vehicle-availability";
 import { sendPushToUser } from "@/lib/server/web-push";
 import {
-  geographicBlockMessage,
-  strongestGeographicResult,
   validateGeographicCompatibility,
   type GeographicCompatibilityService,
 } from "@/lib/server/geo-assignment";
@@ -98,7 +96,7 @@ export async function POST(request: NextRequest) {
         vehicleCapacity: vehicle_capacity ?? null,
       });
       if (!validation.ok) {
-        return NextResponse.json({ ok: false, error: validation.error }, { status: 409 });
+        return NextResponse.json({ ok: false, error: validation.error }, { status: validation.status ?? 409 });
       }
       const vehicleCheck = await resolveVehicleAssignment(auth.admin, tenantId, date, vehicle_id ?? null, vehicle_label ?? null);
       if (!vehicleCheck.ok) {
@@ -124,8 +122,9 @@ export async function POST(request: NextRequest) {
         driverProfileId: driver_profile_id ?? null,
       });
       if (!vehicleConflict.ok) {
-        return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: 409 });
+        return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: vehicleConflict.status ?? 409 });
       }
+      const warnings = [...validation.warnings, ...vehicleConflict.warnings];
 
       // 1. Crea trip_group
       const { data: group, error: groupErr } = await auth.admin
@@ -184,7 +183,7 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      return NextResponse.json({ ok: true, group_id: groupId });
+      return NextResponse.json({ ok: true, group_id: groupId, warnings });
     }
 
     // ─── UPDATE TRIP ──────────────────────────────────────────────────────────
@@ -219,7 +218,7 @@ export async function POST(request: NextRequest) {
         excludeGroupId: group_id,
       });
       if (!validation.ok) {
-        return NextResponse.json({ ok: false, error: validation.error }, { status: 409 });
+        return NextResponse.json({ ok: false, error: validation.error }, { status: validation.status ?? 409 });
       }
       const vehicleCheck = groupDate
         ? await resolveVehicleAssignment(auth.admin, tenantId, groupDate, vehicle_id ?? null, vehicle_label ?? null)
@@ -248,8 +247,9 @@ export async function POST(request: NextRequest) {
         excludeGroupId: group_id,
       });
       if (!vehicleConflict.ok) {
-        return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: 409 });
+        return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: vehicleConflict.status ?? 409 });
       }
+      const warnings = [...validation.warnings, ...vehicleConflict.warnings];
 
       // Aggiorna trip_group
       await auth.admin
@@ -333,7 +333,27 @@ export async function POST(request: NextRequest) {
       // Log driver swap se il driver_profile_id è cambiato
       if ((driver_profile_id ?? null) !== prevDriverProfileId) {
         const allServiceIds = service_ids ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
+        const { data: featureServices } = allServiceIds.length > 0
+          ? await auth.admin
+              .from("services")
+              .select(SERVICE_VALIDATION_COLUMNS)
+              .eq("tenant_id", tenantId)
+              .in("id", allServiceIds)
+          : { data: [] };
+        const featureServiceRows = (featureServices ?? []) as ServiceValidationRow[];
+        const featureHotelIds = Array.from(new Set(featureServiceRows.map((service) => service.hotel_id).filter((id): id is string => Boolean(id))));
+        const { data: featureHotels } = featureHotelIds.length > 0
+          ? await auth.admin
+              .from("hotels")
+              .select("id, zone")
+              .eq("tenant_id", tenantId)
+              .in("id", featureHotelIds)
+          : { data: [] };
+        const featureServiceMap = new Map(featureServiceRows.map((service) => [service.id, service]));
+        const featureHotelMap = new Map((featureHotels ?? []).map((hotel) => [hotel.id as string, hotel as HotelValidationRow]));
         const entries = allServiceIds.map((serviceId) => {
+          const service = featureServiceMap.get(serviceId);
+          const hotel = service?.hotel_id ? featureHotelMap.get(service.hotel_id) : null;
           const features = extractFeatures({
             serviceDate: groupDate!,
             changeType: "driver_swap",
@@ -341,6 +361,12 @@ export async function POST(request: NextRequest) {
             toDriverProfileId: driver_profile_id ?? null,
             fromVehicleLabel: prevVehicleLabel,
             toVehicleLabel: vehicle_label ?? null,
+            direction: service?.direction ?? null,
+            zone: hotel?.zone ?? service?.meeting_point ?? null,
+            time: service ? serviceOperationalTime(service) : null,
+            vessel: service?.vessel ?? service?.barca_compagnia ?? null,
+            pax: service?.pax ?? null,
+            isNavetta: service ? isNavettaService(service) : false,
           });
           return {
             tenantId,
@@ -361,7 +387,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      return NextResponse.json({ ok: true });
+      return NextResponse.json({ ok: true, warnings });
     }
 
     // ─── DELETE TRIP ──────────────────────────────────────────────────────────
@@ -413,6 +439,7 @@ export async function POST(request: NextRequest) {
       }
 
       let destGroupId = target_group_id;
+      const warnings: string[] = [];
 
       // Se target_group_id è null → crea un nuovo giro
       if (!destGroupId) {
@@ -429,8 +456,9 @@ export async function POST(request: NextRequest) {
           vehicleCapacity: vehicle_capacity ?? null,
         });
         if (!validation.ok) {
-          return NextResponse.json({ ok: false, error: validation.error }, { status: 409 });
+          return NextResponse.json({ ok: false, error: validation.error }, { status: validation.status ?? 409 });
         }
+        warnings.push(...validation.warnings);
         const vehicleCheck = await resolveVehicleAssignment(auth.admin, tenantId, date, vehicle_id ?? null, vehicle_label ?? null);
         if (!vehicleCheck.ok) {
           return NextResponse.json({ ok: false, error: vehicleCheck.error }, { status: 409 });
@@ -455,8 +483,9 @@ export async function POST(request: NextRequest) {
           driverProfileId: driver_profile_id ?? null,
         });
         if (!vehicleConflict.ok) {
-          return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: 409 });
+          return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: vehicleConflict.status ?? 409 });
         }
+        warnings.push(...vehicleConflict.warnings);
         const { data: newGroup, error: newGroupErr } = await auth.admin
           .from("trip_groups")
           .insert({
@@ -524,8 +553,9 @@ export async function POST(request: NextRequest) {
           excludeGroupId: destGroupId,
         });
         if (!validation.ok) {
-          return NextResponse.json({ ok: false, error: validation.error }, { status: 409 });
+          return NextResponse.json({ ok: false, error: validation.error }, { status: validation.status ?? 409 });
         }
+        warnings.push(...validation.warnings);
         const destVehicleCheck = await resolveVehicleAssignment(auth.admin, tenantId, (destGroupDate?.date as string | undefined) ?? date ?? "", null, destVehicle);
         if (!destVehicleCheck.ok) {
           return NextResponse.json({ ok: false, error: destVehicleCheck.error }, { status: 409 });
@@ -547,8 +577,9 @@ export async function POST(request: NextRequest) {
           excludeGroupId: destGroupId,
         });
         if (!vehicleConflict.ok) {
-          return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: 409 });
+          return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: vehicleConflict.status ?? 409 });
         }
+        warnings.push(...vehicleConflict.warnings);
       }
 
       // Aggiorna assignments (cambia group_id)
@@ -580,7 +611,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      return NextResponse.json({ ok: true, group_id: destGroupId });
+      return NextResponse.json({ ok: true, group_id: destGroupId, warnings: [...new Set(warnings)] });
     }
 
     // ─── SWAP DRIVER ─────────────────────────────────────────────────────────────
@@ -616,8 +647,9 @@ export async function POST(request: NextRequest) {
         vehicleCapacity: null,
       });
       if (!validation.ok) {
-        return NextResponse.json({ ok: false, error: validation.error }, { status: 409 });
+        return NextResponse.json({ ok: false, error: validation.error }, { status: validation.status ?? 409 });
       }
+      const warnings = validation.warnings;
 
       await Promise.all([
         auth.admin.from("trip_groups").update({ driver_user_id: to_driver_id, updated_at: now }).in("id", groupIds).eq("tenant_id", tenantId),
@@ -638,7 +670,7 @@ export async function POST(request: NextRequest) {
         tag: `trip-swap-driver-${date}`,
       });
 
-      return NextResponse.json({ ok: true, affected: groupIds.length });
+      return NextResponse.json({ ok: true, affected: groupIds.length, warnings });
     }
 
     // ─── SWAP VEHICLE ─────────────────────────────────────────────────────────────
@@ -919,10 +951,19 @@ type HotelValidationRow = {
   zone: string | null;
 };
 
+type ValidationFailure = { ok: false; error: string; status?: 409 | 422 };
+type TripValidationResult = { ok: true; totalPax: number; warnings: string[] } | ValidationFailure;
+type VehicleTimelineValidationResult = { ok: true; warnings: string[] } | ValidationFailure;
+
 function serviceOperationalTime(service: ServiceValidationRow): string {
   return service.direction === "departure"
     ? (service.pickup_hotel ?? service.time).slice(0, 5)
     : effectiveServiceDisembarkTime(service) ?? service.time.slice(0, 5);
+}
+
+function isNavettaService(service: Pick<ServiceValidationRow, "booking_service_kind" | "service_type_code">): boolean {
+  const kind = service.booking_service_kind ?? service.service_type_code ?? "";
+  return kind === "navetta" || kind === "shuttle_hotel" || kind === "bus_city_hotel";
 }
 
 function toMinutes(value: string): number {
@@ -932,6 +973,188 @@ function toMinutes(value: string): number {
 
 function hhmm(value: number): string {
   return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+}
+
+function normalizeValidationText(value: unknown): string {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
+}
+
+function serviceMacroCategory(service: ServiceValidationRow): "ARRIVO" | "PARTENZA" {
+  return service.direction === "arrival" ? "ARRIVO" : "PARTENZA";
+}
+
+function serviceLocationCandidates(service: ServiceValidationRow): string[] {
+  return [
+    service.pickup_hotel,
+    service.meeting_point,
+    service.porto_bruno,
+  ]
+    .map(normalizeValidationText)
+    .filter(Boolean);
+}
+
+function hasSamePickupOrMeetingPoint(left: ServiceValidationRow, right: ServiceValidationRow): boolean {
+  const leftCandidates = new Set(serviceLocationCandidates(left));
+  return serviceLocationCandidates(right).some((candidate) => leftCandidates.has(candidate));
+}
+
+function isRecognizedMultiDrop(left: ServiceValidationRow, right: ServiceValidationRow): boolean {
+  return serviceMacroCategory(left) === serviceMacroCategory(right)
+    && Math.abs(toMinutes(serviceOperationalTime(left)) - toMinutes(serviceOperationalTime(right))) <= 10
+    && hasSamePickupOrMeetingPoint(left, right);
+}
+
+function serviceDisplayLocation(service: ServiceValidationRow, hotels: Map<string, HotelValidationRow>): string {
+  const hotelZone = service.hotel_id ? hotels.get(service.hotel_id)?.zone ?? null : null;
+  return service.pickup_hotel
+    ?? service.meeting_point
+    ?? service.porto_bruno
+    ?? hotelZone
+    ?? "luogo non indicato";
+}
+
+function servicesAreInDifferentPlaces(
+  previous: ServiceValidationRow,
+  next: ServiceValidationRow,
+  hotels: Map<string, HotelValidationRow>
+): boolean {
+  return normalizeValidationText(serviceDisplayLocation(previous, hotels))
+    !== normalizeValidationText(serviceDisplayLocation(next, hotels));
+}
+
+function impossibleConflictMessage(params: {
+  driverName: string;
+  previous: ServiceValidationRow;
+  next: ServiceValidationRow;
+  previousLocation: string;
+  nextLocation: string;
+  availableMinutes: number;
+  requiredMinutes: number;
+  type: "geografico" | "temporale";
+}) {
+  return [
+    `Conflitto ${params.type} impossibile per ${params.driverName}:`,
+    `servizio alle ${serviceOperationalTime(params.previous)} (${params.previousLocation})`,
+    `e alle ${serviceOperationalTime(params.next)} (${params.nextLocation}) -`,
+    `${params.availableMinutes} minuti disponibili, servono almeno ${params.requiredMinutes} min.`,
+  ].join(" ");
+}
+
+function tightConflictWarning(params: {
+  driverName: string;
+  previous: ServiceValidationRow;
+  next: ServiceValidationRow;
+  previousLocation: string;
+  nextLocation: string;
+  availableMinutes: number;
+  requiredMinutes: number;
+}) {
+  return [
+    `Warning operativo per ${params.driverName}:`,
+    `servizio alle ${serviceOperationalTime(params.previous)} (${params.previousLocation})`,
+    `e alle ${serviceOperationalTime(params.next)} (${params.nextLocation}) -`,
+    `${params.availableMinutes} minuti disponibili, servono almeno ${params.requiredMinutes} min.`,
+  ].join(" ");
+}
+
+function serviceToTimelineWindow(service: ServiceValidationRow, hotels: Map<string, HotelValidationRow>) {
+  return {
+    service,
+    startMinutes: toMinutes(serviceOperationalTime(service)),
+    geo: serviceToGeographicWindow(service, hotels),
+  };
+}
+
+function evaluateDriverTimelineConflicts(
+  serviceRows: ServiceValidationRow[],
+  otherServicesByGroup: Map<string, ServiceValidationRow[]>,
+  hotels: Map<string, HotelValidationRow>,
+  driverName: string
+): { block: string | null; warnings: string[] } {
+  const warnings: string[] = [];
+  const windows = [
+    ...Array.from(otherServicesByGroup.values()).flat(),
+    ...serviceRows,
+  ]
+    .map((service) => serviceToTimelineWindow(service, hotels))
+    .sort((left, right) => left.startMinutes - right.startMinutes);
+
+  for (let i = 1; i < windows.length; i++) {
+    const previous = windows[i - 1]!;
+    const next = windows[i]!;
+    if (isRecognizedMultiDrop(previous.service, next.service)) continue;
+
+    const previousLocation = serviceDisplayLocation(previous.service, hotels);
+    const nextLocation = serviceDisplayLocation(next.service, hotels);
+    const differentPlaces = servicesAreInDifferentPlaces(previous.service, next.service, hotels);
+    const geo = validateGeographicCompatibility(previous.geo, next.geo, { warningMarginMinutes: 5 });
+    const availableMinutes = geo.availableMinutes;
+    const requiredMinutes = geo.requiredMinutes;
+
+    if (differentPlaces && availableMinutes <= 5) {
+      return {
+        block: impossibleConflictMessage({
+          driverName,
+          previous: previous.service,
+          next: next.service,
+          previousLocation,
+          nextLocation,
+          availableMinutes,
+          requiredMinutes,
+          type: "temporale",
+        }),
+        warnings,
+      };
+    }
+
+    if (geo.severity === "block") {
+      if (geo.marginMinutes < -5) {
+        return {
+          block: impossibleConflictMessage({
+            driverName,
+            previous: previous.service,
+            next: next.service,
+            previousLocation,
+            nextLocation,
+            availableMinutes,
+            requiredMinutes,
+            type: "geografico",
+          }),
+          warnings,
+        };
+      }
+
+      warnings.push(tightConflictWarning({
+        driverName,
+        previous: previous.service,
+        next: next.service,
+        previousLocation,
+        nextLocation,
+        availableMinutes,
+        requiredMinutes,
+      }));
+      continue;
+    }
+
+    if (geo.severity === "warning") {
+      warnings.push(tightConflictWarning({
+        driverName,
+        previous: previous.service,
+        next: next.service,
+        previousLocation,
+        nextLocation,
+        availableMinutes,
+        requiredMinutes,
+      }));
+    }
+  }
+
+  return { block: null, warnings };
 }
 
 async function loadGroupServiceIds(
@@ -1081,10 +1304,7 @@ async function validateTripPayload(
     vehicleCapacity: number | null;
     excludeGroupId?: string;
   }
-): Promise<
-  | { ok: true; totalPax: number }
-  | { ok: false; error: string }
-> {
+): Promise<TripValidationResult> {
   if (!params.driverUserId) {
     return { ok: false, error: "Seleziona un autista prima di salvare il giro." };
   }
@@ -1151,18 +1371,6 @@ async function validateTripPayload(
       .filter((groupId) => groupId !== params.excludeGroupId)
   );
 
-  const otherTimes = (otherAssignments ?? [])
-    .filter((assignment) => activeGroupIds.has(assignment.group_id as string))
-    .map((assignment) => (assignment.services as unknown) as ServiceValidationRow)
-    .map((service) => toMinutes(serviceOperationalTime({ ...service, id: "", pax: 0 })));
-
-  for (const service of serviceRows) {
-    const currentTime = toMinutes(serviceOperationalTime(service));
-    if (otherTimes.some((otherTime) => Math.abs(otherTime - currentTime) < 75)) {
-      return { ok: false, error: "Autista gia impegnato in un altro giro nella stessa finestra operativa." };
-    }
-  }
-
   const otherAssignmentsForGeo = (otherAssignments ?? [])
     .filter((assignment) => activeGroupIds.has(assignment.group_id as string));
   const otherServices = otherAssignmentsForGeo
@@ -1188,22 +1396,13 @@ async function validateTripPayload(
       (assignment.services as unknown) as ServiceValidationRow,
     ]);
   }
-  const combinedGeoServices = [
-    ...Array.from(otherServicesByGroup.values()).map((groupServices) => servicesToTripGeographicWindow(groupServices, hotelMap)),
-    servicesToTripGeographicWindow(serviceRows, hotelMap),
-  ]
-    .sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
-  const geoResults = [];
-  for (let i = 1; i < combinedGeoServices.length; i++) {
-    geoResults.push(validateGeographicCompatibility(combinedGeoServices[i - 1]!, combinedGeoServices[i]!));
-  }
-  const strongestGeoIssue = strongestGeographicResult(geoResults.filter((result) => result.severity !== "ok"));
-  if (strongestGeoIssue?.severity === "block") {
-    const driverName = await loadDriverName(admin, tenantId, params.driverUserId);
-    return { ok: false, error: geographicBlockMessage(driverName, strongestGeoIssue) };
+  const driverName = await loadDriverName(admin, tenantId, params.driverUserId);
+  const timelineValidation = evaluateDriverTimelineConflicts(serviceRows, otherServicesByGroup, hotelMap, driverName);
+  if (timelineValidation.block) {
+    return { ok: false, error: timelineValidation.block, status: 422 };
   }
 
-  return { ok: true, totalPax };
+  return { ok: true, totalPax, warnings: timelineValidation.warnings };
 }
 
 async function validateVehicleTimelinePayload(
@@ -1217,8 +1416,8 @@ async function validateVehicleTimelinePayload(
     driverProfileId: string | null;
     excludeGroupId?: string;
   }
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!params.vehicleLabel) return { ok: true };
+): Promise<VehicleTimelineValidationResult> {
+  if (!params.vehicleLabel) return { ok: true, warnings: [] };
 
   const { data: services, error: servicesError } = await admin
     .from("services")
@@ -1233,10 +1432,7 @@ async function validateVehicleTimelinePayload(
   const serviceRows = (services ?? []) as ServiceValidationRow[];
   const candidateTotalPax = serviceRows.reduce((sum, service) => sum + (service.pax ?? 0), 0);
   const candidateTimes = serviceRows.map((service) => toMinutes(serviceOperationalTime(service)));
-  if (candidateTimes.length === 0) return { ok: true };
-
-  const candidateStart = Math.min(...candidateTimes);
-  const candidateEnd = Math.max(...candidateTimes) + 30;
+  if (candidateTimes.length === 0) return { ok: true, warnings: [] };
 
   const { data: vehicle } = await admin
     .from("vehicles")
@@ -1264,7 +1460,7 @@ async function validateVehicleTimelinePayload(
   }
 
   const groupIds = (groups ?? []).map((group) => group.id as string);
-  if (groupIds.length === 0) return { ok: true };
+  if (groupIds.length === 0) return { ok: true, warnings: [] };
 
   const { data: assignments, error: assignmentsError } = await admin
     .from("assignments")
@@ -1285,38 +1481,75 @@ async function validateVehicleTimelinePayload(
     ]);
   }
 
+  const allVehicleTimelineServices = [
+    ...serviceRows,
+    ...Array.from(servicesByGroup.values()).flat(),
+  ];
+  const hotelIds = allVehicleTimelineServices
+    .map((service) => service.hotel_id)
+    .filter((id): id is string => Boolean(id));
+  const { data: hotelsData } = hotelIds.length > 0
+    ? await admin.from("hotels").select("id, zone").eq("tenant_id", tenantId).in("id", [...new Set(hotelIds)])
+    : { data: [] as HotelValidationRow[] };
+  const hotelMap = new Map((hotelsData ?? []).map((hotel) => [hotel.id as string, hotel as HotelValidationRow]));
+  const vehicleWarnings: string[] = [];
+  const candidateIntervals = serviceRows.map((service) => {
+    const start = toMinutes(serviceOperationalTime(service));
+    return { service, start, end: start + 30 };
+  });
+
   for (const group of groups ?? []) {
     const sameProfile = params.driverProfileId && group.driver_profile_id === params.driverProfileId;
     const sameUser = !params.driverProfileId && params.driverUserId && group.driver_user_id === params.driverUserId;
     const groupId = group.id as string;
     const groupServices = servicesByGroup.get(groupId) ?? [];
-    const otherTimes = groupServices.map((service) => toMinutes(serviceOperationalTime(service)));
-    if (otherTimes.length === 0) continue;
-    const otherStart = Math.min(...otherTimes);
-    const otherEnd = Math.max(...otherTimes) + 30;
     const otherTotalPax = groupServices.reduce((sum, service) => sum + (service.pax ?? 0), 0);
     const otherLargeGroup = otherTotalPax >= LARGE_GROUP_PAX_THRESHOLD;
     const canShareLargeVehicle = isLargeVehicle && isCandidateLargeGroup && otherLargeGroup;
+    const otherIntervals = groupServices.map((service) => {
+      const start = toMinutes(serviceOperationalTime(service));
+      return { service, start, end: start + 30 };
+    });
+    if (otherIntervals.length === 0) continue;
 
-    if (!sameProfile && !sameUser && !canShareLargeVehicle) {
-      return {
-        ok: false,
-        error: "Mezzo già assegnato a un altro autista per questa giornata.",
-      };
+    for (const candidate of candidateIntervals) {
+      for (const other of otherIntervals) {
+        if (isRecognizedMultiDrop(candidate.service, other.service)) continue;
+
+        const overlap = candidate.start < other.end && other.start < candidate.end;
+        const gap = candidate.start >= other.end
+          ? candidate.start - other.end
+          : other.start - candidate.end;
+
+        if (overlap) {
+          return {
+            ok: false,
+            status: 422,
+            error: [
+              `Conflitto temporale impossibile per mezzo ${params.vehicleLabel}:`,
+              `servizio alle ${serviceOperationalTime(other.service)} (${serviceDisplayLocation(other.service, hotelMap)})`,
+              `e alle ${serviceOperationalTime(candidate.service)} (${serviceDisplayLocation(candidate.service, hotelMap)}) -`,
+              "sovrapposizione reale del mezzo.",
+            ].join(" "),
+          };
+        }
+
+        if (gap >= 0 && gap < VEHICLE_SHARE_BUFFER_MINUTES) {
+          vehicleWarnings.push([
+            `Warning mezzo ${params.vehicleLabel}:`,
+            `${gap} minuti tra servizio alle ${serviceOperationalTime(other.service)}`,
+            `e servizio alle ${serviceOperationalTime(candidate.service)}.`,
+          ].join(" "));
+        }
+      }
     }
 
-    const overlaps = candidateStart < otherEnd + VEHICLE_SHARE_BUFFER_MINUTES && otherStart < candidateEnd + VEHICLE_SHARE_BUFFER_MINUTES;
-    if (!overlaps) continue;
-
-    return {
-      ok: false,
-      error: canShareLargeVehicle
-        ? "Mezzo capiente condiviso non disponibile con buffer sufficiente."
-        : "Mezzo già assegnato a un altro autista per questa giornata.",
-    };
+    if (!sameProfile && !sameUser && !canShareLargeVehicle) {
+      vehicleWarnings.push(`Warning mezzo ${params.vehicleLabel}: mezzo usato anche da un altro autista nella stessa giornata.`);
+    }
   }
 
-  return { ok: true };
+  return { ok: true, warnings: [...new Set(vehicleWarnings)] };
 }
 
 function serviceToGeographicWindow(
@@ -1339,25 +1572,6 @@ function serviceToGeographicWindow(
     startTime,
     endZone: hotelZone,
     startZone: portZone,
-  };
-}
-
-function servicesToTripGeographicWindow(
-  services: ServiceValidationRow[],
-  hotels: Map<string, HotelValidationRow>
-): GeographicCompatibilityService {
-  const windows = [...services]
-    .sort((a, b) => toMinutes(serviceOperationalTime(a)) - toMinutes(serviceOperationalTime(b)))
-    .map((service) => serviceToGeographicWindow(service, hotels));
-  const first = windows[0];
-  const last = windows[windows.length - 1] ?? first;
-  return {
-    id: services.map((service) => service.id).join(","),
-    startTime: first?.startTime ?? "00:00",
-    startZone: first?.startZone ?? null,
-    startArea: first?.startArea ?? null,
-    endZone: last?.endZone ?? first?.endZone ?? null,
-    endArea: last?.endArea ?? first?.endArea ?? null,
   };
 }
 

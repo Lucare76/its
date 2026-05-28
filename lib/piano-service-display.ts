@@ -59,6 +59,7 @@ export type PianoServiceDisplay = {
   pickupLabel: string | null;
   destinationLabel: string | null;
   connectionLabel: string | null;
+  transportRef: string | null;
   ferryLabel: string | null;
   paxLabel: string;
   noteLabel: string | null;
@@ -229,6 +230,32 @@ function connectionTransportLabel(service: PianoDisplayService, badge: PianoDisp
   return [kind, ref, time].filter(Boolean).join(" ");
 }
 
+function buildTransportRef(service: PianoDisplayService, badge: PianoDisplayBadge) {
+  const isArrival = service.direction === "arrival";
+  if (badge !== "TRANSFER AEROPORTO" && badge !== "TRANSFER STAZIONE") return null;
+
+  const isFlight = badge === "TRANSFER AEROPORTO";
+  const kind = isFlight ? "Volo" : "Treno";
+  const suffix = isArrival ? "arr." : "par.";
+  const ref = isArrival
+    ? isFlight
+      ? clean(service.transport_code) ?? clean(service.train_arrival_number)
+      : clean(service.transport_code) ?? clean(service.train_arrival_number) ?? clean(service.train_departure_number)
+    : isFlight
+      ? clean(service.transport_code) ?? clean(service.train_departure_number)
+      : clean(service.transport_code) ?? clean(service.train_departure_number) ?? clean(service.train_arrival_number);
+  const time = isArrival
+    ? isFlight
+      ? fmtTime(service.arrival_time) ?? fmtTime(service.train_arrival_time)
+      : fmtTime(service.train_arrival_time) ?? fmtTime(service.arrival_time)
+    : isFlight
+      ? fmtTime(service.departure_time) ?? fmtTime(service.train_departure_time)
+      : fmtTime(service.train_departure_time) ?? fmtTime(service.departure_time);
+
+  if (!ref && !time) return null;
+  return [kind, ref, suffix, time].filter(Boolean).join(" ");
+}
+
 function ferryLabel(service: PianoDisplayService) {
   const company = companyLabel(service);
   const ferryTime = fmtTime(service.orario_barca)
@@ -338,6 +365,7 @@ function buildDisplay(args: {
   pickupLabel: string | null;
   destinationLabel: string | null;
   connectionLabel: string | null;
+  transportRef?: string | null;
   ferryLabel: string | null;
   clientLabel: string;
   paxLabel: string;
@@ -355,6 +383,7 @@ function buildDisplay(args: {
     args.pickupLabel ? `Pickup: ${args.pickupLabel}` : null,
     args.destinationLabel ? `Destinazione: ${args.destinationLabel}` : null,
     args.connectionLabel ? `Connessione: ${args.connectionLabel}` : null,
+    args.transportRef ?? null,
     args.ferryLabel ? `Nave: ${args.ferryLabel}` : null,
     ...args.warnings,
   ].filter(Boolean) as string[];
@@ -368,6 +397,7 @@ function buildDisplay(args: {
     pickupLabel: args.pickupLabel,
     destinationLabel: args.destinationLabel,
     connectionLabel: args.connectionLabel,
+    transportRef: args.transportRef ?? null,
     ferryLabel: args.ferryLabel,
     clientLabel: args.clientLabel,
     paxLabel: args.paxLabel,
@@ -421,6 +451,7 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
       pickupLabel: pickup ?? "Pickup da verificare",
       destinationLabel: destination ?? "Destinazione da verificare",
       connectionLabel: null,
+      transportRef: null,
       ferryLabel: null,
       clientLabel: client,
       paxLabel: pax,
@@ -449,6 +480,7 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
       pickupLabel: pickup ?? "Pickup escursione da verificare",
       destinationLabel: destination ?? "Destinazione escursione da verificare",
       connectionLabel: null,
+      transportRef: null,
       ferryLabel: null,
       clientLabel: client,
       paxLabel: pax,
@@ -466,6 +498,7 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
     const pickup = port ?? portLabel(service.meeting_point);
     const destination = hotelWithZone(hotel) ?? hotelName;
     const connection = arrivalConnectionLabel({ service, badge, pickup, origin: sourceFrom, ferry, arrivalAtIsland });
+    const transportRef = buildTransportRef(service, badge);
     const warnings = [
       pickup ? null : "Prendere a: arrivo isola da verificare",
       destination ? null : "Destinazione da verificare",
@@ -480,6 +513,7 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
       pickupLabel: null,
       destinationLabel: destination ?? "Destinazione da verificare",
       connectionLabel: connection,
+      transportRef,
       ferryLabel: null,
       clientLabel: client,
       paxLabel: pax,
@@ -494,6 +528,7 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
   const pickup = hotelName ?? clean(service.meeting_point);
   const destination = departureEmbarkPort(service) ?? port ?? sourceTo;
   const connection = departureConnectionLabel({ service, ferry });
+  const transportRef = buildTransportRef(service, badge);
   const warnings = [
     pickup ? null : "Pickup da verificare",
     destination ? null : "Porto/destinazione da verificare",
@@ -507,6 +542,7 @@ export function getPianoServiceDisplay(service: PianoDisplayService, hotel?: Pia
       pickupLabel: pickup ?? "Pickup da verificare",
       destinationLabel: destination ?? "Porto/destinazione da verificare",
       connectionLabel: connection,
+      transportRef,
       ferryLabel: connection ? null : ferry,
       clientLabel: client,
       paxLabel: pax,

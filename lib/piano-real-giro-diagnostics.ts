@@ -56,6 +56,18 @@ export type RealGiroOperatorDecision = {
   compatible_available_vehicles?: Array<{ label: string; capacity: number | null }>;
 };
 
+export type ShuttleDriverMismatchWarning = {
+  type: "shuttle_driver_mismatch";
+  hotel: string;
+  fascia_start: string;
+  fascia_end: string;
+  expected_driver: string | null;
+  mismatch_time: string;
+  actual_driver: string | null;
+  group_id: string;
+  suggestion: string;
+};
+
 export type RealGiroDiagnosticGroup = {
   group_id: string;
   driver_key: string | null;
@@ -150,6 +162,7 @@ export type RealGiroDiagnosticsResult = {
     }>;
   };
   resolution_suggestions: ConflictResolutionSuggestion[];
+  shuttle_driver_mismatches: ShuttleDriverMismatchWarning[];
 };
 
 export type RealGiroConfirmedDecision = Pick<
@@ -270,6 +283,49 @@ function sameTextValue(left?: string | null, right?: string | null) {
   return Boolean(a && b && a === b);
 }
 
+function sameTimeWithin(left?: string | null, right?: string | null, toleranceMinutes = 10) {
+  const a = clean(left);
+  const b = clean(right);
+  return Boolean(a && b && Math.abs(minutes(a) - minutes(b)) <= toleranceMinutes);
+}
+
+function looseString(value: unknown) {
+  if (typeof value === "string" || typeof value === "number") return clean(value);
+  return null;
+}
+
+function looseRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+function nestedLooseString(value: unknown, key: string, nestedKey: string) {
+  const nested = looseRecord(looseRecord(value)?.[key]);
+  return looseString(nested?.[nestedKey]);
+}
+
+function stopFerryTime(stop: MergedStop) {
+  return clean(stop.ferry_arrival_time)
+    ?? clean(stop.ferry_departure_time)
+    ?? stop.services.map((service) => looseString((service as unknown as Record<string, unknown>).orario_barca)).find(Boolean)
+    ?? null;
+}
+
+function stopArrivalPort(stop: MergedStop) {
+  const stopRecord = stop as unknown as Record<string, unknown>;
+  return clean(stop.port_arrival)
+    ?? looseString(stopRecord.arrival_port)
+    ?? nestedLooseString(stopRecord, "db_computed", "port_arrival")
+    ?? nestedLooseString(stopRecord, "db_computed", "porto_arrivo")
+    ?? stop.services.map((service) => {
+      const serviceRecord = service as unknown as Record<string, unknown>;
+      return clean(service.port_arrival)
+        ?? looseString(serviceRecord.arrival_port)
+        ?? nestedLooseString(serviceRecord, "db_computed", "port_arrival")
+        ?? nestedLooseString(serviceRecord, "db_computed", "porto_arrivo");
+    }).find(Boolean)
+    ?? null;
+}
+
 function sameMultiDropDeparture(anchor: MergedStop, candidate: MergedStop) {
   return anchor.macro_category === "PARTENZA"
     && candidate.macro_category === "PARTENZA"
@@ -277,7 +333,16 @@ function sameMultiDropDeparture(anchor: MergedStop, candidate: MergedStop) {
     && Math.abs(minutes(anchor.operational_time) - minutes(candidate.operational_time)) <= 5;
 }
 
-function makeMultiDropStop(stops: MergedStop[], index: number): MergedStop {
+function sameMultiDropArrival(anchor: MergedStop, candidate: MergedStop) {
+  return anchor.macro_category === "ARRIVO"
+    && candidate.macro_category === "ARRIVO"
+    && sameTextValue(anchor.ferry_company, candidate.ferry_company)
+    && sameTimeWithin(stopFerryTime(anchor), stopFerryTime(candidate), 10)
+    && sameTextValue(stopArrivalPort(anchor), stopArrivalPort(candidate))
+    && Math.abs(minutes(anchor.operational_time) - minutes(candidate.operational_time)) <= 10;
+}
+
+function makeMultiDropStop(stops: MergedStop[], index: number, mergeReason: string): MergedStop {
   const ordered = [...stops].sort((a, b) => a.operational_time.localeCompare(b.operational_time));
   const first = ordered[0]!;
   const services = ordered.flatMap((stop) => stop.services);
@@ -289,7 +354,7 @@ function makeMultiDropStop(stops: MergedStop[], index: number): MergedStop {
     operational_time: first.operational_time,
     destination_labels: uniqueStopLabels(ordered.flatMap((stop) => stop.destination_labels)),
     is_merged: true,
-    merge_reason: "Multi-drop partenza: stesso pickup e destinazioni sequenziali",
+    merge_reason: mergeReason,
     warnings: ordered.flatMap((stop) => stop.warnings ?? []),
     multi_drop: true,
   };
@@ -304,22 +369,32 @@ function mergeMultiDropStops(stops: MergedStop[]): MergedStop[] {
 
   for (const stop of ordered) {
     if (used.has(stop.stop_id)) continue;
-    if (stop.macro_category !== "PARTENZA") {
+    if (stop.macro_category !== "PARTENZA" && stop.macro_category !== "ARRIVO") {
       merged.push(stop);
       used.add(stop.stop_id);
       continue;
     }
 
-    const group = ordered.filter((candidate) =>
-      !used.has(candidate.stop_id) && sameMultiDropDeparture(stop, candidate)
-    );
+    const isArrival = stop.macro_category === "ARRIVO";
+    const group = ordered.filter((candidate) => {
+      if (used.has(candidate.stop_id)) return false;
+      return isArrival
+        ? sameMultiDropArrival(stop, candidate)
+        : sameMultiDropDeparture(stop, candidate);
+    });
     const destinationCount = new Set(
       group.flatMap((candidate) => candidate.destination_labels).map(normalizeText).filter(Boolean)
     ).size;
 
     if (group.length > 1 && destinationCount > 1) {
       for (const item of group) used.add(item.stop_id);
-      merged.push(makeMultiDropStop(group, multiDropIndex));
+      merged.push(makeMultiDropStop(
+        group,
+        multiDropIndex,
+        isArrival
+          ? "Multi-drop arrivo: stessa nave, stesso porto di arrivo e destinazioni sequenziali"
+          : "Multi-drop partenza: stesso pickup e destinazioni sequenziali"
+      ));
       multiDropIndex += 1;
       continue;
     }
@@ -405,6 +480,119 @@ function shuttlePairToStop(pair: ShuttlePairGroup): MergedStop {
 
 function presidentShuttlePairCount(pairs: ReturnType<typeof publicShuttlePair>[]) {
   return pairs.filter((pair) => pair.loop_label.toLowerCase().includes("president")).length;
+}
+
+function extractShuttleHotelNameFromLabel(value?: string | null) {
+  const label = clean(value);
+  if (!label) return null;
+  const withoutPrefix = label.replace(/^navetta\s+ciclo\s*-\s*/i, "").trim();
+  const hotelPart = withoutPrefix.split(/\s+\/\s+/)[0]?.trim() ?? "";
+  return clean(hotelPart);
+}
+
+function shuttleHotelName(stop: MergedStop) {
+  const labels = [
+    ...stop.destination_labels,
+    stop.pickup_label,
+    ...stop.services.flatMap((service) => [
+      service.customer_name,
+      service.pickup_label,
+      service.destination_label,
+    ]),
+  ];
+
+  for (const label of labels) {
+    const parsed = extractShuttleHotelNameFromLabel(label);
+    if (parsed && normalizeText(parsed).includes("hotel")) return parsed;
+  }
+
+  for (const label of labels) {
+    const parsed = extractShuttleHotelNameFromLabel(label);
+    if (parsed) return parsed;
+  }
+
+  return null;
+}
+
+function detectCrossGroupShuttleDriverMismatches(groups: RealGiroDiagnosticGroup[]): ShuttleDriverMismatchWarning[] {
+  type ShuttleEntry = {
+    hotel: string;
+    hotel_key: string;
+    time: string;
+    time_min: number;
+    group_id: string;
+    driver_key: string | null;
+    driver_name: string | null;
+  };
+
+  const byHotel = new Map<string, ShuttleEntry[]>();
+  for (const group of groups) {
+    for (const stop of group.stops) {
+      if (stop.macro_category !== "NAVETTA") continue;
+      const hotel = shuttleHotelName(stop);
+      if (!hotel) continue;
+      const hotelKey = normalizeText(hotel);
+      if (!hotelKey) continue;
+      const entry: ShuttleEntry = {
+        hotel,
+        hotel_key: hotelKey,
+        time: stop.operational_time.slice(0, 5),
+        time_min: minutes(stop.operational_time),
+        group_id: group.group_id,
+        driver_key: group.driver_key,
+        driver_name: group.driver_name,
+      };
+      byHotel.set(hotelKey, [...(byHotel.get(hotelKey) ?? []), entry]);
+    }
+  }
+
+  const warnings: ShuttleDriverMismatchWarning[] = [];
+  for (const entries of byHotel.values()) {
+    const ordered = [...entries].sort((a, b) => a.time_min - b.time_min || a.group_id.localeCompare(b.group_id));
+    let fascia: ShuttleEntry[] = [];
+
+    const flush = () => {
+      if (fascia.length <= 1) {
+        fascia = [];
+        return;
+      }
+
+      const expected = fascia[0]!;
+      const expectedDriverKey = expected.driver_key ?? expected.driver_name ?? null;
+      for (const entry of fascia.slice(1)) {
+        const actualDriverKey = entry.driver_key ?? entry.driver_name ?? null;
+        if (actualDriverKey === expectedDriverKey) continue;
+        warnings.push({
+          type: "shuttle_driver_mismatch",
+          hotel: expected.hotel,
+          fascia_start: fascia[0]!.time,
+          fascia_end: fascia[fascia.length - 1]!.time,
+          expected_driver: expected.driver_name,
+          mismatch_time: entry.time,
+          actual_driver: entry.driver_name,
+          group_id: entry.group_id,
+          suggestion: expected.driver_name
+            ? `Assegnare a ${expected.driver_name}`
+            : "Assegnare al primo autista della fascia",
+        });
+      }
+      fascia = [];
+    };
+
+    for (const entry of ordered) {
+      const previous = fascia[fascia.length - 1];
+      if (previous && entry.time_min - previous.time_min > 60) flush();
+      fascia.push(entry);
+    }
+    flush();
+  }
+
+  return warnings.sort((a, b) =>
+    a.hotel.localeCompare(b.hotel)
+      || a.fascia_start.localeCompare(b.fascia_start)
+      || a.mismatch_time.localeCompare(b.mismatch_time)
+      || a.group_id.localeCompare(b.group_id)
+  );
 }
 
 function clean(value?: string | number | null) {
@@ -1137,9 +1325,24 @@ export function buildRealGiroDiagnostics(args: {
       }),
     };
   });
-  const vehicleDiagnostics = buildVehicleDiagnostics({ groups: adjustedGroups, vehicles: args.vehicles, drivers: args.drivers });
+  const shuttleDriverMismatches = detectCrossGroupShuttleDriverMismatches(adjustedGroups);
+  const shuttleMismatchCountByGroup = shuttleDriverMismatches.reduce((map, warning) => {
+    map.set(warning.group_id, (map.get(warning.group_id) ?? 0) + 1);
+    return map;
+  }, new Map<string, number>());
+  const groupsWithShuttleWarnings = adjustedGroups.map((group) => {
+    const shuttleWarningCount = shuttleMismatchCountByGroup.get(group.group_id) ?? 0;
+    if (shuttleWarningCount <= 0) return group;
+    return {
+      ...group,
+      warning_count: group.warning_count + shuttleWarningCount,
+      status: group.status === "OK" ? "WARNING" as const : group.status,
+    };
+  });
+
+  const vehicleDiagnostics = buildVehicleDiagnostics({ groups: groupsWithShuttleWarnings, vehicles: args.vehicles, drivers: args.drivers });
   const operatorRequiredDecisions = buildOperatorRequiredDecisions({
-    groups: adjustedGroups,
+    groups: groupsWithShuttleWarnings,
     clusters: excursionRoundtripClusters,
     drivers: args.drivers ?? [],
     vehicles: vehicleDiagnostics.available_vehicles,
@@ -1149,24 +1352,25 @@ export function buildRealGiroDiagnostics(args: {
     ok: true,
     date: args.date,
     summary: {
-      total_groups: adjustedGroups.length,
-      total_services: adjustedGroups.reduce((sum, group) => sum + group.services_count, 0),
-      groups_ok: adjustedGroups.filter((group) => group.status === "OK").length,
-      groups_with_warnings: adjustedGroups.filter((group) => group.status === "WARNING").length,
-      groups_with_conflicts: adjustedGroups.filter((group) => group.status === "NOT_OPERATIONAL").length,
-      total_conflicts: adjustedGroups.reduce((sum, group) => sum + group.conflict_count, 0),
-      total_warnings: adjustedGroups.reduce((sum, group) => sum + group.warning_count, 0),
-      total_needs_review: adjustedGroups.reduce((sum, group) => sum + group.needs_review_count, 0),
-      total_same_stop_groups: adjustedGroups.reduce((sum, group) => sum + group.same_stop_count, 0),
-      total_shuttle_pairs: adjustedGroups.reduce((sum, group) => sum + group.shuttle_pair_count, 0),
-      president_shuttle_pairs_count: adjustedGroups.reduce((sum, group) => sum + presidentShuttlePairCount(group.shuttle_pairs), 0),
-      overlaps_removed_by_shuttle_pair: adjustedGroups.reduce((sum, group) => sum + group.shuttle_pair_count, 0),
+      total_groups: groupsWithShuttleWarnings.length,
+      total_services: groupsWithShuttleWarnings.reduce((sum, group) => sum + group.services_count, 0),
+      groups_ok: groupsWithShuttleWarnings.filter((group) => group.status === "OK").length,
+      groups_with_warnings: groupsWithShuttleWarnings.filter((group) => group.status === "WARNING").length,
+      groups_with_conflicts: groupsWithShuttleWarnings.filter((group) => group.status === "NOT_OPERATIONAL").length,
+      total_conflicts: groupsWithShuttleWarnings.reduce((sum, group) => sum + group.conflict_count, 0),
+      total_warnings: groupsWithShuttleWarnings.reduce((sum, group) => sum + group.warning_count, 0),
+      total_needs_review: groupsWithShuttleWarnings.reduce((sum, group) => sum + group.needs_review_count, 0),
+      total_same_stop_groups: groupsWithShuttleWarnings.reduce((sum, group) => sum + group.same_stop_count, 0),
+      total_shuttle_pairs: groupsWithShuttleWarnings.reduce((sum, group) => sum + group.shuttle_pair_count, 0),
+      president_shuttle_pairs_count: groupsWithShuttleWarnings.reduce((sum, group) => sum + presidentShuttlePairCount(group.shuttle_pairs), 0),
+      overlaps_removed_by_shuttle_pair: groupsWithShuttleWarnings.reduce((sum, group) => sum + group.shuttle_pair_count, 0),
       vehicle_conflict_count: vehicleDiagnostics.conflicts.length,
     },
-    groups: adjustedGroups,
+    groups: groupsWithShuttleWarnings,
     excursion_roundtrip_clusters: excursionRoundtripClusters,
     operator_required_decisions: operatorRequiredDecisions,
     vehicle_diagnostics: vehicleDiagnostics,
     resolution_suggestions: resolutionSuggestions,
+    shuttle_driver_mismatches: shuttleDriverMismatches,
   };
 }
