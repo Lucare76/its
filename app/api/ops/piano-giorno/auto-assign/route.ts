@@ -415,7 +415,7 @@ function driverCanCoverHotelShiftService(
   if (avail) {
     if (!avail.available) return false;
     if (avail.available_from && timeToMin(avail.available_from) > serviceMin) return false;
-    if (avail.available_to && timeToMin(avail.available_to) < serviceMin + 25) return false;
+    if (avail.available_to && timeToMin(avail.available_to) < serviceMin) return false;
   }
 
   const existingTimes = assignedTimesByDriver.get(profileId) ?? [];
@@ -530,7 +530,34 @@ function buildHotelShiftDrafts(
     const shiftServiceIds = new Set(sorted.map((service) => service.id));
     const hotelName = hotelShiftLabel(sorted[0]!, hotelMap);
 
-    // Scegli autista disponibile e non già assegnato all'altro turno San Nicola
+    const coverableFromShiftStart = (driver: DriverRow) => {
+      let count = 0;
+      for (const service of assignableShiftServices) {
+        const canCover = driverCanCoverHotelShiftService(
+          driver.profile_id,
+          service,
+          shiftServiceIds,
+          driverAvailMap,
+          assignedTimesByDriver,
+        );
+        if (!canCover) break;
+        count += 1;
+      }
+      return count;
+    };
+
+    const bestDriverByCoverage = (candidates: DriverRow[], requirePositiveCoverage: boolean) => {
+      let best: { driver: DriverRow; count: number } | null = null;
+      for (const driver of candidates) {
+        const count = coverableFromShiftStart(driver);
+        if (requirePositiveCoverage && count <= 0) continue;
+        if (!best || count > best.count) best = { driver, count };
+      }
+      return best;
+    };
+
+    // Locked operator services still force the anchor. Otherwise prefer the
+    // assigned driver who can cover most of the shift from the beginning.
     const lockedAnchor = sorted
       .filter((service) => lockedServiceIds.has(service.id))
       .map((service) => assignmentProfileForService(
@@ -541,7 +568,7 @@ function buildHotelShiftDrafts(
         userIdToProfileId,
       ))
       .find((profileId): profileId is string => Boolean(profileId));
-    const firstAssigned = sorted
+    const assignedProfileIds = Array.from(new Set(sorted
       .map((service) => assignmentProfileForService(
         service.id,
         assignmentByServiceId,
@@ -549,56 +576,62 @@ function buildHotelShiftDrafts(
         activeGroupDriverByUserId,
         userIdToProfileId,
       ))
-      .find((profileId): profileId is string => Boolean(profileId));
-    const anchorProfileId = lockedAnchor ?? firstAssigned ?? null;
+      .filter((profileId): profileId is string => Boolean(profileId))));
+    const assignedDrivers = assignedProfileIds
+      .map((profileId) => drivers.find((driver) => driver.profile_id === profileId) ?? null)
+      .filter((driver): driver is DriverRow => Boolean(driver));
+    const assignedDriverCoveringAll = assignedDrivers.find(
+      (driver) => coverableFromShiftStart(driver) === assignableShiftServices.length
+    ) ?? null;
+    const bestAssignedDriver = assignedDriverCoveringAll
+      ?? bestDriverByCoverage(assignedDrivers, false)?.driver
+      ?? null;
+    const bestAvailableDriver = assignedDrivers.length === 0
+      ? bestDriverByCoverage(drivers, true)?.driver ?? null
+      : null;
+    const anchorProfileId = lockedAnchor
+      ?? bestAssignedDriver?.profile_id
+      ?? bestAvailableDriver?.profile_id
+      ?? null;
 
     const zone = serviceOperationalZone(sorted[0]!, hotelMap) ?? "Forio";
 
-    for (const service of assignableShiftServices) {
-      const anchorDriver = anchorProfileId ? drivers.find((d) => d.profile_id === anchorProfileId) ?? null : null;
-      const anchorCanCover = anchorDriver
-        ? driverCanCoverHotelShiftService(anchorDriver.profile_id, service, shiftServiceIds, driverAvailMap, assignedTimesByDriver)
-        : false;
-      const preferredDriver = anchorCanCover ? anchorDriver : null;
-      const fallbackDriver = preferredDriver
-        ? null
-        : drivers.find((d) =>
-            d.profile_id !== anchorProfileId &&
-            driverCanCoverHotelShiftService(d.profile_id, service, shiftServiceIds, driverAvailMap, assignedTimesByDriver)
-          ) ?? null;
-      const driver = preferredDriver ?? fallbackDriver;
-
-      if (!driver) {
-        const driverName = anchorProfileId
-          ? drivers.find((d) => d.profile_id === anchorProfileId)?.full_name ?? "autista fascia"
-          : "autista disponibile";
-        warnings.push(`Navetta ${hotelName} ${serviceOperationalTime(service)} non assegnabile a ${driverName} per conflitto — richiede assegnazione manuale`);
-        continue;
+    if (!anchorProfileId) {
+      const times = assignableShiftServices.map((s) => serviceOperationalTime(s)).join(", ");
+      warnings.push(`Navette ${hotelName} (${times}) — nessun autista disponibile per la fascia, richiede assegnazione manuale`);
+    } else {
+      // Anchor esiste: usa SOLO l'anchor, NESSUN fallback ad altri autisti
+      // Se l'anchor non può coprire un servizio specifico, resta non assegnato
+      const anchorDriver = drivers.find((d) => d.profile_id === anchorProfileId) ?? null;
+      const anchorName = anchorDriver?.full_name ?? "autista fascia";
+      for (const service of assignableShiftServices) {
+        const canCover = anchorDriver
+          ? driverCanCoverHotelShiftService(anchorDriver.profile_id, service, shiftServiceIds, driverAvailMap, assignedTimesByDriver)
+          : false;
+        if (!anchorDriver || !canCover) {
+          warnings.push(`Navetta ${hotelName} ${serviceOperationalTime(service)} non assegnabile a ${anchorName} per conflitto — richiede assegnazione manuale`);
+          continue;
+        }
+        assignedDriverProfileIds.add(anchorDriver.profile_id);
+        draftAssignments.push({
+          draft: {
+            serviceIds: [service.id],
+            pax: service.pax,
+            time: serviceOperationalTime(service),
+            direction: "arrival",
+            zoneLabel: zone,
+            isNavetta: true,
+          },
+          profileId: anchorDriver.profile_id,
+          userId: anchorDriver.user_id,
+          suggestedVehicleLabel: null,
+        });
+        gpBlockedUnits.push(hotelShiftBlockUnit(service, hotelName, anchorDriver.profile_id));
+        assignedTimesByDriver.set(anchorDriver.profile_id, [
+          ...(assignedTimesByDriver.get(anchorDriver.profile_id) ?? []),
+          hotelShiftDriverEvent(service),
+        ]);
       }
-
-      if (anchorDriver && fallbackDriver) {
-        warnings.push(`Navetta ${hotelName} ${serviceOperationalTime(service)} assegnata a ${fallbackDriver.full_name} invece di ${anchorDriver.full_name} per conflitto`);
-      }
-
-      assignedDriverProfileIds.add(driver.profile_id);
-      draftAssignments.push({
-        draft: {
-          serviceIds: [service.id],
-          pax: service.pax,
-          time: serviceOperationalTime(service),
-          direction: "arrival",
-          zoneLabel: zone,
-          isNavetta: true,
-        },
-        profileId: driver.profile_id,
-        userId: driver.user_id,
-        suggestedVehicleLabel: null,
-      });
-      gpBlockedUnits.push(hotelShiftBlockUnit(service, hotelName, driver.profile_id));
-      assignedTimesByDriver.set(driver.profile_id, [
-        ...(assignedTimesByDriver.get(driver.profile_id) ?? []),
-        hotelShiftDriverEvent(service),
-      ]);
     }
   }
   }
@@ -725,7 +758,7 @@ function driverAvailableAtTime(
   }
   if (avail.available_to) {
     const toMin = timeToMin(avail.available_to);
-    if (tripTimeMin >= toMin) return false;
+    if (tripTimeMin > toMin) return false;
   }
   return true;
 }

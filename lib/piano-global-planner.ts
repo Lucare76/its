@@ -88,7 +88,7 @@ function inDriverAvailability(unit: GlobalPlannerUnit, driver: GlobalPlannerDriv
   const from = plannerMinutes(driver.available_from);
   const to = plannerMinutes(driver.available_to);
   if (!unitInterval || from == null || to == null) return true;
-  return unitInterval.start >= from && unitInterval.end <= to;
+  return unitInterval.start >= from && unitInterval.start <= to;
 }
 
 function driverCanUseVehicle(driver: GlobalPlannerDriver, vehicle: GlobalPlannerVehicle) {
