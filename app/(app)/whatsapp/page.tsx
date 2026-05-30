@@ -55,6 +55,12 @@ type InboxPayload = {
   error?: string;
 };
 
+type SendReplyPayload = {
+  ok?: boolean;
+  error?: string;
+  thread_id?: string | null;
+};
+
 type TemplateOption = {
   key: string;
   label: string;
@@ -744,7 +750,8 @@ export default function WhatsAppInboxPage() {
         setLoading(false);
         return;
       }
-      const nextSelectedThreadId = body.selected_thread_id ?? null;
+      const keepNewChatDraft = newChatMode && !nextThreadId;
+      const nextSelectedThreadId = keepNewChatDraft ? null : body.selected_thread_id ?? null;
       const prevMsgMap = prevThreadLastMsgRef.current;
       for (const thread of (body.threads ?? [])) {
         const prevLastAt = prevMsgMap.get(thread.id);
@@ -764,7 +771,7 @@ export default function WhatsAppInboxPage() {
         prevMsgMap.set(thread.id, currentLastAt);
       }
       setThreads(body.threads ?? []);
-      setMessages(body.messages ?? []);
+      setMessages(keepNewChatDraft ? [] : body.messages ?? []);
       setTemplateOptions(body.template_options ?? []);
       setTemplateFetchError(body.template_fetch_error ?? "");
       setSelectedTemplateKey((current) => {
@@ -779,7 +786,7 @@ export default function WhatsAppInboxPage() {
       }
       setLoading(false);
     },
-    [filter, search, selectedThreadId],
+    [filter, newChatMode, search, selectedThreadId],
   );
 
   useEffect(() => {
@@ -890,7 +897,7 @@ export default function WhatsAppInboxPage() {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ thread_id: selectedThreadId, action }),
     });
-    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    const body = (await response.json().catch(() => null)) as SendReplyPayload | null;
     if (!response.ok || !body?.ok) {
       setError(body?.error ?? "Azione non riuscita.");
     } else {
@@ -941,7 +948,7 @@ export default function WhatsAppInboxPage() {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ thread_id: selectedThreadId, action: "delete" }),
     });
-    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    const body = (await response.json().catch(() => null)) as SendReplyPayload | null;
     if (!response.ok || !body?.ok) {
       setError(body?.error ?? "Eliminazione chat non riuscita.");
     } else {
@@ -1030,7 +1037,7 @@ export default function WhatsAppInboxPage() {
             : { mode: "text", thread_id: selectedThreadId, text },
       ),
     });
-    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    const body = (await response.json().catch(() => null)) as SendReplyPayload | null;
     if (!response.ok || !body?.ok) {
       setError(body?.error ?? "Invio messaggio non riuscito.");
     } else {
@@ -1041,7 +1048,7 @@ export default function WhatsAppInboxPage() {
         setNewChatMode(false);
         setNewChatPhone("");
         setNewChatName("");
-        await load(null);
+        await load(body.thread_id ?? null);
       } else {
         await load(selectedThreadId);
       }
@@ -1084,6 +1091,7 @@ export default function WhatsAppInboxPage() {
             onClick={() => {
               setNewChatMode(true);
               setSelectedThreadId(null);
+              setMessages([]);
               setDraft("");
               setComposerMode("template");
               setTemplateVariablesText("");

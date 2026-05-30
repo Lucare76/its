@@ -57,6 +57,15 @@ async function upsertManualContact(
   admin: AuthorizedPricingRequest["admin"],
   input: { tenantId: string; waId: string; phoneE164: string; profileName: string | null }
 ) {
+  const { data: existing, error: existingError } = await admin
+    .from("whatsapp_contacts")
+    .select("id")
+    .eq("tenant_id", input.tenantId)
+    .or(`wa_id.eq.${input.waId},phone_e164.eq.${input.phoneE164}`)
+    .limit(1)
+    .maybeSingle();
+  if (existingError) throw existingError;
+
   const payload = {
     tenant_id: input.tenantId,
     wa_id: input.waId,
@@ -64,6 +73,18 @@ async function upsertManualContact(
     profile_name: input.profileName,
     updated_at: new Date().toISOString()
   };
+
+  if (existing?.id) {
+    const { data, error } = await admin
+      .from("whatsapp_contacts")
+      .update(payload)
+      .eq("id", existing.id)
+      .select("id")
+      .single();
+    if (error) throw error;
+    return data as { id: string };
+  }
+
   const { data, error } = await admin
     .from("whatsapp_contacts")
     .upsert(payload, { onConflict: "tenant_id,wa_id" })
@@ -677,6 +698,7 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({
     ok: true,
+    thread_id: thread.id,
     message_id: sendResult.messageId ?? null,
     phone_e164: sendResult.phoneE164
   });
