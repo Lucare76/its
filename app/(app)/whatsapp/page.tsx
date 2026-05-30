@@ -94,6 +94,12 @@ const filters = [
   { value: "closed", label: "Chiuse" },
 ] as const;
 
+const unsupportedManualHeaderFormats = new Set(["IMAGE", "VIDEO", "DOCUMENT", "LOCATION"]);
+
+function isManualTemplateSupported(option: TemplateOption) {
+  return !option.header_format || !unsupportedManualHeaderFormats.has(option.header_format.toUpperCase());
+}
+
 const quickEmojis = ["👍", "🙏", "😊", "🎉", "🚐", "📍", "⏰", "☎️"] as const;
 const quickReplies = [
   "Arriviamo tra 5 minuti.",
@@ -676,6 +682,9 @@ export default function WhatsAppInboxPage() {
     const approved = templateOptions.filter((option) => option.status === "APPROVED");
     const source = approved.length > 0 ? approved : templateOptions;
     return [...source].sort((a, b) => {
+      const aSupported = isManualTemplateSupported(a) ? 0 : 1;
+      const bSupported = isManualTemplateSupported(b) ? 0 : 1;
+      if (aSupported !== bSupported) return aSupported - bSupported;
       const aLang = a.language_code === "it" ? 0 : 1;
       const bLang = b.language_code === "it" ? 0 : 1;
       if (aLang !== bLang) return aLang - bLang;
@@ -687,10 +696,18 @@ export default function WhatsAppInboxPage() {
   }, [templateOptions]);
   const composerEnabled = Boolean(selectedThreadId) || newChatMode;
   const textModeUnavailable = newChatMode || !conversationWindow.isOpen;
-  const templateVariables = useMemo(
-    () => templateVariablesText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
-    [templateVariablesText],
+  const templateVariables = useMemo(() => {
+    if (!selectedTemplate?.body_parameter_count) return [];
+    const lines = templateVariablesText.split(/\r?\n/);
+    return Array.from({ length: selectedTemplate.body_parameter_count }, (_, index) => (lines[index] ?? "").trim());
+  }, [selectedTemplate?.body_parameter_count, templateVariablesText]);
+  const selectedTemplateHasUnsupportedHeader = Boolean(
+    selectedTemplate?.header_format &&
+    unsupportedManualHeaderFormats.has(selectedTemplate.header_format.toUpperCase()),
   );
+  const selectedTemplateHasMissingVariables = selectedTemplate?.body_parameter_count
+    ? templateVariables.some((value) => !value)
+    : false;
   const lastFailureRequiresTemplate = useMemo(() => {
     const reason = (latestFailedOutbound?.failure_reason ?? "").toLowerCase();
     return reason.includes("131047") || reason.includes("re-engagement");
@@ -777,7 +794,10 @@ export default function WhatsAppInboxPage() {
       setSelectedTemplateKey((current) => {
         const available = body.template_options ?? [];
         if (available.some((item) => item.key === current)) return current;
-        return available[0]?.key ?? "";
+        return available.find((item) => item.status === "APPROVED" && isManualTemplateSupported(item))?.key
+          ?? available.find(isManualTemplateSupported)?.key
+          ?? available[0]?.key
+          ?? "";
       });
       setSelectedThreadId(nextSelectedThreadId);
       if (nextSelectedThreadId !== selectedThreadId) {
@@ -1020,6 +1040,14 @@ export default function WhatsAppInboxPage() {
       return;
     }
     if (composerMode === "template" && !selectedTemplate) { setError("Seleziona un template prima di inviare."); return; }
+    if (composerMode === "template" && selectedTemplateHasUnsupportedHeader) {
+      setError("Questo template richiede un header media. Usa un template solo testo per l'invio manuale dalla inbox.");
+      return;
+    }
+    if (composerMode === "template" && selectedTemplateHasMissingVariables) {
+      setError("Compila tutte le variabili richieste dal template prima di inviare.");
+      return;
+    }
     const token = await getAccessToken();
     if (!token) { setError("Sessione non disponibile."); return; }
     setBusyAction("reply");
@@ -1972,6 +2000,11 @@ export default function WhatsAppInboxPage() {
                           Nessuna variabile richiesta — pronto per l&apos;invio.
                         </div>
                       ) : null}
+                      {selectedTemplateHasUnsupportedHeader && (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                          Questo template richiede un header {selectedTemplate?.header_format?.toLowerCase()}. Per l'invio manuale seleziona un template solo testo.
+                        </div>
+                      )}
                     </div>
                   ) : (
                     /* Text composer ─────────────────────────────────────── */
@@ -2035,7 +2068,7 @@ export default function WhatsAppInboxPage() {
                       disabled={
                         busyAction !== null ||
                         (composerMode === "text" && textModeUnavailable) ||
-                        (composerMode === "text" ? !draft.trim() : !selectedTemplate) ||
+                        (composerMode === "text" ? !draft.trim() : !selectedTemplate || selectedTemplateHasUnsupportedHeader || selectedTemplateHasMissingVariables) ||
                         (newChatMode && !newChatPhone.trim())
                       }
                       className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"

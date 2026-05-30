@@ -8,6 +8,8 @@ export const runtime = "nodejs";
 
 type AuthorizedPricingRequest = Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>;
 
+const unsupportedManualHeaderFormats = new Set(["IMAGE", "VIDEO", "DOCUMENT", "LOCATION"]);
+
 const patchSchema = z.object({
   thread_id: z.string().uuid(),
   action: z.enum(["mark_read", "close", "reopen", "delete", "associate", "update_phone"]),
@@ -550,14 +552,57 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  const templateName = sendMode === "template" ? parsed.data.template_name!.trim() : null;
+  const templateVariables = sendMode === "template" ? parsed.data.template_variables ?? [] : [];
+  const templateLang = sendMode === "template"
+    ? parsed.data.template_language?.trim() || settings.template_language
+    : settings.template_language;
+  let templateBodyText: string | null = null;
+
+  if (sendMode === "template" && templateName) {
+    const { data: tplRow, error: tplError } = await auth.admin
+      .from("whatsapp_templates")
+      .select("body_text, body_parameter_count, header_format, raw_json")
+      .eq("tenant_id", tenantId)
+      .eq("name", templateName)
+      .eq("language_code", templateLang)
+      .maybeSingle();
+    if (tplError) return NextResponse.json({ error: tplError.message }, { status: 500 });
+    if (!tplRow) {
+      return NextResponse.json({ error: "Template WhatsApp non trovato. Sincronizza i template da Impostazioni WhatsApp." }, { status: 400 });
+    }
+
+    const headerFormat = String(tplRow.header_format ?? "").toUpperCase();
+    if (unsupportedManualHeaderFormats.has(headerFormat) || templateHeaderNeedsParameter(tplRow.raw_json)) {
+      return NextResponse.json({
+        error: "Questo template richiede parametri header non supportati dall'invio manuale. Seleziona un template solo testo."
+      }, { status: 400 });
+    }
+
+    const expectedVariables = Number(tplRow.body_parameter_count ?? 0);
+    if (templateVariables.length !== expectedVariables || templateVariables.some((value) => !value.trim())) {
+      return NextResponse.json({
+        error: `Il template richiede ${expectedVariables} variabil${expectedVariables === 1 ? "e" : "i"} compilat${expectedVariables === 1 ? "a" : "e"}.`
+      }, { status: 400 });
+    }
+
+    if (tplRow.body_text) {
+      let filled = tplRow.body_text as string;
+      for (let i = 0; i < templateVariables.length; i++) {
+        filled = filled.replace(new RegExp(`\\{\\{${i + 1}\\}\\}`, "g"), templateVariables[i] ?? "");
+      }
+      templateBodyText = filled;
+    }
+  }
+
   const targetPhone = normalizeWhatsAppWaId(thread.wa_id);
   const sendResult = sendMode === "template"
     ? await sendWhatsAppMessage({
         to: targetPhone,
-        template: parsed.data.template_name!.trim(),
-        languageCode: parsed.data.template_language?.trim() || settings.template_language,
+        template: templateName!,
+        languageCode: templateLang,
         variables: Object.fromEntries(
-          (parsed.data.template_variables ?? []).map((value, index) => [String(index + 1), value])
+          templateVariables.map((value, index) => [String(index + 1), value])
         )
       })
     : await sendWhatsAppTextMessage({
@@ -573,28 +618,6 @@ export async function POST(request: NextRequest) {
       mode: sendMode
     });
     return NextResponse.json({ error: sendResult.error ?? "Invio WhatsApp non riuscito" }, { status: 502 });
-  }
-
-  const templateName = sendMode === "template" ? parsed.data.template_name!.trim() : null;
-  const templateVariables = sendMode === "template" ? parsed.data.template_variables ?? [] : [];
-
-  let templateBodyText: string | null = null;
-  if (sendMode === "template" && templateName) {
-    const templateLang = parsed.data.template_language?.trim() || settings.template_language;
-    const { data: tplRow } = await auth.admin
-      .from("whatsapp_templates")
-      .select("body_text")
-      .eq("tenant_id", tenantId)
-      .eq("name", templateName)
-      .eq("language_code", templateLang)
-      .maybeSingle();
-    if (tplRow?.body_text) {
-      let filled = tplRow.body_text as string;
-      for (let i = 0; i < templateVariables.length; i++) {
-        filled = filled.replace(new RegExp(`\\{\\{${i + 1}\\}\\}`, "g"), templateVariables[i] ?? "");
-      }
-      templateBodyText = filled;
-    }
   }
 
   const previewText = templateBodyText
@@ -702,4 +725,10 @@ export async function POST(request: NextRequest) {
     message_id: sendResult.messageId ?? null,
     phone_e164: sendResult.phoneE164
   });
+}
+
+function templateHeaderNeedsParameter(rawJson: unknown) {
+  const components = (rawJson as { components?: Array<{ type?: string; text?: string | null }> } | null)?.components;
+  const header = components?.find((component) => component.type?.toUpperCase() === "HEADER");
+  return /\{\{\d+\}\}/.test(header?.text ?? "");
 }
