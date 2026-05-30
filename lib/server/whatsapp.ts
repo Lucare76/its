@@ -360,6 +360,18 @@ export async function downloadWhatsAppMedia(mediaId: string) {
 }
 
 async function sendTemplateMessage(phoneNumberId: string, accessToken: string, toPhone: string, templateName: string, languageCode: string, parameters: Array<{ type: "text"; text: string }>) {
+  const template: {
+    name: string;
+    language: { code: string };
+    components?: Array<{ type: "body"; parameters: Array<{ type: "text"; text: string }> }>;
+  } = {
+    name: templateName,
+    language: { code: languageCode }
+  };
+  if (parameters.length > 0) {
+    template.components = [{ type: "body", parameters }];
+  }
+
   const response = await fetch(`https://graph.facebook.com/${whatsappGraphVersion()}/${phoneNumberId}/messages`, {
     method: "POST",
     headers: {
@@ -370,25 +382,26 @@ async function sendTemplateMessage(phoneNumberId: string, accessToken: string, t
       messaging_product: "whatsapp",
       to: toPhone,
       type: "template",
-      template: {
-        name: templateName,
-        language: { code: languageCode },
-        components: [{ type: "body", parameters }]
-      }
+      template
     })
   });
 
   const payload = (await response.json().catch(() => null)) as
     | {
         messages?: Array<{ id: string }>;
-        error?: { message?: string };
+        error?: { message?: string; code?: number | string; error_data?: { details?: string } };
       }
     | null;
+  const errorParts = [
+    payload?.error?.message,
+    payload?.error?.error_data?.details,
+    payload?.error?.code != null ? `code ${payload.error.code}` : null
+  ].filter(Boolean);
 
   return {
     ok: response.ok,
     messageId: payload?.messages?.[0]?.id ?? null,
-    error: payload?.error?.message ?? (response.ok ? null : `WhatsApp API error (${response.status})`)
+    error: errorParts.length > 0 ? errorParts.join(" - ") : response.ok ? null : `WhatsApp API error (${response.status})`
   };
 }
 
