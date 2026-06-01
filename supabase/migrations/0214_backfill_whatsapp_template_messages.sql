@@ -1,7 +1,11 @@
--- Backfill outbound WhatsApp templates that were logged in whatsapp_events
--- before the chat timeline started persisting every outbound message.
+-- Backfill outbound WhatsApp templates into whatsapp_messages.
 --
 -- IMPORTANT: run 0213_whatsapp_reply_context.sql before this migration.
+--
+-- This migration is intentionally defensive:
+-- - it does not use services.customer_id
+-- - it works even if public.whatsapp_events does not exist
+-- - it can be run more than once
 
 create temp table if not exists tmp_whatsapp_template_backfill (
   tenant_id uuid not null,
@@ -13,14 +17,14 @@ create temp table if not exists tmp_whatsapp_template_backfill (
   happened_at timestamptz not null,
   payload_json jsonb null,
   customer_name text null,
-  service_phone text null,
-  service_phone_e164 text null,
   phone_e164 text not null,
   wa_id text not null
 ) on commit drop;
 
 truncate table tmp_whatsapp_template_backfill;
 
+-- Source 1: services.message_id. This exists in the current production schema
+-- and is enough to restore the outbound bubble matched by Meta context.id.
 insert into tmp_whatsapp_template_backfill (
   tenant_id,
   service_id,
@@ -31,8 +35,6 @@ insert into tmp_whatsapp_template_backfill (
   happened_at,
   payload_json,
   customer_name,
-  service_phone,
-  service_phone_e164,
   phone_e164,
   wa_id
 )
@@ -46,45 +48,105 @@ select
   src.happened_at,
   src.payload_json,
   src.customer_name,
-  src.service_phone,
-  src.service_phone_e164,
   src.phone_e164,
   regexp_replace(src.phone_e164, '[^0-9]', '', 'g') as wa_id
 from (
   select
-    e.tenant_id,
-    e.service_id,
-    e.provider_message_id,
-    e.to_phone,
-    e.template,
-    e.status,
-    coalesce(e.happened_at, e.created_at, timezone('utc'::text, now())) as happened_at,
-    e.payload_json,
+    s.tenant_id,
+    s.id as service_id,
+    s.message_id as provider_message_id,
+    coalesce(s.phone_e164, s.phone) as to_phone,
+    null::text as template,
+    coalesce(s.reminder_status::text, 'sent') as status,
+    coalesce(s.sent_at, timezone('utc'::text, now())) as happened_at,
+    jsonb_build_object('source', 'services.message_id') as payload_json,
     s.customer_name,
-    s.phone as service_phone,
-    s.phone_e164 as service_phone_e164,
     case
-      when regexp_replace(coalesce(e.to_phone, s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') like '+%'
-        then regexp_replace(coalesce(e.to_phone, s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g')
-      when regexp_replace(coalesce(e.to_phone, s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') like '00%'
-        then '+' || substring(regexp_replace(coalesce(e.to_phone, s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') from 3)
-      else '+' || regexp_replace(coalesce(e.to_phone, s.phone_e164, s.phone, ''), '[^0-9]', '', 'g')
+      when regexp_replace(coalesce(s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') like '+%'
+        then regexp_replace(coalesce(s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g')
+      when regexp_replace(coalesce(s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') like '00%'
+        then '+' || substring(regexp_replace(coalesce(s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') from 3)
+      else '+' || regexp_replace(coalesce(s.phone_e164, s.phone, ''), '[^0-9]', '', 'g')
     end as phone_e164
-  from public.whatsapp_events e
-  left join public.services s
-    on s.id = e.service_id
-   and s.tenant_id = e.tenant_id
-  where e.tenant_id is not null
-    and e.provider_message_id is not null
-    and e.status in ('sent', 'delivered', 'read')
+  from public.services s
+  where s.tenant_id is not null
+    and s.message_id is not null
     and not exists (
       select 1
       from public.whatsapp_messages m
-      where m.tenant_id = e.tenant_id
-        and m.wa_message_id = e.provider_message_id
+      where m.tenant_id = s.tenant_id
+        and m.wa_message_id = s.message_id
     )
 ) src
 where length(regexp_replace(src.phone_e164, '[^0-9]', '', 'g')) between 7 and 15;
+
+-- Source 2: whatsapp_events, only when that legacy table exists.
+do $$
+begin
+  if to_regclass('public.whatsapp_events') is not null then
+    execute $sql$
+      insert into tmp_whatsapp_template_backfill (
+        tenant_id,
+        service_id,
+        provider_message_id,
+        to_phone,
+        template,
+        status,
+        happened_at,
+        payload_json,
+        customer_name,
+        phone_e164,
+        wa_id
+      )
+      select
+        src.tenant_id,
+        src.service_id,
+        src.provider_message_id,
+        src.to_phone,
+        src.template,
+        src.status,
+        src.happened_at,
+        src.payload_json,
+        src.customer_name,
+        src.phone_e164,
+        regexp_replace(src.phone_e164, '[^0-9]', '', 'g') as wa_id
+      from (
+        select
+          e.tenant_id,
+          e.service_id,
+          e.provider_message_id,
+          e.to_phone,
+          e.template,
+          e.status,
+          coalesce(e.happened_at, e.created_at, timezone('utc'::text, now())) as happened_at,
+          e.payload_json,
+          s.customer_name,
+          case
+            when regexp_replace(coalesce(e.to_phone, s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') like '+%'
+              then regexp_replace(coalesce(e.to_phone, s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g')
+            when regexp_replace(coalesce(e.to_phone, s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') like '00%'
+              then '+' || substring(regexp_replace(coalesce(e.to_phone, s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') from 3)
+            else '+' || regexp_replace(coalesce(e.to_phone, s.phone_e164, s.phone, ''), '[^0-9]', '', 'g')
+          end as phone_e164
+        from public.whatsapp_events e
+        left join public.services s
+          on s.id = e.service_id
+         and s.tenant_id = e.tenant_id
+        where e.tenant_id is not null
+          and e.provider_message_id is not null
+          and e.status in ('sent', 'delivered', 'read')
+          and not exists (
+            select 1
+            from public.whatsapp_messages m
+            where m.tenant_id = e.tenant_id
+              and m.wa_message_id = e.provider_message_id
+          )
+      ) src
+      where length(regexp_replace(src.phone_e164, '[^0-9]', '', 'g')) between 7 and 15
+      on conflict do nothing
+    $sql$;
+  end if;
+end $$;
 
 insert into public.whatsapp_contacts (
   tenant_id,
@@ -196,7 +258,7 @@ select
   b.happened_at,
   jsonb_build_object(
     'id', b.provider_message_id,
-    'source', 'backfill_whatsapp_events',
+    'source', 'backfill_whatsapp_templates',
     'template', b.template,
     'payload_json', coalesce(b.payload_json, '{}'::jsonb)
   ),
