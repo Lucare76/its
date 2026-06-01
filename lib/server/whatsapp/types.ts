@@ -32,6 +32,7 @@ export type MetaMessage = {
   from?: string;
   timestamp?: string;
   type?: string;
+  context?: { id?: string; from?: string };
   text?: { body?: string };
   image?: { id?: string; mime_type?: string; sha256?: string; caption?: string };
   document?: { id?: string; mime_type?: string; sha256?: string; caption?: string; filename?: string };
@@ -71,4 +72,3 @@ export type MetaWebhookPayload = {
     }>;
   }>;
 };
-

@@ -32,8 +32,10 @@ type ThreadRow = {
 type MessageRow = {
   id: string;
   wa_message_id: string | null;
+  reply_to_wa_message_id?: string | null;
   direction: "inbound" | "outbound";
   message_type: string | null;
+  template_name?: string | null;
   text_body: string | null;
   media_id: string | null;
   media_mime_type: string | null;
@@ -43,6 +45,14 @@ type MessageRow = {
   timestamp: string | null;
   created_at: string;
   booking_id: string | null;
+  reply_to_message?: {
+    id: string | null;
+    wa_message_id: string | null;
+    direction: "inbound" | "outbound" | null;
+    message_type: string | null;
+    template_name: string | null;
+    preview: string;
+  } | null;
 };
 
 type InboxPayload = {
@@ -1611,6 +1621,16 @@ export default function WhatsAppInboxPage() {
                               : "rounded-2xl rounded-br-sm border border-indigo-200 bg-indigo-50"
                         }`}
                       >
+                        {inbound && message.reply_to_wa_message_id && (
+                          <div className="mb-2 rounded-lg border-l-2 border-emerald-400 bg-emerald-50/80 px-2.5 py-1.5">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                              In risposta a {message.reply_to_message?.template_name ? `template ${message.reply_to_message.template_name}` : "messaggio"}
+                            </p>
+                            <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-emerald-900">
+                              {message.reply_to_message?.preview || "Messaggio originale non trovato"}
+                            </p>
+                          </div>
+                        )}
                         <p className={`whitespace-pre-wrap text-sm leading-relaxed ${inbound ? "text-slate-800" : failed ? "text-rose-800" : "text-indigo-900"}`}>
                           {message.text_body || `[${message.message_type ?? "messaggio"}]`}
                         </p>
@@ -2002,7 +2022,7 @@ export default function WhatsAppInboxPage() {
                       ) : null}
                       {selectedTemplateHasUnsupportedHeader && (
                         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                          Questo template richiede un header {selectedTemplate?.header_format?.toLowerCase()}. Per l'invio manuale seleziona un template solo testo.
+                          Questo template richiede un header {selectedTemplate?.header_format?.toLowerCase()}. Per l&apos;invio manuale seleziona un template solo testo.
                         </div>
                       )}
                     </div>

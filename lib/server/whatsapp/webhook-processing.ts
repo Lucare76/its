@@ -39,6 +39,12 @@ function previewForMessage(message: MetaMessage) {
   return `[${message.type ?? "messaggio"}]`;
 }
 
+function replyContextId(message: MetaMessage) {
+  return typeof message.context?.id === "string" && message.context.id.trim()
+    ? message.context.id.trim()
+    : null;
+}
+
 function firstEventType(value: MetaChangeValue) {
   if (value.messages?.length) return "message";
   if (value.statuses?.length) return "status";
@@ -196,22 +202,75 @@ async function upsertThread(
   return data as { id: string };
 }
 
+async function findReplyTarget(admin: SupabaseClient, replyToWaMessageId: string | null) {
+  if (!replyToWaMessageId) return null;
+  const { data, error } = await admin
+    .from("whatsapp_messages")
+    .select("id, tenant_id, thread_id, customer_id, booking_id, transfer_id, contact_id, wa_id, phone_e164, message_type, text_body, template_name")
+    .eq("wa_message_id", replyToWaMessageId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.warn("WhatsApp inbound reply target lookup failed", {
+      replyToWaMessageId,
+      message: error.message
+    });
+    return null;
+  }
+  return data as {
+    id: string;
+    tenant_id: string | null;
+    thread_id: string | null;
+    customer_id: string | null;
+    booking_id: string | null;
+    transfer_id: string | null;
+    contact_id: string | null;
+    wa_id: string | null;
+    phone_e164: string | null;
+    message_type: string | null;
+    text_body: string | null;
+    template_name: string | null;
+  } | null;
+}
+
 async function processMessage(admin: SupabaseClient, value: MetaChangeValue, message: MetaMessage) {
   if (!message.id || !message.from) return null;
   const contact = value.contacts?.find((item) => item.wa_id === message.from) ?? value.contacts?.[0];
   const phoneE164 = normalizeWhatsAppWaId(message.from);
+  const replyToWaMessageId = replyContextId(message);
   console.info("WhatsApp inbound message received", {
     hasWaId: Boolean(message.from),
-    normalizedPhonePresent: Boolean(phoneE164)
+    normalizedPhonePresent: Boolean(phoneE164),
+    hasContextId: Boolean(replyToWaMessageId),
+    contextId: replyToWaMessageId
   });
   const textBody = messageText(message);
-  const match = await matchWhatsAppInboundMessage(admin, {
-    waId: message.from,
-    phoneE164,
-    textBody,
-    timestamp: message.timestamp
-  });
-  const effectiveMatchStatus = match.tenantId ? match.status : "needs_review";
+  const replyTarget = await findReplyTarget(admin, replyToWaMessageId);
+  if (replyToWaMessageId) {
+    console.info("WhatsApp inbound context lookup", {
+      inboundMessageId: message.id,
+      replyToWaMessageId,
+      linked: Boolean(replyTarget?.id),
+      linkedThreadId: replyTarget?.thread_id ?? null
+    });
+  }
+  const match = replyTarget?.tenant_id
+    ? {
+        tenantId: replyTarget.tenant_id,
+        bookingId: replyTarget.booking_id,
+        transferId: replyTarget.transfer_id,
+        customerId: replyTarget.customer_id,
+        status: "matched" as const,
+        suggestions: []
+      }
+    : await matchWhatsAppInboundMessage(admin, {
+        waId: message.from,
+        phoneE164,
+        textBody,
+        timestamp: message.timestamp
+      });
+  const effectiveMatchStatus = replyTarget?.tenant_id ? "matched" : match.tenantId ? match.status : "needs_review";
 
   const contactRow = await upsertContact(admin, { tenantId: match.tenantId, contact, waId: message.from, phoneE164 });
   const timestamp = unixToIso(message.timestamp);
@@ -242,6 +301,8 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
     transfer_id: match.transferId,
     message_type: message.type ?? null,
     text_body: textBody,
+    reply_to_wa_message_id: replyToWaMessageId,
+    template_name: null,
     ...mediaMeta(message),
     status: "received",
     timestamp,

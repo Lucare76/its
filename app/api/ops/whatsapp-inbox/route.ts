@@ -55,6 +55,17 @@ function extractStatusFailureReason(rawStatus: unknown) {
   return parts.length > 0 ? parts.join(" - ") : "Invio non consegnato";
 }
 
+function compactMessagePreview(input: {
+  message_type?: string | null;
+  text_body?: string | null;
+  template_name?: string | null;
+}) {
+  const text = input.text_body?.trim();
+  if (text) return text.slice(0, 140);
+  if (input.template_name) return `Template ${input.template_name}`;
+  return `[${input.message_type ?? "messaggio"}]`;
+}
+
 async function upsertManualContact(
   admin: AuthorizedPricingRequest["admin"],
   input: { tenantId: string; waId: string; phoneE164: string; profileName: string | null }
@@ -218,10 +229,11 @@ export async function GET(request: NextRequest) {
   const { data: messages, error: messageError } = selectedId
     ? await auth.admin
       .from("whatsapp_messages")
-      .select("id, wa_message_id, direction, wa_id, phone_e164, message_type, text_body, media_id, media_mime_type, status, timestamp, created_at, booking_id, transfer_id, raw_message")
+      .select("id, wa_message_id, reply_to_wa_message_id, direction, wa_id, phone_e164, message_type, template_name, text_body, media_id, media_mime_type, status, timestamp, created_at, booking_id, transfer_id, raw_message")
       .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
       .eq("thread_id", selectedId)
       .order("timestamp", { ascending: true, nullsFirst: true })
+      .order("created_at", { ascending: true })
       .limit(500)
     : { data: [], error: null };
   if (messageError) return NextResponse.json({ error: messageError.message }, { status: 500 });
@@ -246,6 +258,12 @@ export async function GET(request: NextRequest) {
     });
   }
 
+  const messageByWaId = new Map(
+    (messages ?? [])
+      .filter((message) => Boolean(message.wa_message_id))
+      .map((message) => [message.wa_message_id as string, message])
+  );
+
   const enrichedMessages = (messages ?? []).map((message) => {
     const latestStatus = message.wa_message_id ? latestStatusByMessageId.get(message.wa_message_id) : null;
     const rawMessage = typeof message.raw_message === "object" && message.raw_message !== null
@@ -254,13 +272,16 @@ export async function GET(request: NextRequest) {
     const documentMeta = rawMessage && typeof rawMessage.document === "object" && rawMessage.document !== null
       ? rawMessage.document as { filename?: unknown }
       : null;
+    const replyTarget = message.reply_to_wa_message_id ? messageByWaId.get(message.reply_to_wa_message_id) : null;
     return {
       id: message.id,
       wa_message_id: message.wa_message_id,
+      reply_to_wa_message_id: message.reply_to_wa_message_id,
       direction: message.direction,
       wa_id: message.wa_id,
       phone_e164: message.phone_e164,
       message_type: message.message_type,
+      template_name: message.template_name,
       text_body: message.text_body,
       media_id: message.media_id,
       media_mime_type: message.media_mime_type,
@@ -271,6 +292,25 @@ export async function GET(request: NextRequest) {
       booking_id: message.booking_id,
       transfer_id: message.transfer_id,
       media_filename: typeof documentMeta?.filename === "string" ? documentMeta.filename : null,
+      reply_to_message: replyTarget
+        ? {
+            id: replyTarget.id,
+            wa_message_id: replyTarget.wa_message_id,
+            direction: replyTarget.direction,
+            message_type: replyTarget.message_type,
+            template_name: replyTarget.template_name,
+            preview: compactMessagePreview(replyTarget)
+          }
+        : message.reply_to_wa_message_id
+          ? {
+              id: null,
+              wa_message_id: message.reply_to_wa_message_id,
+              direction: null,
+              message_type: null,
+              template_name: null,
+              preview: "Messaggio originale non trovato in questa conversazione"
+            }
+          : null,
     };
   });
 
@@ -596,6 +636,12 @@ export async function POST(request: NextRequest) {
   }
 
   const targetPhone = normalizeWhatsAppWaId(thread.wa_id);
+  console.info("WhatsApp inbox send requested", {
+    mode: sendMode,
+    threadId: thread.id,
+    templateName,
+    hasTemplateVariables: templateVariables.length > 0
+  });
   const sendResult = sendMode === "template"
     ? await sendWhatsAppMessage({
         to: targetPhone,
@@ -638,6 +684,8 @@ export async function POST(request: NextRequest) {
     booking_id: thread.booking_id ?? null,
     transfer_id: thread.transfer_id ?? null,
     message_type: sendMode === "template" ? "template" : "text",
+    template_name: templateName,
+    reply_to_wa_message_id: null,
     text_body: sendMode === "template" ? (templateBodyText ?? previewText) : text,
     media_id: null,
     media_mime_type: null,
@@ -671,6 +719,13 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ error: "Messaggio inviato ma non salvato in archivio" }, { status: 500 });
   }
+  console.info("WhatsApp inbox message persisted", {
+    mode: sendMode,
+    threadId: thread.id,
+    waMessageId: sendResult.messageId ?? null,
+    templateName,
+    textPreview: previewText.slice(0, 80)
+  });
 
   const { error: updateError } = await auth.admin
     .from("whatsapp_threads")
