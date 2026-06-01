@@ -4,6 +4,7 @@
 --
 -- This migration is intentionally defensive:
 -- - it does not use services.customer_id
+-- - it does not use services.message_id
 -- - it works even if public.whatsapp_events does not exist
 -- - it can be run more than once
 
@@ -23,8 +24,9 @@ create temp table if not exists tmp_whatsapp_template_backfill (
 
 truncate table tmp_whatsapp_template_backfill;
 
--- Source 1: services.message_id. This exists in the current production schema
--- and is enough to restore the outbound bubble matched by Meta context.id.
+-- Source 1: status webhooks archived from Meta.
+-- This is the safest source in schemas where whatsapp_events/services.message_id
+-- are not present. It restores the outbound bubble by wamid and recipient phone.
 insert into tmp_whatsapp_template_backfill (
   tenant_id,
   service_id,
@@ -40,43 +42,43 @@ insert into tmp_whatsapp_template_backfill (
 )
 select
   src.tenant_id,
-  src.service_id,
+  null::uuid as service_id,
   src.provider_message_id,
   src.to_phone,
-  src.template,
+  null::text as template,
   src.status,
   src.happened_at,
   src.payload_json,
-  src.customer_name,
+  null::text as customer_name,
   src.phone_e164,
   regexp_replace(src.phone_e164, '[^0-9]', '', 'g') as wa_id
 from (
-  select
+  select distinct on (s.tenant_id, s.wa_message_id)
     s.tenant_id,
-    s.id as service_id,
-    s.message_id as provider_message_id,
-    coalesce(s.phone_e164, s.phone) as to_phone,
-    null::text as template,
-    coalesce(s.reminder_status::text, 'sent') as status,
-    coalesce(s.sent_at, timezone('utc'::text, now())) as happened_at,
-    jsonb_build_object('source', 'services.message_id') as payload_json,
-    s.customer_name,
+    s.wa_message_id as provider_message_id,
+    s.recipient_id as to_phone,
+    s.status,
+    coalesce(s.timestamp, s.created_at, timezone('utc'::text, now())) as happened_at,
+    coalesce(s.raw_status, '{}'::jsonb) as payload_json,
     case
-      when regexp_replace(coalesce(s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') like '+%'
-        then regexp_replace(coalesce(s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g')
-      when regexp_replace(coalesce(s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') like '00%'
-        then '+' || substring(regexp_replace(coalesce(s.phone_e164, s.phone, ''), '[^0-9+]', '', 'g') from 3)
-      else '+' || regexp_replace(coalesce(s.phone_e164, s.phone, ''), '[^0-9]', '', 'g')
+      when regexp_replace(coalesce(s.recipient_id, ''), '[^0-9+]', '', 'g') like '+%'
+        then regexp_replace(coalesce(s.recipient_id, ''), '[^0-9+]', '', 'g')
+      when regexp_replace(coalesce(s.recipient_id, ''), '[^0-9+]', '', 'g') like '00%'
+        then '+' || substring(regexp_replace(coalesce(s.recipient_id, ''), '[^0-9+]', '', 'g') from 3)
+      else '+' || regexp_replace(coalesce(s.recipient_id, ''), '[^0-9]', '', 'g')
     end as phone_e164
-  from public.services s
+  from public.whatsapp_message_statuses s
   where s.tenant_id is not null
-    and s.message_id is not null
+    and s.wa_message_id is not null
+    and s.recipient_id is not null
+    and s.status in ('sent', 'delivered', 'read')
     and not exists (
       select 1
       from public.whatsapp_messages m
       where m.tenant_id = s.tenant_id
-        and m.wa_message_id = s.message_id
+        and m.wa_message_id = s.wa_message_id
     )
+  order by s.tenant_id, s.wa_message_id, s.created_at asc
 ) src
 where length(regexp_replace(src.phone_e164, '[^0-9]', '', 'g')) between 7 and 15;
 
