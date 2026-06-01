@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { createAdminClient, getTenantWhatsAppSettings, logWhatsAppEvent, sendWhatsAppMessage } from "@/lib/server/whatsapp";
+import { persistOutboundWhatsAppMessage } from "@/lib/server/whatsapp/messages";
 
 export const runtime = "nodejs";
 
@@ -88,6 +89,7 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await sendWhatsAppMessage(payload);
+    const nowIso = new Date().toISOString();
     await logWhatsAppEvent(admin, {
       tenant_id: tenantId,
       service_id: service.id,
@@ -96,13 +98,41 @@ export async function POST(request: NextRequest) {
       template: settings.arrival_template,
       status: result.ok ? "sent" : "failed",
       provider_message_id: result.ok ? result.messageId ?? null : null,
-      happened_at: new Date().toISOString(),
+      happened_at: nowIso,
       payload_json: {
         source: "api/ops/whatsapp-arrivals",
         mode: "arrival_auto",
         error: result.ok ? null : result.error ?? "send failed"
       }
     });
+    if (result.ok) {
+      try {
+        await persistOutboundWhatsAppMessage(admin, {
+          tenantId,
+          toPhone: result.phoneE164,
+          waMessageId: result.messageId,
+          messageType: "template",
+          templateName: settings.arrival_template,
+          textBody: `Template ${settings.arrival_template}`,
+          status: "sent",
+          timestamp: nowIso,
+          serviceId: service.id,
+          rawMessage: {
+            id: result.messageId,
+            source: "api/ops/whatsapp-arrivals",
+            template: settings.arrival_template,
+            variables: payload.variables
+          }
+        });
+      } catch (persistError) {
+        console.error("WhatsApp outbound message persistence failed", {
+          source: "api/ops/whatsapp-arrivals",
+          serviceId: service.id,
+          waMessageId: result.messageId ?? null,
+          message: persistError instanceof Error ? persistError.message : "persist failed"
+        });
+      }
+    }
 
     return NextResponse.json({ ok: result.ok, result });
   } catch (error) {

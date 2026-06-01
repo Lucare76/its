@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient, logWhatsAppEvent, sendWhatsAppMessage } from "@/lib/server/whatsapp";
+import { persistOutboundWhatsAppMessage } from "@/lib/server/whatsapp/messages";
 
 export const runtime = "nodejs";
 
@@ -128,6 +129,31 @@ export async function GET(request: NextRequest) {
           source: "api/jobs/whatsapp-reminders"
         }
       });
+      try {
+        await persistOutboundWhatsAppMessage(admin, {
+          tenantId: service.tenant_id,
+          toPhone: result.phoneE164,
+          waMessageId: result.messageId,
+          messageType: "template",
+          templateName: "transfer_reminder_24h",
+          textBody: "Template transfer_reminder_24h",
+          status: "sent",
+          timestamp: nowIso,
+          serviceId: service.id,
+          rawMessage: {
+            id: result.messageId,
+            source: "api/jobs/whatsapp-reminders",
+            template: "transfer_reminder_24h"
+          }
+        });
+      } catch (error) {
+        console.error("WhatsApp outbound message persistence failed", {
+          source: "api/jobs/whatsapp-reminders",
+          serviceId: service.id,
+          waMessageId: result.messageId ?? null,
+          message: error instanceof Error ? error.message : "persist failed"
+        });
+      }
     }
   }
 

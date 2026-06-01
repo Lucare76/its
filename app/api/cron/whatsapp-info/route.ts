@@ -6,6 +6,7 @@ import {
   selectInfoTemplate,
   whatsappGraphVersion,
 } from "@/lib/server/whatsapp";
+import { persistOutboundWhatsAppMessage } from "@/lib/server/whatsapp/messages";
 
 export const runtime = "nodejs";
 
@@ -221,7 +222,38 @@ async function runCron(request: NextRequest) {
         },
       });
 
-      if (result.ok) { totalSent++; } else { totalFailed++; }
+      if (result.ok) {
+        totalSent++;
+        try {
+          await persistOutboundWhatsAppMessage(admin, {
+            tenantId: svc.tenant_id as string,
+            toPhone: phone,
+            waMessageId: result.messageId,
+            messageType: "template",
+            templateName: info.templateName,
+            textBody: `Template ${info.templateName}`,
+            status: "sent",
+            timestamp: nowIso,
+            serviceId: svc.id as string,
+            rawMessage: {
+              id: result.messageId,
+              source: "api/cron/whatsapp-info",
+              template: info.templateName,
+              language: lang,
+              booking_service_kind: svc.booking_service_kind,
+              parameters: [svc.customer_name, ...extraParams],
+              qr_header_included: Boolean(qrUrl)
+            }
+          });
+        } catch (error) {
+          console.error("WhatsApp outbound message persistence failed", {
+            source: "api/cron/whatsapp-info",
+            serviceId: svc.id,
+            waMessageId: result.messageId ?? null,
+            message: error instanceof Error ? error.message : "persist failed"
+          });
+        }
+      } else { totalFailed++; }
     }
   }
 

@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeWhatsAppWaId, logWhatsAppEvent, mapWebhookStatus } from "@/lib/server/whatsapp";
 import { sendPushToTenantRoles } from "@/lib/server/web-push";
 import { matchWhatsAppInboundMessage } from "./matching";
+import { persistOutboundWhatsAppMessage } from "./messages";
 import type { MetaChangeValue, MetaContact, MetaMessage, MetaStatus, MetaWebhookPayload } from "./types";
 
 type ProcessResult = {
@@ -202,8 +203,7 @@ async function upsertThread(
   return data as { id: string };
 }
 
-async function findReplyTarget(admin: SupabaseClient, replyToWaMessageId: string | null) {
-  if (!replyToWaMessageId) return null;
+async function lookupReplyTarget(admin: SupabaseClient, replyToWaMessageId: string) {
   const { data, error } = await admin
     .from("whatsapp_messages")
     .select("id, tenant_id, thread_id, customer_id, booking_id, transfer_id, contact_id, wa_id, phone_e164, message_type, text_body, template_name")
@@ -211,13 +211,7 @@ async function findReplyTarget(admin: SupabaseClient, replyToWaMessageId: string
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error) {
-    console.warn("WhatsApp inbound reply target lookup failed", {
-      replyToWaMessageId,
-      message: error.message
-    });
-    return null;
-  }
+  if (error) throw error;
   return data as {
     id: string;
     tenant_id: string | null;
@@ -234,6 +228,70 @@ async function findReplyTarget(admin: SupabaseClient, replyToWaMessageId: string
   } | null;
 }
 
+async function persistReplyTargetFromLegacyEvent(
+  admin: SupabaseClient,
+  replyToWaMessageId: string,
+  fallbackPhoneE164: string | null,
+) {
+  const { data: event, error } = await admin
+    .from("whatsapp_events")
+    .select("tenant_id, service_id, to_phone, template, kind, happened_at, payload_json")
+    .eq("provider_message_id", replyToWaMessageId)
+    .order("happened_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.warn("WhatsApp inbound legacy event lookup failed", {
+      replyToWaMessageId,
+      message: error.message
+    });
+    return null;
+  }
+  if (!event?.tenant_id) return null;
+
+  const result = await persistOutboundWhatsAppMessage(admin, {
+    tenantId: String(event.tenant_id),
+    toPhone: String(event.to_phone ?? fallbackPhoneE164 ?? ""),
+    waMessageId: replyToWaMessageId,
+    messageType: "template",
+    templateName: typeof event.template === "string" ? event.template : null,
+    textBody: typeof event.template === "string" ? `Template ${event.template}` : "Template WhatsApp",
+    status: "sent",
+    timestamp: typeof event.happened_at === "string" ? event.happened_at : null,
+    serviceId: typeof event.service_id === "string" ? event.service_id : null,
+    rawMessage: {
+      id: replyToWaMessageId,
+      source: "legacy_whatsapp_event",
+      kind: event.kind ?? null,
+      payload_json: event.payload_json ?? {}
+    }
+  });
+
+  console.info("WhatsApp outbound template recovered from event", {
+    replyToWaMessageId,
+    recovered: result.ok,
+    threadId: result.ok ? result.threadId : null,
+    reason: result.ok ? null : result.reason
+  });
+
+  return result.ok ? lookupReplyTarget(admin, replyToWaMessageId) : null;
+}
+
+async function findReplyTarget(admin: SupabaseClient, replyToWaMessageId: string | null, fallbackPhoneE164: string | null) {
+  if (!replyToWaMessageId) return null;
+  try {
+    const stored = await lookupReplyTarget(admin, replyToWaMessageId);
+    if (stored) return stored;
+    return await persistReplyTargetFromLegacyEvent(admin, replyToWaMessageId, fallbackPhoneE164);
+  } catch (error) {
+    console.warn("WhatsApp inbound reply target lookup failed", {
+      replyToWaMessageId,
+      message: error instanceof Error ? error.message : "lookup failed"
+    });
+    return null;
+  }
+}
+
 async function processMessage(admin: SupabaseClient, value: MetaChangeValue, message: MetaMessage) {
   if (!message.id || !message.from) return null;
   const contact = value.contacts?.find((item) => item.wa_id === message.from) ?? value.contacts?.[0];
@@ -246,7 +304,7 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
     contextId: replyToWaMessageId
   });
   const textBody = messageText(message);
-  const replyTarget = await findReplyTarget(admin, replyToWaMessageId);
+  const replyTarget = await findReplyTarget(admin, replyToWaMessageId, phoneE164);
   if (replyToWaMessageId) {
     console.info("WhatsApp inbound context lookup", {
       inboundMessageId: message.id,
