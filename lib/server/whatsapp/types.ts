@@ -40,6 +40,7 @@ export type MetaMessage = {
   video?: { id?: string; mime_type?: string; sha256?: string; caption?: string };
   button?: { text?: string; payload?: string };
   interactive?: unknown;
+  reaction?: { message_id?: string; emoji?: string };
   [key: string]: unknown;
 };
 

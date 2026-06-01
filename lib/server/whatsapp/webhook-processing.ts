@@ -3,7 +3,7 @@ import { normalizeWhatsAppWaId, logWhatsAppEvent, mapWebhookStatus } from "@/lib
 import { sendPushToTenantRoles } from "@/lib/server/web-push";
 import { matchWhatsAppInboundMessage } from "./matching";
 import { persistOutboundWhatsAppMessage } from "./messages";
-import type { MetaChangeValue, MetaContact, MetaMessage, MetaStatus, MetaWebhookPayload } from "./types";
+import type { MetaChangeValue, MetaContact, MetaMessage, MetaStatus, MetaWebhookPayload, WhatsAppMatchResult } from "./types";
 
 type ProcessResult = {
   messages: number;
@@ -20,6 +20,7 @@ function unixToIso(timestamp: string | undefined) {
 
 function messageText(message: MetaMessage) {
   if (message.type === "text") return message.text?.body ?? null;
+  if (message.type === "reaction") return message.reaction?.emoji ?? null;
   if (message.type === "button") return message.button?.text ?? message.button?.payload ?? null;
   const media = message.image ?? message.document ?? message.video;
   return media?.caption ?? null;
@@ -41,6 +42,10 @@ function previewForMessage(message: MetaMessage) {
 }
 
 function replyContextId(message: MetaMessage) {
+  if (message.type === "reaction" &&
+      typeof message.reaction?.message_id === "string" &&
+      message.reaction.message_id.trim())
+    return message.reaction.message_id.trim();
   return typeof message.context?.id === "string" && message.context.id.trim()
     ? message.context.id.trim()
     : null;
@@ -251,7 +256,7 @@ async function persistReplyTargetFromLegacyEvent(
 
   const result = await persistOutboundWhatsAppMessage(admin, {
     tenantId: String(event.tenant_id),
-    toPhone: String(event.to_phone ?? fallbackPhoneE164 ?? ""),
+    toPhone: String(fallbackPhoneE164 ?? event.to_phone ?? ""),
     waMessageId: replyToWaMessageId,
     messageType: "template",
     templateName: typeof event.template === "string" ? event.template : null,
@@ -313,14 +318,14 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
       linkedThreadId: replyTarget?.thread_id ?? null
     });
   }
-  const match = replyTarget?.tenant_id
+  let match: WhatsAppMatchResult = replyTarget?.tenant_id
     ? {
         tenantId: replyTarget.tenant_id,
         bookingId: replyTarget.booking_id,
         transferId: replyTarget.transfer_id,
         customerId: replyTarget.customer_id,
         status: "matched" as const,
-        suggestions: []
+        suggestions: [] as WhatsAppMatchResult["suggestions"],
       }
     : await matchWhatsAppInboundMessage(admin, {
         waId: message.from,
@@ -328,6 +333,27 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
         textBody,
         timestamp: message.timestamp
       });
+  // Fallback: se nessun tenant abbinato, usa il thread tenant già esistente per questo numero
+  if (!match.tenantId && !replyTarget?.tenant_id) {
+    const { data: fb } = await admin
+      .from("whatsapp_threads")
+      .select("tenant_id, booking_id, transfer_id, customer_id")
+      .eq("wa_id", message.from)
+      .not("tenant_id", "is", null)
+      .order("last_message_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (fb?.tenant_id) {
+      match = {
+        tenantId: String(fb.tenant_id),
+        bookingId: fb.booking_id as string | null,
+        transferId: fb.transfer_id as string | null,
+        customerId: fb.customer_id as string | null,
+        status: "matched",
+        suggestions: [],
+      };
+    }
+  }
   const effectiveMatchStatus = replyTarget?.tenant_id ? "matched" : match.tenantId ? match.status : "needs_review";
 
   const contactRow = await upsertContact(admin, { tenantId: match.tenantId, contact, waId: message.from, phoneE164 });
