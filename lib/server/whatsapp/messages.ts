@@ -3,7 +3,6 @@ import { ensureWhatsAppContact, normalizeWhatsAppContactPhone } from "./contacts
 
 type ServiceContext = {
   id: string;
-  customer_id?: string | null;
   customer_name?: string | null;
   phone?: string | null;
   phone_e164?: string | null;
@@ -37,7 +36,7 @@ async function loadServiceContext(
   if (!serviceId) return null;
   const { data, error } = await admin
     .from("services")
-    .select("id, customer_id, customer_name, phone, phone_e164")
+    .select("id, customer_name, phone, phone_e164")
     .eq("tenant_id", tenantId)
     .eq("id", serviceId)
     .maybeSingle();
@@ -79,7 +78,7 @@ export async function persistOutboundWhatsAppMessage(
     wa_id: waId,
     phone_e164: phoneE164,
     contact_id: contact.id,
-    customer_id: existingThread?.customer_id ?? service?.customer_id ?? null,
+    customer_id: existingThread?.customer_id ?? null,
     booking_id: existingThread?.booking_id ?? service?.id ?? null,
     transfer_id: existingThread?.transfer_id ?? service?.id ?? null,
     last_message_at: timestamp,
@@ -118,7 +117,7 @@ export async function persistOutboundWhatsAppMessage(
     phone_e164: phoneE164,
     contact_id: contact.id,
     thread_id: thread.id,
-    customer_id: service?.customer_id ?? null,
+    customer_id: null,
     booking_id: service?.id ?? input.serviceId ?? null,
     transfer_id: service?.id ?? input.serviceId ?? null,
     message_type: input.messageType,
