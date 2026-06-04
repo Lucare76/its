@@ -245,8 +245,8 @@ export async function GET(request: NextRequest) {
     .limit(100);
 
   if (filter === "needs_review") threadQuery = threadQuery.eq("status", "needs_review");
-  if (filter === "associated") threadQuery = threadQuery.not("booking_id", "is", null);
-  if (filter === "unassociated") threadQuery = threadQuery.is("booking_id", null);
+  if (filter === "associated") threadQuery = threadQuery.or("booking_id.not.is.null,transfer_id.not.is.null");
+  if (filter === "unassociated") threadQuery = threadQuery.is("booking_id", null).is("transfer_id", null);
   if (filter === "closed") threadQuery = threadQuery.eq("status", "closed");
   if (filter === "open") threadQuery = threadQuery.neq("status", "closed");
 
@@ -254,18 +254,25 @@ export async function GET(request: NextRequest) {
   if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
 
   const threadRows = (threads ?? []) as Array<Record<string, unknown>>;
-  const bookingIds = Array.from(new Set(threadRows.map((row) => row.booking_id).filter(Boolean) as string[]));
-  const { data: services } = bookingIds.length
+  const serviceIds = Array.from(new Set(
+    threadRows
+      .map((row) => row.booking_id ?? row.transfer_id)
+      .filter(Boolean) as string[]
+  ));
+  const { data: services } = serviceIds.length
     ? await auth.admin
       .from("services")
       .select("id, customer_name, customer_first_name, customer_last_name, phone, phone_e164, date, time, booking_service_kind, hotel_id, hotels(name)")
       .eq("tenant_id", tenantId)
-      .in("id", bookingIds)
+      .in("id", serviceIds)
     : { data: [] };
   const serviceMap = new Map((services ?? []).map((service: Record<string, unknown>) => [String(service.id), service]));
 
   const enrichedThreads: Array<Record<string, unknown>> = threadRows
-    .map((thread) => ({ ...thread, service: thread.booking_id ? serviceMap.get(String(thread.booking_id)) ?? null : null }))
+    .map((thread) => {
+      const serviceId = thread.booking_id ?? thread.transfer_id;
+      return { ...thread, service: serviceId ? serviceMap.get(String(serviceId)) ?? null : null };
+    })
     .filter((rawThread) => {
       const thread = rawThread as Record<string, unknown>;
       if (!search) return true;
