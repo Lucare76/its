@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 
 function makeAdmin(options: {
-  existing?: { id: string; profile_name: string | null } | null;
+  existing?: { id: string; profile_name: string | null; customer_full_name?: string | null; wa_profile_name?: string | null } | null;
   insertError?: { code?: string; message: string } | null;
 } = {}) {
   const calls: Array<{ type: string; payload?: unknown }> = [];
@@ -40,7 +40,11 @@ describe("ensureWhatsAppContact", () => {
     expect(result).toMatchObject({ ok: true, phoneE164: "+393391234567", waId: "393391234567", created: true });
     expect(calls[0]).toMatchObject({
       type: "insert",
-      payload: expect.objectContaining({ phone_e164: "+393391234567", profile_name: "Mario Rossi" }),
+      payload: expect.objectContaining({
+        phone_e164: "+393391234567",
+        profile_name: "Mario Rossi",
+        customer_full_name: "Mario Rossi",
+      }),
     });
   });
 
@@ -75,8 +79,24 @@ describe("ensureWhatsAppContact", () => {
 
     expect(calls[0]).toMatchObject({
       type: "update",
-      payload: expect.objectContaining({ profile_name: "Hilde" }),
+      payload: expect.objectContaining({ profile_name: "Hilde", customer_full_name: "Hilde" }),
+    });
+  });
+
+  it("salva il nome profilo WhatsApp in un campo separato", async () => {
+    const { admin, calls } = makeAdmin({ existing: { id: "contact-1", profile_name: "Mario Rossi", customer_full_name: "Mario Rossi" } });
+    await ensureWhatsAppContact(admin, {
+      tenantId: "tenant-1",
+      phone: "+393391234567",
+      waProfileName: "Mario 😊",
+    });
+
+    expect(calls[0]).toMatchObject({
+      type: "update",
+      payload: expect.objectContaining({ wa_profile_name: "Mario 😊" }),
+    });
+    expect(calls[0]).toMatchObject({
+      payload: expect.not.objectContaining({ profile_name: "Mario 😊", customer_full_name: "Mario 😊" }),
     });
   });
 });
-

@@ -85,12 +85,12 @@ async function upsertContact(
   admin: SupabaseClient,
   input: { tenantId: string | null; contact: MetaContact | undefined; waId: string; phoneE164: string | null }
 ) {
-  const profileName = input.contact?.profile?.name ?? null;
+  const waProfileName = input.contact?.profile?.name?.trim() || null;
   const payload = {
     tenant_id: input.tenantId,
     wa_id: input.waId,
     phone_e164: input.phoneE164,
-    profile_name: profileName,
+    wa_profile_name: waProfileName,
     updated_at: new Date().toISOString()
   };
   if (input.tenantId) {

@@ -16,7 +16,11 @@ type ThreadRow = {
   status: "open" | "needs_review" | "closed";
   match_status: "matched" | "unmatched" | "ambiguous" | "needs_review";
   match_suggestions: Array<Record<string, unknown>>;
-  whatsapp_contacts?: { profile_name?: string | null } | null;
+  whatsapp_contacts?: {
+    customer_full_name?: string | null;
+    profile_name?: string | null;
+    wa_profile_name?: string | null;
+  } | null;
   service?: {
     id: string;
     customer_name?: string | null;
@@ -206,6 +210,23 @@ function nameInitials(name: string): string {
   return ((parts[0]![0] ?? "") + (parts[parts.length - 1]![0] ?? "")).toUpperCase();
 }
 
+function cleanName(value: string | null | undefined) {
+  return value?.trim() || null;
+}
+
+function threadDisplayName(thread: ThreadRow | null | undefined) {
+  if (!thread) return "Cliente";
+  return (
+    cleanName(thread.whatsapp_contacts?.customer_full_name) ||
+    cleanName(thread.service?.customer_name) ||
+    cleanName(thread.whatsapp_contacts?.profile_name) ||
+    cleanName(thread.whatsapp_contacts?.wa_profile_name) ||
+    cleanName(thread.phone_e164) ||
+    cleanName(thread.wa_id) ||
+    "Cliente"
+  );
+}
+
 function matchStatusBadge(status: ThreadRow["match_status"]): { bg: string; text: string; label: string } {
   switch (status) {
     case "matched":      return { bg: "bg-emerald-100", text: "text-emerald-700", label: "Associata" };
@@ -333,7 +354,7 @@ function mergeThreadsStable(current: ThreadRow[], incoming: ThreadRow[]) {
 
 function buildSuggestedTemplateVariables(thread: ThreadRow | null, template: TemplateOption | null) {
   if (!thread || !template) return [];
-  const customer = thread.service?.customer_name ?? thread.whatsapp_contacts?.profile_name ?? thread.phone_e164 ?? thread.wa_id;
+  const customer = threadDisplayName(thread);
   const date = thread.service?.date ?? "";
   const time = String(thread.service?.time ?? "").slice(0, 5);
   const hotel = thread.service?.hotels?.name ?? "";
@@ -911,7 +932,7 @@ export default function WhatsAppInboxPage() {
         if (prevLastAt !== undefined && prevLastAt !== currentLastAt && thread.unread_count > 0 &&
             (document.hidden || thread.id !== nextSelectedThreadId)) {
           if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-            const name = thread.whatsapp_contacts?.profile_name || thread.service?.customer_name || thread.phone_e164 || thread.wa_id || "Cliente";
+            const name = threadDisplayName(thread);
             new Notification("Nuovo messaggio WhatsApp", {
               body: `${name}: ${thread.last_message_preview ?? "Messaggio ricevuto"}`,
               icon: "/favicon.ico",
@@ -1409,11 +1430,7 @@ export default function WhatsAppInboxPage() {
           <div className="flex-1 overflow-y-auto">
             {threads.map((thread) => {
               const active = thread.id === selectedThreadId;
-              const name =
-                thread.whatsapp_contacts?.profile_name ||
-                thread.service?.customer_name ||
-                thread.phone_e164 ||
-                thread.wa_id;
+              const name = threadDisplayName(thread);
               const { bg: avBg, text: avText } = avatarColors(name);
               const inits = nameInitials(name);
               const dot = threadStatusDot(thread);
@@ -1509,9 +1526,7 @@ export default function WhatsAppInboxPage() {
                       <p className="truncate text-base font-bold text-slate-900">
                         {newChatMode
                           ? "Nuovo messaggio WhatsApp"
-                          : selectedThread?.whatsapp_contacts?.profile_name ||
-                            selectedThread?.phone_e164 ||
-                            selectedThread?.wa_id}
+                          : threadDisplayName(selectedThread)}
                       </p>
                       <p className="mt-0.5 truncate text-xs text-slate-500">
                         {newChatMode
@@ -1597,10 +1612,7 @@ export default function WhatsAppInboxPage() {
                         type="button"
                         onClick={() => {
                           const initialQuery =
-                            selectedThread.service?.customer_name ||
-                            selectedThread.phone_e164 ||
-                            selectedThread.whatsapp_contacts?.profile_name ||
-                            selectedThread.wa_id;
+                            threadDisplayName(selectedThread);
                           setAssociateMode((current) => !current);
                           setAssociateQuery(initialQuery ?? "");
                           if (initialQuery) void searchServicesForAssociation(initialQuery);
@@ -1772,10 +1784,7 @@ export default function WhatsAppInboxPage() {
                         <div className="mb-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[9px] font-bold text-slate-500">
                           {selectedThread
                             ? nameInitials(
-                                selectedThread.whatsapp_contacts?.profile_name ||
-                                selectedThread.service?.customer_name ||
-                                selectedThread.phone_e164 ||
-                                selectedThread.wa_id,
+                                threadDisplayName(selectedThread),
                               )
                             : "?"}
                         </div>
