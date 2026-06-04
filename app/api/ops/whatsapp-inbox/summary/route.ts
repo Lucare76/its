@@ -17,7 +17,14 @@ type ThreadSummaryRow = {
 
 function contactName(contact: ThreadSummaryRow["whatsapp_contacts"]) {
   const row = Array.isArray(contact) ? contact[0] : contact;
-  return row?.manual_contact_name?.trim() || row?.customer_full_name?.trim() || row?.wa_profile_name?.trim() || row?.profile_name?.trim() || null;
+  return cleanName(row?.manual_contact_name) || cleanName(row?.customer_full_name) || cleanName(row?.wa_profile_name) || cleanName(row?.profile_name);
+}
+
+function cleanName(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  if (!/[\p{L}\p{N}]/u.test(trimmed)) return null;
+  return trimmed;
 }
 
 export async function GET(request: NextRequest) {

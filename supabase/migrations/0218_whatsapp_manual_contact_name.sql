@@ -10,6 +10,7 @@ set
   manual_contact_name = btrim(contact.profile_name),
   customer_full_name = coalesce(nullif(btrim(contact.customer_full_name), ''), btrim(contact.profile_name))
 where nullif(btrim(contact.profile_name), '') is not null
+  and btrim(contact.profile_name) ~ '[[:alnum:]]'
   and btrim(contact.profile_name) !~ '^[+0-9 ()-]+$'
   and (
     contact.wa_profile_name is null

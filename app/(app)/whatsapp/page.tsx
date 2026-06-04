@@ -216,7 +216,10 @@ function nameInitials(name: string): string {
 }
 
 function cleanName(value: string | null | undefined) {
-  return value?.trim() || null;
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  if (!/[\p{L}\p{N}]/u.test(trimmed)) return null;
+  return trimmed;
 }
 
 function nameScore(value: string | null | undefined) {
