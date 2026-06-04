@@ -12,9 +12,10 @@ const unsupportedManualHeaderFormats = new Set(["IMAGE", "VIDEO", "DOCUMENT", "L
 
 const patchSchema = z.object({
   thread_id: z.string().uuid(),
-  action: z.enum(["mark_read", "close", "reopen", "delete", "associate", "update_phone"]),
+  action: z.enum(["mark_read", "close", "reopen", "delete", "associate", "update_phone", "rename_contact"]),
   booking_id: z.string().uuid().nullable().optional(),
   phone: z.string().trim().min(6, "Numero troppo corto").max(30, "Numero troppo lungo").optional(),
+  contact_name: z.string().trim().max(120).optional(),
 });
 
 const postSchema = z.object({
@@ -483,6 +484,26 @@ export async function PATCH(request: NextRequest) {
       .eq("id", thread.id);
     if (threadDeleteError) return NextResponse.json({ error: threadDeleteError.message }, { status: 500 });
 
+    return NextResponse.json({ ok: true });
+  }
+
+  if (parsed.data.action === "rename_contact") {
+    const contactName = parsed.data.contact_name?.trim() || null;
+    const { data: thread, error: threadError } = await auth.admin
+      .from("whatsapp_threads")
+      .select("id, contact_id")
+      .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
+      .eq("id", parsed.data.thread_id)
+      .maybeSingle();
+    if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
+    if (!thread?.id) return NextResponse.json({ error: "Conversazione non trovata" }, { status: 404 });
+    if (!thread.contact_id) return NextResponse.json({ error: "Contatto non trovato per questa conversazione" }, { status: 404 });
+    const { error } = await auth.admin
+      .from("whatsapp_contacts")
+      .update({ manual_contact_name: contactName, updated_at: new Date().toISOString() })
+      .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
+      .eq("id", thread.contact_id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
   }
 

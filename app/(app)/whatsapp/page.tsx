@@ -815,6 +815,8 @@ export default function WhatsAppInboxPage() {
   const [associateLoading, setAssociateLoading] = useState(false);
   const [phoneEditThreadId, setPhoneEditThreadId] = useState<string | null>(null);
   const [phoneDraft, setPhoneDraft] = useState("");
+  const [nameEditThreadId, setNameEditThreadId] = useState<string | null>(null);
+  const [nameDraft, setNameDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
@@ -1150,6 +1152,30 @@ export default function WhatsAppInboxPage() {
         setError(body?.error ?? "Aggiornamento numero non riuscito.");
       } else {
         setPhoneEditThreadId(null);
+        await load(selectedThreadId);
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const saveContactName = async () => {
+    if (!selectedThreadId) return;
+    const token = await getAccessToken();
+    if (!token) return;
+    setBusyAction("rename_contact");
+    setError("");
+    try {
+      const response = await fetch("/api/ops/whatsapp-inbox", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ thread_id: selectedThreadId, action: "rename_contact", contact_name: nameDraft.trim() }),
+      });
+      const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!response.ok || !body?.ok) {
+        setError(body?.error ?? "Aggiornamento nome non riuscito.");
+      } else {
+        setNameEditThreadId(null);
         await load(selectedThreadId);
       }
     } finally {
@@ -1559,17 +1585,72 @@ export default function WhatsAppInboxPage() {
                       Indietro
                     </button>
                     <div className="min-w-0">
-                      <p className="truncate text-base font-bold text-slate-900">
-                        {newChatMode
-                          ? "Nuovo messaggio WhatsApp"
-                          : threadDisplayName(selectedThread)}
-                      </p>
+                      {!newChatMode && selectedThread && nameEditThreadId === selectedThread.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            data-no-uppercase
+                            type="text"
+                            value={nameDraft}
+                            onChange={(e) => setNameDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void saveContactName();
+                              if (e.key === "Escape") setNameEditThreadId(null);
+                            }}
+                            placeholder="Nome contatto…"
+                            autoFocus
+                            disabled={busyAction !== null}
+                            className="h-8 w-48 rounded-lg border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-900 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void saveContactName()}
+                            disabled={busyAction !== null}
+                            className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-indigo-700 disabled:bg-slate-300"
+                          >
+                            {busyAction === "rename_contact" ? "…" : "Salva"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNameEditThreadId(null)}
+                            disabled={busyAction !== null}
+                            className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            Annulla
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <p className="truncate text-base font-bold text-slate-900">
+                            {newChatMode
+                              ? "Nuovo messaggio WhatsApp"
+                              : threadDisplayName(selectedThread)}
+                          </p>
+                          {!newChatMode && selectedThread && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNameDraft(selectedThread.whatsapp_contacts?.manual_contact_name?.trim() ?? "");
+                                setNameEditThreadId(selectedThread.id);
+                              }}
+                              disabled={busyAction !== null}
+                              title="Modifica nome contatto"
+                              className="shrink-0 rounded-md p-0.5 text-slate-300 transition hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      )}
                       <p className="mt-0.5 truncate text-xs text-slate-500">
                         {newChatMode
                           ? "Invia un messaggio a un numero che non ha ancora scritto in chat."
                           : selectedThread?.service
                             ? `${serviceDisplayCustomerName(selectedThread.service) ?? "Cliente"} · ${selectedThread.service.date ?? ""} ${String(selectedThread.service.time ?? "").slice(0, 5)}`
-                            : "Nessuna prenotazione associata"}
+                            : selectedThread?.whatsapp_contacts?.wa_profile_name
+                              ? `WhatsApp: ${selectedThread.whatsapp_contacts.wa_profile_name}`
+                              : "Nessuna prenotazione associata"}
                       </p>
                       {!newChatMode && selectedThread && (
                         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
