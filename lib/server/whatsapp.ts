@@ -67,6 +67,14 @@ export interface SendWhatsAppTextInput {
   text: string;
 }
 
+export interface SendWhatsAppMediaInput {
+  to: string;
+  file: Blob;
+  filename: string;
+  mimeType: string;
+  caption?: string | null;
+}
+
 export interface MetaWhatsAppTemplateComponent {
   type?: string;
   format?: string | null;
@@ -628,6 +636,83 @@ export async function syncMetaWhatsAppTemplates(admin: ReturnType<typeof createA
   return loadSyncedWhatsAppTemplates(admin, tenantId);
 }
 
+function whatsappMediaMessageType(mimeType: string): "image" | "video" | "audio" | "document" {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
+  return "document";
+}
+
+function parseWhatsAppApiError(response: Response, payload: { error?: { message?: string; code?: number | string; error_data?: { details?: string } } } | null) {
+  const parts = [
+    payload?.error?.message,
+    payload?.error?.error_data?.details,
+    payload?.error?.code != null ? `code ${payload.error.code}` : null
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" - ") : `WhatsApp API error (${response.status})`;
+}
+
+async function uploadWhatsAppMedia(phoneNumberId: string, accessToken: string, file: Blob, filename: string, mimeType: string) {
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("file", file, filename || "allegato");
+  form.append("type", mimeType || file.type || "application/octet-stream");
+
+  const response = await fetch(`https://graph.facebook.com/${whatsappGraphVersion()}/${phoneNumberId}/media`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    },
+    body: form
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { id?: string; error?: { message?: string; code?: number | string; error_data?: { details?: string } } }
+    | null;
+
+  return {
+    ok: response.ok && Boolean(payload?.id),
+    mediaId: payload?.id ?? null,
+    error: response.ok && payload?.id ? null : parseWhatsAppApiError(response, payload)
+  };
+}
+
+async function sendMediaMessage(
+  phoneNumberId: string,
+  accessToken: string,
+  toPhone: string,
+  mediaId: string,
+  mediaType: "image" | "video" | "audio" | "document",
+  options: { caption?: string | null; filename?: string | null }
+) {
+  const caption = options.caption?.trim().slice(0, 1024);
+  const mediaPayload: Record<string, unknown> = { id: mediaId };
+  if (caption && mediaType !== "audio") mediaPayload.caption = caption;
+  if (mediaType === "document" && options.filename?.trim()) mediaPayload.filename = options.filename.trim().slice(0, 240);
+
+  const response = await fetch(`https://graph.facebook.com/${whatsappGraphVersion()}/${phoneNumberId}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to: toPhone,
+      type: mediaType,
+      [mediaType]: mediaPayload
+    })
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { messages?: Array<{ id: string }>; error?: { message?: string; code?: number | string; error_data?: { details?: string } } }
+    | null;
+
+  return {
+    ok: response.ok,
+    messageId: payload?.messages?.[0]?.id ?? null,
+    error: response.ok ? null : parseWhatsAppApiError(response, payload)
+  };
+}
+
 export async function sendWhatsAppTextMessage(input: SendWhatsAppTextInput) {
   const phoneNumberId = mustEnv("WHATSAPP_PHONE_NUMBER_ID");
   const accessToken = whatsappAccessToken();
@@ -655,6 +740,46 @@ export async function sendWhatsAppTextMessage(input: SendWhatsAppTextInput) {
     ok: true as const,
     messageId: response.messageId,
     phoneE164: toPhone
+  };
+}
+
+export async function sendWhatsAppMediaMessage(input: SendWhatsAppMediaInput) {
+  const phoneNumberId = mustEnv("WHATSAPP_PHONE_NUMBER_ID");
+  const accessToken = whatsappAccessToken();
+  const toPhone = normalizeE164(input.to);
+  const mimeType = input.mimeType || input.file.type || "application/octet-stream";
+  const mediaType = whatsappMediaMessageType(mimeType);
+
+  const upload = await uploadWhatsAppMedia(phoneNumberId, accessToken, input.file, input.filename, mimeType);
+  if (!upload.ok || !upload.mediaId) {
+    return {
+      ok: false as const,
+      error: upload.error ?? "Upload allegato WhatsApp non riuscito",
+      phoneE164: toPhone
+    };
+  }
+
+  const send = await sendMediaMessage(phoneNumberId, accessToken, toPhone, upload.mediaId, mediaType, {
+    caption: input.caption,
+    filename: input.filename
+  });
+  if (!send.ok) {
+    return {
+      ok: false as const,
+      error: send.error ?? "Invio allegato WhatsApp non riuscito",
+      phoneE164: toPhone,
+      mediaId: upload.mediaId,
+      mediaType
+    };
+  }
+
+  return {
+    ok: true as const,
+    messageId: send.messageId,
+    phoneE164: toPhone,
+    mediaId: upload.mediaId,
+    mediaType,
+    mimeType
   };
 }
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { getTenantWhatsAppSettings, isWhatsAppCustomerCareWindowOpen, loadSyncedWhatsAppTemplates, logWhatsAppEvent, normalizeE164, normalizeWhatsAppWaId, sendWhatsAppMessage, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
+import { getTenantWhatsAppSettings, isWhatsAppCustomerCareWindowOpen, loadSyncedWhatsAppTemplates, logWhatsAppEvent, normalizeE164, normalizeWhatsAppWaId, sendWhatsAppMediaMessage, sendWhatsAppMessage, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
 import { matchWhatsAppInboundMessage } from "@/lib/server/whatsapp/matching";
 
 export const runtime = "nodejs";
@@ -33,12 +33,6 @@ const postSchema = z.object({
       message: "Seleziona una conversazione o inserisci un numero."
     });
   }
-  if (value.mode === "text" && !value.text?.trim()) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Inserisci un messaggio."
-    });
-  }
   if (value.mode === "template" && !value.template_name?.trim()) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -46,6 +40,54 @@ const postSchema = z.object({
     });
   }
 });
+
+const maxAttachmentBytes = 16 * 1024 * 1024;
+const outboundMediaTypes = new Set(["image", "video", "audio", "document"]);
+
+function textFormValue(form: FormData, key: string) {
+  const value = form.get(key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseTemplateVariables(value: string | undefined) {
+  if (!value) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  if (Array.isArray(parsed)) return parsed;
+  return undefined;
+}
+
+function normalizeOutboundMediaType(value: unknown): "image" | "video" | "audio" | "document" | null {
+  return typeof value === "string" && outboundMediaTypes.has(value)
+    ? value as "image" | "video" | "audio" | "document"
+    : null;
+}
+
+async function parsePostPayload(request: NextRequest) {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("multipart/form-data")) {
+    return {
+      payload: await request.json().catch(() => null),
+      attachment: null as File | null
+    };
+  }
+
+  const form = await request.formData();
+  const attachmentValue = form.get("attachment");
+  const attachment = attachmentValue instanceof File && attachmentValue.size > 0 ? attachmentValue : null;
+  return {
+    payload: {
+      mode: textFormValue(form, "mode") ?? "text",
+      thread_id: textFormValue(form, "thread_id"),
+      phone: textFormValue(form, "phone"),
+      profile_name: textFormValue(form, "profile_name"),
+      text: textFormValue(form, "text"),
+      template_name: textFormValue(form, "template_name"),
+      template_language: textFormValue(form, "template_language"),
+      template_variables: parseTemplateVariables(textFormValue(form, "template_variables"))
+    },
+    attachment
+  };
+}
 
 function extractStatusFailureReason(rawStatus: unknown) {
   const payload = rawStatus as { errors?: Array<{ title?: string; message?: string; code?: number | string }> } | null;
@@ -492,7 +534,14 @@ export async function POST(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "assistenza"]);
   if (auth instanceof NextResponse) return auth;
 
-  const parsed = postSchema.safeParse(await request.json().catch(() => null));
+  let parsedRequest: Awaited<ReturnType<typeof parsePostPayload>>;
+  try {
+    parsedRequest = await parsePostPayload(request);
+  } catch {
+    return NextResponse.json({ error: "Payload invio WhatsApp non valido." }, { status: 400 });
+  }
+
+  const parsed = postSchema.safeParse(parsedRequest.payload);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid payload" }, { status: 400 });
   }
@@ -501,6 +550,16 @@ export async function POST(request: NextRequest) {
   const nowIso = new Date().toISOString();
   const text = parsed.data.text?.trim() ?? "";
   const sendMode = parsed.data.mode;
+  const attachment = parsedRequest.attachment;
+  if (sendMode === "text" && !text && !attachment) {
+    return NextResponse.json({ error: "Inserisci un messaggio o allega un file." }, { status: 400 });
+  }
+  if (sendMode === "template" && attachment) {
+    return NextResponse.json({ error: "Gli allegati sono disponibili solo nei messaggi liberi dentro la finestra WhatsApp di 24 ore." }, { status: 400 });
+  }
+  if (attachment && attachment.size > maxAttachmentBytes) {
+    return NextResponse.json({ error: "Allegato troppo grande. Limite massimo 16 MB." }, { status: 400 });
+  }
   const settings = await getTenantWhatsAppSettings(auth.admin, tenantId);
 
   let thread:
@@ -640,9 +699,18 @@ export async function POST(request: NextRequest) {
     mode: sendMode,
     threadId: thread.id,
     templateName,
-    hasTemplateVariables: templateVariables.length > 0
+    hasTemplateVariables: templateVariables.length > 0,
+    hasAttachment: Boolean(attachment)
   });
-  const sendResult = sendMode === "template"
+  const sendResult = attachment
+    ? await sendWhatsAppMediaMessage({
+        to: targetPhone,
+        file: attachment,
+        filename: attachment.name || "allegato",
+        mimeType: attachment.type || "application/octet-stream",
+        caption: text
+      })
+    : sendMode === "template"
     ? await sendWhatsAppMessage({
         to: targetPhone,
         template: templateName!,
@@ -670,7 +738,13 @@ export async function POST(request: NextRequest) {
     ? templateBodyText.slice(0, 240)
     : sendMode === "template"
       ? `[Template] ${templateName}${templateVariables.length ? ` · ${templateVariables.join(" | ").slice(0, 180)}` : ""}`.slice(0, 240)
-      : text.slice(0, 240);
+      : attachment
+        ? `${text ? `${text.slice(0, 180)} - ` : ""}Allegato: ${attachment.name || "file"}`.slice(0, 240)
+        : text.slice(0, 240);
+  const outboundMediaType = normalizeOutboundMediaType(
+    attachment && sendResult.ok && "mediaType" in sendResult ? sendResult.mediaType : null
+  );
+  const outboundMediaId = attachment && sendResult.ok && "mediaId" in sendResult ? sendResult.mediaId : null;
 
   const messagePayload = {
     tenant_id: thread.tenant_id ?? tenantId,
@@ -683,19 +757,27 @@ export async function POST(request: NextRequest) {
     customer_id: thread.customer_id ?? null,
     booking_id: thread.booking_id ?? null,
     transfer_id: thread.transfer_id ?? null,
-    message_type: sendMode === "template" ? "template" : "text",
+    message_type: outboundMediaType ?? (sendMode === "template" ? "template" : "text"),
     template_name: templateName,
     reply_to_wa_message_id: null,
-    text_body: sendMode === "template" ? (templateBodyText ?? previewText) : text,
-    media_id: null,
-    media_mime_type: null,
+    text_body: sendMode === "template" ? (templateBodyText ?? previewText) : (text || previewText),
+    media_id: outboundMediaId,
+    media_mime_type: attachment ? attachment.type || "application/octet-stream" : null,
     media_sha256: null,
     status: "sent",
     timestamp: nowIso,
     raw_message: {
       id: sendResult.messageId ?? null,
       type: sendMode,
-      ...(sendMode === "template"
+      ...(attachment
+        ? {
+            [outboundMediaType ?? "document"]: {
+              id: outboundMediaId,
+              caption: text || null,
+              filename: attachment.name || null
+            }
+          }
+        : sendMode === "template"
         ? {
             template: {
               name: templateName,
@@ -706,7 +788,7 @@ export async function POST(request: NextRequest) {
         : {
             text: { body: text }
           }),
-      source: sendMode === "template" ? "manual_template" : "manual_reply"
+      source: attachment ? "manual_attachment" : sendMode === "template" ? "manual_template" : "manual_reply"
     }
   };
 
@@ -724,6 +806,7 @@ export async function POST(request: NextRequest) {
     threadId: thread.id,
     waMessageId: sendResult.messageId ?? null,
     templateName,
+    hasAttachment: Boolean(attachment),
     textPreview: previewText.slice(0, 80)
   });
 
@@ -761,9 +844,15 @@ export async function POST(request: NextRequest) {
     happened_at: nowIso,
     payload_json: {
       source: "api/ops/whatsapp-inbox",
-      mode: sendMode === "template" ? "manual_template" : "manual_reply",
+      mode: attachment ? "manual_attachment" : sendMode === "template" ? "manual_template" : "manual_reply",
       template_language: sendMode === "template" ? parsed.data.template_language?.trim() || settings.template_language : null,
       template_variables: sendMode === "template" ? templateVariables : [],
+      attachment: attachment ? {
+        filename: attachment.name || null,
+        mime_type: attachment.type || "application/octet-stream",
+        size: attachment.size,
+        media_id: outboundMediaId
+      } : null,
       thread_id: thread.id
     }
   });

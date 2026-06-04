@@ -122,6 +122,7 @@ const quickReplies = [
   "Ci chiami a questo numero, grazie.",
   "Perfetto, ti aspettiamo.",
 ] as const;
+const maxAttachmentBytes = 16 * 1024 * 1024;
 
 // ─── Visual helpers ────────────────────────────────────────────────────────
 
@@ -744,6 +745,7 @@ export default function WhatsAppInboxPage() {
   const [filter, setFilter] = useState<(typeof filters)[number]["value"]>("open");
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
+  const [attachment, setAttachment] = useState<File | null>(null);
   const [composerMode, setComposerMode] = useState<"text" | "template">("text");
   const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>("");
   const [templateVariablesText, setTemplateVariablesText] = useState("");
@@ -766,6 +768,7 @@ export default function WhatsAppInboxPage() {
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const lastRenderedMessageKeyRef = useRef<string>("");
   const prevThreadLastMsgRef = useRef<Map<string, string>>(new Map());
@@ -949,12 +952,16 @@ export default function WhatsAppInboxPage() {
 
   useEffect(() => {
     if (composerMode !== "template") return;
+    if (attachment) {
+      setAttachment(null);
+      if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+    }
     if (!selectedTemplate || templateVariablesText.trim()) return;
     const suggested = buildSuggestedTemplateVariables(selectedThread, selectedTemplate);
     if (suggested.length === 0) return;
     const timeout = window.setTimeout(() => setTemplateVariablesText(suggested.join("\n")), 0);
     return () => window.clearTimeout(timeout);
-  }, [composerMode, selectedTemplate, selectedThread, templateVariablesText]);
+  }, [attachment, composerMode, selectedTemplate, selectedThread, templateVariablesText]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1172,7 +1179,7 @@ export default function WhatsAppInboxPage() {
   const sendReply = async () => {
     if (!composerEnabled) return;
     const text = draft.trim();
-    if (composerMode === "text" && !text) { setError("Inserisci un messaggio prima di inviare."); return; }
+    if (composerMode === "text" && !text && !attachment) { setError("Inserisci un messaggio o allega un file prima di inviare."); return; }
     if (composerMode === "text" && textModeUnavailable) {
       setError("La finestra WhatsApp di 24 ore è chiusa. Usa un template approvato per contattare il cliente.");
       return;
@@ -1190,25 +1197,41 @@ export default function WhatsAppInboxPage() {
     if (!token) { setError("Sessione non disponibile."); return; }
     setBusyAction("reply");
     setError("");
-    const response = await fetch("/api/ops/whatsapp-inbox", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(
-        newChatMode
-          ? composerMode === "template"
-            ? { mode: "template", phone: newChatPhone, profile_name: newChatName, template_name: selectedTemplate?.template, template_language: selectedTemplate?.language_code, template_variables: templateVariables }
-            : { mode: "text", phone: newChatPhone, profile_name: newChatName, text }
-          : composerMode === "template"
-            ? { mode: "template", thread_id: selectedThreadId, template_name: selectedTemplate?.template, template_language: selectedTemplate?.language_code, template_variables: templateVariables }
-            : { mode: "text", thread_id: selectedThreadId, text },
-      ),
-    });
+    const jsonPayload = newChatMode
+      ? composerMode === "template"
+        ? { mode: "template", phone: newChatPhone, profile_name: newChatName, template_name: selectedTemplate?.template, template_language: selectedTemplate?.language_code, template_variables: templateVariables }
+        : { mode: "text", phone: newChatPhone, profile_name: newChatName, text }
+      : composerMode === "template"
+        ? { mode: "template", thread_id: selectedThreadId, template_name: selectedTemplate?.template, template_language: selectedTemplate?.language_code, template_variables: templateVariables }
+        : { mode: "text", thread_id: selectedThreadId, text };
+    let response: Response;
+    if (attachment && composerMode === "text") {
+      const form = new FormData();
+      Object.entries(jsonPayload).forEach(([key, value]) => {
+        if (value == null) return;
+        form.append(key, Array.isArray(value) ? JSON.stringify(value) : String(value));
+      });
+      form.append("attachment", attachment);
+      response = await fetch("/api/ops/whatsapp-inbox", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+    } else {
+      response = await fetch("/api/ops/whatsapp-inbox", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(jsonPayload),
+      });
+    }
     const body = (await response.json().catch(() => null)) as SendReplyPayload | null;
     if (!response.ok || !body?.ok) {
       setError(body?.error ?? "Invio messaggio non riuscito.");
     } else {
       shouldStickToBottomRef.current = true;
       setDraft("");
+      setAttachment(null);
+      if (attachmentInputRef.current) attachmentInputRef.current.value = "";
       setTemplateVariablesText("");
       if (newChatMode) {
         setNewChatMode(false);
@@ -1224,6 +1247,24 @@ export default function WhatsAppInboxPage() {
 
   const appendEmoji = (emoji: (typeof quickEmojis)[number]) => setDraft((c) => `${c}${emoji}`);
   const applyQuickReply = (text: (typeof quickReplies)[number]) => setDraft(text);
+  const handleAttachmentChange = (file: File | null) => {
+    if (!file) {
+      setAttachment(null);
+      return;
+    }
+    if (file.size > maxAttachmentBytes) {
+      setAttachment(null);
+      if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+      setError("Allegato troppo grande. Limite massimo 16 MB.");
+      return;
+    }
+    setError("");
+    setAttachment(file);
+  };
+  const clearAttachment = () => {
+    setAttachment(null);
+    if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+  };
 
   const loadSuggestedTemplateVariables = () => {
     const suggested = buildSuggestedTemplateVariables(selectedThread, selectedTemplate);
@@ -2173,6 +2214,39 @@ export default function WhatsAppInboxPage() {
                         spellCheck
                         className="min-h-[104px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100"
                       />
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <input
+                          ref={attachmentInputRef}
+                          type="file"
+                          className="sr-only"
+                          accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+                          disabled={busyAction === "reply" || textModeUnavailable}
+                          onChange={(event) => handleAttachmentChange(event.target.files?.[0] ?? null)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => attachmentInputRef.current?.click()}
+                          disabled={busyAction === "reply" || textModeUnavailable}
+                          className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        >
+                          Allega file
+                        </button>
+                        {attachment && (
+                          <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800">
+                            <span className="truncate">{attachment.name}</span>
+                            <span className="shrink-0 text-emerald-600">{Math.max(1, Math.round(attachment.size / 1024))} KB</span>
+                            <button
+                              type="button"
+                              onClick={clearAttachment}
+                              disabled={busyAction === "reply"}
+                              className="shrink-0 rounded-full px-1 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                              aria-label="Rimuovi allegato"
+                            >
+                              x
+                            </button>
+                          </span>
+                        )}
+                      </div>
                       <div className="mt-3 flex flex-wrap gap-2">
                         {quickReplies.map((reply) => (
                           <button
@@ -2216,7 +2290,7 @@ export default function WhatsAppInboxPage() {
                       disabled={
                         busyAction !== null ||
                         (composerMode === "text" && textModeUnavailable) ||
-                        (composerMode === "text" ? !draft.trim() : !selectedTemplate || selectedTemplateHasUnsupportedHeader || selectedTemplateHasMissingVariables) ||
+                        (composerMode === "text" ? !draft.trim() && !attachment : !selectedTemplate || selectedTemplateHasUnsupportedHeader || selectedTemplateHasMissingVariables) ||
                         (newChatMode && !newChatPhone.trim())
                       }
                       className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
