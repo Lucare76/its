@@ -10,14 +10,14 @@ type ThreadSummaryRow = {
   last_message_preview: string | null;
   unread_count: number | null;
   whatsapp_contacts:
-    | { customer_full_name?: string | null; profile_name?: string | null; wa_profile_name?: string | null }
-    | { customer_full_name?: string | null; profile_name?: string | null; wa_profile_name?: string | null }[]
+    | { manual_contact_name?: string | null; customer_full_name?: string | null; profile_name?: string | null; wa_profile_name?: string | null }
+    | { manual_contact_name?: string | null; customer_full_name?: string | null; profile_name?: string | null; wa_profile_name?: string | null }[]
     | null;
 };
 
 function contactName(contact: ThreadSummaryRow["whatsapp_contacts"]) {
   const row = Array.isArray(contact) ? contact[0] : contact;
-  return row?.customer_full_name?.trim() || row?.profile_name?.trim() || row?.wa_profile_name?.trim() || null;
+  return row?.manual_contact_name?.trim() || row?.customer_full_name?.trim() || row?.wa_profile_name?.trim() || row?.profile_name?.trim() || null;
 }
 
 export async function GET(request: NextRequest) {
@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
   const tenantId = auth.membership.tenant_id;
   const { data, error } = await auth.admin
     .from("whatsapp_threads")
-    .select("id, phone_e164, last_message_at, last_message_preview, unread_count, whatsapp_contacts(customer_full_name,profile_name,wa_profile_name)")
+    .select("id, phone_e164, last_message_at, last_message_preview, unread_count, whatsapp_contacts(manual_contact_name,customer_full_name,profile_name,wa_profile_name)")
     .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
     .neq("status", "closed")
     .gt("unread_count", 0)

@@ -94,9 +94,36 @@ async function upsertContact(
     updated_at: new Date().toISOString()
   };
   if (input.tenantId) {
+    const { data: existing, error: existingError } = await admin
+      .from("whatsapp_contacts")
+      .select("id")
+      .eq("tenant_id", input.tenantId)
+      .eq("wa_id", input.waId)
+      .maybeSingle();
+    if (existingError) throw existingError;
+
+    if (existing?.id) {
+      const { data, error } = await admin
+        .from("whatsapp_contacts")
+        .update({
+          phone_e164: input.phoneE164,
+          wa_profile_name: waProfileName,
+          updated_at: new Date().toISOString()
+        })
+        .eq("tenant_id", input.tenantId)
+        .eq("id", existing.id)
+        .select("id")
+        .single();
+      if (error) throw error;
+      return data as { id: string };
+    }
+
     const { data, error } = await admin
       .from("whatsapp_contacts")
-      .upsert(payload, { onConflict: "tenant_id,wa_id" })
+      .insert({
+        ...payload,
+        created_at: new Date().toISOString()
+      })
       .select("id")
       .single();
     if (error) throw error;

@@ -17,6 +17,7 @@ type ThreadRow = {
   match_status: "matched" | "unmatched" | "ambiguous" | "needs_review";
   match_suggestions: Array<Record<string, unknown>>;
   whatsapp_contacts?: {
+    manual_contact_name?: string | null;
     customer_full_name?: string | null;
     profile_name?: string | null;
     wa_profile_name?: string | null;
@@ -242,14 +243,17 @@ function serviceDisplayCustomerName(service: ThreadRow["service"] | ServiceSearc
 
 function threadDisplayName(thread: ThreadRow | null | undefined) {
   if (!thread) return "Cliente";
+  const manualName = cleanName(thread.whatsapp_contacts?.manual_contact_name);
+  if (manualName) return manualName;
+
   const internalName = bestInternalName(
     thread.whatsapp_contacts?.customer_full_name,
     serviceDisplayCustomerName(thread.service),
   );
   return (
     internalName ||
-    cleanName(thread.whatsapp_contacts?.profile_name) ||
     cleanName(thread.whatsapp_contacts?.wa_profile_name) ||
+    cleanName(thread.whatsapp_contacts?.profile_name) ||
     cleanName(thread.phone_e164) ||
     cleanName(thread.wa_id) ||
     "Cliente"

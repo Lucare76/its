@@ -114,7 +114,7 @@ async function upsertManualContact(
 ) {
   const { data: existing, error: existingError } = await admin
     .from("whatsapp_contacts")
-    .select("id, profile_name, customer_full_name")
+    .select("id, profile_name, customer_full_name, manual_contact_name")
     .eq("tenant_id", input.tenantId)
     .or(`wa_id.eq.${input.waId},phone_e164.eq.${input.phoneE164}`)
     .limit(1)
@@ -130,6 +130,7 @@ async function upsertManualContact(
   const profileName = input.profileName?.trim() || null;
   const payload: Record<string, unknown> = { ...basePayload };
   if (profileName) {
+    payload.manual_contact_name = profileName;
     payload.profile_name = profileName;
     payload.customer_full_name = profileName;
   }
@@ -239,7 +240,7 @@ export async function GET(request: NextRequest) {
 
   let threadQuery = auth.admin
     .from("whatsapp_threads")
-    .select("id, wa_id, phone_e164, customer_id, booking_id, transfer_id, last_message_at, last_message_preview, unread_count, assigned_to, status, match_status, match_suggestions, created_at, updated_at, whatsapp_contacts(profile_name,customer_full_name,wa_profile_name)")
+    .select("id, wa_id, phone_e164, customer_id, booking_id, transfer_id, last_message_at, last_message_preview, unread_count, assigned_to, status, match_status, match_suggestions, created_at, updated_at, whatsapp_contacts(profile_name,customer_full_name,manual_contact_name,wa_profile_name)")
     .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .limit(100);
@@ -279,9 +280,10 @@ export async function GET(request: NextRequest) {
       const haystack = [
         thread.wa_id,
         thread.phone_e164,
-        (thread.whatsapp_contacts as { profile_name?: string; customer_full_name?: string; wa_profile_name?: string } | null)?.customer_full_name,
-        (thread.whatsapp_contacts as { profile_name?: string; customer_full_name?: string; wa_profile_name?: string } | null)?.profile_name,
-        (thread.whatsapp_contacts as { profile_name?: string; customer_full_name?: string; wa_profile_name?: string } | null)?.wa_profile_name,
+        (thread.whatsapp_contacts as { profile_name?: string; customer_full_name?: string; manual_contact_name?: string; wa_profile_name?: string } | null)?.manual_contact_name,
+        (thread.whatsapp_contacts as { profile_name?: string; customer_full_name?: string; manual_contact_name?: string; wa_profile_name?: string } | null)?.customer_full_name,
+        (thread.whatsapp_contacts as { profile_name?: string; customer_full_name?: string; manual_contact_name?: string; wa_profile_name?: string } | null)?.profile_name,
+        (thread.whatsapp_contacts as { profile_name?: string; customer_full_name?: string; manual_contact_name?: string; wa_profile_name?: string } | null)?.wa_profile_name,
         (thread.service as Record<string, unknown> | null)?.customer_name,
         (thread.service as Record<string, unknown> | null)?.phone,
         (thread.service as Record<string, unknown> | null)?.booking_service_kind,
