@@ -24,6 +24,8 @@ type ThreadRow = {
   service?: {
     id: string;
     customer_name?: string | null;
+    customer_first_name?: string | null;
+    customer_last_name?: string | null;
     phone?: string | null;
     phone_e164?: string | null;
     date?: string | null;
@@ -92,6 +94,8 @@ type TemplateOption = {
 type ServiceSearchResult = {
   id: string;
   customer_name?: string | null;
+  customer_first_name?: string | null;
+  customer_last_name?: string | null;
   phone?: string | null;
   phone_e164?: string | null;
   date?: string | null;
@@ -214,11 +218,36 @@ function cleanName(value: string | null | undefined) {
   return value?.trim() || null;
 }
 
+function nameScore(value: string | null | undefined) {
+  const name = cleanName(value);
+  if (!name) return 0;
+  const words = name.split(/\s+/).filter(Boolean).length;
+  const hasEmojiOrSymbols = /[^\p{L}\p{M}\p{N}\s'.-]/u.test(name);
+  return words * 10 + Math.min(name.length, 40) - (hasEmojiOrSymbols ? 25 : 0);
+}
+
+function bestInternalName(primary: string | null | undefined, serviceName: string | null | undefined) {
+  const saved = cleanName(primary);
+  const service = cleanName(serviceName);
+  if (!saved) return service;
+  if (!service) return saved;
+  return nameScore(service) > nameScore(saved) ? service : saved;
+}
+
+function serviceDisplayCustomerName(service: ThreadRow["service"] | ServiceSearchResult | null | undefined) {
+  if (!service) return null;
+  return cleanName([service.customer_first_name, service.customer_last_name].filter(Boolean).join(" "))
+    || cleanName(service.customer_name);
+}
+
 function threadDisplayName(thread: ThreadRow | null | undefined) {
   if (!thread) return "Cliente";
+  const internalName = bestInternalName(
+    thread.whatsapp_contacts?.customer_full_name,
+    serviceDisplayCustomerName(thread.service),
+  );
   return (
-    cleanName(thread.whatsapp_contacts?.customer_full_name) ||
-    cleanName(thread.service?.customer_name) ||
+    internalName ||
     cleanName(thread.whatsapp_contacts?.profile_name) ||
     cleanName(thread.whatsapp_contacts?.wa_profile_name) ||
     cleanName(thread.phone_e164) ||
@@ -1532,7 +1561,7 @@ export default function WhatsAppInboxPage() {
                         {newChatMode
                           ? "Invia un messaggio a un numero che non ha ancora scritto in chat."
                           : selectedThread?.service
-                            ? `${selectedThread.service.customer_name ?? "Cliente"} · ${selectedThread.service.date ?? ""} ${String(selectedThread.service.time ?? "").slice(0, 5)}`
+                            ? `${serviceDisplayCustomerName(selectedThread.service) ?? "Cliente"} · ${selectedThread.service.date ?? ""} ${String(selectedThread.service.time ?? "").slice(0, 5)}`
                             : "Nessuna prenotazione associata"}
                       </p>
                       {!newChatMode && selectedThread && (
@@ -1748,7 +1777,7 @@ export default function WhatsAppInboxPage() {
                           className="flex w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-2 text-left text-xs last:border-b-0 hover:bg-emerald-50 disabled:opacity-50"
                         >
                           <span className="min-w-0">
-                            <span className="block truncate font-semibold text-slate-800">{service.customer_name ?? "Cliente senza nome"}</span>
+                            <span className="block truncate font-semibold text-slate-800">{serviceDisplayCustomerName(service) ?? "Cliente senza nome"}</span>
                             <span className="block truncate text-slate-500">
                               {[service.date, String(service.time ?? "").slice(0, 5), service.hotels?.name, service.phone_e164 ?? service.phone].filter(Boolean).join(" · ")}
                             </span>

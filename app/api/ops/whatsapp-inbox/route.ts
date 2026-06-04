@@ -258,7 +258,7 @@ export async function GET(request: NextRequest) {
   const { data: services } = bookingIds.length
     ? await auth.admin
       .from("services")
-      .select("id, customer_name, phone, phone_e164, date, time, booking_service_kind, hotel_id, hotels(name)")
+      .select("id, customer_name, customer_first_name, customer_last_name, phone, phone_e164, date, time, booking_service_kind, hotel_id, hotels(name)")
       .eq("tenant_id", tenantId)
       .in("id", bookingIds)
     : { data: [] };
