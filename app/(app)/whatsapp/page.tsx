@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { getWhatsAppConversationWindowState } from "@/lib/whatsapp-conversation-window";
 
@@ -94,6 +94,10 @@ type ServiceSearchResult = {
   time?: string | null;
   booking_service_kind?: string | null;
   hotels?: { name?: string | null } | null;
+};
+
+type LoadOptions = {
+  silent?: boolean;
 };
 
 const filters = [
@@ -216,6 +220,112 @@ function threadStatusDot(thread: ThreadRow): string {
   if (thread.match_status === "unmatched") return "bg-rose-400";
   if (thread.unread_count > 0) return "bg-emerald-400";
   return "bg-emerald-300";
+}
+
+function messageStableKey(message: MessageRow) {
+  return message.wa_message_id ? `wa:${message.wa_message_id}` : `id:${message.id}`;
+}
+
+function messageSortValue(message: MessageRow) {
+  return new Date(message.timestamp ?? message.created_at).getTime() || 0;
+}
+
+function areReplyPreviewsEqual(a?: MessageRow["reply_to_message"], b?: MessageRow["reply_to_message"]) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return (
+    a.id === b.id &&
+    a.wa_message_id === b.wa_message_id &&
+    a.direction === b.direction &&
+    a.message_type === b.message_type &&
+    a.template_name === b.template_name &&
+    a.preview === b.preview
+  );
+}
+
+function areMessagesEqual(a: MessageRow, b: MessageRow) {
+  return (
+    a.id === b.id &&
+    a.wa_message_id === b.wa_message_id &&
+    a.reply_to_wa_message_id === b.reply_to_wa_message_id &&
+    a.direction === b.direction &&
+    a.message_type === b.message_type &&
+    a.template_name === b.template_name &&
+    a.text_body === b.text_body &&
+    a.media_id === b.media_id &&
+    a.media_mime_type === b.media_mime_type &&
+    a.media_filename === b.media_filename &&
+    a.status === b.status &&
+    a.failure_reason === b.failure_reason &&
+    a.timestamp === b.timestamp &&
+    a.created_at === b.created_at &&
+    a.booking_id === b.booking_id &&
+    areReplyPreviewsEqual(a.reply_to_message, b.reply_to_message)
+  );
+}
+
+function normalizeMessages(messages: MessageRow[]) {
+  const byKey = new Map<string, MessageRow>();
+  for (const message of messages) {
+    byKey.set(messageStableKey(message), message);
+  }
+  return Array.from(byKey.values()).sort((a, b) => {
+    const byTime = messageSortValue(a) - messageSortValue(b);
+    if (byTime !== 0) return byTime;
+    const byCreatedAt = a.created_at.localeCompare(b.created_at);
+    if (byCreatedAt !== 0) return byCreatedAt;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function mergeMessagesStable(current: MessageRow[], incoming: MessageRow[]) {
+  const normalizedIncoming = normalizeMessages(incoming);
+  if (current.length === 0) return normalizedIncoming;
+
+  const currentByKey = new Map(current.map((message) => [messageStableKey(message), message]));
+  let changed = current.length !== normalizedIncoming.length;
+  const merged = normalizedIncoming.map((nextMessage) => {
+    const previous = currentByKey.get(messageStableKey(nextMessage));
+    if (!previous) {
+      changed = true;
+      return nextMessage;
+    }
+    if (areMessagesEqual(previous, nextMessage)) return previous;
+    changed = true;
+    return nextMessage;
+  });
+
+  if (!changed) {
+    for (let i = 0; i < current.length; i++) {
+      if (current[i] !== merged[i]) {
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  return changed ? merged : current;
+}
+
+function areThreadsEqual(a: ThreadRow, b: ThreadRow) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function mergeThreadsStable(current: ThreadRow[], incoming: ThreadRow[]) {
+  if (current.length === 0) return incoming;
+  const currentById = new Map(current.map((thread) => [thread.id, thread]));
+  let changed = current.length !== incoming.length;
+  const merged = incoming.map((thread) => {
+    const previous = currentById.get(thread.id);
+    if (!previous) {
+      changed = true;
+      return thread;
+    }
+    if (areThreadsEqual(previous, thread)) return previous;
+    changed = true;
+    return thread;
+  });
+  return changed ? merged : current;
 }
 
 // ─── Template data helpers ─────────────────────────────────────────────────
@@ -388,7 +498,7 @@ function IconDownload() {
   );
 }
 
-function WhatsAppMediaAttachment({
+const WhatsAppMediaAttachment = memo(function WhatsAppMediaAttachment({
   message,
   onError,
 }: {
@@ -435,7 +545,7 @@ function WhatsAppMediaAttachment({
     return () => {
       active = false;
     };
-  }, [isAudio, isImage, message.id, message.media_id, onError]);
+  }, [isAudio, isImage, message.id, message.media_id]);
 
   useEffect(() => () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -621,7 +731,7 @@ function WhatsAppMediaAttachment({
       </div>
     </div>
   );
-}
+});
 
 // ─── Page component ────────────────────────────────────────────────────────
 
@@ -659,6 +769,12 @@ export default function WhatsAppInboxPage() {
   const shouldStickToBottomRef = useRef(true);
   const lastRenderedMessageKeyRef = useRef<string>("");
   const prevThreadLastMsgRef = useRef<Map<string, string>>(new Map());
+  const hasLoadedRef = useRef(false);
+  const selectedThreadIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    selectedThreadIdRef.current = selectedThreadId;
+  }, [selectedThreadId]);
 
   const selectedThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -723,7 +839,7 @@ export default function WhatsAppInboxPage() {
     return reason.includes("131047") || reason.includes("re-engagement");
   }, [latestFailedOutbound]);
   const latestMessageKey = useMemo(
-    () => (messages.length > 0 ? `${messages[messages.length - 1]?.id}:${messages.length}` : "empty"),
+    () => (messages.length > 0 ? `${messageStableKey(messages[messages.length - 1]!)}:${messages.length}` : "empty"),
     [messages],
   );
   const windowStatusText = useMemo(() => {
@@ -756,14 +872,19 @@ export default function WhatsAppInboxPage() {
     }
   }, []);
 
+  const handleMediaError = useCallback((nextError: string) => {
+    setError(nextError);
+  }, []);
+
   const load = useCallback(
-    async (nextThreadId?: string | null) => {
-      setLoading(true);
+    async (nextThreadId?: string | null, options?: LoadOptions) => {
+      const showBlockingLoading = !options?.silent || !hasLoadedRef.current;
+      if (showBlockingLoading) setLoading(true);
       setError("");
       const token = await getAccessToken();
       if (!token) {
         setError("Sessione non disponibile.");
-        setLoading(false);
+        if (showBlockingLoading) setLoading(false);
         return;
       }
       const params = new URLSearchParams({ filter, q: search });
@@ -774,11 +895,12 @@ export default function WhatsAppInboxPage() {
       const body = (await response.json().catch(() => null)) as InboxPayload | null;
       if (!response.ok || !body?.ok) {
         setError(body?.error ?? "Errore caricamento WhatsApp Inbox.");
-        setLoading(false);
+        if (showBlockingLoading) setLoading(false);
         return;
       }
       const keepNewChatDraft = newChatMode && !nextThreadId;
       const nextSelectedThreadId = keepNewChatDraft ? null : body.selected_thread_id ?? null;
+      const currentSelectedThreadId = selectedThreadIdRef.current;
       const prevMsgMap = prevThreadLastMsgRef.current;
       for (const thread of (body.threads ?? [])) {
         const prevLastAt = prevMsgMap.get(thread.id);
@@ -797,8 +919,13 @@ export default function WhatsAppInboxPage() {
         }
         prevMsgMap.set(thread.id, currentLastAt);
       }
-      setThreads(body.threads ?? []);
-      setMessages(keepNewChatDraft ? [] : body.messages ?? []);
+      setThreads((current) => mergeThreadsStable(current, body.threads ?? []));
+      setMessages((current) => {
+        if (keepNewChatDraft) return current.length === 0 ? current : [];
+        const incoming = body.messages ?? [];
+        if (nextSelectedThreadId !== currentSelectedThreadId) return normalizeMessages(incoming);
+        return mergeMessagesStable(current, incoming);
+      });
       setTemplateOptions(body.template_options ?? []);
       setTemplateFetchError(body.template_fetch_error ?? "");
       setSelectedTemplateKey((current) => {
@@ -810,13 +937,14 @@ export default function WhatsAppInboxPage() {
           ?? "";
       });
       setSelectedThreadId(nextSelectedThreadId);
-      if (nextSelectedThreadId !== selectedThreadId) {
+      if (nextSelectedThreadId !== currentSelectedThreadId) {
         setDraft("");
         setTemplateVariablesText("");
       }
-      setLoading(false);
+      hasLoadedRef.current = true;
+      if (showBlockingLoading) setLoading(false);
     },
-    [filter, newChatMode, search, selectedThreadId],
+    [filter, newChatMode, search],
   );
 
   useEffect(() => {
@@ -866,13 +994,13 @@ export default function WhatsAppInboxPage() {
 
   useEffect(() => {
     if (!selectedThreadId) return;
-    const interval = window.setInterval(() => { void load(selectedThreadId); }, 12000);
+    const interval = window.setInterval(() => { void load(selectedThreadId, { silent: true }); }, 12000);
     return () => window.clearInterval(interval);
   }, [selectedThreadId, load]);
 
   useEffect(() => {
     if (selectedThreadId) return;
-    const interval = window.setInterval(() => { void load(null); }, 20000);
+    const interval = window.setInterval(() => { void load(null, { silent: true }); }, 20000);
     return () => window.clearInterval(interval);
   }, [selectedThreadId, load]);
 
@@ -1259,7 +1387,7 @@ export default function WhatsAppInboxPage() {
                     setComposerMode("text");
                     shouldStickToBottomRef.current = true;
                     setShowJumpToLatest(false);
-                    void load(thread.id);
+                    setSelectedThreadId(thread.id);
                     setMobileView("chat");
                   }}
                   className={`relative block w-full border-b border-slate-100 px-4 py-3 text-left transition-colors last:border-b-0 ${
@@ -1511,7 +1639,7 @@ export default function WhatsAppInboxPage() {
                           <span className="text-xs text-amber-700">Suggerimenti:</span>
                           {(selectedThread!.match_suggestions as Array<{ id?: string; customer_name?: string }>).map((s, i) => (
                             <span
-                              key={i}
+                              key={s.id ?? s.customer_name ?? `suggestion-${i}`}
                               className="rounded-full border border-amber-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-amber-800"
                             >
                               {s.customer_name ?? s.id ?? `#${i + 1}`}
@@ -1597,7 +1725,7 @@ export default function WhatsAppInboxPage() {
                   const inbound = message.direction === "inbound";
                   const failed = !inbound && message.status === "failed";
                   return (
-                    <div key={message.id} className={`flex items-end gap-2 ${inbound ? "justify-start" : "justify-end"}`}>
+                    <div key={messageStableKey(message)} className={`flex items-end gap-2 ${inbound ? "justify-start" : "justify-end"}`}>
                       {/* Inbound avatar stub */}
                       {inbound && (
                         <div className="mb-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[9px] font-bold text-slate-500">
@@ -1637,7 +1765,7 @@ export default function WhatsAppInboxPage() {
                         {message.media_id && (
                           <WhatsAppMediaAttachment
                             message={message}
-                            onError={(nextError) => setError(nextError)}
+                            onError={handleMediaError}
                           />
                         )}
                         <div className={`mt-1.5 flex flex-wrap items-center gap-1.5 ${inbound ? "" : "justify-end"}`}>
