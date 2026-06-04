@@ -44,7 +44,7 @@ with service_names_by_phone as (
   from public.whatsapp_contacts contact
   join public.services service
     on service.tenant_id = contact.tenant_id
-   and regexp_replace(coalesce(service.phone_e164, service.phone, ''), '[^0-9]', '', 'g')
+   and regexp_replace(coalesce(service.phone, ''), '[^0-9]', '', 'g')
        = regexp_replace(coalesce(contact.phone_e164, contact.wa_id, ''), '[^0-9]', '', 'g')
   where length(regexp_replace(coalesce(contact.phone_e164, contact.wa_id, ''), '[^0-9]', '', 'g')) >= 7
     and nullif(btrim(coalesce(
