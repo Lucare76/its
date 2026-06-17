@@ -366,7 +366,31 @@ function mergeMessagesStable(current: MessageRow[], incoming: MessageRow[]) {
 }
 
 function areThreadsEqual(a: ThreadRow, b: ThreadRow) {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return (
+    a.id === b.id &&
+    a.wa_id === b.wa_id &&
+    a.phone_e164 === b.phone_e164 &&
+    a.booking_id === b.booking_id &&
+    a.transfer_id === b.transfer_id &&
+    a.last_message_at === b.last_message_at &&
+    a.last_message_preview === b.last_message_preview &&
+    a.unread_count === b.unread_count &&
+    a.status === b.status &&
+    a.match_status === b.match_status &&
+    a.whatsapp_contacts?.manual_contact_name === b.whatsapp_contacts?.manual_contact_name &&
+    a.whatsapp_contacts?.customer_full_name === b.whatsapp_contacts?.customer_full_name &&
+    a.whatsapp_contacts?.profile_name === b.whatsapp_contacts?.profile_name &&
+    a.whatsapp_contacts?.wa_profile_name === b.whatsapp_contacts?.wa_profile_name &&
+    a.service?.id === b.service?.id &&
+    a.service?.customer_name === b.service?.customer_name &&
+    a.service?.customer_first_name === b.service?.customer_first_name &&
+    a.service?.customer_last_name === b.service?.customer_last_name &&
+    a.service?.phone === b.service?.phone &&
+    a.service?.date === b.service?.date &&
+    a.service?.time === b.service?.time &&
+    a.service?.booking_service_kind === b.service?.booking_service_kind &&
+    a.service?.hotels?.name === b.service?.hotels?.name
+  );
 }
 
 function mergeThreadsStable(current: ThreadRow[], incoming: ThreadRow[]) {
@@ -833,10 +857,16 @@ export default function WhatsAppInboxPage() {
   const prevThreadLastMsgRef = useRef<Map<string, string>>(new Map());
   const hasLoadedRef = useRef(false);
   const selectedThreadIdRef = useRef<string | null>(null);
+  const newChatModeRef = useRef(false);
+  const loadRef = useRef<(nextThreadId?: string | null, options?: LoadOptions) => Promise<void>>(null!);
 
   useEffect(() => {
     selectedThreadIdRef.current = selectedThreadId;
   }, [selectedThreadId]);
+
+  useEffect(() => {
+    newChatModeRef.current = newChatMode;
+  }, [newChatMode]);
 
   const selectedThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -960,7 +990,7 @@ export default function WhatsAppInboxPage() {
         if (showBlockingLoading) setLoading(false);
         return;
       }
-      const keepNewChatDraft = newChatMode && !nextThreadId;
+      const keepNewChatDraft = newChatModeRef.current && !nextThreadId;
       const nextSelectedThreadId = keepNewChatDraft ? null : body.selected_thread_id ?? null;
       const currentSelectedThreadId = selectedThreadIdRef.current;
       const prevMsgMap = prevThreadLastMsgRef.current;
@@ -998,16 +1028,18 @@ export default function WhatsAppInboxPage() {
           ?? available[0]?.key
           ?? "";
       });
-      setSelectedThreadId(nextSelectedThreadId);
       if (nextSelectedThreadId !== currentSelectedThreadId) {
+        setSelectedThreadId(nextSelectedThreadId);
         setDraft("");
         setTemplateVariablesText("");
       }
       hasLoadedRef.current = true;
       if (showBlockingLoading) setLoading(false);
     },
-    [filter, newChatMode, search],
+    [filter, search],
   );
+
+  loadRef.current = load;
 
   useEffect(() => {
     if (composerMode !== "template") return;
@@ -1054,21 +1086,22 @@ export default function WhatsAppInboxPage() {
   }, []);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => void load(selectedThreadId), 250);
+    const silent = hasLoadedRef.current;
+    const timeout = window.setTimeout(() => void load(selectedThreadId, silent ? { silent: true } : undefined), 250);
     return () => window.clearTimeout(timeout);
   }, [filter, search, selectedThreadId, load]);
 
   useEffect(() => {
     if (!selectedThreadId) return;
-    const interval = window.setInterval(() => { void load(selectedThreadId, { silent: true }); }, 12000);
+    const interval = window.setInterval(() => { void loadRef.current(selectedThreadId, { silent: true }); }, 12000);
     return () => window.clearInterval(interval);
-  }, [selectedThreadId, load]);
+  }, [selectedThreadId]);
 
   useEffect(() => {
     if (selectedThreadId) return;
-    const interval = window.setInterval(() => { void load(null, { silent: true }); }, 20000);
+    const interval = window.setInterval(() => { void loadRef.current(null, { silent: true }); }, 20000);
     return () => window.clearInterval(interval);
-  }, [selectedThreadId, load]);
+  }, [selectedThreadId]);
 
   useEffect(() => {
     shouldStickToBottomRef.current = true;
@@ -1125,7 +1158,7 @@ export default function WhatsAppInboxPage() {
     if (!response.ok || !body?.ok) {
       setError(body?.error ?? "Azione non riuscita.");
     } else {
-      await load(selectedThreadId);
+      await load(selectedThreadId, { silent: true });
     }
     setBusyAction(null);
   };
@@ -1152,7 +1185,7 @@ export default function WhatsAppInboxPage() {
         setError(body?.error ?? "Aggiornamento numero non riuscito.");
       } else {
         setPhoneEditThreadId(null);
-        await load(selectedThreadId);
+        await load(selectedThreadId, { silent: true });
       }
     } finally {
       setBusyAction(null);
@@ -1176,7 +1209,7 @@ export default function WhatsAppInboxPage() {
         setError(body?.error ?? "Aggiornamento nome non riuscito.");
       } else {
         setNameEditThreadId(null);
-        await load(selectedThreadId);
+        await load(selectedThreadId, { silent: true });
       }
     } finally {
       setBusyAction(null);
@@ -1203,7 +1236,7 @@ export default function WhatsAppInboxPage() {
       setDraft("");
       setSelectedThreadId(null);
       setMobileView("list");
-      await load(null);
+      await load(null, { silent: true });
     }
     setBusyAction(null);
   };
@@ -1252,7 +1285,7 @@ export default function WhatsAppInboxPage() {
       } else {
         setAssociateMode(false);
         setAssociateResults([]);
-        await load(selectedThreadId);
+        await load(selectedThreadId, { silent: true });
       }
     } finally {
       setBusyAction(null);
@@ -1322,7 +1355,7 @@ export default function WhatsAppInboxPage() {
         setNewChatName("");
         await load(body.thread_id ?? null);
       } else {
-        await load(selectedThreadId);
+        await load(selectedThreadId, { silent: true });
       }
     }
     setBusyAction(null);
