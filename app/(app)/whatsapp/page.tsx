@@ -1487,7 +1487,9 @@ export default function WhatsAppInboxPage() {
                 {item.label}
                 {active && !loading && (
                   <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-white/25 px-1 text-[10px] font-bold text-white">
-                    {threads.length}
+                    {item.value === "unread"
+                      ? threads.reduce((sum, t) => sum + (t.unread_count ?? 0), 0)
+                      : threads.length}
                   </span>
                 )}
               </button>
