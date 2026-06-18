@@ -75,7 +75,14 @@ function findColumnIndex(header: string[], keywordSets: string[][]): number {
 
 function cellStr(row: unknown[], idx: number): string {
   if (idx < 0 || idx >= row.length) return "";
-  return String(row[idx] ?? "").trim();
+  const v = row[idx];
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    const dd = String(v.getDate()).padStart(2, "0");
+    const mm = String(v.getMonth() + 1).padStart(2, "0");
+    const yyyy = v.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  }
+  return String(v ?? "").trim();
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -187,7 +194,7 @@ export default function BusConvocationsPage() {
 
     try {
       const buffer = await file.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: "array" });
+      const wb = XLSX.read(buffer, { type: "array", cellDates: true });
       const ws = wb.Sheets[wb.SheetNames[0]];
       if (!ws) throw new Error("Nessun foglio trovato nel file");
 
