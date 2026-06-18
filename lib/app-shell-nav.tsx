@@ -352,6 +352,7 @@ export const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/arrivals-clock", label: "Arrivi a orario", icon: "@" },
       { href: "/report-center", label: "Centro report", icon: "Y" },
       { href: "/bus-tours", label: "Controllo bus", icon: "B" },
+      { href: "/bus-convocations", label: "Convocazioni bus", icon: "C" },
       { href: "/analytics", label: "Analisi", icon: "Y" },
       { href: "/analytics-yoy", label: "Anno su anno", icon: "↕" },
       { href: "/audit", label: "Audit", icon: "Q" },
