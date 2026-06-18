@@ -27,25 +27,20 @@ async function sendConvocazioneTemplate(
   customerName: string,
   serviceDate: string,
   meetingPoint: string,
+  serviceTime: string,
   driverName: string,
   driverPhone: string,
-  qrImageUrl: string | null
 ) {
   const bodyParams = [
     { type: "text" as const, text: customerName.slice(0, 60) },
     { type: "text" as const, text: serviceDate },
     { type: "text" as const, text: meetingPoint.slice(0, 80) },
+    { type: "text" as const, text: serviceTime },
     { type: "text" as const, text: driverName.slice(0, 60) },
     { type: "text" as const, text: driverPhone },
   ];
 
   const components: object[] = [{ type: "body", parameters: bodyParams }];
-  if (qrImageUrl) {
-    components.unshift({
-      type: "header",
-      parameters: [{ type: "image", image: { link: qrImageUrl } }],
-    });
-  }
 
   const res = await fetch(
     `https://graph.facebook.com/${whatsappGraphVersion()}/${phoneNumberId}/messages`,
@@ -142,12 +137,11 @@ async function runCron(request: NextRequest) {
 
   const templateName =
     process.env.WHATSAPP_TEMPLATE_CONVOCAZIONE ?? "its_bus_convocazione";
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
 
   // 1. Servizi bus_city_hotel per domani con telefono
   const { data: services, error: svcError } = await admin
     .from("services")
-    .select("id, tenant_id, customer_name, phone, phone_e164, meeting_point, date")
+    .select("id, tenant_id, customer_name, phone, phone_e164, meeting_point, date, time")
     .eq("tenant_id", effectiveTenantId)
     .eq("date", tomorrow)
     .eq("booking_service_kind", "bus_city_hotel")
@@ -245,7 +239,7 @@ async function runCron(request: NextRequest) {
     if (!meetingPoint) { skipped++; continue; }
 
     const phone = (svc.phone_e164 as string | null) ?? normalizeE164(svc.phone as string);
-    const qrUrl = appUrl ? `${appUrl}/api/public/qr/${svc.id}` : null;
+    const serviceTime = String(svc.time ?? "").slice(0, 5) || "—";
     const nowIso = new Date().toISOString();
 
     const result = await sendConvocazioneTemplate(
@@ -256,9 +250,9 @@ async function runCron(request: NextRequest) {
       (svc.customer_name as string) ?? "",
       svc.date as string,
       meetingPoint,
+      serviceTime,
       driverName,
       driverPhone,
-      qrUrl
     );
 
     await logWhatsAppEvent(admin, {
