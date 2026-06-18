@@ -110,6 +110,7 @@ type LoadOptions = {
 };
 
 const filters = [
+  { value: "all", label: "Tutte" },
   { value: "open", label: "Aperte" },
   { value: "unread", label: "Da leggere" },
   { value: "needs_review", label: "Da rivedere" },
