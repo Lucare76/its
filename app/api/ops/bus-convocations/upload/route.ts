@@ -12,6 +12,7 @@ const rowSchema = z.object({
   customerName: z.string(),
   dateLine: z.string(),
   departurePoint: z.string(),
+  serviceTime: z.string(),
   driverName: z.string(),
   driverEmergencyPhone: z.string(),
   generatedMessage: z.string().optional().default(""),
@@ -89,7 +90,11 @@ export async function POST(request: NextRequest) {
       nonValidoCount++;
     } else if (!row.departurePoint.trim()) {
       status = "errore";
-      errorMessage = "Punto partenza mancante";
+      errorMessage = "Luogo partenza mancante";
+      nonValidoCount++;
+    } else if (!row.serviceTime.trim()) {
+      status = "errore";
+      errorMessage = "Orario mancante";
       nonValidoCount++;
     } else if (!row.driverName.trim()) {
       status = "errore";
@@ -120,6 +125,7 @@ export async function POST(request: NextRequest) {
           customer_name: row.customerName.trim(),
           date_line: row.dateLine.trim(),
           departure_point: row.departurePoint.trim(),
+          service_time: row.serviceTime.trim(),
           driver_name: row.driverName.trim(),
           driver_emergency_phone: row.driverEmergencyPhone.trim(),
           generated_message: row.generatedMessage,
@@ -152,6 +158,7 @@ export async function POST(request: NextRequest) {
       customer_name: row.customerName.trim(),
       date_line: row.dateLine.trim(),
       departure_point: row.departurePoint.trim(),
+      service_time: row.serviceTime.trim(),
       driver_name: row.driverName.trim(),
       driver_emergency_phone: row.driverEmergencyPhone.trim(),
       generated_message: row.generatedMessage,

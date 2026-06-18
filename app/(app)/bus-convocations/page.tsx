@@ -16,6 +16,7 @@ type ConvocationRow = {
   customer_name: string;
   date_line: string;
   departure_point: string;
+  service_time: string;
   driver_name: string;
   driver_emergency_phone: string;
   generated_message: string;
@@ -42,17 +43,18 @@ type BatchListItem = BatchMeta & { created_by: string };
 
 const COLUMN_KEYWORDS: Record<string, string[][]> = {
   inviare: [["inviare"], ["invio"], ["si/no"], ["send"]],
-  phoneRaw: [["telefono", "cliente"], ["tel", "cliente"], ["telefono"], ["cell"], ["phone"]],
+  phoneRaw: [["numero", "cliente"], ["telefono", "cliente"], ["tel", "cliente"], ["telefono"], ["cell"], ["phone"]],
   customerName: [["nome", "cliente"], ["cliente"], ["nominativo"], ["customer"], ["nome"]],
-  dateLine: [["data", "linea"], ["data/linea"], ["linea", "bus"], ["data"]],
-  departurePoint: [["punto", "partenza"], ["partenza"], ["pickup"], ["meeting"]],
-  driverName: [["autista"], ["driver"], ["nome", "autista"]],
-  driverEmergencyPhone: [["emergenza"], ["tel", "autista"], ["telefono", "autista"]],
-  generatedMessage: [["messaggio", "generato"], ["messaggio"], ["message"]],
+  dateLine: [["data", "partenza"], ["data", "linea"], ["data/linea"], ["linea", "bus"], ["data"]],
+  departurePoint: [["luogo", "partenza"], ["punto", "partenza"], ["partenza"], ["pickup"], ["meeting"]],
+  serviceTime: [["orario"], ["ora"], ["time"]],
+  driverName: [["nome", "autista"], ["autista"], ["driver"]],
+  driverEmergencyPhone: [["numero", "autista"], ["emergenza"], ["tel", "autista"], ["telefono", "autista"]],
+  generatedMessage: [["messaggio", "finale"], ["messaggio", "generato"], ["messaggio"], ["message"]],
   notes: [["note"], ["notes"]],
 };
 
-const REQUIRED_FIELDS = ["phoneRaw", "customerName", "dateLine", "departurePoint", "driverName", "driverEmergencyPhone"] as const;
+const REQUIRED_FIELDS = ["phoneRaw", "customerName", "dateLine", "departurePoint", "serviceTime", "driverName", "driverEmergencyPhone"] as const;
 
 function parseInviare(value: unknown): boolean {
   if (value == null) return false;
@@ -116,19 +118,33 @@ const ROW_BG: Record<string, string> = {
   escluso: "opacity-50",
 };
 
-const TEMPLATE_TEXT = `Buongiorno {{1}}! 🚌
-La tua prenotazione per la linea bus del {{2}} è confermata.
-Punto di partenza: {{3}}.
-Il tuo autista è {{4}}, puoi contattarlo per emergenza al {{5}}.
-A presto!`;
+const TEMPLATE_TEXT = `Ciao {{1}} 👋
 
-function buildPreview(row: { customerName: string; dateLine: string; departurePoint: string; driverName: string; driverEmergencyPhone: string }): string {
+ti comunichiamo i dettagli della tua partenza del {{2}}.
+
+📍 Luogo di partenza: {{3}}
+⏰ Orario: {{4}}
+🧔🏻‍♂️ Autista: {{5}} - {{6}}
+
+⚠️ L'autista va contattato solo in caso di emergenza.
+⚠️ Ti ricordiamo di presentarti almeno 15 minuti prima sul luogo di partenza.
+
+Questo messaggio vale come conferma della partenza. Non seguiranno ulteriori comunicazioni.
+
+🧳 È fondamentale che tutti i bagagli siano correttamente etichettati, con indicazione chiara dell'hotel di destinazione. I bagagli privi di etichetta non potranno essere presi in carico dal corriere.
+
+In caso di errori, ti chiediamo di avvisarci tempestivamente.
+
+Ischia Transfer Service`;
+
+function buildPreview(row: { customerName: string; dateLine: string; departurePoint: string; serviceTime: string; driverName: string; driverEmergencyPhone: string }): string {
   return TEMPLATE_TEXT
     .replace("{{1}}", row.customerName)
     .replace("{{2}}", row.dateLine)
     .replace("{{3}}", row.departurePoint)
-    .replace("{{4}}", row.driverName)
-    .replace("{{5}}", row.driverEmergencyPhone);
+    .replace("{{4}}", row.serviceTime)
+    .replace("{{5}}", row.driverName)
+    .replace("{{6}}", row.driverEmergencyPhone);
 }
 
 type FilterKey = "all" | "pronto" | "escluso" | "duplicato" | "numero_non_valido" | "errore" | "inviato";
@@ -209,9 +225,10 @@ export default function BusConvocationsPage() {
       }
 
       const FIELD_LABELS: Record<string, string> = {
-        phoneRaw: "telefono cliente", customerName: "nome cliente",
-        dateLine: "data / linea bus", departurePoint: "punto partenza",
-        driverName: "autista", driverEmergencyPhone: "telefono emergenza autista",
+        phoneRaw: "numero cliente", customerName: "nome cliente",
+        dateLine: "data partenza", departurePoint: "luogo di partenza",
+        serviceTime: "orario", driverName: "nome autista",
+        driverEmergencyPhone: "numero autista",
       };
       const missing = REQUIRED_FIELDS.filter((f) => colMap[f] < 0);
       if (missing.length > 0) {
@@ -227,13 +244,14 @@ export default function BusConvocationsPage() {
         const customerName = cellStr(r, colMap.customerName);
         const dateLine = cellStr(r, colMap.dateLine);
         const departurePoint = cellStr(r, colMap.departurePoint);
+        const serviceTime = cellStr(r, colMap.serviceTime);
         const driverName = cellStr(r, colMap.driverName);
         const driverEmergencyPhone = cellStr(r, colMap.driverEmergencyPhone);
         const phoneRaw = cellStr(r, colMap.phoneRaw);
 
         const inviare = colMap.inviare >= 0 ? parseInviare(r[colMap.inviare]) : true;
 
-        const preview = buildPreview({ customerName, dateLine, departurePoint, driverName, driverEmergencyPhone });
+        const preview = buildPreview({ customerName, dateLine, departurePoint, serviceTime, driverName, driverEmergencyPhone });
 
         parsedRows.push({
           rowIndex: i + 1,
@@ -242,6 +260,7 @@ export default function BusConvocationsPage() {
           customerName,
           dateLine,
           departurePoint,
+          serviceTime,
           driverName,
           driverEmergencyPhone,
           generatedMessage: preview,
@@ -475,15 +494,16 @@ export default function BusConvocationsPage() {
             <div className="rounded-lg border border-slate-200 bg-white p-4">
               <p className="mb-2 text-sm font-medium text-slate-700">Colonne richieste nel file:</p>
               <div className="grid grid-cols-2 gap-1 text-xs text-slate-600 sm:grid-cols-3">
-                <span>Telefono cliente</span>
                 <span>Nome cliente</span>
-                <span>Data / Linea bus</span>
-                <span>Punto partenza</span>
-                <span>Autista</span>
-                <span>Telefono emergenza autista</span>
+                <span>Numero cliente</span>
+                <span>Data partenza</span>
+                <span>Luogo di partenza</span>
+                <span>Orario</span>
+                <span>Nome autista</span>
+                <span>Numero autista</span>
               </div>
               <p className="mt-2 text-xs text-muted">
-                Opzionali: Inviare? (SI/NO), Note, Messaggio generato
+                Opzionali: Inviare? (SI/NO), Note, Messaggio finale
               </p>
             </div>
           </div>
@@ -547,10 +567,11 @@ export default function BusConvocationsPage() {
                     <th className="w-10 text-center">#</th>
                     <th>Cliente</th>
                     <th>Telefono</th>
-                    <th>Data / Linea</th>
-                    <th>Punto partenza</th>
+                    <th>Data partenza</th>
+                    <th>Luogo partenza</th>
+                    <th>Orario</th>
                     <th>Autista</th>
-                    <th>Tel emergenza</th>
+                    <th>Tel autista</th>
                     <th className="w-32">Stato</th>
                     <th className="w-10"></th>
                   </tr>
@@ -558,7 +579,7 @@ export default function BusConvocationsPage() {
                 <tbody>
                   {filteredRows.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="py-8 text-center text-muted">Nessuna riga con questo filtro</td>
+                      <td colSpan={10} className="py-8 text-center text-muted">Nessuna riga con questo filtro</td>
                     </tr>
                   ) : filteredRows.map((row) => (
                     <>
@@ -568,6 +589,7 @@ export default function BusConvocationsPage() {
                         <td className="font-mono text-xs">{row.phone_raw}{row.phone_e164 ? <span className="ml-1 text-muted">({row.phone_e164})</span> : null}</td>
                         <td>{row.date_line}</td>
                         <td>{row.departure_point}</td>
+                        <td>{row.service_time}</td>
                         <td>{row.driver_name}</td>
                         <td className="font-mono text-xs">{row.driver_emergency_phone}</td>
                         <td>
@@ -588,13 +610,14 @@ export default function BusConvocationsPage() {
                       </tr>
                       {expandedRow === row.id && (
                         <tr key={`${row.id}-preview`}>
-                          <td colSpan={9} className="bg-slate-50 px-4 py-3">
+                          <td colSpan={10} className="bg-slate-50 px-4 py-3">
                             <p className="mb-1 text-xs font-medium text-muted">Anteprima messaggio (template Meta):</p>
                             <pre className="whitespace-pre-wrap rounded-lg bg-white border border-slate-200 p-3 text-sm leading-relaxed">
                               {row.generated_message || buildPreview({
                                 customerName: row.customer_name,
                                 dateLine: row.date_line,
                                 departurePoint: row.departure_point,
+                                serviceTime: row.service_time,
                                 driverName: row.driver_name,
                                 driverEmergencyPhone: row.driver_emergency_phone,
                               })}
@@ -694,8 +717,9 @@ export default function BusConvocationsPage() {
                     <th className="w-10">#</th>
                     <th>Cliente</th>
                     <th>Telefono</th>
-                    <th>Data / Linea</th>
-                    <th>Punto partenza</th>
+                    <th>Data partenza</th>
+                    <th>Luogo partenza</th>
+                    <th>Orario</th>
                     <th>Autista</th>
                     <th className="w-32">Stato</th>
                     <th>Inviato alle</th>
@@ -704,7 +728,7 @@ export default function BusConvocationsPage() {
                 <tbody>
                   {filteredRows.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="py-8 text-center text-muted">Nessuna riga con questo filtro</td>
+                      <td colSpan={9} className="py-8 text-center text-muted">Nessuna riga con questo filtro</td>
                     </tr>
                   ) : filteredRows.map((row) => (
                     <tr key={row.id} className={ROW_BG[row.status] ?? ""}>
@@ -713,6 +737,7 @@ export default function BusConvocationsPage() {
                       <td className="font-mono text-xs">{row.phone_e164 ?? row.phone_raw}</td>
                       <td>{row.date_line}</td>
                       <td>{row.departure_point}</td>
+                      <td>{row.service_time}</td>
                       <td>{row.driver_name}</td>
                       <td>
                         <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[row.status] ?? "bg-slate-100 text-slate-600 border-slate-200"}`}>
