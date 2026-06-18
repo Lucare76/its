@@ -861,6 +861,7 @@ export default function WhatsAppInboxPage() {
   const selectedThreadIdRef = useRef<string | null>(null);
   const newChatModeRef = useRef(false);
   const loadRef = useRef<(nextThreadId?: string | null, options?: LoadOptions) => Promise<void>>(null!);
+  const sendingRef = useRef(false);
 
   useEffect(() => {
     selectedThreadIdRef.current = selectedThreadId;
@@ -1296,6 +1297,7 @@ export default function WhatsAppInboxPage() {
 
   const sendReply = async () => {
     if (!composerEnabled) return;
+    if (sendingRef.current) return;
     const text = draft.trim();
     if (composerMode === "text" && !text && !attachment) { setError("Inserisci un messaggio o allega un file prima di inviare."); return; }
     if (composerMode === "text" && textModeUnavailable) {
@@ -1313,8 +1315,10 @@ export default function WhatsAppInboxPage() {
     }
     const token = await getAccessToken();
     if (!token) { setError("Sessione non disponibile."); return; }
+    sendingRef.current = true;
     setBusyAction("reply");
     setError("");
+    try {
     const jsonPayload = newChatMode
       ? composerMode === "template"
         ? { mode: "template", phone: newChatPhone, profile_name: newChatName, template_name: selectedTemplate?.template, template_language: selectedTemplate?.language_code, template_variables: templateVariables }
@@ -1360,7 +1364,10 @@ export default function WhatsAppInboxPage() {
         await load(selectedThreadId, { silent: true });
       }
     }
-    setBusyAction(null);
+    } finally {
+      sendingRef.current = false;
+      setBusyAction(null);
+    }
   };
 
   const appendEmoji = (emoji: (typeof quickEmojis)[number]) => setDraft((c) => `${c}${emoji}`);
