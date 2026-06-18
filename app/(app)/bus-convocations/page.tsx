@@ -40,16 +40,16 @@ type BatchMeta = {
 
 type BatchListItem = BatchMeta & { created_by: string };
 
-const COLUMN_ALIASES: Record<string, string[]> = {
-  inviare: ["inviare?", "inviare", "invio", "si/no"],
-  phoneRaw: ["telefono cliente", "telefono", "tel cliente", "cell", "phone"],
-  customerName: ["nome cliente", "cliente", "nominativo", "nome"],
-  dateLine: ["data / linea bus", "data linea bus", "data/linea", "data linea", "data / linea"],
-  departurePoint: ["punto partenza", "punto di partenza", "partenza", "pickup"],
-  driverName: ["autista", "nome autista", "driver"],
-  driverEmergencyPhone: ["telefono emergenza autista", "tel emergenza", "telefono autista", "tel autista"],
-  generatedMessage: ["messaggio generato", "messaggio", "message"],
-  notes: ["note", "notes"],
+const COLUMN_KEYWORDS: Record<string, string[][]> = {
+  inviare: [["inviare"], ["invio"], ["si/no"], ["send"]],
+  phoneRaw: [["telefono", "cliente"], ["tel", "cliente"], ["telefono"], ["cell"], ["phone"]],
+  customerName: [["nome", "cliente"], ["cliente"], ["nominativo"], ["customer"], ["nome"]],
+  dateLine: [["data", "linea"], ["data/linea"], ["linea", "bus"], ["data"]],
+  departurePoint: [["punto", "partenza"], ["partenza"], ["pickup"], ["meeting"]],
+  driverName: [["autista"], ["driver"], ["nome", "autista"]],
+  driverEmergencyPhone: [["emergenza"], ["tel", "autista"], ["telefono", "autista"]],
+  generatedMessage: [["messaggio", "generato"], ["messaggio"], ["message"]],
+  notes: [["note"], ["notes"]],
 };
 
 const REQUIRED_FIELDS = ["phoneRaw", "customerName", "dateLine", "departurePoint", "driverName", "driverEmergencyPhone"] as const;
@@ -60,9 +60,14 @@ function parseInviare(value: unknown): boolean {
   return ["SI", "SÌ", "S", "1", "TRUE", "X", "YES", "Y"].includes(s);
 }
 
-function findColumnIndex(header: string[], aliases: string[]): number {
-  for (const alias of aliases) {
-    const idx = header.findIndex((h) => h.trim().toLowerCase() === alias.toLowerCase());
+function normalizeHeader(s: string): string {
+  return s.trim().toLowerCase().replace(/[\s\n\r]+/g, " ").replace(/[?!.:;]/g, "");
+}
+
+function findColumnIndex(header: string[], keywordSets: string[][]): number {
+  const normalized = header.map(normalizeHeader);
+  for (const keywords of keywordSets) {
+    const idx = normalized.findIndex((h) => keywords.every((kw) => h.includes(kw.toLowerCase())));
     if (idx >= 0) return idx;
   }
   return -1;
@@ -192,13 +197,19 @@ export default function BusConvocationsPage() {
       const header = (raw[0] as unknown[]).map((c) => String(c ?? "").trim());
       const colMap: Record<string, number> = {};
 
-      for (const [field, aliases] of Object.entries(COLUMN_ALIASES)) {
-        colMap[field] = findColumnIndex(header, aliases);
+      for (const [field, keywordSets] of Object.entries(COLUMN_KEYWORDS)) {
+        colMap[field] = findColumnIndex(header, keywordSets);
       }
 
+      const FIELD_LABELS: Record<string, string> = {
+        phoneRaw: "telefono cliente", customerName: "nome cliente",
+        dateLine: "data / linea bus", departurePoint: "punto partenza",
+        driverName: "autista", driverEmergencyPhone: "telefono emergenza autista",
+      };
       const missing = REQUIRED_FIELDS.filter((f) => colMap[f] < 0);
       if (missing.length > 0) {
-        throw new Error(`Colonne obbligatorie non trovate: ${missing.map((f) => COLUMN_ALIASES[f][0]).join(", ")}`);
+        const foundHeaders = header.filter((h) => h.length > 0).join(", ");
+        throw new Error(`Colonne non trovate: ${missing.map((f) => FIELD_LABELS[f] ?? f).join(", ")}.\n\nColonne trovate nel file: ${foundHeaders}`);
       }
 
       const parsedRows = [];
