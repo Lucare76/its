@@ -111,6 +111,7 @@ type LoadOptions = {
 
 const filters = [
   { value: "open", label: "Aperte" },
+  { value: "unread", label: "Da leggere" },
   { value: "needs_review", label: "Da rivedere" },
   { value: "associated", label: "Associate" },
   { value: "unassociated", label: "Non associate" },

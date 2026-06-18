@@ -246,6 +246,7 @@ export async function GET(request: NextRequest) {
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .limit(100);
 
+  if (filter === "unread") threadQuery = threadQuery.neq("status", "closed").gt("unread_count", 0);
   if (filter === "needs_review") threadQuery = threadQuery.eq("status", "needs_review");
   if (filter === "associated") threadQuery = threadQuery.or("booking_id.not.is.null,transfer_id.not.is.null");
   if (filter === "unassociated") threadQuery = threadQuery.is("booking_id", null).is("transfer_id", null);
