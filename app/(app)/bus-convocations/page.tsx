@@ -87,6 +87,25 @@ function cellStr(row: unknown[], idx: number): string {
   return String(v ?? "").trim();
 }
 
+function cellTime(row: unknown[], idx: number): string {
+  if (idx < 0 || idx >= row.length) return "";
+  const v = row[idx];
+  if (typeof v === "number" && v >= 0 && v < 1) {
+    const totalMinutes = Math.round(v * 24 * 60);
+    const hh = String(Math.floor(totalMinutes / 60)).padStart(2, "0");
+    const mm = String(totalMinutes % 60).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    const hh = String(v.getHours()).padStart(2, "0");
+    const mm = String(v.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+  const s = String(v ?? "").trim();
+  if (/^\d{1,2}[:.]\d{2}$/.test(s)) return s.replace(".", ":");
+  return s;
+}
+
 const STATUS_LABELS: Record<string, string> = {
   da_validare: "Da validare",
   pronto: "Pronto",
@@ -230,12 +249,14 @@ export default function BusConvocationsPage() {
 
       for (let r = 0; r < Math.min(raw.length, 10); r++) {
         const candidate = (raw[r] as unknown[]).map((c) => String(c ?? "").trim());
+        if (candidate.filter((c) => c.length > 0).length < 3) continue;
         const candidateMap: Record<string, number> = {};
         for (const [field, keywordSets] of Object.entries(COLUMN_KEYWORDS)) {
           candidateMap[field] = findColumnIndex(candidate, keywordSets);
         }
-        const foundRequired = REQUIRED_FIELDS.filter((f) => candidateMap[f] >= 0).length;
-        if (foundRequired >= 3) {
+        const foundIndices = REQUIRED_FIELDS.map((f) => candidateMap[f]).filter((i) => i >= 0);
+        const distinctIndices = new Set(foundIndices).size;
+        if (foundIndices.length >= 5 && distinctIndices >= 5) {
           headerRowIndex = r;
           header = candidate;
           Object.assign(colMap, candidateMap);
@@ -262,7 +283,7 @@ export default function BusConvocationsPage() {
         const customerName = cellStr(r, colMap.customerName);
         const dateLine = cellStr(r, colMap.dateLine);
         const departurePoint = cellStr(r, colMap.departurePoint);
-        const serviceTime = cellStr(r, colMap.serviceTime);
+        const serviceTime = cellTime(r, colMap.serviceTime);
         const driverName = cellStr(r, colMap.driverName);
         const driverEmergencyPhone = cellStr(r, colMap.driverEmergencyPhone);
         const phoneRaw = cellStr(r, colMap.phoneRaw);
