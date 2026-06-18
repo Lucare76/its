@@ -217,19 +217,37 @@ export default function BusConvocationsPage() {
       const raw: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
       if (raw.length < 2) throw new Error("Il file deve contenere almeno un'intestazione e una riga dati");
 
-      const header = (raw[0] as unknown[]).map((c) => String(c ?? "").trim());
-      const colMap: Record<string, number> = {};
-
-      for (const [field, keywordSets] of Object.entries(COLUMN_KEYWORDS)) {
-        colMap[field] = findColumnIndex(header, keywordSets);
-      }
-
       const FIELD_LABELS: Record<string, string> = {
         phoneRaw: "numero cliente", customerName: "nome cliente",
         dateLine: "data partenza", departurePoint: "luogo di partenza",
         serviceTime: "orario", driverName: "nome autista",
         driverEmergencyPhone: "numero autista",
       };
+
+      let headerRowIndex = -1;
+      let header: string[] = [];
+      const colMap: Record<string, number> = {};
+
+      for (let r = 0; r < Math.min(raw.length, 10); r++) {
+        const candidate = (raw[r] as unknown[]).map((c) => String(c ?? "").trim());
+        const candidateMap: Record<string, number> = {};
+        for (const [field, keywordSets] of Object.entries(COLUMN_KEYWORDS)) {
+          candidateMap[field] = findColumnIndex(candidate, keywordSets);
+        }
+        const foundRequired = REQUIRED_FIELDS.filter((f) => candidateMap[f] >= 0).length;
+        if (foundRequired >= 3) {
+          headerRowIndex = r;
+          header = candidate;
+          Object.assign(colMap, candidateMap);
+          break;
+        }
+      }
+
+      if (headerRowIndex < 0) {
+        const firstRow = (raw[0] as unknown[]).map((c) => String(c ?? "").trim()).filter((h) => h.length > 0).join(", ");
+        throw new Error(`Intestazioni colonne non trovate nelle prime righe del file.\n\nPrima riga: ${firstRow}`);
+      }
+
       const missing = REQUIRED_FIELDS.filter((f) => colMap[f] < 0);
       if (missing.length > 0) {
         const foundHeaders = header.filter((h) => h.length > 0).join(", ");
@@ -237,7 +255,7 @@ export default function BusConvocationsPage() {
       }
 
       const parsedRows = [];
-      for (let i = 1; i < raw.length; i++) {
+      for (let i = headerRowIndex + 1; i < raw.length; i++) {
         const r = raw[i] as unknown[];
         if (!r || r.every((c) => c == null || String(c).trim() === "")) continue;
 
