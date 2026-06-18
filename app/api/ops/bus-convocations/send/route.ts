@@ -8,7 +8,7 @@ export const maxDuration = 120;
 
 const bodySchema = z.object({
   batchId: z.string().uuid(),
-  templateName: z.string().optional().default("its_bus_convocazione"),
+  templateName: z.string().optional().default("its_partenza_bus_dettaglio"),
   languageCode: z.string().optional().default("it"),
 });
 
