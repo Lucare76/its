@@ -22,7 +22,10 @@ const kindLabel: Record<string, string> = {
   formula_medmar_napoli:  "MEDMAR Napoli",
   formula_medmar_pozzuoli:"MEDMAR Pozzuoli",
   formula_snav:           "SNAV",
+  bus_convocazione:       "Convocazione Bus",
 };
+
+type FilterMode = "info_3d" | "bus_convocazione";
 
 export default function WhatsAppLogPage() {
   const [loading, setLoading] = useState(true);
@@ -30,9 +33,10 @@ export default function WhatsAppLogPage() {
   const [rows, setRows]       = useState<NotReadRow[]>([]);
   const [failedRows, setFailedRows] = useState<NotReadRow[]>([]);
   const [days, setDays]       = useState(30);
+  const [filterMode, setFilterMode] = useState<FilterMode>("info_3d");
   const [error, setError]     = useState("");
 
-  const load = useCallback(async (d: number) => {
+  const load = useCallback(async (d: number, mode: FilterMode) => {
     setLoading(true);
     setError("");
     if (!supabase) { setError("Sessione non disponibile."); setLoading(false); return; }
@@ -40,7 +44,7 @@ export default function WhatsAppLogPage() {
     const token = sess.session?.access_token;
     if (!token) { setError("Non autenticato."); setLoading(false); return; }
 
-    const res  = await fetch(`/api/ops/whatsapp-log?days=${d}`, { headers: { Authorization: `Bearer ${token}` } });
+    const res  = await fetch(`/api/ops/whatsapp-log?days=${d}&filter=${mode}`, { headers: { Authorization: `Bearer ${token}` } });
     const body = await res.json().catch(() => null) as { ok?: boolean; kpi?: KPI; notReadRows?: NotReadRow[]; failedRows?: NotReadRow[]; error?: string } | null;
     if (!res.ok || !body?.ok) { setError(body?.error ?? `Errore caricamento dati (HTTP ${res.status}).`); setLoading(false); return; }
     setKpi(body.kpi ?? null);
@@ -52,25 +56,43 @@ export default function WhatsAppLogPage() {
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
-      if (!cancelled) void load(days);
+      if (!cancelled) void load(days, filterMode);
     });
     return () => {
       cancelled = true;
     };
-  }, [days, load]);
+  }, [days, filterMode, load]);
 
   const pct = (n: number) => kpi && kpi.total > 0 ? Math.round((n / kpi.total) * 100) : 0;
+
+  const isBusMode = filterMode === "bus_convocazione";
 
   return (
     <section className="page-section">
       <PageHeader
-        title="Log WhatsApp — Prima di partire"
-        subtitle="Stato di consegna dei messaggi informativi inviati ai clienti."
+        title={isBusMode ? "Log WhatsApp — Convocazioni Bus" : "Log WhatsApp — Prima di partire"}
+        subtitle={isBusMode ? "Stato di consegna delle convocazioni bus inviate da Excel." : "Stato di consegna dei messaggi informativi inviati ai clienti."}
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "WhatsApp Log" }]}
       />
 
+      {/* Filtro tipo */}
+      <div className="flex flex-wrap gap-2">
+        {([
+          { key: "info_3d" as FilterMode, label: "Prima di partire" },
+          { key: "bus_convocazione" as FilterMode, label: "Convocazioni Bus" },
+        ]).map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => setFilterMode(key)}
+            className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition border ${filterMode === key ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200 hover:border-indigo-300"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       {/* Filtro giorni */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 mt-2">
         {[7, 14, 30, 60].map((d) => (
           <button
             key={d}
@@ -126,7 +148,7 @@ export default function WhatsAppLogPage() {
                   <thead className="bg-slate-50 border-b border-slate-100">
                     <tr>
                       <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Cliente</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Arrivo</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">{isBusMode ? "Data partenza" : "Arrivo"}</th>
                       <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Tipo</th>
                       <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Telefono</th>
                       <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Stato</th>
@@ -135,7 +157,7 @@ export default function WhatsAppLogPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {rows.map((r, i) => (
-                      <tr key={r.service_id ?? i} className="hover:bg-slate-50">
+                      <tr key={r.service_id ?? `${r.to_phone}-${i}`} className="hover:bg-slate-50">
                         <td className="px-4 py-2.5 font-medium text-slate-800">{r.customer_name ?? "—"}</td>
                         <td className="px-4 py-2.5 text-slate-600">{r.arrival_date ?? "—"}</td>
                         <td className="px-4 py-2.5 text-slate-500 text-xs">{kindLabel[r.booking_service_kind ?? ""] ?? r.booking_service_kind ?? "—"}</td>
@@ -156,7 +178,7 @@ export default function WhatsAppLogPage() {
             </div>
           ) : (
             <div className="rounded-2xl border border-slate-100 bg-white p-8 text-center text-sm text-slate-400">
-              Tutti i messaggi risultano letti.
+              {isBusMode ? "Tutte le convocazioni bus risultano lette." : "Tutti i messaggi risultano letti."}
             </div>
           )}
 
@@ -171,7 +193,7 @@ export default function WhatsAppLogPage() {
                   <thead className="bg-rose-50 border-b border-rose-100">
                     <tr>
                       <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Cliente</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Arrivo</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">{isBusMode ? "Data partenza" : "Arrivo"}</th>
                       <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Tipo</th>
                       <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Telefono</th>
                       <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Data</th>
@@ -179,7 +201,7 @@ export default function WhatsAppLogPage() {
                   </thead>
                   <tbody className="divide-y divide-rose-50">
                     {failedRows.map((r, i) => (
-                      <tr key={r.service_id ?? i} className="hover:bg-rose-50/50">
+                      <tr key={r.service_id ?? `${r.to_phone}-${i}`} className="hover:bg-rose-50/50">
                         <td className="px-4 py-2.5 font-medium text-slate-800">{r.customer_name ?? "—"}</td>
                         <td className="px-4 py-2.5 text-slate-600">{r.arrival_date ?? "—"}</td>
                         <td className="px-4 py-2.5 text-slate-500 text-xs">{kindLabel[r.booking_service_kind ?? ""] ?? r.booking_service_kind ?? "—"}</td>
