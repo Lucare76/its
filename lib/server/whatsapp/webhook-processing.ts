@@ -458,6 +458,11 @@ async function resolveStatusTenant(admin: SupabaseClient, status: MetaStatus) {
     : { data: null };
   if (storedMessage?.tenant_id) return { tenantId: String(storedMessage.tenant_id), serviceId: storedMessage.booking_id ? String(storedMessage.booking_id) : null };
 
+  const { data: eventRecord } = status.id
+    ? await admin.from("whatsapp_events").select("tenant_id, service_id").eq("provider_message_id", status.id).limit(1).maybeSingle()
+    : { data: null };
+  if (eventRecord?.tenant_id) return { tenantId: String(eventRecord.tenant_id), serviceId: eventRecord.service_id ? String(eventRecord.service_id) : null };
+
   const { data: tenants } = await admin.from("tenants").select("id").limit(2);
   return tenants?.length === 1 ? { tenantId: String(tenants[0].id), serviceId: null } : { tenantId: null, serviceId: null };
 }
