@@ -52,6 +52,8 @@ export async function POST(request: NextRequest) {
     companyPhone:         body.companyPhone          ?? null,
     companyWhatsapp:      body.companyWhatsapp       ?? null,
     footerPhone:          tenant?.contact_phone      ?? null,
+    isAgency:             body.isAgency              ?? false,
+    endCustomerName:      body.endCustomerName       ?? null,
     items:                body.items                 ?? undefined,
     totalPriceCents:      body.totalPriceCents       ?? null,
   };

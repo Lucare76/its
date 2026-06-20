@@ -80,6 +80,8 @@ export async function POST(request: NextRequest, { params }: Params) {
     companyPhone:     tenant?.quote_company_phone ?? null,
     companyWhatsapp:  tenant?.quote_company_whatsapp ?? null,
     footerPhone:      tenant?.contact_phone ?? null,
+    isAgency:         quote.is_agency ?? false,
+    endCustomerName:  quote.end_customer_name ?? null,
     items:            quoteItems ?? [],
     totalPriceCents:  totalPriceCents || null,
   };

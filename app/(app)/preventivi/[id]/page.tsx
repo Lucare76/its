@@ -44,6 +44,8 @@ type QuoteFull = {
   payment_instructions: string | null;
   payment_reference: string | null;
   notes_internal: string | null;
+  is_agency: boolean;
+  end_customer_name: string | null;
   offer_sent_at: string | null;
   accepted_at: string | null;
   paid_at: string | null;
@@ -59,6 +61,7 @@ type QuoteItem = {
   title: string | null;
   description: string | null;
   service_type: string | null;
+  direction: "arrival" | "departure" | "round_trip" | null;
   arrival_date: string | null;
   arrival_time: string | null;
   departure_date: string | null;
@@ -70,6 +73,22 @@ type QuoteItem = {
   unit_price_cents: number | null;
   total_price_cents: number | null;
   price_notes: string | null;
+};
+
+type QuoteItemForm = {
+  item_type: "service" | "free_text";
+  title: string;
+  description: string;
+  service_type: string;
+  direction: string;
+  service_date: string;
+  service_time: string;
+  hotel_name: string;
+  pax: number;
+  quantity: number;
+  price_euros: string;
+  price_mode: "per_person" | "total";
+  price_notes: string;
 };
 
 type FormData = {
@@ -100,6 +119,9 @@ type FormData = {
   bank_account_holder: string;
   payment_instructions: string;
   notes_internal: string;
+  is_agency: boolean;
+  end_customer_name: string;
+  items: QuoteItemForm[];
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -170,6 +192,23 @@ function quoteToForm(q: QuoteFull): FormData {
     bank_account_holder: q.bank_account_holder ?? "",
     payment_instructions: q.payment_instructions ?? "",
     notes_internal:      q.notes_internal ?? "",
+    is_agency:           q.is_agency ?? false,
+    end_customer_name:   q.end_customer_name ?? "",
+    items: Array.isArray(q.items) ? q.items.slice(1).map((item) => ({
+      item_type: item.item_type === "free_text" ? "free_text" as const : "service" as const,
+      title: String(item.title ?? ""),
+      description: String(item.description ?? ""),
+      service_type: String(item.service_type ?? "custom"),
+      direction: String(item.direction ?? ""),
+      service_date: String(item.arrival_date ?? item.departure_date ?? ""),
+      service_time: String((item.arrival_time ?? item.departure_time ?? "") as string).slice(0, 5),
+      hotel_name: String(item.hotel_name ?? ""),
+      pax: Number(item.pax ?? 1),
+      quantity: Number(item.quantity ?? 1),
+      price_euros: item.unit_price_cents ? String(Number(item.unit_price_cents) / 100) : "",
+      price_mode: item.price_mode === "total" ? "total" as const : "per_person" as const,
+      price_notes: String(item.price_notes ?? ""),
+    })) : [],
   };
 }
 
@@ -225,6 +264,74 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
     setForm(f => f ? { ...f, [field]: value } : f);
   }
 
+  function updateItem(index: number, patch: Partial<QuoteItemForm>) {
+    setForm(f => f ? { ...f, items: f.items.map((item, i) => i === index ? { ...item, ...patch } : item) } : f);
+  }
+
+  function addItem(item_type: "service" | "free_text") {
+    setForm(f => f ? {
+      ...f,
+      items: [...f.items, {
+        item_type, title: item_type === "service" ? "Servizio aggiuntivo" : "Voce libera",
+        description: "", service_type: "custom", direction: "", service_date: "", service_time: "",
+        hotel_name: "", pax: item_type === "service" ? f.pax : 0, quantity: 1,
+        price_euros: "", price_mode: "per_person" as const, price_notes: "",
+      }],
+    } : f);
+  }
+
+  function removeItem(index: number) {
+    setForm(f => f ? { ...f, items: f.items.filter((_, i) => i !== index) } : f);
+  }
+
+  function itemPriceCents(value: string) {
+    return Math.round(parseFloat(value) * 100) || 0;
+  }
+
+  function buildQuoteItems(priceCents: number) {
+    if (!form) return [];
+    const formShowArr = form.direction === "arrival" || form.direction === "round_trip";
+    const formShowDep = form.direction === "departure" || form.direction === "round_trip";
+    return [
+      {
+        item_type: "service" as const, price_mode: form.price_mode, service_type: form.service_type,
+        direction: form.direction || null,
+        arrival_date: formShowArr ? (form.arrival_date || null) : null,
+        arrival_time: formShowArr ? (form.arrival_time || null) : null,
+        arrival_flight_train: formShowArr ? (form.arrival_flight_train || null) : null,
+        departure_date: formShowDep ? (form.departure_date || null) : null,
+        departure_time: formShowDep ? (form.departure_time || null) : null,
+        departure_flight_train: formShowDep ? (form.departure_flight_train || null) : null,
+        hotel_name: form.hotel_name || null, hotel_address: form.hotel_address || null,
+        pax: form.pax, quantity: 1, luggage_notes: form.luggage_notes || null,
+        special_requests: form.special_requests || null,
+        unit_price_cents: priceCents,
+        total_price_cents: form.price_mode === "total" ? priceCents : priceCents * form.pax,
+        price_notes: form.price_notes || null,
+      },
+      ...form.items.map((item) => {
+        const cents = itemPriceCents(item.price_euros);
+        return {
+          item_type: item.item_type, price_mode: item.price_mode,
+          title: item.title || null, description: item.description || null,
+          service_type: item.item_type === "service" ? item.service_type : null,
+          direction: item.item_type === "service" ? item.direction || null : null,
+          arrival_date: item.item_type === "service" && item.direction !== "departure" ? item.service_date || null : null,
+          arrival_time: item.item_type === "service" && item.direction !== "departure" ? item.service_time || null : null,
+          departure_date: item.item_type === "service" && item.direction === "departure" ? item.service_date || null : null,
+          departure_time: item.item_type === "service" && item.direction === "departure" ? item.service_time || null : null,
+          hotel_name: item.item_type === "service" ? item.hotel_name || null : null,
+          pax: item.item_type === "service" ? item.pax : 0,
+          quantity: item.item_type === "free_text" ? item.quantity : 1,
+          unit_price_cents: cents,
+          total_price_cents: item.price_mode === "total" ? cents
+            : item.item_type === "service" ? cents * Math.max(item.pax, 1) : cents * Math.max(item.quantity, 1),
+          price_notes: item.price_notes || null,
+        };
+      }),
+    ];
+  }
+
   async function handleSave(sendAfter = false) {
     if (!form || !quote) return;
     setSaving(true);
@@ -260,8 +367,11 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
       bank_account_holder: form.bank_account_holder || null,
       payment_instructions: form.payment_instructions || null,
       notes_internal:      form.notes_internal || null,
+      is_agency:           form.is_agency,
+      end_customer_name:   form.is_agency ? (form.end_customer_name || null) : null,
     };
     if (!isLocked("price_euros", quote.status)) payload.price_cents = priceCents;
+    payload.items = buildQuoteItems(priceCents);
 
     const res = await fetch(`/api/ops/service-quotes/${id}`, {
       method: "PATCH",
@@ -387,6 +497,8 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
             <Row label="Email" value={quote.customer_email} />
             {quote.customer_phone && <Row label="Telefono" value={quote.customer_phone} />}
             <Row label="Lingua" value={quote.customer_language === "it" ? "🇮🇹 Italiano" : "🇬🇧 English"} />
+            {quote.is_agency && <Row label="Tipo" value="Agenzia" />}
+            {quote.is_agency && quote.end_customer_name && <Row label="Cliente finale" value={quote.end_customer_name} />}
           </Section>
 
           <Section title="Servizio">
@@ -597,6 +709,20 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
                     options={[{ value:"it", label:"🇮🇹 Italiano" },{ value:"en", label:"🇬🇧 English" }]} />
                 </EF>
               </Grid>
+              {!isPartialLock && (
+                <div className="mt-3 space-y-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={form.is_agency} onChange={e => setForm(f => f ? { ...f, is_agency: e.target.checked, end_customer_name: e.target.checked ? f.end_customer_name : "" } : f)}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                    <span className="text-sm text-slate-700">Preventivo per agenzia</span>
+                  </label>
+                  {form.is_agency && (
+                    <EF label="Nome cliente finale" full locked={false}>
+                      <EInput value={form.end_customer_name} onChange={v => sf("end_customer_name", v)} locked={false} placeholder="es. Mario Rossi / Gruppo Smith" />
+                    </EF>
+                  )}
+                </div>
+              )}
             </Card>
 
             {/* Servizio */}
@@ -649,6 +775,64 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
                 <EF label="Note prezzo" full locked={Lk("price_notes")}><EInput value={form.price_notes} onChange={v => sf("price_notes", v)} locked={Lk("price_notes")} /></EF>
               </Grid>
             </Card>
+
+            {/* Servizi extra */}
+            {!isPartialLock && (
+              <Card title="Servizi extra e voci libere">
+                <div className="space-y-3">
+                  {form.items.length === 0 && (
+                    <p className="text-sm text-slate-400">Aggiungi altri servizi nello stesso preventivo oppure una voce descrittiva libera.</p>
+                  )}
+                  {form.items.map((item, index) => (
+                    <div key={index} className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <ESelect value={item.item_type} onChange={v => updateItem(index, { item_type: v as "service" | "free_text" })} locked={false}
+                          options={[{ value: "service", label: "Servizio" }, { value: "free_text", label: "Voce libera" }]} />
+                        <button type="button" onClick={() => removeItem(index)} className="shrink-0 text-xs text-red-600 hover:underline">Rimuovi</button>
+                      </div>
+                      <Grid>
+                        <EF label="Titolo" full locked={false}><EInput value={item.title} onChange={v => updateItem(index, { title: v })} locked={false} /></EF>
+                        <EF label="Descrizione" full locked={false}>
+                          <ETextarea value={item.description} onChange={v => updateItem(index, { description: v })} locked={false} rows={2} />
+                        </EF>
+                        {item.item_type === "service" && (
+                          <>
+                            <EF label="Tipo" locked={false}><ESelect value={item.service_type} onChange={v => updateItem(index, { service_type: v })} locked={false} options={SERVICE_OPTIONS} /></EF>
+                            <EF label="Direzione" locked={false}>
+                              <ESelect value={item.direction} onChange={v => updateItem(index, { direction: v })} locked={false} options={[
+                                { value: "", label: "Non specificata" }, { value: "arrival", label: "Arrivo" },
+                                { value: "departure", label: "Partenza" }, { value: "round_trip", label: "A/R" },
+                              ]} />
+                            </EF>
+                            <EF label="Data" locked={false}><EInput type="date" value={item.service_date} onChange={v => updateItem(index, { service_date: v })} locked={false} /></EF>
+                            <EF label="Orario" locked={false}><EInput type="time" value={item.service_time} onChange={v => updateItem(index, { service_time: v })} locked={false} /></EF>
+                            <EF label="Hotel" locked={false}><EInput value={item.hotel_name} onChange={v => updateItem(index, { hotel_name: v })} locked={false} /></EF>
+                            <EF label="Pax" locked={false}><EInput type="number" value={String(item.pax)} onChange={v => updateItem(index, { pax: Number(v) })} locked={false} /></EF>
+                          </>
+                        )}
+                        {item.item_type === "free_text" && (
+                          <EF label="Quantita" locked={false}><EInput type="number" value={String(item.quantity)} onChange={v => updateItem(index, { quantity: Number(v) })} locked={false} /></EF>
+                        )}
+                        <EF label="Modalita prezzo" locked={false}>
+                          <ESelect value={item.price_mode} onChange={v => updateItem(index, { price_mode: v as "per_person" | "total" })} locked={false} options={[
+                            { value: "per_person", label: item.item_type === "service" ? "Per persona" : "Per quantita" },
+                            { value: "total", label: "Totale voce" },
+                          ]} />
+                        </EF>
+                        <EF label={item.price_mode === "total" ? "Prezzo totale" : item.item_type === "service" ? "Prezzo per pax" : "Prezzo unitario"} locked={false}>
+                          <EInput type="number" step="0.01" value={item.price_euros} onChange={v => updateItem(index, { price_euros: v })} locked={false} />
+                        </EF>
+                        <EF label="Note prezzo" full locked={false}><EInput value={item.price_notes} onChange={v => updateItem(index, { price_notes: v })} locked={false} /></EF>
+                      </Grid>
+                    </div>
+                  ))}
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => addItem("service")} className="text-sm px-3 py-2 rounded-lg border border-blue-200 text-blue-700 hover:bg-blue-50">+ Servizio</button>
+                    <button type="button" onClick={() => addItem("free_text")} className="text-sm px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50">+ Voce libera</button>
+                  </div>
+                </div>
+              </Card>
+            )}
 
             {/* Email */}
             <Card title="Email offerta">

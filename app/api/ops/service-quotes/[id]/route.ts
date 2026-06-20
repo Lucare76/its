@@ -60,6 +60,8 @@ const patchSchema = z.object({
   bank_account_holder:  z.string().max(200).nullable().optional(),
   payment_instructions: z.string().max(2000).nullable().optional(),
   notes_internal:       z.string().max(5000).nullable().optional(),
+  is_agency:            z.boolean().optional(),
+  end_customer_name:    z.string().max(200).nullable().optional(),
   items:                z.array(quoteItemSchema).min(1).max(30).optional(),
 });
 
@@ -144,6 +146,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   if (d.bank_account_holder !== undefined) updates.bank_account_holder = d.bank_account_holder?.trim() || null;
   if (d.payment_instructions !== undefined) updates.payment_instructions = d.payment_instructions?.trim() || null;
   if (d.notes_internal      !== undefined) updates.notes_internal      = d.notes_internal?.trim() || null;
+  if (d.is_agency           !== undefined) updates.is_agency           = d.is_agency;
+  if (d.end_customer_name   !== undefined) updates.end_customer_name   = d.is_agency !== false ? (d.end_customer_name?.trim() || null) : null;
 
   if (d.items !== undefined) {
     const normalizedItems = normalizeQuoteItems(d.items, {

@@ -36,6 +36,8 @@ type FormData = {
   bank_account_holder: string;
   payment_instructions: string;
   notes_internal: string;
+  is_agency: boolean;
+  end_customer_name: string;
   items: QuoteItemForm[];
 };
 
@@ -67,6 +69,7 @@ const EMPTY_FORM: FormData = {
   pax: 1, luggage_notes: "", special_requests: "",
   price_euros: "", price_mode: "per_person", price_notes: "",
   email_intro: "", iban: "", swift_code: "", bank_account_holder: "", payment_instructions: "", notes_internal: "",
+  is_agency: false, end_customer_name: "",
   items: [],
 };
 
@@ -342,6 +345,8 @@ function NewPreventiveInner() {
         bank_account_holder: String(q.bank_account_holder ?? ""),
         payment_instructions: String(q.payment_instructions ?? ""),
         notes_internal:      "",
+        is_agency:           Boolean(q.is_agency),
+        end_customer_name:   String(q.end_customer_name ?? ""),
         items:               Array.isArray(q.items) ? (q.items as Array<Record<string, unknown>>).slice(1).map((item) => ({
           item_type: item.item_type === "free_text" ? "free_text" : "service",
           title: String(item.title ?? ""),
@@ -491,6 +496,8 @@ function NewPreventiveInner() {
       bank_account_holder: form.bank_account_holder || null,
       payment_instructions: form.payment_instructions || null,
       notes_internal:      form.notes_internal || null,
+      is_agency:           form.is_agency,
+      end_customer_name:   form.is_agency ? (form.end_customer_name || null) : null,
       items:               buildQuoteItems(priceCents),
     };
 
@@ -625,6 +632,18 @@ function NewPreventiveInner() {
                     options={[{ value:"it", label:"🇮🇹 Italiano" },{ value:"en", label:"🇬🇧 English" }]} />
                 </Field>
               </Grid>
+              <div className="mt-3 space-y-3">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={form.is_agency} onChange={e => setForm(f => ({ ...f, is_agency: e.target.checked, end_customer_name: e.target.checked ? f.end_customer_name : "" }))}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                  <span className="text-sm text-slate-700">Preventivo per agenzia</span>
+                </label>
+                {form.is_agency && (
+                  <Field label="Nome cliente finale" full>
+                    <Input value={form.end_customer_name} onChange={v => sf("end_customer_name", v)} placeholder="es. Mario Rossi / Gruppo Smith" />
+                  </Field>
+                )}
+              </div>
             </Card>
 
             {/* Servizio */}

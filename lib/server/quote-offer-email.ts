@@ -40,6 +40,8 @@ export interface ServiceQuoteEmailData {
   companyPhone: string | null;
   companyWhatsapp: string | null;
   footerPhone: string | null;
+  isAgency?: boolean;
+  endCustomerName?: string | null;
   items?: ServiceQuoteEmailItem[];
   totalPriceCents?: number | null;
 }
@@ -177,6 +179,7 @@ function buildOfferBody(d: ServiceQuoteEmailData): string {
   }
 
   const detailRows: Array<[string, string]> = [
+    ...(d.isAgency && d.endCustomerName ? [[it ? "👤 Cliente" : "👤 Guest", e(d.endCustomerName)] as [string, string]] : []),
     [it ? "🚐 Tipo servizio" : "🚐 Service type", e(typeLabel)],
     ...(d.hotelName ? [[it ? "🏨 Hotel" : "🏨 Hotel", e(d.hotelName)] as [string, string]] : []),
     ...(d.hotelAddress ? [[it ? "📍 Indirizzo" : "📍 Address", e(d.hotelAddress)] as [string, string]] : []),

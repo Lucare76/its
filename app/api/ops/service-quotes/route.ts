@@ -69,6 +69,8 @@ const createSchema = z.object({
   payment_instructions: z.string().max(2000).nullable().optional(),
 
   notes_internal: z.string().max(5000).nullable().optional(),
+  is_agency: z.boolean().default(false),
+  end_customer_name: z.string().max(200).nullable().optional(),
   items: z.array(quoteItemSchema).min(1).max(30).optional(),
 });
 
@@ -82,7 +84,7 @@ export async function GET(request: NextRequest) {
 
   let query = auth.admin
     .from("service_quotes")
-    .select("id,quote_number,status,customer_first_name,customer_last_name,customer_email,customer_phone,customer_language,service_type,direction,arrival_date,departure_date,hotel_name,pax,price_cents,price_mode,currency,offer_sent_at,accepted_at,paid_at,confirmed_at,expires_at,created_at,updated_at,notes_internal")
+    .select("id,quote_number,status,customer_first_name,customer_last_name,customer_email,customer_phone,customer_language,service_type,direction,arrival_date,departure_date,hotel_name,pax,price_cents,price_mode,currency,offer_sent_at,accepted_at,paid_at,confirmed_at,expires_at,created_at,updated_at,notes_internal,is_agency,end_customer_name")
     .eq("tenant_id", tenantId)
     .order("created_at", { ascending: false });
 
@@ -188,6 +190,8 @@ export async function POST(request: NextRequest) {
     bank_account_holder: tenant?.quote_bank_holder || null,
     payment_instructions: d.payment_instructions?.trim() || tenant?.quote_payment_instructions || null,
     notes_internal:      d.notes_internal?.trim() || null,
+    is_agency:           d.is_agency,
+    end_customer_name:   d.is_agency ? (d.end_customer_name?.trim() || null) : null,
     created_by:          auth.user.id,
     status:              "draft",
   };
