@@ -1,7 +1,7 @@
 import { emailHtml, emailButton, emailDataTable, fmtDate, emailHighlightBox } from "@/lib/server/email-layout";
 import { sendEmail } from "@/lib/server/send-email";
 import { escapeHtml } from "@/lib/server/escape-html";
-import { displaySentenceCase, displayTitleCase } from "@/lib/display-text-case";
+
 
 export type QuoteEmailResult = { ok: boolean; error?: string };
 
@@ -108,7 +108,7 @@ function fmtExpiresDate(iso: string | null, lang: "it" | "en"): string {
 }
 
 function itemTitle(item: ServiceQuoteEmailItem, lang: "it" | "en") {
-  if (item.title) return escapeHtml(displayTitleCase(item.title, lang));
+  if (item.title) return escapeHtml(item.title);
   if (item.item_type === "free_text") return lang === "it" ? "Servizio libero" : "Custom item";
   return escapeHtml(serviceTypeLabel(item.service_type ?? "custom", lang));
 }
@@ -120,7 +120,7 @@ function buildItemsHtml(items: ServiceQuoteEmailItem[] | undefined, lang: "it" |
   const blocks = items.map((item, index) => {
     const meta: string[] = [];
     if (item.item_type === "service") {
-      if (item.hotel_name) meta.push(`${it ? "Hotel" : "Hotel"}: ${e(displayTitleCase(item.hotel_name, lang))}`);
+      if (item.hotel_name) meta.push(`${it ? "Hotel" : "Hotel"}: ${e(item.hotel_name)}`);
       if (item.pax != null && item.pax > 0) meta.push(`${item.pax} pax`);
       if (item.price_mode === "per_person" && item.unit_price_cents != null) {
         meta.push(`${it ? "Per persona" : "Per person"}: € ${fmtEur(item.unit_price_cents)}`);
@@ -132,9 +132,9 @@ function buildItemsHtml(items: ServiceQuoteEmailItem[] | undefined, lang: "it" |
     } else if (item.quantity && item.quantity > 1) {
       meta.push(`${it ? "Quantita" : "Quantity"}: ${item.quantity}`);
     }
-    if (item.description) meta.push(e(displaySentenceCase(item.description)));
-    if (item.special_requests) meta.push(e(displaySentenceCase(item.special_requests)));
-    if (item.price_notes) meta.push(e(displaySentenceCase(item.price_notes)));
+    if (item.description) meta.push(e(item.description));
+    if (item.special_requests) meta.push(e(item.special_requests));
+    if (item.price_notes) meta.push(e(item.price_notes));
 
     return `
       <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:10px;background:#ffffff;">
@@ -251,6 +251,8 @@ function buildOfferBody(d: ServiceQuoteEmailData): string {
   return `
     <p style="font-size:17px;margin-bottom:6px;">${it ? "Gentile" : "Dear"} <strong>${e(d.customerFirstName)} ${e(d.customerLastName)}</strong>,</p>
     ${intro}
+
+    ${d.isAgency && d.endCustomerName ? `<p style="margin:16px 0 4px;font-size:14px;color:#475569;">👤 ${it ? "Cliente" : "Guest"}: <strong>${e(d.endCustomerName)}</strong></p>` : ""}
 
     ${d.items && d.items.length > 0 ? buildItemsHtml(d.items, d.customerLanguage) : `
       <p style="margin:20px 0 8px;font-weight:700;color:#1e3a5f;">${it ? "DETTAGLI SERVIZIO" : "SERVICE DETAILS"}</p>

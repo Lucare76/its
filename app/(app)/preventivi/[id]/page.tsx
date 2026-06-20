@@ -4,7 +4,7 @@ import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getToken } from "@/lib/supabase/client";
-import { displaySentenceCase, displayTitleCase } from "@/lib/display-text-case";
+
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -540,20 +540,20 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
                   <div key={index} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
                     <div className="flex justify-between gap-3 text-sm">
                       <span className="font-semibold text-slate-800">
-                        {index + 1}. {displayTitleCase(item.title || (item.item_type === "free_text" ? "Voce libera" : SERVICE_LABELS[item.service_type ?? ""] ?? item.service_type ?? "Servizio"), "it")}
+                        {index + 1}. {item.title || (item.item_type === "free_text" ? "Voce libera" : SERVICE_LABELS[item.service_type ?? ""] ?? item.service_type ?? "Servizio")}
                       </span>
                       <span className="font-bold text-blue-900">{fmtEur(item.total_price_cents ?? 0)}</span>
                     </div>
                     <p className="mt-1 text-xs text-slate-500">
                       {[
-                        item.description ? displaySentenceCase(item.description) : null,
-                        item.hotel_name ? `Hotel: ${displayTitleCase(item.hotel_name, "it")}` : null,
+                        item.description ?? null,
+                        item.hotel_name ? `Hotel: ${item.hotel_name}` : null,
                         item.pax != null && item.pax > 0 ? `${item.pax} pax` : null,
                         item.price_mode === "per_person" && item.unit_price_cents != null ? `Per persona: ${fmtEur(item.unit_price_cents)}` : null,
                         item.quantity && item.quantity > 1 ? `Quantita: ${item.quantity}` : null,
                         item.arrival_date ? `Arrivo: ${fmtDate(item.arrival_date)}${item.arrival_time ? ` ${item.arrival_time.slice(0, 5)}` : ""}` : null,
                         item.departure_date ? `Partenza: ${fmtDate(item.departure_date)}${item.departure_time ? ` ${item.departure_time.slice(0, 5)}` : ""}` : null,
-                        item.price_notes ? displaySentenceCase(item.price_notes) : null,
+                        item.price_notes ?? null,
                       ].filter(Boolean).join(" · ")}
                     </p>
                   </div>
