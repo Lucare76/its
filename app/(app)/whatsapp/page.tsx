@@ -412,6 +412,40 @@ function mergeThreadsStable(current: ThreadRow[], incoming: ThreadRow[]) {
   return changed ? merged : current;
 }
 
+function areTemplateOptionsEqual(a: TemplateOption, b: TemplateOption) {
+  return (
+    a.key === b.key &&
+    a.label === b.label &&
+    a.template === b.template &&
+    a.language_code === b.language_code &&
+    a.status === b.status &&
+    a.category === b.category &&
+    a.body_parameter_count === b.body_parameter_count &&
+    a.body_text === b.body_text &&
+    a.header_format === b.header_format &&
+    a.is_tenant_default === b.is_tenant_default &&
+    a.is_tenant_arrival === b.is_tenant_arrival
+  );
+}
+
+function mergeTemplateOptionsStable(current: TemplateOption[], incoming: TemplateOption[]) {
+  if (current.length !== incoming.length) return incoming;
+
+  const incomingByKey = new Map(incoming.map((option) => [option.key, option]));
+  if (current.every((option) => {
+    const nextOption = incomingByKey.get(option.key);
+    return nextOption ? areTemplateOptionsEqual(option, nextOption) : false;
+  })) {
+    return current;
+  }
+
+  const currentByKey = new Map(current.map((option) => [option.key, option]));
+  return incoming.map((option) => {
+    const previous = currentByKey.get(option.key);
+    return previous && areTemplateOptionsEqual(previous, option) ? previous : option;
+  });
+}
+
 // ─── Template data helpers ─────────────────────────────────────────────────
 
 function buildSuggestedTemplateVariables(thread: ThreadRow | null, template: TemplateOption | null) {
@@ -862,6 +896,8 @@ export default function WhatsAppInboxPage() {
   const newChatModeRef = useRef(false);
   const loadRef = useRef<(nextThreadId?: string | null, options?: LoadOptions) => Promise<void>>(null!);
   const sendingRef = useRef(false);
+  const loadSequenceRef = useRef(0);
+  const loadAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     selectedThreadIdRef.current = selectedThreadId;
@@ -973,10 +1009,15 @@ export default function WhatsAppInboxPage() {
 
   const load = useCallback(
     async (nextThreadId?: string | null, options?: LoadOptions) => {
+      const sequence = ++loadSequenceRef.current;
+      loadAbortRef.current?.abort();
+      const abortController = new AbortController();
+      loadAbortRef.current = abortController;
       const showBlockingLoading = !options?.silent || !hasLoadedRef.current;
       if (showBlockingLoading) setLoading(true);
-      setError("");
+      if (!options?.silent) setError("");
       const token = await getAccessToken();
+      if (sequence !== loadSequenceRef.current || abortController.signal.aborted) return;
       if (!token) {
         setError("Sessione non disponibile.");
         if (showBlockingLoading) setLoading(false);
@@ -986,8 +1027,19 @@ export default function WhatsAppInboxPage() {
       if (nextThreadId) params.set("thread_id", nextThreadId);
       const response = await fetch(`/api/ops/whatsapp-inbox?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: abortController.signal,
+        cache: "no-store",
+      }).catch((fetchError: unknown) => {
+        if (abortController.signal.aborted) return null;
+        if (sequence === loadSequenceRef.current) {
+          setError(fetchError instanceof Error ? fetchError.message : "Errore di rete durante il caricamento WhatsApp.");
+          if (showBlockingLoading) setLoading(false);
+        }
+        return null;
       });
+      if (!response || sequence !== loadSequenceRef.current || abortController.signal.aborted) return;
       const body = (await response.json().catch(() => null)) as InboxPayload | null;
+      if (sequence !== loadSequenceRef.current || abortController.signal.aborted) return;
       if (!response.ok || !body?.ok) {
         setError(body?.error ?? "Errore caricamento WhatsApp Inbox.");
         if (showBlockingLoading) setLoading(false);
@@ -1021,8 +1073,11 @@ export default function WhatsAppInboxPage() {
         if (nextSelectedThreadId !== currentSelectedThreadId) return normalizeMessages(incoming);
         return mergeMessagesStable(current, incoming);
       });
-      setTemplateOptions(body.template_options ?? []);
-      setTemplateFetchError(body.template_fetch_error ?? "");
+      setTemplateOptions((current) => mergeTemplateOptionsStable(current, body.template_options ?? []));
+      setTemplateFetchError((current) => {
+        const incoming = body.template_fetch_error ?? "";
+        return current === incoming ? current : incoming;
+      });
       setSelectedTemplateKey((current) => {
         const available = body.template_options ?? [];
         if (available.some((item) => item.key === current)) return current;
@@ -1043,6 +1098,18 @@ export default function WhatsAppInboxPage() {
   );
 
   loadRef.current = load;
+
+  useEffect(() => () => {
+    loadSequenceRef.current += 1;
+    loadAbortRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    // Invalida subito l'eventuale risposta del filtro/thread precedente.
+    // Il nuovo caricamento è volutamente debounced più sotto.
+    loadSequenceRef.current += 1;
+    loadAbortRef.current?.abort();
+  }, [filter, search, selectedThreadId]);
 
   useEffect(() => {
     if (composerMode !== "template") return;
@@ -1096,15 +1163,32 @@ export default function WhatsAppInboxPage() {
 
   useEffect(() => {
     if (!selectedThreadId) return;
-    const interval = window.setInterval(() => { void loadRef.current(selectedThreadId, { silent: true }); }, 12000);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadRef.current(selectedThreadId, { silent: true });
+      }
+    }, 12000);
     return () => window.clearInterval(interval);
   }, [selectedThreadId]);
 
   useEffect(() => {
     if (selectedThreadId) return;
-    const interval = window.setInterval(() => { void loadRef.current(null, { silent: true }); }, 20000);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadRef.current(null, { silent: true });
+      }
+    }, 20000);
     return () => window.clearInterval(interval);
   }, [selectedThreadId]);
+
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void loadRef.current(selectedThreadIdRef.current, { silent: true });
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => document.removeEventListener("visibilitychange", refreshWhenVisible);
+  }, []);
 
   useEffect(() => {
     shouldStickToBottomRef.current = true;
