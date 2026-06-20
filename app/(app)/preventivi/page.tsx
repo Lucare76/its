@@ -21,6 +21,7 @@ type ServiceQuote = {
   hotel_name: string | null;
   pax: number;
   price_cents: number;
+  price_mode: "per_person" | "total";
   currency: string;
   offer_sent_at: string | null;
   accepted_at: string | null;
@@ -29,6 +30,7 @@ type ServiceQuote = {
   expires_at: string | null;
   created_at: string;
   notes_internal: string | null;
+  items?: Array<{ total_price_cents: number | null }>;
 };
 
 type QuoteFull = ServiceQuote & {
@@ -250,7 +252,11 @@ export default function PreventiviPage() {
                   <p className="text-xs text-slate-400 truncate">{q.customer_email}</p>
                   <div className="flex items-center justify-between mt-1">
                     <span className="text-xs text-slate-500">{SERVICE_LABELS[q.service_type] ?? q.service_type}</span>
-                    <span className="text-xs font-semibold text-blue-700">{fmtEur(q.price_cents * q.pax)}</span>
+                    <span className="text-xs font-semibold text-blue-700">
+                      {fmtEur(q.items?.length
+                        ? q.items.reduce((sum, item) => sum + (item.total_price_cents ?? 0), 0)
+                        : q.price_mode === "total" ? q.price_cents : q.price_cents * q.pax)}
+                    </span>
                   </div>
                 </button>
                 {/* ↗ open in new tab */}
@@ -412,8 +418,8 @@ function QuoteDetailPanel({
 
       {/* ── PREZZO ── */}
       <Section title="Prezzo">
-        <Row label="Per persona" value={fmtEur(quote.price_cents)} />
-        <Row label={`Totale (${quote.pax} pax)`} value={fmtEur(quote.price_cents * quote.pax)} bold />
+        {quote.price_mode !== "total" && <Row label="Per persona" value={fmtEur(quote.price_cents)} />}
+        <Row label={quote.price_mode === "total" ? "Totale" : `Totale (${quote.pax} pax)`} value={fmtEur(quote.price_mode === "total" ? quote.price_cents : quote.price_cents * quote.pax)} bold />
         {quote.price_notes && <Row label="Note" value={quote.price_notes} />}
       </Section>
 

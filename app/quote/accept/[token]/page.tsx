@@ -24,6 +24,7 @@ type QuoteDetails = {
   luggage_notes: string | null;
   special_requests: string | null;
   price_cents: number;
+  price_mode: "per_person" | "total";
   currency: string;
   price_notes: string | null;
   email_intro: string | null;
@@ -51,6 +52,7 @@ type QuoteItem = {
   hotel_address: string | null;
   pax: number | null;
   quantity: number | null;
+  price_mode: "per_person" | "total";
   luggage_notes: string | null;
   special_requests: string | null;
   unit_price_cents: number | null;
@@ -197,6 +199,9 @@ function QuoteItemCard({ item, index, lang }: { item: QuoteItem; index: number; 
     item.hotel_name ? `Hotel: ${item.hotel_name}` : null,
     item.hotel_address,
     item.pax != null && item.pax > 0 ? `${item.pax} pax` : null,
+    item.price_mode === "per_person" && item.unit_price_cents != null
+      ? `${lang === "it" ? "Per persona" : "Per person"}: ${fmtEur(item.unit_price_cents)}`
+      : null,
     item.quantity && item.quantity > 1 ? `${lang === "it" ? "Quantita" : "Quantity"}: ${item.quantity}` : null,
     item.arrival_date ? `${lang === "it" ? "Arrivo" : "Arrival"}: ${fmtDate(item.arrival_date, lang)}${item.arrival_time ? ` ${item.arrival_time.slice(0, 5)}` : ""}` : null,
     item.departure_date ? `${lang === "it" ? "Partenza" : "Departure"}: ${fmtDate(item.departure_date, lang)}${item.departure_time ? ` ${item.departure_time.slice(0, 5)}` : ""}` : null,
@@ -306,7 +311,7 @@ export default function AcceptQuotePage({ params }: { params: Promise<{ token: s
   const items = quote.items ?? [];
   const totalCents = items.length > 0
     ? items.reduce((sum, item) => sum + (item.total_price_cents ?? 0), 0)
-    : quote.price_cents * quote.pax;
+    : quote.price_mode === "total" ? quote.price_cents : quote.price_cents * quote.pax;
 
   return wrapper(
     <div className="bg-white rounded-2xl shadow overflow-hidden">
@@ -372,7 +377,7 @@ export default function AcceptQuotePage({ params }: { params: Promise<{ token: s
         <section>
           <h2 className="text-xs font-bold text-blue-900 uppercase tracking-wider mb-2">{t.price}</h2>
           <div className="bg-slate-50 rounded-xl px-4 py-1">
-            {items.length === 0 && <Row label={t.pricePerPerson} value={fmtEur(quote.price_cents)} />}
+            {items.length === 0 && quote.price_mode !== "total" && <Row label={t.pricePerPerson} value={fmtEur(quote.price_cents)} />}
             <div className="flex justify-between gap-4 py-2 text-sm">
               <span className="text-slate-500">{t.total}</span>
               <span className="text-blue-900 font-black text-base">{fmtEur(totalCents)}</span>

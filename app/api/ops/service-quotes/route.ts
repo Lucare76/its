@@ -12,6 +12,7 @@ const serviceTypeSchema = z.enum([
 
 const quoteItemSchema = z.object({
   item_type: z.enum(["service", "free_text"]),
+  price_mode: z.enum(["per_person", "total"]).default("per_person"),
   title: z.string().max(200).nullable().optional(),
   description: z.string().max(3000).nullable().optional(),
   service_type: serviceTypeSchema.nullable().optional(),
@@ -58,6 +59,7 @@ const createSchema = z.object({
   special_requests: z.string().max(2000).nullable().optional(),
 
   price_cents:  z.number().int().min(0),
+  price_mode:   z.enum(["per_person", "total"]).default("per_person"),
   currency:     z.string().length(3).default("EUR"),
   price_notes:  z.string().max(1000).nullable().optional(),
 
@@ -80,7 +82,7 @@ export async function GET(request: NextRequest) {
 
   let query = auth.admin
     .from("service_quotes")
-    .select("id,quote_number,status,customer_first_name,customer_last_name,customer_email,customer_phone,customer_language,service_type,direction,arrival_date,departure_date,hotel_name,pax,price_cents,currency,offer_sent_at,accepted_at,paid_at,confirmed_at,expires_at,created_at,updated_at,notes_internal")
+    .select("id,quote_number,status,customer_first_name,customer_last_name,customer_email,customer_phone,customer_language,service_type,direction,arrival_date,departure_date,hotel_name,pax,price_cents,price_mode,currency,offer_sent_at,accepted_at,paid_at,confirmed_at,expires_at,created_at,updated_at,notes_internal")
     .eq("tenant_id", tenantId)
     .order("created_at", { ascending: false });
 
@@ -137,6 +139,7 @@ export async function POST(request: NextRequest) {
     luggage_notes: d.luggage_notes?.trim() || null,
     special_requests: d.special_requests?.trim() || null,
     price_cents: d.price_cents,
+    price_mode: d.price_mode,
     price_notes: d.price_notes?.trim() || null,
   });
   const primary = normalizedItems.find((item) => item.item_type === "service") ?? normalizedItems[0];
@@ -175,6 +178,7 @@ export async function POST(request: NextRequest) {
     luggage_notes:       primary.luggage_notes ?? d.luggage_notes?.trim() ?? null,
     special_requests:    primary.special_requests ?? d.special_requests?.trim() ?? null,
     price_cents:         primary.unit_price_cents || d.price_cents,
+    price_mode:          primary.price_mode,
     currency:            d.currency,
     price_notes:         d.price_notes?.trim() || null,
     email_intro:         d.email_intro?.trim() || null,

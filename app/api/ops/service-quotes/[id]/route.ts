@@ -9,6 +9,7 @@ const serviceTypeSchema = z.enum(["transfer_airport","transfer_station","transfe
 
 const quoteItemSchema = z.object({
   item_type: z.enum(["service", "free_text"]),
+  price_mode: z.enum(["per_person", "total"]).default("per_person"),
   title: z.string().max(200).nullable().optional(),
   description: z.string().max(3000).nullable().optional(),
   service_type: serviceTypeSchema.nullable().optional(),
@@ -50,6 +51,7 @@ const patchSchema = z.object({
   luggage_notes:        z.string().max(1000).nullable().optional(),
   special_requests:     z.string().max(2000).nullable().optional(),
   price_cents:          z.number().int().min(0).optional(),
+  price_mode:           z.enum(["per_person", "total"]).optional(),
   price_notes:          z.string().max(1000).nullable().optional(),
   email_intro:          z.string().max(2000).nullable().optional(),
   payment_method:       z.string().max(40).nullable().optional(),
@@ -133,6 +135,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   if (d.luggage_notes       !== undefined) updates.luggage_notes       = d.luggage_notes?.trim() || null;
   if (d.special_requests    !== undefined) updates.special_requests    = d.special_requests?.trim() || null;
   if (d.price_cents         !== undefined) updates.price_cents         = d.price_cents;
+  if (d.price_mode          !== undefined) updates.price_mode          = d.price_mode;
   if (d.price_notes         !== undefined) updates.price_notes         = d.price_notes?.trim() || null;
   if (d.email_intro         !== undefined) updates.email_intro         = d.email_intro?.trim() || null;
   if (d.payment_method      !== undefined) updates.payment_method      = d.payment_method;
@@ -158,6 +161,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       luggage_notes: d.luggage_notes?.trim() ?? existing.luggage_notes ?? null,
       special_requests: d.special_requests?.trim() ?? existing.special_requests ?? null,
       price_cents: d.price_cents ?? existing.price_cents ?? 0,
+      price_mode: d.price_mode ?? existing.price_mode ?? "per_person",
       price_notes: d.price_notes?.trim() ?? existing.price_notes ?? null,
     });
     const primary = normalizedItems.find((item) => item.item_type === "service") ?? normalizedItems[0];
@@ -175,6 +179,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     updates.luggage_notes = primary.luggage_notes ?? null;
     updates.special_requests = primary.special_requests ?? null;
     if (d.price_cents !== undefined) updates.price_cents = primary.unit_price_cents;
+    updates.price_mode = primary.price_mode;
 
     const { error: deleteItemsErr } = await auth.admin
       .from("service_quote_items")
@@ -187,6 +192,34 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       .from("service_quote_items")
       .insert(quoteItemsForInsert(tenantId, id, normalizedItems));
     if (insertItemsErr) return NextResponse.json({ error: insertItemsErr.message }, { status: 500 });
+  } else if (d.price_cents !== undefined || d.price_mode !== undefined || d.pax !== undefined) {
+    const { data: primaryItem } = await auth.admin
+      .from("service_quote_items")
+      .select("id,pax,unit_price_cents,price_mode")
+      .eq("tenant_id", tenantId)
+      .eq("quote_id", id)
+      .eq("item_type", "service")
+      .order("sort_order", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (primaryItem) {
+      const pax = d.pax ?? primaryItem.pax ?? existing.pax ?? 1;
+      const unitPrice = d.price_cents ?? primaryItem.unit_price_cents ?? existing.price_cents ?? 0;
+      const priceMode = d.price_mode ?? primaryItem.price_mode ?? existing.price_mode ?? "per_person";
+      const { error: itemUpdateErr } = await auth.admin
+        .from("service_quote_items")
+        .update({
+          pax,
+          unit_price_cents: unitPrice,
+          price_mode: priceMode,
+          total_price_cents: priceMode === "total" ? unitPrice : unitPrice * Math.max(pax, 1),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", primaryItem.id)
+        .eq("tenant_id", tenantId);
+      if (itemUpdateErr) return NextResponse.json({ error: itemUpdateErr.message }, { status: 500 });
+    }
   }
 
   const { data: updated, error } = await auth.admin

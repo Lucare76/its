@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
     luggageNotes:         body.luggageNotes          ?? null,
     specialRequests:      body.specialRequests       ?? null,
     priceCents:           body.priceCents            ?? 0,
+    priceMode:            body.priceMode             ?? "per_person",
     currency:             body.currency              ?? "EUR",
     priceNotes:           body.priceNotes            ?? null,
     emailIntro:           body.emailIntro            ?? null,

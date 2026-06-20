@@ -89,6 +89,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     luggageNotes:      quote.luggage_notes ?? null,
     specialRequests:   quote.special_requests ?? null,
     priceCents:        quote.price_cents,
+    priceMode:         quote.price_mode ?? "per_person",
     currency:          quote.currency,
     priceNotes:        quote.price_notes ?? null,
     emailIntro:        quote.email_intro ?? null,

@@ -26,6 +26,7 @@ export interface ServiceQuoteEmailData {
   luggageNotes: string | null;
   specialRequests: string | null;
   priceCents: number;        // per persona
+  priceMode?: "per_person" | "total";
   currency: string;
   priceNotes: string | null;
   emailIntro: string | null; // messaggio apertura personalizzato
@@ -65,6 +66,7 @@ export interface ServiceQuoteEmailItem {
   luggage_notes?: string | null;
   special_requests?: string | null;
   unit_price_cents?: number | null;
+  price_mode?: "per_person" | "total" | null;
   total_price_cents?: number | null;
   price_notes?: string | null;
 }
@@ -117,6 +119,9 @@ function buildItemsHtml(items: ServiceQuoteEmailItem[] | undefined, lang: "it" |
     if (item.item_type === "service") {
       if (item.hotel_name) meta.push(`${it ? "Hotel" : "Hotel"}: ${e(item.hotel_name)}`);
       if (item.pax != null && item.pax > 0) meta.push(`${item.pax} pax`);
+      if (item.price_mode === "per_person" && item.unit_price_cents != null) {
+        meta.push(`${it ? "Per persona" : "Per person"}: € ${fmtEur(item.unit_price_cents)}`);
+      }
       if (item.arrival_date) meta.push(`${it ? "Arrivo" : "Arrival"}: ${fmtDate(item.arrival_date)}${item.arrival_time ? ` ${fmtTime(item.arrival_time)}` : ""}`);
       if (item.departure_date) meta.push(`${it ? "Partenza" : "Departure"}: ${fmtDate(item.departure_date)}${item.departure_time ? ` ${fmtTime(item.departure_time)}` : ""}`);
     } else if (item.quantity && item.quantity > 1) {
@@ -149,7 +154,7 @@ function buildItemsHtml(items: ServiceQuoteEmailItem[] | undefined, lang: "it" |
 function buildOfferBody(d: ServiceQuoteEmailData): string {
   const it = d.customerLanguage === "it";
   const e = escapeHtml;
-  const totalCents = d.totalPriceCents ?? d.items?.reduce((sum, item) => sum + (item.total_price_cents ?? 0), 0) ?? d.priceCents * d.pax;
+  const totalCents = d.totalPriceCents ?? d.items?.reduce((sum, item) => sum + (item.total_price_cents ?? 0), 0) ?? (d.priceMode === "total" ? d.priceCents : d.priceCents * d.pax);
   const typeLabel = serviceTypeLabel(d.serviceType, d.customerLanguage);
   const showArrival = d.direction === "arrival" || d.direction === "round_trip";
   const showDeparture = d.direction === "departure" || d.direction === "round_trip";
@@ -178,7 +183,7 @@ function buildOfferBody(d: ServiceQuoteEmailData): string {
   ];
 
   const priceRows: Array<[string, string]> = [
-    [it ? "💶 Prezzo a persona" : "💶 Price per person", `€ ${fmtEur(d.priceCents)}`],
+    ...(d.priceMode === "total" ? [] : [[it ? "💶 Prezzo a persona" : "💶 Price per person", `€ ${fmtEur(d.priceCents)}`] as [string, string]]),
     [it ? "💶 Totale" : "💶 Total", `<strong>€ ${fmtEur(totalCents)}</strong>`],
     ...(d.priceNotes ? [[it ? "ℹ️ Note prezzo" : "ℹ️ Price notes", e(d.priceNotes)] as [string, string]] : []),
   ];

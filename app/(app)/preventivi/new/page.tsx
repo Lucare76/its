@@ -28,6 +28,7 @@ type FormData = {
   luggage_notes: string;
   special_requests: string;
   price_euros: string;
+  price_mode: "per_person" | "total";
   price_notes: string;
   email_intro: string;
   iban: string;
@@ -50,6 +51,7 @@ type QuoteItemForm = {
   pax: number;
   quantity: number;
   price_euros: string;
+  price_mode: "per_person" | "total";
   price_notes: string;
 };
 
@@ -63,7 +65,7 @@ const EMPTY_FORM: FormData = {
   departure_date: "", departure_time: "", departure_flight_train: "",
   hotel_name: "", hotel_address: "",
   pax: 1, luggage_notes: "", special_requests: "",
-  price_euros: "", price_notes: "",
+  price_euros: "", price_mode: "per_person", price_notes: "",
   email_intro: "", iban: "", swift_code: "", bank_account_holder: "", payment_instructions: "", notes_internal: "",
   items: [],
 };
@@ -332,6 +334,7 @@ function NewPreventiveInner() {
         luggage_notes:       String(q.luggage_notes ?? ""),
         special_requests:    String(q.special_requests ?? ""),
         price_euros:         q.price_cents ? String(Number(q.price_cents) / 100) : "",
+        price_mode:          q.price_mode === "total" ? "total" : "per_person",
         price_notes:         String(q.price_notes ?? ""),
         email_intro:         String(q.email_intro ?? ""),
         iban:                String(q.iban ?? ""),
@@ -351,6 +354,7 @@ function NewPreventiveInner() {
           pax: Number(item.pax ?? 1),
           quantity: Number(item.quantity ?? 1),
           price_euros: item.unit_price_cents ? String(Number(item.unit_price_cents) / 100) : "",
+          price_mode: item.price_mode === "total" ? "total" : "per_person",
           price_notes: String(item.price_notes ?? ""),
         })) : [],
       });
@@ -382,6 +386,7 @@ function NewPreventiveInner() {
           pax: item_type === "service" ? f.pax : 0,
           quantity: 1,
           price_euros: "",
+          price_mode: "per_person",
           price_notes: "",
         },
       ],
@@ -400,6 +405,7 @@ function NewPreventiveInner() {
     return [
       {
         item_type: "service" as const,
+        price_mode: form.price_mode,
         service_type: form.service_type,
         direction: form.direction || null,
         arrival_date: form.arrival_date || null,
@@ -415,13 +421,14 @@ function NewPreventiveInner() {
         luggage_notes: form.luggage_notes || null,
         special_requests: form.special_requests || null,
         unit_price_cents: priceCents,
-        total_price_cents: priceCents * form.pax,
+        total_price_cents: form.price_mode === "total" ? priceCents : priceCents * form.pax,
         price_notes: form.price_notes || null,
       },
       ...form.items.map((item) => {
         const cents = itemPriceCents(item.price_euros);
         return {
           item_type: item.item_type,
+          price_mode: item.price_mode,
           title: item.title || null,
           description: item.description || null,
           service_type: item.item_type === "service" ? item.service_type : null,
@@ -434,7 +441,9 @@ function NewPreventiveInner() {
           pax: item.item_type === "service" ? item.pax : 0,
           quantity: item.item_type === "free_text" ? item.quantity : 1,
           unit_price_cents: cents,
-          total_price_cents: item.item_type === "service" ? cents * Math.max(item.pax, 1) : cents * Math.max(item.quantity, 1),
+          total_price_cents: item.price_mode === "total"
+            ? cents
+            : item.item_type === "service" ? cents * Math.max(item.pax, 1) : cents * Math.max(item.quantity, 1),
           price_notes: item.price_notes || null,
         };
       }),
@@ -474,6 +483,7 @@ function NewPreventiveInner() {
       luggage_notes:       form.luggage_notes || null,
       special_requests:    form.special_requests || null,
       price_cents:         priceCents,
+      price_mode:          form.price_mode,
       price_notes:         form.price_notes || null,
       email_intro:         form.email_intro || null,
       iban:                form.iban || null,
@@ -532,6 +542,7 @@ function NewPreventiveInner() {
         luggageNotes:      form.luggage_notes || null,
         specialRequests:   form.special_requests || null,
         priceCents,
+        priceMode:          form.price_mode,
         currency:          "EUR",
         priceNotes:        form.price_notes || null,
         emailIntro:        form.email_intro || null,
@@ -651,13 +662,19 @@ function NewPreventiveInner() {
             {/* Prezzo */}
             <Card title="Prezzo">
               <Grid>
-                <Field label="Prezzo per persona (€) *">
+                <Field label="Modalita prezzo">
+                  <Select value={form.price_mode} onChange={v => sf("price_mode", v)} options={[
+                    { value: "per_person", label: "Per persona" },
+                    { value: "total", label: "Totale servizio" },
+                  ]} />
+                </Field>
+                <Field label={form.price_mode === "total" ? "Prezzo totale (€) *" : "Prezzo per persona (€) *"}>
                   <Input type="number" step="0.01" value={form.price_euros} onChange={v => sf("price_euros", v)} required placeholder="es. 45.00" />
                 </Field>
-                <Field label={`Totale (${form.pax} pax)`}>
+                <Field label={form.price_mode === "total" ? "Totale preventivo" : `Totale (${form.pax} pax)`}>
                   <div className="px-3 py-2 border border-slate-100 bg-slate-50 rounded-lg text-sm font-bold text-blue-900">
                     {form.price_euros
-                      ? `€ ${(parseFloat(form.price_euros || "0") * form.pax).toFixed(2)}`
+                      ? `€ ${(parseFloat(form.price_euros || "0") * (form.price_mode === "total" ? 1 : form.pax)).toFixed(2)}`
                       : "—"}
                   </div>
                 </Field>
@@ -703,7 +720,13 @@ function NewPreventiveInner() {
                       {item.item_type === "free_text" && (
                         <Field label="Quantita"><Input type="number" value={String(item.quantity)} onChange={v => updateItem(index, { quantity: Number(v) })} /></Field>
                       )}
-                      <Field label={item.item_type === "service" ? "Prezzo per pax" : "Prezzo unitario"}>
+                      <Field label="Modalita prezzo">
+                        <Select value={item.price_mode} onChange={v => updateItem(index, { price_mode: v as "per_person" | "total" })} options={[
+                          { value: "per_person", label: item.item_type === "service" ? "Per persona" : "Per quantita" },
+                          { value: "total", label: "Totale voce" },
+                        ]} />
+                      </Field>
+                      <Field label={item.price_mode === "total" ? "Prezzo totale" : item.item_type === "service" ? "Prezzo per pax" : "Prezzo unitario"}>
                         <Input type="number" step="0.01" value={item.price_euros} onChange={v => updateItem(index, { price_euros: v })} />
                       </Field>
                       <Field label="Note prezzo" full><Input value={item.price_notes} onChange={v => updateItem(index, { price_notes: v })} /></Field>

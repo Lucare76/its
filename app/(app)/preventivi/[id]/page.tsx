@@ -32,6 +32,7 @@ type QuoteFull = {
   luggage_notes: string | null;
   special_requests: string | null;
   price_cents: number;
+  price_mode: "per_person" | "total";
   currency: string;
   price_notes: string | null;
   email_intro: string | null;
@@ -64,6 +65,8 @@ type QuoteItem = {
   hotel_name: string | null;
   pax: number | null;
   quantity: number | null;
+  price_mode: "per_person" | "total";
+  unit_price_cents: number | null;
   total_price_cents: number | null;
   price_notes: string | null;
 };
@@ -88,6 +91,7 @@ type FormData = {
   luggage_notes: string;
   special_requests: string;
   price_euros: string;
+  price_mode: "per_person" | "total";
   price_notes: string;
   email_intro: string;
   iban: string;
@@ -157,6 +161,7 @@ function quoteToForm(q: QuoteFull): FormData {
     luggage_notes:       q.luggage_notes ?? "",
     special_requests:    q.special_requests ?? "",
     price_euros:         String(q.price_cents / 100),
+    price_mode:          q.price_mode ?? "per_person",
     price_notes:         q.price_notes ?? "",
     email_intro:         q.email_intro ?? "",
     iban:                q.iban ?? "",
@@ -171,7 +176,7 @@ function quoteToForm(q: QuoteFull): FormData {
 function isLocked(field: string, status: Status): boolean {
   if (status === "expired" || status === "cancelled") return true;
   if (status === "confirmed" || status === "paid") return field !== "notes_internal";
-  if (status === "accepted") return field === "price_euros";
+  if (status === "accepted") return field === "price_euros" || field === "price_mode";
   return false; // draft, offer_sent: tutto modificabile
 }
 
@@ -247,6 +252,7 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
       luggage_notes:       form.luggage_notes || null,
       special_requests:    form.special_requests || null,
       price_notes:         form.price_notes || null,
+      price_mode:          form.price_mode,
       email_intro:         form.email_intro || null,
       iban:                form.iban || null,
       swift_code:          form.swift_code || null,
@@ -325,7 +331,10 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
   const showArr = (form.direction || quote.direction) === "arrival" || (form.direction || quote.direction) === "round_trip";
   const showDep = (form.direction || quote.direction) === "departure" || (form.direction || quote.direction) === "round_trip";
   const quoteItems = quote.items ?? [];
-  const totalCents = quoteItemsTotal(quoteItems, quote.price_cents * quote.pax);
+  const totalCents = quoteItemsTotal(
+    quoteItems,
+    quote.price_mode === "total" ? quote.price_cents : quote.price_cents * quote.pax,
+  );
 
   // ── VIEW mode ──────────────────────────────────────────────────────────────
 
@@ -406,7 +415,7 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
           )}
 
           <Section title="Prezzo">
-            {quoteItems.length === 0 && <Row label="Per persona" value={fmtEur(quote.price_cents)} />}
+            {quoteItems.length === 0 && quote.price_mode !== "total" && <Row label="Per persona" value={fmtEur(quote.price_cents)} />}
             <Row label={quoteItems.length > 0 ? "Totale preventivo" : `Totale (${quote.pax} pax)`} value={fmtEur(totalCents)} bold />
             {quote.price_notes && <Row label="Note" value={quote.price_notes} />}
           </Section>
@@ -427,6 +436,7 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
                         item.description,
                         item.hotel_name ? `Hotel: ${item.hotel_name}` : null,
                         item.pax != null && item.pax > 0 ? `${item.pax} pax` : null,
+                        item.price_mode === "per_person" && item.unit_price_cents != null ? `Per persona: ${fmtEur(item.unit_price_cents)}` : null,
                         item.quantity && item.quantity > 1 ? `Quantita: ${item.quantity}` : null,
                         item.arrival_date ? `Arrivo: ${fmtDate(item.arrival_date)}${item.arrival_time ? ` ${item.arrival_time.slice(0, 5)}` : ""}` : null,
                         item.departure_date ? `Partenza: ${fmtDate(item.departure_date)}${item.departure_time ? ` ${item.departure_time.slice(0, 5)}` : ""}` : null,
@@ -621,12 +631,18 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
             {/* Prezzo */}
             <Card title="Prezzo">
               <Grid>
-                <EF label={`Prezzo/persona (€)${Lk("price_euros") ? " 🔒" : " *"}`} locked={Lk("price_euros")}>
+                <EF label="Modalita prezzo" locked={Lk("price_mode")}>
+                  <ESelect value={form.price_mode} onChange={v => sf("price_mode", v)} locked={Lk("price_mode")} options={[
+                    { value: "per_person", label: "Per persona" },
+                    { value: "total", label: "Totale servizio" },
+                  ]} />
+                </EF>
+                <EF label={`${form.price_mode === "total" ? "Prezzo totale" : "Prezzo/persona"} (€)${Lk("price_euros") ? " 🔒" : " *"}`} locked={Lk("price_euros")}>
                   <EInput type="number" step="0.01" value={form.price_euros} onChange={v => sf("price_euros", v)} locked={Lk("price_euros")} required />
                 </EF>
-                <EF label={`Totale (${form.pax} pax)`} locked={true}>
+                <EF label={form.price_mode === "total" ? "Totale preventivo" : `Totale (${form.pax} pax)`} locked={true}>
                   <div className="px-3 py-2 border border-slate-100 bg-slate-50 rounded-lg text-sm font-bold text-blue-900">
-                    {`€ ${(parseFloat(form.price_euros || "0") * form.pax).toFixed(2)}`}
+                    {`€ ${(parseFloat(form.price_euros || "0") * (form.price_mode === "total" ? 1 : form.pax)).toFixed(2)}`}
                   </div>
                 </EF>
                 <EF label="Note prezzo" full locked={Lk("price_notes")}><EInput value={form.price_notes} onChange={v => sf("price_notes", v)} locked={Lk("price_notes")} /></EF>

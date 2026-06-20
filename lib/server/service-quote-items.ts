@@ -1,5 +1,6 @@
 export type ServiceQuoteItemInput = {
   item_type: "service" | "free_text";
+  price_mode?: "per_person" | "total" | null;
   title?: string | null;
   description?: string | null;
   service_type?: string | null;
@@ -30,6 +31,7 @@ export type ServiceQuoteItem = ServiceQuoteItemInput & {
   quantity: number;
   unit_price_cents: number;
   total_price_cents: number;
+  price_mode: "per_person" | "total";
 };
 
 type LegacyQuote = {
@@ -47,6 +49,7 @@ type LegacyQuote = {
   luggage_notes: string | null;
   special_requests: string | null;
   price_cents: number;
+  price_mode?: "per_person" | "total" | null;
   price_notes: string | null;
 };
 
@@ -58,8 +61,10 @@ function cleanText(value: string | null | undefined) {
 export function legacyQuoteToItem(quote: LegacyQuote): ServiceQuoteItem {
   const pax = Math.max(Number(quote.pax ?? 1), 1);
   const unitPrice = Math.max(Number(quote.price_cents ?? 0), 0);
+  const priceMode = quote.price_mode === "total" ? "total" : "per_person";
   return {
     item_type: "service",
+    price_mode: priceMode,
     sort_order: 0,
     title: null,
     description: null,
@@ -78,7 +83,7 @@ export function legacyQuoteToItem(quote: LegacyQuote): ServiceQuoteItem {
     luggage_notes: quote.luggage_notes ?? null,
     special_requests: quote.special_requests ?? null,
     unit_price_cents: unitPrice,
-    total_price_cents: unitPrice * pax,
+    total_price_cents: priceMode === "total" ? unitPrice : unitPrice * pax,
     price_notes: quote.price_notes ?? null,
   };
 }
@@ -87,14 +92,18 @@ export function normalizeQuoteItems(items: ServiceQuoteItemInput[], legacyQuote?
   const source = items.length > 0 ? items : legacyQuote ? [legacyQuoteToItem(legacyQuote)] : [];
   return source.map((item, index) => {
     const itemType = item.item_type === "free_text" ? "free_text" : "service";
+    const priceMode = item.price_mode === "total" ? "total" : "per_person";
     const pax = Math.max(Number(item.pax ?? (itemType === "service" ? 1 : 0)), 0);
     const quantity = Math.max(Number(item.quantity ?? 1), 1);
     const unitPrice = Math.max(Number(item.unit_price_cents ?? 0), 0);
-    const computedTotal = itemType === "service" ? unitPrice * Math.max(pax, 1) : unitPrice * quantity;
+    const computedTotal = priceMode === "total"
+      ? unitPrice
+      : itemType === "service" ? unitPrice * Math.max(pax, 1) : unitPrice * quantity;
     const totalPrice = Math.max(Number(item.total_price_cents ?? computedTotal), 0);
 
     return {
       item_type: itemType,
+      price_mode: priceMode,
       sort_order: index,
       title: cleanText(item.title),
       description: cleanText(item.description),
@@ -129,6 +138,7 @@ export function quoteItemsForInsert(tenantId: string, quoteId: string, items: Se
     quote_id: quoteId,
     sort_order: item.sort_order,
     item_type: item.item_type,
+    price_mode: item.price_mode,
     title: item.title,
     description: item.description,
     service_type: item.service_type,
