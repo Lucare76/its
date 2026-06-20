@@ -32,6 +32,30 @@ type QuoteDetails = {
   bank_account_holder: string | null;
   payment_instructions: string | null;
   expires_at: string | null;
+  items?: QuoteItem[];
+};
+
+type QuoteItem = {
+  item_type: "service" | "free_text";
+  title: string | null;
+  description: string | null;
+  service_type: string | null;
+  direction: "arrival" | "departure" | "round_trip" | null;
+  arrival_date: string | null;
+  arrival_time: string | null;
+  arrival_flight_train: string | null;
+  departure_date: string | null;
+  departure_time: string | null;
+  departure_flight_train: string | null;
+  hotel_name: string | null;
+  hotel_address: string | null;
+  pax: number | null;
+  quantity: number | null;
+  luggage_notes: string | null;
+  special_requests: string | null;
+  unit_price_cents: number | null;
+  total_price_cents: number | null;
+  price_notes: string | null;
 };
 
 // ── i18n ─────────────────────────────────────────────────────────────────────
@@ -166,6 +190,34 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+function QuoteItemCard({ item, index, lang }: { item: QuoteItem; index: number; lang: "it" | "en" }) {
+  const title = item.title || (item.item_type === "free_text" ? (lang === "it" ? "Servizio libero" : "Custom item") : serviceLabel(item.service_type ?? "custom", lang));
+  const details = [
+    item.description,
+    item.hotel_name ? `Hotel: ${item.hotel_name}` : null,
+    item.hotel_address,
+    item.pax != null && item.pax > 0 ? `${item.pax} pax` : null,
+    item.quantity && item.quantity > 1 ? `${lang === "it" ? "Quantita" : "Quantity"}: ${item.quantity}` : null,
+    item.arrival_date ? `${lang === "it" ? "Arrivo" : "Arrival"}: ${fmtDate(item.arrival_date, lang)}${item.arrival_time ? ` ${item.arrival_time.slice(0, 5)}` : ""}` : null,
+    item.departure_date ? `${lang === "it" ? "Partenza" : "Departure"}: ${fmtDate(item.departure_date, lang)}${item.departure_time ? ` ${item.departure_time.slice(0, 5)}` : ""}` : null,
+    item.luggage_notes,
+    item.special_requests,
+    item.price_notes,
+  ].filter(Boolean);
+
+  return (
+    <div className="rounded-xl border border-slate-100 bg-white px-4 py-3">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="font-bold text-slate-800">{index + 1}. {title}</p>
+          {details.length > 0 && <p className="mt-1 text-xs leading-5 text-slate-500">{details.join(" · ")}</p>}
+        </div>
+        <p className="shrink-0 font-black text-blue-900">{fmtEur(item.total_price_cents ?? 0)}</p>
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AcceptQuotePage({ params }: { params: Promise<{ token: string }> }) {
@@ -251,7 +303,10 @@ export default function AcceptQuotePage({ params }: { params: Promise<{ token: s
 
   const showArrival = quote.direction === "arrival" || quote.direction === "round_trip";
   const showDeparture = quote.direction === "departure" || quote.direction === "round_trip";
-  const totalCents = quote.price_cents * quote.pax;
+  const items = quote.items ?? [];
+  const totalCents = items.length > 0
+    ? items.reduce((sum, item) => sum + (item.total_price_cents ?? 0), 0)
+    : quote.price_cents * quote.pax;
 
   return wrapper(
     <div className="bg-white rounded-2xl shadow overflow-hidden">
@@ -268,21 +323,29 @@ export default function AcceptQuotePage({ params }: { params: Promise<{ token: s
           <p className="text-slate-600 text-sm italic border-l-4 border-blue-200 pl-3">{quote.email_intro}</p>
         )}
 
-        {/* Service details */}
-        <section>
-          <h2 className="text-xs font-bold text-blue-900 uppercase tracking-wider mb-2">{t.serviceDetails}</h2>
-          <div className="bg-slate-50 rounded-xl px-4 py-1">
-            <Row label={t.serviceType} value={serviceLabel(quote.service_type, lang)} />
-            {quote.hotel_name && <Row label={t.hotel} value={quote.hotel_name} />}
-            {quote.hotel_address && <Row label={t.address} value={quote.hotel_address} />}
-            <Row label={t.passengers} value={String(quote.pax)} />
-            {quote.luggage_notes && <Row label={t.luggage} value={quote.luggage_notes} />}
-            {quote.special_requests && <Row label={t.special} value={quote.special_requests} />}
-          </div>
-        </section>
+        {items.length > 0 ? (
+          <section>
+            <h2 className="text-xs font-bold text-blue-900 uppercase tracking-wider mb-2">{lang === "it" ? "SERVIZI INCLUSI" : "INCLUDED SERVICES"}</h2>
+            <div className="space-y-2 rounded-xl bg-slate-50 p-2">
+              {items.map((item, index) => <QuoteItemCard key={index} item={item} index={index} lang={lang} />)}
+            </div>
+          </section>
+        ) : (
+          <section>
+            <h2 className="text-xs font-bold text-blue-900 uppercase tracking-wider mb-2">{t.serviceDetails}</h2>
+            <div className="bg-slate-50 rounded-xl px-4 py-1">
+              <Row label={t.serviceType} value={serviceLabel(quote.service_type, lang)} />
+              {quote.hotel_name && <Row label={t.hotel} value={quote.hotel_name} />}
+              {quote.hotel_address && <Row label={t.address} value={quote.hotel_address} />}
+              <Row label={t.passengers} value={String(quote.pax)} />
+              {quote.luggage_notes && <Row label={t.luggage} value={quote.luggage_notes} />}
+              {quote.special_requests && <Row label={t.special} value={quote.special_requests} />}
+            </div>
+          </section>
+        )}
 
         {/* Arrival */}
-        {showArrival && quote.arrival_date && (
+        {items.length === 0 && showArrival && quote.arrival_date && (
           <section>
             <h2 className="text-xs font-bold text-blue-900 uppercase tracking-wider mb-2">{t.arrival}</h2>
             <div className="bg-blue-50 rounded-xl px-4 py-1">
@@ -294,7 +357,7 @@ export default function AcceptQuotePage({ params }: { params: Promise<{ token: s
         )}
 
         {/* Departure */}
-        {showDeparture && quote.departure_date && (
+        {items.length === 0 && showDeparture && quote.departure_date && (
           <section>
             <h2 className="text-xs font-bold text-blue-900 uppercase tracking-wider mb-2">{t.departure}</h2>
             <div className="bg-orange-50 rounded-xl px-4 py-1">
@@ -309,7 +372,7 @@ export default function AcceptQuotePage({ params }: { params: Promise<{ token: s
         <section>
           <h2 className="text-xs font-bold text-blue-900 uppercase tracking-wider mb-2">{t.price}</h2>
           <div className="bg-slate-50 rounded-xl px-4 py-1">
-            <Row label={t.pricePerPerson} value={fmtEur(quote.price_cents)} />
+            {items.length === 0 && <Row label={t.pricePerPerson} value={fmtEur(quote.price_cents)} />}
             <div className="flex justify-between gap-4 py-2 text-sm">
               <span className="text-slate-500">{t.total}</span>
               <span className="text-blue-900 font-black text-base">{fmtEur(totalCents)}</span>

@@ -43,8 +43,16 @@ export async function POST(request: NextRequest, { params }: Params) {
     .eq("id", tenantId)
     .single();
 
+  const { data: quoteItems } = await auth.admin
+    .from("service_quote_items")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .eq("quote_id", id)
+    .order("sort_order", { ascending: true });
+  const itemsTotalCents = (quoteItems ?? []).reduce((sum, item) => sum + Number(item.total_price_cents ?? 0), 0);
+
   const now = new Date().toISOString();
-  const totalPaidCents = parsed.data.total_paid_cents ?? (quote.price_cents * quote.pax);
+  const totalPaidCents = parsed.data.total_paid_cents ?? (itemsTotalCents || (quote.price_cents * quote.pax));
 
   const { error: updateErr } = await auth.admin
     .from("service_quotes")
@@ -92,6 +100,8 @@ export async function POST(request: NextRequest, { params }: Params) {
     companyWhatsapp:   tenant?.quote_company_whatsapp ?? null,
     footerPhone:       tenant?.contact_phone ?? null,
     totalPaidCents,
+    items:             quoteItems ?? [],
+    totalPriceCents:   itemsTotalCents || null,
   };
 
   const emailResult = await sendQuoteConfirmEmail(emailData);

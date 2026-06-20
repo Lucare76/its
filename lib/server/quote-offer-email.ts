@@ -38,10 +38,35 @@ export interface ServiceQuoteEmailData {
   companyPhone: string | null;
   companyWhatsapp: string | null;
   footerPhone: string | null;
+  items?: ServiceQuoteEmailItem[];
+  totalPriceCents?: number | null;
 }
 
 export interface QuoteConfirmEmailData extends Omit<ServiceQuoteEmailData, "acceptUrl" | "expiresAt"> {
   totalPaidCents: number;
+}
+
+export interface ServiceQuoteEmailItem {
+  item_type: "service" | "free_text";
+  title?: string | null;
+  description?: string | null;
+  service_type?: string | null;
+  direction?: "arrival" | "departure" | "round_trip" | null;
+  arrival_date?: string | null;
+  arrival_time?: string | null;
+  arrival_flight_train?: string | null;
+  departure_date?: string | null;
+  departure_time?: string | null;
+  departure_flight_train?: string | null;
+  hotel_name?: string | null;
+  hotel_address?: string | null;
+  pax?: number | null;
+  quantity?: number | null;
+  luggage_notes?: string | null;
+  special_requests?: string | null;
+  unit_price_cents?: number | null;
+  total_price_cents?: number | null;
+  price_notes?: string | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -77,12 +102,54 @@ function fmtExpiresDate(iso: string | null, lang: "it" | "en"): string {
     : d.toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
 }
 
+function itemTitle(item: ServiceQuoteEmailItem, lang: "it" | "en") {
+  if (item.title) return escapeHtml(item.title);
+  if (item.item_type === "free_text") return lang === "it" ? "Servizio libero" : "Custom item";
+  return escapeHtml(serviceTypeLabel(item.service_type ?? "custom", lang));
+}
+
+function buildItemsHtml(items: ServiceQuoteEmailItem[] | undefined, lang: "it" | "en") {
+  if (!items || items.length === 0) return "";
+  const it = lang === "it";
+  const e = escapeHtml;
+  const blocks = items.map((item, index) => {
+    const meta: string[] = [];
+    if (item.item_type === "service") {
+      if (item.hotel_name) meta.push(`${it ? "Hotel" : "Hotel"}: ${e(item.hotel_name)}`);
+      if (item.pax != null && item.pax > 0) meta.push(`${item.pax} pax`);
+      if (item.arrival_date) meta.push(`${it ? "Arrivo" : "Arrival"}: ${fmtDate(item.arrival_date)}${item.arrival_time ? ` ${fmtTime(item.arrival_time)}` : ""}`);
+      if (item.departure_date) meta.push(`${it ? "Partenza" : "Departure"}: ${fmtDate(item.departure_date)}${item.departure_time ? ` ${fmtTime(item.departure_time)}` : ""}`);
+    } else if (item.quantity && item.quantity > 1) {
+      meta.push(`${it ? "Quantita" : "Quantity"}: ${item.quantity}`);
+    }
+    if (item.description) meta.push(e(item.description));
+    if (item.special_requests) meta.push(e(item.special_requests));
+    if (item.price_notes) meta.push(e(item.price_notes));
+
+    return `
+      <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:10px;background:#ffffff;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+          <div>
+            <p style="margin:0 0 4px;font-weight:700;color:#1e3a5f;">${index + 1}. ${itemTitle(item, lang)}</p>
+            ${meta.length > 0 ? `<p style="margin:0;color:#64748b;font-size:13px;line-height:1.5;">${meta.join("<br/>")}</p>` : ""}
+          </div>
+          <p style="margin:0;font-weight:800;color:#1e3a5f;white-space:nowrap;">€ ${fmtEur(item.total_price_cents ?? 0)}</p>
+        </div>
+      </div>`;
+  }).join("");
+
+  return `
+    <p style="margin:20px 0 8px;font-weight:700;color:#1e3a5f;">${it ? "SERVIZI INCLUSI" : "INCLUDED SERVICES"}</p>
+    ${blocks}
+  `;
+}
+
 // ─── TEMPLATE 1 & 2 — OFFERTA ────────────────────────────────────────────────
 
 function buildOfferBody(d: ServiceQuoteEmailData): string {
   const it = d.customerLanguage === "it";
   const e = escapeHtml;
-  const totalCents = d.priceCents * d.pax;
+  const totalCents = d.totalPriceCents ?? d.items?.reduce((sum, item) => sum + (item.total_price_cents ?? 0), 0) ?? d.priceCents * d.pax;
   const typeLabel = serviceTypeLabel(d.serviceType, d.customerLanguage);
   const showArrival = d.direction === "arrival" || d.direction === "round_trip";
   const showDeparture = d.direction === "departure" || d.direction === "round_trip";
@@ -174,10 +241,12 @@ function buildOfferBody(d: ServiceQuoteEmailData): string {
     <p style="font-size:17px;margin-bottom:6px;">${it ? "Gentile" : "Dear"} <strong>${e(d.customerFirstName)} ${e(d.customerLastName)}</strong>,</p>
     ${intro}
 
-    <p style="margin:20px 0 8px;font-weight:700;color:#1e3a5f;">${it ? "DETTAGLI SERVIZIO" : "SERVICE DETAILS"}</p>
-    ${emailDataTable(detailRows)}
-    ${arrivalSection}
-    ${departureSection}
+    ${d.items && d.items.length > 0 ? buildItemsHtml(d.items, d.customerLanguage) : `
+      <p style="margin:20px 0 8px;font-weight:700;color:#1e3a5f;">${it ? "DETTAGLI SERVIZIO" : "SERVICE DETAILS"}</p>
+      ${emailDataTable(detailRows)}
+      ${arrivalSection}
+      ${departureSection}
+    `}
 
     <p style="margin:20px 0 8px;font-weight:700;color:#1e3a5f;">${it ? "PREZZO" : "PRICE"}</p>
     ${emailDataTable(priceRows)}
@@ -264,8 +333,10 @@ function buildConfirmBody(d: QuoteConfirmEmailData): string {
       </p>
     `, "#f0fdf4", "#bbf7d0")}
 
-    <p style="margin:20px 0 8px;font-weight:700;color:#1e3a5f;">${it ? "RIEPILOGO SERVIZIO" : "SERVICE SUMMARY"}</p>
-    ${emailDataTable(rows)}
+    ${d.items && d.items.length > 0 ? buildItemsHtml(d.items, d.customerLanguage) : `
+      <p style="margin:20px 0 8px;font-weight:700;color:#1e3a5f;">${it ? "RIEPILOGO SERVIZIO" : "SERVICE SUMMARY"}</p>
+      ${emailDataTable(rows)}
+    `}
 
     ${usefulInfo}
     ${contacts}

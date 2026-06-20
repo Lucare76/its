@@ -2,6 +2,7 @@
 
 import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { getToken } from "@/lib/supabase/client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -48,6 +49,23 @@ type QuoteFull = {
   cancelled_at: string | null;
   expires_at: string | null;
   created_at: string;
+  items?: QuoteItem[];
+};
+
+type QuoteItem = {
+  item_type: "service" | "free_text";
+  title: string | null;
+  description: string | null;
+  service_type: string | null;
+  arrival_date: string | null;
+  arrival_time: string | null;
+  departure_date: string | null;
+  departure_time: string | null;
+  hotel_name: string | null;
+  pax: number | null;
+  quantity: number | null;
+  total_price_cents: number | null;
+  price_notes: string | null;
 };
 
 type FormData = {
@@ -113,6 +131,10 @@ function fmtDatetime(iso: string | null) {
   return new Date(iso).toLocaleString("it-IT", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 function fmtEur(cents: number) { return `€ ${(cents / 100).toFixed(2)}`; }
+
+function quoteItemsTotal(items: QuoteItem[] | undefined, fallback: number) {
+  return items && items.length > 0 ? items.reduce((sum, item) => sum + (item.total_price_cents ?? 0), 0) : fallback;
+}
 
 function quoteToForm(q: QuoteFull): FormData {
   return {
@@ -188,7 +210,10 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
     setLoading(false);
   }
 
-  useEffect(() => { void loadQuote(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadQuote(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function sf(field: keyof FormData, value: string | number) {
     setForm(f => f ? { ...f, [field]: value } : f);
@@ -291,7 +316,7 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
   if (!quote || !form) return (
     <div className="flex flex-col items-center justify-center h-screen gap-4">
       <p className="text-slate-500">Preventivo non trovato.</p>
-      <a href="/preventivi" className="text-blue-600 hover:underline text-sm">← Torna alla lista</a>
+      <Link href="/preventivi" className="text-blue-600 hover:underline text-sm">← Torna alla lista</Link>
     </div>
   );
 
@@ -299,6 +324,8 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
   const isPartialLock = quote.status === "confirmed" || quote.status === "paid";
   const showArr = (form.direction || quote.direction) === "arrival" || (form.direction || quote.direction) === "round_trip";
   const showDep = (form.direction || quote.direction) === "departure" || (form.direction || quote.direction) === "round_trip";
+  const quoteItems = quote.items ?? [];
+  const totalCents = quoteItemsTotal(quoteItems, quote.price_cents * quote.pax);
 
   // ── VIEW mode ──────────────────────────────────────────────────────────────
 
@@ -318,7 +345,7 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
               <p className="text-slate-500 text-sm">{quote.customer_first_name} {quote.customer_last_name} — {quote.customer_email}</p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <a href="/preventivi" className="text-xs text-slate-400 hover:text-slate-600">← Lista</a>
+              <Link href="/preventivi" className="text-xs text-slate-400 hover:text-slate-600">← Lista</Link>
               {!isReadOnly && (
                 <button onClick={() => setMode("edit")}
                   className="flex items-center gap-1.5 text-sm px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl">
@@ -379,10 +406,38 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
           )}
 
           <Section title="Prezzo">
-            <Row label="Per persona" value={fmtEur(quote.price_cents)} />
-            <Row label={`Totale (${quote.pax} pax)`} value={fmtEur(quote.price_cents * quote.pax)} bold />
+            {quoteItems.length === 0 && <Row label="Per persona" value={fmtEur(quote.price_cents)} />}
+            <Row label={quoteItems.length > 0 ? "Totale preventivo" : `Totale (${quote.pax} pax)`} value={fmtEur(totalCents)} bold />
             {quote.price_notes && <Row label="Note" value={quote.price_notes} />}
           </Section>
+
+          {quoteItems.length > 0 && (
+            <Section title="Servizi inclusi">
+              <div className="space-y-2">
+                {quoteItems.map((item, index) => (
+                  <div key={index} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                    <div className="flex justify-between gap-3 text-sm">
+                      <span className="font-semibold text-slate-800">
+                        {index + 1}. {item.title || (item.item_type === "free_text" ? "Voce libera" : SERVICE_LABELS[item.service_type ?? ""] ?? item.service_type ?? "Servizio")}
+                      </span>
+                      <span className="font-bold text-blue-900">{fmtEur(item.total_price_cents ?? 0)}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {[
+                        item.description,
+                        item.hotel_name ? `Hotel: ${item.hotel_name}` : null,
+                        item.pax != null && item.pax > 0 ? `${item.pax} pax` : null,
+                        item.quantity && item.quantity > 1 ? `Quantita: ${item.quantity}` : null,
+                        item.arrival_date ? `Arrivo: ${fmtDate(item.arrival_date)}${item.arrival_time ? ` ${item.arrival_time.slice(0, 5)}` : ""}` : null,
+                        item.departure_date ? `Partenza: ${fmtDate(item.departure_date)}${item.departure_time ? ` ${item.departure_time.slice(0, 5)}` : ""}` : null,
+                        item.price_notes,
+                      ].filter(Boolean).join(" · ")}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
 
           <Section title="Pagamento">
             {quote.iban && <Row label="IBAN" value={quote.iban} mono />}

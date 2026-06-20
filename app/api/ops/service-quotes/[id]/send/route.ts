@@ -27,6 +27,14 @@ export async function POST(request: NextRequest, { params }: Params) {
     return NextResponse.json({ error: `Stato non valido per invio offerta: ${quote.status}.` }, { status: 409 });
   }
 
+  const { data: quoteItems } = await auth.admin
+    .from("service_quote_items")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .eq("quote_id", id)
+    .order("sort_order", { ascending: true });
+  const totalPriceCents = (quoteItems ?? []).reduce((sum, item) => sum + Number(item.total_price_cents ?? 0), 0);
+
   const { data: tenant } = await auth.admin
     .from("tenants")
     .select("quote_offer_validity_days,quote_company_phone,quote_company_whatsapp,quote_iban,quote_bank_holder,quote_payment_instructions,quote_swift_code,contact_phone")
@@ -71,6 +79,8 @@ export async function POST(request: NextRequest, { params }: Params) {
     companyPhone:     tenant?.quote_company_phone ?? null,
     companyWhatsapp:  tenant?.quote_company_whatsapp ?? null,
     footerPhone:      tenant?.contact_phone ?? null,
+    items:            quoteItems ?? [],
+    totalPriceCents:  totalPriceCents || null,
   };
 
   const result = await sendQuoteOfferEmail(emailData);

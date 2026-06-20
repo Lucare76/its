@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { Suspense } from "react";
 import { getToken } from "@/lib/supabase/client";
 
@@ -34,6 +35,22 @@ type FormData = {
   bank_account_holder: string;
   payment_instructions: string;
   notes_internal: string;
+  items: QuoteItemForm[];
+};
+
+type QuoteItemForm = {
+  item_type: "service" | "free_text";
+  title: string;
+  description: string;
+  service_type: string;
+  direction: string;
+  service_date: string;
+  service_time: string;
+  hotel_name: string;
+  pax: number;
+  quantity: number;
+  price_euros: string;
+  price_notes: string;
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -48,6 +65,7 @@ const EMPTY_FORM: FormData = {
   pax: 1, luggage_notes: "", special_requests: "",
   price_euros: "", price_notes: "",
   email_intro: "", iban: "", swift_code: "", bank_account_holder: "", payment_instructions: "", notes_internal: "",
+  items: [],
 };
 
 const SERVICE_OPTIONS = [
@@ -321,12 +339,106 @@ function NewPreventiveInner() {
         bank_account_holder: String(q.bank_account_holder ?? ""),
         payment_instructions: String(q.payment_instructions ?? ""),
         notes_internal:      "",
+        items:               Array.isArray(q.items) ? (q.items as Array<Record<string, unknown>>).slice(1).map((item) => ({
+          item_type: item.item_type === "free_text" ? "free_text" : "service",
+          title: String(item.title ?? ""),
+          description: String(item.description ?? ""),
+          service_type: String(item.service_type ?? "custom"),
+          direction: String(item.direction ?? ""),
+          service_date: String(item.arrival_date ?? item.departure_date ?? ""),
+          service_time: String((item.arrival_time ?? item.departure_time ?? "") as string).slice(0, 5),
+          hotel_name: String(item.hotel_name ?? ""),
+          pax: Number(item.pax ?? 1),
+          quantity: Number(item.quantity ?? 1),
+          price_euros: item.unit_price_cents ? String(Number(item.unit_price_cents) / 100) : "",
+          price_notes: String(item.price_notes ?? ""),
+        })) : [],
       });
     })();
   }, [fromId]);
 
   function sf(field: keyof FormData, value: string | number) {
     setForm(f => ({ ...f, [field]: value }));
+  }
+
+  function updateItem(index: number, patch: Partial<QuoteItemForm>) {
+    setForm(f => ({ ...f, items: f.items.map((item, i) => i === index ? { ...item, ...patch } : item) }));
+  }
+
+  function addItem(item_type: "service" | "free_text") {
+    setForm(f => ({
+      ...f,
+      items: [
+        ...f.items,
+        {
+          item_type,
+          title: item_type === "service" ? "Servizio aggiuntivo" : "Voce libera",
+          description: "",
+          service_type: "custom",
+          direction: "",
+          service_date: "",
+          service_time: "",
+          hotel_name: "",
+          pax: item_type === "service" ? f.pax : 0,
+          quantity: 1,
+          price_euros: "",
+          price_notes: "",
+        },
+      ],
+    }));
+  }
+
+  function removeItem(index: number) {
+    setForm(f => ({ ...f, items: f.items.filter((_, i) => i !== index) }));
+  }
+
+  function itemPriceCents(value: string) {
+    return Math.round(parseFloat(value) * 100) || 0;
+  }
+
+  function buildQuoteItems(priceCents: number) {
+    return [
+      {
+        item_type: "service" as const,
+        service_type: form.service_type,
+        direction: form.direction || null,
+        arrival_date: form.arrival_date || null,
+        arrival_time: form.arrival_time || null,
+        arrival_flight_train: form.arrival_flight_train || null,
+        departure_date: form.departure_date || null,
+        departure_time: form.departure_time || null,
+        departure_flight_train: form.departure_flight_train || null,
+        hotel_name: form.hotel_name || null,
+        hotel_address: form.hotel_address || null,
+        pax: form.pax,
+        quantity: 1,
+        luggage_notes: form.luggage_notes || null,
+        special_requests: form.special_requests || null,
+        unit_price_cents: priceCents,
+        total_price_cents: priceCents * form.pax,
+        price_notes: form.price_notes || null,
+      },
+      ...form.items.map((item) => {
+        const cents = itemPriceCents(item.price_euros);
+        return {
+          item_type: item.item_type,
+          title: item.title || null,
+          description: item.description || null,
+          service_type: item.item_type === "service" ? item.service_type : null,
+          direction: item.item_type === "service" ? item.direction || null : null,
+          arrival_date: item.item_type === "service" && item.direction !== "departure" ? item.service_date || null : null,
+          arrival_time: item.item_type === "service" && item.direction !== "departure" ? item.service_time || null : null,
+          departure_date: item.item_type === "service" && item.direction === "departure" ? item.service_date || null : null,
+          departure_time: item.item_type === "service" && item.direction === "departure" ? item.service_time || null : null,
+          hotel_name: item.item_type === "service" ? item.hotel_name || null : null,
+          pax: item.item_type === "service" ? item.pax : 0,
+          quantity: item.item_type === "free_text" ? item.quantity : 1,
+          unit_price_cents: cents,
+          total_price_cents: item.item_type === "service" ? cents * Math.max(item.pax, 1) : cents * Math.max(item.quantity, 1),
+          price_notes: item.price_notes || null,
+        };
+      }),
+    ];
   }
 
   const showArr = form.direction === "arrival"   || form.direction === "round_trip";
@@ -369,6 +481,7 @@ function NewPreventiveInner() {
       bank_account_holder: form.bank_account_holder || null,
       payment_instructions: form.payment_instructions || null,
       notes_internal:      form.notes_internal || null,
+      items:               buildQuoteItems(priceCents),
     };
 
     const res = await fetch("/api/ops/service-quotes", {
@@ -395,6 +508,7 @@ function NewPreventiveInner() {
     // POST to save a temp draft silently, preview, delete is complex.
     // Better: POST to preview-email endpoint with form data
     const priceCents = Math.round(parseFloat(form.price_euros) * 100) || 0;
+    const previewItems = buildQuoteItems(priceCents);
     const res = await fetch("/api/ops/service-quotes/preview-email", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -429,6 +543,8 @@ function NewPreventiveInner() {
         acceptUrl:         "#[link-accettazione]",
         companyPhone:      null,
         companyWhatsapp:   null,
+        items:             previewItems,
+        totalPriceCents:   previewItems.reduce((sum, item) => sum + item.total_price_cents, 0),
       }),
     });
     const data = await res.json() as { ok?: boolean; html?: string };
@@ -481,7 +597,7 @@ function NewPreventiveInner() {
                 className="flex items-center gap-1.5 text-sm px-3 py-2 border border-slate-200 rounded-xl text-slate-600 hover:bg-white">
                 📋 Importa da testo
               </button>
-              <a href="/preventivi" className="text-sm text-slate-400 hover:text-slate-600">← Lista</a>
+              <Link href="/preventivi" className="text-sm text-slate-400 hover:text-slate-600">← Lista</Link>
             </div>
           </div>
 
@@ -549,6 +665,58 @@ function NewPreventiveInner() {
               </Grid>
             </Card>
 
+            <Card title="Servizi extra e voci libere">
+              <div className="space-y-3">
+                {form.items.length === 0 && (
+                  <p className="text-sm text-slate-400">Aggiungi altri servizi nello stesso preventivo oppure una voce descrittiva libera.</p>
+                )}
+                {form.items.map((item, index) => (
+                  <div key={index} className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <Select value={item.item_type} onChange={v => updateItem(index, { item_type: v as "service" | "free_text" })}
+                        options={[{ value: "service", label: "Servizio" }, { value: "free_text", label: "Voce libera" }]} />
+                      <button type="button" onClick={() => removeItem(index)} className="shrink-0 text-xs text-red-600 hover:underline">Rimuovi</button>
+                    </div>
+                    <Grid>
+                      <Field label="Titolo" full><Input value={item.title} onChange={v => updateItem(index, { title: v })} /></Field>
+                      <Field label="Descrizione" full>
+                        <textarea value={item.description} onChange={e => updateItem(index, { description: e.target.value })} rows={2}
+                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none" />
+                      </Field>
+                      {item.item_type === "service" && (
+                        <>
+                          <Field label="Tipo"><Select value={item.service_type} onChange={v => updateItem(index, { service_type: v })} options={SERVICE_OPTIONS} /></Field>
+                          <Field label="Direzione">
+                            <Select value={item.direction} onChange={v => updateItem(index, { direction: v })} options={[
+                              { value: "", label: "Non specificata" },
+                              { value: "arrival", label: "Arrivo" },
+                              { value: "departure", label: "Partenza" },
+                              { value: "round_trip", label: "A/R" },
+                            ]} />
+                          </Field>
+                          <Field label="Data"><Input type="date" value={item.service_date} onChange={v => updateItem(index, { service_date: v })} /></Field>
+                          <Field label="Orario"><Input type="time" value={item.service_time} onChange={v => updateItem(index, { service_time: v })} /></Field>
+                          <Field label="Hotel"><Input value={item.hotel_name} onChange={v => updateItem(index, { hotel_name: v })} /></Field>
+                          <Field label="Pax"><Input type="number" value={String(item.pax)} onChange={v => updateItem(index, { pax: Number(v) })} /></Field>
+                        </>
+                      )}
+                      {item.item_type === "free_text" && (
+                        <Field label="Quantita"><Input type="number" value={String(item.quantity)} onChange={v => updateItem(index, { quantity: Number(v) })} /></Field>
+                      )}
+                      <Field label={item.item_type === "service" ? "Prezzo per pax" : "Prezzo unitario"}>
+                        <Input type="number" step="0.01" value={item.price_euros} onChange={v => updateItem(index, { price_euros: v })} />
+                      </Field>
+                      <Field label="Note prezzo" full><Input value={item.price_notes} onChange={v => updateItem(index, { price_notes: v })} /></Field>
+                    </Grid>
+                  </div>
+                ))}
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => addItem("service")} className="text-sm px-3 py-2 rounded-lg border border-blue-200 text-blue-700 hover:bg-blue-50">+ Servizio</button>
+                  <button type="button" onClick={() => addItem("free_text")} className="text-sm px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50">+ Voce libera</button>
+                </div>
+              </div>
+            </Card>
+
             {/* Email */}
             <Card title="Email offerta">
               <div className="space-y-3">
@@ -600,10 +768,10 @@ function NewPreventiveInner() {
                 className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold py-3 rounded-xl">
                 {saving ? "Salvataggio…" : "Crea preventivo"}
               </button>
-              <a href="/preventivi"
+              <Link href="/preventivi"
                 className="px-5 py-3 border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 text-center">
                 Annulla
-              </a>
+              </Link>
             </div>
           </form>
         </div>

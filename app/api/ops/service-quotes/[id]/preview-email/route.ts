@@ -15,15 +15,17 @@ export async function GET(request: NextRequest, { params }: Params) {
   const tenantId = auth.membership.tenant_id;
   const lang = (request.nextUrl.searchParams.get("lang") ?? "it") as "it" | "en";
 
-  const [{ data: quote }, { data: tenant }] = await Promise.all([
+  const [{ data: quote }, { data: tenant }, { data: quoteItems }] = await Promise.all([
     auth.admin.from("service_quotes").select("*").eq("id", id).eq("tenant_id", tenantId).single(),
     auth.admin.from("tenants").select("quote_company_phone,quote_company_whatsapp,quote_offer_validity_days,quote_swift_code,contact_phone").eq("id", tenantId).single(),
+    auth.admin.from("service_quote_items").select("*").eq("tenant_id", tenantId).eq("quote_id", id).order("sort_order", { ascending: true }),
   ]);
 
   if (!quote) return NextResponse.json({ error: "Preventivo non trovato." }, { status: 404 });
 
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
   const expiresAt = quote.expires_at ?? new Date(Date.now() + (tenant?.quote_offer_validity_days ?? 7) * 86400_000).toISOString();
+  const totalPriceCents = (quoteItems ?? []).reduce((sum, item) => sum + Number(item.total_price_cents ?? 0), 0);
 
   const data: ServiceQuoteEmailData = {
     quoteNumber:          quote.quote_number,
@@ -57,6 +59,8 @@ export async function GET(request: NextRequest, { params }: Params) {
     companyPhone:         tenant?.quote_company_phone ?? null,
     companyWhatsapp:      tenant?.quote_company_whatsapp ?? null,
     footerPhone:          tenant?.contact_phone ?? null,
+    items:                quoteItems ?? [],
+    totalPriceCents:      totalPriceCents || null,
   };
 
   const { html, subject } = buildQuoteOfferHtml(data);
