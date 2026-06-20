@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { use } from "react";
+import { displaySentenceCase, displayTitleCase } from "@/lib/display-text-case";
 
 type QuoteDetails = {
   id: string;
@@ -193,11 +194,12 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function QuoteItemCard({ item, index, lang }: { item: QuoteItem; index: number; lang: "it" | "en" }) {
-  const title = item.title || (item.item_type === "free_text" ? (lang === "it" ? "Servizio libero" : "Custom item") : serviceLabel(item.service_type ?? "custom", lang));
+  const rawTitle = item.title || (item.item_type === "free_text" ? (lang === "it" ? "Servizio libero" : "Custom item") : serviceLabel(item.service_type ?? "custom", lang));
+  const title = displayTitleCase(rawTitle, lang);
   const details = [
-    item.description,
-    item.hotel_name ? `Hotel: ${item.hotel_name}` : null,
-    item.hotel_address,
+    item.description ? displaySentenceCase(item.description) : null,
+    item.hotel_name ? `Hotel: ${displayTitleCase(item.hotel_name, lang)}` : null,
+    item.hotel_address ? displayTitleCase(item.hotel_address, lang) : null,
     item.pax != null && item.pax > 0 ? `${item.pax} pax` : null,
     item.price_mode === "per_person" && item.unit_price_cents != null
       ? `${lang === "it" ? "Per persona" : "Per person"}: ${fmtEur(item.unit_price_cents)}`
@@ -205,9 +207,9 @@ function QuoteItemCard({ item, index, lang }: { item: QuoteItem; index: number; 
     item.quantity && item.quantity > 1 ? `${lang === "it" ? "Quantita" : "Quantity"}: ${item.quantity}` : null,
     item.arrival_date ? `${lang === "it" ? "Arrivo" : "Arrival"}: ${fmtDate(item.arrival_date, lang)}${item.arrival_time ? ` ${item.arrival_time.slice(0, 5)}` : ""}` : null,
     item.departure_date ? `${lang === "it" ? "Partenza" : "Departure"}: ${fmtDate(item.departure_date, lang)}${item.departure_time ? ` ${item.departure_time.slice(0, 5)}` : ""}` : null,
-    item.luggage_notes,
-    item.special_requests,
-    item.price_notes,
+    item.luggage_notes ? displaySentenceCase(item.luggage_notes) : null,
+    item.special_requests ? displaySentenceCase(item.special_requests) : null,
+    item.price_notes ? displaySentenceCase(item.price_notes) : null,
   ].filter(Boolean);
 
   return (
