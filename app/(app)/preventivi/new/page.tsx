@@ -408,12 +408,12 @@ function NewPreventiveInner() {
         price_mode: form.price_mode,
         service_type: form.service_type,
         direction: form.direction || null,
-        arrival_date: form.arrival_date || null,
-        arrival_time: form.arrival_time || null,
-        arrival_flight_train: form.arrival_flight_train || null,
-        departure_date: form.departure_date || null,
-        departure_time: form.departure_time || null,
-        departure_flight_train: form.departure_flight_train || null,
+        arrival_date: showArr ? (form.arrival_date || null) : null,
+        arrival_time: showArr ? (form.arrival_time || null) : null,
+        arrival_flight_train: showArr ? (form.arrival_flight_train || null) : null,
+        departure_date: showDep ? (form.departure_date || null) : null,
+        departure_time: showDep ? (form.departure_time || null) : null,
+        departure_flight_train: showDep ? (form.departure_flight_train || null) : null,
         hotel_name: form.hotel_name || null,
         hotel_address: form.hotel_address || null,
         pax: form.pax,
@@ -634,7 +634,11 @@ function NewPreventiveInner() {
                   <Select value={form.service_type} onChange={v => sf("service_type", v)} options={SERVICE_OPTIONS} />
                 </Field>
                 <Field label="Direzione">
-                  <Select value={form.direction} onChange={v => sf("direction", v)} options={[
+                  <Select value={form.direction} onChange={v => {
+                    sf("direction", v);
+                    if (v === "arrival" || v === "") setForm(f => ({ ...f, departure_date: "", departure_time: "", departure_flight_train: "" }));
+                    if (v === "departure" || v === "") setForm(f => ({ ...f, arrival_date: "", arrival_time: "", arrival_flight_train: "" }));
+                  }} options={[
                     { value:"arrival",    label:"Arrivo" },
                     { value:"departure",  label:"Partenza" },
                     { value:"round_trip", label:"Andata e Ritorno" },

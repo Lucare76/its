@@ -123,8 +123,10 @@ function buildItemsHtml(items: ServiceQuoteEmailItem[] | undefined, lang: "it" |
       if (item.price_mode === "per_person" && item.unit_price_cents != null) {
         meta.push(`${it ? "Per persona" : "Per person"}: € ${fmtEur(item.unit_price_cents)}`);
       }
-      if (item.arrival_date) meta.push(`${it ? "Arrivo" : "Arrival"}: ${fmtDate(item.arrival_date)}${item.arrival_time ? ` ${fmtTime(item.arrival_time)}` : ""}`);
-      if (item.departure_date) meta.push(`${it ? "Partenza" : "Departure"}: ${fmtDate(item.departure_date)}${item.departure_time ? ` ${fmtTime(item.departure_time)}` : ""}`);
+      const showItemArr = item.direction !== "departure";
+      const showItemDep = item.direction !== "arrival";
+      if (showItemArr && item.arrival_date) meta.push(`${it ? "Arrivo" : "Arrival"}: ${fmtDate(item.arrival_date)}${item.arrival_time ? ` ${fmtTime(item.arrival_time)}` : ""}`);
+      if (showItemDep && item.departure_date) meta.push(`${it ? "Partenza" : "Departure"}: ${fmtDate(item.departure_date)}${item.departure_time ? ` ${fmtTime(item.departure_time)}` : ""}`);
     } else if (item.quantity && item.quantity > 1) {
       meta.push(`${it ? "Quantita" : "Quantity"}: ${item.quantity}`);
     }
