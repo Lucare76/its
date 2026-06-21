@@ -341,6 +341,13 @@ td {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Preventivi: i campi liberi devono rispettare la grafia inserita dall'operatore. */
+.quote-natural-text input:not([type="checkbox"]):not([type="radio"]),
+.quote-natural-text textarea,
+.quote-natural-text select {
+  text-transform: none !important;
+}
+
 .page-section {
   @apply space-y-5;
 }

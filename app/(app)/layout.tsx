@@ -470,6 +470,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
     const handleInput = (e: Event) => {
       const target = e.target as HTMLElement;
+      if (target.closest(".quote-natural-text")) return;
       if (target instanceof HTMLInputElement) {
         if (SKIP_TYPES.has(target.type) || target.dataset.noUppercase) return;
         const upper = target.value.toUpperCase();

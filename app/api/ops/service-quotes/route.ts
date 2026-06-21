@@ -163,7 +163,7 @@ export async function POST(request: NextRequest) {
     quote_number: quoteNumberData as string,
     customer_first_name: d.customer_first_name.trim(),
     customer_last_name:  d.customer_last_name.trim(),
-    customer_email:      d.customer_email.trim().toLowerCase(),
+    customer_email:      d.customer_email.trim(),
     customer_phone:      d.customer_phone?.trim() || null,
     customer_language:   d.customer_language,
     service_type:        primary.service_type ?? d.service_type,

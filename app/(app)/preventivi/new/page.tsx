@@ -596,7 +596,7 @@ function NewPreventiveInner() {
 
   return (
     <>
-      <div className="min-h-screen bg-slate-50">
+      <div className="quote-natural-text min-h-screen bg-slate-50">
         <div className="max-w-2xl mx-auto py-8 px-4">
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
@@ -717,7 +717,8 @@ function NewPreventiveInner() {
                       <Field label="Titolo" full><Input value={item.title} onChange={v => updateItem(index, { title: v })} /></Field>
                       <Field label="Descrizione" full>
                         <textarea value={item.description} onChange={e => updateItem(index, { description: e.target.value })} rows={2}
-                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none" />
+                          autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                          className="w-full normal-case border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none" />
                       </Field>
                       {item.item_type === "service" && (
                         <>
@@ -764,7 +765,8 @@ function NewPreventiveInner() {
               <div className="space-y-3">
                 <Field label="Intro personalizzata (lascia vuoto per testo standard)">
                   <textarea value={form.email_intro} onChange={e => sf("email_intro", e.target.value)} rows={3}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none" />
+                    autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                    className="w-full normal-case border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none" />
                 </Field>
               </div>
             </Card>
@@ -779,7 +781,8 @@ function NewPreventiveInner() {
               <div className="mt-3">
                 <Field label="Istruzioni pagamento aggiuntive">
                   <textarea value={form.payment_instructions} onChange={e => sf("payment_instructions", e.target.value)} rows={2}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none" />
+                    autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                    className="w-full normal-case border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none" />
                 </Field>
               </div>
               {/* Preview buttons */}
@@ -799,7 +802,8 @@ function NewPreventiveInner() {
             <Card title="Note interne">
               <Field label="Note (non visibili al cliente)">
                 <textarea value={form.notes_internal} onChange={e => sf("notes_internal", e.target.value)} rows={2}
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none" />
+                  autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                  className="w-full normal-case border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none" />
               </Field>
             </Card>
 
@@ -957,9 +961,9 @@ function Input({ value, onChange, type = "text", required = false, placeholder =
   return (
     <input type={type} value={value} onChange={e => onChange?.(e.target.value)}
       required={required} placeholder={placeholder} step={step}
-      autoCapitalize={exactText ? "none" : undefined}
-      autoCorrect={exactText ? "off" : undefined}
-      spellCheck={exactText ? false : undefined}
+      autoCapitalize={type === "text" || exactText ? "none" : undefined}
+      autoCorrect={type === "text" || exactText ? "off" : undefined}
+      spellCheck={type === "text" || exactText ? false : undefined}
       className="w-full normal-case border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
   );
 }

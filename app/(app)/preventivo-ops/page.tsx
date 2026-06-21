@@ -406,14 +406,14 @@ export default function PreventivoOpsPage() {
   };
 
   if (accessDenied) return (
-    <section className="page-section">
+    <section className="quote-natural-text page-section">
       <PageHeader title="Preventivi" breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Preventivi" }]} />
       <div className="card p-6 text-sm text-slate-500">Accesso non abilitato per questo utente.</div>
     </section>
   );
 
   return (
-    <section className="page-section">
+    <section className="quote-natural-text page-section">
       <PageHeader
         title="Preventivi"
         subtitle="Crea e invia preventivi ai clienti via email."

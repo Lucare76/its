@@ -120,7 +120,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 
   if (d.customer_first_name !== undefined) updates.customer_first_name = d.customer_first_name.trim();
   if (d.customer_last_name  !== undefined) updates.customer_last_name  = d.customer_last_name.trim();
-  if (d.customer_email      !== undefined) updates.customer_email      = d.customer_email.trim().toLowerCase();
+  if (d.customer_email      !== undefined) updates.customer_email      = d.customer_email.trim();
   if (d.customer_phone      !== undefined) updates.customer_phone      = d.customer_phone?.trim() || null;
   if (d.customer_language   !== undefined) updates.customer_language   = d.customer_language;
   if (d.service_type        !== undefined) updates.service_type        = d.service_type;

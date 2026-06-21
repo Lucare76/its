@@ -197,7 +197,7 @@ export default function PreventiviPage() {
 
   return (
     <>
-      <div className="flex h-screen overflow-hidden">
+      <div className="quote-natural-text flex h-screen overflow-hidden">
         {/* ── Left — list ────────────────────────────────────────────────── */}
         <div className="w-80 shrink-0 border-r border-slate-200 flex flex-col">
           <div className="p-4 border-b border-slate-100">

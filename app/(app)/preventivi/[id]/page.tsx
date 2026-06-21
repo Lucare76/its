@@ -451,7 +451,7 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
 
   if (mode === "view") return (
     <>
-      <div className="min-h-screen bg-slate-50">
+      <div className="quote-natural-text min-h-screen bg-slate-50">
         <div className="max-w-2xl mx-auto py-8 px-4 space-y-4">
           {/* Header */}
           <div className="flex items-start justify-between gap-4">
@@ -657,7 +657,7 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
 
   return (
     <>
-      <div className="min-h-screen bg-slate-50">
+      <div className="quote-natural-text min-h-screen bg-slate-50">
         <div className="max-w-2xl mx-auto py-8 px-4">
           {/* Header */}
           <div className="flex items-center justify-between mb-4">
@@ -1006,9 +1006,9 @@ function EInput({ value, onChange, type = "text", required = false, locked, plac
   return (
     <input type={type} value={value} onChange={e => !locked && onChange?.(e.target.value)}
       required={required} placeholder={placeholder} step={step} readOnly={locked}
-      autoCapitalize={exactText ? "none" : undefined}
-      autoCorrect={exactText ? "off" : undefined}
-      spellCheck={exactText ? false : undefined}
+      autoCapitalize={type === "text" || exactText ? "none" : undefined}
+      autoCorrect={type === "text" || exactText ? "off" : undefined}
+      spellCheck={type === "text" || exactText ? false : undefined}
       className={`w-full normal-case border rounded-lg px-3 py-2 text-sm focus:outline-none ${locked ? "border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed" : "border-slate-200 focus:ring-1 focus:ring-blue-400"}`} />
   );
 }
@@ -1029,6 +1029,7 @@ function ETextarea({ value, onChange, locked, rows = 3 }: {
   return (
     <textarea value={value} onChange={e => !locked && onChange?.(e.target.value)}
       rows={rows} readOnly={locked}
-      className={`w-full border rounded-lg px-3 py-2 text-sm resize-none focus:outline-none ${locked ? "border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed" : "border-slate-200 focus:ring-1 focus:ring-blue-400"}`} />
+      autoCapitalize="none" autoCorrect="off" spellCheck={false}
+      className={`w-full normal-case border rounded-lg px-3 py-2 text-sm resize-none focus:outline-none ${locked ? "border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed" : "border-slate-200 focus:ring-1 focus:ring-blue-400"}`} />
   );
 }
