@@ -112,10 +112,6 @@ const EN_MONTHS: Record<string, number> = {
   jan:1, feb:2, mar:3, apr:4, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12,
 };
 
-function toTitleCase(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
-}
-
 function parseDate(text: string): { date: string; label: string } | null {
   const year = new Date().getFullYear();
 
@@ -174,8 +170,8 @@ function extractFromText(text: string): ImportResult {
   // Name: greeting pattern or ALL-CAPS or title-case lines
   const nameMatch = text.match(/(?:grazie|thanks?|regards?|saluti|cordiali\s+saluti|sinceramente),?\s*\n?\s*([A-ZÀÈÌÒÙ][A-ZÀÈÌÒÙa-zàèìòù]+(?:[-\s][A-ZÀÈÌÒÙ][A-ZÀÈÌÒÙa-zàèìòù]+)*)\s+([A-ZÀÈÌÒÙ][A-ZÀÈÌÒÙa-zàèìòù]+)/);
   if (nameMatch) {
-    result.customer_first_name = toTitleCase(nameMatch[1]);
-    result.customer_last_name = toTitleCase(nameMatch[2]);
+    result.customer_first_name = nameMatch[1];
+    result.customer_last_name = nameMatch[2];
   } else {
     // Scan last 3 non-empty lines for a name (title-case or ALL CAPS)
     const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
@@ -184,7 +180,7 @@ function extractFromText(text: string): ImportResult {
       const titleMatch = line.match(/^([A-ZÀÈÌÒÙ][a-zàèìòù]+)\s+([A-ZÀÈÌÒÙ][a-zàèìòù]+)$/);
       if (titleMatch) { result.customer_first_name = titleMatch[1]; result.customer_last_name = titleMatch[2]; break; }
       const capsMatch = line.match(/^([A-ZÀÈÌÒÙ]{2,})\s+([A-ZÀÈÌÒÙ]{2,})$/);
-      if (capsMatch) { result.customer_first_name = toTitleCase(capsMatch[1]); result.customer_last_name = toTitleCase(capsMatch[2]); break; }
+      if (capsMatch) { result.customer_first_name = capsMatch[1]; result.customer_last_name = capsMatch[2]; break; }
     }
   }
 
@@ -623,8 +619,8 @@ function NewPreventiveInner() {
             {/* Cliente */}
             <Card title="Cliente">
               <Grid>
-                <Field label="Nome *"><Input value={form.customer_first_name} onChange={v => sf("customer_first_name", v)} required /></Field>
-                <Field label="Cognome *"><Input value={form.customer_last_name} onChange={v => sf("customer_last_name", v)} required /></Field>
+                <Field label="Nome *"><Input value={form.customer_first_name} onChange={v => sf("customer_first_name", v)} required exactText /></Field>
+                <Field label="Cognome *"><Input value={form.customer_last_name} onChange={v => sf("customer_last_name", v)} required exactText /></Field>
                 <Field label="Email *" full><Input type="email" value={form.customer_email} onChange={v => sf("customer_email", v)} required /></Field>
                 <Field label="Telefono"><Input value={form.customer_phone} onChange={v => sf("customer_phone", v)} /></Field>
                 <Field label="Lingua email">
@@ -954,14 +950,17 @@ function Field({ label, children, full = false }: { label: string; children: Rea
   );
 }
 
-function Input({ value, onChange, type = "text", required = false, placeholder = "", step }: {
+function Input({ value, onChange, type = "text", required = false, placeholder = "", step, exactText = false }: {
   value: string; onChange?: (v: string) => void;
-  type?: string; required?: boolean; placeholder?: string; step?: string;
+  type?: string; required?: boolean; placeholder?: string; step?: string; exactText?: boolean;
 }) {
   return (
     <input type={type} value={value} onChange={e => onChange?.(e.target.value)}
       required={required} placeholder={placeholder} step={step}
-      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+      autoCapitalize={exactText ? "none" : undefined}
+      autoCorrect={exactText ? "off" : undefined}
+      spellCheck={exactText ? false : undefined}
+      className="w-full normal-case border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
   );
 }
 

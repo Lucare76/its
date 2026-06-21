@@ -693,10 +693,10 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
             <Card title="Cliente">
               <Grid>
                 <EF label="Nome *" locked={Lk("customer_first_name")}>
-                  <EInput value={form.customer_first_name} onChange={v => sf("customer_first_name", v)} locked={Lk("customer_first_name")} required />
+                  <EInput value={form.customer_first_name} onChange={v => sf("customer_first_name", v)} locked={Lk("customer_first_name")} required exactText />
                 </EF>
                 <EF label="Cognome *" locked={Lk("customer_last_name")}>
-                  <EInput value={form.customer_last_name} onChange={v => sf("customer_last_name", v)} locked={Lk("customer_last_name")} required />
+                  <EInput value={form.customer_last_name} onChange={v => sf("customer_last_name", v)} locked={Lk("customer_last_name")} required exactText />
                 </EF>
                 <EF label="Email *" full locked={Lk("customer_email")}>
                   <EInput type="email" value={form.customer_email} onChange={v => sf("customer_email", v)} locked={Lk("customer_email")} required />
@@ -1000,13 +1000,16 @@ function EF({ label, children, full = false, locked }: { label: string; children
     </div>
   );
 }
-function EInput({ value, onChange, type = "text", required = false, locked, placeholder = "", step }: {
-  value: string; onChange?: (v: string) => void; type?: string; required?: boolean; locked: boolean; placeholder?: string; step?: string;
+function EInput({ value, onChange, type = "text", required = false, locked, placeholder = "", step, exactText = false }: {
+  value: string; onChange?: (v: string) => void; type?: string; required?: boolean; locked: boolean; placeholder?: string; step?: string; exactText?: boolean;
 }) {
   return (
     <input type={type} value={value} onChange={e => !locked && onChange?.(e.target.value)}
       required={required} placeholder={placeholder} step={step} readOnly={locked}
-      className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none ${locked ? "border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed" : "border-slate-200 focus:ring-1 focus:ring-blue-400"}`} />
+      autoCapitalize={exactText ? "none" : undefined}
+      autoCorrect={exactText ? "off" : undefined}
+      spellCheck={exactText ? false : undefined}
+      className={`w-full normal-case border rounded-lg px-3 py-2 text-sm focus:outline-none ${locked ? "border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed" : "border-slate-200 focus:ring-1 focus:ring-blue-400"}`} />
   );
 }
 function ESelect({ value, onChange, options, locked }: {
