@@ -75,6 +75,51 @@ function isValidClockTime(value: string) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value.trim());
 }
 
+function InlineCityEdit({ serviceId, currentCity, onSave, saving }: { serviceId: string; currentCity: string; onSave: (city: string) => Promise<unknown>; saving: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(currentCity);
+  const [localSaving, setLocalSaving] = useState(false);
+
+  useEffect(() => { setValue(currentCity); }, [currentCity]);
+
+  const save = async () => {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.toUpperCase() === currentCity.toUpperCase()) { setEditing(false); return; }
+    setLocalSaving(true);
+    await onSave(trimmed);
+    setLocalSaving(false);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <span className="ml-2 inline-flex items-center gap-1">
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") setEditing(false); }}
+          autoFocus
+          disabled={localSaving || saving}
+          placeholder="Città..."
+          className="w-28 rounded border border-indigo-300 px-1.5 py-0.5 text-xs uppercase focus:outline-none focus:ring-1 focus:ring-indigo-400"
+        />
+        <button onClick={() => void save()} disabled={localSaving || saving} className="text-xs text-indigo-600 hover:text-indigo-800">✓</button>
+        <button onClick={() => { setEditing(false); setValue(currentCity); }} className="text-xs text-slate-400 hover:text-slate-600">✕</button>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      title={currentCity ? "Modifica città" : "Aggiungi città"}
+      className={`ml-2 text-xs ${currentCity ? "text-slate-400 hover:text-indigo-600" : "text-indigo-500 hover:text-indigo-700 font-medium"}`}
+    >
+      {currentCity ? `· ${currentCity} ✎` : "+ città"}
+    </button>
+  );
+}
+
 export default function BusNetworkPage() {
   const [payload, setPayload] = useState<ApiPayload>(emptyPayload);
   const [loading, setLoading] = useState(true);
@@ -2239,9 +2284,12 @@ export default function BusNetworkPage() {
                         <div className="min-w-0 flex-1">
                           <span className="font-semibold uppercase text-slate-800">{svc.customer_display_name}</span>
                           <span className="ml-2 uppercase text-sm text-slate-500">{svc.hotel_name}</span>
-                          {svc.bus_city_origin && (
-                            <span className="ml-2 text-xs text-slate-400">· {svc.bus_city_origin}</span>
-                          )}
+                          <InlineCityEdit
+                            serviceId={svc.id}
+                            currentCity={svc.bus_city_origin ?? ""}
+                            onSave={async (city) => { await post("update_service_city", { service_id: svc.id, bus_city_origin: city }); }}
+                            saving={saving}
+                          />
                           {svc.phone_display && (
                             <span className="ml-2 text-xs text-slate-400">{svc.phone_display}</span>
                           )}
@@ -2482,9 +2530,14 @@ export default function BusNetworkPage() {
               <div className="text-base font-bold uppercase text-slate-900">{assignService.customer_display_name}</div>
               <div className="text-sm text-slate-600">Hotel: <span className="font-medium uppercase">{assignService.hotel_name}</span></div>
               <div className="text-sm text-slate-600">Tel: <span className="font-medium">{assignService.phone_display}</span></div>
-              {assignService.bus_city_origin && (
-                <div className="text-sm text-slate-600">Città: <span className="font-medium">{assignService.bus_city_origin}</span></div>
-              )}
+              <div className="text-sm text-slate-600">
+                Città: <InlineCityEdit
+                  serviceId={assignService.id}
+                  currentCity={assignService.bus_city_origin ?? ""}
+                  onSave={async (city) => { await post("update_service_city", { service_id: assignService.id, bus_city_origin: city }); }}
+                  saving={saving}
+                />
+              </div>
               <div className="text-sm text-slate-600">Pax: <span className="font-medium">{assignService.pax}</span></div>
             </div>
 

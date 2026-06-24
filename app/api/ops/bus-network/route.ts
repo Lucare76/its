@@ -576,6 +576,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    if (action === "update_service_city") {
+      const parsed = z.object({
+        service_id: z.string().uuid(),
+        bus_city_origin: z.string().trim().min(1).max(200),
+      }).parse(body);
+      const { error } = await auth.admin.from("services")
+        .update({ bus_city_origin: parsed.bus_city_origin.toUpperCase() })
+        .eq("tenant_id", tenantId)
+        .eq("id", parsed.service_id);
+      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
     if (action === "allocate_service") {
       const parsed = allocateSchema.parse(body);
       if (!parsed.stop_id) {
