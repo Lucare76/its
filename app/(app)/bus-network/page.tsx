@@ -237,6 +237,7 @@ export default function BusNetworkPage() {
   const [transferLineId, setTransferLineId] = useState("");
   const [transferUnitId, setTransferUnitId] = useState("");
   const [transferStopId, setTransferStopId] = useState("");
+  const [transferCreatingStop, setTransferCreatingStop] = useState(false);
 
   const load = useCallback(async () => {
     const token = await getToken();
@@ -454,10 +455,17 @@ export default function BusNetworkPage() {
     () => payload.units.filter((u) => u.bus_line_id === transferLineId && u.status !== "closed" && u.status !== "completed"),
     [payload.units, transferLineId]
   );
+  const transferStopMissing = useMemo(() => {
+    if (!transferAlloc || !transferLineId) return false;
+    const sourceStop = transferAlloc.stop_name?.toUpperCase().trim();
+    if (!sourceStop) return false;
+    return !transferTargetStops.some((s) => s.stop_name.toUpperCase().trim() === sourceStop);
+  }, [transferAlloc, transferLineId, transferTargetStops]);
 
   // --- Actions ---
   const openTransferModal = useCallback((alloc: AllocationDetail) => {
     setTransferAlloc(alloc);
+    setTransferCreatingStop(false);
     const otherLines = payload.lines.filter((l) => l.id !== alloc.bus_line_id);
     const firstLine = otherLines[0];
     const firstLineId = firstLine?.id ?? "";
@@ -467,6 +475,20 @@ export default function BusNetworkPage() {
     const firstUnit = payload.units.find((u) => u.bus_line_id === firstLineId && u.status !== "closed" && u.status !== "completed");
     setTransferUnitId(firstUnit?.id ?? "");
   }, [payload.lines, payload.stops, payload.units, direction]);
+
+  const createStopForTransfer = useCallback(async () => {
+    if (!transferAlloc || !transferLineId) return;
+    setTransferCreatingStop(true);
+    const result = await post("create_stop_for_transfer", {
+      bus_line_id: transferLineId,
+      stop_name: transferAlloc.stop_name,
+      direction,
+    }) as { stop_id?: string } | null;
+    setTransferCreatingStop(false);
+    if (result?.stop_id) {
+      setTransferStopId(result.stop_id);
+    }
+  }, [transferAlloc, transferLineId, direction, post]);
 
   const confirmTransfer = useCallback(async () => {
     if (!transferAlloc || !transferLineId || !transferUnitId || !transferStopId) return;
@@ -2822,6 +2844,19 @@ export default function BusNetworkPage() {
                   : transferTargetStops.map((s) => <option key={s.id} value={s.id}>{s.stop_name}{s.city && s.city !== s.stop_name ? ` (${s.city})` : ""}</option>)
                 }
               </select>
+              {transferStopMissing && transferAlloc && (
+                <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2.5 text-sm">
+                  <div className="font-medium text-amber-800">
+                    La fermata &quot;{transferAlloc.stop_name}&quot; non esiste su questa linea.
+                  </div>
+                  <button
+                    onClick={() => void createStopForTransfer()}
+                    disabled={saving || transferCreatingStop}
+                    className="mt-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-40">
+                    {transferCreatingStop ? "Creazione..." : `Crea fermata "${transferAlloc.stop_name}" su questa linea`}
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="space-y-1">

@@ -1605,6 +1605,95 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    if (action === "create_stop_for_transfer") {
+      if (auth.membership.role !== "admin") {
+        return NextResponse.json({ ok: false, error: "Non autorizzato." }, { status: 403 });
+      }
+      const parsed = z.object({
+        bus_line_id: z.string().uuid(),
+        stop_name: z.string().trim().min(1).max(200),
+        direction: z.enum(["arrival", "departure"]),
+      }).parse(body);
+
+      const cityName = parsed.stop_name.toUpperCase();
+
+      const existing = await auth.admin.from("tenant_bus_line_stops")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("bus_line_id", parsed.bus_line_id)
+        .eq("direction", parsed.direction)
+        .ilike("stop_name", cityName)
+        .maybeSingle();
+      if (existing.data) {
+        return NextResponse.json({ ok: true, stop_id: existing.data.id, ...(await loadBusNetwork(auth)) });
+      }
+
+      const { data: lineStops } = await auth.admin.from("tenant_bus_line_stops")
+        .select("id,stop_name,city,lat,lng,stop_order")
+        .eq("tenant_id", tenantId)
+        .eq("bus_line_id", parsed.bus_line_id)
+        .eq("direction", parsed.direction)
+        .eq("active", true)
+        .order("stop_order");
+      type GeoStop = { id: string; stop_name: string; city: string; lat: number | null; lng: number | null; stop_order: number };
+      const stops = (lineStops ?? []) as GeoStop[];
+
+      const geo = await geocodeCity(cityName);
+      let insertOrder = (stops.length > 0 ? Math.max(...stops.map(s => s.stop_order)) : 0) + 1;
+
+      if (geo) {
+        const withCoords = stops.filter(s => s.lat != null) as Array<GeoStop & { lat: number; lng: number }>;
+        if (withCoords.length > 0) {
+          const sorted = [...withCoords].sort((a, b) =>
+            parsed.direction === "arrival" ? b.lat - a.lat : a.lat - b.lat
+          );
+          let insertAfterIdx = sorted.length;
+          for (let i = 0; i < sorted.length; i++) {
+            const cmp = parsed.direction === "arrival"
+              ? geo.lat > sorted[i].lat
+              : geo.lat < sorted[i].lat;
+            if (cmp) { insertAfterIdx = i; break; }
+          }
+          if (insertAfterIdx === 0) {
+            insertOrder = Math.max(1, sorted[0].stop_order - 1);
+          } else if (insertAfterIdx >= sorted.length) {
+            insertOrder = sorted[sorted.length - 1].stop_order + 1;
+          } else {
+            insertOrder = sorted[insertAfterIdx - 1].stop_order + 1;
+            for (const s of stops) {
+              if (s.stop_order >= insertOrder) {
+                await auth.admin.from("tenant_bus_line_stops")
+                  .update({ stop_order: s.stop_order + 1, order_index: s.stop_order + 1 })
+                  .eq("tenant_id", tenantId).eq("id", s.id);
+              }
+            }
+          }
+        }
+      }
+
+      const { data: newStop, error: stopErr } = await auth.admin.from("tenant_bus_line_stops")
+        .insert({
+          tenant_id: tenantId,
+          bus_line_id: parsed.bus_line_id,
+          direction: parsed.direction,
+          stop_name: cityName,
+          city: cityName,
+          stop_order: insertOrder,
+          order_index: insertOrder,
+          lat: geo?.lat ?? null,
+          lng: geo?.lng ?? null,
+          is_manual: true,
+          active: true,
+        })
+        .select("id")
+        .single();
+      if (stopErr || !newStop) {
+        return NextResponse.json({ ok: false, error: stopErr?.message ?? "Errore creazione fermata." }, { status: 400 });
+      }
+
+      return NextResponse.json({ ok: true, stop_id: (newStop as { id: string }).id, ...(await loadBusNetwork(auth)) });
+    }
+
     if (action === "transfer_allocation_line") {
       // Solo admin
       if (auth.membership.role !== "admin") {
