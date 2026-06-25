@@ -550,7 +550,7 @@ export default function BusNetworkPage() {
     setAssignModalOpen(true);
   }, [dateUnitLoads, lineStops, selectedLine]);
 
-  const onAssignLineChange = useCallback((newLineId: string) => {
+  const onAssignLineChange = useCallback(async (newLineId: string) => {
     setAssignLineId(newLineId);
     const stops = payload.stops.filter((s) => s.bus_line_id === newLineId && s.direction === direction).sort((a, b) => a.stop_order - b.stop_order);
     const units = payload.units.filter((u) => u.bus_line_id === newLineId && u.status !== "closed" && u.status !== "completed");
@@ -562,23 +562,32 @@ export default function BusNetworkPage() {
     });
     const svcPax = assignService?.pax ?? 1;
     const firstAvailable = unitsWithLoad.find(u => u.remaining >= svcPax) ?? unitsWithLoad[0];
-    setAssignStopId(stops[0]?.id ?? "");
     setAssignUnitId(firstAvailable?.id ?? "");
-  }, [payload.stops, payload.units, payload.allocation_details, direction, date, assignService]);
 
-  const createStopForAssign = useCallback(async () => {
-    if (!assignService || !assignLineId) return;
-    setAssignCreatingStop(true);
-    const result = await post("create_stop_for_transfer", {
-      bus_line_id: assignLineId,
-      stop_name: assignService.bus_city_origin ?? "",
-      direction,
-    }) as { stop_id?: string } | null;
-    setAssignCreatingStop(false);
-    if (result?.stop_id) {
-      setAssignStopId(result.stop_id);
+    const city = (assignService?.bus_city_origin ?? "").toUpperCase().trim();
+    const matchingStop = city
+      ? stops.find(s => s.stop_name.toUpperCase().trim() === city || (s.city ?? "").toUpperCase().trim() === city)
+      : null;
+
+    if (matchingStop) {
+      setAssignStopId(matchingStop.id);
+    } else if (city && newLineId !== selectedLineId) {
+      setAssignCreatingStop(true);
+      const result = await post("create_stop_for_transfer", {
+        bus_line_id: newLineId,
+        stop_name: city,
+        direction,
+      }) as { stop_id?: string } | null;
+      setAssignCreatingStop(false);
+      if (result?.stop_id) {
+        setAssignStopId(result.stop_id);
+      } else {
+        setAssignStopId(stops[0]?.id ?? "");
+      }
+    } else {
+      setAssignStopId(stops[0]?.id ?? "");
     }
-  }, [assignService, assignLineId, direction, post]);
+  }, [payload.stops, payload.units, payload.allocation_details, direction, date, assignService, selectedLineId, post]);
 
   const confirmMove = useCallback(async () => {
     if (!moveSource || !moveTargetUnitId) return;
@@ -2653,17 +2662,9 @@ export default function BusNetworkPage() {
                   <option key={stop.id} value={stop.id}>{stop.stop_name}{stop.city && stop.city !== stop.stop_name ? ` (${stop.city})` : ""}</option>
                 ))}
               </select>
-              {assignStopMissing && assignService?.bus_city_origin && (
-                <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2.5 text-sm">
-                  <div className="font-medium text-amber-800">
-                    La fermata &quot;{assignService.bus_city_origin}&quot; non esiste su questa linea.
-                  </div>
-                  <button
-                    onClick={() => void createStopForAssign()}
-                    disabled={saving || assignCreatingStop}
-                    className="mt-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-40">
-                    {assignCreatingStop ? "Creazione..." : `Crea fermata "${assignService.bus_city_origin}" su questa linea`}
-                  </button>
+              {assignCreatingStop && (
+                <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+                  Creazione fermata in corso...
                 </div>
               )}
             </div>
