@@ -541,8 +541,10 @@ export default function BusNetworkPage() {
     setAssignCreatingStop(false);
     const currentLineId = selectedLine?.id ?? "";
     setAssignLineId(currentLineId);
-    const available = dateUnitLoads.filter((u) => u.status !== "closed" && u.status !== "completed");
-    setAssignUnitId(available[0]?.id ?? "");
+    const firstAvailable = dateUnitLoads.find((u) => u.status !== "closed" && u.status !== "completed" && u.remaining_seats >= svc.pax)
+      ?? dateUnitLoads.find((u) => u.status !== "closed" && u.status !== "completed")
+      ?? null;
+    setAssignUnitId(firstAvailable?.id ?? "");
     const suggestedStop = lineStops.find((s) => s.stop_name === svc.suggested_stop_name) ?? lineStops[0] ?? null;
     setAssignStopId(suggestedStop?.id ?? "");
     setAssignModalOpen(true);
@@ -552,9 +554,17 @@ export default function BusNetworkPage() {
     setAssignLineId(newLineId);
     const stops = payload.stops.filter((s) => s.bus_line_id === newLineId && s.direction === direction).sort((a, b) => a.stop_order - b.stop_order);
     const units = payload.units.filter((u) => u.bus_line_id === newLineId && u.status !== "closed" && u.status !== "completed");
+    const unitsWithLoad = units.map(u => {
+      const pax = payload.allocation_details
+        .filter(a => a.bus_unit_id === u.id && a.service_date === date && a.direction === direction)
+        .reduce((sum, a) => sum + a.pax_assigned, 0);
+      return { ...u, remaining: Math.max(0, u.capacity - pax) };
+    });
+    const svcPax = assignService?.pax ?? 1;
+    const firstAvailable = unitsWithLoad.find(u => u.remaining >= svcPax) ?? unitsWithLoad[0];
     setAssignStopId(stops[0]?.id ?? "");
-    setAssignUnitId(units[0]?.id ?? "");
-  }, [payload.stops, payload.units, direction]);
+    setAssignUnitId(firstAvailable?.id ?? "");
+  }, [payload.stops, payload.units, payload.allocation_details, direction, date, assignService]);
 
   const createStopForAssign = useCallback(async () => {
     if (!assignService || !assignLineId) return;
