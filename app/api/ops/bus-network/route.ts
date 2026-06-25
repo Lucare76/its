@@ -15,6 +15,7 @@ import {
   type RawBusUnit
 } from "@/lib/server/bus-network";
 import { findBusStopsByCity, resolveBusStop } from "@/lib/server/bus-lines-catalog";
+import { resolveHotelMatch } from "@/lib/server/hotel-matching";
 import { geocodeCity, geocodeCityName } from "@/lib/server/geocoding";
 import { getCustomerFullName } from "@/lib/service-display";
 import type { AgencyBookingServiceKind, OperationalServiceType } from "@/lib/types";
@@ -260,7 +261,7 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
       ...service,
       customer_display_name: getCustomerFullName(service),
       phone_display: service.phone_e164 ?? service.phone ?? "N/D",
-      hotel_name: hotel?.name ?? service.meeting_point ?? hotelFromNotes ?? "Hotel N/D",
+      hotel_name: hotel?.name ?? hotelFromNotes ?? "Hotel N/D",
       hotel_zone: hotel?.zone ?? null,
       derived_family_code: identity.family_code,
       derived_family_name: identity.family_name,
@@ -1301,16 +1302,18 @@ export async function POST(request: NextRequest) {
       }
 
       // Carica tutte le fermate attive del tenant per la direzione richiesta
-      const [allStopsRes, allUnitsRes, existingSvcRes] = await Promise.all([
+      const [allStopsRes, allUnitsRes, existingSvcRes, hotelsRes] = await Promise.all([
         auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,stop_name,city,stop_order,pickup_note")
           .eq("tenant_id", tenantId).eq("direction", parsed.direction).eq("active", true).order("stop_order"),
         auth.admin.from("tenant_bus_units").select("id,bus_line_id,label,capacity,status")
           .eq("tenant_id", tenantId).not("status", "in", '("closed","completed")').order("sort_order"),
         auth.admin.from("services").select("id").eq("tenant_id", tenantId).eq("date", parsed.travel_date),
+        auth.admin.from("hotels").select("id,name,zone").eq("tenant_id", tenantId),
       ]);
       if (allStopsRes.error) throw new Error(allStopsRes.error.message);
       if (allUnitsRes.error) throw new Error(allUnitsRes.error.message);
       if (existingSvcRes.error) throw new Error(existingSvcRes.error.message);
+      const importHotels = (hotelsRes.data ?? []) as Array<{ id: string; name: string; zone: string | null }>;
 
       const existingSvcIds = (existingSvcRes.data ?? []).map((s: { id: string }) => s.id);
       // Se non ci sono servizi per questa data, non ci sono allocazioni → mappa vuota
@@ -1446,7 +1449,7 @@ export async function POST(request: NextRequest) {
               booking_service_kind: "bus_city_hotel",
               status: "new",
               billing_party_name: row.agency ?? null,
-              meeting_point: row.hotel ?? null,
+              hotel_id: row.hotel ? (resolveHotelMatch(importHotels, row.hotel, null) ?? undefined) : undefined,
             }).select("id").single();
             if (svcErr || !svc) {
               console.error(`[import_excel_auto] insert services fallita per "${row.name}" (${row.city}): ${svcErr?.message}`);
