@@ -1060,7 +1060,13 @@ export async function POST(request: NextRequest) {
       // Permette di raggruppare passeggeri della stessa fermata sullo stesso bus.
       const busStopPrimary = new Map<string, string>(); // busId → stopId
 
-      for (const svc of services as Array<{ id: string; customer_name: string; pax: number; direction: string; bus_city_origin?: string | null; transport_code?: string | null; time?: string | null; outbound_time?: string | null; service_type_code?: string | null; booking_service_kind?: string | null }>) {
+      type SvcRow = { id: string; customer_name: string; pax: number; direction: string; bus_city_origin?: string | null; transport_code?: string | null; time?: string | null; outbound_time?: string | null; service_type_code?: string | null; booking_service_kind?: string | null };
+      const sortedServices = [...(services as SvcRow[])].sort((a, b) => {
+        const ca = normCity(a.bus_city_origin); const cb = normCity(b.bus_city_origin);
+        if (ca !== cb) return ca.localeCompare(cb);
+        return (b.pax ?? 0) - (a.pax ?? 0);
+      });
+      for (const svc of sortedServices) {
         if (allocatedIds.has(svc.id)) continue;
 
         const identity = deriveServiceBusIdentity(svc as Parameters<typeof deriveServiceBusIdentity>[0]);
