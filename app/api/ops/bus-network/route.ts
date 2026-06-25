@@ -1069,12 +1069,15 @@ export async function POST(request: NextRequest) {
 
         const lineStops = allStops.filter((s) => s.bus_line_id === line.id && s.direction === parsed.direction);
         const reqCity = normCity(svc.bus_city_origin);
+        const expandedCity = normCity((svc.bus_city_origin ?? "").replace(/\bp\.\s*/gi, "ponte ").replace(/\bs\.\s*/gi, "santa ").replace(/\bc\.\s*/gi, "citta "));
         const identCity = normCity(identity.city);
         const aliasCities = findBusStopsByCity(svc.bus_city_origin).map((e) => normCity(e.stop.city));
 
         let stop = lineStops.find((s) => {
           const sc = normCity(s.city); const sn = normCity(s.stop_name);
-          return sc === reqCity || sn === reqCity || sc === identCity || sn === identCity || aliasCities.includes(sc) || aliasCities.includes(sn);
+          return sc === reqCity || sn === reqCity || sc === expandedCity || sn === expandedCity ||
+            sc === identCity || sn === identCity || aliasCities.includes(sc) || aliasCities.includes(sn) ||
+            sn.includes(reqCity) || reqCity.includes(sn) || sc.includes(reqCity) || reqCity.includes(sc);
         });
 
         // Fermata non trovata → crea fermata manuale solo se non appartiene a un'altra linea

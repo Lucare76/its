@@ -178,19 +178,42 @@ function formatTime(value?: string | null) {
   return raw ? raw.slice(0, 5) : undefined;
 }
 
+function expandAbbreviations(text: string) {
+  return text
+    .replace(/\bp\.\s*/gi, "ponte ")
+    .replace(/\bs\.\s*/gi, "santa ")
+    .replace(/\bc\.\s*/gi, "citta ")
+    .replace(/\bv\.\s*/gi, "via ")
+    .replace(/\bss\.\s*/gi, "santissima ")
+    .replace(/\bmt\.\s*/gi, "monte ")
+    .trim();
+}
+
 function stopMatches(stop: BusStopRow, candidates: string[]) {
   const normalizedStop = normalizeBusText(stop.stop_name);
   const normalizedCity = normalizeBusText(stop.city);
   return candidates.some((candidate) => candidate && (candidate === normalizedStop || candidate === normalizedCity));
 }
 
+function stopMatchesFuzzy(stop: BusStopRow, candidates: string[]) {
+  const normalizedStop = normalizeBusText(stop.stop_name);
+  const normalizedCity = normalizeBusText(stop.city);
+  return candidates.some((candidate) => {
+    if (!candidate) return false;
+    return normalizedStop.includes(candidate) || candidate.includes(normalizedStop) ||
+           normalizedCity.includes(candidate) || candidate.includes(normalizedCity);
+  });
+}
+
 function findStop(context: BusResolverContext, input: BusResolverInput, line: BusLineRow | null) {
   if (!line?.id) return { confidence: "none" as const };
   const rawStop = input.stopName || input.busCityOrigin || "";
   const normalizedRaw = normalizeBusText(rawStop);
+  const expanded = normalizeBusText(expandAbbreviations(rawStop));
   const catalog = resolveBusStop(rawStop || input.transportCode || "");
   const candidates = [
     normalizedRaw,
+    expanded,
     normalizeBusText(catalog?.canonicalCity)
   ].filter(Boolean);
 
@@ -206,6 +229,10 @@ function findStop(context: BusResolverContext, input: BusResolverInput, line: Bu
   const derived = eligibleStops.find((stop) => stopMatches(stop, candidates));
   if (derived) {
     return { stop: derived, confidence: catalog ? "derived" as const : "alias" as const };
+  }
+  const fuzzy = eligibleStops.find((stop) => stopMatchesFuzzy(stop, candidates));
+  if (fuzzy) {
+    return { stop: fuzzy, confidence: "alias" as const };
   }
   return { confidence: "none" as const };
 }
