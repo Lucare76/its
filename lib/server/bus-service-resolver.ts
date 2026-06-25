@@ -139,7 +139,7 @@ export type BusResolverContext = {
   plannedAllocations: Array<{ busUnitId: string; date: string; direction: BusDirection; pax: number }>;
 };
 
-function normalizeBusText(value?: string | null) {
+export function normalizeBusText(value?: string | null) {
   return String(value ?? "")
     .toLowerCase()
     .normalize("NFD")
@@ -178,7 +178,7 @@ function formatTime(value?: string | null) {
   return raw ? raw.slice(0, 5) : undefined;
 }
 
-function expandAbbreviations(text: string) {
+export function expandAbbreviations(text: string) {
   return text
     .replace(/\bp\.\s*/gi, "ponte ")
     .replace(/\bs\.\s*/gi, "santa ")
@@ -189,13 +189,13 @@ function expandAbbreviations(text: string) {
     .trim();
 }
 
-function stopMatches(stop: BusStopRow, candidates: string[]) {
+export function stopMatches(stop: BusStopRow, candidates: string[]) {
   const normalizedStop = normalizeBusText(stop.stop_name);
   const normalizedCity = normalizeBusText(stop.city);
   return candidates.some((candidate) => candidate && (candidate === normalizedStop || candidate === normalizedCity));
 }
 
-function stopMatchesFuzzy(stop: BusStopRow, candidates: string[]) {
+export function stopMatchesFuzzy(stop: BusStopRow, candidates: string[]) {
   const normalizedStop = normalizeBusText(stop.stop_name);
   const normalizedCity = normalizeBusText(stop.city);
   return candidates.some((candidate) => {
