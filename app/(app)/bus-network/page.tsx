@@ -141,9 +141,11 @@ export default function BusNetworkPage() {
 
   // Assign modal
   const [assignService, setAssignService] = useState<BusService | null>(null);
+  const [assignLineId, setAssignLineId] = useState("");
   const [assignUnitId, setAssignUnitId] = useState("");
   const [assignStopId, setAssignStopId] = useState("");
   const [assignModalOpen, setAssignModalOpen] = useState(false);
+  const [assignCreatingStop, setAssignCreatingStop] = useState(false);
 
   // Modifica nome linea
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
@@ -510,14 +512,63 @@ export default function BusNetworkPage() {
     setMoveModalOpen(true);
   }, [dateUnitLoads]);
 
+  const assignLineStops = useMemo(
+    () => payload.stops.filter((s) => s.bus_line_id === assignLineId && s.direction === direction).sort((a, b) => a.stop_order - b.stop_order),
+    [payload.stops, assignLineId, direction]
+  );
+  const assignLineUnits = useMemo(
+    () => {
+      const units = payload.units.filter((u) => u.bus_line_id === assignLineId && u.status !== "closed" && u.status !== "completed");
+      if (!date) return units.map(u => ({ ...u, pax_assigned: 0, remaining_seats: u.capacity }));
+      return units.map(u => {
+        const datePax = payload.allocation_details
+          .filter(a => a.bus_unit_id === u.id && a.service_date === date && a.direction === direction)
+          .reduce((sum, a) => sum + a.pax_assigned, 0);
+        return { ...u, pax_assigned: datePax, remaining_seats: Math.max(0, u.capacity - datePax) };
+      });
+    },
+    [payload.units, payload.allocation_details, assignLineId, date, direction]
+  );
+  const assignStopMissing = useMemo(() => {
+    if (!assignService || !assignLineId || assignLineId === selectedLineId) return false;
+    const city = (assignService.bus_city_origin ?? "").toUpperCase().trim();
+    if (!city) return false;
+    return !assignLineStops.some(s => s.stop_name.toUpperCase().trim() === city);
+  }, [assignService, assignLineId, selectedLineId, assignLineStops]);
+
   const openAssignModal = useCallback((svc: BusService) => {
     setAssignService(svc);
+    setAssignCreatingStop(false);
+    const currentLineId = selectedLine?.id ?? "";
+    setAssignLineId(currentLineId);
     const available = dateUnitLoads.filter((u) => u.status !== "closed" && u.status !== "completed");
     setAssignUnitId(available[0]?.id ?? "");
     const suggestedStop = lineStops.find((s) => s.stop_name === svc.suggested_stop_name) ?? lineStops[0] ?? null;
     setAssignStopId(suggestedStop?.id ?? "");
     setAssignModalOpen(true);
-  }, [dateUnitLoads, lineStops]);
+  }, [dateUnitLoads, lineStops, selectedLine]);
+
+  const onAssignLineChange = useCallback((newLineId: string) => {
+    setAssignLineId(newLineId);
+    const stops = payload.stops.filter((s) => s.bus_line_id === newLineId && s.direction === direction).sort((a, b) => a.stop_order - b.stop_order);
+    const units = payload.units.filter((u) => u.bus_line_id === newLineId && u.status !== "closed" && u.status !== "completed");
+    setAssignStopId(stops[0]?.id ?? "");
+    setAssignUnitId(units[0]?.id ?? "");
+  }, [payload.stops, payload.units, direction]);
+
+  const createStopForAssign = useCallback(async () => {
+    if (!assignService || !assignLineId) return;
+    setAssignCreatingStop(true);
+    const result = await post("create_stop_for_transfer", {
+      bus_line_id: assignLineId,
+      stop_name: assignService.bus_city_origin ?? "",
+      direction,
+    }) as { stop_id?: string } | null;
+    setAssignCreatingStop(false);
+    if (result?.stop_id) {
+      setAssignStopId(result.stop_id);
+    }
+  }, [assignService, assignLineId, direction, post]);
 
   const confirmMove = useCallback(async () => {
     if (!moveSource || !moveTargetUnitId) return;
@@ -529,17 +580,18 @@ export default function BusNetworkPage() {
   }, [moveSource, moveTargetUnitId, movePaxStr, moveReason, post]);
 
   const confirmAssign = useCallback(async () => {
-    if (!assignService || !assignUnitId || !assignStopId) return;
-    const stop = lineStops.find((s) => s.id === assignStopId);
+    if (!assignService || !assignUnitId || !assignStopId || !assignLineId) return;
+    const allStops = payload.stops;
+    const stop = allStops.find((s) => s.id === assignStopId);
     if (!stop) return;
     await post("allocate_service", {
-      service_id: assignService.id, bus_line_id: selectedLine?.id,
+      service_id: assignService.id, bus_line_id: assignLineId,
       bus_unit_id: assignUnitId, direction: assignService.direction,
       stop_name: stop.stop_name, stop_id: stop.id, pax_assigned: assignService.pax
     });
     setAssignModalOpen(false);
     setAssignService(null);
-  }, [assignService, assignUnitId, assignStopId, lineStops, selectedLine, post]);
+  }, [assignService, assignUnitId, assignStopId, assignLineId, payload.stops, post]);
 
   const deleteAllocation = useCallback(async (allocationId: string) => {
     setDeleteConfirmId(null);
@@ -2564,10 +2616,20 @@ export default function BusNetworkPage() {
             </div>
 
             <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-700">Linea:</label>
+              <select value={assignLineId} onChange={(e) => onAssignLineChange(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                {payload.lines.map((l) => (
+                  <option key={l.id} value={l.id}>{l.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
               <label className="text-sm font-medium text-slate-700">Bus:</label>
               <select value={assignUnitId} onChange={(e) => setAssignUnitId(e.target.value)}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
-                {dateUnitLoads.filter((u) => u.status !== "closed" && u.status !== "completed").map((u) => (
+                {assignLineUnits.map((u) => (
                   <option key={u.id} value={u.id}>{u.label} — {u.remaining_seats} posti liberi</option>
                 ))}
               </select>
@@ -2577,17 +2639,30 @@ export default function BusNetworkPage() {
               <label className="text-sm font-medium text-slate-700">Fermata di salita:</label>
               <select value={assignStopId} onChange={(e) => setAssignStopId(e.target.value)}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
-                {lineStops.map((stop) => (
-                  <option key={stop.id} value={stop.id}>{stop.stop_name} — {stop.city}</option>
+                {assignLineStops.map((stop) => (
+                  <option key={stop.id} value={stop.id}>{stop.stop_name}{stop.city && stop.city !== stop.stop_name ? ` (${stop.city})` : ""}</option>
                 ))}
               </select>
+              {assignStopMissing && assignService?.bus_city_origin && (
+                <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2.5 text-sm">
+                  <div className="font-medium text-amber-800">
+                    La fermata &quot;{assignService.bus_city_origin}&quot; non esiste su questa linea.
+                  </div>
+                  <button
+                    onClick={() => void createStopForAssign()}
+                    disabled={saving || assignCreatingStop}
+                    className="mt-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-40">
+                    {assignCreatingStop ? "Creazione..." : `Crea fermata "${assignService.bus_city_origin}" su questa linea`}
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="flex gap-3 pt-1">
               <button onClick={() => { setAssignModalOpen(false); setAssignService(null); }}
                 className="btn-secondary flex-1 py-2.5">Annulla</button>
               <button onClick={() => void confirmAssign()}
-                disabled={saving || !assignUnitId || !assignStopId}
+                disabled={saving || !assignUnitId || !assignStopId || !assignLineId}
                 className="btn-primary flex-1 py-2.5 disabled:opacity-40">
                 {saving ? "Assegnazione..." : "Assegna"}
               </button>
