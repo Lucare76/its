@@ -2383,25 +2383,9 @@ export default function BusNetworkPage() {
 
               {/* Unassigned passengers */}
               {unassigned.length > 0 && (() => {
-                const stopSummary = new Map<string, number>();
-                let totalUnassignedPax = 0;
-                for (const svc of unassigned) {
-                  const city = (svc.bus_city_origin ?? "Sconosciuta").toUpperCase();
-                  stopSummary.set(city, (stopSummary.get(city) ?? 0) + svc.pax);
-                  totalUnassignedPax += svc.pax;
-                }
-                const stopOrderMap = new Map(lineStops.map(s => [s.stop_name.toUpperCase(), s.stop_order]));
-                const sortedStops = [...stopSummary.entries()].sort((a, b) => (stopOrderMap.get(a[0]) ?? 999) - (stopOrderMap.get(b[0]) ?? 999));
+                const totalUnassignedPax = unassigned.reduce((sum, svc) => sum + svc.pax, 0);
                 return (
                 <SectionCard title={`👥 Da assegnare — ${selectedLine.name} (${unassigned.length} prenotazioni · ${totalUnassignedPax} pax)`}>
-                  <div className="mb-3 flex flex-wrap gap-2 rounded-lg bg-slate-50 px-3 py-2.5">
-                    {sortedStops.map(([city, pax]) => (
-                      <span key={city} className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 shadow-sm border border-slate-200">
-                        <span className="uppercase">{city}</span>
-                        <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">{pax}</span>
-                      </span>
-                    ))}
-                  </div>
                   <div className="divide-y divide-slate-100">
                     {unassigned.map((svc) => (
                       <div key={svc.id} className="flex items-center gap-3 px-1 py-3">
