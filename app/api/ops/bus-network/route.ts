@@ -1350,6 +1350,26 @@ export async function POST(request: NextRequest) {
       if (existingSvcRes.error) throw new Error(existingSvcRes.error.message);
       const importHotels = (hotelsRes.data ?? []) as Array<{ id: string; name: string; zone: string | null }>;
 
+      const [pickupTimesRes, linesRes] = await Promise.all([
+        auth.admin.from("hotel_pickup_times").select("hotel_name, pickup_time_linea_italia, pickup_time_linea_centro, pickup_time_linea_adriatica"),
+        auth.admin.from("tenant_bus_lines").select("id, family_code").eq("tenant_id", tenantId),
+      ]);
+      const pickupTimesMap = new Map<string, { italia: string; centro: string; adriatica: string }>();
+      for (const row of (pickupTimesRes.data ?? []) as Array<{ hotel_name: string; pickup_time_linea_italia: string; pickup_time_linea_centro: string; pickup_time_linea_adriatica: string }>) {
+        pickupTimesMap.set(row.hotel_name.toUpperCase().trim(), { italia: row.pickup_time_linea_italia, centro: row.pickup_time_linea_centro, adriatica: row.pickup_time_linea_adriatica });
+      }
+      const allLinesById = new Map((linesRes.data ?? []).map((l: { id: string; family_code: string }) => [l.id, l]));
+      function resolvePickupTime(hotelName: string | null | undefined, lineId: string): string {
+        if (!hotelName) return "00:00";
+        const entry = pickupTimesMap.get(hotelName.toUpperCase().trim());
+        if (!entry) return "00:00";
+        const family = (allLinesById.get(lineId)?.family_code ?? "").toLowerCase();
+        if (family === "italia") return entry.italia?.slice(0, 5) ?? "00:00";
+        if (family === "centro") return entry.centro?.slice(0, 5) ?? "00:00";
+        if (family === "adriatica") return entry.adriatica?.slice(0, 5) ?? "00:00";
+        return "00:00";
+      }
+
       const existingSvcIds = (existingSvcRes.data ?? []).map((s: { id: string }) => s.id);
       // Se non ci sono servizi per questa data, non ci sono allocazioni → mappa vuota
       let allocData: Array<{ bus_unit_id: string; pax_assigned: number }> = [];
@@ -1471,13 +1491,15 @@ export async function POST(request: NextRequest) {
         if (stop && !fuzzy) {
           const bus = pickBusForLine(stop.bus_line_id, row.pax);
           if (bus) {
+            const pickupTime = parsed.direction === "departure" ? resolvePickupTime(row.hotel, stop.bus_line_id) : "00:00";
             const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
               tenant_id: tenantId,
               customer_name: row.name,
               phone: row.phone ?? "",
               direction: parsed.direction,
               date: parsed.travel_date,
-              time: "00:00",
+              time: pickupTime,
+              pickup_time: parsed.direction === "departure" ? pickupTime : null,
               vessel: "Linea bus",
               pax: row.pax,
               bus_city_origin: row.city,
