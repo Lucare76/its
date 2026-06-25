@@ -14,7 +14,7 @@ import {
   suggestBusRedistribution,
   type RawBusUnit
 } from "@/lib/server/bus-network";
-import { findBusStopsByCity } from "@/lib/server/bus-lines-catalog";
+import { findBusStopsByCity, resolveBusStop } from "@/lib/server/bus-lines-catalog";
 import { geocodeCity, geocodeCityName } from "@/lib/server/geocoding";
 import { getCustomerFullName } from "@/lib/service-display";
 import type { AgencyBookingServiceKind, OperationalServiceType } from "@/lib/types";
@@ -1047,8 +1047,13 @@ export async function POST(request: NextRequest) {
           return sc === reqCity || sn === reqCity || sc === identCity || sn === identCity || aliasCities.includes(sc) || aliasCities.includes(sn);
         });
 
-        // Fermata non trovata → crea fermata manuale
+        // Fermata non trovata → crea fermata manuale solo se non appartiene a un'altra linea
         if (!stop && reqCity) {
+          const catalogMatch = resolveBusStop(svc.bus_city_origin);
+          if (catalogMatch && catalogMatch.familyCode !== line.family_code) {
+            skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: `${svc.bus_city_origin ?? "?"} appartiene a ${catalogMatch.familyName}, non a ${line.name}` });
+            continue;
+          }
           const cityName = (svc.bus_city_origin ?? "").trim().toUpperCase() || "SCONOSCIUTA";
           const stopKey = `${line.id}:${parsed.direction}:${cityName}`;
           if (!createdStopKeys.has(stopKey)) {
