@@ -742,6 +742,32 @@ export async function POST(request: NextRequest) {
         if (delSvcErr) throw new Error(delSvcErr.message);
       }
 
+      // 3b. Delete unallocated services that belong to this line family by derived identity
+      const { data: unallocatedSvcs } = await auth.admin
+        .from("services")
+        .select("id, bus_city_origin, transport_code, time, service_type_code, booking_service_kind")
+        .eq("tenant_id", tenantId)
+        .eq("date", parsed.date)
+        .eq("direction", parsed.direction)
+        .or("service_type_code.eq.bus_line,booking_service_kind.eq.bus_city_hotel");
+      if (unallocatedSvcs && unallocatedSvcs.length > 0) {
+        const { data: lineRow } = await auth.admin.from("tenant_bus_lines").select("family_code").eq("id", parsed.bus_line_id).single();
+        const targetFamily = (lineRow as { family_code: string } | null)?.family_code;
+        if (targetFamily) {
+          const orphanIds = (unallocatedSvcs as Array<{ id: string; bus_city_origin?: string | null; transport_code?: string | null; time?: string; service_type_code?: string | null; booking_service_kind?: string | null }>)
+            .filter(s => {
+              if (serviceIds.includes(s.id)) return false;
+              const identity = deriveServiceBusIdentity(s as Parameters<typeof deriveServiceBusIdentity>[0]);
+              return identity.family_code === targetFamily;
+            })
+            .map(s => s.id);
+          if (orphanIds.length > 0) {
+            await auth.admin.from("services").delete().eq("tenant_id", tenantId).in("id", orphanIds);
+            serviceIds.push(...orphanIds);
+          }
+        }
+      }
+
       // 4. Delete pending passengers for this line/date/direction
       await auth.admin
         .from("bus_import_pending")
