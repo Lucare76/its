@@ -247,17 +247,20 @@ async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
     phone?: string | undefined;
     phone_e164?: string | null | undefined;
     hotel_id: string;
+    meeting_point?: string | null;
+    notes?: string;
     booking_service_kind?: AgencyBookingServiceKind | null | undefined;
     service_type_code?: OperationalServiceType | null | undefined;
     outbound_time?: string | null;
   }) => {
     const identity = deriveServiceBusIdentity(service);
     const hotel = hotelsById.get(service.hotel_id);
+    const hotelFromNotes = service.notes?.match(/Hotel:\s*([^·|\n]+)/)?.[1]?.trim();
     return {
       ...service,
       customer_display_name: getCustomerFullName(service),
       phone_display: service.phone_e164 ?? service.phone ?? "N/D",
-      hotel_name: hotel?.name ?? "Hotel N/D",
+      hotel_name: hotel?.name ?? service.meeting_point ?? hotelFromNotes ?? "Hotel N/D",
       hotel_zone: hotel?.zone ?? null,
       derived_family_code: identity.family_code,
       derived_family_name: identity.family_name,
@@ -1443,6 +1446,7 @@ export async function POST(request: NextRequest) {
               booking_service_kind: "bus_city_hotel",
               status: "new",
               billing_party_name: row.agency ?? null,
+              meeting_point: row.hotel ?? null,
             }).select("id").single();
             if (svcErr || !svc) {
               console.error(`[import_excel_auto] insert services fallita per "${row.name}" (${row.city}): ${svcErr?.message}`);
