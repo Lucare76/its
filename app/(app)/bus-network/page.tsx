@@ -1231,14 +1231,24 @@ export default function BusNetworkPage() {
 
               {/* Route strip */}
               {activeTab === "bus" && (() => {
-                const stopsWithPax = lineStops.map(stop => ({
-                  stop,
-                  pax: dateAllocations
+                const stopsWithPax = lineStops.map(stop => {
+                  const allocatedPax = dateAllocations
                     .filter((a) => a.stop_name.toLowerCase() === stop.stop_name.toLowerCase())
-                    .reduce((sum, a) => sum + a.pax_assigned, 0),
-                }));
-                const visibleStops = hideEmptyStops ? stopsWithPax.filter(s => s.pax > 0) : stopsWithPax;
-                const stopsWithPaxCount = stopsWithPax.filter(s => s.pax > 0).length;
+                    .reduce((sum, a) => sum + a.pax_assigned, 0);
+                  const sn = stop.stop_name.toLowerCase().trim();
+                  const sc = (stop.city ?? "").toLowerCase().trim();
+                  const pendingPax = unassigned
+                    .filter((svc) => {
+                      const raw = (svc.bus_city_origin ?? "").toLowerCase().trim();
+                      const expanded = raw.replace(/\bp\.\s*/g, "ponte ").replace(/\bs\.\s*/g, "santa ").replace(/\bc\.\s*/g, "citta ").trim();
+                      return raw === sn || raw === sc || expanded === sn || expanded === sc ||
+                        sn.includes(raw) || raw.includes(sn);
+                    })
+                    .reduce((sum, svc) => sum + svc.pax, 0);
+                  return { stop, pax: allocatedPax, pendingPax };
+                });
+                const visibleStops = hideEmptyStops ? stopsWithPax.filter(s => s.pax > 0 || s.pendingPax > 0) : stopsWithPax;
+                const stopsWithPaxCount = stopsWithPax.filter(s => s.pax > 0 || s.pendingPax > 0).length;
                 return (
                   <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                     <div className="flex w-full items-center justify-between px-4 py-2.5">
@@ -1259,8 +1269,8 @@ export default function BusNetworkPage() {
                     {showRouteStrip && (
                       <div className="overflow-x-auto border-t border-slate-100 px-3 py-3">
                         <div className="flex min-w-max items-start gap-0">
-                          {visibleStops.map(({ stop, pax }, idx) => {
-                            const hasPax = pax > 0;
+                          {visibleStops.map(({ stop, pax, pendingPax }, idx) => {
+                            const hasPax = pax > 0 || pendingPax > 0;
                             return (
                               <div key={stop.id} className="flex items-center">
                                 {idx > 0 && (
@@ -1279,8 +1289,11 @@ export default function BusNetworkPage() {
                                   {stop.pickup_time && (
                                     <span className="mt-0.5 rounded bg-indigo-50 px-1 text-[9px] font-semibold text-indigo-500">{stop.pickup_time}</span>
                                   )}
-                                  {hasPax && (
+                                  {pax > 0 && (
                                     <span className="mt-1 rounded-full bg-emerald-600 px-1.5 text-[10px] font-bold text-white">{pax} pax</span>
+                                  )}
+                                  {pendingPax > 0 && (
+                                    <span className="mt-0.5 rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-white">{pendingPax} da ass.</span>
                                   )}
                                   <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
                                     <button onClick={() => void moveStopOrder(stop.id, "up")} disabled={idx === 0 || saving}
