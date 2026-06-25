@@ -1611,7 +1611,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "create_stop_for_transfer") {
-      if (auth.membership.role !== "admin") {
+      if (!["admin", "supervisor", "operator"].includes(auth.membership.role)) {
         return NextResponse.json({ ok: false, error: "Non autorizzato." }, { status: 403 });
       }
       const parsed = z.object({
@@ -1700,8 +1700,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "transfer_allocation_line") {
-      // Solo admin
-      if (auth.membership.role !== "admin") {
+      if (!["admin", "supervisor", "operator"].includes(auth.membership.role)) {
         return NextResponse.json({ ok: false, error: "Non autorizzato." }, { status: 403 });
       }
       const schema = z.object({

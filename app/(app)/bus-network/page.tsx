@@ -329,7 +329,7 @@ export default function BusNetworkPage() {
   }, [post]);
 
   // --- Derived data ---
-  const isAdmin = payload.user_role === "admin" || payload.user_role === "supervisor";
+  const isAdmin = payload.user_role === "admin" || payload.user_role === "supervisor" || payload.user_role === "operator";
   const selectedLine = payload.lines.find((l) => l.id === selectedLineId) ?? null;
 
   const lineUnits = useMemo(
