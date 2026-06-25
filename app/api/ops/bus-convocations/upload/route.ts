@@ -11,10 +11,9 @@ const rowSchema = z.object({
   phoneRaw: z.string(),
   customerName: z.string(),
   dateLine: z.string(),
-  departurePoint: z.string(),
-  serviceTime: z.string(),
-  driverName: z.string(),
-  driverEmergencyPhone: z.string(),
+  oraLuogoPartenza: z.string(),
+  puntoCarico: z.string(),
+  autista: z.string(),
   generatedMessage: z.string().optional().default(""),
   notes: z.string().optional().default(""),
 });
@@ -88,21 +87,17 @@ export async function POST(request: NextRequest) {
       status = "errore";
       errorMessage = "Data / Linea bus mancante";
       nonValidoCount++;
-    } else if (!row.departurePoint.trim()) {
+    } else if (!row.oraLuogoPartenza.trim()) {
       status = "errore";
-      errorMessage = "Luogo partenza mancante";
+      errorMessage = "Ora e luogo di partenza mancante";
       nonValidoCount++;
-    } else if (!row.serviceTime.trim()) {
+    } else if (!row.puntoCarico.trim()) {
       status = "errore";
-      errorMessage = "Orario mancante";
+      errorMessage = "Punto di carico mancante";
       nonValidoCount++;
-    } else if (!row.driverName.trim()) {
+    } else if (!row.autista.trim()) {
       status = "errore";
-      errorMessage = "Nome autista mancante";
-      nonValidoCount++;
-    } else if (!row.driverEmergencyPhone.trim()) {
-      status = "errore";
-      errorMessage = "Telefono emergenza autista mancante";
+      errorMessage = "Autista mancante";
       nonValidoCount++;
     } else if (!row.phoneRaw.trim()) {
       status = "numero_non_valido";
@@ -124,10 +119,10 @@ export async function POST(request: NextRequest) {
           phone_e164: null,
           customer_name: row.customerName.trim(),
           date_line: row.dateLine.trim(),
-          departure_point: row.departurePoint.trim(),
-          service_time: row.serviceTime.trim(),
-          driver_name: row.driverName.trim(),
-          driver_emergency_phone: row.driverEmergencyPhone.trim(),
+          departure_point: row.oraLuogoPartenza.trim(),
+          service_time: row.puntoCarico.trim(),
+          driver_name: row.autista.trim(),
+          driver_emergency_phone: "",
           generated_message: row.generatedMessage,
           notes: row.notes,
           status,
@@ -157,10 +152,10 @@ export async function POST(request: NextRequest) {
       phone_e164: phoneE164,
       customer_name: row.customerName.trim(),
       date_line: row.dateLine.trim(),
-      departure_point: row.departurePoint.trim(),
-      service_time: row.serviceTime.trim(),
-      driver_name: row.driverName.trim(),
-      driver_emergency_phone: row.driverEmergencyPhone.trim(),
+      departure_point: row.oraLuogoPartenza.trim(),
+      service_time: row.puntoCarico.trim(),
+      driver_name: row.autista.trim(),
+      driver_emergency_phone: "",
       generated_message: row.generatedMessage,
       notes: row.notes,
       status,

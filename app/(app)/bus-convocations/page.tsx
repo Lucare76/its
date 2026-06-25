@@ -43,18 +43,16 @@ type BatchListItem = BatchMeta & { created_by: string };
 
 const COLUMN_KEYWORDS: Record<string, string[][]> = {
   inviare: [["inviare"], ["invio"], ["si/no"], ["send"]],
-  phoneRaw: [["numero", "cliente"], ["telefono", "cliente"], ["tel", "cliente"], ["telefono"], ["cell"], ["phone"]],
-  customerName: [["nome", "cliente"], ["cliente"], ["nominativo"], ["customer"], ["nome"]],
+  phoneRaw: [["numero", "cliente"], ["telefono", "cliente"], ["tel", "cliente"], ["cell"], ["phone"]],
+  customerName: [["nome", "cliente"], ["nominativo"], ["customer"], ["nome"]],
   dateLine: [["data", "partenza"], ["data", "linea"], ["data/linea"], ["linea", "bus"], ["data"]],
-  departurePoint: [["luogo", "partenza"], ["punto", "partenza"], ["partenza"], ["pickup"], ["meeting"]],
-  serviceTime: [["orario"], ["ora"], ["time"]],
-  driverName: [["nome", "autista"], ["autista"], ["driver"]],
-  driverEmergencyPhone: [["numero", "autista"], ["emergenza"], ["tel", "autista"], ["telefono", "autista"]],
-  generatedMessage: [["messaggio", "finale"], ["messaggio", "generato"], ["messaggio"], ["message"]],
+  oraLuogoPartenza: [["ora", "luogo", "partenza"], ["ora", "partenza"], ["orario", "partenza"], ["ora"]],
+  puntoCarico: [["punto", "carico"], ["punto", "partenza"], ["luogo", "partenza"], ["pickup"], ["meeting"]],
+  autista: [["autista"], ["driver"]],
   notes: [["note"], ["notes"]],
 };
 
-const REQUIRED_FIELDS = ["phoneRaw", "customerName", "dateLine", "departurePoint", "serviceTime", "driverName", "driverEmergencyPhone"] as const;
+const REQUIRED_FIELDS = ["phoneRaw", "customerName", "dateLine", "oraLuogoPartenza", "puntoCarico", "autista"] as const;
 
 function parseInviare(value: unknown): boolean {
   if (value == null) return false;
@@ -141,9 +139,9 @@ const TEMPLATE_TEXT = `Ciao {{1}} 👋
 
 ti comunichiamo i dettagli della tua partenza del {{2}}.
 
-📍 Luogo di partenza: {{3}}
-⏰ Orario: {{4}}
-🧔🏻‍♂️ Autista: {{5}} - {{6}}
+📍 Ora e luogo di partenza: {{3}}
+📍 Punto di carico: {{4}}
+🧔🏻‍♂️ Autista: {{5}}
 
 ⚠️ L'autista va contattato solo in caso di emergenza.
 ⚠️ Ti ricordiamo di presentarti almeno 15 minuti prima sul luogo di partenza.
@@ -156,14 +154,13 @@ In caso di errori, ti chiediamo di avvisarci tempestivamente.
 
 Ischia Transfer Service`;
 
-function buildPreview(row: { customerName: string; dateLine: string; departurePoint: string; serviceTime: string; driverName: string; driverEmergencyPhone: string }): string {
+function buildPreview(row: { customerName: string; dateLine: string; oraLuogoPartenza: string; puntoCarico: string; autista: string }): string {
   return TEMPLATE_TEXT
     .replace("{{1}}", row.customerName)
     .replace("{{2}}", row.dateLine)
-    .replace("{{3}}", row.departurePoint)
-    .replace("{{4}}", row.serviceTime)
-    .replace("{{5}}", row.driverName)
-    .replace("{{6}}", row.driverEmergencyPhone);
+    .replace("{{3}}", row.oraLuogoPartenza)
+    .replace("{{4}}", row.puntoCarico)
+    .replace("{{5}}", row.autista);
 }
 
 type FilterKey = "all" | "pronto" | "escluso" | "duplicato" | "numero_non_valido" | "errore" | "inviato";
@@ -238,9 +235,8 @@ export default function BusConvocationsPage() {
 
       const FIELD_LABELS: Record<string, string> = {
         phoneRaw: "numero cliente", customerName: "nome cliente",
-        dateLine: "data partenza", departurePoint: "luogo di partenza",
-        serviceTime: "orario", driverName: "nome autista",
-        driverEmergencyPhone: "numero autista",
+        dateLine: "data partenza", oraLuogoPartenza: "ora e luogo di partenza",
+        puntoCarico: "punto di carico", autista: "autista",
       };
 
       let headerRowIndex = -1;
@@ -282,15 +278,14 @@ export default function BusConvocationsPage() {
 
         const customerName = cellStr(r, colMap.customerName);
         const dateLine = cellStr(r, colMap.dateLine);
-        const departurePoint = cellStr(r, colMap.departurePoint);
-        const serviceTime = cellTime(r, colMap.serviceTime);
-        const driverName = cellStr(r, colMap.driverName);
-        const driverEmergencyPhone = cellStr(r, colMap.driverEmergencyPhone);
+        const oraLuogoPartenza = cellStr(r, colMap.oraLuogoPartenza);
+        const puntoCarico = cellStr(r, colMap.puntoCarico);
+        const autista = cellStr(r, colMap.autista);
         const phoneRaw = cellStr(r, colMap.phoneRaw);
 
         const inviare = colMap.inviare >= 0 ? parseInviare(r[colMap.inviare]) : true;
 
-        const preview = buildPreview({ customerName, dateLine, departurePoint, serviceTime, driverName, driverEmergencyPhone });
+        const preview = buildPreview({ customerName, dateLine, oraLuogoPartenza, puntoCarico, autista });
 
         parsedRows.push({
           rowIndex: i + 1,
@@ -298,10 +293,9 @@ export default function BusConvocationsPage() {
           phoneRaw,
           customerName,
           dateLine,
-          departurePoint,
-          serviceTime,
-          driverName,
-          driverEmergencyPhone,
+          oraLuogoPartenza,
+          puntoCarico,
+          autista,
           generatedMessage: preview,
           notes: colMap.notes >= 0 ? cellStr(r, colMap.notes) : "",
         });
@@ -536,13 +530,12 @@ export default function BusConvocationsPage() {
                 <span>Nome cliente</span>
                 <span>Numero cliente</span>
                 <span>Data partenza</span>
-                <span>Luogo di partenza</span>
-                <span>Orario</span>
-                <span>Nome autista</span>
-                <span>Numero autista</span>
+                <span>Ora e luogo di partenza</span>
+                <span>Punto di carico</span>
+                <span>Autista</span>
               </div>
               <p className="mt-2 text-xs text-muted">
-                Opzionali: Inviare? (SI/NO), Note, Messaggio finale
+                Opzionali: Inviare? (SI/NO), Note
               </p>
             </div>
           </div>
@@ -607,10 +600,9 @@ export default function BusConvocationsPage() {
                     <th>Cliente</th>
                     <th>Telefono</th>
                     <th>Data partenza</th>
-                    <th>Luogo partenza</th>
-                    <th>Orario</th>
+                    <th>Ora e luogo</th>
+                    <th>Punto di carico</th>
                     <th>Autista</th>
-                    <th>Tel autista</th>
                     <th className="w-32">Stato</th>
                     <th className="w-10"></th>
                   </tr>
@@ -618,7 +610,7 @@ export default function BusConvocationsPage() {
                 <tbody>
                   {filteredRows.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="py-8 text-center text-muted">Nessuna riga con questo filtro</td>
+                      <td colSpan={9} className="py-8 text-center text-muted">Nessuna riga con questo filtro</td>
                     </tr>
                   ) : filteredRows.map((row) => (
                     <>
@@ -630,7 +622,6 @@ export default function BusConvocationsPage() {
                         <td>{row.departure_point}</td>
                         <td>{row.service_time}</td>
                         <td>{row.driver_name}</td>
-                        <td className="font-mono text-xs">{row.driver_emergency_phone}</td>
                         <td>
                           <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[row.status] ?? "bg-slate-100 text-slate-600 border-slate-200"}`}>
                             {STATUS_LABELS[row.status] ?? row.status}
@@ -649,16 +640,15 @@ export default function BusConvocationsPage() {
                       </tr>
                       {expandedRow === row.id && (
                         <tr key={`${row.id}-preview`}>
-                          <td colSpan={10} className="bg-slate-50 px-4 py-3">
+                          <td colSpan={9} className="bg-slate-50 px-4 py-3">
                             <p className="mb-1 text-xs font-medium text-muted">Anteprima messaggio (template Meta):</p>
                             <pre className="whitespace-pre-wrap rounded-lg bg-white border border-slate-200 p-3 text-sm leading-relaxed">
                               {row.generated_message || buildPreview({
                                 customerName: row.customer_name,
                                 dateLine: row.date_line,
-                                departurePoint: row.departure_point,
-                                serviceTime: row.service_time,
-                                driverName: row.driver_name,
-                                driverEmergencyPhone: row.driver_emergency_phone,
+                                oraLuogoPartenza: row.departure_point,
+                                puntoCarico: row.service_time,
+                                autista: row.driver_name,
                               })}
                             </pre>
                             {(row.status === "pronto" || row.status === "da_inviare" || row.status === "duplicato") && (

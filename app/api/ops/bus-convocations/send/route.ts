@@ -89,7 +89,6 @@ export async function POST(request: NextRequest) {
       "3": String(row.departure_point ?? ""),
       "4": String(row.service_time ?? ""),
       "5": String(row.driver_name ?? ""),
-      "6": String(row.driver_emergency_phone ?? ""),
     };
 
     const nowIso = new Date().toISOString();
