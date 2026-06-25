@@ -107,3 +107,49 @@ describe("resolveHotelMatch", () => {
     expect(resolveHotelMatch(hotelsWithNorm, "Bella Spiaggia")).toBe("hn1");
   });
 });
+
+describe("resolveHotelMatch — nomi Excel bus vs DB Ischia", () => {
+  const ischiaHotels: HotelMatchRow[] = [
+    { id: "h-sv", name: "SAN VALENTINO TERME" },
+    { id: "h-cp", name: "CENTRAL PARK TERME" },
+    { id: "h-dp", name: "DON PEPE" },
+    { id: "h-ps", name: "PUNTA DEL SOLE" },
+    { id: "h-to", name: "TRAMONTO D'ORO" },
+    { id: "h-ga", name: "GRAND HOTEL TERME DI AUGUSTO" },
+    { id: "h-rt", name: "ROYAL TERME" },
+    { id: "h-sm", name: "STELLA MARIS" },
+    { id: "h-so", name: "SORRISO" },
+    { id: "h-hw", name: "HOLIDAY WEB" },
+    { id: "h-rf", name: "RE FERDINANDO" },
+    { id: "h-cr", name: "CRISTALLO" },
+    { id: "h-br", name: "BRISTOL" },
+  ];
+
+  const testCases: Array<[string, string]> = [
+    ["SAN VALENTINO", "h-sv"],
+    ["CENTRAL PARK", "h-cp"],
+    ["DON PEPE", "h-dp"],
+    ["PUNTA DEL SOLE", "h-ps"],
+    ["TRAMONTO D'ORO", "h-to"],
+    ["GRAND HOTEL TERME DI AUGUSTO", "h-ga"],
+    ["ROYAL TERME", "h-rt"],
+    ["STELLA MARIS", "h-sm"],
+    ["SORRISO", "h-so"],
+    ["HOLIDAY WEB", "h-hw"],
+  ];
+
+  for (const [excelName, expectedId] of testCases) {
+    it(`"${excelName}" → matcha correttamente`, () => {
+      const result = resolveHotelMatch(ischiaHotels, excelName, null);
+      expect(result).toBe(expectedId);
+    });
+  }
+
+  it("nome parziale 'AUGUSTO' matcha GRAND HOTEL TERME DI AUGUSTO", () => {
+    expect(resolveHotelMatch(ischiaHotels, "AUGUSTO", null)).toBe("h-ga");
+  });
+
+  it("nome con typo minore non matcha nomi completamente diversi", () => {
+    expect(resolveHotelMatch(ischiaHotels, "RISTORANTE PIPPO", null)).toBeNull();
+  });
+});
