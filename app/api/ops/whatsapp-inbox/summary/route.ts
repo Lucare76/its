@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
   }
 
   const rows = ((data ?? []) as ThreadSummaryRow[]);
-  const unreadCount = rows.reduce((sum, row) => sum + Number(row.unread_count ?? 0), 0);
+  const unreadCount = rows.length;
   const latest = rows[0] ?? null;
   const latestSender = latest ? contactName(latest.whatsapp_contacts) ?? latest.phone_e164 ?? "cliente" : null;
 
