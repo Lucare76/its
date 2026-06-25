@@ -2377,7 +2377,8 @@ export default function BusNetworkPage() {
                   stopSummary.set(city, (stopSummary.get(city) ?? 0) + svc.pax);
                   totalUnassignedPax += svc.pax;
                 }
-                const sortedStops = [...stopSummary.entries()].sort((a, b) => b[1] - a[1]);
+                const stopOrderMap = new Map(lineStops.map(s => [s.stop_name.toUpperCase(), s.stop_order]));
+                const sortedStops = [...stopSummary.entries()].sort((a, b) => (stopOrderMap.get(a[0]) ?? 999) - (stopOrderMap.get(b[0]) ?? 999));
                 return (
                 <SectionCard title={`👥 Da assegnare — ${selectedLine.name} (${unassigned.length} prenotazioni · ${totalUnassignedPax} pax)`}>
                   <div className="mb-3 flex flex-wrap gap-2 rounded-lg bg-slate-50 px-3 py-2.5">
