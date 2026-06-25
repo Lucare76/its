@@ -269,18 +269,18 @@ export const BUS_LINES_2026: BusLineCatalogEntry[] = [
       { city: "TERNI",                   time: "05:52", pickupNote: note("Terminal ATC"),                          lat: 42.56, lng: 12.65 },
       { city: "VITERBO",                 time: "06:00", pickupNote: note("Piazzale Romiti"),                       lat: 42.42, lng: 12.11 },
       { city: "AMELIA",                  time: "06:10", pickupNote: note("Agenzia Tiva Viaggi"),                   lat: 42.55, lng: 12.41 },
-      { city: "ORTE",                    time: "07:10", pickupNote: note("Hotel Tevere"),                          lat: 42.45, lng: 12.39 }
+      { city: "ORTE",                    time: "07:10", pickupNote: note("Hotel Tevere"),                          lat: 42.45, lng: 12.39 },
+      { city: "ROMA TIBURTINA",          time: "07:45", pickupNote: note("Largo Mazzoni, fronte negozio Smea"),    lat: 41.90, lng: 12.53 },
+      { city: "ROMA ANAGNINA",           time: "08:15", pickupNote: note("Fermata Atac 502, piazzale del Mercatino"), lat: 41.84, lng: 12.59 }
     ]
   },
   {
-    code: "LINEA_8_CENTRO_2",
-    name: "Linea 8 Centro 2",
+    code: "LINEA_8_ITALIA_SUD",
+    name: "Linea 8 Italia Sud",
     validFrom: "2026-04-26",
     validTo: "2026-10-11",
     notes: null,
     stops: [
-      { city: "ROMA TIBURTINA", time: "07:45", pickupNote: note("Largo Mazzoni, fronte negozio Smea"),         lat: 41.90, lng: 12.53 },
-      { city: "ROMA ANAGNINA",  time: "08:15", pickupNote: note("Fermata Atac 502, piazzale del Mercatino"),   lat: 41.84, lng: 12.59 },
       { city: "VALMONTONE",     time: "08:45", pickupNote: note("Casello"),                                    lat: 41.78, lng: 12.92 },
       { city: "CASSINO",        time: "10:30", pickupNote: note("Casello"),                                    lat: 41.49, lng: 13.83 },
       { city: "CASERTA",        time: "11:10", pickupNote: note("Casello nord"),                               lat: 41.07, lng: 14.33 }
