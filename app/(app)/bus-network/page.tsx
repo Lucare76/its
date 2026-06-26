@@ -715,6 +715,15 @@ export default function BusNetworkPage() {
     }
   }, [post, date, direction]);
 
+  const [optimizeResult, setOptimizeResult] = useState<{ moved: number; moved_detail: Array<{ customer_name: string; from_bus: string; to_bus: string; stop_name: string; pax: number }>; errors: number } | null>(null);
+
+  const optimizeStopGrouping = useCallback(async () => {
+    const body = await post("optimize_stop_grouping", { date, direction }) as ({ moved?: number; moved_detail?: Array<{ customer_name: string; from_bus: string; to_bus: string; stop_name: string; pax: number }>; errors?: number } | null);
+    if (body) {
+      setOptimizeResult({ moved: body.moved ?? 0, moved_detail: body.moved_detail ?? [], errors: body.errors ?? 0 });
+    }
+  }, [post, date, direction]);
+
   const saveStopName = useCallback(async (stopId: string, name: string) => {
     if (!name.trim()) return;
     await post("update_stop_name", { stop_id: stopId, stop_name: name.trim() });
@@ -1323,6 +1332,11 @@ export default function BusNetworkPage() {
                   <button onClick={() => void autoAssign()} disabled={saving}
                     className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-40">
                     ⚡ Auto-assegna
+                  </button>
+                  <button onClick={() => void optimizeStopGrouping()} disabled={saving}
+                    className="flex items-center gap-1.5 rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-600 hover:bg-teal-50 disabled:opacity-40"
+                    title="Raggruppa passeggeri della stessa fermata sullo stesso bus">
+                    🔀 Ottimizza fermate
                   </button>
                   <button onClick={() => setResetModalOpen(true)} disabled={saving}
                     className="flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-40">
@@ -3011,6 +3025,36 @@ export default function BusNetworkPage() {
               </div>
             )}
             <button onClick={() => setAutoAssignResult(null)} className="btn-primary w-full py-2.5">Chiudi</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Optimize result ── */}
+      {optimizeResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-teal-700">🔀 Ottimizzazione completata</h2>
+            <p className="text-sm text-slate-600">
+              Spostati: <span className="font-semibold">{optimizeResult.moved}</span> passeggeri
+              {optimizeResult.errors > 0 && (
+                <> — Errori: <span className="font-semibold text-amber-600">{optimizeResult.errors}</span></>
+              )}
+            </p>
+            {optimizeResult.moved_detail.length > 0 && (
+              <div className="max-h-52 overflow-y-auto rounded-lg bg-teal-50 px-3 py-2 text-xs text-teal-800 space-y-1">
+                {optimizeResult.moved_detail.map((d, i) => (
+                  <div key={i}>
+                    <span className="font-semibold uppercase">{d.customer_name}</span> ({d.pax} pax)
+                    <span className="text-teal-600"> {d.from_bus} → {d.to_bus}</span>
+                    <span className="text-teal-500"> · {d.stop_name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {optimizeResult.moved === 0 && (
+              <p className="text-sm text-slate-500">Nessuno spostamento necessario — le fermate sono già raggruppate.</p>
+            )}
+            <button onClick={() => setOptimizeResult(null)} className="btn-primary w-full py-2.5">Chiudi</button>
           </div>
         </div>
       )}

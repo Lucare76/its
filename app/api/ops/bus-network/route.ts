@@ -1259,6 +1259,106 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    if (action === "optimize_stop_grouping") {
+      const parsed = z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        direction: z.enum(["arrival", "departure"])
+      }).parse(body);
+
+      const [allocDetailsRes, unitsRes] = await Promise.all([
+        auth.admin.from("ops_bus_allocation_details")
+          .select("allocation_id,service_id,bus_line_id,bus_unit_id,bus_label,stop_id,stop_name,pax_assigned,customer_name,service_date,direction")
+          .eq("tenant_id", tenantId)
+          .eq("service_date", parsed.date)
+          .eq("direction", parsed.direction),
+        auth.admin.from("tenant_bus_units")
+          .select("id,bus_line_id,label,capacity,status,sort_order")
+          .eq("tenant_id", tenantId).eq("active", true).order("sort_order"),
+      ]);
+      if (allocDetailsRes.error) throw new Error(allocDetailsRes.error.message);
+      if (unitsRes.error) throw new Error(unitsRes.error.message);
+
+      type OptAlloc = { allocation_id: string; service_id: string; bus_line_id: string; bus_unit_id: string; bus_label: string; stop_id: string | null; stop_name: string; pax_assigned: number; customer_name: string };
+      const allocs = (allocDetailsRes.data ?? []) as OptAlloc[];
+      const units = (unitsRes.data ?? []) as Array<{ id: string; bus_line_id: string; label: string; capacity: number; status: string; sort_order: number }>;
+
+      // Calcola pax per bus (solo questa data/direzione)
+      const busPax = new Map<string, number>();
+      for (const a of allocs) busPax.set(a.bus_unit_id, (busPax.get(a.bus_unit_id) ?? 0) + a.pax_assigned);
+
+      // Per ogni fermata: quali bus la servono e quanti pax ciascuno
+      const stopBuses = new Map<string, Map<string, { pax: number; allocs: OptAlloc[] }>>();
+      for (const a of allocs) {
+        if (!a.stop_id) continue;
+        const key = `${a.bus_line_id}:${a.stop_id}`;
+        if (!stopBuses.has(key)) stopBuses.set(key, new Map());
+        const busMap = stopBuses.get(key)!;
+        if (!busMap.has(a.bus_unit_id)) busMap.set(a.bus_unit_id, { pax: 0, allocs: [] });
+        const entry = busMap.get(a.bus_unit_id)!;
+        entry.pax += a.pax_assigned;
+        entry.allocs.push(a);
+      }
+
+      const moved: Array<{ customer_name: string; from_bus: string; to_bus: string; stop_name: string; pax: number }> = [];
+      const errors: string[] = [];
+
+      for (const [, busMap] of stopBuses) {
+        if (busMap.size <= 1) continue; // già su un solo bus
+
+        // Bus principale = quello con più pax di questa fermata
+        const sorted = [...busMap.entries()].sort((a, b) => b[1].pax - a[1].pax);
+        const [primaryBusId] = sorted[0];
+        const primaryUnit = units.find((u) => u.id === primaryBusId);
+        if (!primaryUnit || primaryUnit.status === "closed" || primaryUnit.status === "completed") continue;
+
+        const primaryCapacity = primaryUnit.capacity;
+        let primaryCurrentPax = busPax.get(primaryBusId) ?? 0;
+
+        // Sposta dal bus secondario al principale
+        for (let i = 1; i < sorted.length; i++) {
+          const [secondaryBusId, secondaryData] = sorted[i];
+          const secondaryUnit = units.find((u) => u.id === secondaryBusId);
+          const secondaryLabel = secondaryUnit?.label ?? "?";
+
+          for (const alloc of secondaryData.allocs) {
+            if (primaryCurrentPax + alloc.pax_assigned > primaryCapacity) continue; // non entra
+
+            const { error } = await auth.admin.rpc("move_bus_allocation", {
+              p_tenant_id: tenantId,
+              p_allocation_id: alloc.allocation_id,
+              p_to_bus_unit_id: primaryBusId,
+              p_pax_moved: alloc.pax_assigned,
+              p_reason: "Ottimizzazione raggruppamento fermate",
+              p_created_by_user_id: auth.user.id,
+            });
+            if (error) {
+              errors.push(`${alloc.customer_name}: ${error.message}`);
+              continue;
+            }
+            primaryCurrentPax += alloc.pax_assigned;
+            busPax.set(primaryBusId, primaryCurrentPax);
+            busPax.set(secondaryBusId, (busPax.get(secondaryBusId) ?? 0) - alloc.pax_assigned);
+            moved.push({
+              customer_name: alloc.customer_name,
+              from_bus: secondaryLabel,
+              to_bus: primaryUnit.label,
+              stop_name: alloc.stop_name,
+              pax: alloc.pax_assigned,
+            });
+          }
+        }
+      }
+
+      return NextResponse.json({
+        ok: true,
+        moved: moved.length,
+        moved_detail: moved,
+        errors: errors.length,
+        error_detail: errors,
+        ...(await loadBusNetwork(auth)),
+      });
+    }
+
     if (action === "import_excel_line") {
       const importSchema = z.object({
         bus_line_id: z.string().uuid(),
