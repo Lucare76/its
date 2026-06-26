@@ -182,6 +182,9 @@ export async function buildDepartureWorkbook(
   const logoBase64 = preloadedLogo ?? await fetchLogoBase64();
 
   const sorted = [...allocs].sort((a, b) => {
+    const ta = a.hotel_pickup_time ?? "";
+    const tb = b.hotel_pickup_time ?? "";
+    if (ta !== tb) return ta.localeCompare(tb);
     const ha = (a.hotel_name ?? "").toUpperCase();
     const hb = (b.hotel_name ?? "").toUpperCase();
     if (ha !== hb) return ha.localeCompare(hb);
@@ -189,6 +192,7 @@ export async function buildDepartureWorkbook(
   });
 
   ws.columns = [
+    { width: 10 }, // orario pickup
     { width: 24 }, // hotel partenza
     { width: 8 },  // n° pax
     { width: 32 }, // nominativo
@@ -211,8 +215,8 @@ export async function buildDepartureWorkbook(
   ws.getRow(startRow).height = 24;
 
   // Header
-  const headerRow = ws.addRow(["hotel partenza", "n° pax", "nominativo", "cell", "destinazione", "agenzia", "note"]);
-  styleHeaderRow(headerRow, 7);
+  const headerRow = ws.addRow(["pickup", "hotel partenza", "n° pax", "nominativo", "cell", "destinazione", "agenzia", "note"]);
+  styleHeaderRow(headerRow, 8);
 
   // Data rows
   let totalPax = 0;
@@ -221,7 +225,9 @@ export async function buildDepartureWorkbook(
     const hotelPartenza = shortenHotelName(alloc.hotel_name || hotelFromNotes || "");
     const stopNote = alloc.stop_pickup_note ?? "";
     const destinazione = stopNote ? `${alloc.stop_name} - ${stopNote}` : alloc.stop_name;
+    const pickupTime = (alloc.hotel_pickup_time ?? "").slice(0, 5);
     const row = ws.addRow([
+      pickupTime,
       hotelPartenza,
       alloc.pax_assigned,
       alloc.customer_name,
@@ -231,15 +237,16 @@ export async function buildDepartureWorkbook(
       cleanNote,
     ]);
     row.font = { size: 10 };
+    if (pickupTime) row.getCell(1).font = { size: 10, bold: true };
     totalPax += alloc.pax_assigned;
   }
 
   // Totale
   ws.addRow([]);
-  const totRow = ws.addRow(["TOTALE", totalPax, "", "", "", "", ""]);
+  const totRow = ws.addRow(["", "TOTALE", totalPax, "", "", "", "", ""]);
   totRow.font = { bold: true, size: 11 };
-  totRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${TOTAL_BG}` } };
   totRow.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${TOTAL_BG}` } };
+  totRow.getCell(3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${TOTAL_BG}` } };
 
   // Scarico
   const usedStopNames = new Set(sorted.map((a) => a.stop_name.toUpperCase()));
