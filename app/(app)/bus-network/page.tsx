@@ -926,29 +926,27 @@ export default function BusNetworkPage() {
 
   // Export linea corrente (tutti i bus della linea selezionata)
   const exportExcel = useCallback(async () => {
-    const { utils, writeFile } = await import("xlsx");
+    const { buildArrivalWorkbook, buildDepartureWorkbook, downloadWorkbook } = await import("@/lib/bus-export-excel");
     const lineStopsForExport = payload.stops
       .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === direction)
       .sort((a, b) => a.stop_order - b.stop_order);
     const allAllocs = busCards.flatMap((c) => c.allocations);
     const firstUnit = busCards[0]?.unit;
-    const ws = direction === "departure"
-      ? buildDepartureSheet(utils, allAllocs, lineStopsForExport, firstUnit?.driver_name_return, firstUnit?.driver_phone_return)
-      : buildArrivalSheet(utils, allAllocs, lineStopsForExport, firstUnit?.driver_name_outbound, firstUnit?.driver_phone_outbound);
-    const wb = utils.book_new();
-    utils.book_append_sheet(wb, ws as never, (selectedLine?.name ?? "Bus").slice(0, 31));
-    writeFile(wb, `bus_${selectedLine?.code ?? "export"}_${date}_${direction === "arrival" ? "Andata" : "Ritorno"}.xlsx`);
+    const wb = direction === "departure"
+      ? await buildDepartureWorkbook(allAllocs, lineStopsForExport, firstUnit?.driver_name_return, firstUnit?.driver_phone_return)
+      : await buildArrivalWorkbook(allAllocs, lineStopsForExport, firstUnit?.driver_name_outbound, firstUnit?.driver_phone_outbound);
+    await downloadWorkbook(wb, `bus_${selectedLine?.code ?? "export"}_${date}_${direction === "arrival" ? "Andata" : "Ritorno"}.xlsx`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busCards, date, direction, selectedLine]);
 
   // Export singolo bus: un foglio Andata + un foglio Ritorno
   const exportSingleBus = useCallback(async () => {
-    const { utils, writeFile } = await import("xlsx");
+    const { buildArrivalWorkbook, buildDepartureWorkbook, downloadWorkbook } = await import("@/lib/bus-export-excel");
     const targetCard = busCards.find((c) => c.unit.id === selectedBusUnitId) ?? busCards[0];
     if (!targetCard) return;
     const unitId = targetCard.unit.id;
-    const lineName = selectedLine?.name ?? "";
-    const wb = utils.book_new();
+    const ExcelJS = (await import("exceljs")).default;
+    const combinedWb = new ExcelJS.Workbook();
     for (const dir of ["arrival", "departure"] as const) {
       const dirAllocs = payload.allocation_details.filter(
         (a) => a.bus_unit_id === unitId && a.service_date === date && a.direction === dir
@@ -957,28 +955,44 @@ export default function BusNetworkPage() {
       const stopsForDir = payload.stops
         .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === dir)
         .sort((a, b) => a.stop_order - b.stop_order);
-      const ws = dir === "departure"
-        ? buildDepartureSheet(utils, dirAllocs, stopsForDir, targetCard.unit.driver_name_return, targetCard.unit.driver_phone_return)
-        : buildArrivalSheet(utils, dirAllocs, stopsForDir, targetCard.unit.driver_name_outbound, targetCard.unit.driver_phone_outbound);
-      utils.book_append_sheet(wb, ws as never, dir === "arrival" ? "Andata" : "Ritorno");
+      const singleWb = dir === "departure"
+        ? await buildDepartureWorkbook(dirAllocs, stopsForDir, targetCard.unit.driver_name_return, targetCard.unit.driver_phone_return)
+        : await buildArrivalWorkbook(dirAllocs, stopsForDir, targetCard.unit.driver_name_outbound, targetCard.unit.driver_phone_outbound);
+      const srcSheet = singleWb.worksheets[0];
+      if (srcSheet) {
+        const destSheet = combinedWb.addWorksheet(dir === "arrival" ? "Andata" : "Ritorno");
+        srcSheet.eachRow((row, rowNumber) => {
+          const destRow = destSheet.getRow(rowNumber);
+          row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            destRow.getCell(colNumber).value = cell.value;
+            destRow.getCell(colNumber).font = cell.font;
+            destRow.getCell(colNumber).fill = cell.fill as import("exceljs").Fill;
+            destRow.getCell(colNumber).alignment = cell.alignment;
+            destRow.getCell(colNumber).border = cell.border;
+          });
+          destRow.height = row.height;
+        });
+        srcSheet.columns.forEach((col, idx) => {
+          if (col.width) destSheet.getColumn(idx + 1).width = col.width;
+        });
+      }
     }
-    if (wb.SheetNames.length === 0) return;
+    if (combinedWb.worksheets.length === 0) return;
     const lineCode = selectedLine?.code ?? "bus";
     const busLabel = targetCard.unit.label.replace(/\s+/g, "_");
-    writeFile(wb, `${lineCode}_${busLabel}_${date}.xlsx`);
+    await downloadWorkbook(combinedWb, `${lineCode}_${busLabel}_${date}.xlsx`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busCards, selectedBusUnitId, date, direction, selectedLine, payload.allocation_details]);
 
   // Export tutte le linee: un foglio per bus×direzione (1 bus = 1 sheet)
   const exportAllLines = useCallback(async () => {
-    const { utils, writeFile } = await import("xlsx");
-    const wb = utils.book_new();
+    const { buildArrivalWorkbook, buildDepartureWorkbook, downloadWorkbook } = await import("@/lib/bus-export-excel");
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
     const usedNames = new Set<string>();
     for (const line of payload.lines) {
-      // Andata prima, poi Ritorno — per ogni linea
       for (const dir of ["arrival", "departure"] as const) {
         const dirLabel = dir === "arrival" ? "And" : "Rit";
-        // Unità di questa linea — già ordinate per sort_order dalla query API
         const lineUnitsAll = payload.units.filter((u) => u.bus_line_id === line.id);
         for (const unit of lineUnitsAll) {
           const unitAllocs = payload.allocation_details.filter(
@@ -988,24 +1002,39 @@ export default function BusNetworkPage() {
           const stopsForDir = payload.stops
             .filter((s) => s.bus_line_id === line.id && s.direction === dir)
             .sort((a, b) => a.stop_order - b.stop_order);
-          const ws = dir === "departure"
-            ? buildDepartureSheet(utils, unitAllocs, stopsForDir, unit.driver_name_return, unit.driver_phone_return)
-            : buildArrivalSheet(utils, unitAllocs, stopsForDir, unit.driver_name_outbound, unit.driver_phone_outbound);
-          // Nome foglio univoco ≤ 31 char: LineaCode_BusLabel_Dir
+          const singleWb = dir === "departure"
+            ? await buildDepartureWorkbook(unitAllocs, stopsForDir, unit.driver_name_return, unit.driver_phone_return)
+            : await buildArrivalWorkbook(unitAllocs, stopsForDir, unit.driver_name_outbound, unit.driver_phone_outbound);
           const lineShort = (line.code ?? line.name).slice(0, 14);
           const busShort = unit.label.replace(/\s+/g, "").slice(0, 12);
           let sheetName = `${lineShort}_${busShort}_${dirLabel}`.slice(0, 31);
-          // Evita duplicati (Excel non permette fogli con lo stesso nome)
           if (usedNames.has(sheetName)) {
             sheetName = sheetName.slice(0, 28) + String(usedNames.size).padStart(2, "0");
           }
           usedNames.add(sheetName);
-          utils.book_append_sheet(wb, ws as never, sheetName);
+          const srcSheet = singleWb.worksheets[0];
+          if (srcSheet) {
+            const destSheet = wb.addWorksheet(sheetName);
+            srcSheet.eachRow((row, rowNumber) => {
+              const destRow = destSheet.getRow(rowNumber);
+              row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                destRow.getCell(colNumber).value = cell.value;
+                destRow.getCell(colNumber).font = cell.font;
+                destRow.getCell(colNumber).fill = cell.fill as import("exceljs").Fill;
+                destRow.getCell(colNumber).alignment = cell.alignment;
+                destRow.getCell(colNumber).border = cell.border;
+              });
+              destRow.height = row.height;
+            });
+            srcSheet.columns.forEach((col, idx) => {
+              if (col.width) destSheet.getColumn(idx + 1).width = col.width;
+            });
+          }
         }
       }
     }
-    if (wb.SheetNames.length === 0) return;
-    writeFile(wb, `bus_tutte_linee_${date}.xlsx`);
+    if (wb.worksheets.length === 0) return;
+    await downloadWorkbook(wb, `bus_tutte_linee_${date}.xlsx`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payload, date]);
 
