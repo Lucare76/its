@@ -1283,13 +1283,47 @@ export async function POST(request: NextRequest) {
       let assigned = 0;
       let pending = 0;
 
-      for (const row of parsed.rows) {
+      const resolvedRows: Array<{ row: (typeof parsed.rows)[number]; stop: DBStop | null; fuzzy: boolean }> = parsed.rows.map((row) => {
         const { stop, fuzzy } = findStop(row.city);
+        return { row, stop, fuzzy };
+      });
+      const rowsByStop = new Map<string, Array<{ row: (typeof parsed.rows)[number]; stop: DBStop }>>();
 
+      for (const item of resolvedRows) {
+        const { row, stop, fuzzy } = item;
         if (stop && !fuzzy) {
-          // Fermata trovata: crea servizio + alloca
-          const bus = pickBus(row.pax, stop.id);
-          if (bus) {
+          const key = `${parsed.bus_line_id}:${stop.id}`;
+          const list = rowsByStop.get(key) ?? [];
+          list.push({ row, stop });
+          rowsByStop.set(key, list);
+        } else {
+          // Fermata non trovata o parziale → da validare
+          await auth.admin.from("bus_import_pending").insert({
+            tenant_id: tenantId,
+            bus_line_id: parsed.bus_line_id,
+            direction: parsed.direction,
+            travel_date: parsed.travel_date,
+            passenger_name: row.name,
+            passenger_phone: row.phone ?? null,
+            passenger_email: row.email ?? null,
+            city_original: row.city,
+            pax: row.pax,
+            notes: row.notes ?? null,
+            geo_suggested_stop: stop?.stop_name ?? null,
+          });
+          pending++;
+        }
+      }
+
+      const groupedRows = Array.from(rowsByStop.values())
+        .sort((a, b) => b.reduce((sum, item) => sum + item.row.pax, 0) - a.reduce((sum, item) => sum + item.row.pax, 0));
+
+      for (const group of groupedRows) {
+        const stop = group[0].stop;
+        const groupPax = group.reduce((sum, item) => sum + item.row.pax, 0);
+        const bus = pickBus(groupPax, stop.id);
+        if (bus) {
+          for (const { row } of group) {
             const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
               tenant_id: tenantId,
               customer_name: row.name,
@@ -1331,8 +1365,10 @@ export async function POST(request: NextRequest) {
             busIds.add(bus.id);
             stopBusMap.set(stopKey, busIds);
             assigned++;
-          } else {
-            // Nessun bus disponibile → da validare
+          }
+        } else {
+          // Nessun bus disponibile per l'intero gruppo fermata → da validare
+          for (const { row } of group) {
             await auth.admin.from("bus_import_pending").insert({
               tenant_id: tenantId,
               bus_line_id: parsed.bus_line_id,
@@ -1348,22 +1384,6 @@ export async function POST(request: NextRequest) {
             });
             pending++;
           }
-        } else {
-          // Fermata non trovata o parziale → da validare
-          await auth.admin.from("bus_import_pending").insert({
-            tenant_id: tenantId,
-            bus_line_id: parsed.bus_line_id,
-            direction: parsed.direction,
-            travel_date: parsed.travel_date,
-            passenger_name: row.name,
-            passenger_phone: row.phone ?? null,
-            passenger_email: row.email ?? null,
-            city_original: row.city,
-            pax: row.pax,
-            notes: row.notes ?? null,
-            geo_suggested_stop: stop?.stop_name ?? null,
-          });
-          pending++;
         }
       }
 
@@ -1558,6 +1578,7 @@ export async function POST(request: NextRequest) {
       let assigned2 = 0;
       let pending2 = 0;
 
+      const resolvedRows2: Array<{ row: (typeof parsed.rows)[number]; stop: DBStop2 | null; fuzzy: boolean }> = [];
       for (const row of parsed.rows) {
         // Se il client ha già assegnato manualmente la fermata, usala direttamente
         let resolvedStop: DBStop2 | null = null;
@@ -1577,9 +1598,47 @@ export async function POST(request: NextRequest) {
         const stop = resolvedStop;
         const fuzzy = resolvedFuzzy;
 
+        resolvedRows2.push({ row, stop, fuzzy });
+      }
+
+      const rowsByStop2 = new Map<string, Array<{ row: (typeof parsed.rows)[number]; stop: DBStop2 }>>();
+      for (const item of resolvedRows2) {
+        const { row, stop, fuzzy } = item;
         if (stop && !fuzzy) {
-          const bus = pickBusForLine(stop.bus_line_id, stop.id, row.pax);
-          if (bus) {
+          const key = `${stop.bus_line_id}:${stop.id}`;
+          const list = rowsByStop2.get(key) ?? [];
+          list.push({ row, stop });
+          rowsByStop2.set(key, list);
+        } else {
+          // Fermata non trovata → da validare (bus_line_id = primo bus disponibile del tenant come fallback)
+          const firstLine = allUnits[0]?.bus_line_id ?? null;
+          if (firstLine) {
+            await auth.admin.from("bus_import_pending").insert({
+              tenant_id: tenantId,
+              bus_line_id: firstLine,
+              direction: parsed.direction,
+              travel_date: parsed.travel_date,
+              passenger_name: row.name,
+              passenger_phone: row.phone ?? null,
+              city_original: row.city,
+              pax: row.pax,
+              notes: row.notes ?? null,
+              geo_suggested_stop: stop?.stop_name ?? null,
+            });
+          }
+          pending2++;
+        }
+      }
+
+      const groupedRows2 = Array.from(rowsByStop2.values())
+        .sort((a, b) => b.reduce((sum, item) => sum + item.row.pax, 0) - a.reduce((sum, item) => sum + item.row.pax, 0));
+
+      for (const group of groupedRows2) {
+        const stop = group[0].stop;
+        const groupPax = group.reduce((sum, item) => sum + item.row.pax, 0);
+        const bus = pickBusForLine(stop.bus_line_id, stop.id, groupPax);
+        if (bus) {
+          for (const { row } of group) {
             const pickupTime = parsed.direction === "departure" ? resolvePickupTime(row.hotel, stop.bus_line_id) : "00:00";
             const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
               tenant_id: tenantId,
@@ -1646,8 +1705,10 @@ export async function POST(request: NextRequest) {
             busIds.add(bus.id);
             stopBusMap2.set(stopKey, busIds);
             assigned2++;
-          } else {
-            // Nessun bus disponibile sulla linea → da validare
+          }
+        } else {
+          // Nessun bus disponibile per l'intero gruppo fermata → da validare
+          for (const { row } of group) {
             await auth.admin.from("bus_import_pending").insert({
               tenant_id: tenantId,
               bus_line_id: stop.bus_line_id,
@@ -1662,24 +1723,6 @@ export async function POST(request: NextRequest) {
             });
             pending2++;
           }
-        } else {
-          // Fermata non trovata → da validare (bus_line_id = primo bus disponibile del tenant come fallback)
-          const firstLine = allUnits[0]?.bus_line_id ?? null;
-          if (firstLine) {
-            await auth.admin.from("bus_import_pending").insert({
-              tenant_id: tenantId,
-              bus_line_id: firstLine,
-              direction: parsed.direction,
-              travel_date: parsed.travel_date,
-              passenger_name: row.name,
-              passenger_phone: row.phone ?? null,
-              city_original: row.city,
-              pax: row.pax,
-              notes: row.notes ?? null,
-              geo_suggested_stop: stop?.stop_name ?? null,
-            });
-          }
-          pending2++;
         }
       }
 
