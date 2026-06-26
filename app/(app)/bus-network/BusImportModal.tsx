@@ -79,7 +79,7 @@ function normalizeHotelName(name: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/['".,]/g, " ")
-    .replace(/\b(hotel|htl|albergo|residence|locanda|pensione|villa|resort|b&b|bb|terme|spa|club|grand|park|relax|exclusive|boutique|di|del|della|delle|dei|degli|il|la|le|lo|gli|e|d)\b/g, " ")
+    .replace(/\b(hotel|htl|albergo|residence|locanda|pensione|resort|b&b|bb|terme|thermal|spa|club|grand|park|parco|relax|exclusive|boutique|di|del|della|delle|dei|degli|il|la|le|lo|gli|e|d)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -101,13 +101,13 @@ function matchHotel(
   const exact = hotels.find((h) => normalizeHotelName(h.name) === norm);
   if (exact) return { matchedHotelId: exact.id, suggestedHotelId: null, suggestedHotelName: null };
 
-  // Match fuzzy: uno contiene l'altro (minimo 3 caratteri)
-  if (norm.length >= 3) {
+  // Match fuzzy: uno contiene l'altro → auto-match se il nome cercato è abbastanza lungo
+  if (norm.length >= 4) {
     const fuzzy = hotels.find((h) => {
       const hn = normalizeHotelName(h.name);
       return hn.length >= 3 && (hn.includes(norm) || norm.includes(hn));
     });
-    if (fuzzy) return { matchedHotelId: null, suggestedHotelId: fuzzy.id, suggestedHotelName: fuzzy.name };
+    if (fuzzy) return { matchedHotelId: fuzzy.id, suggestedHotelId: null, suggestedHotelName: null };
   }
 
   return { matchedHotelId: null, suggestedHotelId: null, suggestedHotelName: null };
