@@ -113,11 +113,9 @@ export async function buildArrivalWorkbook(
     ws.getRow(1).height = 60;
     startRow = 2;
   }
-  ws.mergeCells(startRow, 1, startRow, 8);
   const titleCell = ws.getCell(startRow, 1);
   titleCell.value = "ARRIVI";
   titleCell.font = { bold: true, size: 14, color: { argb: `FF${HEADER_COLOR}` } };
-  titleCell.alignment = { horizontal: "center", vertical: "middle" };
   ws.getRow(startRow).height = 24;
 
   // Header
@@ -195,11 +193,9 @@ export async function buildDepartureWorkbook(
     ws.getRow(1).height = 60;
     startRow = 2;
   }
-  ws.mergeCells(startRow, 1, startRow, 7);
   const titleCell = ws.getCell(startRow, 1);
   titleCell.value = "PARTENZE";
   titleCell.font = { bold: true, size: 14, color: { argb: `FF${HEADER_COLOR}` } };
-  titleCell.alignment = { horizontal: "center", vertical: "middle" };
   ws.getRow(startRow).height = 24;
 
   // Header
