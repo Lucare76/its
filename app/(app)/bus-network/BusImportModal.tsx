@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 
 // Mappa orari catalogo 2026 per città canonica (usata come fallback nell'import Excel)
 const CATALOG_CITY_TIME: Record<string, string> = {
@@ -39,7 +40,7 @@ const CATALOG_CITY_TIME: Record<string, string> = {
   "AVEZZANO": "10:00", "SORA": "11:00",
 };
 
-type BusLine = { id: string; code: string; name: string };
+type BusLine = { id: string; code: string; name: string; family_code: string };
 type BusStop = { id: string; bus_line_id: string; direction: "arrival" | "departure"; stop_name: string; city: string; pickup_note?: string | null; pickup_time?: string | null; stop_order: number; lat?: number | null; lng?: number | null; is_manual?: boolean };
 type HotelListItem = { id: string; name: string; zone: string };
 
@@ -72,14 +73,15 @@ function normalizeAgency(raw: string): string {
   return AGENCY_ALIASES[key] ?? raw.trim();
 }
 
-// Normalizza il nome hotel per il matching (rimuove prefissi comuni, accenti, caratteri speciali)
 function normalizeHotelName(name: string): string {
   return name
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\b(hotel|albergo|residence|locanda|pensione|villa|resort|b&b|bb)\b/g, "")
+    .replace(/['".,]/g, " ")
+    .replace(/\b(hotel|albergo|residence|locanda|pensione|villa|resort|b&b|bb|terme|spa|club|grand|park|relax|exclusive|boutique)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -143,10 +145,10 @@ const CITY_ALIASES: Record<string, string> = {
   "prenestina ovest": "roma",
   "prenestina est": "roma",
   "prenestina": "roma",
-  "tiburtina": "roma",
-  "roma tiburtina": "roma",
-  "anagnina": "roma",
-  "roma anagnina": "roma",
+  "tiburtina": "roma tiburtina",
+  "roma tiburtina": "roma tiburtina",
+  "anagnina": "roma anagnina",
+  "roma anagnina": "roma anagnina",
   "valmontone": "valmontone",
 };
 
@@ -193,26 +195,45 @@ function matchAcrossLines(
   direction: "arrival" | "departure"
 ): { stop: BusStop | null; line: BusLine | null; status: "ok" | "fuzzy" | "pending" } {
   const nc = normCity(city);
+  const expanded = normCity(city.replace(/\bp\.\s*/gi, "ponte ").replace(/\bs\.\s*/gi, "santa ").replace(/\bc\.\s*/gi, "citta "));
   if (!nc || nc.length < 3) return { stop: null, line: null, status: "pending" };
 
   const dirStops = stops.filter((s) => s.direction === direction);
   const findLine = (s: BusStop) => lines.find((l) => l.id === s.bus_line_id) ?? null;
 
-  // Exact: città o stop_name uguali, oppure pickup_note contiene la stringa cercata
-  const exact = dirStops.find((s) =>
-    normCity(s.city) === nc ||
-    normCity(s.stop_name) === nc ||
+  const exactMatches = dirStops.filter((s) =>
+    normCity(s.city) === nc || normCity(s.stop_name) === nc ||
+    normCity(s.city) === expanded || normCity(s.stop_name) === expanded ||
     (s.pickup_note && normCity(s.pickup_note).includes(nc) && nc.length >= 4)
   );
-  if (exact) return { stop: exact, line: findLine(exact), status: "ok" };
 
-  // Fuzzy limitato: solo sulla colonna city (non pickup_note → evita falsi positivi)
-  // Copre casi come "PRENESTINA OVEST" → fermata con city "PRENESTINA"
-  const fuzzy = dirStops.find((s) => {
-    const sc = normCity(s.city);
-    return sc.length >= 3 && (sc.includes(nc) || nc.includes(sc));
+  if (exactMatches.length === 1) return { stop: exactMatches[0], line: findLine(exactMatches[0]), status: "ok" };
+
+  if (exactMatches.length > 1) {
+    const catalogFamily = resolveBusStop(city)?.familyCode ?? null;
+    if (catalogFamily) {
+      const preferred = exactMatches.find((s) => {
+        const line = findLine(s);
+        return line && line.family_code === catalogFamily;
+      });
+      if (preferred) return { stop: preferred, line: findLine(preferred), status: "ok" };
+    }
+    return { stop: exactMatches[0], line: findLine(exactMatches[0]), status: "ok" };
+  }
+
+  const fuzzyMatches = dirStops.filter((s) => {
+    const sc = normCity(s.city); const sn = normCity(s.stop_name);
+    return (sc.length >= 3 && (sc.includes(nc) || nc.includes(sc))) ||
+           (sn.length >= 3 && (sn.includes(nc) || nc.includes(sn)));
   });
-  if (fuzzy) return { stop: fuzzy, line: findLine(fuzzy), status: "fuzzy" };
+  if (fuzzyMatches.length > 0) {
+    const catalogFamily = resolveBusStop(city)?.familyCode ?? null;
+    if (catalogFamily && fuzzyMatches.length > 1) {
+      const preferred = fuzzyMatches.find((s) => findLine(s)?.family_code === catalogFamily);
+      if (preferred) return { stop: preferred, line: findLine(preferred), status: "fuzzy" };
+    }
+    return { stop: fuzzyMatches[0], line: findLine(fuzzyMatches[0]), status: "fuzzy" };
+  }
 
   return { stop: null, line: null, status: "pending" };
 }
