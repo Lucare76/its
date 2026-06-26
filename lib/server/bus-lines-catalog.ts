@@ -161,7 +161,6 @@ export const BUS_LINES_2026: BusLineCatalogEntry[] = [
       { city: "CHIUSI CHIANCIANO",time: "12:30", pickupNote: note("Casello autostradale"),                          lat: 43.02, lng: 11.95 },
       { city: "FABRO",            time: "12:45", pickupNote: note("Area di servizio"),                              lat: 42.86, lng: 11.98 },
       { city: "ORVIETO",          time: "13:00", pickupNote: note("Ristorante Food Village"),                       lat: 42.72, lng: 12.11 },
-      { city: "ORTE",             time: "13:30", pickupNote: note("Hotel Tevere"),                                  lat: 42.45, lng: 12.39 },
       { city: "ROMA",             time: "14:30", pickupNote: note("Area di Servizio Prenestina Ovest"),             lat: 41.89, lng: 12.49 },
       { city: "FROSINONE",        time: "15:00", pickupNote: note("Casello autostradale"),                          lat: 41.64, lng: 13.35 }
     ]
