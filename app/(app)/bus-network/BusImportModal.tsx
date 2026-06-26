@@ -79,7 +79,7 @@ function normalizeHotelName(name: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/['".,]/g, " ")
-    .replace(/\b(hotel|albergo|residence|locanda|pensione|villa|resort|b&b|bb|terme|spa|club|grand|park|relax|exclusive|boutique|di|del|della|delle|dei|degli|il|la|le|lo|gli|e|d)\b/g, " ")
+    .replace(/\b(hotel|htl|albergo|residence|locanda|pensione|villa|resort|b&b|bb|terme|spa|club|grand|park|relax|exclusive|boutique|di|del|della|delle|dei|degli|il|la|le|lo|gli|e|d)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
