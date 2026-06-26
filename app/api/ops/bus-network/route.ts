@@ -201,6 +201,15 @@ const moveSchema = z.object({
   reason: z.string().max(500).optional().nullable()
 });
 
+const bulkMoveSchema = z.object({
+  allocations: z.array(z.object({
+    allocation_id: z.string().uuid(),
+    pax_moved: z.number().int().min(1).max(120),
+  })).min(1).max(50),
+  to_bus_unit_id: z.string().uuid(),
+  reason: z.string().max(500).optional().nullable()
+});
+
 const reorderStopsSchema = z.object({
   bus_line_id: z.string().uuid(),
   direction: z.enum(["arrival", "departure"]),
@@ -697,6 +706,35 @@ export async function POST(request: NextRequest) {
         checkAndAlertLowSeats(auth, tenantId, parsed.to_bus_unit_id)
       ]);
       return NextResponse.json({ ok: true, ...networkPayload, low_seat_alert: moveAlert });
+    }
+
+    if (action === "move_allocations_bulk") {
+      const parsed = bulkMoveSchema.parse(body);
+      const errors: string[] = [];
+      for (const item of parsed.allocations) {
+        const { error } = await auth.admin.rpc("move_bus_allocation", {
+          p_tenant_id: tenantId,
+          p_allocation_id: item.allocation_id,
+          p_to_bus_unit_id: parsed.to_bus_unit_id,
+          p_pax_moved: item.pax_moved,
+          p_reason: parsed.reason ?? null,
+          p_created_by_user_id: auth.user.id
+        });
+        if (error) errors.push(error.message);
+      }
+      if (errors.length === parsed.allocations.length) {
+        return NextResponse.json({ ok: false, error: errors[0] }, { status: 400 });
+      }
+      const [networkPayload, moveAlert] = await Promise.all([
+        loadBusNetwork(auth),
+        checkAndAlertLowSeats(auth, tenantId, parsed.to_bus_unit_id)
+      ]);
+      return NextResponse.json({
+        ok: true,
+        ...networkPayload,
+        low_seat_alert: moveAlert,
+        ...(errors.length > 0 ? { partial_errors: errors } : {})
+      });
     }
 
     if (action === "delete_allocation") {

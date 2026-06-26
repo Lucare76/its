@@ -234,6 +234,12 @@ export default function BusNetworkPage() {
   // Create new stop from pending approval
   const [pendingNewStop, setPendingNewStop] = useState<{ name: string; city: string; note: string; afterStopId: string } | null>(null);
 
+  // Multi-select bulk move
+  const [selectedAllocIds, setSelectedAllocIds] = useState<Set<string>>(new Set());
+  const [bulkMoveModalOpen, setBulkMoveModalOpen] = useState(false);
+  const [bulkMoveTargetUnitId, setBulkMoveTargetUnitId] = useState("");
+  const [bulkMoveReason, setBulkMoveReason] = useState("");
+
   // Transfer to another line modal (admin only)
   const [transferAlloc, setTransferAlloc] = useState<AllocationDetail | null>(null);
   const [transferLineId, setTransferLineId] = useState("");
@@ -267,6 +273,7 @@ export default function BusNetworkPage() {
     };
     setPayload(next);
     setSelectedLineId((cur) => (cur && next.lines.some((l) => l.id === cur)) ? cur : (next.lines[0]?.id ?? ""));
+    setSelectedAllocIds(new Set());
     setLoading(false);
   }, [date]);
 
@@ -597,6 +604,45 @@ export default function BusNetworkPage() {
     setMoveModalOpen(false);
     setMoveSource(null);
   }, [moveSource, moveTargetUnitId, movePaxStr, moveReason, post]);
+
+  const toggleAllocSelection = useCallback((allocId: string) => {
+    setSelectedAllocIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(allocId)) next.delete(allocId);
+      else next.add(allocId);
+      return next;
+    });
+  }, []);
+
+  const selectedAllocs = useMemo(
+    () => payload.allocation_details.filter((a) => selectedAllocIds.has(a.allocation_id)),
+    [payload.allocation_details, selectedAllocIds]
+  );
+
+  const selectedTotalPax = useMemo(
+    () => selectedAllocs.reduce((sum, a) => sum + a.pax_assigned, 0),
+    [selectedAllocs]
+  );
+
+  const openBulkMoveModal = useCallback(() => {
+    if (selectedAllocs.length === 0) return;
+    const sourceUnitIds = new Set(selectedAllocs.map((a) => a.bus_unit_id));
+    const compatible = dateUnitLoads.filter((u) => !sourceUnitIds.has(u.id) && u.status !== "closed" && u.status !== "completed");
+    setBulkMoveTargetUnitId(compatible[0]?.id ?? "");
+    setBulkMoveReason("");
+    setBulkMoveModalOpen(true);
+  }, [selectedAllocs, dateUnitLoads]);
+
+  const confirmBulkMove = useCallback(async () => {
+    if (selectedAllocs.length === 0 || !bulkMoveTargetUnitId) return;
+    await post("move_allocations_bulk", {
+      allocations: selectedAllocs.map((a) => ({ allocation_id: a.allocation_id, pax_moved: a.pax_assigned })),
+      to_bus_unit_id: bulkMoveTargetUnitId,
+      reason: bulkMoveReason || null,
+    });
+    setBulkMoveModalOpen(false);
+    setSelectedAllocIds(new Set());
+  }, [selectedAllocs, bulkMoveTargetUnitId, bulkMoveReason, post]);
 
   const confirmAssign = useCallback(async () => {
     if (!assignService || !assignUnitId || !assignStopId || !assignLineId) return;
@@ -1581,7 +1627,23 @@ export default function BusNetworkPage() {
                         {[...stopGroups.map(({ stop, allocs }) => (
                           <div key={stop.id} className="px-3 py-2">
                             <div className="mb-1 flex items-center justify-between">
-                              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                              <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                                <input
+                                  type="checkbox"
+                                  checked={allocs.length > 0 && allocs.every((a) => selectedAllocIds.has(a.allocation_id))}
+                                  onChange={() => {
+                                    const ids = allocs.map((a) => a.allocation_id);
+                                    setSelectedAllocIds((prev) => {
+                                      const next = new Set(prev);
+                                      const allSelected = ids.every((id) => next.has(id));
+                                      if (allSelected) ids.forEach((id) => next.delete(id));
+                                      else ids.forEach((id) => next.add(id));
+                                      return next;
+                                    });
+                                  }}
+                                  className="shrink-0 accent-indigo-600"
+                                  title={`Seleziona tutti ${stop.stop_name}`}
+                                />
                                 📍 {stop.stop_name}
                                 {stop.city && stop.city.toLowerCase() !== stop.stop_name.toLowerCase() && (
                                   <span className="ml-1 font-normal normal-case text-slate-300">({stop.city})</span>
@@ -1597,7 +1659,14 @@ export default function BusNetworkPage() {
                               <div key={alloc.allocation_id}
                                 draggable
                                 onDragStart={() => handleDragStart(alloc)}
-                                className="group mb-1 flex cursor-grab items-start gap-2 rounded-lg p-1.5 active:cursor-grabbing hover:bg-slate-50">
+                                className={`group mb-1 flex cursor-grab items-start gap-2 rounded-lg p-1.5 active:cursor-grabbing hover:bg-slate-50 ${selectedAllocIds.has(alloc.allocation_id) ? "bg-indigo-50 ring-1 ring-indigo-300" : ""}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedAllocIds.has(alloc.allocation_id)}
+                                  onChange={() => toggleAllocSelection(alloc.allocation_id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="mt-1 shrink-0 accent-indigo-600"
+                                />
                                 <div className="min-w-0 flex-1">
                                   <div className="truncate text-sm font-semibold uppercase text-slate-800">
                                     {alloc.customer_name}
@@ -1742,7 +1811,14 @@ export default function BusNetworkPage() {
                             <div
                               draggable
                               onDragStart={() => handleDragStart(alloc)}
-                              className="group flex cursor-grab items-start gap-2 rounded-lg p-1.5 active:cursor-grabbing hover:bg-slate-50">
+                              className={`group flex cursor-grab items-start gap-2 rounded-lg p-1.5 active:cursor-grabbing hover:bg-slate-50 ${selectedAllocIds.has(alloc.allocation_id) ? "bg-indigo-50 ring-1 ring-indigo-300" : ""}`}>
+                              <input
+                                type="checkbox"
+                                checked={selectedAllocIds.has(alloc.allocation_id)}
+                                onChange={() => toggleAllocSelection(alloc.allocation_id)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="mt-1 shrink-0 accent-indigo-600"
+                              />
                               <div className="min-w-0 flex-1">
                                 <div className="truncate text-sm font-semibold uppercase text-slate-800">{alloc.customer_name}</div>
                                 {editCardHotelId === alloc.allocation_id ? (
@@ -2690,6 +2766,86 @@ export default function BusNetworkPage() {
           </div>
         </div>
       )}
+
+      {/* ── Bulk move floating bar ── */}
+      {selectedAllocIds.size > 0 && !bulkMoveModalOpen && (
+        <div className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-2xl bg-indigo-600 px-5 py-3 text-white shadow-2xl">
+          <span className="text-sm font-semibold">{selectedAllocIds.size} selezionat{selectedAllocIds.size === 1 ? "o" : "i"} ({selectedTotalPax} pax)</span>
+          <button onClick={openBulkMoveModal} className="rounded-lg bg-white px-3 py-1.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-50">
+            Sposta insieme
+          </button>
+          <button onClick={() => setSelectedAllocIds(new Set())} className="rounded-lg bg-indigo-500 px-3 py-1.5 text-sm font-medium text-indigo-100 hover:bg-indigo-400">
+            Deseleziona
+          </button>
+        </div>
+      )}
+
+      {/* ── Bulk move modal ── */}
+      {bulkMoveModalOpen && selectedAllocs.length > 0 && (() => {
+        const bulkTargetUnit = dateUnitLoads.find((u) => u.id === bulkMoveTargetUnitId);
+        const bulkResidual = bulkTargetUnit ? bulkTargetUnit.remaining_seats - selectedTotalPax : null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="w-full max-w-lg space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+              <h2 className="text-lg font-bold text-slate-900">Sposta {selectedAllocs.length} passeggeri ({selectedTotalPax} pax)</h2>
+
+              <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl bg-slate-50 p-3">
+                {selectedAllocs.map((a) => (
+                  <div key={a.allocation_id} className="flex items-center justify-between text-sm">
+                    <span className="truncate font-medium uppercase text-slate-800">{a.customer_name}</span>
+                    <span className="ml-2 shrink-0 text-xs text-slate-500">{a.bus_label} — {a.pax_assigned} pax</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-slate-700">Sposta tutti su:</label>
+                <select value={bulkMoveTargetUnitId} onChange={(e) => setBulkMoveTargetUnitId(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                  <option value="">— Scegli bus —</option>
+                  {payload.lines.map((line) => {
+                    const sourceUnitIds = new Set(selectedAllocs.map((a) => a.bus_unit_id));
+                    const lineUnits = dateUnitLoads.filter((u) => u.bus_line_id === line.id && !sourceUnitIds.has(u.id) && u.status !== "closed" && u.status !== "completed");
+                    if (lineUnits.length === 0) return null;
+                    return (
+                      <optgroup key={line.id} label={line.name}>
+                        {lineUnits.map((u) => (
+                          <option key={u.id} value={u.id}>{u.label} — {u.remaining_seats} posti liberi</option>
+                        ))}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+              </div>
+
+              {bulkResidual !== null && (
+                <div className={`rounded-lg px-3 py-2 text-sm font-medium ${bulkResidual < 0 ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                  {bulkResidual < 0
+                    ? `⚠ Capienza superata di ${Math.abs(bulkResidual)} posti`
+                    : `✓ Posti liberi dopo lo spostamento: ${bulkResidual}`}
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-slate-700">Motivo (opzionale):</label>
+                <input value={bulkMoveReason} onChange={(e) => setBulkMoveReason(e.target.value)}
+                  placeholder="Es: richiesta cliente, bus pieno..."
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+              </div>
+
+              <div className="flex gap-3 pt-1">
+                <button onClick={() => setBulkMoveModalOpen(false)}
+                  className="btn-secondary flex-1 py-2.5">Annulla</button>
+                <button onClick={() => void confirmBulkMove()}
+                  disabled={saving || !bulkMoveTargetUnitId || (bulkResidual !== null && bulkResidual < 0)}
+                  className="btn-primary flex-1 py-2.5 disabled:opacity-40">
+                  {saving ? "Spostamento..." : `Sposta ${selectedAllocs.length} passeggeri`}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Assign modal ── */}
       {assignModalOpen && assignService && (
