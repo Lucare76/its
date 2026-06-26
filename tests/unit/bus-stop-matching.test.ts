@@ -125,13 +125,13 @@ describe("matching completo abbreviazioni Excel → DB", () => {
 });
 
 describe("resolveBusStop — catalogo linee", () => {
-  it("ROMA TIBURTINA → CENTRO", () => {
+  it("ROMA TIBURTINA → CENTRO (Linea 7)", () => {
     const result = resolveBusStop("ROMA TIBURTINA");
     expect(result).not.toBeNull();
     expect(result!.familyCode).toBe("CENTRO");
   });
 
-  it("ROMA ANAGNINA → CENTRO", () => {
+  it("ROMA ANAGNINA → CENTRO (Linea 7)", () => {
     const result = resolveBusStop("ROMA ANAGNINA");
     expect(result).not.toBeNull();
     expect(result!.familyCode).toBe("CENTRO");

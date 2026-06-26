@@ -1112,7 +1112,7 @@ export async function POST(request: NextRequest) {
 
         if (!stop) { skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: `Fermata non trovata per ${svc.bus_city_origin ?? "N/D"}` }); continue; }
 
-        // Scegli bus con logica geografica + riorganizzazione
+        // Scegli bus: riempimento sequenziale dal primo all'ultimo, stessa fermata sullo stesso bus
         const buses = busesByLineId.get(line.id) ?? [];
         const reserved = new Set(["ITALIA PUGLIA", "ITALIA PUGLIA 2"]);
         const isPuglia = svc.transport_code === "LINEA_PUGLIA_ITALIA";
@@ -1121,72 +1121,14 @@ export async function POST(request: NextRequest) {
         if (preferred.length) {
           chosenBus = preferred.map((lbl) => buses.find((b) => b.label === lbl && b.remaining >= svc.pax) ?? null).find((b): b is SimUnit => b !== null) ?? null;
         } else {
-          const eligible = buses.filter((b) => b.remaining >= svc.pax && !reserved.has(b.label));
-          const sameStop = eligible.filter((b) => busStopPrimary.get(b.id) === stop.id).sort((a, b) => a.remaining - b.remaining);
-
-          if (sameStop.length > 0) {
-            chosenBus = sameStop[0];
+          const nonReserved = buses.filter((b) => !reserved.has(b.label));
+          // 1. Bus che ha già la stessa fermata e ha posto
+          const sameStop = nonReserved.find((b) => busStopPrimary.get(b.id) === stop.id && b.remaining >= svc.pax);
+          if (sameStop) {
+            chosenBus = sameStop;
           } else {
-            // Bus con stessa fermata ma senza capienza → prova riorganizzazione
-            const fullSameStop = buses.find((b) => busStopPrimary.get(b.id) === stop.id && b.remaining < svc.pax && !reserved.has(b.label));
-            if (fullSameStop) {
-              const needed = svc.pax - fullSameStop.remaining;
-              // Cerca gruppi di altre fermate su questo bus da spostare
-              const otherStopGroups: Array<{ stopId: string; stopName: string; pax: number; allocIds: string[] }> = [];
-              const busAllocs = assigned.filter(a => a.busUnitId === fullSameStop.id && a.stopId !== stop.id);
-              const groupedByStop = new Map<string, { pax: number; allocIds: string[]; stopName: string }>();
-              for (const a of busAllocs) {
-                const g = groupedByStop.get(a.stopId ?? a.stopName) ?? { pax: 0, allocIds: [], stopName: a.stopName };
-                g.pax += a.pax;
-                g.allocIds.push(a.serviceId);
-                groupedByStop.set(a.stopId ?? a.stopName, g);
-              }
-              for (const [sid, g] of groupedByStop) otherStopGroups.push({ stopId: sid, ...g });
-              otherStopGroups.sort((a, b) => a.pax - b.pax);
-
-              let freed = 0;
-              const reorgMoves: Array<{ allocIds: string[]; stopName: string; pax: number; destBus: SimUnit }> = [];
-              for (const group of otherStopGroups) {
-                if (freed >= needed) break;
-                const dest = buses.find(b => b.id !== fullSameStop.id && b.remaining >= group.pax && !reserved.has(b.label));
-                if (!dest) continue;
-                reorgMoves.push({ allocIds: group.allocIds, stopName: group.stopName, pax: group.pax, destBus: dest });
-                freed += group.pax;
-              }
-
-              if (freed >= needed) {
-                for (const move of reorgMoves) {
-                  for (const svcId of move.allocIds) {
-                    const { data: existingAlloc } = await auth.admin
-                      .from("tenant_bus_allocations")
-                      .select("id")
-                      .eq("tenant_id", tenantId)
-                      .eq("service_id", svcId)
-                      .eq("bus_unit_id", fullSameStop.id)
-                      .maybeSingle();
-                    if (existingAlloc) {
-                      await auth.admin
-                        .from("tenant_bus_allocations")
-                        .update({ bus_unit_id: move.destBus.id })
-                        .eq("tenant_id", tenantId)
-                        .eq("id", (existingAlloc as { id: string }).id);
-                    }
-                  }
-                  fullSameStop.remaining += move.pax;
-                  move.destBus.remaining -= move.pax;
-                  datePax.set(fullSameStop.id, (datePax.get(fullSameStop.id) ?? 0) - move.pax);
-                  datePax.set(move.destBus.id, (datePax.get(move.destBus.id) ?? 0) + move.pax);
-                  busStopPrimary.set(move.destBus.id, move.stopName);
-                }
-                chosenBus = fullSameStop;
-              }
-            }
-
-            if (!chosenBus) {
-              const fresh = eligible.filter((b) => !busStopPrimary.has(b.id)).sort((a, b) => a.remaining - b.remaining);
-              const other = eligible.filter((b) => busStopPrimary.has(b.id) && busStopPrimary.get(b.id) !== stop.id).sort((a, b) => a.remaining - b.remaining);
-              chosenBus = fresh[0] ?? other[0] ?? null;
-            }
+            // 2. Primo bus in ordine con posto (riempimento sequenziale)
+            chosenBus = nonReserved.find((b) => b.remaining >= svc.pax) ?? null;
           }
         }
         if (!chosenBus) { skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: "Nessun bus disponibile" }); continue; }
