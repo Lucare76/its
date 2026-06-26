@@ -73,22 +73,46 @@ function sortPassengersByRoute<T extends { hotel_name: string }>(
 async function checkAndAlertLowSeats(
   auth: PricingAuthContext,
   tenantId: string,
-  busUnitId: string
+  busUnitId: string,
+  serviceDate?: string
 ): Promise<{ busLabel: string; lineName: string; remainingSeats: number; threshold: number } | null> {
-  const [unitResult, allocResult] = await Promise.all([
-    auth.admin
-      .from("tenant_bus_units")
-      .select("id,bus_line_id,label,capacity,low_seat_threshold")
-      .eq("tenant_id", tenantId)
-      .eq("id", busUnitId)
-      .maybeSingle(),
-    auth.admin
+  const unitResult = await auth.admin
+    .from("tenant_bus_units")
+    .select("id,bus_line_id,label,capacity,low_seat_threshold")
+    .eq("tenant_id", tenantId)
+    .eq("id", busUnitId)
+    .maybeSingle();
+  if (unitResult.error || !unitResult.data) return null;
+
+  let resolvedDate = serviceDate;
+  if (!resolvedDate) {
+    const sampleAlloc = await auth.admin
       .from("tenant_bus_allocations")
-      .select("pax_assigned")
+      .select("service_id")
       .eq("tenant_id", tenantId)
       .eq("bus_unit_id", busUnitId)
-  ]);
-  if (unitResult.error || allocResult.error || !unitResult.data) return null;
+      .limit(1)
+      .maybeSingle();
+    if (sampleAlloc.data?.service_id) {
+      const svc = await auth.admin
+        .from("services")
+        .select("date")
+        .eq("id", (sampleAlloc.data as { service_id: string }).service_id)
+        .maybeSingle();
+      resolvedDate = (svc.data as { date?: string } | null)?.date ?? undefined;
+    }
+  }
+
+  let allocQuery = auth.admin
+    .from("tenant_bus_allocations")
+    .select("pax_assigned, services!inner(date)")
+    .eq("tenant_id", tenantId)
+    .eq("bus_unit_id", busUnitId);
+  if (resolvedDate) {
+    allocQuery = allocQuery.eq("services.date", resolvedDate);
+  }
+  const allocResult = await allocQuery;
+  if (allocResult.error) return null;
 
   const unit = unitResult.data as { id: string; bus_line_id: string; label: string; capacity: number; low_seat_threshold: number };
   const totalPax = (allocResult.data ?? []).reduce(
