@@ -57,7 +57,7 @@ function styleHeaderRow(row: ExcelJS.Row, colCount: number) {
   }
 }
 
-async function fetchLogoBase64(): Promise<string | null> {
+export async function fetchLogoBase64(): Promise<string | null> {
   try {
     const res = await fetch("/brand/logo-ischia-transfer.png");
     if (!res.ok) return null;
@@ -73,7 +73,7 @@ async function fetchLogoBase64(): Promise<string | null> {
   }
 }
 
-function addLogo(wb: ExcelJS.Workbook, ws: ExcelJS.Worksheet, logoBase64: string) {
+export function addLogo(wb: ExcelJS.Workbook, ws: ExcelJS.Worksheet, logoBase64: string) {
   const base64Data = logoBase64.split(",")[1] ?? logoBase64;
   const imageId = wb.addImage({ base64: base64Data, extension: "png" });
   ws.addImage(imageId, {
@@ -86,12 +86,14 @@ export async function buildArrivalWorkbook(
   allocs: ExportAlloc[],
   stops: ExportStop[],
   driverName?: string | null,
-  driverPhone?: string | null
+  driverPhone?: string | null,
+  preloadedLogo?: string | null
 ): Promise<ExcelJS.Workbook> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Andata");
+  ws.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
 
-  const logoBase64 = await fetchLogoBase64();
+  const logoBase64 = preloadedLogo ?? await fetchLogoBase64();
 
   const stopOrderMap = new Map<string, number>();
   for (const s of stops) stopOrderMap.set(s.stop_name.toUpperCase(), s.stop_order);
@@ -170,12 +172,14 @@ export async function buildDepartureWorkbook(
   allocs: ExportAlloc[],
   stops: ExportStop[],
   driverName?: string | null,
-  driverPhone?: string | null
+  driverPhone?: string | null,
+  preloadedLogo?: string | null
 ): Promise<ExcelJS.Workbook> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Ritorno");
+  ws.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
 
-  const logoBase64 = await fetchLogoBase64();
+  const logoBase64 = preloadedLogo ?? await fetchLogoBase64();
 
   const sorted = [...allocs].sort((a, b) => {
     const ha = (a.hotel_name ?? "").toUpperCase();

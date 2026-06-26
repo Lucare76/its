@@ -1005,27 +1005,29 @@ export default function BusNetworkPage() {
 
   // Export linea corrente (tutti i bus della linea selezionata)
   const exportExcel = useCallback(async () => {
-    const { buildArrivalWorkbook, buildDepartureWorkbook, downloadWorkbook } = await import("@/lib/bus-export-excel");
+    const { buildArrivalWorkbook, buildDepartureWorkbook, downloadWorkbook, fetchLogoBase64 } = await import("@/lib/bus-export-excel");
+    const logo = await fetchLogoBase64();
     const lineStopsForExport = payload.stops
       .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === direction)
       .sort((a, b) => a.stop_order - b.stop_order);
     const allAllocs = busCards.flatMap((c) => c.allocations);
     const firstUnit = busCards[0]?.unit;
     const wb = direction === "departure"
-      ? await buildDepartureWorkbook(allAllocs, lineStopsForExport, firstUnit?.driver_name_return, firstUnit?.driver_phone_return)
-      : await buildArrivalWorkbook(allAllocs, lineStopsForExport, firstUnit?.driver_name_outbound, firstUnit?.driver_phone_outbound);
+      ? await buildDepartureWorkbook(allAllocs, lineStopsForExport, firstUnit?.driver_name_return, firstUnit?.driver_phone_return, logo)
+      : await buildArrivalWorkbook(allAllocs, lineStopsForExport, firstUnit?.driver_name_outbound, firstUnit?.driver_phone_outbound, logo);
     await downloadWorkbook(wb, `bus_${selectedLine?.code ?? "export"}_${date}_${direction === "arrival" ? "Andata" : "Ritorno"}.xlsx`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busCards, date, direction, selectedLine]);
 
   // Export singolo bus: un foglio Andata + un foglio Ritorno
   const exportSingleBus = useCallback(async () => {
-    const { buildArrivalWorkbook, buildDepartureWorkbook, downloadWorkbook } = await import("@/lib/bus-export-excel");
+    const { buildArrivalWorkbook, buildDepartureWorkbook, downloadWorkbook, fetchLogoBase64, addLogo } = await import("@/lib/bus-export-excel");
     const targetCard = busCards.find((c) => c.unit.id === selectedBusUnitId) ?? busCards[0];
     if (!targetCard) return;
     const unitId = targetCard.unit.id;
     const ExcelJS = (await import("exceljs")).default;
     const combinedWb = new ExcelJS.Workbook();
+    const logo = await fetchLogoBase64();
     for (const dir of ["arrival", "departure"] as const) {
       const dirAllocs = payload.allocation_details.filter(
         (a) => a.bus_unit_id === unitId && a.service_date === date && a.direction === dir
@@ -1035,11 +1037,13 @@ export default function BusNetworkPage() {
         .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === dir)
         .sort((a, b) => a.stop_order - b.stop_order);
       const singleWb = dir === "departure"
-        ? await buildDepartureWorkbook(dirAllocs, stopsForDir, targetCard.unit.driver_name_return, targetCard.unit.driver_phone_return)
-        : await buildArrivalWorkbook(dirAllocs, stopsForDir, targetCard.unit.driver_name_outbound, targetCard.unit.driver_phone_outbound);
+        ? await buildDepartureWorkbook(dirAllocs, stopsForDir, targetCard.unit.driver_name_return, targetCard.unit.driver_phone_return, logo)
+        : await buildArrivalWorkbook(dirAllocs, stopsForDir, targetCard.unit.driver_name_outbound, targetCard.unit.driver_phone_outbound, logo);
       const srcSheet = singleWb.worksheets[0];
       if (srcSheet) {
         const destSheet = combinedWb.addWorksheet(dir === "arrival" ? "Andata" : "Ritorno");
+        destSheet.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
+        if (logo) addLogo(combinedWb, destSheet, logo);
         srcSheet.eachRow((row, rowNumber) => {
           const destRow = destSheet.getRow(rowNumber);
           row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
@@ -1065,9 +1069,10 @@ export default function BusNetworkPage() {
 
   // Export tutte le linee: un foglio per bus×direzione (1 bus = 1 sheet)
   const exportAllLines = useCallback(async () => {
-    const { buildArrivalWorkbook, buildDepartureWorkbook, downloadWorkbook } = await import("@/lib/bus-export-excel");
+    const { buildArrivalWorkbook, buildDepartureWorkbook, downloadWorkbook, fetchLogoBase64, addLogo } = await import("@/lib/bus-export-excel");
     const ExcelJS = (await import("exceljs")).default;
     const wb = new ExcelJS.Workbook();
+    const logo = await fetchLogoBase64();
     const usedNames = new Set<string>();
     for (const line of payload.lines) {
       for (const dir of ["arrival", "departure"] as const) {
@@ -1082,8 +1087,8 @@ export default function BusNetworkPage() {
             .filter((s) => s.bus_line_id === line.id && s.direction === dir)
             .sort((a, b) => a.stop_order - b.stop_order);
           const singleWb = dir === "departure"
-            ? await buildDepartureWorkbook(unitAllocs, stopsForDir, unit.driver_name_return, unit.driver_phone_return)
-            : await buildArrivalWorkbook(unitAllocs, stopsForDir, unit.driver_name_outbound, unit.driver_phone_outbound);
+            ? await buildDepartureWorkbook(unitAllocs, stopsForDir, unit.driver_name_return, unit.driver_phone_return, logo)
+            : await buildArrivalWorkbook(unitAllocs, stopsForDir, unit.driver_name_outbound, unit.driver_phone_outbound, logo);
           const lineShort = (line.code ?? line.name).slice(0, 14);
           const busShort = unit.label.replace(/\s+/g, "").slice(0, 12);
           let sheetName = `${lineShort}_${busShort}_${dirLabel}`.slice(0, 31);
@@ -1094,6 +1099,8 @@ export default function BusNetworkPage() {
           const srcSheet = singleWb.worksheets[0];
           if (srcSheet) {
             const destSheet = wb.addWorksheet(sheetName);
+            destSheet.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
+            if (logo) addLogo(wb, destSheet, logo);
             srcSheet.eachRow((row, rowNumber) => {
               const destRow = destSheet.getRow(rowNumber);
               row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
