@@ -135,6 +135,15 @@ function normCity(v?: string | null) {
     .trim();
 }
 
+function expandBusImportAbbreviations(value?: string | null) {
+  return String(value ?? "")
+    .replace(/\bp\.\s*/gi, "ponte ")
+    .replace(/\bs\.\s*/gi, "santa ")
+    .replace(/\bc\.\s*/gi, "citta ")
+    .replace(/\bv\.\s*/gi, "via ")
+    .trim();
+}
+
 // Alias per stringhe ambigue che dopo lo stripping non producono un nome città riconoscibile
 // (es. "STAZIONE FS" da sola → dopo strip risulta "FS" che è troppo corto per il match)
 const CITY_ALIASES: Record<string, string> = {
@@ -195,16 +204,24 @@ function matchAcrossLines(
   direction: "arrival" | "departure"
 ): { stop: BusStop | null; line: BusLine | null; status: "ok" | "fuzzy" | "pending" } {
   const nc = normCity(city);
-  const expanded = normCity(city.replace(/\bp\.\s*/gi, "ponte ").replace(/\bs\.\s*/gi, "santa ").replace(/\bc\.\s*/gi, "citta "));
+  const expanded = normCity(expandBusImportAbbreviations(city));
   if (!nc || nc.length < 3) return { stop: null, line: null, status: "pending" };
+  const candidates = Array.from(new Set([nc, expanded].filter(Boolean)));
 
   const dirStops = stops.filter((s) => s.direction === direction);
   const findLine = (s: BusStop) => lines.find((l) => l.id === s.bus_line_id) ?? null;
 
   const exactMatches = dirStops.filter((s) =>
-    normCity(s.city) === nc || normCity(s.stop_name) === nc ||
-    normCity(s.city) === expanded || normCity(s.stop_name) === expanded ||
-    (s.pickup_note && normCity(s.pickup_note).includes(nc) && nc.length >= 4)
+    candidates.some((candidate) => {
+      const sc = normCity(s.city);
+      const sn = normCity(s.stop_name);
+      const sp = s.pickup_note ? normCity(s.pickup_note) : "";
+      return sc === candidate ||
+        sn === candidate ||
+        (candidate.includes(sc) && sc.length >= 5) ||
+        (candidate.includes(sn) && sn.length >= 5) ||
+        (sp && candidate.includes(sp) && (candidate.includes(sc) || candidate.includes(sn)));
+    })
   );
 
   if (exactMatches.length === 1) return { stop: exactMatches[0], line: findLine(exactMatches[0]), status: "ok" };

@@ -1336,6 +1336,15 @@ export async function POST(request: NextRequest) {
         return String(v ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
       }
 
+      function expandBusImportAbbreviations(value?: string | null) {
+        return String(value ?? "")
+          .replace(/\bp\.\s*/gi, "ponte ")
+          .replace(/\bs\.\s*/gi, "santa ")
+          .replace(/\bc\.\s*/gi, "citta ")
+          .replace(/\bv\.\s*/gi, "via ")
+          .trim();
+      }
+
       // Carica tutte le fermate attive del tenant per la direzione richiesta
       const [allStopsRes, allUnitsRes, existingSvcRes, hotelsRes] = await Promise.all([
         auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,stop_name,city,stop_order,pickup_note")
@@ -1408,23 +1417,39 @@ export async function POST(request: NextRequest) {
       }
 
       function findStopAuto(city: string): { stop: DBStop2 | null; fuzzy: boolean } {
-        const nc = normCityAuto(city);
-        if (!nc || nc.length < 3) return { stop: null, fuzzy: false };
-        // Exact: city/stop_name o pickup_note
-        const exact = allLineStops.find((s) =>
-          normCityAuto(s.city) === nc ||
-          normCityAuto(s.stop_name) === nc ||
-          (s.pickup_note && normCityAuto(s.pickup_note).includes(nc) && nc.length >= 4)
-        );
+        const candidates = Array.from(new Set([
+          normCityAuto(city),
+          normCityAuto(expandBusImportAbbreviations(city)),
+        ].filter((candidate) => candidate.length >= 3)));
+        if (candidates.length === 0) return { stop: null, fuzzy: false };
+
+        // Exact/high-confidence: city/stop_name match, abbreviation expansion, or
+        // stringhe tipo "S.MARIA DEGLI ANGELI HOTEL ANTONELLI" che contengono
+        // fermata + dettaglio punto carico. Queste non devono finire in pending.
+        const exact = allLineStops.find((s) => {
+          const sc = normCityAuto(s.city);
+          const sn = normCityAuto(s.stop_name);
+          const sp = s.pickup_note ? normCityAuto(s.pickup_note) : "";
+          return candidates.some((candidate) =>
+            candidate === sc ||
+            candidate === sn ||
+            (candidate.includes(sc) && sc.length >= 5) ||
+            (candidate.includes(sn) && sn.length >= 5) ||
+            (sp && candidate.includes(sp) && (candidate.includes(sc) || candidate.includes(sn)))
+          );
+        });
         if (exact) return { stop: exact, fuzzy: false };
-        // Fuzzy: substring + keyword overlap su pickup_note
+
+        // Fuzzy residuale: solo suggerimento, resta da validare.
         const fuzzy = allLineStops.find((s) => {
           const sc = normCityAuto(s.city);
           const sn = normCityAuto(s.stop_name);
           const sp = s.pickup_note ? normCityAuto(s.pickup_note) : "";
-          return sc.includes(nc) || nc.includes(sc) ||
-            sn.includes(nc) || nc.includes(sn) ||
-            (sp && nc.length >= 4 && (sp.includes(nc) || nc.includes(sp) || hasKeywordOverlapAuto(nc, sp)));
+          return candidates.some((candidate) =>
+            sc.includes(candidate) || candidate.includes(sc) ||
+            sn.includes(candidate) || candidate.includes(sn) ||
+            (sp && (sp.includes(candidate) || candidate.includes(sp) || hasKeywordOverlapAuto(candidate, sp)))
+          );
         });
         return { stop: fuzzy ?? null, fuzzy: !!fuzzy };
       }
