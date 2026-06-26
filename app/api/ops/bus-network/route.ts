@@ -159,7 +159,7 @@ function pickSameStopFirstBus<T extends { id: string; bus_line_id: string; capac
   if (input.stopId) {
     const sameStopBusIds = stopBusMap.get(`${input.lineId}:${input.stopId}`) ?? new Set<string>();
     const sameStop = lineUnits.find((unit) => sameStopBusIds.has(unit.id) && hasRoom(unit));
-    if (sameStopBusIds.size > 0) return sameStop ?? null;
+    if (sameStop) return sameStop;
   }
 
   if (input.preferredLabels?.length) {
@@ -1110,7 +1110,7 @@ export async function POST(request: NextRequest) {
         auth.admin.from("tenant_bus_lines").select("id,code,name,family_code").eq("tenant_id", tenantId),
         auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,direction,stop_name,city,stop_order").eq("tenant_id", tenantId).eq("active", true),
         auth.admin.from("tenant_bus_units").select("id,bus_line_id,label,capacity,status,sort_order").eq("tenant_id", tenantId).eq("active", true).order("sort_order"),
-        auth.admin.from("tenant_bus_allocations").select("id,service_id,bus_unit_id,pax_assigned").eq("tenant_id", tenantId)
+        auth.admin.from("tenant_bus_allocations").select("id,service_id,bus_unit_id,bus_line_id,stop_id,pax_assigned").eq("tenant_id", tenantId)
       ]);
       if (svcRes.error) throw new Error(svcRes.error.message);
       if (linesRes.error) throw new Error(linesRes.error.message);
@@ -1152,9 +1152,15 @@ export async function POST(request: NextRequest) {
       const assigned: Array<{ serviceId: string; customerName: string; busUnitId: string; busLabel: string; stopId: string | null; stopName: string; pax: number }> = [];
       const skipped: Array<{ serviceId: string; customerName: string; reason: string }> = [];
       const createdStopKeys = new Set<string>();
-      // Logica geografica: mappa busId → stopId primaria già assegnata al bus.
-      // Permette di raggruppare passeggeri della stessa fermata sullo stesso bus.
-      const busStopPrimary = new Map<string, string>(); // busId → stopId
+      // Mappa lineId:stopId → Set<busId> per raggruppare stessa fermata sullo stesso bus
+      const stopBusMap = new Map<string, Set<string>>();
+      for (const a of (allocRes.data ?? []) as Array<{ bus_unit_id: string; pax_assigned: number; service_id: string; stop_id?: string | null; bus_line_id?: string | null }>) {
+        if (a.stop_id && a.bus_line_id) {
+          const key = `${a.bus_line_id}:${a.stop_id}`;
+          if (!stopBusMap.has(key)) stopBusMap.set(key, new Set());
+          stopBusMap.get(key)!.add(a.bus_unit_id);
+        }
+      }
 
       type SvcRow = { id: string; customer_name: string; pax: number; direction: string; bus_city_origin?: string | null; transport_code?: string | null; time?: string | null; outbound_time?: string | null; service_type_code?: string | null; booking_service_kind?: string | null };
       const sortedServices = [...(services as SvcRow[])].sort((a, b) => {
@@ -1208,25 +1214,18 @@ export async function POST(request: NextRequest) {
 
         if (!stop) { skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: `Fermata non trovata per ${svc.bus_city_origin ?? "N/D"}` }); continue; }
 
-        // Scegli bus: riempimento sequenziale dal primo all'ultimo, stessa fermata sullo stesso bus
-        const buses = busesByLineId.get(line.id) ?? [];
         const reserved = new Set(["ITALIA PUGLIA", "ITALIA PUGLIA 2"]);
         const isPuglia = svc.transport_code === "LINEA_PUGLIA_ITALIA";
-        const preferred = isPuglia ? ["ITALIA PUGLIA", "ITALIA PUGLIA 2"] : [];
-        let chosenBus: SimUnit | null = null;
-        if (preferred.length) {
-          chosenBus = preferred.map((lbl) => buses.find((b) => b.label === lbl && b.remaining >= svc.pax) ?? null).find((b): b is SimUnit => b !== null) ?? null;
-        } else {
-          const nonReserved = buses.filter((b) => !reserved.has(b.label));
-          // 1. Bus che ha già la stessa fermata e ha posto
-          const sameStop = nonReserved.find((b) => busStopPrimary.get(b.id) === stop.id && b.remaining >= svc.pax);
-          if (sameStop) {
-            chosenBus = sameStop;
-          } else {
-            // 2. Primo bus in ordine con posto (riempimento sequenziale)
-            chosenBus = nonReserved.find((b) => b.remaining >= svc.pax) ?? null;
-          }
-        }
+        const preferred = isPuglia ? ["ITALIA PUGLIA", "ITALIA PUGLIA 2"] : undefined;
+        const excluded = isPuglia ? undefined : reserved;
+        const allLineUnits = (busesByLineId.get(line.id) ?? []) as Array<SimUnit & { label: string }>;
+        const chosenBus = pickSameStopFirstBus(allLineUnits, datePax, stopBusMap, {
+          lineId: line.id,
+          stopId: stop.id,
+          pax: svc.pax,
+          excludedLabels: excluded,
+          preferredLabels: preferred,
+        });
         if (!chosenBus) { skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: "Nessun bus disponibile" }); continue; }
 
         const { error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
@@ -1243,7 +1242,9 @@ export async function POST(request: NextRequest) {
         });
         if (allocErr) { skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: allocErr.message }); continue; }
 
-        if (!busStopPrimary.has(chosenBus.id)) busStopPrimary.set(chosenBus.id, stop.id);
+        const sbKey = `${line.id}:${stop.id}`;
+        if (!stopBusMap.has(sbKey)) stopBusMap.set(sbKey, new Set());
+        stopBusMap.get(sbKey)!.add(chosenBus.id);
         chosenBus.remaining -= svc.pax;
         datePax.set(chosenBus.id, (datePax.get(chosenBus.id) ?? 0) + svc.pax);
         assigned.push({ serviceId: svc.id, customerName: svc.customer_name, busUnitId: chosenBus.id, busLabel: chosenBus.label, stopId: stop.id, stopName: stop.stop_name, pax: svc.pax });
