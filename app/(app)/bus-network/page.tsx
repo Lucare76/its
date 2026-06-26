@@ -1044,6 +1044,7 @@ export default function BusNetworkPage() {
         const destSheet = combinedWb.addWorksheet(dir === "arrival" ? "Andata" : "Ritorno");
         destSheet.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
         if (logo) addLogo(combinedWb, destSheet, logo);
+        for (const merge of srcSheet.model.merges ?? []) destSheet.mergeCells(merge);
         srcSheet.eachRow((row, rowNumber) => {
           const destRow = destSheet.getRow(rowNumber);
           row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
@@ -1101,6 +1102,7 @@ export default function BusNetworkPage() {
             const destSheet = wb.addWorksheet(sheetName);
             destSheet.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
             if (logo) addLogo(wb, destSheet, logo);
+            for (const merge of srcSheet.model.merges ?? []) destSheet.mergeCells(merge);
             srcSheet.eachRow((row, rowNumber) => {
               const destRow = destSheet.getRow(rowNumber);
               row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
