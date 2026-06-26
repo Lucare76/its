@@ -757,7 +757,6 @@ export default function BusNetworkPage() {
     });
   }
 
-  // Costruisce il foglio in formato PARTENZE (per direzione "departure")
   function buildDepartureSheet(
     utils: import("xlsx").XLSX$Utils,
     allocs: AllocationDetail[],
@@ -765,24 +764,16 @@ export default function BusNetworkPage() {
     driverName?: string | null,
     driverPhone?: string | null
   ) {
-    const stopOrderMap = new Map<string, number>();
-    for (const s of stops) stopOrderMap.set(s.stop_name.toUpperCase(), s.stop_order);
-
-    // Righe passeggeri: ordina per orario P.KUP hotel (ritorno), poi nominativo
     const sorted = [...allocs].sort((a, b) => {
-      const ta = (a.hotel_pickup_time ?? a.stop_pickup_time ?? "99:99").slice(0, 5);
-      const tb = (b.hotel_pickup_time ?? b.stop_pickup_time ?? "99:99").slice(0, 5);
-      if (ta !== tb) return ta.localeCompare(tb);
+      const ha = (a.hotel_name ?? "").toUpperCase();
+      const hb = (b.hotel_name ?? "").toUpperCase();
+      if (ha !== hb) return ha.localeCompare(hb);
       return (a.customer_name ?? "").localeCompare(b.customer_name ?? "");
     });
 
-    // Header autista + titolo + intestazioni
     const aoa: (string | number)[][] = [
-      [`AUTISTA: ${driverName || "N/D"}`, "", "", "", "", "", "", ""],
-      [`CELL: ${driverPhone || "N/D"}`, "", "", "", "", "", "", ""],
-      ["", "", "", "", "", "", "", ""],
-      ["PARTENZE", "", "", "", "", "", "", ""],
-      ["P.KUP", "hotel partenza", "n° pax", "nominativo", "cell", "destinazione", "agenzia", "note"],
+      ["", "", "PARTENZE", "", "", "", ""],
+      ["hotel partenza", "n° pax", "nominativo", "cell", "destinazione", "agenzia", "note"],
     ];
 
     let totalPax = 0;
@@ -795,31 +786,26 @@ export default function BusNetworkPage() {
         .replace(/Agenzia:\s*[^·\n]+·?\s*/gi, "")
         .trim();
 
-      // hotel partenza = hotel in Ischia (dove sale il passeggero)
-      // destinazione   = solo il nome della fermata di scarico (senza note tecniche)
-      const hotelPartenza = alloc.hotel_name || hotelFromNotes;
-      const destinazione = alloc.stop_name;
+      const hotelPartenza = alloc.hotel_name || hotelFromNotes || "";
+      const stopNote = alloc.stop_pickup_note ?? "";
+      const destinazione = stopNote ? `${alloc.stop_name} - ${stopNote}` : alloc.stop_name;
 
       aoa.push([
-        (alloc.hotel_pickup_time ?? alloc.stop_pickup_time ?? "").slice(0, 5),
         hotelPartenza,
         alloc.pax_assigned,
         alloc.customer_name,
         alloc.customer_phone ?? "",
         destinazione,
-        alloc.agency_name || agencyFromNotes,
+        alloc.agency_name || agencyFromNotes || "",
         cleanNote,
       ]);
       totalPax += alloc.pax_assigned;
     }
 
-    // Riga vuota + TOTALE
-    aoa.push(["", "", "", "", "", "", "", ""]);
-    aoa.push(["", "TOTALE", totalPax, "", "", "", "", ""]);
+    aoa.push(["", "", "", "", "", "", ""]);
+    aoa.push(["TOTALE", totalPax, "", "", "", "", ""]);
 
-    // Sezione SCARICO: solo fermate con passeggeri, in ordine di stop_order
     const usedStopNames = new Set(sorted.map((a) => a.stop_name.toUpperCase()));
-    // SCARICO: fermate con passeggeri, ordinate geograficamente sud→nord (lat crescente)
     const usedStops = stops
       .filter((s) => usedStopNames.has(s.stop_name.toUpperCase()))
       .sort((a, b) => {
@@ -829,23 +815,97 @@ export default function BusNetworkPage() {
         return a.stop_order - b.stop_order;
       });
     if (usedStops.length > 0) {
-      aoa.push(["", "", "", "", "", "", "", ""]);
-      aoa.push(["SCARICO", "", "", "", "", "", "", ""]);
+      aoa.push(["", "", "", "", "", "", ""]);
+      aoa.push(["SCARICO", "", "", "", "", "", ""]);
       for (const stop of usedStops) {
-        aoa.push(["", "", "", stop.stop_name, "", "", "", ""]);
+        const label = stop.pickup_note ? `${stop.stop_name} - ${stop.pickup_note}` : stop.stop_name;
+        aoa.push([label, "", "", "", "", "", ""]);
       }
     }
 
-    const ws = utils.aoa_to_sheet(aoa as (string | number)[][]);
+    aoa.push(["", "", "", "", "", "", ""]);
+    const driverInfo = `AUTISTA : ${driverName || "N/D"}  ${driverPhone || ""}`.trim();
+    aoa.push([driverInfo, "", "", "", "", "", ""]);
+
+    const ws = utils.aoa_to_sheet(aoa);
     ws["!cols"] = [
-      { wch: 8 },  // P.KUP
       { wch: 22 }, // hotel partenza
       { wch: 7 },  // n° pax
       { wch: 30 }, // nominativo
       { wch: 16 }, // cell
-      { wch: 36 }, // destinazione
+      { wch: 40 }, // destinazione
       { wch: 20 }, // agenzia
       { wch: 22 }, // note
+    ];
+    return ws;
+  }
+
+  function buildArrivalSheet(
+    utils: import("xlsx").XLSX$Utils,
+    allocs: AllocationDetail[],
+    stops: BusStop[],
+    driverName?: string | null,
+    driverPhone?: string | null
+  ) {
+    const stopOrderMap = new Map<string, number>();
+    for (const s of stops) stopOrderMap.set(s.stop_name.toUpperCase(), s.stop_order);
+
+    const sorted = [...allocs].sort((a, b) => {
+      const oa = stopOrderMap.get(a.stop_name.toUpperCase()) ?? 9999;
+      const ob = stopOrderMap.get(b.stop_name.toUpperCase()) ?? 9999;
+      if (oa !== ob) return oa - ob;
+      return (a.service_time ?? "").localeCompare(b.service_time ?? "");
+    });
+
+    const aoa: (string | number)[][] = [
+      ["", "", "ARRIVI", "", "", "", "", ""],
+      ["orario", "punto di carico", "n° pax", "nominativo", "cell", "HOTEL", "note", "agenzia"],
+    ];
+
+    let totalPax = 0;
+    for (const alloc of sorted) {
+      const rawNotes = alloc.notes ?? "";
+      const hotelFromNotes = rawNotes.match(/Hotel:\s*([^·\n]+)/)?.[1]?.trim() ?? "";
+      const agencyFromNotes = rawNotes.match(/Agenzia:\s*([^·\n]+)/)?.[1]?.trim() ?? "";
+      const cleanNote = rawNotes
+        .replace(/Hotel:\s*[^·\n]+·?\s*/gi, "")
+        .replace(/Agenzia:\s*[^·\n]+·?\s*/gi, "")
+        .trim();
+
+      const stopTime = alloc.stop_pickup_time ?? "";
+      const orario = stopTime ? `${stopTime.slice(0, 5)} ${alloc.stop_name}` : alloc.stop_name;
+      const pickupNote = alloc.stop_pickup_note ?? "";
+
+      aoa.push([
+        orario,
+        pickupNote,
+        alloc.pax_assigned,
+        alloc.customer_name,
+        alloc.customer_phone ?? "",
+        alloc.hotel_name || hotelFromNotes || "",
+        cleanNote,
+        alloc.agency_name || agencyFromNotes || "",
+      ]);
+      totalPax += alloc.pax_assigned;
+    }
+
+    aoa.push(["", "", "", "", "", "", "", ""]);
+    aoa.push(["", "TOTALE", totalPax, "", "", "", "", ""]);
+    aoa.push(["", "", "", "", "", "", "", ""]);
+
+    const driverInfo = `AUTISTA : ${driverName || "N/D"}  ${driverPhone || ""}`.trim();
+    aoa.push([driverInfo, "", "", "", "", "", "", ""]);
+
+    const ws = utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [
+      { wch: 28 }, // orario (time + city)
+      { wch: 28 }, // punto di carico
+      { wch: 7 },  // n° pax
+      { wch: 30 }, // nominativo
+      { wch: 16 }, // cell
+      { wch: 24 }, // HOTEL
+      { wch: 12 }, // note
+      { wch: 20 }, // agenzia
     ];
     return ws;
   }
@@ -870,22 +930,11 @@ export default function BusNetworkPage() {
     const lineStopsForExport = payload.stops
       .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === direction)
       .sort((a, b) => a.stop_order - b.stop_order);
-    let ws;
-    if (direction === "departure") {
-      const allAllocs = busCards.flatMap((c) => c.allocations);
-      const firstUnit = busCards[0]?.unit;
-      ws = buildDepartureSheet(utils, allAllocs, lineStopsForExport, firstUnit?.driver_name_return, firstUnit?.driver_phone_return);
-    } else {
-      const rows: Record<string, string | number>[] = [];
-      for (const { unit, allocations: cardAllocs } of busCards) {
-        rows.push(...buildAllocRows(
-          { label: unit.label, driverName: unit.driver_name_outbound, driverPhone: unit.driver_phone_outbound },
-          cardAllocs, selectedLine?.name ?? "", lineStopsForExport
-        ));
-      }
-      ws = utils.json_to_sheet(rows);
-      (ws as Record<string, unknown>)["!cols"] = colWidths;
-    }
+    const allAllocs = busCards.flatMap((c) => c.allocations);
+    const firstUnit = busCards[0]?.unit;
+    const ws = direction === "departure"
+      ? buildDepartureSheet(utils, allAllocs, lineStopsForExport, firstUnit?.driver_name_return, firstUnit?.driver_phone_return)
+      : buildArrivalSheet(utils, allAllocs, lineStopsForExport, firstUnit?.driver_name_outbound, firstUnit?.driver_phone_outbound);
     const wb = utils.book_new();
     utils.book_append_sheet(wb, ws as never, (selectedLine?.name ?? "Bus").slice(0, 31));
     writeFile(wb, `bus_${selectedLine?.code ?? "export"}_${date}_${direction === "arrival" ? "Andata" : "Ritorno"}.xlsx`);
@@ -908,17 +957,9 @@ export default function BusNetworkPage() {
       const stopsForDir = payload.stops
         .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === dir)
         .sort((a, b) => a.stop_order - b.stop_order);
-      let ws;
-      if (dir === "departure") {
-        ws = buildDepartureSheet(utils, dirAllocs, stopsForDir, targetCard.unit.driver_name_return, targetCard.unit.driver_phone_return);
-      } else {
-        const rows = buildAllocRows(
-          { label: targetCard.unit.label, driverName: targetCard.unit.driver_name_outbound, driverPhone: targetCard.unit.driver_phone_outbound },
-          dirAllocs, lineName, stopsForDir
-        );
-        ws = utils.json_to_sheet(rows);
-        (ws as Record<string, unknown>)["!cols"] = colWidths;
-      }
+      const ws = dir === "departure"
+        ? buildDepartureSheet(utils, dirAllocs, stopsForDir, targetCard.unit.driver_name_return, targetCard.unit.driver_phone_return)
+        : buildArrivalSheet(utils, dirAllocs, stopsForDir, targetCard.unit.driver_name_outbound, targetCard.unit.driver_phone_outbound);
       utils.book_append_sheet(wb, ws as never, dir === "arrival" ? "Andata" : "Ritorno");
     }
     if (wb.SheetNames.length === 0) return;
@@ -947,17 +988,9 @@ export default function BusNetworkPage() {
           const stopsForDir = payload.stops
             .filter((s) => s.bus_line_id === line.id && s.direction === dir)
             .sort((a, b) => a.stop_order - b.stop_order);
-          let ws;
-          if (dir === "departure") {
-            ws = buildDepartureSheet(utils, unitAllocs, stopsForDir, unit.driver_name_return, unit.driver_phone_return);
-          } else {
-            const rows = buildAllocRows(
-              { label: unit.label, driverName: unit.driver_name_outbound, driverPhone: unit.driver_phone_outbound },
-              unitAllocs, line.name, stopsForDir
-            );
-            ws = utils.json_to_sheet(rows);
-            (ws as Record<string, unknown>)["!cols"] = colWidths;
-          }
+          const ws = dir === "departure"
+            ? buildDepartureSheet(utils, unitAllocs, stopsForDir, unit.driver_name_return, unit.driver_phone_return)
+            : buildArrivalSheet(utils, unitAllocs, stopsForDir, unit.driver_name_outbound, unit.driver_phone_outbound);
           // Nome foglio univoco ≤ 31 char: LineaCode_BusLabel_Dir
           const lineShort = (line.code ?? line.name).slice(0, 14);
           const busShort = unit.label.replace(/\s+/g, "").slice(0, 12);
