@@ -244,7 +244,7 @@ export async function GET(request: NextRequest) {
     .select("id, wa_id, phone_e164, customer_id, booking_id, transfer_id, last_message_at, last_message_preview, unread_count, assigned_to, status, match_status, match_suggestions, created_at, updated_at, whatsapp_contacts(profile_name,customer_full_name,manual_contact_name,wa_profile_name)")
     .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
     .order("last_message_at", { ascending: false, nullsFirst: false })
-    .limit(filter === "all" ? 1000 : 100);
+    .limit(filter === "all" ? 5000 : 100);
 
   if (filter === "unread") threadQuery = threadQuery.neq("status", "closed").gt("unread_count", 0);
   if (filter === "needs_review") threadQuery = threadQuery.eq("status", "needs_review");
