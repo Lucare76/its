@@ -22,6 +22,14 @@ type ExportStop = {
   lat?: number | null;
 };
 
+function shortenHotelName(name: string): string {
+  return name
+    .replace(/\b(hotel|albergo|terme|resort|spa|club|grand|park|relax|boutique)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase() || name.toUpperCase();
+}
+
 function extractFromNotes(rawNotes: string) {
   const hotelFromNotes = rawNotes.match(/Hotel:\s*([^·\n]+)/)?.[1]?.trim() ?? "";
   const agencyFromNotes = rawNotes.match(/Agenzia:\s*([^·\n]+)/)?.[1]?.trim() ?? "";
@@ -134,7 +142,7 @@ export async function buildArrivalWorkbook(
       alloc.pax_assigned,
       alloc.customer_name,
       alloc.customer_phone ?? "",
-      alloc.hotel_name || hotelFromNotes || "",
+      shortenHotelName(alloc.hotel_name || hotelFromNotes || ""),
       cleanNote,
       alloc.agency_name || agencyFromNotes || "",
     ]);
@@ -206,7 +214,7 @@ export async function buildDepartureWorkbook(
   let totalPax = 0;
   for (const alloc of sorted) {
     const { hotelFromNotes, agencyFromNotes, cleanNote } = extractFromNotes(alloc.notes ?? "");
-    const hotelPartenza = alloc.hotel_name || hotelFromNotes || "";
+    const hotelPartenza = shortenHotelName(alloc.hotel_name || hotelFromNotes || "");
     const stopNote = alloc.stop_pickup_note ?? "";
     const destinazione = stopNote ? `${alloc.stop_name} - ${stopNote}` : alloc.stop_name;
     const row = ws.addRow([
