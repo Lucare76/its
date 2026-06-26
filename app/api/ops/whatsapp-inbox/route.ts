@@ -873,12 +873,12 @@ export async function POST(request: NextRequest) {
     .eq("id", thread.id);
 
   if (updateError) {
-    console.error("WhatsApp inbox reply thread update failed", {
+    console.warn("WhatsApp inbox reply thread update failed (non-fatal)", {
       hasWaId: Boolean(thread.wa_id),
       normalizedPhonePresent: Boolean(sendResult.phoneE164),
-      error: updateError.message
+      error: updateError.message,
+      code: updateError.code ?? null
     });
-    return NextResponse.json({ error: "Messaggio inviato ma thread non aggiornato" }, { status: 500 });
   }
 
   await logWhatsAppEvent(auth.admin, {

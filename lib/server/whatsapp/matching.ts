@@ -7,7 +7,6 @@ type ServiceRow = {
   tenant_id: string;
   customer_name: string | null;
   phone: string | null;
-  phone_e164: string | null;
   date: string | null;
   time: string | null;
   notes?: string | null;
@@ -28,7 +27,7 @@ function toSuggestion(row: ServiceRow, reason: string): WhatsAppServiceSuggestio
     tenant_id: row.tenant_id,
     customer_name: row.customer_name,
     phone: row.phone,
-    phone_e164: row.phone_e164,
+    phone_e164: null,
     date: row.date,
     time: row.time,
     booking_service_kind: row.booking_service_kind ?? null,
@@ -110,24 +109,18 @@ export async function matchWhatsAppInboundMessage(
 ): Promise<WhatsAppMatchResult> {
   const normalizedPhone = input.phoneE164 ?? normalizeWhatsAppWaId(input.waId);
   const exactPhones = Array.from(new Set([input.waId, normalizedPhone].filter(Boolean)));
-  const serviceColumns = "id, tenant_id, customer_name, phone, phone_e164, date, time, notes, message_id, external_code, source_quote_id, booking_service_kind, hotel_id";
-  const [exactPhone, exactPhoneE164] = await Promise.all([
-    exactPhones.length
-      ? admin.from("services").select(serviceColumns).in("phone", exactPhones).order("date", { ascending: true }).limit(20)
-      : Promise.resolve({ data: [], error: null }),
-    exactPhones.length
-      ? admin.from("services").select(serviceColumns).in("phone_e164", exactPhones).order("date", { ascending: true }).limit(20)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
-  if (exactPhone.error || exactPhoneE164.error) {
+  const serviceColumns = "id, tenant_id, customer_name, phone, date, time, notes, message_id, external_code, source_quote_id, booking_service_kind, hotel_id";
+  const exactPhone = exactPhones.length
+    ? await admin.from("services").select(serviceColumns).in("phone", exactPhones).order("date", { ascending: true }).limit(20)
+    : { data: [], error: null };
+  if (exactPhone.error) {
     console.error("WhatsApp inbound exact service lookup failed", {
-      phoneError: exactPhone.error?.message ?? null,
-      phoneE164Error: exactPhoneE164.error?.message ?? null
+      phoneError: exactPhone.error.message
     });
   }
 
   const exactSuggestions = uniqueServices(
-    ([...(exactPhone.data ?? []), ...(exactPhoneE164.data ?? [])] as ServiceRow[]).map((row) => toSuggestion(row, "phone_exact"))
+    ((exactPhone.data ?? []) as ServiceRow[]).map((row) => toSuggestion(row, "phone_exact"))
   );
   const exactResult = resolveFromSuggestions(exactSuggestions);
   if (exactResult.status === "matched") return exactResult;
@@ -148,7 +141,7 @@ export async function matchWhatsAppInboundMessage(
     }
 
     const normalizedMatches = ((recentRows ?? []) as ServiceRow[])
-      .filter((row) => phoneComparable(row.phone_e164) === comparable || phoneComparable(row.phone) === comparable)
+      .filter((row) => phoneComparable(row.phone) === comparable)
       .map((row) => toSuggestion(row, "phone_normalized"));
     const normalizedResult = resolveFromSuggestions(normalizedMatches);
     if (normalizedResult.status === "matched") return normalizedResult;
