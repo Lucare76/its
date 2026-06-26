@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import BusImportModal from "./BusImportModal";
@@ -210,6 +210,30 @@ export default function BusNetworkPage() {
 
   // Geo sort progress
   const [geoSorting, setGeoSorting] = useState(false);
+
+  // Synchronized horizontal scroll for bus cards
+  const busCardsRef = useRef<HTMLDivElement>(null);
+  const topScrollRef = useRef<HTMLDivElement>(null);
+  const topScrollInnerRef = useRef<HTMLDivElement>(null);
+  const syncingScroll = useRef(false);
+  const syncScroll = useCallback((source: "top" | "bottom") => {
+    if (syncingScroll.current) return;
+    syncingScroll.current = true;
+    const from = source === "top" ? topScrollRef.current : busCardsRef.current;
+    const to = source === "top" ? busCardsRef.current : topScrollRef.current;
+    if (from && to) to.scrollLeft = from.scrollLeft;
+    requestAnimationFrame(() => { syncingScroll.current = false; });
+  }, []);
+  useEffect(() => {
+    const el = busCardsRef.current;
+    const inner = topScrollInnerRef.current;
+    if (!el || !inner) return;
+    const sync = () => { inner.style.width = el.scrollWidth + "px"; };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
 
   // Distribuzione Ischia
   const [dragDistAllocId, setDragDistAllocId] = useState<string | null>(null);
@@ -1426,7 +1450,11 @@ export default function BusNetworkPage() {
               })()}
 
               {/* Bus cards */}
-              {activeTab === "bus" && <div className="flex flex-nowrap gap-4 overflow-x-auto pb-2">
+              {activeTab === "bus" && <>
+              <div ref={topScrollRef} className="overflow-x-auto" onScroll={() => syncScroll("top")}>
+                <div ref={topScrollInnerRef} style={{ height: 1 }} />
+              </div>
+              <div ref={busCardsRef} className="flex flex-nowrap gap-4 overflow-x-auto pb-2" onScroll={() => syncScroll("bottom")}>
                 {busCards.map(({ unit, allocations: cardAllocs }) => {
                   const paxTotal = cardAllocs.reduce((sum, a) => sum + a.pax_assigned, 0);
                   const remainingSeats = Math.max(0, unit.capacity - paxTotal);
@@ -1990,7 +2018,7 @@ export default function BusNetworkPage() {
                     + Aggiungi bus
                   </button>
                 </div>
-              </div>}
+              </div></>}
 
               {/* ── Distribuzione Ischia ── */}
               {activeTab === "bus" && direction === "arrival" && (
