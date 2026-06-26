@@ -1811,31 +1811,85 @@ export async function POST(request: NextRequest) {
 
       const a = alloc as { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; direction: string; pax_assigned: number; notes?: string | null };
 
-      // Leggi fermata destinazione
-      const { data: targetStop } = await auth.admin
-        .from("tenant_bus_line_stops")
-        .select("stop_name")
-        .eq("id", parsed.target_stop_id)
+      // Leggi fermata e bus destinazione prima di toccare l'allocazione corrente.
+      const [{ data: targetStop, error: targetStopErr }, { data: targetUnit, error: targetUnitErr }] = await Promise.all([
+        auth.admin
+          .from("tenant_bus_line_stops")
+          .select("id,bus_line_id,direction,stop_name,active")
+          .eq("tenant_id", tenantId)
+          .eq("id", parsed.target_stop_id)
+          .single(),
+        auth.admin
+          .from("tenant_bus_units")
+          .select("id,bus_line_id,capacity,status")
+          .eq("tenant_id", tenantId)
+          .eq("id", parsed.target_bus_unit_id)
+          .single()
+      ]);
+      if (targetStopErr || !targetStop) return NextResponse.json({ ok: false, error: "Fermata destinazione non trovata." }, { status: 404 });
+      if (targetUnitErr || !targetUnit) return NextResponse.json({ ok: false, error: "Bus destinazione non trovato." }, { status: 404 });
+
+      const stopRow = targetStop as { id: string; bus_line_id: string; direction: string; stop_name: string; active: boolean };
+      const unitRow = targetUnit as { id: string; bus_line_id: string; capacity: number; status: string };
+      if (!stopRow.active || stopRow.bus_line_id !== parsed.target_bus_line_id || stopRow.direction !== a.direction) {
+        return NextResponse.json({ ok: false, error: "Fermata destinazione non coerente con linea/direzione." }, { status: 400 });
+      }
+      if (unitRow.bus_line_id !== parsed.target_bus_line_id || unitRow.status === "closed" || unitRow.status === "completed") {
+        return NextResponse.json({ ok: false, error: "Bus destinazione non coerente o chiuso." }, { status: 400 });
+      }
+
+      const { data: serviceRow, error: serviceErr } = await auth.admin
+        .from("services")
+        .select("date,direction")
+        .eq("tenant_id", tenantId)
+        .eq("id", a.service_id)
         .single();
-      const targetStopName = (targetStop as { stop_name: string } | null)?.stop_name ?? "";
+      if (serviceErr || !serviceRow) return NextResponse.json({ ok: false, error: "Servizio allocazione non trovato." }, { status: 404 });
 
-      // Elimina allocazione corrente
-      await auth.admin.from("tenant_bus_allocations").delete().eq("tenant_id", tenantId).eq("id", parsed.allocation_id);
+      const sameDateServices = await auth.admin
+        .from("services")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("date", (serviceRow as { date: string }).date)
+        .eq("direction", (serviceRow as { direction: string }).direction);
+      if (sameDateServices.error) throw new Error(sameDateServices.error.message);
+      const sameDateServiceIds = (sameDateServices.data ?? []).map((row: { id: string }) => row.id);
 
-      // Crea nuova allocazione sulla linea/bus/fermata di destinazione
-      const { error: newAllocErr } = await auth.admin.rpc("allocate_bus_service", {
-        p_tenant_id: tenantId,
-        p_service_id: a.service_id,
-        p_bus_line_id: parsed.target_bus_line_id,
-        p_bus_unit_id: parsed.target_bus_unit_id,
-        p_stop_id: parsed.target_stop_id,
-        p_stop_name: targetStopName,
-        p_direction: a.direction as "arrival" | "departure",
-        p_pax_assigned: a.pax_assigned,
-        p_notes: a.notes ?? null,
-        p_created_by_user_id: auth.user.id,
-      });
-      if (newAllocErr) throw new Error(newAllocErr.message);
+      let targetBusPax = 0;
+      if (sameDateServiceIds.length > 0) {
+        const { data: targetAllocations, error: targetAllocationsErr } = await auth.admin
+          .from("tenant_bus_allocations")
+          .select("id,pax_assigned")
+          .eq("tenant_id", tenantId)
+          .eq("bus_unit_id", parsed.target_bus_unit_id)
+          .in("service_id", sameDateServiceIds);
+        if (targetAllocationsErr) throw new Error(targetAllocationsErr.message);
+        targetBusPax = (targetAllocations ?? []).reduce((sum: number, row: { id: string; pax_assigned: number | null }) => {
+          return row.id === a.id ? sum : sum + Number(row.pax_assigned ?? 0);
+        }, 0);
+      }
+      if (targetBusPax + a.pax_assigned > unitRow.capacity) {
+        return NextResponse.json({ ok: false, error: "Capienza bus destinazione superata." }, { status: 400 });
+      }
+
+      const targetStopName = stopRow.stop_name;
+      const { error: updateAllocErr } = await auth.admin
+        .from("tenant_bus_allocations")
+        .update({
+          bus_line_id: parsed.target_bus_line_id,
+          bus_unit_id: parsed.target_bus_unit_id,
+          stop_id: parsed.target_stop_id,
+          stop_name: targetStopName,
+        })
+        .eq("tenant_id", tenantId)
+        .eq("id", parsed.allocation_id);
+      if (updateAllocErr) throw new Error(updateAllocErr.message);
+
+      await auth.admin
+        .from("services")
+        .update({ bus_city_origin: targetStopName })
+        .eq("tenant_id", tenantId)
+        .eq("id", a.service_id);
 
       // Traccia nel log movimenti
       await auth.admin.from("tenant_bus_allocation_moves").insert({
