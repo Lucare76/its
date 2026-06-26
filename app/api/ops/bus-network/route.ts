@@ -114,6 +114,40 @@ async function checkAndAlertLowSeats(
 
 export const runtime = "nodejs";
 
+function pickSameStopFirstBus<T extends { id: string; bus_line_id: string; capacity: number; label?: string }>(
+  units: T[],
+  datePaxMap: Map<string, number>,
+  stopBusMap: Map<string, Set<string>>,
+  input: {
+    lineId: string;
+    stopId: string | null;
+    pax: number;
+    excludedLabels?: Set<string>;
+    preferredLabels?: string[];
+  }
+): T | null {
+  const lineUnits = units.filter((unit) =>
+    unit.bus_line_id === input.lineId &&
+    !input.excludedLabels?.has(unit.label ?? "")
+  );
+  const hasRoom = (unit: T) => unit.capacity - (datePaxMap.get(unit.id) ?? 0) >= input.pax;
+
+  if (input.stopId) {
+    const sameStopBusIds = stopBusMap.get(`${input.lineId}:${input.stopId}`) ?? new Set<string>();
+    const sameStop = lineUnits.find((unit) => sameStopBusIds.has(unit.id) && hasRoom(unit));
+    if (sameStopBusIds.size > 0) return sameStop ?? null;
+  }
+
+  if (input.preferredLabels?.length) {
+    const preferred = input.preferredLabels
+      .map((label) => lineUnits.find((unit) => unit.label === label && hasRoom(unit)) ?? null)
+      .find((unit): unit is T => Boolean(unit));
+    if (preferred) return preferred;
+  }
+
+  return lineUnits.find(hasRoom) ?? null;
+}
+
 const unitUpdateSchema = z.object({
   unit_id: z.string().uuid(),
   capacity: z.number().int().min(1).max(120),
@@ -1182,6 +1216,15 @@ export async function POST(request: NextRequest) {
         return String(v ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
       }
 
+      const existingServicesRes = await auth.admin
+        .from("services")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("date", parsed.travel_date)
+        .eq("direction", parsed.direction);
+      if (existingServicesRes.error) throw new Error(existingServicesRes.error.message);
+      const existingServiceIds = (existingServicesRes.data ?? []).map((service: { id: string }) => service.id);
+
       // Carica fermate e bus della linea
       const [stopsRes, unitsRes, allocRes] = await Promise.all([
         auth.admin.from("tenant_bus_line_stops").select("id,stop_name,city,stop_order")
@@ -1190,22 +1233,31 @@ export async function POST(request: NextRequest) {
         auth.admin.from("tenant_bus_units").select("id,label,capacity,status")
           .eq("tenant_id", tenantId).eq("bus_line_id", parsed.bus_line_id)
           .not("status", "in", '("closed","completed")').order("sort_order"),
-        auth.admin.from("tenant_bus_allocations").select("bus_unit_id,pax_assigned,service_id")
-          .eq("tenant_id", tenantId),
+        existingServiceIds.length > 0
+          ? auth.admin.from("tenant_bus_allocations").select("bus_line_id,bus_unit_id,stop_id,pax_assigned,service_id")
+            .eq("tenant_id", tenantId).in("service_id", existingServiceIds)
+          : Promise.resolve({ data: [], error: null }),
       ]);
       if (stopsRes.error) throw new Error(stopsRes.error.message);
       if (unitsRes.error) throw new Error(unitsRes.error.message);
       if (allocRes.error) throw new Error(allocRes.error.message);
 
       type DBStop = { id: string; stop_name: string; city: string; stop_order: number };
-      type DBUnit = { id: string; label: string; capacity: number; status: string };
+      type DBUnit = { id: string; bus_line_id: string; label: string; capacity: number; status: string };
       const lineStops = (stopsRes.data ?? []) as DBStop[];
-      const units = (unitsRes.data ?? []) as DBUnit[];
+      const units = (unitsRes.data ?? []).map((unit: Omit<DBUnit, "bus_line_id">) => ({ ...unit, bus_line_id: parsed.bus_line_id })) as DBUnit[];
 
       // Calcola pax per data per bus
       const datePaxMap = new Map<string, number>();
-      for (const a of (allocRes.data ?? []) as Array<{ bus_unit_id: string; pax_assigned: number }>) {
+      const stopBusMap = new Map<string, Set<string>>();
+      for (const a of (allocRes.data ?? []) as Array<{ bus_line_id: string; bus_unit_id: string; stop_id: string | null; pax_assigned: number }>) {
         datePaxMap.set(a.bus_unit_id, (datePaxMap.get(a.bus_unit_id) ?? 0) + a.pax_assigned);
+        if (a.stop_id) {
+          const key = `${a.bus_line_id}:${a.stop_id}`;
+          const busIds = stopBusMap.get(key) ?? new Set<string>();
+          busIds.add(a.bus_unit_id);
+          stopBusMap.set(key, busIds);
+        }
       }
 
       function findStop(city: string): { stop: DBStop | null; fuzzy: boolean } {
@@ -1220,12 +1272,12 @@ export async function POST(request: NextRequest) {
         return { stop: fuzzy ?? null, fuzzy: !!fuzzy };
       }
 
-      function pickBus(pax: number): DBUnit | null {
-        const scored = units
-          .map((u) => ({ u, remaining: u.capacity - (datePaxMap.get(u.id) ?? 0) }))
-          .filter((x) => x.remaining >= pax)
-          .sort((a, b) => a.remaining - b.remaining);
-        return scored[0]?.u ?? null;
+      function pickBus(pax: number, stopId: string | null): DBUnit | null {
+        return pickSameStopFirstBus(units, datePaxMap, stopBusMap, {
+          lineId: parsed.bus_line_id,
+          stopId,
+          pax,
+        });
       }
 
       let assigned = 0;
@@ -1236,7 +1288,7 @@ export async function POST(request: NextRequest) {
 
         if (stop && !fuzzy) {
           // Fermata trovata: crea servizio + alloca
-          const bus = pickBus(row.pax);
+          const bus = pickBus(row.pax, stop.id);
           if (bus) {
             const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
               tenant_id: tenantId,
@@ -1274,6 +1326,10 @@ export async function POST(request: NextRequest) {
             }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
 
             datePaxMap.set(bus.id, (datePaxMap.get(bus.id) ?? 0) + row.pax);
+            const stopKey = `${parsed.bus_line_id}:${stop.id}`;
+            const busIds = stopBusMap.get(stopKey) ?? new Set<string>();
+            busIds.add(bus.id);
+            stopBusMap.set(stopKey, busIds);
             assigned++;
           } else {
             // Nessun bus disponibile → da validare
@@ -1381,12 +1437,12 @@ export async function POST(request: NextRequest) {
 
       const existingSvcIds = (existingSvcRes.data ?? []).map((s: { id: string }) => s.id);
       // Se non ci sono servizi per questa data, non ci sono allocazioni → mappa vuota
-      let allocData: Array<{ bus_unit_id: string; pax_assigned: number }> = [];
+      let allocData: Array<{ bus_line_id: string; bus_unit_id: string; stop_id: string | null; pax_assigned: number }> = [];
       if (existingSvcIds.length > 0) {
-        const allocRes = await auth.admin.from("tenant_bus_allocations").select("bus_unit_id,pax_assigned")
+        const allocRes = await auth.admin.from("tenant_bus_allocations").select("bus_line_id,bus_unit_id,stop_id,pax_assigned")
           .eq("tenant_id", tenantId).in("service_id", existingSvcIds);
         if (allocRes.error) throw new Error(allocRes.error.message);
-        allocData = (allocRes.data ?? []) as Array<{ bus_unit_id: string; pax_assigned: number }>;
+        allocData = (allocRes.data ?? []) as Array<{ bus_line_id: string; bus_unit_id: string; stop_id: string | null; pax_assigned: number }>;
       }
 
       type DBStop2 = { id: string; bus_line_id: string; stop_name: string; city: string; stop_order: number; pickup_note?: string | null };
@@ -1396,8 +1452,15 @@ export async function POST(request: NextRequest) {
 
       // Mappa pax correnti per bus unit (solo per la data di viaggio)
       const datePaxMap2 = new Map<string, number>();
+      const stopBusMap2 = new Map<string, Set<string>>();
       for (const a of allocData) {
         datePaxMap2.set(a.bus_unit_id, (datePaxMap2.get(a.bus_unit_id) ?? 0) + a.pax_assigned);
+        if (a.stop_id) {
+          const key = `${a.bus_line_id}:${a.stop_id}`;
+          const busIds = stopBusMap2.get(key) ?? new Set<string>();
+          busIds.add(a.bus_unit_id);
+          stopBusMap2.set(key, busIds);
+        }
       }
 
       const STOP_WORDS_AUTO = new Set([
@@ -1484,11 +1547,12 @@ export async function POST(request: NextRequest) {
         return { stop: null, fuzzy: false };
       }
 
-      function pickBusForLine(lineId: string, pax: number): DBUnit2 | null {
-        // Riempie i bus in ordine sequenziale (sort_order): prima riempie completamente il primo, poi passa al secondo
-        const lineUnits = [...allUnits.filter((u) => u.bus_line_id === lineId)];
-        // allUnits è già ordinato per sort_order (query ordina .order("sort_order"))
-        return lineUnits.find((u) => (u.capacity - (datePaxMap2.get(u.id) ?? 0)) >= pax) ?? null;
+      function pickBusForLine(lineId: string, stopId: string | null, pax: number): DBUnit2 | null {
+        return pickSameStopFirstBus(allUnits, datePaxMap2, stopBusMap2, {
+          lineId,
+          stopId,
+          pax,
+        });
       }
 
       let assigned2 = 0;
@@ -1514,7 +1578,7 @@ export async function POST(request: NextRequest) {
         const fuzzy = resolvedFuzzy;
 
         if (stop && !fuzzy) {
-          const bus = pickBusForLine(stop.bus_line_id, row.pax);
+          const bus = pickBusForLine(stop.bus_line_id, stop.id, row.pax);
           if (bus) {
             const pickupTime = parsed.direction === "departure" ? resolvePickupTime(row.hotel, stop.bus_line_id) : "00:00";
             const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
@@ -1577,6 +1641,10 @@ export async function POST(request: NextRequest) {
             }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
 
             datePaxMap2.set(bus.id, (datePaxMap2.get(bus.id) ?? 0) + row.pax);
+            const stopKey = `${stop.bus_line_id}:${stop.id}`;
+            const busIds = stopBusMap2.get(stopKey) ?? new Set<string>();
+            busIds.add(bus.id);
+            stopBusMap2.set(stopKey, busIds);
             assigned2++;
           } else {
             // Nessun bus disponibile sulla linea → da validare
@@ -1821,7 +1889,7 @@ export async function POST(request: NextRequest) {
           .single(),
         auth.admin
           .from("tenant_bus_units")
-          .select("id,bus_line_id,capacity,status")
+          .select("id,bus_line_id,label,capacity,status")
           .eq("tenant_id", tenantId)
           .eq("id", parsed.target_bus_unit_id)
           .single()
@@ -1830,7 +1898,7 @@ export async function POST(request: NextRequest) {
       if (targetUnitErr || !targetUnit) return NextResponse.json({ ok: false, error: "Bus destinazione non trovato." }, { status: 404 });
 
       const stopRow = targetStop as { id: string; bus_line_id: string; direction: string; stop_name: string; active: boolean };
-      const unitRow = targetUnit as { id: string; bus_line_id: string; capacity: number; status: string };
+      let unitRow = targetUnit as { id: string; bus_line_id: string; capacity: number; status: string; label?: string };
       if (!stopRow.active || stopRow.bus_line_id !== parsed.target_bus_line_id || stopRow.direction !== a.direction) {
         return NextResponse.json({ ok: false, error: "Fermata destinazione non coerente con linea/direzione." }, { status: 400 });
       }
@@ -1855,19 +1923,58 @@ export async function POST(request: NextRequest) {
       if (sameDateServices.error) throw new Error(sameDateServices.error.message);
       const sameDateServiceIds = (sameDateServices.data ?? []).map((row: { id: string }) => row.id);
 
-      let targetBusPax = 0;
+      let targetLineAllocations: Array<{ id: string; bus_line_id: string; bus_unit_id: string; stop_id: string | null; pax_assigned: number | null }> = [];
       if (sameDateServiceIds.length > 0) {
-        const { data: targetAllocations, error: targetAllocationsErr } = await auth.admin
+        const { data, error } = await auth.admin
           .from("tenant_bus_allocations")
-          .select("id,pax_assigned")
+          .select("id,bus_line_id,bus_unit_id,stop_id,pax_assigned")
           .eq("tenant_id", tenantId)
-          .eq("bus_unit_id", parsed.target_bus_unit_id)
+          .eq("bus_line_id", parsed.target_bus_line_id)
           .in("service_id", sameDateServiceIds);
-        if (targetAllocationsErr) throw new Error(targetAllocationsErr.message);
-        targetBusPax = (targetAllocations ?? []).reduce((sum: number, row: { id: string; pax_assigned: number | null }) => {
-          return row.id === a.id ? sum : sum + Number(row.pax_assigned ?? 0);
-        }, 0);
+        if (error) throw new Error(error.message);
+        targetLineAllocations = data ?? [];
       }
+
+      const { data: targetLineUnits, error: targetLineUnitsErr } = await auth.admin
+        .from("tenant_bus_units")
+        .select("id,bus_line_id,label,capacity,status")
+        .eq("tenant_id", tenantId)
+        .eq("bus_line_id", parsed.target_bus_line_id)
+        .order("sort_order");
+      if (targetLineUnitsErr) throw new Error(targetLineUnitsErr.message);
+
+      const targetDatePax = new Map<string, number>();
+      const targetStopBusMap = new Map<string, Set<string>>();
+      for (const allocation of targetLineAllocations) {
+        if (allocation.id === a.id) continue;
+        targetDatePax.set(allocation.bus_unit_id, (targetDatePax.get(allocation.bus_unit_id) ?? 0) + Number(allocation.pax_assigned ?? 0));
+        if (allocation.stop_id) {
+          const key = `${allocation.bus_line_id}:${allocation.stop_id}`;
+          const busIds = targetStopBusMap.get(key) ?? new Set<string>();
+          busIds.add(allocation.bus_unit_id);
+          targetStopBusMap.set(key, busIds);
+        }
+      }
+
+      const effectiveUnit = pickSameStopFirstBus(
+        ((targetLineUnits ?? []) as Array<{ id: string; bus_line_id: string; label: string; capacity: number; status: string }>)
+          .filter((unit) => unit.status !== "closed" && unit.status !== "completed"),
+        targetDatePax,
+        targetStopBusMap,
+        {
+          lineId: parsed.target_bus_line_id,
+          stopId: parsed.target_stop_id,
+          pax: a.pax_assigned,
+          preferredLabels: unitRow.label ? [unitRow.label] : undefined,
+        }
+      );
+      const targetStopBusIds = targetStopBusMap.get(`${parsed.target_bus_line_id}:${parsed.target_stop_id}`) ?? new Set<string>();
+      if (!effectiveUnit && targetStopBusIds.size > 0) {
+        return NextResponse.json({ ok: false, error: "Fermata gia' presente su un bus senza capienza: spostamento bloccato per non spezzare la fermata." }, { status: 400 });
+      }
+      if (effectiveUnit) unitRow = effectiveUnit;
+
+      const targetBusPax = targetDatePax.get(unitRow.id) ?? 0;
       if (targetBusPax + a.pax_assigned > unitRow.capacity) {
         return NextResponse.json({ ok: false, error: "Capienza bus destinazione superata." }, { status: 400 });
       }
@@ -1877,7 +1984,7 @@ export async function POST(request: NextRequest) {
         .from("tenant_bus_allocations")
         .update({
           bus_line_id: parsed.target_bus_line_id,
-          bus_unit_id: parsed.target_bus_unit_id,
+          bus_unit_id: unitRow.id,
           stop_id: parsed.target_stop_id,
           stop_name: targetStopName,
         })
@@ -1896,7 +2003,7 @@ export async function POST(request: NextRequest) {
         tenant_id: tenantId,
         service_id: a.service_id,
         from_bus_unit_id: a.bus_unit_id,
-        to_bus_unit_id: parsed.target_bus_unit_id,
+        to_bus_unit_id: unitRow.id,
         stop_name: targetStopName,
         pax_moved: a.pax_assigned,
         reason: `Trasferito a linea diversa`,
