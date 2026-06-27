@@ -1,15 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui";
 import { supabase } from "@/lib/supabase/client";
 
-type KPI = { total: number; read: number; delivered: number; sent: number; failed: number; notRead: number };
-type NotReadRow = {
+type StatusGroup = "read" | "delivered" | "pending" | "failed";
+type KpiFilter = "all" | StatusGroup;
+type KPI = {
+  total: number;
+  read: number;
+  delivered: number;
+  sent: number;
+  pending: number;
+  failed: number;
+  notRead: number;
+};
+type LogRow = {
   service_id: string | null;
   to_phone: string;
   template: string | null;
   status: string;
+  status_group: StatusGroup;
   happened_at: string;
   customer_name: string | null;
   arrival_date: string | null;
@@ -18,23 +29,38 @@ type NotReadRow = {
 
 const kindLabel: Record<string, string> = {
   transfer_airport_hotel: "Aeroporto",
-  transfer_train_hotel:   "Stazione",
-  formula_medmar_napoli:  "MEDMAR Napoli",
-  formula_medmar_pozzuoli:"MEDMAR Pozzuoli",
-  formula_snav:           "SNAV",
-  bus_convocazione:       "Convocazione Bus",
+  transfer_train_hotel: "Stazione",
+  formula_medmar_napoli: "MEDMAR Napoli",
+  formula_medmar_pozzuoli: "MEDMAR Pozzuoli",
+  formula_snav: "SNAV",
+  bus_convocazione: "Convocazione Bus",
+};
+
+const filterLabels: Record<KpiFilter, string> = {
+  all: "Tutti",
+  read: "Letti",
+  delivered: "Consegnati non letti",
+  pending: "In attesa consegna",
+  failed: "Falliti",
 };
 
 type FilterMode = "info_3d" | "bus_convocazione";
 
+function statusBadge(row: LogRow) {
+  if (row.status_group === "read") return { label: "Letto", className: "bg-emerald-100 text-emerald-700" };
+  if (row.status_group === "delivered") return { label: "Consegnato", className: "bg-sky-100 text-sky-700" };
+  if (row.status_group === "failed") return { label: "Fallito", className: "bg-rose-100 text-rose-700" };
+  return { label: row.status === "queued" ? "In coda" : "In attesa", className: "bg-amber-100 text-amber-700" };
+}
+
 export default function WhatsAppLogPage() {
   const [loading, setLoading] = useState(true);
-  const [kpi, setKpi]         = useState<KPI | null>(null);
-  const [rows, setRows]       = useState<NotReadRow[]>([]);
-  const [failedRows, setFailedRows] = useState<NotReadRow[]>([]);
-  const [days, setDays]       = useState(30);
+  const [kpi, setKpi] = useState<KPI | null>(null);
+  const [rows, setRows] = useState<LogRow[]>([]);
+  const [days, setDays] = useState(30);
   const [filterMode, setFilterMode] = useState<FilterMode>("info_3d");
-  const [error, setError]     = useState("");
+  const [kpiFilter, setKpiFilter] = useState<KpiFilter>("all");
+  const [error, setError] = useState("");
 
   const load = useCallback(async (d: number, mode: FilterMode) => {
     setLoading(true);
@@ -44,12 +70,15 @@ export default function WhatsAppLogPage() {
     const token = sess.session?.access_token;
     if (!token) { setError("Non autenticato."); setLoading(false); return; }
 
-    const res  = await fetch(`/api/ops/whatsapp-log?days=${d}&filter=${mode}`, { headers: { Authorization: `Bearer ${token}` } });
-    const body = await res.json().catch(() => null) as { ok?: boolean; kpi?: KPI; notReadRows?: NotReadRow[]; failedRows?: NotReadRow[]; error?: string } | null;
-    if (!res.ok || !body?.ok) { setError(body?.error ?? `Errore caricamento dati (HTTP ${res.status}).`); setLoading(false); return; }
+    const res = await fetch(`/api/ops/whatsapp-log?days=${d}&filter=${mode}`, { headers: { Authorization: `Bearer ${token}` } });
+    const body = await res.json().catch(() => null) as { ok?: boolean; kpi?: KPI; rows?: LogRow[]; notReadRows?: LogRow[]; error?: string } | null;
+    if (!res.ok || !body?.ok) {
+      setError(body?.error ?? `Errore caricamento dati (HTTP ${res.status}).`);
+      setLoading(false);
+      return;
+    }
     setKpi(body.kpi ?? null);
-    setRows(body.notReadRows ?? []);
-    setFailedRows(body.failedRows ?? []);
+    setRows(body.rows ?? body.notReadRows ?? []);
     setLoading(false);
   }, []);
 
@@ -64,18 +93,20 @@ export default function WhatsAppLogPage() {
   }, [days, filterMode, load]);
 
   const pct = (n: number) => kpi && kpi.total > 0 ? Math.round((n / kpi.total) * 100) : 0;
-
   const isBusMode = filterMode === "bus_convocazione";
+  const filteredRows = useMemo(() => {
+    if (kpiFilter === "all") return rows;
+    return rows.filter((row) => row.status_group === kpiFilter);
+  }, [kpiFilter, rows]);
 
   return (
     <section className="page-section">
       <PageHeader
-        title={isBusMode ? "Log WhatsApp — Convocazioni Bus" : "Log WhatsApp — Prima di partire"}
+        title={isBusMode ? "Log WhatsApp - Convocazioni Bus" : "Log WhatsApp - Prima di partire"}
         subtitle={isBusMode ? "Stato di consegna delle convocazioni bus inviate da Excel." : "Stato di consegna dei messaggi informativi inviati ai clienti."}
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "WhatsApp Log" }]}
       />
 
-      {/* Filtro tipo */}
       <div className="flex flex-wrap gap-2">
         {([
           { key: "info_3d" as FilterMode, label: "Prima di partire" },
@@ -83,7 +114,7 @@ export default function WhatsAppLogPage() {
         ]).map(({ key, label }) => (
           <button
             key={key}
-            onClick={() => setFilterMode(key)}
+            onClick={() => { setFilterMode(key); setKpiFilter("all"); }}
             className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition border ${filterMode === key ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200 hover:border-indigo-300"}`}
           >
             {label}
@@ -91,7 +122,6 @@ export default function WhatsAppLogPage() {
         ))}
       </div>
 
-      {/* Filtro giorni */}
       <div className="flex gap-2 mt-2">
         {[7, 14, 30, 60].map((d) => (
           <button
@@ -105,28 +135,32 @@ export default function WhatsAppLogPage() {
       </div>
 
       {loading && <p className="text-sm text-slate-500">Caricamento...</p>}
-      {error   && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600">{error}</p>}
 
       {kpi && !loading && (
         <>
-          {/* KPI */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             {[
-              { label: "Inviati",     value: kpi.total,     color: "#4338ca", bg: "#eef2ff" },
-              { label: "Letti",       value: kpi.read,      color: "#0f766e", bg: "#f0fdfa", extra: `${pct(kpi.read)}%` },
-              { label: "Consegnati",  value: kpi.delivered, color: "#0369a1", bg: "#f0f9ff", extra: `${pct(kpi.delivered)}%` },
-              { label: "Non letti",   value: kpi.notRead,   color: kpi.notRead > 0 ? "#b45309" : "#64748b", bg: kpi.notRead > 0 ? "#fffbeb" : "#f8fafc", extra: `${pct(kpi.notRead)}%` },
-              { label: "Falliti",     value: kpi.failed,    color: kpi.failed > 0 ? "#dc2626" : "#64748b", bg: kpi.failed > 0 ? "#fef2f2" : "#f8fafc" },
-            ].map(({ label, value, color, bg, extra }) => (
-              <div key={label} className="rounded-2xl border border-slate-100 p-4 shadow-sm" style={{ backgroundColor: bg }}>
+              { key: "all" as KpiFilter, label: "Inviati", value: kpi.total, color: "#4338ca", bg: "#eef2ff" },
+              { key: "read" as KpiFilter, label: "Letti", value: kpi.read, color: "#0f766e", bg: "#f0fdfa", extra: `${pct(kpi.read)}%` },
+              { key: "delivered" as KpiFilter, label: "Consegnati non letti", value: kpi.delivered, color: "#0369a1", bg: "#f0f9ff", extra: `${pct(kpi.delivered)}%` },
+              { key: "pending" as KpiFilter, label: "In attesa consegna", value: kpi.pending, color: kpi.pending > 0 ? "#b45309" : "#64748b", bg: kpi.pending > 0 ? "#fffbeb" : "#f8fafc", extra: `${pct(kpi.pending)}%` },
+              { key: "failed" as KpiFilter, label: "Falliti", value: kpi.failed, color: kpi.failed > 0 ? "#dc2626" : "#64748b", bg: kpi.failed > 0 ? "#fef2f2" : "#f8fafc" },
+            ].map(({ key, label, value, color, bg, extra }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setKpiFilter(key)}
+                className={`rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-200 ${kpiFilter === key ? "border-indigo-300 ring-2 ring-indigo-100" : "border-slate-100"}`}
+                style={{ backgroundColor: bg }}
+              >
                 <p className="text-3xl font-extrabold" style={{ color }}>{value}</p>
                 <p className="mt-0.5 text-sm font-semibold text-slate-600">{label}</p>
                 {extra && <p className="text-xs text-slate-400">{extra} del totale</p>}
-              </div>
+              </button>
             ))}
           </div>
 
-          {/* Barra lettura */}
           {kpi.total > 0 && (
             <div className="rounded-xl border border-slate-100 bg-white p-4">
               <p className="mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wide">Tasso di lettura</p>
@@ -137,11 +171,19 @@ export default function WhatsAppLogPage() {
             </div>
           )}
 
-          {/* Tabella non letti */}
-          {rows.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="font-semibold text-slate-700">Filtro attivo: {filterLabels[kpiFilter]}</span>
+            {kpiFilter !== "all" && (
+              <button type="button" onClick={() => setKpiFilter("all")} className="font-semibold text-indigo-600 hover:text-indigo-700">
+                Mostra tutti
+              </button>
+            )}
+          </div>
+
+          {filteredRows.length > 0 ? (
             <div>
               <p className="mb-2 text-sm font-semibold text-slate-700">
-                {rows.length} messaggi non ancora letti
+                {filteredRows.length} messaggi visualizzati
               </p>
               <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
                 <table className="w-full text-sm">
@@ -156,64 +198,32 @@ export default function WhatsAppLogPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {rows.map((r, i) => (
-                      <tr key={r.service_id ?? `${r.to_phone}-${i}`} className="hover:bg-slate-50">
-                        <td className="px-4 py-2.5 font-medium text-slate-800">{r.customer_name ?? "—"}</td>
-                        <td className="px-4 py-2.5 text-slate-600">{r.arrival_date ?? "—"}</td>
-                        <td className="px-4 py-2.5 text-slate-500 text-xs">{kindLabel[r.booking_service_kind ?? ""] ?? r.booking_service_kind ?? "—"}</td>
-                        <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{r.to_phone}</td>
-                        <td className="px-4 py-2.5">
-                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${r.status === "delivered" ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-700"}`}>
-                            {r.status === "delivered" ? "Consegnato" : "Inviato"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-xs text-slate-400">
-                          {new Date(r.happened_at).toLocaleDateString("it-IT", { day: "2-digit", month: "short" })}
-                        </td>
-                      </tr>
-                    ))}
+                    {filteredRows.map((r, i) => {
+                      const badge = statusBadge(r);
+                      return (
+                        <tr key={r.service_id ?? `${r.to_phone}-${i}`} className="hover:bg-slate-50">
+                          <td className="px-4 py-2.5 font-medium text-slate-800">{r.customer_name ?? "-"}</td>
+                          <td className="px-4 py-2.5 text-slate-600">{r.arrival_date ?? "-"}</td>
+                          <td className="px-4 py-2.5 text-slate-500 text-xs">{kindLabel[r.booking_service_kind ?? ""] ?? r.booking_service_kind ?? "-"}</td>
+                          <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{r.to_phone}</td>
+                          <td className="px-4 py-2.5">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${badge.className}`}>
+                              {badge.label}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-slate-400">
+                            {new Date(r.happened_at).toLocaleDateString("it-IT", { day: "2-digit", month: "short" })}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             </div>
           ) : (
             <div className="rounded-2xl border border-slate-100 bg-white p-8 text-center text-sm text-slate-400">
-              {isBusMode ? "Tutte le convocazioni bus risultano lette." : "Tutti i messaggi risultano letti."}
-            </div>
-          )}
-
-          {/* Tabella falliti */}
-          {failedRows.length > 0 && (
-            <div>
-              <p className="mb-2 text-sm font-semibold text-rose-700">
-                {failedRows.length} messaggi non consegnati (falliti)
-              </p>
-              <div className="rounded-2xl border border-rose-200 bg-white overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-rose-50 border-b border-rose-100">
-                    <tr>
-                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Cliente</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">{isBusMode ? "Data partenza" : "Arrivo"}</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Tipo</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Telefono</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-rose-600 uppercase tracking-wide">Data</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-rose-50">
-                    {failedRows.map((r, i) => (
-                      <tr key={r.service_id ?? `${r.to_phone}-${i}`} className="hover:bg-rose-50/50">
-                        <td className="px-4 py-2.5 font-medium text-slate-800">{r.customer_name ?? "—"}</td>
-                        <td className="px-4 py-2.5 text-slate-600">{r.arrival_date ?? "—"}</td>
-                        <td className="px-4 py-2.5 text-slate-500 text-xs">{kindLabel[r.booking_service_kind ?? ""] ?? r.booking_service_kind ?? "—"}</td>
-                        <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{r.to_phone}</td>
-                        <td className="px-4 py-2.5 text-xs text-slate-400">
-                          {new Date(r.happened_at).toLocaleDateString("it-IT", { day: "2-digit", month: "short" })}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              Nessun messaggio per il filtro selezionato.
             </div>
           )}
         </>
