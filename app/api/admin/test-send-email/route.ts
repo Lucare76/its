@@ -9,12 +9,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { sendAgencyBookingConfirmationEmail } from "@/lib/server/agency-booking-email";
 import { sendOperatorNotifyEmail } from "@/lib/server/agency-approval-email";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
+import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://app.ischiatransferservice.it";
 
 export async function GET(request: NextRequest) {
+  const auth = await authorizePricingRequest(request, ["admin"]);
+  if (auth instanceof NextResponse) return auth;
   const apiKey   = process.env.RESEND_API_KEY;
   const fromEmail = getVerifiedFromEmail();
   const opsEmail  = process.env.OPS_NOTIFY_EMAIL;
