@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { normalizeWhatsAppWaId, logWhatsAppEvent, mapWebhookStatus } from "@/lib/server/whatsapp";
+import { normalizeWhatsAppWaId, logWhatsAppEvent, mapWebhookStatus, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
 import { sendPushToTenantRoles } from "@/lib/server/web-push";
+import { getWhatsAppOfficeHoursStatus, WHATSAPP_OFFICE_CLOSED_AUTO_REPLY_TEXT } from "./office-hours";
 import { matchWhatsAppInboundMessage } from "./matching";
 import { persistOutboundWhatsAppMessage } from "./messages";
 import type { MetaChangeValue, MetaContact, MetaMessage, MetaStatus, MetaWebhookPayload, WhatsAppMatchResult } from "./types";
@@ -11,6 +12,7 @@ type ProcessResult = {
   contacts: number;
   errors: string[];
   tenantsResolved: number;
+  autoReplies: number;
 };
 
 function unixToIso(timestamp: string | undefined) {
@@ -324,6 +326,127 @@ async function findReplyTarget(admin: SupabaseClient, replyToWaMessageId: string
   }
 }
 
+async function maybeSendOfficeClosedAutoReply(
+  admin: SupabaseClient,
+  input: {
+    tenantId: string | null;
+    phoneE164: string | null;
+    threadId: string | null;
+    inboundWaMessageId: string;
+    originalTimestamp: string | undefined;
+    timestamp: string;
+  },
+) {
+  const officeHours = getWhatsAppOfficeHoursStatus(input.timestamp);
+  console.info("WhatsApp office hours check", {
+    inboundMessageId: input.inboundWaMessageId,
+    originalTimestamp: input.originalTimestamp ?? null,
+    timestampUtc: officeHours.timestampUtc,
+    timestampEuropeRome: officeHours.timestampEuropeRome,
+    result: officeHours.result,
+    isSunday: officeHours.isSunday,
+    closureWindowKey: officeHours.closureWindowKey,
+    timeZone: officeHours.timeZone,
+  });
+
+  if (officeHours.isOpen) return { sent: false as const, reason: "office_open" };
+  if (!input.tenantId) return { sent: false as const, reason: "missing_tenant" };
+  if (!input.phoneE164) return { sent: false as const, reason: "missing_phone" };
+  if (!officeHours.closureWindowKey) return { sent: false as const, reason: "missing_closure_window_key" };
+
+  const nowIso = new Date().toISOString();
+  const { data: logRow, error: logError } = await admin
+    .from("whatsapp_auto_reply_logs")
+    .insert({
+      tenant_id: input.tenantId,
+      phone_number: input.phoneE164,
+      conversation_id: input.threadId,
+      auto_reply_type: "office_closed",
+      closure_window_key: officeHours.closureWindowKey,
+      send_status: "pending",
+      sent_at: null,
+      created_at: nowIso,
+      updated_at: nowIso,
+    })
+    .select("id")
+    .single();
+
+  if (logError) {
+    if (logError.code === "23505") {
+      console.info("WhatsApp office closed auto-reply already sent for closure window", {
+        tenantId: input.tenantId,
+        phoneNumber: input.phoneE164,
+        closureWindowKey: officeHours.closureWindowKey,
+      });
+      return { sent: false as const, reason: "already_sent" };
+    }
+    throw logError;
+  }
+
+  const sendResult = await sendWhatsAppTextMessage({
+    to: input.phoneE164,
+    text: WHATSAPP_OFFICE_CLOSED_AUTO_REPLY_TEXT,
+    replyToMessageId: input.inboundWaMessageId,
+  });
+
+  if (!sendResult.ok) {
+    await admin
+      .from("whatsapp_auto_reply_logs")
+      .update({
+        send_status: "failed",
+        error_message: sendResult.error.slice(0, 2000),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", logRow.id);
+
+    console.error("WhatsApp office closed auto-reply send failed", {
+      tenantId: input.tenantId,
+      phoneNumber: input.phoneE164,
+      closureWindowKey: officeHours.closureWindowKey,
+      error: sendResult.error,
+    });
+    return { sent: false as const, reason: "send_failed" };
+  }
+
+  const sentAt = new Date().toISOString();
+  await admin
+    .from("whatsapp_auto_reply_logs")
+    .update({
+      send_status: "sent",
+      sent_at: sentAt,
+      provider_message_id: sendResult.messageId,
+      updated_at: sentAt,
+    })
+    .eq("id", logRow.id);
+
+  await persistOutboundWhatsAppMessage(admin, {
+    tenantId: input.tenantId,
+    toPhone: sendResult.phoneE164,
+    waMessageId: sendResult.messageId,
+    messageType: "text",
+    textBody: WHATSAPP_OFFICE_CLOSED_AUTO_REPLY_TEXT,
+    status: "sent",
+    timestamp: sentAt,
+    replyToWaMessageId: input.inboundWaMessageId,
+    rawMessage: {
+      id: sendResult.messageId,
+      source: "office_closed_auto_reply",
+      closure_window_key: officeHours.closureWindowKey,
+      reply_to_wa_message_id: input.inboundWaMessageId,
+    },
+  });
+
+  console.info("WhatsApp office closed auto-reply sent", {
+    tenantId: input.tenantId,
+    phoneNumber: input.phoneE164,
+    inboundMessageId: input.inboundWaMessageId,
+    providerMessageId: sendResult.messageId,
+    closureWindowKey: officeHours.closureWindowKey,
+  });
+
+  return { sent: true as const, reason: "sent" };
+}
+
 async function processMessage(admin: SupabaseClient, value: MetaChangeValue, message: MetaMessage) {
   if (!message.id || !message.from) return null;
   const contact = value.contacts?.find((item) => item.wa_id === message.from) ?? value.contacts?.[0];
@@ -439,11 +562,20 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
       if (error) throw error;
     }
   }
+  const autoReply = await maybeSendOfficeClosedAutoReply(admin, {
+    tenantId: match.tenantId,
+    phoneE164,
+    threadId: thread.id,
+    inboundWaMessageId: message.id,
+    originalTimestamp: message.timestamp,
+    timestamp,
+  });
   return {
     tenantId: match.tenantId,
     phoneE164,
     preview: previewForMessage(message),
-    profileName: contact?.profile?.name ?? null
+    profileName: contact?.profile?.name ?? null,
+    autoReplySent: autoReply.sent,
   };
 }
 
@@ -511,7 +643,7 @@ async function processStatus(admin: SupabaseClient, status: MetaStatus) {
 }
 
 export async function processWhatsAppWebhook(admin: SupabaseClient, payload: MetaWebhookPayload, webhookEventId?: string): Promise<ProcessResult> {
-  const result: ProcessResult = { messages: 0, statuses: 0, contacts: 0, errors: [], tenantsResolved: 0 };
+  const result: ProcessResult = { messages: 0, statuses: 0, contacts: 0, errors: [], tenantsResolved: 0, autoReplies: 0 };
   const resolvedTenantIds = new Set<string>();
 
   for (const entry of payload.entry ?? []) {
@@ -530,6 +662,7 @@ export async function processWhatsAppWebhook(admin: SupabaseClient, payload: Met
           result.messages += 1;
           if (processed?.tenantId) {
             resolvedTenantIds.add(processed.tenantId);
+            if (processed.autoReplySent) result.autoReplies += 1;
             const sender = processed.profileName || processed.phoneE164 || "cliente";
             try {
               await sendPushToTenantRoles(processed.tenantId, ["admin", "operator", "supervisor"], {

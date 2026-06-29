@@ -65,6 +65,7 @@ export interface SendWhatsAppMessageInput {
 export interface SendWhatsAppTextInput {
   to: string;
   text: string;
+  replyToMessageId?: string | null;
 }
 
 export interface SendWhatsAppMediaInput {
@@ -439,7 +440,8 @@ export async function sendWhatsAppMessage(input: SendWhatsAppMessageInput) {
   };
 }
 
-async function sendTextMessage(phoneNumberId: string, accessToken: string, toPhone: string, textBody: string) {
+async function sendTextMessage(phoneNumberId: string, accessToken: string, toPhone: string, textBody: string, replyToMessageId?: string | null) {
+  const context = replyToMessageId?.trim() ? { message_id: replyToMessageId.trim() } : undefined;
   const response = await fetch(`https://graph.facebook.com/${whatsappGraphVersion()}/${phoneNumberId}/messages`, {
     method: "POST",
     headers: {
@@ -450,6 +452,7 @@ async function sendTextMessage(phoneNumberId: string, accessToken: string, toPho
       messaging_product: "whatsapp",
       to: toPhone,
       type: "text",
+      ...(context ? { context } : {}),
       text: { body: textBody.slice(0, 4096), preview_url: false }
     })
   });
@@ -727,7 +730,7 @@ export async function sendWhatsAppTextMessage(input: SendWhatsAppTextInput) {
     };
   }
 
-  const response = await sendTextMessage(phoneNumberId, accessToken, toPhone, textBody);
+  const response = await sendTextMessage(phoneNumberId, accessToken, toPhone, textBody, input.replyToMessageId);
   if (!response.ok) {
     return {
       ok: false as const,

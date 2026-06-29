@@ -18,6 +18,7 @@ export type PersistOutboundWhatsAppMessageInput = {
   status?: string | null;
   timestamp?: string | null;
   serviceId?: string | null;
+  replyToWaMessageId?: string | null;
   rawMessage?: Record<string, unknown>;
 };
 
@@ -111,7 +112,7 @@ export async function persistOutboundWhatsAppMessage(
   const messagePayload = {
     tenant_id: input.tenantId,
     wa_message_id: waMessageId,
-    reply_to_wa_message_id: null,
+    reply_to_wa_message_id: input.replyToWaMessageId ?? null,
     direction: "outbound" as const,
     wa_id: waId,
     phone_e164: phoneE164,
