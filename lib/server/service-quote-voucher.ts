@@ -17,10 +17,8 @@ type QuoteItemRow = {
   hotel_address?: string | null;
   pax: number | null;
   quantity: number | null;
-  total_price_cents?: number | null;
   luggage_notes?: string | null;
   special_requests: string | null;
-  price_notes: string | null;
 };
 
 const SERVICE_LABELS: Record<string, string> = {
@@ -50,10 +48,6 @@ function fmtDate(value?: string | null) {
 
 function fmtTime(value?: string | null) {
   return value ? String(value).slice(0, 5) : "";
-}
-
-function fmtMoney(cents: number) {
-  return `EUR ${(cents / 100).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function serviceLabel(type?: string | null) {
@@ -87,7 +81,6 @@ function renderItem(item: QuoteItemRow, index: number) {
     item.departure_flight_train ? metaLine("Rif. partenza", item.departure_flight_train) : "",
     item.luggage_notes ? metaLine("Bagagli", item.luggage_notes) : "",
     item.special_requests ? metaLine("Richieste", item.special_requests) : "",
-    item.price_notes ? metaLine("Note", item.price_notes) : "",
   ].filter(Boolean);
 
   const description = item.description?.trim()
@@ -137,13 +130,8 @@ export async function buildServiceQuoteVoucherHtml(
     quantity: 1,
     luggage_notes: quote.luggage_notes,
     special_requests: quote.special_requests,
-    price_notes: quote.price_notes,
   }];
   const voucherItems = quoteItems.length > 0 ? quoteItems : fallbackItems;
-
-  const totalCents = quoteItems.length > 0
-    ? quoteItems.reduce((sum, item) => sum + Number(item.total_price_cents ?? 0), 0)
-    : Number(quote.price_mode === "total" ? quote.price_cents : quote.price_cents * quote.pax);
 
   const customerName = `${quote.customer_first_name ?? ""} ${quote.customer_last_name ?? ""}`.trim();
   const guestName = quote.is_agency && quote.end_customer_name ? quote.end_customer_name : null;
@@ -219,8 +207,8 @@ export async function buildServiceQuoteVoucherHtml(
       <div class="summary">
         <div class="box"><label>Cliente</label><p>${escapeHtml(customerName || "-")}${guestName ? `<small>Ospite: ${escapeHtml(guestName)}</small>` : ""}</p></div>
         <div class="box"><label>Contatti</label><p>${escapeHtml(quote.customer_email ?? "-")}${quote.customer_phone ? `<small>${escapeHtml(quote.customer_phone)}</small>` : ""}</p></div>
-        <div class="box"><label>Totale prenotazione</label><p>${escapeHtml(fmtMoney(totalCents))}</p></div>
         <div class="box"><label>Stato</label><p>${quote.status === "confirmed" ? "Confermata" : "Preview voucher"}<small>Generato il ${escapeHtml(printedAt)}</small></p></div>
+        <div class="box"><label>Riferimento</label><p>${escapeHtml(quote.quote_number ?? "-")}<small>Voucher servizi confermati</small></p></div>
       </div>
 
       <p class="items-title">Servizi inclusi</p>
