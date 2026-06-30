@@ -62,19 +62,38 @@ export async function POST(request: NextRequest) {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "");
   const trackingUrl = appUrl && assignment?.driver_user_id ? `${appUrl}/track/${service.id}` : null;
 
-  const result = await sendWhatsAppReminder(service, hotel?.name, {
-    meetingPoint: service.meeting_point,
-    driverPhone: extractDriverPhoneFromNotes(service.notes),
-    vehicleLabel: assignment?.vehicle_label ?? null,
-    plate: service.bus_plate,
-    trackingUrl
-  }, {
-    templateName: settings.default_template,
-    languageCode: settings.template_language,
-    allowTextFallback: settings.allow_text_fallback
-  });
+  const result = await (async () => {
+    try {
+      return await sendWhatsAppReminder(service, hotel?.name, {
+        meetingPoint: service.meeting_point,
+        driverPhone: extractDriverPhoneFromNotes(service.notes),
+        vehicleLabel: assignment?.vehicle_label ?? null,
+        plate: service.bus_plate,
+        trackingUrl
+      }, {
+        templateName: settings.default_template,
+        languageCode: settings.template_language,
+        allowTextFallback: settings.allow_text_fallback
+      });
+    } catch (error) {
+      return {
+        ok: false as const,
+        error: error instanceof Error ? error.message : "WhatsApp send failed",
+        templateName: settings.default_template,
+        languageCode: settings.template_language,
+        phoneE164: service.phone_e164 ?? service.phone,
+        deliveryMode: "template" as const
+      };
+    }
+  })();
   if (!result.ok) {
     const nowIso = new Date().toISOString();
+    const failedServiceUpdate: { reminder_status: "failed"; phone_e164?: string } = {
+      reminder_status: "failed"
+    };
+    if (/^\+\d{7,15}$/.test(result.phoneE164)) {
+      failedServiceUpdate.phone_e164 = result.phoneE164;
+    }
     await logWhatsAppEvent(admin, {
       tenant_id: auth.membership.tenant_id,
       service_id: service.id,
@@ -95,10 +114,7 @@ export async function POST(request: NextRequest) {
     });
     await admin
       .from("services")
-      .update({
-        phone_e164: result.phoneE164,
-        reminder_status: "failed"
-      })
+      .update(failedServiceUpdate)
       .eq("id", service.id)
       .eq("tenant_id", auth.membership.tenant_id);
     return NextResponse.json({ error: result.error }, { status: 502 });

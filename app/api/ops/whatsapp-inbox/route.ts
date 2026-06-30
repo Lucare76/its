@@ -109,6 +109,20 @@ function compactMessagePreview(input: {
   return `[${input.message_type ?? "messaggio"}]`;
 }
 
+function failedOutboundPreview(input: {
+  mode: "text" | "template";
+  text: string;
+  templateBodyText: string | null;
+  templateName: string | null;
+  attachment: File | null;
+}) {
+  const body = input.templateBodyText?.trim()
+    || (input.mode === "template" && input.templateName ? `Template ${input.templateName}` : "")
+    || input.text.trim()
+    || (input.attachment ? `Allegato: ${input.attachment.name || "file"}` : "Messaggio WhatsApp");
+  return `[Non inviato] ${body}`.slice(0, 240);
+}
+
 async function upsertManualContact(
   admin: AuthorizedPricingRequest["admin"],
   input: { tenantId: string; waId: string; phoneE164: string; profileName: string | null }
@@ -237,6 +251,7 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const filter = url.searchParams.get("filter") ?? "open";
   const search = (url.searchParams.get("q") ?? "").trim();
+  const searchDigits = search.replace(/\D/g, "");
   const selectedThreadId = url.searchParams.get("thread_id") ?? url.searchParams.get("thread");
 
   let threadQuery = auth.admin
@@ -244,7 +259,7 @@ export async function GET(request: NextRequest) {
     .select("id, wa_id, phone_e164, customer_id, booking_id, transfer_id, last_message_at, last_message_preview, unread_count, assigned_to, status, match_status, match_suggestions, created_at, updated_at, whatsapp_contacts(profile_name,customer_full_name,manual_contact_name,wa_profile_name)")
     .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
     .order("last_message_at", { ascending: false, nullsFirst: false })
-    .limit(filter === "all" ? 5000 : 100);
+    .limit(search ? 5000 : filter === "all" ? 5000 : 100);
 
   if (filter === "unread") threadQuery = threadQuery.neq("status", "closed").gt("unread_count", 0);
   if (filter === "needs_review") threadQuery = threadQuery.eq("status", "needs_review");
@@ -252,6 +267,9 @@ export async function GET(request: NextRequest) {
   if (filter === "unassociated") threadQuery = threadQuery.is("booking_id", null).is("transfer_id", null);
   if (filter === "closed") threadQuery = threadQuery.eq("status", "closed");
   if (filter === "open") threadQuery = threadQuery.neq("status", "closed");
+  if (searchDigits.length >= 6) {
+    threadQuery = threadQuery.or(`wa_id.ilike.%${searchDigits}%,phone_e164.ilike.%${searchDigits}%`);
+  }
 
   const { data: threads, error: threadError } = await threadQuery;
   if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
@@ -279,6 +297,7 @@ export async function GET(request: NextRequest) {
     .filter((rawThread) => {
       const thread = rawThread as Record<string, unknown>;
       if (!search) return true;
+      const normalizedSearch = search.toLowerCase();
       const haystack = [
         thread.wa_id,
         thread.phone_e164,
@@ -292,7 +311,8 @@ export async function GET(request: NextRequest) {
         ((thread.service as Record<string, unknown> | null)?.hotels as { name?: string } | null)?.name,
         thread.last_message_preview
       ].filter(Boolean).join(" ").toLowerCase();
-      return haystack.includes(search.toLowerCase());
+      return haystack.includes(normalizedSearch)
+        || (searchDigits.length >= 6 && haystack.replace(/\D/g, "").includes(searchDigits));
     });
 
   const selectedId = selectedThreadId ?? enrichedThreads[0]?.id;
@@ -509,7 +529,14 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (parsed.data.action === "update_phone") {
-    const normalizedPhone = normalizeWhatsAppWaId(parsed.data.phone ?? "");
+    let normalizedPhone: string;
+    try {
+      normalizedPhone = normalizeE164(parsed.data.phone ?? "");
+    } catch (error) {
+      return NextResponse.json({
+        error: error instanceof Error ? error.message : "Inserisci il numero in formato internazionale con prefisso (es. +39 392 4425299)."
+      }, { status: 400 });
+    }
     const digits = normalizedPhone.replace(/\D/g, "");
     if (digits.length < 8) {
       return NextResponse.json({ error: "Inserisci il numero in formato internazionale con prefisso (es. +49 172 5404319)." }, { status: 400 });
@@ -646,8 +673,10 @@ export async function POST(request: NextRequest) {
     let normalizedPhone: string;
     try {
       normalizedPhone = normalizeE164(parsed.data.phone ?? "");
-    } catch {
-      return NextResponse.json({ error: "Numero non valido. Usa il formato +393391234567 o 3391234567." }, { status: 400 });
+    } catch (error) {
+      return NextResponse.json({
+        error: error instanceof Error ? error.message : "Numero non valido. Usa il formato +393391234567 o 3391234567."
+      }, { status: 400 });
     }
     const waId = normalizedPhone.replace(/^\+/, "");
     const match = await matchWhatsAppInboundMessage(auth.admin, {
@@ -750,29 +779,129 @@ export async function POST(request: NextRequest) {
     hasTemplateVariables: templateVariables.length > 0,
     hasAttachment: Boolean(attachment)
   });
-  const sendResult = attachment
-    ? await sendWhatsAppMediaMessage({
-        to: targetPhone,
-        file: attachment,
-        filename: attachment.name || "allegato",
-        mimeType: attachment.type || "application/octet-stream",
-        caption: text
-      })
-    : sendMode === "template"
-    ? await sendWhatsAppMessage({
-        to: targetPhone,
-        template: templateName!,
-        languageCode: templateLang,
-        variables: Object.fromEntries(
-          templateVariables.map((value, index) => [String(index + 1), value])
-        )
-      })
-    : await sendWhatsAppTextMessage({
-        to: targetPhone,
-        text
-      });
+  const sendResult = await (async () => {
+    try {
+      return attachment
+        ? await sendWhatsAppMediaMessage({
+            to: targetPhone,
+            file: attachment,
+            filename: attachment.name || "allegato",
+            mimeType: attachment.type || "application/octet-stream",
+            caption: text
+          })
+        : sendMode === "template"
+        ? await sendWhatsAppMessage({
+            to: targetPhone,
+            template: templateName!,
+            languageCode: templateLang,
+            variables: Object.fromEntries(
+              templateVariables.map((value, index) => [String(index + 1), value])
+            )
+          })
+        : await sendWhatsAppTextMessage({
+            to: targetPhone,
+            text
+          });
+    } catch (error) {
+      return {
+        ok: false as const,
+        error: error instanceof Error ? error.message : "Invio WhatsApp non riuscito",
+        phoneE164: targetPhone
+      };
+    }
+  })();
 
   if (!sendResult.ok) {
+    const failurePreview = failedOutboundPreview({
+      mode: sendMode,
+      text,
+      templateBodyText,
+      templateName,
+      attachment
+    });
+    const failedMessagePayload = {
+      tenant_id: thread.tenant_id ?? tenantId,
+      wa_message_id: null,
+      direction: "outbound" as const,
+      wa_id: thread.wa_id,
+      phone_e164: sendResult.phoneE164,
+      contact_id: thread.contact_id ?? null,
+      thread_id: thread.id,
+      customer_id: thread.customer_id ?? null,
+      booking_id: thread.booking_id ?? null,
+      transfer_id: thread.transfer_id ?? null,
+      message_type: attachment ? "document" : sendMode === "template" ? "template" : "text",
+      template_name: templateName,
+      reply_to_wa_message_id: null,
+      text_body: sendMode === "template" ? (templateBodyText ?? failurePreview) : (text || failurePreview),
+      media_id: null,
+      media_mime_type: attachment ? attachment.type || "application/octet-stream" : null,
+      media_sha256: null,
+      status: "failed",
+      timestamp: nowIso,
+      raw_message: {
+        error: sendResult.error ?? "Invio WhatsApp non riuscito",
+        type: sendMode,
+        source: attachment ? "manual_attachment" : sendMode === "template" ? "manual_template" : "manual_reply",
+        template: sendMode === "template" ? {
+          name: templateName,
+          language: { code: templateLang },
+          parameters: templateVariables
+        } : null,
+        attachment: attachment ? {
+          filename: attachment.name || null,
+          mime_type: attachment.type || "application/octet-stream",
+          size: attachment.size
+        } : null
+      }
+    };
+    const { error: failedInsertError } = await auth.admin.from("whatsapp_messages").insert(failedMessagePayload);
+    if (failedInsertError) {
+      console.error("WhatsApp inbox failed reply persistence failed", {
+        hasWaId: Boolean(thread.wa_id),
+        normalizedPhonePresent: Boolean(sendResult.phoneE164),
+        sendError: sendResult.error ?? "unknown",
+        persistError: failedInsertError.message
+      });
+    }
+    const { error: failedThreadError } = await auth.admin
+      .from("whatsapp_threads")
+      .update({
+        phone_e164: sendResult.phoneE164,
+        last_message_at: nowIso,
+        last_message_preview: failurePreview,
+        unread_count: 0,
+        status: "open",
+        match_status: thread.match_status === "matched" ? "matched" : "needs_review",
+        updated_at: nowIso
+      })
+      .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+      .eq("id", thread.id);
+    if (failedThreadError) {
+      console.warn("WhatsApp inbox failed reply thread update failed", {
+        hasWaId: Boolean(thread.wa_id),
+        normalizedPhonePresent: Boolean(sendResult.phoneE164),
+        error: failedThreadError.message
+      });
+    }
+    await logWhatsAppEvent(auth.admin, {
+      tenant_id: tenantId,
+      service_id: thread.booking_id ?? null,
+      to_phone: sendResult.phoneE164,
+      kind: "manual",
+      template: templateName,
+      status: "failed",
+      provider_message_id: null,
+      happened_at: nowIso,
+      payload_json: {
+        source: "api/ops/whatsapp-inbox",
+        mode: attachment ? "manual_attachment" : sendMode === "template" ? "manual_template" : "manual_reply",
+        error: sendResult.error ?? "Invio WhatsApp non riuscito",
+        template_language: sendMode === "template" ? templateLang : null,
+        template_variables: sendMode === "template" ? templateVariables : [],
+        thread_id: thread.id
+      }
+    });
     console.error("WhatsApp inbox reply failed", {
       hasWaId: Boolean(thread.wa_id),
       normalizedPhonePresent: Boolean(sendResult.phoneE164),
