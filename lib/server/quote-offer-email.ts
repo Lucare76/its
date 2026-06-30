@@ -48,6 +48,7 @@ export interface ServiceQuoteEmailData {
 
 export interface QuoteConfirmEmailData extends Omit<ServiceQuoteEmailData, "acceptUrl" | "expiresAt"> {
   totalPaidCents: number;
+  voucherUrl?: string | null;
 }
 
 export interface ServiceQuoteEmailItem {
@@ -279,6 +280,15 @@ function buildOfferBody(d: ServiceQuoteEmailData): string {
 function buildConfirmBody(d: QuoteConfirmEmailData): string {
   const it = d.customerLanguage === "it";
   const e = escapeHtml;
+  const voucherSection = d.voucherUrl ? emailHighlightBox(`
+    <p style="font-size:15px;font-weight:700;color:#1e3a5f;margin:0 0 12px;">
+      ${it ? "Voucher prenotazione" : "Booking voucher"}
+    </p>
+    <p style="color:#475569;font-size:13px;margin:0 0 14px;">
+      ${it ? "Puoi aprire e stampare il riepilogo dei servizi confermati." : "You can open and print the summary of your confirmed services."}
+    </p>
+    ${emailButton(it ? "APRI VOUCHER" : "OPEN VOUCHER", d.voucherUrl, "#1d4ed8")}
+  `, "#eff6ff", "#bfdbfe") : "";
   const typeLabel = serviceTypeLabel(d.serviceType, d.customerLanguage);
   const showArrival = d.direction === "arrival" || d.direction === "round_trip";
   const showDeparture = d.direction === "departure" || d.direction === "round_trip";
@@ -351,6 +361,7 @@ function buildConfirmBody(d: QuoteConfirmEmailData): string {
       ${emailDataTable(rows)}
     `}
 
+    ${voucherSection}
     ${usefulInfo}
     ${contacts}
 

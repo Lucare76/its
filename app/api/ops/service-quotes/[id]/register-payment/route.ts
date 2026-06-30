@@ -53,6 +53,7 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   const now = new Date().toISOString();
   const totalPaidCents = parsed.data.total_paid_cents ?? (itemsTotalCents || (quote.price_cents * quote.pax));
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? request.nextUrl.origin).replace(/\/$/, "");
 
   const { error: updateErr } = await auth.admin
     .from("service_quotes")
@@ -103,6 +104,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     totalPaidCents,
     items:             quoteItems ?? [],
     totalPriceCents:   itemsTotalCents || null,
+    voucherUrl:         `${appUrl}/quote/voucher/${quote.accept_token}`,
   };
 
   const emailResult = await sendQuoteConfirmEmail(emailData);

@@ -119,6 +119,9 @@ export default function PreventiviPage() {
   const [previewLang, setPreviewLang] = useState<"it" | "en">("it");
   const [previewHtml, setPreviewHtml] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [voucherPreviewOpen, setVoucherPreviewOpen] = useState(false);
+  const [voucherPreviewHtml, setVoucherPreviewHtml] = useState("");
+  const [voucherPreviewLoading, setVoucherPreviewLoading] = useState(false);
 
   const load = useCallback(async () => {
     const token = await getToken();
@@ -191,6 +194,25 @@ export default function PreventiviPage() {
   function switchPreviewLang(lang: "it" | "en") {
     setPreviewLang(lang);
     if (selected) void loadPreview(selected.id, lang);
+  }
+
+  async function loadVoucherPreview(id: string) {
+    setVoucherPreviewLoading(true);
+    setVoucherPreviewHtml("");
+    const token = await getToken();
+    if (!token) { setVoucherPreviewLoading(false); return; }
+    const res = await fetch(`/api/ops/service-quotes/${id}/voucher-preview`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await res.json() as { ok?: boolean; html?: string };
+    if (body.ok && body.html) setVoucherPreviewHtml(body.html);
+    setVoucherPreviewLoading(false);
+  }
+
+  function openVoucherPreview() {
+    if (!selected) return;
+    setVoucherPreviewOpen(true);
+    void loadVoucherPreview(selected.id);
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -303,6 +325,7 @@ export default function PreventiviPage() {
               onAction={doAction}
               onClose={() => setSelected(null)}
               onOpenPreview={openPreview}
+              onOpenVoucherPreview={openVoucherPreview}
               onRefresh={() => openDetail(selected.id)}
             />
           )}
@@ -327,6 +350,15 @@ export default function PreventiviPage() {
           canSend={selected.status === "draft" || selected.status === "offer_sent"}
         />
       )}
+
+      {voucherPreviewOpen && selected && (
+        <VoucherPreviewModal
+          quoteNumber={selected.quote_number}
+          html={voucherPreviewHtml}
+          loading={voucherPreviewLoading}
+          onClose={() => setVoucherPreviewOpen(false)}
+        />
+      )}
     </>
   );
 }
@@ -335,7 +367,7 @@ export default function PreventiviPage() {
 
 function QuoteDetailPanel({
   quote, actionBusy, actionError, paymentRef, setPaymentRef,
-  onAction, onClose, onOpenPreview, onRefresh,
+  onAction, onClose, onOpenPreview, onOpenVoucherPreview, onRefresh,
 }: {
   quote: QuoteFull;
   actionBusy: string | null;
@@ -345,6 +377,7 @@ function QuoteDetailPanel({
   onAction: (action: string, body?: Record<string, unknown>) => void;
   onClose: () => void;
   onOpenPreview: () => void;
+  onOpenVoucherPreview: () => void;
   onRefresh: () => void;
 }) {
   const showArr = quote.direction === "arrival"  || quote.direction === "round_trip";
@@ -477,6 +510,10 @@ function QuoteDetailPanel({
         {(quote.status === "accepted" || quote.status === "offer_sent") && (
           <div className="border border-purple-200 rounded-xl p-4 bg-purple-50 space-y-2">
             <p className="text-sm font-semibold text-purple-800">Registra pagamento</p>
+            <button type="button" onClick={onOpenVoucherPreview}
+              className="w-full border border-purple-200 bg-white text-purple-700 hover:bg-purple-100 font-medium py-2.5 rounded-xl text-sm">
+              Anteprima voucher prenotazione
+            </button>
             <input type="text" placeholder="Riferimento / CRO bonifico (opzionale)"
               value={paymentRef} onChange={e => setPaymentRef(e.target.value)}
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" />
@@ -583,6 +620,43 @@ function EmailPreviewModal({
 }
 
 // ── Section + Row components ───────────────────────────────────────────────────
+
+function VoucherPreviewModal({ quoteNumber, html, loading, onClose }: {
+  quoteNumber: string; html: string; loading: boolean; onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 shrink-0">
+          <div>
+            <h3 className="font-bold text-slate-800">Anteprima voucher - {quoteNumber}</h3>
+            <p className="text-xs text-slate-400">Controllo prima della conferma saldo</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none ml-1">x</button>
+        </div>
+        <div className="flex-1 overflow-hidden p-4">
+          {loading ? (
+            <div className="flex items-center justify-center h-full text-slate-400">Caricamento voucher...</div>
+          ) : html ? (
+            <iframe
+              srcDoc={html}
+              className="w-full h-full rounded-xl border border-slate-100"
+              sandbox="allow-same-origin allow-scripts"
+              title="Anteprima voucher"
+            />
+          ) : (
+            <div className="flex items-center justify-center h-full text-slate-400">Anteprima voucher non disponibile.</div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-slate-100 shrink-0">
+          <button onClick={onClose} className="px-4 py-2 border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 text-sm">
+            Chiudi
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
