@@ -266,6 +266,46 @@ async function readGoogleVisionOutput(accessToken: string, outputPrefix: string)
     .trim();
 }
 
+async function deleteGoogleStorageObject(accessToken: string, bucket: string, objectName: string) {
+  const response = await fetch(
+    `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(objectName)}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: "no-store"
+    }
+  );
+
+  return response.ok || response.status === 404;
+}
+
+async function cleanupGoogleVisionTemporaryObjects(accessToken: string, inputObjectName: string, outputPrefix: string) {
+  const env = googleEnv();
+  try {
+    await deleteGoogleStorageObject(accessToken, env.inputBucket, inputObjectName);
+
+    const listResponse = await fetch(
+      `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(env.outputBucket)}/o?prefix=${encodeURIComponent(outputPrefix)}`,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        cache: "no-store"
+      }
+    );
+    if (!listResponse.ok) return;
+
+    const listed = (await listResponse.json()) as { items?: Array<{ name?: string }> };
+    await Promise.all(
+      (listed.items ?? [])
+        .map((item) => item.name)
+        .filter((name): name is string => Boolean(name))
+        .map((name) => deleteGoogleStorageObject(accessToken, env.outputBucket, name))
+    );
+  } catch {
+    // OCR must not fail just because the best-effort cleanup failed.
+  }
+}
+
 async function runGoogleVisionPdfOcr(contentBase64: string) {
   const env = googleEnv();
   if (!env.enabled) return "";
@@ -278,16 +318,20 @@ async function runGoogleVisionPdfOcr(contentBase64: string) {
     const inputObjectName = `incoming/${stamp}.pdf`;
     const outputPrefix = `output/${stamp}/`;
 
-    const uploaded = await uploadPdfToGoogleStorage(accessToken, contentBase64, inputObjectName);
-    if (!uploaded) return "";
+    try {
+      const uploaded = await uploadPdfToGoogleStorage(accessToken, contentBase64, inputObjectName);
+      if (!uploaded) return "";
 
-    const operationName = await startGoogleVisionPdfOcr(accessToken, inputObjectName, outputPrefix);
-    if (!operationName) return "";
+      const operationName = await startGoogleVisionPdfOcr(accessToken, inputObjectName, outputPrefix);
+      if (!operationName) return "";
 
-    const completed = await waitForGoogleOperation(accessToken, operationName);
-    if (!completed) return "";
+      const completed = await waitForGoogleOperation(accessToken, operationName);
+      if (!completed) return "";
 
-    return await readGoogleVisionOutput(accessToken, outputPrefix);
+      return await readGoogleVisionOutput(accessToken, outputPrefix);
+    } finally {
+      await cleanupGoogleVisionTemporaryObjects(accessToken, inputObjectName, outputPrefix);
+    }
   } catch {
     return "";
   }
