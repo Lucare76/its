@@ -249,7 +249,7 @@ export async function buildServiceQuoteVoucherHtml(
     .page { max-width: 820px; margin: 28px auto; background: #fff; border: 1px solid #e5e7eb; box-shadow: 0 16px 45px rgba(15,23,42,.10); }
     .hero { padding: 30px 34px; background: #0f172a; color: #fff; }
     .brand-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-    .brand-logo { width: 112px; height: auto; display: block; background: #fff; border-radius: 6px; padding: 6px; }
+    .brand-logo { width: 132px; height: auto; display: block; }
     .kicker { margin: 0 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: #93c5fd; }
     h1 { margin: 0; font-size: 30px; line-height: 1.08; }
     .hero-grid { display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: end; margin-top: 22px; }
