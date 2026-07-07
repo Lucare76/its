@@ -67,6 +67,7 @@ describe("buildServiceQuoteVoucherHtml language", () => {
     const html = await buildServiceQuoteVoucherHtml(adminForVoucher("en") as never, "tenant-1", "quote-1");
 
     expect(html).toContain('<html lang="en">');
+    expect(html).toContain('/brand/logo-email-header.png');
     expect(html).toContain("Booking voucher");
     expect(html).toContain("Included services");
     expect(html).toContain("Airport Transfer");

@@ -248,6 +248,8 @@ export async function buildServiceQuoteVoucherHtml(
     }
     .page { max-width: 820px; margin: 28px auto; background: #fff; border: 1px solid #e5e7eb; box-shadow: 0 16px 45px rgba(15,23,42,.10); }
     .hero { padding: 30px 34px; background: #0f172a; color: #fff; }
+    .brand-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .brand-logo { width: 112px; height: auto; display: block; background: #fff; border-radius: 6px; padding: 6px; }
     .kicker { margin: 0 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: #93c5fd; }
     h1 { margin: 0; font-size: 30px; line-height: 1.08; }
     .hero-grid { display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: end; margin-top: 22px; }
@@ -274,6 +276,7 @@ export async function buildServiceQuoteVoucherHtml(
     @media (max-width: 680px) {
       .page { margin: 0; border: 0; }
       .hero, .content, .footer { padding-left: 20px; padding-right: 20px; }
+      .brand-row { align-items: flex-start; flex-direction: column; }
       .hero-grid, .summary, .meta { grid-template-columns: 1fr; }
       .ref { text-align: left; }
     }
@@ -282,7 +285,10 @@ export async function buildServiceQuoteVoucherHtml(
 <body>
   <main class="page">
     <header class="hero">
-      <p class="kicker">${escapeHtml(companyName)}</p>
+      <div class="brand-row">
+        <img class="brand-logo" src="/brand/logo-email-header.png" alt="${escapeHtml(companyName)} logo">
+        <p class="kicker">${escapeHtml(companyName)}</p>
+      </div>
       <h1>${escapeHtml(t.title)}</h1>
       <div class="hero-grid">
         <div>
