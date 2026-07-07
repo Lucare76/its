@@ -21,43 +21,126 @@ type QuoteItemRow = {
   special_requests: string | null;
 };
 
-const SERVICE_LABELS: Record<string, string> = {
-  transfer_airport: "Transfer Aeroporto",
-  transfer_station: "Transfer Stazione",
-  transfer_port: "Transfer Porto",
-  excursion: "Escursione",
-  shuttle: "Navetta",
-  formula_snav: "Formula SNAV",
-  formula_medmar: "Formula Medmar",
-  custom: "Servizio su misura",
+type VoucherLanguage = "it" | "en";
+
+const SERVICE_LABELS: Record<string, Record<VoucherLanguage, string>> = {
+  transfer_airport: { it: "Transfer Aeroporto", en: "Airport Transfer" },
+  transfer_station: { it: "Transfer Stazione", en: "Train Station Transfer" },
+  transfer_port: { it: "Transfer Porto", en: "Port Transfer" },
+  excursion: { it: "Escursione", en: "Excursion" },
+  shuttle: { it: "Navetta", en: "Shuttle" },
+  formula_snav: { it: "Formula SNAV", en: "SNAV Package" },
+  formula_medmar: { it: "Formula Medmar", en: "Medmar Package" },
+  custom: { it: "Servizio su misura", en: "Custom Service" },
 };
 
-const DIRECTION_LABELS: Record<string, string> = {
-  arrival: "Arrivo",
-  departure: "Partenza",
-  round_trip: "Andata e ritorno",
+const DIRECTION_LABELS: Record<string, Record<VoucherLanguage, string>> = {
+  arrival: { it: "Arrivo", en: "Arrival" },
+  departure: { it: "Partenza", en: "Departure" },
+  round_trip: { it: "Andata e ritorno", en: "Round trip" },
 };
 
-function fmtDate(value?: string | null) {
+const COPY: Record<VoucherLanguage, Record<string, string>> = {
+  it: {
+    htmlLang: "it",
+    title: "Voucher prenotazione",
+    subtitle: "Prenotazione confermata al ricevimento del saldo.",
+    quoteRef: "Rif. preventivo",
+    customer: "Cliente",
+    guest: "Ospite",
+    contacts: "Contatti",
+    status: "Stato",
+    confirmed: "Confermata",
+    paid: "Pagata",
+    preview: "Preview voucher",
+    generatedOn: "Generato il",
+    reference: "Riferimento",
+    confirmedServicesVoucher: "Voucher servizi confermati",
+    includedServices: "Servizi inclusi",
+    type: "Tipo",
+    direction: "Direzione",
+    hotel: "Hotel",
+    address: "Indirizzo",
+    passengers: "Passeggeri",
+    quantity: "Quantita",
+    arrival: "Arrivo",
+    departure: "Partenza",
+    at: "ore",
+    arrivalRef: "Rif. arrivo",
+    departureRef: "Rif. partenza",
+    luggage: "Bagagli",
+    requests: "Richieste",
+    customItem: "Voce prenotazione",
+    service: "Servizio",
+    note: "Il giorno prima del servizio riceverete, quando previsto, i dettagli operativi di autista, mezzo e orario definitivo. Presentare questo voucher in caso di richiesta del personale operativo.",
+    phone: "Tel.",
+    print: "Stampa / salva PDF",
+  },
+  en: {
+    htmlLang: "en",
+    title: "Booking voucher",
+    subtitle: "Booking confirmed after receipt of payment.",
+    quoteRef: "Quote ref.",
+    customer: "Customer",
+    guest: "Guest",
+    contacts: "Contacts",
+    status: "Status",
+    confirmed: "Confirmed",
+    paid: "Paid",
+    preview: "Voucher preview",
+    generatedOn: "Generated on",
+    reference: "Reference",
+    confirmedServicesVoucher: "Confirmed services voucher",
+    includedServices: "Included services",
+    type: "Type",
+    direction: "Direction",
+    hotel: "Hotel",
+    address: "Address",
+    passengers: "Passengers",
+    quantity: "Quantity",
+    arrival: "Arrival",
+    departure: "Departure",
+    at: "at",
+    arrivalRef: "Arrival ref.",
+    departureRef: "Departure ref.",
+    luggage: "Luggage",
+    requests: "Requests",
+    customItem: "Booking item",
+    service: "Service",
+    note: "The day before the service, when applicable, you will receive the final operational details with driver, vehicle and confirmed time. Please present this voucher if requested by our operations team.",
+    phone: "Phone",
+    print: "Print / save PDF",
+  },
+};
+
+function quoteLanguage(value: unknown): VoucherLanguage {
+  return value === "en" ? "en" : "it";
+}
+
+function fmtDate(value: string | null | undefined, lang: VoucherLanguage) {
   if (!value) return "";
   const date = new Date(`${String(value).slice(0, 10)}T00:00:00Z`);
   return Number.isNaN(date.getTime())
     ? String(value)
-    : date.toLocaleDateString("it-IT", { day: "2-digit", month: "long", year: "numeric", timeZone: "UTC" });
+    : date.toLocaleDateString(lang === "en" ? "en-GB" : "it-IT", { day: "2-digit", month: "long", year: "numeric", timeZone: "UTC" });
 }
 
 function fmtTime(value?: string | null) {
   return value ? String(value).slice(0, 5) : "";
 }
 
-function serviceLabel(type?: string | null) {
-  return type ? SERVICE_LABELS[type] ?? type : "Servizio";
+function serviceLabel(type: string | null | undefined, lang: VoucherLanguage) {
+  return type ? SERVICE_LABELS[type]?.[lang] ?? type : COPY[lang].service;
 }
 
-function itemTitle(item: QuoteItemRow, index: number) {
+function directionLabel(direction: string | null | undefined, lang: VoucherLanguage) {
+  return direction ? DIRECTION_LABELS[direction]?.[lang] ?? direction : "";
+}
+
+function itemTitle(item: QuoteItemRow, lang: VoucherLanguage) {
   if (item.title?.trim()) return item.title.trim();
-  if (item.item_type === "free_text") return "Voce prenotazione";
-  return serviceLabel(item.service_type);
+  if (item.item_type === "free_text") return COPY[lang].customItem;
+  return serviceLabel(item.service_type, lang);
 }
 
 function metaLine(label: string, value?: string | number | null) {
@@ -65,22 +148,23 @@ function metaLine(label: string, value?: string | number | null) {
   return `<span><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</span>`;
 }
 
-function renderItem(item: QuoteItemRow, index: number) {
+function renderItem(item: QuoteItemRow, index: number, lang: VoucherLanguage) {
+  const t = COPY[lang];
   const showArrival = item.direction !== "departure";
   const showDeparture = item.direction !== "arrival";
   const meta = [
-    item.item_type === "service" ? metaLine("Tipo", serviceLabel(item.service_type)) : "",
-    item.direction ? metaLine("Direzione", DIRECTION_LABELS[item.direction] ?? item.direction) : "",
-    item.hotel_name ? metaLine("Hotel", item.hotel_name) : "",
-    item.hotel_address ? metaLine("Indirizzo", item.hotel_address) : "",
-    item.pax && item.pax > 0 ? metaLine("Passeggeri", `${item.pax} pax`) : "",
-    item.quantity && item.quantity > 1 ? metaLine("Quantita", item.quantity) : "",
-    showArrival && item.arrival_date ? metaLine("Arrivo", `${fmtDate(item.arrival_date)}${item.arrival_time ? ` ore ${fmtTime(item.arrival_time)}` : ""}`) : "",
-    item.arrival_flight_train ? metaLine("Rif. arrivo", item.arrival_flight_train) : "",
-    showDeparture && item.departure_date ? metaLine("Partenza", `${fmtDate(item.departure_date)}${item.departure_time ? ` ore ${fmtTime(item.departure_time)}` : ""}`) : "",
-    item.departure_flight_train ? metaLine("Rif. partenza", item.departure_flight_train) : "",
-    item.luggage_notes ? metaLine("Bagagli", item.luggage_notes) : "",
-    item.special_requests ? metaLine("Richieste", item.special_requests) : "",
+    item.item_type === "service" ? metaLine(t.type, serviceLabel(item.service_type, lang)) : "",
+    item.direction ? metaLine(t.direction, directionLabel(item.direction, lang)) : "",
+    item.hotel_name ? metaLine(t.hotel, item.hotel_name) : "",
+    item.hotel_address ? metaLine(t.address, item.hotel_address) : "",
+    item.pax && item.pax > 0 ? metaLine(t.passengers, `${item.pax} pax`) : "",
+    item.quantity && item.quantity > 1 ? metaLine(t.quantity, item.quantity) : "",
+    showArrival && item.arrival_date ? metaLine(t.arrival, `${fmtDate(item.arrival_date, lang)}${item.arrival_time ? ` ${t.at} ${fmtTime(item.arrival_time)}` : ""}`) : "",
+    item.arrival_flight_train ? metaLine(t.arrivalRef, item.arrival_flight_train) : "",
+    showDeparture && item.departure_date ? metaLine(t.departure, `${fmtDate(item.departure_date, lang)}${item.departure_time ? ` ${t.at} ${fmtTime(item.departure_time)}` : ""}`) : "",
+    item.departure_flight_train ? metaLine(t.departureRef, item.departure_flight_train) : "",
+    item.luggage_notes ? metaLine(t.luggage, item.luggage_notes) : "",
+    item.special_requests ? metaLine(t.requests, item.special_requests) : "",
   ].filter(Boolean);
 
   const description = item.description?.trim()
@@ -91,7 +175,7 @@ function renderItem(item: QuoteItemRow, index: number) {
     <section class="item">
       <div class="item-index">${index + 1}</div>
       <div class="item-body">
-        <h2>${escapeHtml(itemTitle(item, index))}</h2>
+        <h2>${escapeHtml(itemTitle(item, lang))}</h2>
         ${description}
         <div class="meta">${meta.join("")}</div>
       </div>
@@ -111,6 +195,8 @@ export async function buildServiceQuoteVoucherHtml(
 
   if (error || !quote) throw new Error("Preventivo non trovato.");
 
+  const lang = quoteLanguage(quote.customer_language);
+  const t = COPY[lang];
   const quoteItems = (items ?? []) as QuoteItemRow[];
   const fallbackItems: QuoteItemRow[] = [{
     item_type: "service",
@@ -138,14 +224,19 @@ export async function buildServiceQuoteVoucherHtml(
   const companyName = tenant?.name ?? "Ischia Transfer Service";
   const contactPhone = tenant?.quote_company_phone ?? tenant?.contact_phone ?? null;
   const contactWhatsapp = tenant?.quote_company_whatsapp ?? null;
-  const printedAt = new Date().toLocaleString("it-IT", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const printedAt = new Date().toLocaleString(lang === "en" ? "en-GB" : "it-IT", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const statusLabel = quote.status === "confirmed"
+    ? t.confirmed
+    : quote.status === "paid"
+      ? t.paid
+      : t.preview;
 
   return `<!doctype html>
-<html lang="it">
+<html lang="${t.htmlLang}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Voucher prenotazione ${escapeHtml(quote.quote_number)}</title>
+  <title>${escapeHtml(t.title)} ${escapeHtml(quote.quote_number)}</title>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; background: #f3f4f6; color: #111827; font-family: Arial, Helvetica, sans-serif; }
@@ -192,38 +283,38 @@ export async function buildServiceQuoteVoucherHtml(
   <main class="page">
     <header class="hero">
       <p class="kicker">${escapeHtml(companyName)}</p>
-      <h1>Voucher prenotazione</h1>
+      <h1>${escapeHtml(t.title)}</h1>
       <div class="hero-grid">
         <div>
-          <p style="margin:0;color:#dbeafe;font-size:14px;">Prenotazione confermata al ricevimento del saldo.</p>
+          <p style="margin:0;color:#dbeafe;font-size:14px;">${escapeHtml(t.subtitle)}</p>
         </div>
         <div class="ref">
           <strong>${escapeHtml(quote.quote_number)}</strong>
-          <span>Rif. preventivo</span>
+          <span>${escapeHtml(t.quoteRef)}</span>
         </div>
       </div>
     </header>
     <section class="content">
       <div class="summary">
-        <div class="box"><label>Cliente</label><p>${escapeHtml(customerName || "-")}${guestName ? `<small>Ospite: ${escapeHtml(guestName)}</small>` : ""}</p></div>
-        <div class="box"><label>Contatti</label><p>${escapeHtml(quote.customer_email ?? "-")}${quote.customer_phone ? `<small>${escapeHtml(quote.customer_phone)}</small>` : ""}</p></div>
-        <div class="box"><label>Stato</label><p>${quote.status === "confirmed" ? "Confermata" : "Preview voucher"}<small>Generato il ${escapeHtml(printedAt)}</small></p></div>
-        <div class="box"><label>Riferimento</label><p>${escapeHtml(quote.quote_number ?? "-")}<small>Voucher servizi confermati</small></p></div>
+        <div class="box"><label>${escapeHtml(t.customer)}</label><p>${escapeHtml(customerName || "-")}${guestName ? `<small>${escapeHtml(t.guest)}: ${escapeHtml(guestName)}</small>` : ""}</p></div>
+        <div class="box"><label>${escapeHtml(t.contacts)}</label><p>${escapeHtml(quote.customer_email ?? "-")}${quote.customer_phone ? `<small>${escapeHtml(quote.customer_phone)}</small>` : ""}</p></div>
+        <div class="box"><label>${escapeHtml(t.status)}</label><p>${escapeHtml(statusLabel)}<small>${escapeHtml(t.generatedOn)} ${escapeHtml(printedAt)}</small></p></div>
+        <div class="box"><label>${escapeHtml(t.reference)}</label><p>${escapeHtml(quote.quote_number ?? "-")}<small>${escapeHtml(t.confirmedServicesVoucher)}</small></p></div>
       </div>
 
-      <p class="items-title">Servizi inclusi</p>
-      ${voucherItems.map(renderItem).join("")}
+      <p class="items-title">${escapeHtml(t.includedServices)}</p>
+      ${voucherItems.map((item, index) => renderItem(item, index, lang)).join("")}
 
       <div class="note">
-        Il giorno prima del servizio riceverete, quando previsto, i dettagli operativi di autista, mezzo e orario definitivo. Presentare questo voucher in caso di richiesta del personale operativo.
+        ${escapeHtml(t.note)}
       </div>
     </section>
     <footer class="footer">
       <span>${escapeHtml(companyName)}</span>
-      <span>${contactPhone ? `Tel. ${escapeHtml(contactPhone)}` : ""}${contactWhatsapp ? ` - WhatsApp ${escapeHtml(contactWhatsapp)}` : ""}</span>
+      <span>${contactPhone ? `${escapeHtml(t.phone)} ${escapeHtml(contactPhone)}` : ""}${contactWhatsapp ? ` - WhatsApp ${escapeHtml(contactWhatsapp)}` : ""}</span>
     </footer>
   </main>
-  <div class="toolbar no-print"><button onclick="window.print()">Stampa / salva PDF</button></div>
+  <div class="toolbar no-print"><button onclick="window.print()">${escapeHtml(t.print)}</button></div>
 </body>
 </html>`;
 }
