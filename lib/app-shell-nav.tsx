@@ -255,6 +255,7 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/richieste-modifica", label: "Richieste modifica", icon: "✏️" },
   { href: "/whatsapp", label: "Inbox WhatsApp", icon: "WA" },
   { href: "/whatsapp-log", label: "WhatsApp Log", icon: "💬" },
+  { href: "/whatsapp-costs", label: "Costi WhatsApp", icon: "€", adminOnly: true },
   { href: "/bus-convocations", label: "Convocazioni Bus", icon: "📣" },
 ];
 

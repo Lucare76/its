@@ -50,7 +50,12 @@ export type MetaStatus = {
   timestamp?: string;
   recipient_id?: string;
   conversation?: { id?: string };
-  pricing?: { category?: string };
+  pricing?: {
+    category?: string;
+    billable?: boolean;
+    pricing_model?: string;
+    type?: string;
+  };
   errors?: Array<Record<string, unknown>>;
   [key: string]: unknown;
 };

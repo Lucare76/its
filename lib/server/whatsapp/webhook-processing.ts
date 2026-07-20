@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeWhatsAppWaId, logWhatsAppEvent, mapWebhookStatus, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
 import { sendPushToTenantRoles } from "@/lib/server/web-push";
 import { getWhatsAppOfficeHoursStatus, WHATSAPP_OFFICE_CLOSED_AUTO_REPLY_TEXT } from "./office-hours";
+import { upsertWhatsAppCostEvent } from "./costs";
 import { matchWhatsAppInboundMessage } from "./matching";
 import { persistOutboundWhatsAppMessage } from "./messages";
 import type { MetaChangeValue, MetaContact, MetaMessage, MetaStatus, MetaWebhookPayload, WhatsAppMatchResult } from "./types";
@@ -604,6 +605,8 @@ async function processStatus(admin: SupabaseClient, status: MetaStatus) {
   const resolved = await resolveStatusTenant(admin, status);
   if (!resolved.tenantId) throw new Error("Unable to resolve tenant for WhatsApp status");
   const timestamp = unixToIso(status.timestamp);
+  const firstError = status.errors?.[0] as Record<string, unknown> | undefined;
+  const pricing = status.pricing;
 
   await admin.from("whatsapp_message_statuses").upsert({
     tenant_id: resolved.tenantId,
@@ -611,10 +614,34 @@ async function processStatus(admin: SupabaseClient, status: MetaStatus) {
     status: status.status,
     recipient_id: status.recipient_id ?? null,
     conversation_id: status.conversation?.id ?? null,
-    pricing_category: status.pricing?.category ?? null,
+    pricing_category: pricing?.category ?? null,
+    billable: typeof pricing?.billable === "boolean" ? pricing.billable : null,
+    pricing_model: pricing?.pricing_model ?? null,
+    pricing_type: pricing?.type ?? null,
+    error_code: firstError?.code != null ? String(firstError.code) : null,
+    error_message: typeof firstError?.message === "string"
+      ? firstError.message
+      : typeof firstError?.title === "string"
+        ? firstError.title
+        : null,
     timestamp,
     raw_status: status
   }, { onConflict: "tenant_id,wa_message_id,status,timestamp", ignoreDuplicates: true });
+
+  try {
+    await upsertWhatsAppCostEvent(admin, {
+      tenantId: resolved.tenantId,
+      serviceId: resolved.serviceId,
+      status,
+      timestamp,
+    });
+  } catch (costError) {
+    console.warn("WhatsApp cost event update failed", {
+      waMessageId: status.id,
+      tenantId: resolved.tenantId,
+      message: costError instanceof Error ? costError.message : "cost update failed",
+    });
+  }
 
   const mappedStatus = mapWebhookStatus(status.status);
   if (mappedStatus) {
