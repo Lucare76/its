@@ -369,7 +369,54 @@ export default function WhatsAppCostsPage() {
 
         <section className="rounded-lg border border-slate-200 bg-white p-4">
           <h2 className="text-sm font-bold text-slate-800">Tabella giornaliera</h2>
-          <div className="mt-3 overflow-x-auto">
+          <div className="mt-3 space-y-3 md:hidden">
+            {data?.daily.map((row) => (
+              <article key={row.date} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase text-slate-500">Data</p>
+                    <p className="mt-1 text-sm font-bold text-slate-900">{row.date}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-semibold uppercase text-slate-500">Volume</p>
+                    <p className="mt-1 text-lg font-bold text-slate-900">{row.volume}</p>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-md bg-white p-2">
+                    <p className="text-[11px] font-semibold uppercase text-slate-500">Gratis</p>
+                    <p className="mt-1 text-sm font-bold text-slate-900">{row.free}</p>
+                  </div>
+                  <div className="rounded-md bg-white p-2">
+                    <p className="text-[11px] font-semibold uppercase text-slate-500">Pagati</p>
+                    <p className="mt-1 text-sm font-bold text-slate-900">{row.paid}</p>
+                  </div>
+                  <div className="rounded-md bg-white p-2">
+                    <p className="text-[11px] font-semibold uppercase text-slate-500">Da det.</p>
+                    <p className="mt-1 text-sm font-bold text-slate-900">{row.missing_rate}</p>
+                  </div>
+                </div>
+
+                <dl className="mt-3 space-y-2 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="text-slate-500">Costo Meta stimato</dt>
+                    <dd className="font-semibold text-slate-900">{fmtEuro(row.estimated_cost)}</dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="text-slate-500">Costo fatturato</dt>
+                    <dd className="font-semibold text-slate-900">{row.reconciled_cost ? fmtEuro(row.reconciled_cost) : "-"}</dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="text-slate-500">Differenza</dt>
+                    <dd className="font-semibold text-slate-900">{row.difference == null ? "-" : fmtEuro(row.difference)}</dd>
+                  </div>
+                </dl>
+              </article>
+            ))}
+            {!data?.daily.length ? <EmptyState title="Nessun evento WhatsApp" text="Nessun evento WhatsApp nel periodo selezionato." /> : null}
+          </div>
+          <div className="mt-3 hidden overflow-x-auto md:block">
             <table className="min-w-full text-left text-sm">
               <thead className="text-xs uppercase text-slate-500">
                 <tr><th className="py-2">Data</th><th>Volume</th><th>Gratuiti</th><th>A pagamento</th><th>Da determinare</th><th>Costo Meta stimato</th><th>Costo fatturato da Meta</th><th>Differenza</th></tr>
