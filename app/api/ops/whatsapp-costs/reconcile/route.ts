@@ -28,6 +28,11 @@ function splitCsvLine(line: string, separator: string) {
   for (let i = 0; i < line.length; i += 1) {
     const char = line[i];
     if (char === "\"") {
+      if (quoted && line[i + 1] === "\"") {
+        current += "\"";
+        i += 1;
+        continue;
+      }
       quoted = !quoted;
       continue;
     }
@@ -49,13 +54,58 @@ function parseItalianDate(value: string) {
     const [, dd, mm, yyyy] = match;
     return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
   }
+  const monthMatch = trimmed.toLowerCase().match(/^(\d{1,2})\s+([a-zà-ù]{3,})\s+(\d{4})$/i);
+  if (monthMatch) {
+    const [, dd, month, yyyy] = monthMatch;
+    const months: Record<string, string> = {
+      gen: "01",
+      gennaio: "01",
+      feb: "02",
+      febbraio: "02",
+      mar: "03",
+      marzo: "03",
+      apr: "04",
+      aprile: "04",
+      mag: "05",
+      maggio: "05",
+      giu: "06",
+      giugno: "06",
+      lug: "07",
+      luglio: "07",
+      ago: "08",
+      agosto: "08",
+      set: "09",
+      settembre: "09",
+      ott: "10",
+      ottobre: "10",
+      nov: "11",
+      novembre: "11",
+      dic: "12",
+      dicembre: "12",
+    };
+    const mm = months[month];
+    if (mm) return `${yyyy}-${mm}-${dd.padStart(2, "0")}`;
+  }
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
   return null;
 }
 
+function normalizeReportCategory(value: string) {
+  const normalized = value.trim().toLowerCase();
+  const labels: Record<string, string> = {
+    servizio: "service",
+    service: "service",
+    utility: "utility",
+    marketing: "marketing",
+    autenticazione: "authentication",
+    authentication: "authentication",
+  };
+  return labels[normalized] ?? normalized;
+}
+
 function parseMoney(value: string) {
   const normalized = value
-    .replace(/[€\s]/g, "")
+    .replace(/[^0-9,.-]/g, "")
     .replace(/\./g, "")
     .replace(",", ".");
   const parsed = Number(normalized);
@@ -101,7 +151,7 @@ export function parseMetaCsv(csv: string) {
     }
 
     const date = parseItalianDate(cells[headerIndexes.date] ?? "");
-    const category = (cells[headerIndexes.category] ?? "").trim().toLowerCase();
+    const category = normalizeReportCategory(cells[headerIndexes.category] ?? "");
     const pricingType = headerIndexes.type >= 0 ? (cells[headerIndexes.type] ?? "").trim().toLowerCase() || null : null;
     const volume = parseVolume(cells[headerIndexes.volume] ?? "");
     const cost = parseMoney(cells[headerIndexes.cost] ?? "");
