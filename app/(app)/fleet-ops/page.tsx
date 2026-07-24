@@ -360,6 +360,7 @@ export default function FleetOpsPage() {
             <a href="/fleet-ops/maintenance" className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 hover:bg-orange-100">Manutenzioni</a>
             <a href="/fleet-ops/inventory" className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800 hover:bg-sky-100">Ricambi</a>
             <a href="/fleet-ops/reports" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">Report costi/km</a>
+            <a href="/fleet-ops/driver-history" className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-800 hover:bg-indigo-100">Storico assegnazioni</a>
           </div>
         }
       />
@@ -652,6 +653,7 @@ export default function FleetOpsPage() {
                           <a href="/fleet-ops/maintenance" className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 hover:bg-orange-100">Apri manutenzioni</a>
                           <a href="/fleet-ops/inventory" className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800 hover:bg-sky-100">Apri magazzino</a>
                           <a href="/fleet-ops/reports" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">Apri report costi/km</a>
+                          <a href="/fleet-ops/driver-history" className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-800 hover:bg-indigo-100">Apri storico assegnazioni</a>
                         </div>
                       </div>
                     </div>

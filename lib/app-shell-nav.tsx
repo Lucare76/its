@@ -330,6 +330,7 @@ export const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/fleet-ops/inventory", label: "Ricambi magazzino", icon: "🔩" },
       { href: "/fleet-ops/reports", label: "Report veicoli", icon: "📈" },
       { href: "/fleet-ops/drivers", label: "KPI Autisti", icon: "📊" },
+      { href: "/fleet-ops/driver-history", label: "Storico assegnazioni", icon: "J" },
       { href: "/fleet-ops/scadenze", label: "Scadenze documenti", icon: "J" },
       { href: "/settings/tenant", label: "Profilo azienda", icon: "🏢" },
     ]
