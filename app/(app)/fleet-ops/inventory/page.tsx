@@ -43,10 +43,15 @@ const EMPTY_FORM = {
   notes: "",
 };
 
+function fmtMoney(value: number | null | undefined) {
+  return value != null ? `EUR ${value.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "-";
+}
+
 export default function FleetInventoryPage() {
   const [records, setRecords] = useState<InventoryRecord[]>([]);
   const [vehicles, setVehicles] = useState<VehicleOption[]>([]);
   const [statusFilter, setStatusFilter] = useState<"all" | "available" | "ordered" | "out_of_stock">("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
@@ -84,11 +89,29 @@ export default function FleetInventoryPage() {
     return () => window.clearTimeout(timeout);
   }, [load]);
 
+  const visibleRecords = useMemo(() => {
+    const needle = searchQuery.trim().toLowerCase();
+    if (!needle) return records;
+    return records.filter((record) => [
+      record.part_name,
+      record.part_code,
+      record.supplier,
+      record.ordered_from,
+      record.ordered_by_name,
+      record.vehicle?.label,
+      record.vehicle?.plate,
+      record.notes,
+    ].some((value) => (value ?? "").toLowerCase().includes(needle)));
+  }, [records, searchQuery]);
+
   const totals = useMemo(() => ({
     available: records.filter((record) => record.status === "available").length,
     ordered: records.filter((record) => record.status === "ordered").length,
     out_of_stock: records.filter((record) => record.status === "out_of_stock").length,
-  }), [records]);
+    stockValue: visibleRecords.reduce((sum, record) => sum + Number(record.unit_cost ?? 0) * record.quantity_on_hand, 0),
+    orderedValue: visibleRecords.reduce((sum, record) => sum + Number(record.unit_cost ?? 0) * record.quantity_ordered, 0),
+    lowAttention: visibleRecords.filter((record) => record.status === "out_of_stock" || (record.quantity_on_hand <= 0 && record.quantity_ordered <= 0)).length,
+  }), [records, visibleRecords]);
 
   async function createInventoryItem() {
     const token = await accessToken();
@@ -140,12 +163,33 @@ export default function FleetInventoryPage() {
         </div>
       ) : null}
 
+      <div className="grid gap-3 md:grid-cols-4">
+        {[
+          { label: "Valore magazzino", value: fmtMoney(totals.stockValue), note: "giacenza valorizzata" },
+          { label: "Valore ordinato", value: fmtMoney(totals.orderedValue), note: "pezzi in ordine" },
+          { label: "Da attenzionare", value: String(totals.lowAttention), note: "esauriti o senza scorta" },
+          { label: "Righe visibili", value: String(visibleRecords.length), note: `su ${records.length} totali` },
+        ].map((item) => (
+          <div key={item.label} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{item.label}</p>
+            <p className="mt-1 text-2xl font-bold text-slate-900">{loading ? "..." : item.value}</p>
+            <p className="mt-1 text-xs text-slate-500">{item.note}</p>
+          </div>
+        ))}
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_420px]">
         <SectionCard
           title="Inventario"
-          subtitle={`${records.length} righe inventario`}
+          subtitle={`${visibleRecords.length} righe inventario visibili`}
           actions={(
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className="input-saas h-8 w-52 text-xs"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Cerca pezzo, codice, mezzo"
+              />
               {([
                 ["all", "Tutti"],
                 ["available", `Disponibili (${totals.available})`],
@@ -161,17 +205,17 @@ export default function FleetInventoryPage() {
         >
           {loading ? (
             <p className="text-sm text-slate-400">Caricamento...</p>
-          ) : records.length === 0 ? (
+          ) : visibleRecords.length === 0 ? (
             <p className="text-sm text-slate-400">Nessun ricambio presente per il filtro selezionato.</p>
           ) : (
             <div className="space-y-3">
-              {records.map((record) => (
+              {visibleRecords.map((record) => (
                 <article key={record.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-slate-900">{record.part_name}</p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {record.part_code ?? "Codice assente"} · {record.vehicle ? `${record.vehicle.label}${record.vehicle.plate ? ` · ${record.vehicle.plate}` : ""}` : "Ricambio generale"}
+                        {record.part_code ?? "Codice assente"} - {record.vehicle ? `${record.vehicle.label}${record.vehicle.plate ? ` - ${record.vehicle.plate}` : ""}` : "Ricambio generale"}
                       </p>
                     </div>
                     <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
@@ -193,15 +237,15 @@ export default function FleetInventoryPage() {
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Costo</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.unit_cost != null ? `€${record.unit_cost.toFixed(2)}` : "—"}</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.unit_cost != null ? `EUR ${record.unit_cost.toFixed(2)}` : "-"}</p>
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Data ordine</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.order_date ? new Date(record.order_date).toLocaleDateString("it-IT") : "—"}</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.order_date ? new Date(record.order_date).toLocaleDateString("it-IT") : "-"}</p>
                     </div>
                   </div>
                   <p className="mt-3 text-sm text-slate-500">
-                    Ordinato da: {record.ordered_by_name ?? "—"} · Dove: {record.ordered_from ?? record.supplier ?? "—"}
+                    Ordinato da: {record.ordered_by_name ?? "-"} - Dove: {record.ordered_from ?? record.supplier ?? "-"}
                   </p>
                   {record.notes ? <p className="mt-2 text-sm text-slate-500">{record.notes}</p> : null}
                 </article>
@@ -224,7 +268,7 @@ export default function FleetInventoryPage() {
               Mezzo collegato
               <select className="input-saas mt-1 w-full" value={form.vehicle_id} onChange={(event) => setForm((current) => ({ ...current, vehicle_id: event.target.value }))}>
                 <option value="">Generale / non assegnato</option>
-                {vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.label}{vehicle.plate ? ` · ${vehicle.plate}` : ""}</option>)}
+                {vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.label}{vehicle.plate ? ` - ${vehicle.plate}` : ""}</option>)}
               </select>
             </label>
             <div className="grid gap-3 sm:grid-cols-2">

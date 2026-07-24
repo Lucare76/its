@@ -51,16 +51,16 @@ async function accessToken() {
 }
 
 function fmt(n: number) {
-  return `€${n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `EUR ${n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function formatKmPerLiter(km: number, liters: number) {
-  if (km <= 0 || liters <= 0) return "—";
+  if (km <= 0 || liters <= 0) return "-";
   return `${(km / liters).toFixed(2)} km/L`;
 }
 
 function formatLitersPer100Km(km: number, liters: number) {
-  if (km <= 0 || liters <= 0) return "—";
+  if (km <= 0 || liters <= 0) return "-";
   return `${((liters / km) * 100).toFixed(1)} L/100 km`;
 }
 
@@ -107,7 +107,7 @@ export default function FleetReportsPage() {
       .sort((a, b) => b.total_cost - a.total_cost)
       .slice(0, 8)
       .map((row) => ({
-        name: row.label.length > 10 ? `${row.label.slice(0, 10)}…` : row.label,
+        name: row.label.length > 10 ? `${row.label.slice(0, 10)}...` : row.label,
         Carburante: Number(row.fuel_cost.toFixed(2)),
         Manutenzione: Number(row.maintenance_cost.toFixed(2)),
       }));
@@ -192,17 +192,17 @@ export default function FleetReportsPage() {
       {/* KPI bar */}
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-6">
         {[
-          { label: "Totale costi", value: totals ? fmt(totals.total_cost) : "—", sub: "carburante + manutenzione", color: "text-slate-900" },
-          { label: "Carburante", value: totals ? fmt(totals.fuel_cost) : "—", sub: totals ? `${((totals.fuel_cost / Math.max(totals.total_cost, 1)) * 100).toFixed(0)}% del totale` : "—", color: "text-amber-700" },
-          { label: "Manutenzione", value: totals ? fmt(totals.maintenance_cost) : "—", sub: totals ? `${((totals.maintenance_cost / Math.max(totals.total_cost, 1)) * 100).toFixed(0)}% del totale` : "—", color: "text-orange-700" },
-          { label: "Costo/km", value: costPerKm != null ? `€${costPerKm.toFixed(3)}` : "—", sub: totals ? `su ${totalsLoggedKm.toLocaleString("it-IT")} km` : "dati insufficienti", color: "text-teal-700" },
-          { label: "Consumo medio", value: avgKmPerLiter != null ? `${avgKmPerLiter.toFixed(2)} km/L` : "—", sub: totals ? `calcolato su ${totalsFuelLiters.toFixed(1)} L` : "dati insufficienti", color: "text-sky-700" },
-          { label: "Consumo per 100 km", value: avgLitersPer100Km != null ? `${avgLitersPer100Km.toFixed(1)} L/100 km` : "—", sub: totals ? `su ${totalsFuelIntervalKm.toLocaleString("it-IT")} km da rifornimenti` : "dati insufficienti", color: "text-violet-700" },
+          { label: "Totale costi", value: totals ? fmt(totals.total_cost) : "-", sub: "carburante + manutenzione", color: "text-slate-900" },
+          { label: "Carburante", value: totals ? fmt(totals.fuel_cost) : "-", sub: totals ? `${((totals.fuel_cost / Math.max(totals.total_cost, 1)) * 100).toFixed(0)}% del totale` : "-", color: "text-amber-700" },
+          { label: "Manutenzione", value: totals ? fmt(totals.maintenance_cost) : "-", sub: totals ? `${((totals.maintenance_cost / Math.max(totals.total_cost, 1)) * 100).toFixed(0)}% del totale` : "-", color: "text-orange-700" },
+          { label: "Costo/km", value: costPerKm != null ? `EUR ${costPerKm.toFixed(3)}` : "-", sub: totals ? `su ${totalsLoggedKm.toLocaleString("it-IT")} km` : "dati insufficienti", color: "text-teal-700" },
+          { label: "Consumo medio", value: avgKmPerLiter != null ? `${avgKmPerLiter.toFixed(2)} km/L` : "-", sub: totals ? `calcolato su ${totalsFuelLiters.toFixed(1)} L` : "dati insufficienti", color: "text-sky-700" },
+          { label: "Consumo per 100 km", value: avgLitersPer100Km != null ? `${avgLitersPer100Km.toFixed(1)} L/100 km` : "-", sub: totals ? `su ${totalsFuelIntervalKm.toLocaleString("it-IT")} km da rifornimenti` : "dati insufficienti", color: "text-violet-700" },
         ].map((kpi) => (
           <div key={kpi.label} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{kpi.label}</p>
             <p className={`mt-1 text-2xl font-bold ${kpi.color}`}>
-              {loading ? <span className="text-slate-300">…</span> : kpi.value}
+              {loading ? <span className="text-slate-300">...</span> : kpi.value}
             </p>
             <p className="mt-1 text-xs text-slate-500">{kpi.sub}</p>
           </div>
@@ -213,7 +213,7 @@ export default function FleetReportsPage() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)]">
         <SectionCard
           title="Costi per mezzo"
-          subtitle={payload ? `${payload.year} · ${payload.period === "monthly" ? "mensile" : "annuale"}` : "Caricamento"}
+          subtitle={payload ? `${payload.year} - ${payload.period === "monthly" ? "mensile" : "annuale"}` : "Caricamento"}
           actions={(
             <div className="flex gap-1 rounded-lg bg-slate-100 p-1">
               {(["vehicles", "timeline"] as const).map((t) => (
@@ -240,7 +240,7 @@ export default function FleetReportsPage() {
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
                   <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tick={{ fill: "#64748b" }} />
-                  <YAxis stroke="#94a3b8" fontSize={11} tick={{ fill: "#64748b" }} tickFormatter={(v: number) => `€${v}`} width={65} />
+                  <YAxis stroke="#94a3b8" fontSize={11} tick={{ fill: "#64748b" }} tickFormatter={(v: number) => `EUR ${v}`} width={65} />
                   <Tooltip
                     contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12 }}
                     formatter={(value: unknown) => fmt(Number(value))}
@@ -309,7 +309,7 @@ export default function FleetReportsPage() {
                   <th className="hidden pb-3 pr-4 text-right md:table-cell">Km</th>
                   <th className="hidden pb-3 pr-4 text-right lg:table-cell">Consumo medio</th>
                   <th className="hidden pb-3 pr-4 text-right lg:table-cell">Consumo/100 km</th>
-                  <th className="hidden pb-3 text-right md:table-cell">€/km</th>
+                  <th className="hidden pb-3 text-right md:table-cell">EUR /km</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -329,7 +329,7 @@ export default function FleetReportsPage() {
                         {row.label}
                         {isTop && <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">TOP</span>}
                       </td>
-                      <td className="hidden py-2.5 pr-4 font-mono text-xs text-slate-500 sm:table-cell">{row.plate ?? "—"}</td>
+                      <td className="hidden py-2.5 pr-4 font-mono text-xs text-slate-500 sm:table-cell">{row.plate ?? "-"}</td>
                       <td className="py-2.5 pr-4 text-right text-amber-700">{fmt(row.fuel_cost)}</td>
                       <td className="py-2.5 pr-4 text-right text-orange-700">{fmt(row.maintenance_cost)}</td>
                       <td className="py-2.5 pr-4 text-right font-bold text-slate-900">{fmt(row.total_cost)}</td>
@@ -338,13 +338,13 @@ export default function FleetReportsPage() {
                         {kmFromFuel && <span className="ml-1 text-[10px] text-slate-400">~</span>}
                       </td>
                       <td className="hidden py-2.5 pr-4 text-right text-sky-700 lg:table-cell">
-                        {averageKmPerLiter != null ? formatKmPerLiter(rowFuelIntervalKm, rowFuelLiters) : "—"}
+                        {averageKmPerLiter != null ? formatKmPerLiter(rowFuelIntervalKm, rowFuelLiters) : "-"}
                       </td>
                       <td className="hidden py-2.5 pr-4 text-right text-violet-700 lg:table-cell">
-                        {averageLitersPer100Km != null ? formatLitersPer100Km(rowFuelIntervalKm, rowFuelLiters) : "—"}
+                        {averageLitersPer100Km != null ? formatLitersPer100Km(rowFuelIntervalKm, rowFuelLiters) : "-"}
                       </td>
                       <td className="hidden py-2.5 text-right text-teal-700 md:table-cell">
-                        {cpk != null ? `€${cpk.toFixed(3)}` : "—"}
+                        {cpk != null ? `EUR ${cpk.toFixed(3)}` : "-"}
                       </td>
                     </tr>
                   );
@@ -357,15 +357,15 @@ export default function FleetReportsPage() {
                   <td className="py-2.5 pr-4 text-right font-semibold text-amber-700">{fmt(totals?.fuel_cost ?? 0)}</td>
                   <td className="py-2.5 pr-4 text-right font-semibold text-orange-700">{fmt(totals?.maintenance_cost ?? 0)}</td>
                   <td className="py-2.5 pr-4 text-right text-base font-bold text-slate-900">{fmt(totals?.total_cost ?? 0)}</td>
-                  <td className="hidden py-2.5 pr-4 text-right font-semibold text-slate-600 md:table-cell">{totals?.logged_km.toLocaleString("it-IT") ?? "—"}</td>
+                  <td className="hidden py-2.5 pr-4 text-right font-semibold text-slate-600 md:table-cell">{totals?.logged_km.toLocaleString("it-IT") ?? "-"}</td>
                   <td className="hidden py-2.5 pr-4 text-right font-semibold text-sky-700 lg:table-cell">
-                    {totals ? formatKmPerLiter(totalsFuelIntervalKm, totalsFuelLiters) : "—"}
+                    {totals ? formatKmPerLiter(totalsFuelIntervalKm, totalsFuelLiters) : "-"}
                   </td>
                   <td className="hidden py-2.5 pr-4 text-right font-semibold text-violet-700 lg:table-cell">
-                    {totals ? formatLitersPer100Km(totalsFuelIntervalKm, totalsFuelLiters) : "—"}
+                    {totals ? formatLitersPer100Km(totalsFuelIntervalKm, totalsFuelLiters) : "-"}
                   </td>
                   <td className="hidden py-2.5 text-right font-semibold text-teal-700 md:table-cell">
-                    {costPerKm != null ? `€${costPerKm.toFixed(3)}` : "—"}
+                    {costPerKm != null ? `EUR ${costPerKm.toFixed(3)}` : "-"}
                   </td>
                 </tr>
               </tfoot>

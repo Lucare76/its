@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DateInput, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
@@ -68,6 +68,14 @@ const EMPTY_FORM = {
 
 const PLACEHOLDER_FISCAL_DOCUMENT_HOSTS = new Set(["example.com", "example.org", "example.net"]);
 
+function fmtMoney(value: number | null | undefined) {
+  return value != null ? `EUR ${value.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "-";
+}
+
+function fmtNumber(value: number | null | undefined, suffix = "") {
+  return value != null ? `${value.toLocaleString("it-IT")}${suffix}` : "-";
+}
+
 function normalizeFiscalDocumentUrl(raw: string | null | undefined) {
   const value = (raw ?? "").trim();
   if (!value) return { ok: true as const, url: null };
@@ -91,6 +99,7 @@ export default function FleetFuelPage() {
   const [currentRole, setCurrentRole] = useState<FuelRole>("operator");
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("pending");
+  const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [documentModal, setDocumentModal] = useState<FuelDocumentModalState | null>(null);
@@ -151,6 +160,36 @@ export default function FleetFuelPage() {
     }, 0);
     return () => window.clearTimeout(timeout);
   }, [load]);
+
+  const visibleRecords = useMemo(() => {
+    const needle = searchQuery.trim().toLowerCase();
+    if (!needle) return records;
+    return records.filter((record) => [
+      record.vehicle?.label,
+      record.vehicle?.plate,
+      record.vehicle?.license_number,
+      record.station,
+      record.fuel_type,
+      record.fiscal_document_name,
+      record.notes,
+    ].some((value) => (value ?? "").toLowerCase().includes(needle)));
+  }, [records, searchQuery]);
+
+  const fuelSummary = useMemo(() => {
+    const approved = visibleRecords.filter((record) => record.approval_status === "approved");
+    const totalCost = approved.reduce((sum, record) => sum + Number(record.cost ?? 0), 0);
+    const totalLiters = approved.reduce((sum, record) => sum + Number(record.liters ?? 0), 0);
+    const missingDocuments = visibleRecords.filter((record) => {
+      const hasDocument = Boolean((record.fiscal_document_url ?? "").trim() || (record.fiscal_document_name ?? "").trim());
+      return record.approval_status === "approved" && !hasDocument;
+    }).length;
+    return {
+      totalCost,
+      totalLiters,
+      averagePrice: totalLiters > 0 ? totalCost / totalLiters : null,
+      missingDocuments,
+    };
+  }, [visibleRecords]);
 
   async function createManualFuelEntry() {
     const token = await accessToken();
@@ -373,6 +412,21 @@ export default function FleetFuelPage() {
         </div>
       ) : null}
 
+      <div className="grid gap-3 md:grid-cols-4">
+        {[
+          { label: "Costo approvato", value: fmtMoney(fuelSummary.totalCost), note: "sul filtro corrente" },
+          { label: "Litri approvati", value: `${fuelSummary.totalLiters.toLocaleString("it-IT", { maximumFractionDigits: 1 })} L`, note: "rifornimenti validati" },
+          { label: "Prezzo medio", value: fuelSummary.averagePrice != null ? `EUR ${fuelSummary.averagePrice.toFixed(3)}/L` : "-", note: "costo / litri" },
+          { label: "Doc. mancanti", value: String(fuelSummary.missingDocuments), note: "approvati senza riferimento" },
+        ].map((item) => (
+          <div key={item.label} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{item.label}</p>
+            <p className="mt-1 text-2xl font-bold text-slate-900">{loading ? "..." : item.value}</p>
+            <p className="mt-1 text-xs text-slate-500">{item.note}</p>
+          </div>
+        ))}
+      </div>
+
       {documentModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4">
           <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white shadow-2xl">
@@ -381,7 +435,7 @@ export default function FleetFuelPage() {
                 {documentModal.mode === "approve" ? "Approva rifornimento" : "Modifica documento fiscale"}
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                {documentModal.record.vehicle?.label ?? "Veicolo"} · {new Date(documentModal.record.fuel_date).toLocaleDateString("it-IT")}
+                {documentModal.record.vehicle?.label ?? "Veicolo"} - {new Date(documentModal.record.fuel_date).toLocaleDateString("it-IT")}
               </p>
             </div>
             <div className="space-y-4 px-5 py-4">
@@ -448,7 +502,7 @@ export default function FleetFuelPage() {
                 Mezzo
                 <select className="input-saas mt-1 w-full" value={editModal.form.vehicle_id}
                   onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, vehicle_id: e.target.value } } : null)}>
-                  {vehicles.map(v => <option key={v.id} value={v.id}>{v.label}{v.plate ? ` · ${v.plate}` : ""}</option>)}
+                  {vehicles.map(v => <option key={v.id} value={v.id}>{v.label}{v.plate ? ` - ${v.plate}` : ""}</option>)}
                 </select>
               </label>
               <label className="text-xs font-semibold text-slate-500">
@@ -516,8 +570,8 @@ export default function FleetFuelPage() {
             <div className="px-6 py-5">
               <p className="text-sm font-semibold text-slate-900">Eliminare questo rifornimento?</p>
               <p className="mt-1 text-xs text-slate-500">
-                {deleteConfirm.vehicle?.label ?? "Veicolo"} · {new Date(deleteConfirm.fuel_date).toLocaleDateString("it-IT")}
-                {deleteConfirm.cost != null ? ` · €${deleteConfirm.cost.toFixed(2)}` : ""}
+                {deleteConfirm.vehicle?.label ?? "Veicolo"} - {new Date(deleteConfirm.fuel_date).toLocaleDateString("it-IT")}
+                {deleteConfirm.cost != null ? ` - EUR ${deleteConfirm.cost.toFixed(2)}` : ""}
               </p>
               <p className="mt-2 text-xs text-rose-600">L&apos;operazione è irreversibile.</p>
             </div>
@@ -538,9 +592,15 @@ export default function FleetFuelPage() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_420px]">
         <SectionCard
           title="Coda rifornimenti"
-          subtitle={`${records.length} registrazioni visibili`}
+          subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}`}
           actions={(
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className="input-saas h-8 w-52 text-xs"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Cerca mezzo, targa, distributore"
+              />
               {([
                 ["pending", `Da approvare (${counts.pending})`],
                 ["approved", `Approvati (${counts.approved})`],
@@ -561,22 +621,22 @@ export default function FleetFuelPage() {
         >
           {loading ? (
             <p className="text-sm text-slate-400">Caricamento...</p>
-          ) : records.length === 0 ? (
+          ) : visibleRecords.length === 0 ? (
             <p className="text-sm text-slate-400">Nessun rifornimento trovato per il filtro corrente.</p>
           ) : (
             <div className="space-y-3">
-              {records.map((record) => (
+              {visibleRecords.map((record) => (
                 <article key={record.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-slate-900">
-                        {record.vehicle?.label ?? "Veicolo"} {record.vehicle?.plate ? `· ${record.vehicle.plate}` : ""}
+                        {record.vehicle?.label ?? "Veicolo"} {record.vehicle?.plate ? `- ${record.vehicle.plate}` : ""}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {new Date(record.fuel_date).toLocaleDateString("it-IT")} · {record.station ?? "Distributore non indicato"} · {record.fuel_type ?? "tipo non indicato"}
+                        {new Date(record.fuel_date).toLocaleDateString("it-IT")} - {record.station ?? "Distributore non indicato"} - {record.fuel_type ?? "tipo non indicato"}
                       </p>
                       <p className="mt-1 text-xs text-slate-400">
-                        {record.submitted_via_qr ? "Caricato da QR driver" : "Inserimento ufficio"}{record.vehicle?.license_number ? ` · Licenza ${record.vehicle.license_number}` : ""}
+                        {record.submitted_via_qr ? "Caricato da QR driver" : "Inserimento ufficio"}{record.vehicle?.license_number ? ` - Licenza ${record.vehicle.license_number}` : ""}
                       </p>
                     </div>
                     <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
@@ -591,15 +651,15 @@ export default function FleetFuelPage() {
                   <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Litri</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.liters != null ? `${record.liters.toFixed(1)} L` : "—"}</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.liters != null ? `${record.liters.toFixed(1)} L` : "-"}</p>
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Costo</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.cost != null ? `€${record.cost.toFixed(2)}` : "—"}</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.cost != null ? `EUR ${record.cost.toFixed(2)}` : "-"}</p>
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Km</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.km_at_fuel != null ? record.km_at_fuel.toLocaleString("it-IT") : "—"}</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.km_at_fuel != null ? record.km_at_fuel.toLocaleString("it-IT") : "-"}</p>
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Documento fiscale</p>
@@ -681,7 +741,7 @@ export default function FleetFuelPage() {
                 <option value="">Seleziona mezzo</option>
                 {vehicles.map((vehicle) => (
                   <option key={vehicle.id} value={vehicle.id}>
-                    {vehicle.label}{vehicle.plate ? ` · ${vehicle.plate}` : ""}
+                    {vehicle.label}{vehicle.plate ? ` - ${vehicle.plate}` : ""}
                   </option>
                 ))}
               </select>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { generateSuggestionText, generateSuggestions, type Suggestion, type SuggestionActionPayload } from "@/lib/operations-suggestions";
+import { generateSuggestions, type Suggestion, type SuggestionActionPayload } from "@/lib/operations-suggestions";
 import type { Assignment, BusLotConfig, Hotel, Service } from "@/lib/types";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { fetchAllServices } from "@/lib/server/fetch-all-services";
@@ -8,7 +8,6 @@ import { fetchAllServices } from "@/lib/server/fetch-all-services";
 export const runtime = "nodejs";
 
 const CACHE_MS = 20_000;
-const AI_TEXT_LIMIT = 3;
 
 type CacheEntry = {
   expiresAt: number;
@@ -80,20 +79,6 @@ async function loadState(auth: Exclude<Awaited<ReturnType<typeof authorizePricin
     hotels: (hotelsResult.data ?? []) as Hotel[],
     busLotConfigs: ((busLotConfigsResult.error ? [] : busLotConfigsResult.data) ?? []) as BusLotConfig[]
   };
-}
-
-async function enrichCriticalHighText(suggestions: Suggestion[]) {
-  let generated = 0;
-  const out: Suggestion[] = [];
-  for (const suggestion of suggestions) {
-    if (generated < AI_TEXT_LIMIT && !suggestion.resolved && (suggestion.priority === "critical" || suggestion.priority === "high")) {
-      generated += 1;
-      out.push({ ...suggestion, description: await generateSuggestionText(suggestion) });
-      continue;
-    }
-    out.push(suggestion);
-  }
-  return out;
 }
 
 async function markResolved(
@@ -182,16 +167,14 @@ export async function GET(request: NextRequest) {
     const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
     if (auth instanceof NextResponse) return auth;
 
-    const useAi = request.nextUrl.searchParams.get("ai") !== "false";
-    const cacheKey = `${auth.membership.tenant_id}:${useAi ? "ai" : "static"}`;
+    const cacheKey = `${auth.membership.tenant_id}:static`;
     const hit = cache.get(cacheKey);
     if (hit && hit.expiresAt > Date.now()) {
       return NextResponse.json({ ok: true, cached: true, suggestions: hit.suggestions });
     }
 
     const [state, resolvedSuggestionIds] = await Promise.all([loadState(auth), readResolvedIds(auth)]);
-    const generated = generateSuggestions({ ...state, resolvedSuggestionIds });
-    const suggestions = useAi ? await enrichCriticalHighText(generated) : generated;
+    const suggestions = generateSuggestions({ ...state, resolvedSuggestionIds });
 
     cache.set(cacheKey, { expiresAt: Date.now() + CACHE_MS, suggestions });
     return NextResponse.json({ ok: true, cached: false, suggestions });
