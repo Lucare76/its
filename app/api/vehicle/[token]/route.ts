@@ -534,7 +534,7 @@ export async function POST(
     const validFuelTypes = new Set(["diesel", "benzina", "gas", "elettrico"]);
 
     if (!validFuelTypes.has(fuelType)) return fail("Tipo carburante non valido.");
-    if (liters !== null && (!Number.isFinite(liters) || liters <= 0 || liters > 300)) return fail("Litri non validi.");
+    if (liters !== null && (!Number.isFinite(liters) || liters <= 0 || liters > 600)) return fail("Litri non validi.");
     if (cost !== null && (!Number.isFinite(cost) || cost < 0 || cost > 5000)) return fail("Costo non valido.");
     if (kmAtFuel !== null && (!Number.isInteger(kmAtFuel) || kmAtFuel < 0)) return fail("Km al rifornimento non validi.");
     if (station && station.length > 160) return fail("Nome distributore troppo lungo.");
