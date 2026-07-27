@@ -30,7 +30,26 @@ type ServiceQuote = {
   expires_at: string | null;
   created_at: string;
   notes_internal: string | null;
-  items?: Array<{ total_price_cents: number | null }>;
+  items?: QuoteItem[];
+};
+
+type QuoteItem = {
+  item_type?: "service" | "free_text" | null;
+  title?: string | null;
+  description?: string | null;
+  service_type?: string | null;
+  direction?: "arrival" | "departure" | "round_trip" | null;
+  arrival_date?: string | null;
+  arrival_time?: string | null;
+  departure_date?: string | null;
+  departure_time?: string | null;
+  hotel_name?: string | null;
+  pax?: number | null;
+  quantity?: number | null;
+  price_mode?: "per_person" | "total" | null;
+  unit_price_cents?: number | null;
+  total_price_cents?: number | null;
+  price_notes?: string | null;
 };
 
 type QuoteFull = ServiceQuote & {
@@ -97,6 +116,13 @@ export function fmtDatetime(iso: string | null) {
     day: "2-digit", month: "short", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   });
+}
+
+function quoteTotalCents(quote: ServiceQuote) {
+  if (quote.items?.length) {
+    return quote.items.reduce((sum, item) => sum + (item.total_price_cents ?? 0), 0);
+  }
+  return quote.price_mode === "total" ? quote.price_cents : quote.price_cents * quote.pax;
 }
 
 export function fmtEur(cents: number) {
@@ -398,6 +424,10 @@ function QuoteDetailPanel({
           <p className="text-slate-500 text-sm truncate">{quote.customer_first_name} {quote.customer_last_name} — {quote.customer_email}</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <a href={`/preventivi/${quote.id}`} target="_blank" rel="noopener noreferrer"
+            className="text-xs px-3 py-1.5 border border-blue-200 rounded-lg text-blue-700 hover:bg-blue-50">
+            Apri dettaglio completo
+          </a>
           {!locked && (
             <a href={`/preventivi/${quote.id}`} target="_blank" rel="noopener noreferrer"
               className="text-xs px-3 py-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50">
@@ -451,12 +481,41 @@ function QuoteDetailPanel({
 
       {/* ── PREZZO ── */}
       <Section title="Prezzo">
-        {quote.price_mode !== "total" && <Row label="Per persona" value={fmtEur(quote.price_cents)} />}
-        <Row label={quote.price_mode === "total" ? "Totale" : `Totale (${quote.pax} pax)`} value={fmtEur(quote.price_mode === "total" ? quote.price_cents : quote.price_cents * quote.pax)} bold />
+        {!quote.items?.length && quote.price_mode !== "total" && <Row label="Per persona" value={fmtEur(quote.price_cents)} />}
+        <Row label={quote.items?.length ? "Totale preventivo" : quote.price_mode === "total" ? "Totale" : `Totale (${quote.pax} pax)`} value={fmtEur(quoteTotalCents(quote))} bold />
         {quote.price_notes && <Row label="Note" value={quote.price_notes} />}
       </Section>
 
       {/* ── PAGAMENTO ── */}
+      {quote.items?.length ? (
+        <Section title="Dettaglio voci">
+          <div className="space-y-2">
+            {quote.items.map((item, index) => (
+              <div key={index} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                <div className="flex justify-between gap-3 text-sm">
+                  <span className="font-semibold text-slate-800">
+                    {index + 1}. {item.title || (item.item_type === "free_text" ? "Voce libera" : SERVICE_LABELS[item.service_type ?? ""] ?? item.service_type ?? "Servizio")}
+                  </span>
+                  <span className="font-bold text-blue-900">{fmtEur(item.total_price_cents ?? 0)}</span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  {[
+                    item.description ?? null,
+                    item.hotel_name ? `Hotel: ${item.hotel_name}` : null,
+                    item.pax != null && item.pax > 0 ? `${item.pax} pax` : null,
+                    item.price_mode === "per_person" && item.unit_price_cents != null ? `Per persona: ${fmtEur(item.unit_price_cents)}` : null,
+                    item.quantity && item.quantity > 1 ? `Quantita: ${item.quantity}` : null,
+                    item.arrival_date ? `Arrivo: ${fmtDate(item.arrival_date)}${item.arrival_time ? ` ${item.arrival_time.slice(0, 5)}` : ""}` : null,
+                    item.departure_date ? `Partenza: ${fmtDate(item.departure_date)}${item.departure_time ? ` ${item.departure_time.slice(0, 5)}` : ""}` : null,
+                    item.price_notes ?? null,
+                  ].filter(Boolean).join(" - ")}
+                </p>
+              </div>
+            ))}
+          </div>
+        </Section>
+      ) : null}
+
       <Section title="Pagamento">
         {quote.payment_method && <Row label="Metodo" value={quote.payment_method} />}
         {quote.iban && <Row label="IBAN" value={quote.iban} mono />}
@@ -523,6 +582,13 @@ function QuoteDetailPanel({
               {actionBusy === "register-payment" ? "Registrazione…" : "✅ Conferma pagamento ricevuto"}
             </button>
           </div>
+        )}
+
+        {(quote.status === "paid" || quote.status === "confirmed") && (
+          <button type="button" onClick={onOpenVoucherPreview}
+            className="w-full border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 font-medium py-2.5 rounded-xl text-sm">
+            Anteprima voucher prenotazione
+          </button>
         )}
 
         {/* Duplica (per expired/cancelled) */}
