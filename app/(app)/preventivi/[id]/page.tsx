@@ -642,6 +642,12 @@ export default function PreventivDetailPage({ params }: { params: Promise<{ id: 
                 </button>
               </div>
             )}
+            {(quote.status === "paid" || quote.status === "confirmed") && (
+              <button type="button" onClick={openVoucherPreview}
+                className="w-full border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 font-medium py-2.5 rounded-xl text-sm">
+                Anteprima voucher prenotazione
+              </button>
+            )}
             {isReadOnly && (
               <a href={`/preventivi/new?from=${quote.id}`} target="_blank" rel="noopener noreferrer"
                 className="flex items-center justify-center gap-2 w-full border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium py-2.5 rounded-xl text-sm">
@@ -998,7 +1004,7 @@ function VoucherPreviewModal({ quoteNumber, html, loading, onClose }: {
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 shrink-0">
           <div>
             <h3 className="font-bold text-slate-800">Anteprima voucher - {quoteNumber}</h3>
-            <p className="text-xs text-slate-400">Controllo prima della conferma saldo</p>
+            <p className="text-xs text-slate-400">Voucher prenotazione generato dal preventivo</p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl ml-1">x</button>
         </div>
