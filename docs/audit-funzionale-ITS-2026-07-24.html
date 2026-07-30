@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <title>Audit Funzionale Completo ITS - 24 Luglio 2026</title>
+  <style>
+    @page { size: A4; margin: 14mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #101828;
+      background: #f6f8fb;
+      line-height: 1.48;
+    }
+    main {
+      max-width: 1060px;
+      margin: 0 auto;
+      background: #fff;
+      padding: 34px 42px 48px;
+    }
+    h1, h2, h3 { margin: 0; line-height: 1.18; }
+    h1 { font-size: 32px; letter-spacing: .2px; }
+    h2 { font-size: 19px; margin-top: 30px; padding-top: 18px; border-top: 1px solid #d9e2ec; }
+    h3 { font-size: 15px; margin-top: 18px; color: #24415f; }
+    p { margin: 8px 0 0; }
+    ul { margin: 8px 0 0 20px; padding: 0; }
+    li { margin: 5px 0; }
+    .hero {
+      color: #fff;
+      background: linear-gradient(135deg, #0b1f36 0%, #176069 58%, #20a486 100%);
+      padding: 30px;
+      border-radius: 14px;
+      margin-bottom: 22px;
+    }
+    .meta {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+    .pill {
+      background: rgba(255,255,255,.14);
+      border: 1px solid rgba(255,255,255,.24);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 12px;
+    }
+    .pill strong { display: block; margin-top: 4px; font-size: 15px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .card {
+      border: 1px solid #d9e2ec;
+      border-radius: 10px;
+      padding: 14px;
+      background: #fbfdff;
+    }
+    .ok { color: #067647; font-weight: 700; }
+    .warn { color: #b54708; font-weight: 700; }
+    .todo { color: #175cd3; font-weight: 700; }
+    .muted { color: #667085; }
+    .small { font-size: 12px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid #d9e2ec;
+      padding: 8px 9px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { background: #eef4fb; color: #24415f; }
+    code {
+      font-family: Consolas, Monaco, monospace;
+      background: #eef4fb;
+      border-radius: 4px;
+      padding: 1px 4px;
+    }
+    .callout {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-left: 4px solid #20a486;
+      background: #effaf6;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <h1>Audit Funzionale Completo ITS</h1>
+      <p>Rilettura aggiornata alla luce degli interventi completati dopo l'audit del 29 giugno 2026.</p>
+      <div class="meta">
+        <div class="pill">Data audit<strong>24 luglio 2026</strong></div>
+        <div class="pill">Commit analizzato<strong>19cb0d0</strong></div>
+        <div class="pill">Versione stato<strong>post-remediation</strong></div>
+        <div class="pill">Criterio<strong>non invasivo</strong></div>
+      </div>
+    </section>
+
+    <h2>Verdetto sintetico</h2>
+    <p>Il gestionale e' oggi piu' completo rispetto all'audit del 29 giugno: sono stati chiusi o raffinati diversi punti che prima erano segnalati come incompleti, soprattutto nell'area operativa, WhatsApp, voucher e costi flotta. La direzione corretta resta quella scelta: completare schermate e controlli senza modificare i flussi critici che gia' funzionano.</p>
+    <div class="callout">
+      <strong>Priorita' attuale:</strong> consolidare monitoraggi e strumenti di consultazione prima di automatizzare ulteriormente processi delicati come invii programmati, smistamento Bruno e scoring automatico dei pattern storici.
+    </div>
+
+    <h2>Metriche repository</h2>
+    <div class="grid">
+      <div class="card"><strong>113 pagine App Router</strong><p class="muted">Ampia copertura UI per ruoli operativi, amministrativi e driver.</p></div>
+      <div class="card"><strong>265 route API</strong><p class="muted">Backend applicativo ricco, con molte integrazioni gia' isolate per dominio.</p></div>
+      <div class="card"><strong>133 definizioni tabellari in migration</strong><p class="muted">Schema Supabase esteso, coerente con natura multi-tenant del gestionale.</p></div>
+      <div class="card"><strong>87 test spec/test</strong><p class="muted">Base test gia' presente su aree operative, pricing, WhatsApp, voucher e piano giorno.</p></div>
+    </div>
+
+    <h2>Cosa e' stato completato dopo l'audit</h2>
+    <table>
+      <thead>
+        <tr><th>Area</th><th>Stato prima</th><th>Intervento completato</th><th>Stato attuale</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>WhatsApp costi</td>
+          <td>Monitoraggio non presente o non leggibile lato gestionale.</td>
+          <td>Dashboard <code>/whatsapp-costs</code>, import CSV Meta, ripartizione per categoria, messaggi senza tariffa, simulazione tariffe.</td>
+          <td><span class="ok">Operativo</span>. Restano da caricare tariffe Meta definitive per vedere costi non zero.</td>
+        </tr>
+        <tr>
+          <td>Voucher</td>
+          <td>Parti non sempre tradotte e identita' visiva migliorabile.</td>
+          <td>Voucher legato alla lingua del preventivo, test lingua, logo ITS inserito e integrato nella hero senza box bianco evidente.</td>
+          <td><span class="ok">Migliorato</span>. Da verificare su ogni template email reale.</td>
+        </tr>
+        <tr>
+          <td>Carburante / Km / Ricambi</td>
+          <td>UI base, non rotta ma poco raffinata.</td>
+          <td>Raffinata la UI costi flotta con viste piu' leggibili, indicatori e navigazione operativa.</td>
+          <td><span class="ok">Raffinato</span>. Ora e' piu' adatta all'uso quotidiano.</td>
+        </tr>
+        <tr>
+          <td>Risoluzione conflitti guidata</td>
+          <td>Suggerimenti presenti, applicazione non abbastanza passo-passo.</td>
+          <td>Aggiunta UI guidata per scegliere suggerimento, verificare impatto e applicare con piu' controllo.</td>
+          <td><span class="ok">Completato lato UI</span>. Bene mantenere supervisione operatore.</td>
+        </tr>
+        <tr>
+          <td>Storico assegnazioni autisti</td>
+          <td>Dati nel DB, mancava schermata dedicata.</td>
+          <td>Aggiunta pagina dedicata e API read-only per consultare storico assegnazioni.</td>
+          <td><span class="ok">Completato</span>. Utile per audit operativo e controllo scelte precedenti.</td>
+        </tr>
+        <tr>
+          <td>OpenAI suggestions legacy</td>
+          <td>Codice morto o non usato nell'area suggerimenti operativi.</td>
+          <td>Rimosso percorso non attivo, mantenendo le logiche deterministiche esistenti.</td>
+          <td><span class="ok">Pulito</span>. Ridotto rumore tecnico senza cambiare comportamento utente.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Stato funzionale per area</h2>
+    <h3>Operativita' giornaliera</h3>
+    <p>Il Piano del Giorno resta il cuore operativo. Le ultime modifiche hanno migliorato la capacita' di intervenire sui conflitti e di consultare lo storico delle decisioni, senza introdurre automazioni aggressive.</p>
+    <ul>
+      <li><span class="ok">Forte:</span> suggerimenti, test su planner, assegnazioni, conflitti e vincoli veicolo/autista.</li>
+      <li><span class="todo">Da fare:</span> osservabilita' migliore sugli errori reali e dashboard decisionale per interventi manuali frequenti.</li>
+    </ul>
+
+    <h3>WhatsApp</h3>
+    <p>Il modulo e' cresciuto: webhook, contatti, costi, log e risposta fuori orario hanno copertura dedicata. Il costo visualizzato resta zero quando i messaggi sono consegnati ma le tariffe Meta non sono configurate o agganciate.</p>
+    <ul>
+      <li><span class="ok">Forte:</span> controllo costi e diagnostica messaggi senza tariffa.</li>
+      <li><span class="warn">Attenzione:</span> caricare tariffe ufficiali o export billing Meta quando disponibile per rendere il dato contabile.</li>
+    </ul>
+
+    <h3>Voucher e preventivi</h3>
+    <p>La generazione voucher e' piu' coerente con lingua e brand. I test dedicati riducono il rischio di regressioni nelle parti testuali.</p>
+    <ul>
+      <li><span class="ok">Forte:</span> lingua voucher e identita' visuale migliorate.</li>
+      <li><span class="todo">Da fare:</span> controllo campione su vecchi voucher gia' inviati, perche' quelli storici non vengono retro-inviati automaticamente.</li>
+    </ul>
+
+    <h3>Flotta e costi operativi</h3>
+    <p>L'area carburante, km e ricambi non era un blocco funzionale, ma ora e' piu' presentabile e consultabile. Il valore aggiunto e' soprattutto gestionale: meno dispersione e maggiore leggibilita'.</p>
+    <ul>
+      <li><span class="ok">Forte:</span> UI piu' chiara e pronta per uso reale.</li>
+      <li><span class="todo">Da fare:</span> eventuali KPI automatici su costo/km, costo veicolo e scostamenti mensili.</li>
+    </ul>
+
+    <h2>Cosa resta da fare</h2>
+    <table>
+      <thead>
+        <tr><th>Priorita'</th><th>Voce</th><th>Perche' resta aperta</th><th>Approccio consigliato</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Alta controllata</td>
+          <td>Cron orfani / invii automatici</td>
+          <td>Attivarli senza supervisione puo' impattare email e WhatsApp reali.</td>
+          <td>Prima monitor read-only e dry-run; poi attivazione graduale.</td>
+        </tr>
+        <tr>
+          <td>Media</td>
+          <td>Smistamento Bruno</td>
+          <td>Area segnalata come delicata: utile non alterare decisioni operative senza validazione.</td>
+          <td>Schermata di controllo e suggerimenti, non automatismo diretto.</td>
+        </tr>
+        <tr>
+          <td>Media</td>
+          <td>Pattern appresi</td>
+          <td>I dati storici sono disponibili, ma usarli per scoring automatico cambia il comportamento del planner.</td>
+          <td>Mostrare evidenze all'operatore prima di farle pesare nelle assegnazioni.</td>
+        </tr>
+        <tr>
+          <td>Media</td>
+          <td>Logging strutturato / alert</td>
+          <td>Oggi molti flussi hanno log, ma manca una visione unica di anomalie e retry.</td>
+          <td>Dashboard tecnica leggera piu' alert su errori critici.</td>
+        </tr>
+        <tr>
+          <td>Bassa</td>
+          <td>KPI avanzati flotta</td>
+          <td>La UI e' migliorata; i KPI predittivi sono un passo successivo.</td>
+          <td>Aggiungere dopo uso reale dei dati carburante/km/ricambi.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Rischi principali</h2>
+    <ul>
+      <li><strong>Automazioni comunicazioni:</strong> ogni invio automatico verso clienti va trattato con log, idempotenza e modalita' dry-run quando possibile.</li>
+      <li><strong>Dati Meta WhatsApp:</strong> i costi non possono essere certi senza tariffe o documentazione billing ufficiale caricata nel sistema.</li>
+      <li><strong>Storico operativo:</strong> i dati storici sono preziosi, ma vanno usati come supporto decisionale prima di diventare regole automatiche.</li>
+      <li><strong>Regressioni UI:</strong> ogni nuova schermata operativa va controllata mobile e desktop, soprattutto per driver e operatori.</li>
+    </ul>
+
+    <h2>Raccomandazione operativa</h2>
+    <p>La prossima fase dovrebbe restare prudente: completare strumenti di controllo, report e storico prima di abilitare nuove automazioni. Il sistema e' gia' in una fase vendibile piu' matura; ora il valore maggiore arriva da affidabilita', diagnostica e usabilita' quotidiana.</p>
+
+    <p class="small muted">Audit generato dal repository locale ITS il 24 luglio 2026, commit <code>19cb0d0</code>. Le metriche sono derivate dai file presenti nel workspace al momento della generazione.</p>
+  </main>
+</body>
+</html>
