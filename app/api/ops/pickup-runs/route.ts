@@ -165,6 +165,20 @@ function groupIntoRuns(
   });
 }
 
+// ── Verifica ownership tenant ─────────────────────────────────────────────────
+// pickup_run_arrivals e pickup_run_buses non hanno tenant_id proprio: l'ownership
+// deriva dal run_id (FK verso pickup_runs.tenant_id). Con client service-role
+// (che bypassa la RLS) va verificata esplicitamente prima di ogni scrittura.
+async function runBelongsToTenant(auth: PricingAuthContext, runId: string, tenantId: string): Promise<boolean> {
+  const { data } = await auth.admin
+    .from("pickup_runs")
+    .select("id")
+    .eq("id", runId)
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  return !!data;
+}
+
 // ── Caricamento dati ──────────────────────────────────────────────────────────
 
 async function loadPickupRuns(auth: PricingAuthContext, date: string, direction?: string) {
@@ -430,15 +444,24 @@ export async function POST(req: NextRequest) {
       if (!run_service_id || !dist_bus_id)
         return NextResponse.json({ ok: false, error: "Campi obbligatori mancanti" }, { status: 400 });
 
-      const { data: rs, error: rsErr } = await auth.admin
+      const { data: rs } = await auth.admin
         .from("pickup_run_services")
         .select("service_id, passenger_name, hotel_name, hotel_zone, pax, run_id")
         .eq("id", run_service_id)
-        .single();
-      if (rsErr || !rs) throw new Error("Passeggero non trovato.");
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      if (!rs) return NextResponse.json({ ok: false, error: "Passeggero non trovato." }, { status: 404 });
+
+      const { data: distBus } = await auth.admin
+        .from("bus_ischia_dist_buses")
+        .select("id")
+        .eq("id", dist_bus_id)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      if (!distBus) return NextResponse.json({ ok: false, error: "Bus smistamento non trovato." }, { status: 404 });
 
       // Crea allocazione sul bus smistamento
-      await auth.admin.from("bus_ischia_dist_allocations").insert({
+      const { error: allocErr } = await auth.admin.from("bus_ischia_dist_allocations").insert({
         tenant_id: tenantId,
         dist_bus_id,
         service_id: rs.service_id,
@@ -447,19 +470,23 @@ export async function POST(req: NextRequest) {
         hotel_name: rs.hotel_name,
         hotel_zone: rs.hotel_zone ?? "",
       });
+      if (allocErr) throw new Error(allocErr.message);
 
       // Segna come spostato
-      await auth.admin
+      const { error: moveErr } = await auth.admin
         .from("pickup_run_services")
         .update({ moved_to_dist_bus_id: dist_bus_id })
-        .eq("id", run_service_id);
+        .eq("id", run_service_id)
+        .eq("tenant_id", tenantId);
+      if (moveErr) throw new Error(moveErr.message);
 
       // Trova run per ricaricare con la giusta direction
       const { data: runRow } = await auth.admin
         .from("pickup_runs")
         .select("direction")
         .eq("id", rs.run_id)
-        .single();
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
 
       const data = await loadPickupRuns(auth, date, runRow?.direction ?? undefined);
       return NextResponse.json({ ok: true, ...data });
@@ -477,6 +504,9 @@ export async function POST(req: NextRequest) {
       };
       if (!run_id || !ferry_name || !arrival_time)
         return NextResponse.json({ ok: false, error: "Campi obbligatori mancanti" }, { status: 400 });
+
+      if (!(await runBelongsToTenant(auth, run_id, tenantId)))
+        return NextResponse.json({ ok: false, error: "Run non trovato." }, { status: 404 });
 
       const { error } = await auth.admin.from("pickup_run_arrivals").insert({
         run_id,
@@ -503,7 +533,15 @@ export async function POST(req: NextRequest) {
     // ── remove_arrival: rimuovi traghetto da un run ─────────────────────────
     if (action === "remove_arrival") {
       const { arrival_id, run_id } = body as { arrival_id: string; run_id: string };
-      const { error } = await auth.admin.from("pickup_run_arrivals").delete().eq("id", arrival_id);
+
+      if (!(await runBelongsToTenant(auth, run_id, tenantId)))
+        return NextResponse.json({ ok: false, error: "Run non trovato." }, { status: 404 });
+
+      const { error } = await auth.admin
+        .from("pickup_run_arrivals")
+        .delete()
+        .eq("id", arrival_id)
+        .eq("run_id", run_id);
       if (error) throw new Error(error.message);
 
       const { data: allArrivals } = await auth.admin
@@ -531,6 +569,9 @@ export async function POST(req: NextRequest) {
           bus_id?: string;
         };
 
+      if (!(await runBelongsToTenant(auth, run_id, tenantId)))
+        return NextResponse.json({ ok: false, error: "Run non trovato." }, { status: 404 });
+
       if (bus_id) {
         // update esistente
         const { error } = await auth.admin
@@ -541,7 +582,8 @@ export async function POST(req: NextRequest) {
             pax_assigned: pax_assigned ?? 0,
             notes: notes ?? null,
           })
-          .eq("id", bus_id);
+          .eq("id", bus_id)
+          .eq("run_id", run_id);
         if (error) throw new Error(error.message);
       } else {
         // insert nuovo
@@ -564,7 +606,20 @@ export async function POST(req: NextRequest) {
     // ── remove_bus: rimuovi bus da run ─────────────────────────────────────
     if (action === "remove_bus") {
       const { bus_id } = body as { bus_id: string };
-      const { error } = await auth.admin.from("pickup_run_buses").delete().eq("id", bus_id);
+
+      const { data: busRow } = await auth.admin
+        .from("pickup_run_buses")
+        .select("run_id")
+        .eq("id", bus_id)
+        .maybeSingle();
+      if (!busRow || !(await runBelongsToTenant(auth, busRow.run_id, tenantId)))
+        return NextResponse.json({ ok: false, error: "Bus non trovato." }, { status: 404 });
+
+      const { error } = await auth.admin
+        .from("pickup_run_buses")
+        .delete()
+        .eq("id", bus_id)
+        .eq("run_id", busRow.run_id);
       if (error) throw new Error(error.message);
 
       const data = await loadPickupRuns(auth, date);
@@ -582,8 +637,15 @@ export async function POST(req: NextRequest) {
       if (status !== undefined) update.status = status;
       if (notes !== undefined) update.notes = notes;
 
-      const { error } = await auth.admin.from("pickup_runs").update(update).eq("id", run_id);
+      const { data: updated, error } = await auth.admin
+        .from("pickup_runs")
+        .update(update)
+        .eq("id", run_id)
+        .eq("tenant_id", tenantId)
+        .select("id");
       if (error) throw new Error(error.message);
+      if (!updated || updated.length === 0)
+        return NextResponse.json({ ok: false, error: "Run non trovato." }, { status: 404 });
 
       const data = await loadPickupRuns(auth, date);
       return NextResponse.json({ ok: true, ...data });
@@ -592,8 +654,15 @@ export async function POST(req: NextRequest) {
     // ── delete_run ─────────────────────────────────────────────────────────
     if (action === "delete_run") {
       const { run_id } = body as { run_id: string };
-      const { error } = await auth.admin.from("pickup_runs").delete().eq("id", run_id);
+      const { data: deleted, error } = await auth.admin
+        .from("pickup_runs")
+        .delete()
+        .eq("id", run_id)
+        .eq("tenant_id", tenantId)
+        .select("id");
       if (error) throw new Error(error.message);
+      if (!deleted || deleted.length === 0)
+        return NextResponse.json({ ok: false, error: "Run non trovato." }, { status: 404 });
 
       const data = await loadPickupRuns(auth, date);
       return NextResponse.json({ ok: true, ...data });

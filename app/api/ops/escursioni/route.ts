@@ -148,6 +148,16 @@ export async function POST(req: NextRequest) {
       const { excursion_line_id, label, capacity, departure_time, vehicle_id } = body as {
         excursion_line_id: string; label: string; capacity: number; departure_time?: string; vehicle_id?: string | null;
       };
+
+      const { data: lineRow } = await auth.admin
+        .from("excursion_lines")
+        .select("id")
+        .eq("id", excursion_line_id)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      if (!lineRow)
+        return NextResponse.json({ ok: false, error: "Escursione non trovata." }, { status: 404 });
+
       const { error } = await auth.admin.from("excursion_units").insert({
         tenant_id: tenantId, excursion_line_id, excursion_date: date,
         label, capacity: capacity ?? 50,
@@ -182,6 +192,16 @@ export async function POST(req: NextRequest) {
         excursion_unit_id: string; customer_name: string; pax: number;
         hotel_name?: string; pickup_time?: string; phone?: string; agency_name?: string; notes?: string;
       };
+
+      const { data: unitRow } = await auth.admin
+        .from("excursion_units")
+        .select("id")
+        .eq("id", excursion_unit_id)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      if (!unitRow)
+        return NextResponse.json({ ok: false, error: "Bus escursione non trovato." }, { status: 404 });
+
       const { error } = await auth.admin.from("excursion_allocations").insert({
         excursion_unit_id, customer_name, pax: pax ?? 1,
         hotel_name: hotel_name?.trim() || null,
@@ -197,6 +217,16 @@ export async function POST(req: NextRequest) {
     // ── remove_passenger ──────────────────────────────────────────────────
     if (action === "remove_passenger") {
       const { allocation_id } = body as { allocation_id: string };
+
+      const { data: allocRow } = await auth.admin
+        .from("excursion_allocations")
+        .select("id, excursion_units!inner(tenant_id)")
+        .eq("id", allocation_id)
+        .eq("excursion_units.tenant_id", tenantId)
+        .maybeSingle();
+      if (!allocRow)
+        return NextResponse.json({ ok: false, error: "Passeggero non trovato." }, { status: 404 });
+
       const { error } = await auth.admin.from("excursion_allocations").delete().eq("id", allocation_id);
       if (error) throw new Error(error.message);
       return NextResponse.json({ ok: true, ...(await loadData(auth, date)) });
