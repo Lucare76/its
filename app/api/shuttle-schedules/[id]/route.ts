@@ -15,7 +15,7 @@ const patchSchema = z.object({
   meeting_point: z.string().max(200).nullable().optional(),
   vessel: z.string().min(1).max(60).optional(),
   valid_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  valid_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  valid_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   days_of_week: z.array(z.number().int().min(0).max(6)).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
 });
@@ -105,7 +105,7 @@ export async function PATCH(
 
   const existing = decodeShuttleScheduleId(id);
   const nextValidFrom = parsed.data.valid_from ?? todayIsoDate();
-  const nextValidTo = parsed.data.valid_to ?? "2099-12-31";
+  const nextValidTo = parsed.data.valid_to;
   if (nextValidTo < nextValidFrom) {
     return NextResponse.json(
       { error: "La data finale deve essere uguale o successiva alla data iniziale." },
