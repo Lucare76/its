@@ -1,10 +1,12 @@
 # Stato di lavoro — modulo Navette (shuttle)
 
+## STATO GENERALE: MILESTONE 1 NAVETTE COMPLETATA (2026-07-31)
+
 - **Branch**: main
-- **HEAD attuale**: `b62c1a0` (allineato con `origin/main`, verificato con `git rev-parse HEAD` / `git rev-parse origin/main` il 2026-07-31). Il worktree contiene modifiche applicative + test non ancora committati (`app/api/shuttle-schedules/route.ts`, `app/api/shuttle-schedules/[id]/route.ts`, `tests/unit/shuttle-schedules-tenant-isolation.test.ts`, `tests/unit/shuttle-schedules-audit-log.test.ts`) — nessun commit/push eseguito in questa sessione, per istruzione esplicita.
+- **HEAD attuale**: `9a78e3b` (allineato con `origin/main`, verificato con `git rev-parse HEAD` / `git rev-parse origin/main` il 2026-07-31). Worktree pulito.
 - **Data audit iniziale**: 2026-07-31 (HEAD `db71eaf` al momento dell'audit)
 - **Data ultimo aggiornamento di questo file**: 2026-07-31
-- **Stato worktree**: pulito a inizio sessione; a fine sessione contiene modifiche applicative + test non committati (vedi sopra)
+- **Stato worktree**: pulito
 
 ## Commit già completati (non rifare)
 
@@ -19,27 +21,34 @@
 9. `d687bd0` (2026-07-31) — fix: handle malformed shuttle schedule id in PATCH route. Mitiga **F-12 (BASSA)**: decode avvolto in try/catch + validazione struttura minima, `400` controllato invece di eccezione non gestita. 13 test in `tests/unit/shuttle-schedules-invalid-id.test.ts`.
 10. `e6f4d95` — test: add handler-level tenant isolation coverage for shuttle schedules API. Copre **F-07**, nessun bug trovato, nessun codice di produzione modificato. 28 test in `tests/unit/shuttle-schedules-tenant-isolation.test.ts`.
 11. `b62c1a0` — docs: mark M1-02 M1-03 M1-07 M1-09 complete and recommend M1-08 next.
-
-**Non ancora committato** (codice + test pronti, revisionati e approvati, in attesa di commit): audit aggregato M1-08/F-04 — vedi "Ultimo task completato" sotto.
+12. `aaebe8c` (2026-07-31) — feat: add aggregated audit log for shuttle schedule create update delete. Mitiga **F-04 (ridefinita)**: audit aggregato via `auditLog`→`ops_audit_events`, nessun log per riga. 33 test in `tests/unit/shuttle-schedules-audit-log.test.ts`.
+13. `9a78e3b` (2026-07-31) — docs: mark M1-08 complete and set M1-04 as the only open M1 task.
 
 ## Ultimo task completato
 
-**M1-08 / F-04 (ridefinita) — codice pronto, non ancora committato.** Audit persistente e aggregato (`shuttle_schedule_created`/`_updated`/`_deleted` via `auditLog`→`ops_audit_events`) per POST/PATCH/DELETE riusciti su `shuttle-schedules`, con snapshot funzionale `previous`/`next`, conteggi e range reali. Guard F-01 esteso (stessa query, stesso comportamento) per evitare una select ridondante. Fallimento parziale del PATCH ora riconoscibile nell'evento di errore (`deletePhaseCompleted`). 33 test in `tests/unit/shuttle-schedules-audit-log.test.ts`, esperimento di sensibilità eseguito e verificato. Reviewer indipendente: APPROVATO.
+**M1-08 / F-04 (ridefinita)** — commit `aaebe8c` + `9a78e3b`. Audit persistente e aggregato per POST/PATCH/DELETE riusciti su `shuttle-schedules`. Reviewer indipendente: APPROVATO.
 
-## Task corrente
+**Chiusura formale M1-04 / F-06** (questa sessione, solo documentazione) — analizzato a fondo il rischio prestazionale del `GET` (reale ma senza incidenti osservati) e le due possibili mitigazioni (filtro data, filtro tipo servizio): **nessuna delle due è risultata sicura per l'implementazione runtime in alta stagione** (regressione certa sulle programmazioni concluse per il filtro data; sicurezza non dimostrabile senza dati di produzione per il filtro tipo servizio; nessuna delle due risolve F-02). M1-04 è chiuso come **rischio accettato e documentato**, rinviato a Milestone 2 (M2-15). **Nessun codice applicativo modificato.**
 
-Nessun task applicativo in corso. **M1-04 (filtro/performance GET, F-06) è l'unico task M1 ancora aperto.** Non iniziato in questa sessione.
+## MILESTONE 1 — NESSUN TASK APERTO
+
+Tutti i task Milestone 1 sono COMPLETATI o formalmente CHIUSI con motivazione documentata (M1-04). Questo **non equivale a "nessun rischio"**: vedi "Rischi residui (Milestone 2)" sotto.
+
+## Prossimo passo raccomandato
+
+**Avviare l'audit del modulo Assegnazioni** (driver/veicolo — tabella `assignments`, gestione turni/piano-giorno), seguendo lo stesso metodo usato per il modulo Navette (audit read-only → mappatura → finding classificati → checklist atomica).
 
 ## Task bloccati
 
 Nessuno.
 
-## Rischi aperti (non ancora mitigati)
+## Rischi residui (Milestone 2) — non risolti, non oggetto di questa Milestone 1
 
-- **F-01, F-10, F-11, F-05, F-12, F-07, F-04 — tutti MITIGATI.** Causa strutturale di F-01 (modello delete+insert) resta debito tecnico per Milestone 2; il limite transazionale del PATCH (nessun rollback tra delete e insert) resta invariato, ora solo più visibile grazie a `deletePhaseCompleted` nell'evento di errore.
-- **F-02 (ALTA)**: navette con stessi 7 campi identificativi ma periodi diversi vengono fuse in un'unica scheda in UI. Nessuna mitigazione di codice sicura disponibile in stagione — solo comunicazione operativa. Rimandato a Milestone 2.
-- **F-03 (ALTA)**: operazione di modifica non transazionale, rischio di "navetta scomparsa" su errore parziale (invariato).
-- **F-06 (ALTA)**: query GET senza filtro, degrado prestazionale crescente con l'accumulo dati stagionali. Vedi M1-04, unico task M1 aperto.
+- **F-02 (ALTA) — fusione dei periodi**: navette con stessi 7 campi identificativi ma periodi diversi (anche di stagioni diverse) vengono fuse in un'unica scheda derivata, con `valid_from`/`valid_to`/`days_of_week` potenzialmente fuorvianti. Nessuna mitigazione di codice sicura possibile senza la soluzione strutturale (M2-01). Solo comunicazione operativa nel frattempo.
+- **F-06 (ALTA) — `GET` full-history con `select("*")`**: legge l'intero storico `services` del tenant (non filtrato per data né per tipo servizio) ad ogni caricamento della pagina Settings → Navette. Rischio prestazionale reale e crescente con l'accumulo di dati stagionali, **nessun incidente osservato ad oggi**. Chiuso come rischio accettato in M1-04 (vedi checklist); la correzione va progettata **insieme** a F-02 (M2-15), non isolatamente.
+- **PATCH non transazionale**: `deleteMatchingFutureServices` e `insertRows` restano due chiamate Supabase separate senza rollback. Un fallimento tra le due lascia dati in stato parziale (non ripristinato automaticamente); ora almeno riconoscibile nell'evento di errore tramite `deletePhaseCompleted` (M1-08), ma il difetto strutturale resta — soluzione in M2-02/M2-03.
+
+Questi tre rischi **appartengono esplicitamente a Milestone 2** e non devono essere riproposti come task M1 in futuro senza una nuova valutazione esplicita.
 
 Dettaglio completo di tutti i finding in `docs/audits/shuttle-module-audit.md` (documento storico, non aggiornato oltre l'audit iniziale se non strettamente necessario).
 

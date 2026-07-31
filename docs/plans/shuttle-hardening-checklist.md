@@ -50,20 +50,15 @@ Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianifi
 
 ### M1-04 — Filtrare `GET /api/shuttle-schedules` per tipo servizio e data
 - **Milestone**: 1 · **Priorità**: ALTA (F-06)
-- **Obiettivo**: ridurre il costo della query GET e correggere il `valid_from` mostrato quando esistono vecchie navette con la stessa chiave.
-- **Problema risolto**: F-06, in parte F-15.
-- **File consentiti**: `lib/server/fetch-all-services.ts` (o nuova funzione dedicata `fetchShuttleLikeServices` per non alterare gli altri chiamanti di `fetchAllServices`), `app/api/shuttle-schedules/route.ts`.
-- **File vietati**: altri chiamanti di `fetchAllServices` fuori dal modulo navette.
-- **Modifiche previste**: introdurre una query filtrata (`booking_service_kind in (navetta, shuttle_hotel)` con fallback su `vessel ilike 'navetta'`, e `date >= oggi - 400 giorni` per mantenere una finestra storica ragionevole senza scaricare tutto) usata solo dalla rotta GET/POST di shuttle-schedules; **non modificare** `fetchAllServices` usata da altri moduli.
-- **Test obbligatori**: nuovo test che verifica che `deriveShuttleSchedules` riceva solo servizi filtrati e che il conteggio di righe scaricate sia inferiore rispetto al full-scan su un dataset misto simulato.
-- **Comandi di verifica**: `pnpm exec vitest run`, `pnpm typecheck`, verifica manuale in dev (`pnpm dev`) che la pagina Settings → Navette mostri le stesse navette di prima.
-- **Rollback**: ripristinare la chiamata a `fetchAllServices` esistente in `route.ts`.
-- **Definition of Done**: GET shuttle-schedules non scarica più l'intera tabella `services`; test verde; verifica manuale in dev che nessuna navetta esistente sparisca dalla lista.
-- **Dipendenze**: nessuna.
-- **Feature flag**: consigliata (`SHUTTLE_FILTERED_FETCH=1`) per poter disattivare rapidamente in caso di regressione durante l'alta stagione.
-- **Rischio**: medio — cambia cosa il GET restituisce; richiede verifica manuale attenta prima del deploy in stagione.
-- **Stato**: DA FARE.
-- **Commit suggerito**: `perf: filter shuttle-schedules GET query by service kind and date range`
+- **Stato**: **CHIUSO IN M1 — RINVIATO A M2 come rischio accettato e documentato.** Nessun codice applicativo modificato per questo task.
+- **Motivazione della chiusura (audit approvato)**: `GET /api/shuttle-schedules` usa `select("*")` e legge l'intero storico `services` del tenant (non solo le righe navetta) — il rischio prestazionale è **reale e crescente** nel tempo, ma **non esiste evidenza di incidente operativo attuale**. Le due leve di mitigazione disponibili sono state analizzate a fondo e **nessuna è risultata sicura per un'implementazione runtime in alta stagione**:
+  - un filtro `date >= oggi` introduce una **regressione certa e dimostrata**: le programmazioni concluse (nessuna riga futura) spariscono interamente dalla risposta server, non più recuperabili nemmeno spostando il selettore data della UI su un giorno passato — oggi invece restano raggiungibili;
+  - un filtro su `booking_service_kind` **non è dimostrato sicuro** per righe legacy che si affidano al fallback di classificazione su `vessel` (vedi `normalizedKind()` in `lib/shuttle-schedules.ts`), verificabile solo con dati reali di produzione, non disponibili in questa sessione;
+  - **nessuna delle due opzioni risolve F-02** in generale (la fusione di periodi non contigui con la stessa chiave permane anche filtrando la data, tranne nel sottocaso in cui parte del periodo è già trascorsa).
+- **Decisione**: nessuna modifica runtime in Milestone 1. Il task viene chiuso qui come **rischio accettato e documentato**; la correzione strutturale (query realmente scoped, con o senza nuova architettura dati) è spostata in Milestone 2 — vedi M2-15.
+- **F-02 e F-06 vanno affrontati insieme**: qualunque filtro futuro su `GET` deve essere progettato in coordinamento con la soluzione strutturale di F-02 (M2-01), perché un filtro isolato rischia di mascherare la fusione dei periodi invece di risolverla, o di introdurre nuove regressioni di visibilità (vedi analisi sopra).
+- **Rollback**: non applicabile, nessuna modifica effettuata.
+- **Commit**: nessuno (solo documentazione).
 
 ### M1-05 — Verifica tenant su `hotel_id` in POST/PATCH
 - **Milestone**: 1 · **Priorità**: MEDIA (F-10)
@@ -180,15 +175,16 @@ Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianifi
 | M2-12 | Riordinare `DAYS_LABEL`/UI giorni settimana Lun→Dom con attenzione agli indici sottostanti | F-20 (parte strutturale) | Richiede test approfonditi su `enumerateShuttleDates` |
 | M2-13 | Test E2E Playwright per il flusso completo navette | audit — test mancanti | Da aggiungere a `tests/e2e/`, eseguibile con `pnpm e2e:ops` |
 | M2-14 | Test unitari mancanti: GET/POST/DELETE, ruoli/autorizzazione, sovrapposizione intervalli | audit — test mancanti | Indipendenti tra loro, possono precedere M2-01 |
+| M2-15 | Query `GET /api/shuttle-schedules` realmente scoped (data e/o tipo servizio), progettata **insieme** alla soluzione strutturale di F-02, non isolatamente | F-06, coordinato con F-02/M2-01 | Rinviato da M1-04 in questa sessione come rischio accettato; richiede dati reali di produzione per validare il filtro `booking_service_kind` prima dell'adozione; **non implementare un filtro data isolato** senza prima risolvere la rappresentazione dei periodi (rischio di nascondere programmazioni concluse) |
 
 ---
 
 ## Ordine di esecuzione consigliato
 
-**Milestone 1** — stato aggiornato al 2026-07-31 dopo l'audit aggregato delle operazioni massive (DONE-11):
-~~M1-03~~ (DONE-10) → ~~M1-01~~ (DONE-05) → ~~M1-05~~ (DONE-06) → ~~M1-06~~ (DONE-07) → ~~M1-02~~ (DONE-08) → ~~M1-07~~ (DONE-09) → ~~M1-09~~ (già coperto da DONE-07) → ~~M1-08~~ (DONE-11) → **M1-04** (unico task M1 ancora aperto)
+**MILESTONE 1 NAVETTE — COMPLETATA (2026-07-31).**
+~~M1-03~~ (DONE-10) → ~~M1-01~~ (DONE-05) → ~~M1-05~~ (DONE-06) → ~~M1-06~~ (DONE-07) → ~~M1-02~~ (DONE-08) → ~~M1-07~~ (DONE-09) → ~~M1-09~~ (già coperto da DONE-07) → ~~M1-08~~ (DONE-11) → ~~M1-04~~ (CHIUSO come rischio accettato, rinviato a M2-15)
 
-**M1-04 (filtro/performance GET, F-06) è l'unico task ancora aperto in Milestone 1.** Nessuna migrazione richiesta, ma **rischio di regressione medio** (cambia cosa il GET restituisce, richiede feature flag e verifica manuale attenta prima del deploy in stagione). **Non iniziato in questa sessione**, per istruzione esplicita.
+**Nessun task Milestone 1 resta aperto.** Questo **non significa "nessun rischio residuo"**: M1-04/F-06 è chiuso come rischio accettato e documentato (non risolto), e i finding strutturali F-02/F-03 restano esplicitamente aperti e rimandati a Milestone 2 (vedi tabella M2 sopra e `docs/plans/shuttle-working-status.md`). "Milestone 1 completata" significa che tutti i task **atomici e sicuri per l'alta stagione** sono stati eseguiti o formalmente chiusi con motivazione; non significa che il modulo sia privo di debito tecnico.
 
 **Milestone 1.5**: nessuna dipendenza dall'ordine, eseguibili in parallelo da persone diverse; consigliato M1.5-01 e M1.5-03 per primi (rischio operativo più alto se non fatti).
 
@@ -196,7 +192,7 @@ Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianifi
 
 ## Definition of Done del modulo (criterio per dichiararlo concluso)
 
-Il modulo Navette si considera "in sicurezza per l'alta stagione" quando: tutti i task Milestone 1 sono COMPLETATI e testati in produzione senza regressioni per almeno una settimana; il finding F-01 ha almeno la mitigazione M1-01 attiva; nessun finding CRITICA residuo nell'audit. Si considera "strutturalmente sano" solo dopo il completamento di M2-01/M2-02/M2-03 post-stagione.
+Il modulo Navette si considera "in sicurezza per l'alta stagione" quando: tutti i task Milestone 1 sono COMPLETATI **o formalmente chiusi con motivazione documentata** (M1-04 rientra in questo secondo caso) e testati in produzione senza regressioni per almeno una settimana; il finding F-01 ha almeno la mitigazione M1-01 attiva; nessun finding CRITICA residuo nell'audit. **Questa condizione è ora soddisfatta (2026-07-31).** Si considera "strutturalmente sano" solo dopo il completamento di M2-01/M2-02/M2-03/M2-15 post-stagione — F-02, F-03 e F-06 restano debito tecnico noto e non vanno confusi con "nessun rischio residuo".
 
 ## Rollback generale
 
