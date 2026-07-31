@@ -170,6 +170,32 @@ function invalidHotelResponse() {
   );
 }
 
+// The shuttle schedule id is not a database key: it is a base64url-encoded
+// JSON key. decodeShuttleScheduleId() only decodes/parses — it does not
+// validate structure, so a syntactically valid JSON payload missing the
+// fields the queries rely on (e.g. "{}" or "[]") decodes without throwing.
+// This checks only the fields used unconditionally in .eq(...) filters
+// downstream (hotel_id/meeting_point/booking_service_kind already have
+// null-safe fallbacks and are not required here).
+function isValidDecodedScheduleKey(value: ReturnType<typeof decodeShuttleScheduleId>): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (value.direction === "arrival" || value.direction === "departure") &&
+    typeof value.departure_time === "string" &&
+    value.departure_time.length > 0 &&
+    typeof value.customer_name === "string" &&
+    value.customer_name.length > 0 &&
+    typeof value.vessel === "string" &&
+    value.vessel.length > 0
+  );
+}
+
+function invalidScheduleIdResponse() {
+  return NextResponse.json({ error: "Identificativo navetta non valido." }, { status: 400 });
+}
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -189,7 +215,23 @@ export async function PATCH(
     );
   }
 
-  const existing = decodeShuttleScheduleId(id);
+  let existing: ReturnType<typeof decodeShuttleScheduleId>;
+  try {
+    existing = decodeShuttleScheduleId(id);
+    if (!isValidDecodedScheduleKey(existing)) {
+      throw new Error("shuttle schedule id decoded to an incomplete/invalid structure");
+    }
+  } catch (error) {
+    auditLog({
+      event: "shuttle_schedules_update_invalid_id",
+      level: "warn",
+      tenantId: auth.membership.tenant_id,
+      userId: auth.user.id,
+      details: { idLength: id.length },
+    });
+    return invalidScheduleIdResponse();
+  }
+
   const nextValidFrom = parsed.data.valid_from;
   const nextValidTo = parsed.data.valid_to;
   if (nextValidTo < nextValidFrom) {
