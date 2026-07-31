@@ -12,29 +12,21 @@ Regola generale per ogni task: **un task = un test = un commit facilmente revers
 | DONE-02 | `valid_to` obbligatorio nel PATCH shuttle schedules | `175a5a8` | `tests/unit/shuttle-schedules-patch-valid-to.test.ts` |
 | DONE-03 | `valid_from` obbligatorio nel PATCH shuttle schedules | `9a37134` | `tests/unit/shuttle-schedules-patch-valid-from.test.ts` |
 | DONE-04 | Regressione `valid_to >= valid_from` (range date) | `db71eaf` | `tests/unit/shuttle-schedules-patch-date-range.test.ts` |
+| DONE-05 | Blocco server-side (HTTP 409, fail-closed) di PATCH/DELETE su navette con corse odierne/future già assegnate (`assignments`) o con `status != 'new'` — mitigazione di F-01, verificato tenant-scoped su `services` e `assignments` | `ac37474` (2026-07-31) | `tests/unit/shuttle-schedules-operational-guard.test.ts` (13 casi: blocco/non blocco, oggi incluso, passato escluso, tenant isolation, fail-closed su errore query) |
 
 Nota: DONE-01 non copre `app/api/shuttle-schedules/**`, che però risulta tenant-safe per costruzione indipendente (vedi F-07 nell'audit). Il task M1-03 sotto copre solo il gap di test, non un bug.
+
+Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianificato in M1-01 (avviso "soft" in UI con `confirm()`, task ora chiuso di conseguenza — vedi sotto). Il blocco è **hard** lato server: nessun percorso applicativo può eseguire il delete quando esistono corse operative, indipendentemente dalla UI. La causa strutturale (F-01, modello delete+insert) resta comunque aperta e rimandata a Milestone 2 (M2-01/M2-02/M2-03): DONE-05 impedisce la perdita di dati, non elimina il modello a rischio.
 
 ---
 
 ## MILESTONE 1 — Alta stagione (correzioni sicure, atomiche, basso rischio)
 
-### M1-01 — Avviso bloccante in UI prima di modificare/eliminare navette con corse future già assegnate
+### M1-01 — ~~Avviso bloccante in UI prima di modificare/eliminare navette con corse future già assegnate~~ → SUPERATO da DONE-05
 - **Milestone**: 1 · **Priorità**: MASSIMA (mitiga F-01, CRITICA)
-- **Obiettivo**: impedire che un operatore salvi/elimini una navetta senza sapere che perderà assegnazioni driver/veicolo e stato delle corse future.
-- **Problema risolto**: F-01 (audit) — palliativo, non risolve la causa strutturale.
-- **File consentiti**: `app/(app)/settings/shuttles/page.tsx`, eventuale nuovo endpoint di sola lettura `app/api/shuttle-schedules/[id]/impact/route.ts` (GET, conta righe future con `assignments`/`status != 'new'`).
-- **File vietati**: `lib/shuttle-schedules.ts` (logica di delete/insert esistente NON va toccata in questo task), qualunque file WhatsApp.
-- **Modifiche previste**: nuovo GET di sola lettura che conta le corse future coinvolte e quelle già assegnate/lavorate; in UI, prima del PATCH/DELETE, chiamare questo endpoint e mostrare un `confirm()` esplicito con i numeri, bloccando il salvataggio se l'utente annulla.
-- **Test obbligatori**: test unitario sul nuovo endpoint GET (conteggio corretto assegnate/non assegnate, tenant isolation).
-- **Comandi di verifica**: `pnpm exec vitest run tests/unit/shuttle-schedules-impact.test.ts`, `pnpm typecheck`.
-- **Rollback**: rimuovere il nuovo file route + revert delle poche righe in `page.tsx` che chiamano l'endpoint prima del submit.
-- **Definition of Done**: un operatore che tenta di modificare/eliminare una navetta con corse future assegnate vede un avviso con conteggio reale prima di poter confermare.
-- **Dipendenze**: nessuna.
-- **Feature flag**: non necessaria (comportamento additivo, non distruttivo se l'endpoint fallisce — in tal caso il salvataggio prosegue senza avviso, da loggare).
-- **Rischio**: basso (solo lettura aggiuntiva, nessuna modifica alla logica di scrittura esistente).
-- **Stato**: DA FARE.
-- **Commit suggerito**: `feat: warn before shuttle edit/delete affects assigned future services`
+- **Stato**: **COMPLETATO (in forma più forte del previsto)** — commit `ac37474` (2026-07-31). Vedi DONE-05 sopra.
+- **Nota**: il piano originale prevedeva un avviso "soft" in UI (endpoint di conteggio + `confirm()` con possibilità di procedere). L'implementazione effettiva è un **blocco hard lato server** (HTTP 409, nessun percorso per "continuare comunque"): copre lo stesso obiettivo (impedire perdita di assegnazioni/stato) in modo più robusto, perché non dipende dalla UI né da un client che rispetti l'avviso. Questo task non richiede ulteriore lavoro applicativo.
+- **Follow-up eventuale (Milestone 1.5, non urgente)**: `page.tsx` (`handleSave`/`handleDelete`) mostra oggi all'operatore il campo `error` grezzo della risposta (`"SHUTTLE_HAS_OPERATIONAL_SERVICES"`, il codice macchina) invece del campo `message` leggibile restituito dal nuovo blocco. Non è un rischio di perdita dati (il blocco funziona comunque), solo un difetto di leggibilità del messaggio d'errore — candidabile come nuovo task UX in Milestone 1.5, non trattato in questa sessione.
 
 ### M1-02 — Fix `todayIsoDate()` per usare il fuso Europe/Rome invece di UTC
 - **Milestone**: 1 · **Priorità**: ALTA (F-05)
@@ -243,10 +235,10 @@ Nota: DONE-01 non copre `app/api/shuttle-schedules/**`, che però risulta tenant
 
 ## Ordine di esecuzione consigliato
 
-**Milestone 1** (in questo ordine, ciascuno testato e committato separatamente):
-M1-03 → M1-02 → M1-08 → M1-06+M1-09 → M1-07 → M1-05 → M1-01 → M1-04
+**Milestone 1** — stato aggiornato al 2026-07-31 dopo `ac37474` (M1-01 completato in forma rafforzata come DONE-05):
+~~M1-03~~ → ~~M1-01~~ (COMPLETATO come DONE-05) → **M1-05** (prossimo) → M1-06 → M1-02 → M1-08 → M1-09 → M1-07 → M1-04
 
-Motivazione ordine: si parte dai task a rischio zero (solo test, M1-03), poi fix puntuali isolati (data/log/errori, M1-02/M1-08/M1-06/M1-09/M1-07/M1-05) prima di toccare la UI con l'avviso bloccante (M1-01, dipende da un nuovo endpoint) e infine il cambio di query più delicato (M1-04, da fare con più margine di osservazione).
+Motivazione ordine aggiornato: con F-01 già mitigato da un blocco hard, il criterio guida torna a "tenant isolation e sicurezza" (M1-05: `hotel_id` non verificato per appartenenza al tenant, F-10, unico bug di questa categoria ancora aperto e confermato nel codice), poi sicurezza minore (M1-06: sanitizzazione errori), poi correttezza/osservabilità (M1-02, M1-08, M1-09, M1-07), infine il cambio di query più delicato (M1-04). M1-03 resta a rischio zero ma copre solo un gap di test su un comportamento già sicuro (nessun bug oggi), quindi non è più il task con priorità più alta rispetto a M1-05 che corregge un varco reale.
 
 **Milestone 1.5**: nessuna dipendenza dall'ordine, eseguibili in parallelo da persone diverse; consigliato M1.5-01 e M1.5-03 per primi (rischio operativo più alto se non fatti).
 
