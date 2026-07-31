@@ -170,7 +170,34 @@ export async function POST(request: NextRequest) {
   };
 
   try {
-    await insertInChunks(auth, buildServiceRows(auth.membership.tenant_id, schedule));
+    const rows = buildServiceRows(auth.membership.tenant_id, schedule);
+    await insertInChunks(auth, rows);
+
+    auditLog({
+      event: "shuttle_schedule_created",
+      level: "info",
+      tenantId: auth.membership.tenant_id,
+      userId: auth.user.id,
+      role: auth.membership.role,
+      outcome: "created",
+      details: {
+        previous: null,
+        next: {
+          hotelId: schedule.hotel_id,
+          bookingServiceKind: schedule.booking_service_kind,
+          customerName: schedule.customer_name,
+          direction: schedule.direction,
+          departureTime: schedule.departure_time,
+          meetingPoint: schedule.meeting_point,
+          vessel: schedule.vessel,
+          validFrom: schedule.valid_from,
+          validTo: schedule.valid_to,
+          weekdays: schedule.days_of_week,
+        },
+        deletedCount: 0,
+        insertedCount: rows.length,
+      },
+    });
   } catch (error) {
     auditLog({
       event: "shuttle_schedules_create_failed",

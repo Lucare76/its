@@ -94,15 +94,26 @@ async function deleteMatchingFutureServices(
   if (error) throw new Error(error.message);
 }
 
+type OperationalGuardResult = {
+  blocked: boolean;
+  matchedCount: number;
+  dateFrom: string | null;
+  dateTo: string | null;
+  weekdays: number[];
+};
+
+// Extends the F-01 guard query result (unchanged filters, unchanged blocking
+// logic) with the data already fetched, so PATCH/DELETE can build an audit
+// snapshot (M1-08) without a second, redundant select on the same rows.
 async function hasOperationalFutureServices(
   admin: SupabaseClient,
   tenantId: string,
   scheduleId: string
-): Promise<boolean> {
+): Promise<OperationalGuardResult> {
   const decoded = decodeShuttleScheduleId(scheduleId);
   let query = admin
     .from("services")
-    .select("id, status")
+    .select("id, status, date")
     .eq("tenant_id", tenantId)
     .gte("date", todayIsoDate())
     .eq("direction", decoded.direction)
@@ -121,11 +132,23 @@ async function hasOperationalFutureServices(
   const { data, error } = await query;
   if (error) throw new Error(error.message);
 
-  const services = (data ?? []) as Array<{ id: string; status: string | null }>;
-  if (services.some((service) => service.status !== "new")) return true;
+  const services = (data ?? []) as Array<{ id: string; status: string | null; date: string }>;
+  const matchedCount = services.length;
+  const sortedDates = services.map((service) => service.date).sort();
+  const dateFrom = sortedDates[0] ?? null;
+  const dateTo = sortedDates[sortedDates.length - 1] ?? null;
+  const weekdays = Array.from(
+    new Set(services.map((service) => new Date(`${service.date}T12:00:00`).getDay()))
+  ).sort((left, right) => left - right);
+
+  if (services.some((service) => service.status !== "new")) {
+    return { blocked: true, matchedCount, dateFrom, dateTo, weekdays };
+  }
 
   const serviceIds = services.map((service) => service.id);
-  if (serviceIds.length === 0) return false;
+  if (serviceIds.length === 0) {
+    return { blocked: false, matchedCount: 0, dateFrom: null, dateTo: null, weekdays: [] };
+  }
 
   const { data: assignmentRows, error: assignmentsError } = await admin
     .from("assignments")
@@ -135,7 +158,8 @@ async function hasOperationalFutureServices(
     .limit(1);
   if (assignmentsError) throw new Error(assignmentsError.message);
 
-  return ((assignmentRows ?? []) as Array<{ id: string }>).length > 0;
+  const blocked = ((assignmentRows ?? []) as Array<{ id: string }>).length > 0;
+  return { blocked, matchedCount, dateFrom, dateTo, weekdays };
 }
 
 function operationalGuardResponse() {
@@ -279,22 +303,83 @@ export async function PATCH(
     notes: parsed.data.notes === undefined ? null : normalizeNullableText(parsed.data.notes),
   };
 
+  let deletePhaseCompleted = false;
+  let expectedInsertCount = 0;
+  let deletedCount = 0;
+  let deletedDateFrom: string | null = null;
+  let deletedDateTo: string | null = null;
+  let previousWeekdays: number[] = [];
+
   try {
-    if (await hasOperationalFutureServices(auth.admin, auth.membership.tenant_id, id)) {
+    const guardResult = await hasOperationalFutureServices(auth.admin, auth.membership.tenant_id, id);
+    if (guardResult.blocked) {
       return operationalGuardResponse();
     }
+    deletedCount = guardResult.matchedCount;
+    deletedDateFrom = guardResult.dateFrom;
+    deletedDateTo = guardResult.dateTo;
+    previousWeekdays = guardResult.weekdays;
+
     await deleteMatchingFutureServices(auth.admin, auth.membership.tenant_id, id);
+    deletePhaseCompleted = true;
+
     const rows = buildRows(auth.membership.tenant_id, schedule);
+    expectedInsertCount = rows.length;
     if (rows.length) {
       await insertRows(auth.admin, rows);
     }
+
+    auditLog({
+      event: "shuttle_schedule_updated",
+      level: "info",
+      tenantId: auth.membership.tenant_id,
+      userId: auth.user.id,
+      role: auth.membership.role,
+      outcome: "updated",
+      details: {
+        previous: {
+          hotelId: existing.hotel_id,
+          bookingServiceKind: existing.booking_service_kind,
+          customerName: existing.customer_name,
+          direction: existing.direction,
+          departureTime: existing.departure_time,
+          meetingPoint: existing.meeting_point,
+          vessel: existing.vessel,
+          validFrom: deletedDateFrom,
+          validTo: deletedDateTo,
+          weekdays: previousWeekdays,
+        },
+        next: {
+          hotelId: schedule.hotel_id,
+          bookingServiceKind: schedule.booking_service_kind,
+          customerName: schedule.customer_name,
+          direction: schedule.direction,
+          departureTime: schedule.departure_time,
+          meetingPoint: schedule.meeting_point,
+          vessel: schedule.vessel,
+          validFrom: schedule.valid_from,
+          validTo: schedule.valid_to,
+          weekdays: schedule.days_of_week,
+        },
+        deletedCount,
+        insertedCount: expectedInsertCount,
+        deletedDateFrom,
+        deletedDateTo,
+      },
+    });
   } catch (error) {
     auditLog({
       event: "shuttle_schedules_update_failed",
       level: "error",
       tenantId: auth.membership.tenant_id,
       userId: auth.user.id,
-      details: { scheduleId: id, message: error instanceof Error ? error.message : String(error) },
+      details: {
+        scheduleId: id,
+        message: error instanceof Error ? error.message : String(error),
+        deletePhaseCompleted,
+        deletedCount,
+        expectedInsertCount,
+      },
     });
     return NextResponse.json(
       { error: "Impossibile aggiornare la navetta." },
@@ -318,10 +403,40 @@ export async function DELETE(
   const { id } = await params;
 
   try {
-    if (await hasOperationalFutureServices(auth.admin, auth.membership.tenant_id, id)) {
+    const existing = decodeShuttleScheduleId(id);
+    const guardResult = await hasOperationalFutureServices(auth.admin, auth.membership.tenant_id, id);
+    if (guardResult.blocked) {
       return operationalGuardResponse();
     }
     await deleteMatchingFutureServices(auth.admin, auth.membership.tenant_id, id);
+
+    auditLog({
+      event: "shuttle_schedule_deleted",
+      level: "info",
+      tenantId: auth.membership.tenant_id,
+      userId: auth.user.id,
+      role: auth.membership.role,
+      outcome: "deleted",
+      details: {
+        previous: {
+          hotelId: existing.hotel_id,
+          bookingServiceKind: existing.booking_service_kind,
+          customerName: existing.customer_name,
+          direction: existing.direction,
+          departureTime: existing.departure_time,
+          meetingPoint: existing.meeting_point,
+          vessel: existing.vessel,
+          validFrom: guardResult.dateFrom,
+          validTo: guardResult.dateTo,
+          weekdays: guardResult.weekdays,
+        },
+        next: null,
+        deletedCount: guardResult.matchedCount,
+        insertedCount: 0,
+        deletedDateFrom: guardResult.dateFrom,
+        deletedDateTo: guardResult.dateTo,
+      },
+    });
   } catch (error) {
     auditLog({
       event: "shuttle_schedules_delete_failed",
