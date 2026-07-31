@@ -1,7 +1,7 @@
 # Stato di lavoro — modulo Navette (shuttle)
 
 - **Branch**: main
-- **HEAD attuale**: `b909349` (allineato con `origin/main`, verificato con `git rev-parse HEAD` / `git rev-parse origin/main` il 2026-07-31)
+- **HEAD attuale**: `eb4f978` (allineato con `origin/main`, verificato con `git rev-parse HEAD` / `git rev-parse origin/main` il 2026-07-31)
 - **Data audit iniziale**: 2026-07-31 (HEAD `db71eaf` al momento dell'audit)
 - **Data ultimo aggiornamento di questo file**: 2026-07-31
 - **Stato worktree**: pulito (`git status --short` → nessun output) a ogni verifica successiva
@@ -14,16 +14,17 @@
 4. `db71eaf` — test: cover shuttle schedule date range validation
 5. `ac37474` (2026-07-31) — fix: block shuttle schedule changes when future services are operational. Mitiga **F-01 (CRITICA)**: `PATCH`/`DELETE` su `app/api/shuttle-schedules/[id]/route.ts` ora rispondono `409 SHUTTLE_HAS_OPERATIONAL_SERVICES` (fail-closed, tenant-scoped, nessun bypass) quando esiste almeno una corsa odierna/futura con `assignments` o `status != 'new'`. Copre e supera l'ambito originariamente pianificato per M1-01 (vedi checklist). 13 test dedicati in `tests/unit/shuttle-schedules-operational-guard.test.ts`.
 6. `b909349` (2026-07-31) — fix: validate hotel_id belongs to requesting tenant in shuttle schedules API. Mitiga **F-10 (MEDIA)**: `POST`/`PATCH` verificano `hotel_id` contro `public.hotels` filtrato per `id` + `auth.membership.tenant_id` prima di ogni scrittura (nel PATCH, anche prima del guard F-01); mismatch → `400 INVALID_HOTEL_FOR_TENANT`; errore query → `500` fail-closed. 12 test dedicati in `tests/unit/shuttle-schedules-hotel-tenant-guard.test.ts`. Nessun mock esistente modificato.
+7. `eb4f978` (2026-07-31) — fix: avoid leaking raw database errors from shuttle schedules API. Mitiga **F-11 (MEDIA)**: `GET`/`POST`/`PATCH`/`DELETE` non restituiscono più `error.message` grezzo al client; ogni errore interno è ora loggato lato server via `auditLog` (dettaglio completo, incl. `scheduleId` quando disponibile) mentre il client riceve un messaggio generico stabile; status HTTP invariati. Corretti anche i due catch dell'hotel-check F-10, in precedenza privi di log. 10 test dedicati in `tests/unit/shuttle-schedules-error-sanitization.test.ts`, incluse 4 regressioni esplicite su 400/409/200.
 
 ## Ultimo task completato
 
-**DONE-06 / M1-05 (commit `b909349`)** — verifica tenant su `hotel_id` in POST/PATCH. Reviewer indipendente read-only: APPROVATO (ordine controlli verificato, tenant isolation confermata, fail-closed su errore query, nessun file vietato toccato, WhatsApp intatto).
+**DONE-07 / M1-06 (commit `eb4f978`)** — sanificazione messaggi di errore. Reviewer indipendente read-only: APPROVATO (assenza `error.message`/`details`/`hint`/`code`/`stack` verificata su tutti i percorsi, log presente ovunque, nessuna regressione F-01/F-10, nessun file vietato toccato, WhatsApp intatto).
 
-## Prossimo task raccomandato
+## Task corrente
 
-**M1-06 — Sanificare i messaggi di errore restituiti al client** (F-11, vedi `docs/plans/shuttle-hardening-checklist.md`).
+**M1-02 — Fix `todayIsoDate()` per usare il fuso Europe/Rome invece di UTC** (F-05, vedi `docs/plans/shuttle-hardening-checklist.md`).
 
-Motivazione: applicando l'ordine di priorità (bug attivi di sicurezza → bug attivi di correttezza → perdita/corruzione dati → osservabilità → test → performance), M1-06 è l'unico task M1 aperto che corregge un **bug di sicurezza attivo** — verificato nel codice attuale: `GET` (`route.ts:95`), `POST` (`route.ts:150-153`), `PATCH` (`[id]/route.ts:232-235`) e `DELETE` (`[id]/route.ts:259-262`) restituiscono tutti `error.message` grezzo (potenzialmente testo Postgres con dettagli di schema/constraint) direttamente nel body della risposta 500 a qualunque utente autenticato admin/operator/supervisor del tenant. M1-02 (F-05, fuso orario) è un bug attivo ma di categoria "correttezza", quindi segue in priorità. Atomico, nessuna migrazione, non tocca WhatsApp, rischio basso.
+Motivazione: con F-01, F-10 e F-11 già mitigati, applicando l'ordine di priorità (bug attivi di sicurezza → bug attivi di correttezza → osservabilità → test → performance), M1-02 è l'unico bug attivo di correttezza rimasto in Milestone 1: `todayIsoDate()` calcola "oggi" in UTC anziché nel fuso operativo italiano, alterando il perimetro di righe considerate "future" nella finestra 00:00–02:00 ora legale (CEST) / 00:00–01:00 ora solare (CET). Atomico, nessuna migrazione, non tocca WhatsApp, rischio basso.
 
 ## Task bloccati
 
@@ -33,10 +34,10 @@ Nessuno.
 
 - **F-01 (CRITICA) — MITIGATO**: blocco server-side attivo dal commit `ac37474`. Causa strutturale (modello delete+insert) resta debito tecnico per Milestone 2.
 - **F-10 (MEDIA) — MITIGATO**: verifica tenant su `hotel_id` attiva dal commit `b909349`.
-- **F-11 (MEDIA, ora priorità operativa più alta)**: messaggi di errore Postgres grezzi esposti al client su 4 percorsi (GET/POST/PATCH/DELETE) — vedi M1-06, prossimo task raccomandato.
+- **F-11 (MEDIA) — MITIGATO**: messaggi di errore sanificati dal commit `eb4f978`.
+- **F-05 (ALTA, ora priorità operativa più alta)**: bug di fuso orario (UTC invece di Europe/Rome) — vedi M1-02, task corrente.
 - **F-02 (ALTA)**: navette con stessi 7 campi identificativi ma periodi diversi vengono fuse in un'unica scheda in UI; un edit può alterare un periodo non voluto. Nessuna mitigazione di codice sicura disponibile in stagione — solo comunicazione operativa. Esplicitamente rimandato a Milestone 2, non trattato in questa sessione.
 - **F-03 (ALTA)**: operazione di modifica non transazionale, rischio di "navetta scomparsa" su errore parziale (invariato).
-- **F-05 (ALTA)**: bug di fuso orario (UTC invece di Europe/Rome) nella finestra 00:00–02:00 CEST — impatta simmetricamente guard F-01 e cancellazione, non introduce varco di sicurezza aggiuntivo, ma resta un bug di correttezza da correggere (M1-02, priorità dopo M1-06).
 - **F-06 (ALTA)**: query GET senza filtro, degrado prestazionale crescente con l'accumulo dati stagionali. Invariato.
 
 Dettaglio completo di tutti i finding in `docs/audits/shuttle-module-audit.md` (documento storico, non aggiornato oltre l'audit iniziale se non strettamente necessario).
