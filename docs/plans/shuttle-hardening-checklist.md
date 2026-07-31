@@ -18,6 +18,7 @@ Regola generale per ogni task: **un task = un test = un commit facilmente revers
 | DONE-08 | `todayIsoDate()` calcola "oggi" esplicitamente in `Europe/Rome` (`Intl.DateTimeFormat("en-CA", {timeZone:"Europe/Rome"})`), non più in UTC — mitigazione di **F-05**; firma testabile `todayIsoDate(now = new Date())`; nessun offset fisso, DST gestita automaticamente | `988cf4b` (2026-07-31) | `tests/unit/shuttle-schedules-rome-date.test.ts` (22 casi: transizioni DST marzo/ottobre, rollover fine anno/mese, indipendenza dal TZ di processo, valore effettivo passato a `.gte("date",...)` a livello handler); reviewer indipendente: **APPROVATO** |
 | DONE-09 | `decodeShuttleScheduleId(id)` nel PATCH avvolta in try/catch + validazione minima della struttura decodificata (campi indispensabili alle query: `direction`, `departure_time`, `customer_name`, `vessel`) — mitigazione di **F-12**; id malformato o strutturalmente incompleto → `400 "Identificativo navetta non valido."`, nessuna query/scrittura eseguita | `d687bd0` (2026-07-31) | `tests/unit/shuttle-schedules-invalid-id.test.ts` (13 casi: base64/JSON invalido, oggetto vuoto/array/campi mancanti/tipi errati, campi extra accettati, id valido invariato, nessun leak, regressione 401/409/400); reviewer indipendente: **APPROVATO** |
 | DONE-10 | Copertura test handler-level dell'isolamento tenant su `GET`/`POST`/`PATCH`/`DELETE` di `shuttle-schedules` — **F-07**; verificato con mock tenant-aware mutabile (non tautologico: dimostrato che i test falliscono realmente rimuovendo un filtro `.eq("tenant_id",...)` critico, poi ripristinato) che **nessuna vulnerabilità è stata trovata** — l'isolamento era già corretto per costruzione indipendente (tenant_id sempre da `auth.membership.tenant_id`, mai dal body né dall'id derivato); **nessun codice di produzione modificato** | nessuno (solo test, commit da effettuare) | `tests/unit/shuttle-schedules-tenant-isolation.test.ts` (28 casi: GET/POST/PATCH/DELETE, chiave identica tra tenant, `tenant_id` malevolo nel body, hotel cross-tenant, auth/ruoli, regressioni F-01/F-10/F-11/M1-02/M1-07); reviewer indipendente: **APPROVATO** |
+| DONE-11 | Audit persistente e aggregato delle operazioni massive su `shuttle-schedules` — **F-04, ridefinita**; un evento `auditLog` (`shuttle_schedule_created`/`_updated`/`_deleted`, livello `info`) per ogni POST/PATCH/DELETE riuscito, scritto **solo dopo il successo completo** dell'operazione, con `previous`/`next` (chiave funzionale + periodo + giorni, camelCase), `deletedCount`/`insertedCount`/`deletedDateFrom`/`deletedDateTo`; riusa `ops_audit_events` (già esistente, già consultabile via `/api/audit/feed` e pagina `/audit`, **non modificate**), **nessun log per singola riga `services`**, **nessuna migrazione**; il guard F-01 (`hasOperationalFutureServices`) è stato esteso a restituire anche `matchedCount`/`dateFrom`/`dateTo`/`weekdays` (stessa query, stessa logica di blocco, nessun comportamento esterno cambiato) per evitare una seconda select ridondante; il fallimento parziale del PATCH (DELETE riuscita, INSERT fallito) è ora riconoscibile nell'evento di errore esistente tramite `deletePhaseCompleted`/`deletedCount`/`expectedInsertCount`, senza introdurre transazionalità | nessuno (solo codice+test, commit applicativo da effettuare) | `tests/unit/shuttle-schedules-audit-log.test.ts` (33 casi: POST/PATCH/DELETE, diff previous/next, conteggi/range reali, fallimento parziale, tenant isolation, privacy); esperimento di sensibilità eseguito (rimozione temporanea della chiamata di successo → 7 test falliscono realmente, poi ripristinato, `git diff` verificato pulito); reviewer indipendente: **APPROVATO** |
 
 Nota: DONE-01 non copre `app/api/shuttle-schedules/**`, che però risulta tenant-safe per costruzione indipendente (vedi F-07 nell'audit). Il task M1-03 sotto copre solo il gap di test, non un bug.
 
@@ -87,17 +88,11 @@ Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianifi
 
 ### M1-08 — Log di audit per cancellazione navetta
 - **Milestone**: 1 · **Priorità**: ALTA (F-04)
-- **Obiettivo**: tracciabilità delle cancellazioni massive di corse navetta.
-- **File consentiti**: `app/api/shuttle-schedules/[id]/route.ts`.
-- **Modifiche previste**: prima della delete in `deleteMatchingFutureServices` (o subito dopo, con conteggio righe interessate), scrivere una entry riepilogativa (utente, tenant, chiave navetta, numero righe, data/ora) — riusando `service_deletion_log` se lo schema lo consente senza migrazione, altrimenti tramite `auditLog` applicativo già presente nel progetto.
-- **Test obbligatori**: test che verifica che la funzione di log venga chiamata con i parametri attesi in caso di DELETE riuscito.
-- **Comandi di verifica**: `pnpm exec vitest run`, `pnpm typecheck`.
-- **Rollback**: rimuovere la chiamata di log aggiunta.
-- **Definition of Done**: ogni cancellazione di navetta lascia una traccia verificabile (chi, quando, quante righe).
-- **Dipendenze**: verificare lo schema di `service_deletion_log` prima di implementare (se richiede `service_id` singolo non compatibile con cancellazione multipla, usare `auditLog` generico invece).
-- **Rischio**: basso (operazione additiva).
-- **Stato**: DA FARE.
-- **Commit suggerito**: `feat: log shuttle schedule deletions for audit trail`
+- **Stato**: **COMPLETATO** — codice e test pronti, commit applicativo da effettuare. Vedi DONE-11 sopra.
+- **Risultato sintetico**: audit aggregato per azione funzionale (creazione/modifica/eliminazione), non log tecnico riga-per-riga. Riusa `ops_audit_events` tramite `auditLog()` già in uso nel file — nessuna nuova tabella, nessuna migrazione. `service_deletion_log` **non** è stato usato per queste operazioni bulk (resta dedicato alla cancellazione di singolo servizio via `ops/services/[id]`, invariato).
+- **Limite transazionale residuo**: PATCH resta non transazionale (delete e insert sono due chiamate Supabase separate, invariato da prima di questo task). In caso di fallimento tra le due, nessun evento di successo viene scritto; l'evento di errore esistente (M1-06) è arricchito con `deletePhaseCompleted` per distinguere un fallimento prima della cancellazione da uno dopo (dati potenzialmente in stato parziale, non ripristinati automaticamente — nessun rollback introdotto, per esplicito vincolo del task).
+- **Test eseguiti**: `tests/unit/shuttle-schedules-audit-log.test.ts` (33/33 verdi) + suite shuttle esistente (162/162 verdi) + `pnpm typecheck` pulito + lint pulito + esperimento di sensibilità (rimozione temporanea della chiamata di successo → 7 test falliti realmente, ripristinato, `git diff` verificato pulito).
+- **Reviewer indipendente**: **APPROVATO** — verificato racconto funzionale (non solo DELETE SQL), nessun nuovo modello dati, nessun dato personale superfluo, volume proporzionato (un evento per azione), PATCH/DELETE distinti, scrittura solo dopo successo reale, F-01/F-10/F-11/M1-02/M1-07/F-07 invariati, WhatsApp non toccato.
 
 ### M1-09 — Log degli errori di scrittura (PATCH/POST/DELETE)
 - **Milestone**: 1 · **Priorità**: MEDIA (F-17)
@@ -190,15 +185,10 @@ Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianifi
 
 ## Ordine di esecuzione consigliato
 
-**Milestone 1** — stato aggiornato al 2026-07-31 dopo la copertura test tenant isolation (DONE-10, nessun bug trovato):
-~~M1-03~~ (DONE-10) → ~~M1-01~~ (DONE-05) → ~~M1-05~~ (DONE-06) → ~~M1-06~~ (DONE-07) → ~~M1-02~~ (DONE-08) → ~~M1-07~~ (DONE-09) → ~~M1-09~~ (già coperto da DONE-07) → **M1-08** (prossimo consigliato) → M1-04 (dopo, o post-stagione)
+**Milestone 1** — stato aggiornato al 2026-07-31 dopo l'audit aggregato delle operazioni massive (DONE-11):
+~~M1-03~~ (DONE-10) → ~~M1-01~~ (DONE-05) → ~~M1-05~~ (DONE-06) → ~~M1-06~~ (DONE-07) → ~~M1-02~~ (DONE-08) → ~~M1-07~~ (DONE-09) → ~~M1-09~~ (già coperto da DONE-07) → ~~M1-08~~ (DONE-11) → **M1-04** (unico task M1 ancora aperto)
 
-**Solo M1-08 e M1-04 restano aperti in Milestone 1.** Raccomandazione del reviewer per l'ordine tra i due, valutata su: alta stagione, rischio regressione, assenza di migrazioni, beneficio operativo, possibilità di rollback.
-
-- **M1-08 (ridefinito come audit delle cancellazioni/modifiche massive, F-04)**: nessuna migrazione (riusa `service_deletion_log` già esistente), operazione puramente additiva (solo log, nessun cambio di comportamento/status), rollback banale (rimozione della chiamata di log), beneficio operativo concreto per il supporto durante l'alta stagione (oggi zero tracciabilità sulle cancellazioni bulk di `shuttle-schedules`). Rischio di regressione: **nullo**.
-- **M1-04 (filtro/performance GET, F-06)**: nessuna migrazione, ma **rischio di regressione medio** — cambia cosa il GET restituisce, richiede feature flag e verifica manuale attenta prima del deploy in stagione; beneficio operativo reale (performance + correttezza badge) ma non urgente (nessun incidente osservato).
-
-**Raccomandazione: M1-08 prima di M1-04.** A parità di assenza di migrazioni, M1-08 ha rischio nullo e beneficio operativo immediato per l'alta stagione, mentre M1-04 introduce un cambio di comportamento che merita più margine di osservazione — coerente con la preferenza esplicita per interventi atomici a basso rischio durante l'alta stagione. Nessuno dei due è stato iniziato in questa sessione.
+**M1-04 (filtro/performance GET, F-06) è l'unico task ancora aperto in Milestone 1.** Nessuna migrazione richiesta, ma **rischio di regressione medio** (cambia cosa il GET restituisce, richiede feature flag e verifica manuale attenta prima del deploy in stagione). **Non iniziato in questa sessione**, per istruzione esplicita.
 
 **Milestone 1.5**: nessuna dipendenza dall'ordine, eseguibili in parallelo da persone diverse; consigliato M1.5-01 e M1.5-03 per primi (rischio operativo più alto se non fatti).
 
