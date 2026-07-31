@@ -84,6 +84,61 @@ async function deleteMatchingFutureServices(
   if (error) throw new Error(error.message);
 }
 
+async function hasOperationalFutureServices(
+  admin: SupabaseClient,
+  tenantId: string,
+  scheduleId: string
+): Promise<boolean> {
+  const decoded = decodeShuttleScheduleId(scheduleId);
+  let query = admin
+    .from("services")
+    .select("id, status")
+    .eq("tenant_id", tenantId)
+    .gte("date", todayIsoDate())
+    .eq("direction", decoded.direction)
+    .eq("time", decoded.departure_time)
+    .eq("customer_name", decoded.customer_name)
+    .eq("vessel", decoded.vessel);
+
+  if (decoded.hotel_id) query = query.eq("hotel_id", decoded.hotel_id);
+  else query = query.is("hotel_id", null);
+
+  if (decoded.meeting_point) query = query.eq("meeting_point", decoded.meeting_point);
+  else query = query.is("meeting_point", null);
+
+  if (decoded.booking_service_kind) query = query.eq("booking_service_kind", decoded.booking_service_kind);
+
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+
+  const services = (data ?? []) as Array<{ id: string; status: string | null }>;
+  if (services.some((service) => service.status !== "new")) return true;
+
+  const serviceIds = services.map((service) => service.id);
+  if (serviceIds.length === 0) return false;
+
+  const { data: assignmentRows, error: assignmentsError } = await admin
+    .from("assignments")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .in("service_id", serviceIds)
+    .limit(1);
+  if (assignmentsError) throw new Error(assignmentsError.message);
+
+  return ((assignmentRows ?? []) as Array<{ id: string }>).length > 0;
+}
+
+function operationalGuardResponse() {
+  return NextResponse.json(
+    {
+      error: "SHUTTLE_HAS_OPERATIONAL_SERVICES",
+      message:
+        "La navetta contiene corse odierne o future già assegnate o lavorate. Rimuovi prima le assegnazioni e ripristina lo stato delle corse.",
+    },
+    { status: 409 }
+  );
+}
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -130,6 +185,9 @@ export async function PATCH(
   };
 
   try {
+    if (await hasOperationalFutureServices(auth.admin, auth.membership.tenant_id, id)) {
+      return operationalGuardResponse();
+    }
     await deleteMatchingFutureServices(auth.admin, auth.membership.tenant_id, id);
     const rows = buildRows(auth.membership.tenant_id, schedule);
     if (rows.length) {
@@ -158,6 +216,9 @@ export async function DELETE(
   const { id } = await params;
 
   try {
+    if (await hasOperationalFutureServices(auth.admin, auth.membership.tenant_id, id)) {
+      return operationalGuardResponse();
+    }
     await deleteMatchingFutureServices(auth.admin, auth.membership.tenant_id, id);
   } catch (error) {
     return NextResponse.json(

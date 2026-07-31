@@ -26,9 +26,40 @@ function createFakeSupabase() {
     return builder;
   }
 
+  // Select builder used by the F-01 operational guard (hasOperationalFutureServices)
+  // added to the PATCH/DELETE route. Always resolves to an empty result set, i.e.
+  // "no operational future services found", so the guard never blocks these
+  // pre-existing tests and their original assertions stay unchanged.
+  function makeEmptySelectBuilder() {
+    const builder = {
+      eq() {
+        return builder;
+      },
+      gte() {
+        return builder;
+      },
+      is() {
+        return builder;
+      },
+      in() {
+        return builder;
+      },
+      limit() {
+        return builder;
+      },
+      then(resolve: (v: { data: unknown[]; error: null }) => unknown, reject?: (e: unknown) => unknown) {
+        return Promise.resolve({ data: [], error: null }).then(resolve, reject);
+      }
+    };
+    return builder;
+  }
+
   const admin = {
     from(_table: string) {
       return {
+        select(_cols: string) {
+          return makeEmptySelectBuilder();
+        },
         delete() {
           calls.delete++;
           return makeDeleteBuilder();
