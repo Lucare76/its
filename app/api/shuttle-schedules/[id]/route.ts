@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { authorizeServiceRoleRequest } from "@/lib/server/pricing-auth";
+import { auditLog } from "@/lib/server/ops-audit";
 import { decodeShuttleScheduleId, enumerateShuttleDates, type ShuttleSchedule } from "@/lib/shuttle-schedules";
 
 export const runtime = "nodejs";
@@ -193,7 +194,14 @@ export async function PATCH(
     let hotelValid: boolean;
     try {
       hotelValid = await isHotelInTenant(auth.admin, auth.membership.tenant_id, parsed.data.hotel_id);
-    } catch {
+    } catch (error) {
+      auditLog({
+        event: "shuttle_schedules_update_hotel_check_failed",
+        level: "error",
+        tenantId: auth.membership.tenant_id,
+        userId: auth.user.id,
+        details: { scheduleId: id, message: error instanceof Error ? error.message : String(error) },
+      });
       return NextResponse.json(
         { error: "Impossibile verificare l'hotel selezionato." },
         { status: 500 }
@@ -230,8 +238,15 @@ export async function PATCH(
       await insertRows(auth.admin, rows);
     }
   } catch (error) {
+    auditLog({
+      event: "shuttle_schedules_update_failed",
+      level: "error",
+      tenantId: auth.membership.tenant_id,
+      userId: auth.user.id,
+      details: { scheduleId: id, message: error instanceof Error ? error.message : String(error) },
+    });
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Errore aggiornamento navetta." },
+      { error: "Impossibile aggiornare la navetta." },
       { status: 500 }
     );
   }
@@ -257,8 +272,15 @@ export async function DELETE(
     }
     await deleteMatchingFutureServices(auth.admin, auth.membership.tenant_id, id);
   } catch (error) {
+    auditLog({
+      event: "shuttle_schedules_delete_failed",
+      level: "error",
+      tenantId: auth.membership.tenant_id,
+      userId: auth.user.id,
+      details: { scheduleId: id, message: error instanceof Error ? error.message : String(error) },
+    });
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Errore eliminazione navetta." },
+      { error: "Impossibile eliminare la navetta." },
       { status: 500 }
     );
   }

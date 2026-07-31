@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { authorizeServiceRoleRequest, type AuthorizedRequestContext } from "@/lib/server/pricing-auth";
+import { auditLog } from "@/lib/server/ops-audit";
 import { fetchAllServices } from "@/lib/server/fetch-all-services";
 import { deriveShuttleSchedules, enumerateShuttleDates, type ShuttleSchedule } from "@/lib/shuttle-schedules";
 
@@ -92,7 +93,14 @@ export async function GET(request: NextRequest) {
 
   const servicesResult = await fetchAllServices(auth.admin, auth.membership.tenant_id);
   if (servicesResult.error) {
-    return NextResponse.json({ error: servicesResult.error.message }, { status: 500 });
+    auditLog({
+      event: "shuttle_schedules_list_failed",
+      level: "error",
+      tenantId: auth.membership.tenant_id,
+      userId: auth.user.id,
+      details: { message: servicesResult.error.message },
+    });
+    return NextResponse.json({ error: "Impossibile recuperare le navette." }, { status: 500 });
   }
 
   const schedules = deriveShuttleSchedules(servicesResult.data ?? []);
@@ -118,7 +126,14 @@ export async function POST(request: NextRequest) {
     let hotelValid: boolean;
     try {
       hotelValid = await isHotelInTenant(auth.admin, auth.membership.tenant_id, parsed.data.hotel_id);
-    } catch {
+    } catch (error) {
+      auditLog({
+        event: "shuttle_schedules_create_hotel_check_failed",
+        level: "error",
+        tenantId: auth.membership.tenant_id,
+        userId: auth.user.id,
+        details: { message: error instanceof Error ? error.message : String(error) },
+      });
       return NextResponse.json(
         { error: "Impossibile verificare l'hotel selezionato." },
         { status: 500 }
@@ -148,8 +163,15 @@ export async function POST(request: NextRequest) {
   try {
     await insertInChunks(auth, buildServiceRows(auth.membership.tenant_id, schedule));
   } catch (error) {
+    auditLog({
+      event: "shuttle_schedules_create_failed",
+      level: "error",
+      tenantId: auth.membership.tenant_id,
+      userId: auth.user.id,
+      details: { message: error instanceof Error ? error.message : String(error) },
+    });
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Errore creazione navetta." },
+      { error: "Impossibile creare la navetta." },
       { status: 500 }
     );
   }
