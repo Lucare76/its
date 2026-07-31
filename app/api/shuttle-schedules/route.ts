@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { authorizeServiceRoleRequest, type AuthorizedRequestContext } from "@/lib/server/pricing-auth";
 import { fetchAllServices } from "@/lib/server/fetch-all-services";
@@ -61,6 +62,27 @@ async function insertInChunks(
   }
 }
 
+async function isHotelInTenant(admin: SupabaseClient, tenantId: string, hotelId: string): Promise<boolean> {
+  const { data, error } = await admin
+    .from("hotels")
+    .select("id")
+    .eq("id", hotelId)
+    .eq("tenant_id", tenantId)
+    .limit(1);
+  if (error) throw new Error(error.message);
+  return (data ?? []).length > 0;
+}
+
+function invalidHotelResponse() {
+  return NextResponse.json(
+    {
+      error: "INVALID_HOTEL_FOR_TENANT",
+      message: "L'hotel selezionato non appartiene al tenant autenticato.",
+    },
+    { status: 400 }
+  );
+}
+
 export async function GET(request: NextRequest) {
   const auth = await authorizeServiceRoleRequest(request, {
     roles: ["admin", "operator"],
@@ -90,6 +112,21 @@ export async function POST(request: NextRequest) {
       { error: parsed.error.issues[0]?.message ?? "Dati non validi." },
       { status: 400 }
     );
+  }
+
+  if (parsed.data.hotel_id) {
+    let hotelValid: boolean;
+    try {
+      hotelValid = await isHotelInTenant(auth.admin, auth.membership.tenant_id, parsed.data.hotel_id);
+    } catch {
+      return NextResponse.json(
+        { error: "Impossibile verificare l'hotel selezionato." },
+        { status: 500 }
+      );
+    }
+    if (!hotelValid) {
+      return invalidHotelResponse();
+    }
   }
 
   const schedule: ShuttleSchedule = {
