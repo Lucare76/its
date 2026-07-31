@@ -25,8 +25,17 @@ const shuttleScheduleSchema = z.object({
   path: ["valid_to"],
 });
 
-function todayIsoDate() {
-  return new Date().toISOString().slice(0, 10);
+// Explicit Europe/Rome timezone (not UTC, not offset-fixed) so "today" matches
+// the operative day in Italy across DST transitions. See F-05.
+const ROME_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/Rome",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+export function todayIsoDate(now: Date = new Date()): string {
+  return ROME_DATE_FORMATTER.format(now);
 }
 
 function buildServiceRows(tenantId: string, schedule: ShuttleSchedule) {
