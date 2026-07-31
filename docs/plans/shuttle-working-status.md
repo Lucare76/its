@@ -1,10 +1,10 @@
 # Stato di lavoro — modulo Navette (shuttle)
 
 - **Branch**: main
-- **HEAD attuale**: `ac37474` (allineato con `origin/main`, verificato con `git rev-parse HEAD` / `git rev-parse origin/main` il 2026-07-31)
+- **HEAD attuale**: `b909349` (allineato con `origin/main`, verificato con `git rev-parse HEAD` / `git rev-parse origin/main` il 2026-07-31)
 - **Data audit iniziale**: 2026-07-31 (HEAD `db71eaf` al momento dell'audit)
 - **Data ultimo aggiornamento di questo file**: 2026-07-31
-- **Stato worktree**: pulito (`git status --short` → nessun output) sia all'audit iniziale sia a questo aggiornamento
+- **Stato worktree**: pulito (`git status --short` → nessun output) a ogni verifica successiva
 
 ## Commit già completati (non rifare)
 
@@ -13,16 +13,17 @@
 3. `9a37134` — fix: require valid_from in shuttle schedule patch
 4. `db71eaf` — test: cover shuttle schedule date range validation
 5. `ac37474` (2026-07-31) — fix: block shuttle schedule changes when future services are operational. Mitiga **F-01 (CRITICA)**: `PATCH`/`DELETE` su `app/api/shuttle-schedules/[id]/route.ts` ora rispondono `409 SHUTTLE_HAS_OPERATIONAL_SERVICES` (fail-closed, tenant-scoped, nessun bypass) quando esiste almeno una corsa odierna/futura con `assignments` o `status != 'new'`. Copre e supera l'ambito originariamente pianificato per M1-01 (vedi checklist). 13 test dedicati in `tests/unit/shuttle-schedules-operational-guard.test.ts`.
+6. `b909349` (2026-07-31) — fix: validate hotel_id belongs to requesting tenant in shuttle schedules API. Mitiga **F-10 (MEDIA)**: `POST`/`PATCH` verificano `hotel_id` contro `public.hotels` filtrato per `id` + `auth.membership.tenant_id` prima di ogni scrittura (nel PATCH, anche prima del guard F-01); mismatch → `400 INVALID_HOTEL_FOR_TENANT`; errore query → `500` fail-closed. 12 test dedicati in `tests/unit/shuttle-schedules-hotel-tenant-guard.test.ts`. Nessun mock esistente modificato.
 
 ## Ultimo task completato
 
-**DONE-05 / M1-01 (commit `ac37474`)** — blocco server-side hard di F-01. Verificato in due sessioni di revisione indipendente (implementazione + verifica finale read-only su schema `assignments`/RLS): APPROVATO in entrambe.
+**DONE-06 / M1-05 (commit `b909349`)** — verifica tenant su `hotel_id` in POST/PATCH. Reviewer indipendente read-only: APPROVATO (ordine controlli verificato, tenant isolation confermata, fail-closed su errore query, nessun file vietato toccato, WhatsApp intatto).
 
 ## Prossimo task raccomandato
 
-**M1-05 — Verifica tenant su `hotel_id` in POST/PATCH** (vedi `docs/plans/shuttle-hardening-checklist.md`).
+**M1-06 — Sanificare i messaggi di errore restituiti al client** (F-11, vedi `docs/plans/shuttle-hardening-checklist.md`).
 
-Motivazione: con F-01 ora mitigato, il criterio guida torna alla priorità più alta della checklist (tenant isolation e sicurezza). M1-05 corregge F-10, l'unico finding di quella categoria ancora **confermato aperto nel codice attuale** (verificato: `hotel_id` è validato solo come UUID via Zod, mai controllato contro `auth.membership.tenant_id`, in entrambe le route `route.ts` e `[id]/route.ts`). È atomico, a basso rischio, non richiede migrazioni, non tocca WhatsApp. M1-03 (test di tenant isolation, rischio zero) resta valido ma copre un gap di sola copertura test su un comportamento già sicuro, non un bug attivo — priorità secondaria rispetto a M1-05.
+Motivazione: applicando l'ordine di priorità (bug attivi di sicurezza → bug attivi di correttezza → perdita/corruzione dati → osservabilità → test → performance), M1-06 è l'unico task M1 aperto che corregge un **bug di sicurezza attivo** — verificato nel codice attuale: `GET` (`route.ts:95`), `POST` (`route.ts:150-153`), `PATCH` (`[id]/route.ts:232-235`) e `DELETE` (`[id]/route.ts:259-262`) restituiscono tutti `error.message` grezzo (potenzialmente testo Postgres con dettagli di schema/constraint) direttamente nel body della risposta 500 a qualunque utente autenticato admin/operator/supervisor del tenant. M1-02 (F-05, fuso orario) è un bug attivo ma di categoria "correttezza", quindi segue in priorità. Atomico, nessuna migrazione, non tocca WhatsApp, rischio basso.
 
 ## Task bloccati
 
@@ -30,11 +31,12 @@ Nessuno.
 
 ## Rischi aperti (non ancora mitigati)
 
-- **F-01 (CRITICA) — MITIGATO** (non più aperto): blocco server-side attivo dal commit `ac37474`. La causa strutturale (modello delete+insert) resta comunque debito tecnico per Milestone 2 (M2-01/M2-02/M2-03): il blocco impedisce la perdita di dati, non elimina il modello a rischio.
-- **F-10 (MEDIA, ora priorità operativa più alta)**: `hotel_id` non verificato per appartenenza al tenant richiedente in POST/PATCH — vedi M1-05, prossimo task raccomandato.
-- **F-02 (ALTA)**: navette con stessi 7 campi identificativi ma periodi diversi vengono fuse in un'unica scheda in UI; un edit può alterare un periodo non voluto. Nessuna mitigazione di codice sicura disponibile in stagione — solo comunicazione operativa (non ricreare navette con identici hotel/direzione/orario/meeting point/vessel/nome cliente per periodi diversi). Esplicitamente rimandato a Milestone 2, non trattato in questa sessione.
-- **F-03 (ALTA)**: operazione di modifica non transazionale, rischio di "navetta scomparsa" su errore parziale (invariato da DONE-05: il blocco impedisce la perdita di assegnazioni quando la navetta è operativa, ma non introduce transazionalità tra delete e insert per il caso non bloccato).
-- **F-05 (ALTA)**: bug di fuso orario (UTC invece di Europe/Rome) nella finestra 00:00–02:00 CEST — ora impatta anche la query del nuovo guard (stessa funzione `todayIsoDate()`), ma in modo simmetrico alla cancellazione: nella finestra a rischio il guard esamina lo stesso insieme di righe che verrebbero cancellate, quindi non introduce un varco di sicurezza aggiuntivo — resta comunque un bug di correttezza da correggere (M1-02).
+- **F-01 (CRITICA) — MITIGATO**: blocco server-side attivo dal commit `ac37474`. Causa strutturale (modello delete+insert) resta debito tecnico per Milestone 2.
+- **F-10 (MEDIA) — MITIGATO**: verifica tenant su `hotel_id` attiva dal commit `b909349`.
+- **F-11 (MEDIA, ora priorità operativa più alta)**: messaggi di errore Postgres grezzi esposti al client su 4 percorsi (GET/POST/PATCH/DELETE) — vedi M1-06, prossimo task raccomandato.
+- **F-02 (ALTA)**: navette con stessi 7 campi identificativi ma periodi diversi vengono fuse in un'unica scheda in UI; un edit può alterare un periodo non voluto. Nessuna mitigazione di codice sicura disponibile in stagione — solo comunicazione operativa. Esplicitamente rimandato a Milestone 2, non trattato in questa sessione.
+- **F-03 (ALTA)**: operazione di modifica non transazionale, rischio di "navetta scomparsa" su errore parziale (invariato).
+- **F-05 (ALTA)**: bug di fuso orario (UTC invece di Europe/Rome) nella finestra 00:00–02:00 CEST — impatta simmetricamente guard F-01 e cancellazione, non introduce varco di sicurezza aggiuntivo, ma resta un bug di correttezza da correggere (M1-02, priorità dopo M1-06).
 - **F-06 (ALTA)**: query GET senza filtro, degrado prestazionale crescente con l'accumulo dati stagionali. Invariato.
 
 Dettaglio completo di tutti i finding in `docs/audits/shuttle-module-audit.md` (documento storico, non aggiornato oltre l'audit iniziale se non strettamente necessario).

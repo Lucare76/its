@@ -13,6 +13,7 @@ Regola generale per ogni task: **un task = un test = un commit facilmente revers
 | DONE-03 | `valid_from` obbligatorio nel PATCH shuttle schedules | `9a37134` | `tests/unit/shuttle-schedules-patch-valid-from.test.ts` |
 | DONE-04 | Regressione `valid_to >= valid_from` (range date) | `db71eaf` | `tests/unit/shuttle-schedules-patch-date-range.test.ts` |
 | DONE-05 | Blocco server-side (HTTP 409, fail-closed) di PATCH/DELETE su navette con corse odierne/future già assegnate (`assignments`) o con `status != 'new'` — mitigazione di F-01, verificato tenant-scoped su `services` e `assignments` | `ac37474` (2026-07-31) | `tests/unit/shuttle-schedules-operational-guard.test.ts` (13 casi: blocco/non blocco, oggi incluso, passato escluso, tenant isolation, fail-closed su errore query) |
+| DONE-06 | Verifica server-side (HTTP 400, fail-closed) che `hotel_id` in POST/PATCH appartenga al tenant autenticato (`public.hotels` filtrato per `id` + `tenant_id`) — mitigazione di **F-10**, guard eseguito prima del guard F-01 e prima di ogni scrittura, verificato ordine e tenant isolation | `b909349` (2026-07-31) | `tests/unit/shuttle-schedules-hotel-tenant-guard.test.ts` (12 casi: tenant proprio/altrui, hotel_id null/omesso, fail-closed su errore query, ordine rispetto al guard F-01); reviewer indipendente: **APPROVATO** |
 
 Nota: DONE-01 non copre `app/api/shuttle-schedules/**`, che però risulta tenant-safe per costruzione indipendente (vedi F-07 nell'audit). Il task M1-03 sotto copre solo il gap di test, non un bug.
 
@@ -81,19 +82,10 @@ Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianifi
 
 ### M1-05 — Verifica tenant su `hotel_id` in POST/PATCH
 - **Milestone**: 1 · **Priorità**: MEDIA (F-10)
-- **Obiettivo**: impedire di associare una navetta a un hotel che non appartiene al tenant corrente.
-- **Problema risolto**: F-10.
-- **File consentiti**: `app/api/shuttle-schedules/route.ts`, `app/api/shuttle-schedules/[id]/route.ts`.
-- **Modifiche previste**: se `hotel_id` è presente nel payload, query `select id from hotels where id = hotel_id and tenant_id = auth.membership.tenant_id`; 400 esplicito se non trovato.
-- **Test obbligatori**: test che invia un `hotel_id` di un tenant diverso e verifica risposta 400, sia su POST che su PATCH.
-- **Comandi di verifica**: `pnpm exec vitest run`, `pnpm typecheck`.
-- **Rollback**: rimuovere il blocco di verifica aggiunto.
-- **Definition of Done**: richieste con `hotel_id` cross-tenant vengono rifiutate con 400.
-- **Dipendenze**: nessuna.
-- **Feature flag**: non necessaria.
-- **Rischio**: basso.
-- **Stato**: DA FARE.
-- **Commit suggerito**: `fix: validate hotel_id belongs to requesting tenant in shuttle schedules API`
+- **Stato**: **COMPLETATO** — commit `b909349` (2026-07-31). Vedi DONE-06 sopra.
+- **Risultato sintetico**: helper `isHotelInTenant(admin, tenantId, hotelId)` aggiunto in entrambe le route (`route.ts` e `[id]/route.ts`, duplicato minimo perché `lib/shuttle-schedules.ts` è fuori perimetro); eseguito solo se `hotel_id` è presente e non nullo, prima di qualunque scrittura e, nel PATCH, prima del guard F-01 (`hasOperationalFutureServices`); su mismatch tenant risponde `400 INVALID_HOTEL_FOR_TENANT`; su errore query risponde `500` fail-closed senza dettagli Postgres.
+- **Test eseguiti**: `tests/unit/shuttle-schedules-hotel-tenant-guard.test.ts` (12/12 verdi) + suite shuttle esistente (56/56 verdi, nessun mock esistente modificato) + `pnpm typecheck` pulito + lint pulito sui file toccati.
+- **Reviewer indipendente**: **APPROVATO** — verificato ordine dei controlli, tenant isolation, fail-closed, nessun file vietato toccato, WhatsApp intatto.
 
 ### M1-06 — Sanificare i messaggi di errore restituiti al client
 - **Milestone**: 1 · **Priorità**: MEDIA (F-11)
@@ -235,10 +227,10 @@ Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianifi
 
 ## Ordine di esecuzione consigliato
 
-**Milestone 1** — stato aggiornato al 2026-07-31 dopo `ac37474` (M1-01 completato in forma rafforzata come DONE-05):
-~~M1-03~~ → ~~M1-01~~ (COMPLETATO come DONE-05) → **M1-05** (prossimo) → M1-06 → M1-02 → M1-08 → M1-09 → M1-07 → M1-04
+**Milestone 1** — stato aggiornato al 2026-07-31 dopo `b909349` (M1-05 completato come DONE-06):
+~~M1-03~~ → ~~M1-01~~ (DONE-05) → ~~M1-05~~ (DONE-06) → **M1-06** (prossimo) → M1-02 → M1-08 → M1-09 → M1-07 → M1-04
 
-Motivazione ordine aggiornato: con F-01 già mitigato da un blocco hard, il criterio guida torna a "tenant isolation e sicurezza" (M1-05: `hotel_id` non verificato per appartenenza al tenant, F-10, unico bug di questa categoria ancora aperto e confermato nel codice), poi sicurezza minore (M1-06: sanitizzazione errori), poi correttezza/osservabilità (M1-02, M1-08, M1-09, M1-07), infine il cambio di query più delicato (M1-04). M1-03 resta a rischio zero ma copre solo un gap di test su un comportamento già sicuro (nessun bug oggi), quindi non è più il task con priorità più alta rispetto a M1-05 che corregge un varco reale.
+Motivazione ordine aggiornato: con F-01 e F-10 già mitigati, il criterio guida (bug attivi di sicurezza → bug attivi di correttezza → osservabilità → test → performance) individua **M1-06** come prossimo: è l'unico task aperto che corregge un bug di sicurezza attivo e verificato (F-11, esposizione di messaggi Postgres grezzi al client su 4 percorsi distinti: GET, POST, PATCH, DELETE). M1-02 (F-05, correttezza) segue per categoria; M1-08/M1-09 (osservabilità) e M1-07 (robustezza minore) seguono a scalare; M1-04 resta ultimo per rischio di regressione più alto (cambia semantica del GET, richiede feature flag). M1-03 resta a rischio zero ma copre solo un gap di test, non un bug attivo.
 
 **Milestone 1.5**: nessuna dipendenza dall'ordine, eseguibili in parallelo da persone diverse; consigliato M1.5-01 e M1.5-03 per primi (rischio operativo più alto se non fatti).
 
