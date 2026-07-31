@@ -15,6 +15,9 @@ Regola generale per ogni task: **un task = un test = un commit facilmente revers
 | DONE-05 | Blocco server-side (HTTP 409, fail-closed) di PATCH/DELETE su navette con corse odierne/future già assegnate (`assignments`) o con `status != 'new'` — mitigazione di F-01, verificato tenant-scoped su `services` e `assignments` | `ac37474` (2026-07-31) | `tests/unit/shuttle-schedules-operational-guard.test.ts` (13 casi: blocco/non blocco, oggi incluso, passato escluso, tenant isolation, fail-closed su errore query) |
 | DONE-06 | Verifica server-side (HTTP 400, fail-closed) che `hotel_id` in POST/PATCH appartenga al tenant autenticato (`public.hotels` filtrato per `id` + `tenant_id`) — mitigazione di **F-10**, guard eseguito prima del guard F-01 e prima di ogni scrittura, verificato ordine e tenant isolation | `b909349` (2026-07-31) | `tests/unit/shuttle-schedules-hotel-tenant-guard.test.ts` (12 casi: tenant proprio/altrui, hotel_id null/omesso, fail-closed su errore query, ordine rispetto al guard F-01); reviewer indipendente: **APPROVATO** |
 | DONE-07 | Rimozione dei messaggi Postgres/Supabase grezzi dalle risposte 500 di `GET`/`POST`/`PATCH`/`DELETE` — mitigazione di **F-11**; ogni errore interno inatteso viene ora loggato lato server via `auditLog` (`lib/server/ops-audit.ts`, già in uso nello stesso flusso di autenticazione) con dettaglio completo (`tenantId`, `userId`, `scheduleId` quando disponibile, messaggio originale), mentre il client riceve solo un messaggio generico stabile; status HTTP invariati; aggiunto log anche sui due catch dell'hotel-check F-10, in precedenza privi di log | `eb4f978` (2026-07-31) | `tests/unit/shuttle-schedules-error-sanitization.test.ts` (10 casi: 4 percorsi × assenza leak/log presente, assenza campi `details/hint/code/stack`, regressione 400/409/200 invariati); reviewer indipendente: **APPROVATO** |
+| DONE-08 | `todayIsoDate()` calcola "oggi" esplicitamente in `Europe/Rome` (`Intl.DateTimeFormat("en-CA", {timeZone:"Europe/Rome"})`), non più in UTC — mitigazione di **F-05**; firma testabile `todayIsoDate(now = new Date())`; nessun offset fisso, DST gestita automaticamente | `988cf4b` (2026-07-31) | `tests/unit/shuttle-schedules-rome-date.test.ts` (22 casi: transizioni DST marzo/ottobre, rollover fine anno/mese, indipendenza dal TZ di processo, valore effettivo passato a `.gte("date",...)` a livello handler); reviewer indipendente: **APPROVATO** |
+| DONE-09 | `decodeShuttleScheduleId(id)` nel PATCH avvolta in try/catch + validazione minima della struttura decodificata (campi indispensabili alle query: `direction`, `departure_time`, `customer_name`, `vessel`) — mitigazione di **F-12**; id malformato o strutturalmente incompleto → `400 "Identificativo navetta non valido."`, nessuna query/scrittura eseguita | `d687bd0` (2026-07-31) | `tests/unit/shuttle-schedules-invalid-id.test.ts` (13 casi: base64/JSON invalido, oggetto vuoto/array/campi mancanti/tipi errati, campi extra accettati, id valido invariato, nessun leak, regressione 401/409/400); reviewer indipendente: **APPROVATO** |
+| DONE-10 | Copertura test handler-level dell'isolamento tenant su `GET`/`POST`/`PATCH`/`DELETE` di `shuttle-schedules` — **F-07**; verificato con mock tenant-aware mutabile (non tautologico: dimostrato che i test falliscono realmente rimuovendo un filtro `.eq("tenant_id",...)` critico, poi ripristinato) che **nessuna vulnerabilità è stata trovata** — l'isolamento era già corretto per costruzione indipendente (tenant_id sempre da `auth.membership.tenant_id`, mai dal body né dall'id derivato); **nessun codice di produzione modificato** | nessuno (solo test, commit da effettuare) | `tests/unit/shuttle-schedules-tenant-isolation.test.ts` (28 casi: GET/POST/PATCH/DELETE, chiave identica tra tenant, `tenant_id` malevolo nel body, hotel cross-tenant, auth/ruoli, regressioni F-01/F-10/F-11/M1-02/M1-07); reviewer indipendente: **APPROVATO** |
 
 Nota: DONE-01 non copre `app/api/shuttle-schedules/**`, che però risulta tenant-safe per costruzione indipendente (vedi F-07 nell'audit). Il task M1-03 sotto copre solo il gap di test, non un bug.
 
@@ -32,37 +35,17 @@ Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianifi
 
 ### M1-02 — Fix `todayIsoDate()` per usare il fuso Europe/Rome invece di UTC
 - **Milestone**: 1 · **Priorità**: ALTA (F-05)
-- **Obiettivo**: evitare che nella finestra 00:00–02:00 CEST una data odierna italiana venga trattata come "passata" in UTC, alterando il perimetro di righe cancellate/rigenerate.
-- **Problema risolto**: F-05.
-- **File consentiti**: `app/api/shuttle-schedules/route.ts`, `app/api/shuttle-schedules/[id]/route.ts` (entrambe le definizioni duplicate di `todayIsoDate`).
-- **File vietati**: qualunque altro file che usa date (fuori perimetro navette), file WhatsApp.
-- **Modifiche previste**: sostituire `new Date().toISOString().slice(0,10)` con un calcolo esplicito in `Europe/Rome` (es. `new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome" }).format(new Date())`), identico nei due file.
-- **Test obbligatori**: nuovo test che mocka `Date` a un istante UTC nella finestra 22:00–23:59 UTC (= 00:00–01:59 CEST) e verifica che `todayIsoDate()` (o la funzione esportata, se estratta) ritorni la data italiana corretta, non quella UTC.
-- **Comandi di verifica**: `pnpm exec vitest run tests/unit/shuttle-schedules-patch-date-range.test.ts tests/unit/shuttle-schedules-patch-valid-from.test.ts tests/unit/shuttle-schedules-patch-valid-to.test.ts`, `pnpm typecheck`.
-- **Rollback**: revert della singola riga modificata in ciascuno dei 2 file.
-- **Definition of Done**: `todayIsoDate()` restituisce sempre la data corrente in Italia, verificato da test con orario mockato.
-- **Dipendenze**: nessuna.
-- **Feature flag**: non necessaria.
-- **Rischio**: basso — funzione pura, cambio isolato, ben testabile.
-- **Stato**: DA FARE.
-- **Commit suggerito**: `fix: compute shuttle schedule "today" cutoff in Europe/Rome timezone`
+- **Stato**: **COMPLETATO** — commit `988cf4b` (2026-07-31). Vedi DONE-08 sopra.
+- **Risultato sintetico**: `todayIsoDate(now = new Date())` in entrambi i file usa `Intl.DateTimeFormat("en-CA", {timeZone:"Europe/Rome"})`; nessun offset fisso, DST gestita automaticamente, indipendente dal timezone del processo (verificato con `TZ` diverse).
+- **Test eseguiti**: `tests/unit/shuttle-schedules-rome-date.test.ts` (22/22 verdi) + suite shuttle esistente (88/88 verdi) + `pnpm typecheck` pulito + lint pulito.
+- **Reviewer indipendente**: **APPROVATO**.
 
 ### M1-03 — Test di tenant isolation dedicato per `shuttle-schedules`
 - **Milestone**: 1 · **Priorità**: ALTA (F-07)
-- **Obiettivo**: garantire con un test di regressione che PATCH/DELETE/GET/POST filtrino sempre per `tenant_id` di sessione, anche se un futuro refactor tocca questo file.
-- **Problema risolto**: F-07 (gap di test coverage, non un bug attuale).
-- **File consentiti**: nuovo file `tests/unit/shuttle-schedules-tenant-isolation.test.ts`.
-- **File vietati**: nessuna modifica a `app/api/shuttle-schedules/**` o `lib/shuttle-schedules.ts` in questo task.
-- **Modifiche previste**: nuovo test che, con mock del client Supabase, verifica che ogni chiamata `.eq("tenant_id", ...)` nel delete/insert/select usi sempre `auth.membership.tenant_id`, anche quando l'`id` decodificato "suggerisce" un hotel/cliente diverso.
-- **Test obbligatori**: il file stesso.
-- **Comandi di verifica**: `pnpm exec vitest run tests/unit/shuttle-schedules-tenant-isolation.test.ts`.
-- **Rollback**: cancellazione del nuovo file di test.
-- **Definition of Done**: test verde, copre PATCH e DELETE con scenario cross-tenant simulato.
-- **Dipendenze**: nessuna.
-- **Feature flag**: non applicabile.
-- **Rischio**: nullo (solo aggiunta di test).
-- **Stato**: DA FARE.
-- **Commit suggerito**: `test: add tenant isolation coverage for shuttle schedules API`
+- **Stato**: **COMPLETATO** — solo test, nessun commit di codice (nessuna vulnerabilità trovata). Vedi DONE-10 sopra.
+- **Risultato sintetico**: 28 test handler-level con mock tenant-aware mutabile (non tautologico — dimostrato rimuovendo temporaneamente `.eq("tenant_id",...)` da `deleteMatchingFutureServices` e osservando 5 fallimenti reali, poi ripristinato). **Nessuna vulnerabilità cross-tenant trovata**: GET/POST/PATCH/DELETE risultano tutti correttamente tenant-scoped, `tenant_id` nel body viene sempre ignorato, chiavi identiche tra tenant non causano fusione né cancellazione cross-tenant, hotel cross-tenant resta bloccato da F-10.
+- **Test eseguiti**: `tests/unit/shuttle-schedules-tenant-isolation.test.ts` (28/28 verdi) + suite shuttle esistente (129/129 verdi) + `pnpm typecheck` pulito + lint pulito.
+- **Reviewer indipendente**: **APPROVATO**.
 
 ### M1-04 — Filtrare `GET /api/shuttle-schedules` per tipo servizio e data
 - **Milestone**: 1 · **Priorità**: ALTA (F-06)
@@ -97,16 +80,10 @@ Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianifi
 
 ### M1-07 — `decodeShuttleScheduleId` dentro try/catch nel PATCH
 - **Milestone**: 1 · **Priorità**: BASSA (F-12)
-- **Obiettivo**: coerenza di gestione errori tra PATCH e DELETE per id malformati.
-- **File consentiti**: `app/api/shuttle-schedules/[id]/route.ts`.
-- **Modifiche previste**: spostare/avvolgere `decodeShuttleScheduleId(id)` in un try/catch dedicato prima della validazione Zod, risposta 400 `"Id navetta non valido."` in caso di errore di parsing.
-- **Test obbligatori**: test PATCH con id non-base64/non-JSON valido → verifica 400 invece di eccezione non gestita.
-- **Comandi di verifica**: `pnpm exec vitest run`, `pnpm typecheck`.
-- **Rollback**: revert del blocco try/catch aggiunto.
-- **Definition of Done**: PATCH con id malformato risponde 400 controllato, allineato al comportamento di DELETE.
-- **Rischio**: basso.
-- **Stato**: DA FARE.
-- **Commit suggerito**: `fix: handle malformed shuttle schedule id in PATCH route`
+- **Stato**: **COMPLETATO** — commit `d687bd0` (2026-07-31). Vedi DONE-09 sopra.
+- **Risultato sintetico**: decode avvolto in try/catch + validazione minima post-decode dei soli campi indispensabili alle query; `400 "Identificativo navetta non valido."` su id malformato o strutturalmente incompleto, nessuna query/scrittura eseguita.
+- **Test eseguiti**: `tests/unit/shuttle-schedules-invalid-id.test.ts` (13/13 verdi) + suite shuttle esistente (101/101 verdi) + `pnpm typecheck` pulito + lint pulito.
+- **Reviewer indipendente**: **APPROVATO**.
 
 ### M1-08 — Log di audit per cancellazione navetta
 - **Milestone**: 1 · **Priorità**: ALTA (F-04)
@@ -124,16 +101,8 @@ Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianifi
 
 ### M1-09 — Log degli errori di scrittura (PATCH/POST/DELETE)
 - **Milestone**: 1 · **Priorità**: MEDIA (F-17)
-- **Obiettivo**: avere traccia in log quando una scrittura fallisce, per diagnosi rapida in produzione.
-- **File consentiti**: `app/api/shuttle-schedules/route.ts`, `app/api/shuttle-schedules/[id]/route.ts`.
-- **Modifiche previste**: aggiungere `auditLog`/`console.error` nei blocchi `catch` esistenti (si può accorpare con M1-06).
-- **Test obbligatori**: verifica che la funzione di log venga invocata nei path di errore già coperti dai test esistenti.
-- **Comandi di verifica**: `pnpm exec vitest run`, `pnpm typecheck`.
-- **Rollback**: rimuovere le chiamate di log aggiunte.
-- **Definition of Done**: ogni errore di scrittura produce una entry di log server-side.
-- **Rischio**: basso.
-- **Stato**: DA FARE (può essere fuso con M1-06 nello stesso commit se il reviewer lo preferisce).
-- **Commit suggerito**: `feat: log write failures in shuttle schedules API`
+- **Stato**: **GIÀ COPERTO da DONE-07 (M1-06, commit `eb4f978`)** — nessun lavoro residuo.
+- **Nota**: l'implementazione di M1-06 (sanificazione errori) ha aggiunto `auditLog` a **tutti** i blocchi `catch` di `GET`/`POST`/`PATCH`/`DELETE` in entrambi i file (verificato con `grep` mirato: ogni `catch` è seguito da una chiamata `auditLog`), esattamente l'obiettivo di questo task. Nessun blocco `catch` privo di log risulta più presente. Task chiuso senza ulteriore commit.
 
 ---
 
@@ -221,10 +190,15 @@ Nota su DONE-05: l'implementazione sostituisce integralmente l'approccio pianifi
 
 ## Ordine di esecuzione consigliato
 
-**Milestone 1** — stato aggiornato al 2026-07-31 dopo `eb4f978` (M1-06 completato come DONE-07):
-~~M1-03~~ → ~~M1-01~~ (DONE-05) → ~~M1-05~~ (DONE-06) → ~~M1-06~~ (DONE-07) → **M1-02** (task corrente) → M1-08 → M1-09 → M1-07 → M1-04
+**Milestone 1** — stato aggiornato al 2026-07-31 dopo la copertura test tenant isolation (DONE-10, nessun bug trovato):
+~~M1-03~~ (DONE-10) → ~~M1-01~~ (DONE-05) → ~~M1-05~~ (DONE-06) → ~~M1-06~~ (DONE-07) → ~~M1-02~~ (DONE-08) → ~~M1-07~~ (DONE-09) → ~~M1-09~~ (già coperto da DONE-07) → **M1-08** (prossimo consigliato) → M1-04 (dopo, o post-stagione)
 
-Motivazione ordine aggiornato: con F-01, F-10 e F-11 già mitigati, il criterio guida (bug attivi di sicurezza → bug attivi di correttezza → osservabilità → test → performance) individua **M1-02** come prossimo: è l'unico bug attivo di correttezza rimasto in Milestone 1 (F-05, `todayIsoDate()` in UTC invece di Europe/Rome). M1-08/M1-09 (osservabilità) e M1-07 (robustezza minore) seguono a scalare; M1-04 resta ultimo per rischio di regressione più alto (cambia semantica del GET, richiede feature flag). M1-03 resta a rischio zero ma copre solo un gap di test, non un bug attivo.
+**Solo M1-08 e M1-04 restano aperti in Milestone 1.** Raccomandazione del reviewer per l'ordine tra i due, valutata su: alta stagione, rischio regressione, assenza di migrazioni, beneficio operativo, possibilità di rollback.
+
+- **M1-08 (ridefinito come audit delle cancellazioni/modifiche massive, F-04)**: nessuna migrazione (riusa `service_deletion_log` già esistente), operazione puramente additiva (solo log, nessun cambio di comportamento/status), rollback banale (rimozione della chiamata di log), beneficio operativo concreto per il supporto durante l'alta stagione (oggi zero tracciabilità sulle cancellazioni bulk di `shuttle-schedules`). Rischio di regressione: **nullo**.
+- **M1-04 (filtro/performance GET, F-06)**: nessuna migrazione, ma **rischio di regressione medio** — cambia cosa il GET restituisce, richiede feature flag e verifica manuale attenta prima del deploy in stagione; beneficio operativo reale (performance + correttezza badge) ma non urgente (nessun incidente osservato).
+
+**Raccomandazione: M1-08 prima di M1-04.** A parità di assenza di migrazioni, M1-08 ha rischio nullo e beneficio operativo immediato per l'alta stagione, mentre M1-04 introduce un cambio di comportamento che merita più margine di osservazione — coerente con la preferenza esplicita per interventi atomici a basso rischio durante l'alta stagione. Nessuno dei due è stato iniziato in questa sessione.
 
 **Milestone 1.5**: nessuna dipendenza dall'ordine, eseguibili in parallelo da persone diverse; consigliato M1.5-01 e M1.5-03 per primi (rischio operativo più alto se non fatti).
 
