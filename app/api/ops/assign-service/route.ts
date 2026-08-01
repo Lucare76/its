@@ -13,8 +13,41 @@ import {
   type GeographicCompatibilityService,
 } from "@/lib/server/geo-assignment";
 import { type SupabaseClient } from "@supabase/supabase-js";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
+
+// Elimina, in modo best-effort, il trip_group appena creato dalla richiesta
+// corrente quando il successivo insert su assignments fallisce (CONC-01).
+// Va chiamata solo con un groupId proveniente da un insert eseguito nella
+// stessa richiesta: non deve mai cancellare un gruppo preesistente/riusato.
+async function cleanupCreatedTripGroup(
+  admin: SupabaseClient,
+  tenantId: string,
+  groupId: string
+): Promise<boolean> {
+  try {
+    const { error } = await admin.from("trip_groups").delete().eq("id", groupId).eq("tenant_id", tenantId);
+    if (error) {
+      auditLog({
+        event: "assignment_cleanup_failed",
+        level: "error",
+        tenantId,
+        details: { groupIdCreated: groupId, error: error.message },
+      });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    auditLog({
+      event: "assignment_cleanup_failed",
+      level: "error",
+      tenantId,
+      details: { groupIdCreated: groupId, error: err instanceof Error ? err.message : "Errore sconosciuto." },
+    });
+    return false;
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -169,7 +202,7 @@ export async function POST(request: NextRequest) {
 
       groupId = newGroup.id as string;
 
-      await auth.admin.from("assignments").insert({
+      const { error: assignmentInsertError } = await auth.admin.from("assignments").insert({
         tenant_id: tenantId,
         service_id: body.service_id,
         driver_user_id: body.driver_user_id ?? null,
@@ -178,6 +211,51 @@ export async function POST(request: NextRequest) {
         group_id: groupId,
         ...manualAssignmentLock,
       });
+
+      if (assignmentInsertError) {
+        const cleanupSucceeded = await cleanupCreatedTripGroup(auth.admin, tenantId, groupId);
+
+        if (assignmentInsertError.code === "23505") {
+          auditLog({
+            event: "assignment_conflict",
+            level: "warn",
+            tenantId,
+            userId,
+            details: {
+              serviceId: body.service_id,
+              groupIdCreated: groupId,
+              cleanupAttempted: true,
+              cleanupSucceeded,
+            },
+          });
+          return NextResponse.json(
+            {
+              ok: false,
+              error: "SERVICE_ALREADY_ASSIGNED",
+              message: "Il servizio è già stato assegnato da un altro operatore. Ricarica la pagina.",
+            },
+            { status: 409 }
+          );
+        }
+
+        auditLog({
+          event: "assignment_insert_failed",
+          level: "error",
+          tenantId,
+          userId,
+          details: {
+            serviceId: body.service_id,
+            groupIdCreated: groupId,
+            cleanupAttempted: true,
+            cleanupSucceeded,
+            dbCode: assignmentInsertError.code ?? null,
+          },
+        });
+        return NextResponse.json(
+          { ok: false, error: "ASSIGNMENT_FAILED", message: "Errore durante l'assegnazione. Riprova." },
+          { status: 500 }
+        );
+      }
     }
 
     await auth.admin.from("services").update({ status: "assigned" }).eq("id", body.service_id).eq("tenant_id", tenantId);
