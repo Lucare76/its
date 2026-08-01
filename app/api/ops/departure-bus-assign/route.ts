@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "crypto";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { ensureDriverProfileForMembership, reserveMembershipUsername } from "@/lib/server/driver-registry";
 import { sendPushToUser } from "@/lib/server/web-push";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -12,6 +13,64 @@ function makeAdminClient() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
   if (!url || !key) return null;
   return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+}
+
+// ── Verifica che tutti i service_ids appartengano al tenant autenticato ──────
+// Guardia anti-IDOR (SEC-01): un service_id non appartenente al tenant o
+// inesistente produce la stessa risposta 404 generica, senza rivelare quale
+// dei due casi si sia verificato. Un errore nella query stessa è fail-closed
+// (500, nessuna scrittura). Deve essere chiamata prima di qualsiasi DELETE/INSERT.
+type OwnershipCheckResult = { ok: true } | { ok: false; response: NextResponse };
+
+async function verifyServicesBelongToTenant(
+  admin: SupabaseClient,
+  tenantId: string,
+  uniqueServiceIds: string[],
+  context: { userId: string; action: string }
+): Promise<OwnershipCheckResult> {
+  const { data: ownedServices, error: ownedServicesError } = await admin
+    .from("services")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .in("id", uniqueServiceIds);
+
+  if (ownedServicesError) {
+    auditLog({
+      event: "departure_bus_assign_service_ownership_check_failed",
+      level: "error",
+      tenantId,
+      userId: context.userId,
+      details: {
+        action: context.action,
+        serviceCount: uniqueServiceIds.length,
+        error: ownedServicesError.message,
+      },
+    });
+    return {
+      ok: false,
+      response: NextResponse.json({ ok: false, error: "Errore durante la verifica dei servizi." }, { status: 500 }),
+    };
+  }
+
+  if ((ownedServices?.length ?? 0) !== uniqueServiceIds.length) {
+    auditLog({
+      event: "departure_bus_assign_failed",
+      level: "warn",
+      tenantId,
+      userId: context.userId,
+      details: {
+        action: context.action,
+        serviceCount: uniqueServiceIds.length,
+        reason: "service_ownership_mismatch",
+      },
+    });
+    return {
+      ok: false,
+      response: NextResponse.json({ ok: false, error: "Uno o più servizi non trovati." }, { status: 404 }),
+    };
+  }
+
+  return { ok: true };
 }
 
 // ── GET — lista autisti con stato account ─────────────────────────────────────
@@ -153,6 +212,13 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      const uniqueServiceIds = [...new Set(serviceIds)];
+      const ownership = await verifyServicesBelongToTenant(auth.admin, tenantId, uniqueServiceIds, {
+        userId: auth.user.id,
+        action: "assign_driver",
+      });
+      if (!ownership.ok) return ownership.response;
+
       // Rimuovi assignments precedenti per questi servizi
       await auth.admin
         .from("assignments")
@@ -190,6 +256,13 @@ export async function POST(req: NextRequest) {
       if (!serviceIds?.length) {
         return NextResponse.json({ ok: false, error: "service_ids richiesti" }, { status: 400 });
       }
+
+      const uniqueServiceIds = [...new Set(serviceIds)];
+      const ownership = await verifyServicesBelongToTenant(auth.admin, tenantId, uniqueServiceIds, {
+        userId: auth.user.id,
+        action: "remove_driver",
+      });
+      if (!ownership.ok) return ownership.response;
 
       await auth.admin
         .from("assignments")
