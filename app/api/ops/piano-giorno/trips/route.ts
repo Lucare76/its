@@ -27,6 +27,7 @@ import { effectiveServiceDisembarkTime } from "@/lib/piano-arrival-time";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
 import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 const LARGE_GROUP_PAX_THRESHOLD = 21;
@@ -84,13 +85,19 @@ export async function POST(request: NextRequest) {
       if (!date || !service_ids?.length) {
         return NextResponse.json({ ok: false, error: "date e service_ids obbligatori." }, { status: 400 });
       }
+      const ownership = await verifyServiceIdsBelongToTenant(auth.admin, tenantId, service_ids, {
+        userId,
+        action: "create_trip",
+      });
+      if (!ownership.ok) return ownership.response;
+      const verifiedServiceIds = ownership.uniqueServiceIds;
       const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, date);
       if (confirmationError) {
         return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
       }
       const validation = await validateTripPayload(auth.admin, tenantId, {
         date,
-        serviceIds: service_ids,
+        serviceIds: verifiedServiceIds,
         driverUserId: driver_user_id ?? null,
         driverProfileId: driver_profile_id ?? null,
         vehicleCapacity: vehicle_capacity ?? null,
@@ -116,7 +123,7 @@ export async function POST(request: NextRequest) {
       const effectiveVehicleLabel = vehicleCheck.vehicle?.label ?? vehicle_label ?? null;
       const vehicleConflict = await validateVehicleTimelinePayload(auth.admin, tenantId, {
         date,
-        serviceIds: service_ids,
+        serviceIds: verifiedServiceIds,
         vehicleLabel: effectiveVehicleLabel,
         driverUserId: driver_user_id ?? null,
         driverProfileId: driver_profile_id ?? null,
@@ -154,7 +161,7 @@ export async function POST(request: NextRequest) {
       await _assignServicesToGroup(
         auth.admin,
         tenantId,
-        service_ids,
+        verifiedServiceIds,
         groupId,
         driver_user_id ?? null,
         driver_profile_id ?? null,
@@ -168,13 +175,14 @@ export async function POST(request: NextRequest) {
         const { data: firstService } = await auth.admin
           .from("services")
           .select("time, customer_name, pax")
-          .in("id", service_ids)
+          .eq("tenant_id", tenantId)
+          .in("id", verifiedServiceIds)
           .order("time")
           .limit(1)
           .maybeSingle();
         const label = firstService
           ? `${firstService.time.slice(0, 5)} — ${firstService.customer_name} · ${firstService.pax} pax`
-          : `${service_ids.length} servizi`;
+          : `${verifiedServiceIds.length} servizi`;
         void sendPushToUser(tenantId, driver_user_id, {
           title: `🚌 Nuovo giro assegnato — ${date}`,
           body: label,
@@ -201,10 +209,19 @@ export async function POST(request: NextRequest) {
       const groupDate = groupMeta?.date as string | undefined;
       const prevDriverProfileId = groupMeta?.driver_profile_id as string | null ?? null;
       const prevVehicleLabel = groupMeta?.vehicle_label as string | null ?? null;
-      const effectiveServiceIds = service_ids ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
       if (!groupDate) {
         return NextResponse.json({ ok: false, error: "Data giro non trovata." }, { status: 404 });
       }
+      let verifiedServiceIds: string[] | null = null;
+      if (service_ids) {
+        const ownership = await verifyServiceIdsBelongToTenant(auth.admin, tenantId, service_ids, {
+          userId,
+          action: "update_trip",
+        });
+        if (!ownership.ok) return ownership.response;
+        verifiedServiceIds = ownership.uniqueServiceIds;
+      }
+      const effectiveServiceIds = verifiedServiceIds ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
       const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, groupDate);
       if (confirmationError) {
         return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
@@ -303,7 +320,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Se passati nuovi service_ids, riassegna (add/remove dal gruppo)
-      if (service_ids !== undefined) {
+      if (verifiedServiceIds !== null) {
         // Rimuovi servizi che non sono più nel gruppo
         const { data: existing } = await auth.admin
           .from("assignments")
@@ -312,7 +329,7 @@ export async function POST(request: NextRequest) {
           .eq("tenant_id", tenantId);
 
         const existingIds = new Set((existing ?? []).map((a) => a.service_id as string));
-        const newIds = new Set(service_ids);
+        const newIds = new Set(verifiedServiceIds);
 
         // Servizi rimossi dal gruppo → cancella assignment o svincola
         const toRemove = (existing ?? []).filter((a) => !newIds.has(a.service_id as string));
@@ -324,7 +341,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Servizi aggiunti → nuovi assignments
-        const toAdd = service_ids.filter((id) => !existingIds.has(id));
+        const toAdd = verifiedServiceIds.filter((id) => !existingIds.has(id));
         if (toAdd.length > 0) {
           await _assignServicesToGroup(auth.admin, tenantId, toAdd, group_id, driver_user_id ?? null, driver_profile_id ?? null, vehicle_label ?? null, userId, now);
         }
@@ -332,7 +349,7 @@ export async function POST(request: NextRequest) {
 
       // Log driver swap se il driver_profile_id è cambiato
       if ((driver_profile_id ?? null) !== prevDriverProfileId) {
-        const allServiceIds = service_ids ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
+        const allServiceIds = verifiedServiceIds ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
         const { data: featureServices } = allServiceIds.length > 0
           ? await auth.admin
               .from("services")
@@ -440,6 +457,7 @@ export async function POST(request: NextRequest) {
 
       let destGroupId = target_group_id;
       const warnings: string[] = [];
+      const hasExistingTargetGroup = Boolean(target_group_id);
 
       // Se target_group_id è null → crea un nuovo giro
       if (!destGroupId) {
@@ -508,18 +526,28 @@ export async function POST(request: NextRequest) {
         destGroupId = newGroup.id as string;
       }
 
-      if (destGroupId) {
+      // SEC-02: quando il gruppo destinazione è stato fornito dal client (non
+      // appena creato da noi sopra), va verificato senza alcun fallback su
+      // `date` — altrimenti un target_group_id inesistente o di un altro
+      // tenant potrebbe proseguire usando la data fornita dall'attaccante.
+      if (hasExistingTargetGroup) {
         const { data: destGroupMeta } = await auth.admin
           .from("trip_groups")
           .select("date")
           .eq("id", destGroupId)
           .eq("tenant_id", tenantId)
           .maybeSingle();
-        const effectiveDate = (destGroupMeta?.date as string | undefined) ?? date;
-        if (!effectiveDate) {
-          return NextResponse.json({ ok: false, error: "Data giro destinazione non trovata." }, { status: 404 });
+        if (!destGroupMeta?.date) {
+          auditLog({
+            event: "piano_trip_target_group_ownership_check_failed",
+            level: "warn",
+            tenantId,
+            userId,
+            details: { action: "move_services", reason: "target_group_ownership_mismatch" },
+          });
+          return NextResponse.json({ ok: false, error: "Giro di destinazione non trovato." }, { status: 404 });
         }
-        const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, effectiveDate);
+        const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, destGroupMeta.date as string);
         if (confirmationError) {
           return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
         }
@@ -792,6 +820,70 @@ export async function POST(request: NextRequest) {
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
+
+// Verifica che tutti i service_ids appartengano al tenant autenticato (SEC-02).
+// Deduplica gli id, poi risponde 404 generico identico per id inesistente e id
+// di un altro tenant (nessuna distinzione rivelata al client). Un errore nella
+// query stessa è fail-closed (500, nessuna scrittura). Deve essere chiamata
+// prima di qualsiasi INSERT/UPDATE/UPSERT su assignments/trip_groups.
+async function verifyServiceIdsBelongToTenant(
+  admin: SupabaseClient,
+  tenantId: string,
+  serviceIds: string[],
+  context: { userId?: string; action: string }
+): Promise<
+  | { ok: true; uniqueServiceIds: string[] }
+  | { ok: false; response: NextResponse }
+> {
+  const uniqueServiceIds = [...new Set(serviceIds)];
+  if (uniqueServiceIds.length === 0) {
+    return { ok: true, uniqueServiceIds };
+  }
+
+  const { data, error } = await admin
+    .from("services")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .in("id", uniqueServiceIds);
+
+  if (error) {
+    auditLog({
+      event: "piano_trip_service_ownership_check_failed",
+      level: "error",
+      tenantId,
+      userId: context.userId ?? null,
+      details: {
+        action: context.action,
+        serviceCount: uniqueServiceIds.length,
+        error: error.message,
+      },
+    });
+    return {
+      ok: false,
+      response: NextResponse.json({ ok: false, error: "Errore durante la verifica dei servizi." }, { status: 500 }),
+    };
+  }
+
+  if ((data?.length ?? 0) !== uniqueServiceIds.length) {
+    auditLog({
+      event: "piano_trip_tenant_guard_failed",
+      level: "warn",
+      tenantId,
+      userId: context.userId ?? null,
+      details: {
+        action: context.action,
+        serviceCount: uniqueServiceIds.length,
+        reason: "service_ownership_mismatch",
+      },
+    });
+    return {
+      ok: false,
+      response: NextResponse.json({ ok: false, error: "Uno o più servizi non trovati." }, { status: 404 }),
+    };
+  }
+
+  return { ok: true, uniqueServiceIds };
+}
 
 async function _assignServicesToGroup(
   admin: SupabaseClient,
