@@ -5,6 +5,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { ensureDriverProfileForMembership, reserveMembershipUsername } from "@/lib/server/driver-registry";
 import { sendPushToUser } from "@/lib/server/web-push";
 import { auditLog } from "@/lib/server/ops-audit";
+import { validateDriverGeographicBatch, type TripGeoServiceRow } from "@/lib/server/geo-assignment";
 
 export const runtime = "nodejs";
 
@@ -218,6 +219,100 @@ export async function POST(req: NextRequest) {
         action: "assign_driver",
       });
       if (!ownership.ok) return ownership.response;
+
+      // ── FUNC-01: caricamento dati operativi del batch (data, orario, geografia) ──
+      const { data: batchServicesData, error: batchServicesError } = await auth.admin
+        .from("services")
+        .select("id, date, time, pickup_hotel, direction, hotel_id, meeting_point")
+        .eq("tenant_id", tenantId)
+        .in("id", uniqueServiceIds);
+
+      if (batchServicesError) {
+        auditLog({
+          event: "departure_bus_assign_services_load_failed",
+          level: "error",
+          tenantId,
+          userId: auth.user.id,
+          details: { action: "assign_driver", error: batchServicesError.message },
+        });
+        return NextResponse.json({ ok: false, error: "Errore durante il caricamento dei servizi." }, { status: 500 });
+      }
+
+      const batchServices = (batchServicesData ?? []) as Array<TripGeoServiceRow & { date: string }>;
+      if (batchServices.length !== uniqueServiceIds.length) {
+        return NextResponse.json({ ok: false, error: "Uno o più servizi non trovati." }, { status: 404 });
+      }
+
+      // ── FUNC-01: disponibilità giornaliera confermata per tutte le date del batch ──
+      const uniqueDates = [...new Set(batchServices.map((s) => s.date))];
+      const { data: confirmations, error: confirmationsError } = await auth.admin
+        .from("daily_availability_confirmations")
+        .select("date, confirmed")
+        .eq("tenant_id", tenantId)
+        .in("date", uniqueDates);
+
+      if (confirmationsError) {
+        auditLog({
+          event: "departure_bus_assign_availability_check_failed",
+          level: "error",
+          tenantId,
+          userId: auth.user.id,
+          details: { action: "assign_driver", error: confirmationsError.message },
+        });
+        return NextResponse.json({ ok: false, error: "Errore durante la verifica della disponibilità." }, { status: 500 });
+      }
+
+      const confirmedDates = new Set(
+        (confirmations ?? []).filter((c) => c.confirmed).map((c) => c.date as string)
+      );
+      const allDatesConfirmed = uniqueDates.every((d) => confirmedDates.has(d));
+      if (!allDatesConfirmed) {
+        auditLog({
+          event: "departure_bus_assign_failed",
+          level: "warn",
+          tenantId,
+          userId: auth.user.id,
+          details: { action: "assign_driver", reason: "daily_availability_not_confirmed" },
+        });
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "DAILY_AVAILABILITY_NOT_CONFIRMED",
+            message: "La disponibilità giornaliera non è stata ancora confermata.",
+          },
+          { status: 409 }
+        );
+      }
+
+      // ── FUNC-01: validazione geografica del batch come unico giro bus ──────────
+      const geoValidation = await validateDriverGeographicBatch(auth.admin, tenantId, driverUserId, batchServices);
+      if (!geoValidation.ok) {
+        if (geoValidation.kind === "query_error") {
+          auditLog({
+            event: "departure_bus_assign_geo_check_failed",
+            level: "error",
+            tenantId,
+            userId: auth.user.id,
+            details: { action: "assign_driver", error: geoValidation.error },
+          });
+          return NextResponse.json({ ok: false, error: "Errore durante la verifica geografica." }, { status: 500 });
+        }
+        auditLog({
+          event: "departure_bus_assign_failed",
+          level: "warn",
+          tenantId,
+          userId: auth.user.id,
+          details: { action: "assign_driver", reason: "geographic_conflict" },
+        });
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "DRIVER_GEOGRAPHIC_CONFLICT",
+            message: "L'autista ha un altro servizio incompatibile con questo gruppo bus.",
+          },
+          { status: 409 }
+        );
+      }
 
       // Rimuovi assignments precedenti per questi servizi
       await auth.admin

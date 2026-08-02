@@ -1,3 +1,5 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 export type GeoArea = "nord_ovest" | "est_sud" | null;
 export type GeoSeverity = "ok" | "warning" | "block";
 
@@ -205,4 +207,142 @@ export function geographicBlockMessage(driverName: string, result: GeographicCom
     "",
     "Scegli un altro autista o riassegna uno dei servizi.",
   ].join("\n");
+}
+
+// ─── Validazione geografica di un batch driver (FUNC-01) ─────────────────────
+// Usata da assign-service (batch di un solo servizio) e da departure-bus-assign
+// (batch di più service_ids che compongono un unico giro bus). Il batch è
+// sempre trattato come un'unica finestra operativa (dal primo pickup al
+// servizio più tardo), mai validato servizio per servizio: un giro con più
+// tappe non deve generare falsi conflitti tra le proprie tappe interne.
+
+export type TripGeoServiceRow = {
+  id: string;
+  time: string;
+  pickup_hotel: string | null;
+  direction: "arrival" | "departure";
+  hotel_id: string | null;
+  meeting_point: string | null;
+};
+
+export type TripGeoHotelRow = {
+  id: string;
+  zone: string | null;
+};
+
+export type DriverGeographicBatchResult =
+  | { ok: true }
+  | { ok: false; kind: "query_error"; error: string }
+  | { ok: false; kind: "block"; error: string };
+
+export function tripServiceOperationalTime(service: TripGeoServiceRow): string {
+  return service.direction === "departure"
+    ? (service.pickup_hotel ?? service.time).slice(0, 5)
+    : service.time.slice(0, 5);
+}
+
+export function tripOperationalMinutes(value: string): number {
+  const [h, m] = value.slice(0, 5).split(":").map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+export function tripServiceToGeographicWindow(
+  service: TripGeoServiceRow,
+  hotels: Map<string, TripGeoHotelRow>
+): GeographicCompatibilityService {
+  const hotelZone = service.hotel_id ? hotels.get(service.hotel_id)?.zone ?? null : null;
+  const startTime = tripServiceOperationalTime(service);
+  if (service.direction === "departure") {
+    return { id: service.id, startTime, startZone: hotelZone, endZone: service.meeting_point };
+  }
+  return { id: service.id, startTime, startZone: service.meeting_point, endZone: hotelZone };
+}
+
+export function tripServicesToGeographicWindow(
+  services: TripGeoServiceRow[],
+  hotels: Map<string, TripGeoHotelRow>
+): GeographicCompatibilityService {
+  const windows = [...services]
+    .sort((a, b) => tripOperationalMinutes(tripServiceOperationalTime(a)) - tripOperationalMinutes(tripServiceOperationalTime(b)))
+    .map((service) => tripServiceToGeographicWindow(service, hotels));
+  const first = windows[0];
+  const last = windows[windows.length - 1] ?? first;
+  return {
+    id: services.map((service) => service.id).join(","),
+    startTime: first?.startTime ?? "00:00",
+    startZone: first?.startZone ?? null,
+    startArea: first?.startArea ?? null,
+    endZone: last?.endZone ?? first?.endZone ?? null,
+    endArea: last?.endArea ?? first?.endArea ?? null,
+  };
+}
+
+// Valida un batch di servizi (un nuovo giro) contro gli altri giri già
+// assegnati allo stesso driver. I service_id del batch sono sempre esclusi
+// dagli "altri giri" del driver, anche se già presenti in assignments (caso
+// di riassegnazione dello stesso giro allo stesso driver).
+export async function validateDriverGeographicBatch(
+  admin: SupabaseClient,
+  tenantId: string,
+  driverUserId: string,
+  batchServices: TripGeoServiceRow[]
+): Promise<DriverGeographicBatchResult> {
+  const batchIds = new Set(batchServices.map((service) => service.id));
+
+  const { data: otherAssignments, error } = await admin
+    .from("assignments")
+    .select("group_id, services!inner(id, time, pickup_hotel, direction, hotel_id, meeting_point)")
+    .eq("tenant_id", tenantId)
+    .eq("driver_user_id", driverUserId)
+    .not("group_id", "is", null);
+
+  if (error) {
+    return { ok: false, kind: "query_error", error: `Errore validazione geografica autista: ${error.message}` };
+  }
+
+  const otherAssignmentsForGeo = (otherAssignments ?? [])
+    .filter((assignment) => !batchIds.has(((assignment.services as unknown) as TripGeoServiceRow).id));
+  const otherServices = otherAssignmentsForGeo.map((assignment) => (assignment.services as unknown) as TripGeoServiceRow);
+
+  const hotelIds = [...otherServices, ...batchServices]
+    .map((row) => row.hotel_id)
+    .filter((id): id is string => Boolean(id));
+  const { data: hotelsData } = hotelIds.length > 0
+    ? await admin.from("hotels").select("id, zone").eq("tenant_id", tenantId).in("id", [...new Set(hotelIds)])
+    : { data: [] as TripGeoHotelRow[] };
+  const hotelMap = new Map((hotelsData ?? []).map((hotel) => [hotel.id as string, hotel as TripGeoHotelRow]));
+
+  const otherServicesByGroup = new Map<string, TripGeoServiceRow[]>();
+  for (const assignment of otherAssignmentsForGeo) {
+    const groupId = (assignment.group_id as string | null) ?? `service:${((assignment.services as unknown) as TripGeoServiceRow).id}`;
+    otherServicesByGroup.set(groupId, [
+      ...(otherServicesByGroup.get(groupId) ?? []),
+      (assignment.services as unknown) as TripGeoServiceRow,
+    ]);
+  }
+
+  const windows = [
+    ...Array.from(otherServicesByGroup.values()).map((groupServices) => tripServicesToGeographicWindow(groupServices, hotelMap)),
+    tripServicesToGeographicWindow(batchServices, hotelMap),
+  ].sort((a, b) => tripOperationalMinutes(a.startTime) - tripOperationalMinutes(b.startTime));
+
+  const issues: GeographicCompatibilityResult[] = [];
+  for (let i = 1; i < windows.length; i++) {
+    issues.push(validateGeographicCompatibility(windows[i - 1]!, windows[i]!));
+  }
+  const strongest = strongestGeographicResult(issues.filter((issue) => issue.severity !== "ok"));
+  if (strongest?.severity === "block") {
+    const { data: driver } = await admin
+      .from("memberships")
+      .select("full_name")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", driverUserId)
+      .maybeSingle();
+    return {
+      ok: false,
+      kind: "block",
+      error: geographicBlockMessage((driver?.full_name as string | null) ?? "selezionato", strongest),
+    };
+  }
+  return { ok: true };
 }

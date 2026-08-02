@@ -92,6 +92,52 @@ function createTenantAwareSupabase(seed: { services?: Row[]; assignments?: Row[]
     return builder;
   }
 
+  // FUNC-01: la geo-validazione del batch interroga assignments.select(...) per
+  // gli "altri giri" del driver. Nessuna riga seed di questo file ha group_id
+  // valorizzato, quindi il filtro .not("group_id","is",null) la esclude sempre
+  // e la geo-validazione non trova mai conflitti in questi scenari SEC-01.
+  function makeAssignmentsSelectBuilder() {
+    let filtered = assignments;
+    const builder = {
+      eq(field: string, value: unknown) {
+        filtered = filtered.filter((row) => row[field] === value);
+        return builder;
+      },
+      not(field: string, _op: string, value: unknown) {
+        filtered = filtered.filter((row) => (row[field] ?? null) !== value);
+        return builder;
+      },
+      then(resolve: (v: { data: Row[]; error: null }) => unknown, reject?: (e: unknown) => unknown) {
+        return Promise.resolve({ data: filtered, error: null }).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
+  // FUNC-01: la disponibilità giornaliera è confermata di default per ogni
+  // data richiesta, cosi gli scenari SEC-01 (non focalizzati su FUNC-01)
+  // restano invariati. I casi di disponibilità non confermata sono coperti
+  // dedicatamente in departure-bus-assign-operational-validation.test.ts.
+  function makeDailyAvailabilityBuilder() {
+    let requestedDates: string[] = [];
+    const builder = {
+      eq(_field: string, _value: unknown) {
+        return builder;
+      },
+      in(field: string, values: unknown[]) {
+        if (field === "date") requestedDates = values as string[];
+        return builder;
+      },
+      then(resolve: (v: { data: Row[]; error: null }) => unknown, reject?: (e: unknown) => unknown) {
+        return Promise.resolve({ data: requestedDates.map((d) => ({ date: d, confirmed: true })), error: null }).then(
+          resolve,
+          reject
+        );
+      },
+    };
+    return builder;
+  }
+
   const admin = {
     from(table: string) {
       if (table === "services") {
@@ -112,6 +158,16 @@ function createTenantAwareSupabase(seed: { services?: Row[]; assignments?: Row[]
             calls.insertedRows.push(...rows);
             assignments.push(...rows);
             return Promise.resolve({ error: null });
+          },
+          select() {
+            return makeAssignmentsSelectBuilder();
+          },
+        };
+      }
+      if (table === "daily_availability_confirmations") {
+        return {
+          select() {
+            return makeDailyAvailabilityBuilder();
           },
         };
       }
@@ -148,8 +204,21 @@ vi.mock("@/lib/server/web-push", () => ({
 
 import { POST } from "@/app/api/ops/departure-bus-assign/route";
 
-function serviceRow(tenantId: string, id: string): Row {
-  return { id, tenant_id: tenantId };
+// FUNC-01: la route ora carica anche data/orario/geografia del batch. I
+// default qui sotto (data confermata di default, hotel_id nullo → nessuna
+// zona) mantengono i test SEC-01 concentrati solo sull'isolamento tenant.
+function serviceRow(tenantId: string, id: string, overrides: Row = {}): Row {
+  return {
+    id,
+    tenant_id: tenantId,
+    date: "2026-08-10",
+    time: "10:00:00",
+    pickup_hotel: null,
+    direction: "departure",
+    hotel_id: null,
+    meeting_point: null,
+    ...overrides,
+  };
 }
 
 function makeRequest(body: Record<string, unknown>) {
