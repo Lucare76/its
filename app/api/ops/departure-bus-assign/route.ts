@@ -314,24 +314,24 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Rimuovi assignments precedenti per questi servizi
-      await auth.admin
-        .from("assignments")
-        .delete()
-        .in("service_id", serviceIds)
-        .eq("tenant_id", tenantId);
-
-      // Inserisci nuovi assignments
-      const { error: insertErr } = await auth.admin.from("assignments").insert(
+      // RACE-01: upsert al posto di DELETE+INSERT. Con due richieste concorrenti
+      // sullo stesso batch, il DELETE dell'una poteva cancellare silenziosamente
+      // la riga appena scritta dall'altra (lost update, nessun errore visibile).
+      // L'upsert scrive una sola riga per service_id in un solo statement atomico
+      // sul vincolo unique assignments_service_tenant_unique (service_id, tenant_id)
+      // — introdotto in 0137 proprio per supportare upsert — eliminando del tutto
+      // la finestra di race: ogni riga esiste sempre, mai zero righe, mai duplicati.
+      const { error: upsertErr } = await auth.admin.from("assignments").upsert(
         serviceIds.map((sid) => ({
           tenant_id: tenantId,
           service_id: sid,
           driver_user_id: driverUserId,
           vehicle_label: vehicleLabel,
-        }))
+        })),
+        { onConflict: "service_id,tenant_id", ignoreDuplicates: false }
       );
 
-      if (insertErr) throw new Error(insertErr.message);
+      if (upsertErr) throw new Error(upsertErr.message);
 
       // Notifica push all'autista
       const readableLabel = vehicleLabel.replace(/^DEP_BUS:/, "");

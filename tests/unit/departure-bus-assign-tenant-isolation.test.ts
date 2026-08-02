@@ -159,6 +159,19 @@ function createTenantAwareSupabase(seed: { services?: Row[]; assignments?: Row[]
             assignments.push(...rows);
             return Promise.resolve({ error: null });
           },
+          // RACE-01: la route ora usa upsert al posto di delete+insert. Stessi
+          // contatori di insert() cosi le asserzioni esistenti restano valide;
+          // applica la semantica ON CONFLICT (service_id, tenant_id) reale.
+          upsert(rows: Row[], _options?: { onConflict?: string; ignoreDuplicates?: boolean }) {
+            calls.assignmentsInsert++;
+            calls.insertedRows.push(...rows);
+            for (const row of rows) {
+              const idx = assignments.findIndex((a) => a.service_id === row.service_id && a.tenant_id === row.tenant_id);
+              if (idx >= 0) assignments[idx] = { ...assignments[idx], ...row };
+              else assignments.push(row);
+            }
+            return Promise.resolve({ error: null });
+          },
           select() {
             return makeAssignmentsSelectBuilder();
           },
@@ -261,7 +274,8 @@ describe("Tenant isolation — departure-bus-assign API (SEC-01)", () => {
 
     expect(res.status).toBe(200);
     expect(body).toEqual({ ok: true });
-    expect(fake.calls.assignmentsDelete).toBe(1);
+    // RACE-01: assign_driver ora scrive con upsert, mai più con delete+insert.
+    expect(fake.calls.assignmentsDelete).toBe(0);
     expect(fake.calls.assignmentsInsert).toBe(1);
     expect(fake.calls.insertedRows).toHaveLength(2);
     for (const row of fake.calls.insertedRows) {

@@ -194,6 +194,17 @@ function createOperationalSupabase(
             assignments.push(...rows);
             return Promise.resolve({ error: null });
           },
+          // RACE-01: la route ora usa upsert al posto di delete+insert.
+          upsert(rows: Row[], _options?: { onConflict?: string; ignoreDuplicates?: boolean }) {
+            calls.assignmentsInsert++;
+            calls.insertedRows.push(...rows);
+            for (const row of rows) {
+              const idx = assignments.findIndex((a) => a.service_id === row.service_id && a.tenant_id === row.tenant_id);
+              if (idx >= 0) assignments[idx] = { ...assignments[idx], ...row };
+              else assignments.push(row);
+            }
+            return Promise.resolve({ error: null });
+          },
         };
       }
       if (table === "hotels") {
@@ -305,7 +316,8 @@ describe("Validazione operativa — departure-bus-assign API (FUNC-01)", () => {
 
     expect(res.status).toBe(200);
     expect(body).toEqual({ ok: true });
-    expect(fake.calls.assignmentsDelete).toBe(1);
+    // RACE-01: assign_driver ora scrive con upsert, mai più con delete+insert.
+    expect(fake.calls.assignmentsDelete).toBe(0);
     expect(fake.calls.assignmentsInsert).toBe(1);
     expect(fake.calls.insertedRows).toHaveLength(2);
   });
@@ -561,19 +573,19 @@ describe("Validazione operativa — departure-bus-assign API (FUNC-01)", () => {
     expect(body).toEqual({ ok: false, error: "driver_profile_id e email richiesti" });
   });
 
-  it("13. insertErr esistente sull'INSERT finale invariato (500, messaggio del throw esistente)", async () => {
+  it("13. upsertErr esistente sulla scrittura finale invariato (500, messaggio del throw esistente)", async () => {
     const fake = createOperationalSupabase({
       services: [serviceRow(SERVICE_X1)],
       dailyAvailabilityConfirmations: [confirmedDate(DATE_1)],
     });
-    // Forza l'errore sull'insert finale (dopo i guard FUNC-01, comportamento preesistente).
+    // Forza l'errore sull'upsert finale (RACE-01: era insert, ora upsert; comportamento del throw preesistente invariato).
     const originalFrom = fake.admin.from.bind(fake.admin);
     (fake.admin as { from: (table: string) => unknown }).from = (table: string) => {
       const base = originalFrom(table) as Record<string, unknown>;
       if (table === "assignments") {
         return {
           ...base,
-          insert() {
+          upsert() {
             return Promise.resolve({ error: { message: "duplicate key value violates unique constraint" } });
           },
         };
