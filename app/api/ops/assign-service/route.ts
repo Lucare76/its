@@ -12,6 +12,89 @@ import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
+// ── SEC-05: verifica che driver_user_id/driver_profile_id ricevuti dal client
+// appartengano al tenant autenticato prima di scrivere l'assignment. La route
+// usa il client service-role (bypassa RLS): il controllo va fatto qui.
+// Salta il controllo solo se nessuno dei due campi è presente. Stessa risposta
+// 404 generica per driver inesistente, di altro tenant, o coppia
+// user_id/profile_id incoerente — non deve rivelare quale caso si sia
+// verificato. Errore di query è fail-closed (500). Non verifica lo stato
+// sospeso/attivo del driver (FUNC-03, fuori scope).
+function driverNotFoundResponse(): NextResponse {
+  return NextResponse.json({ ok: false, error: "DRIVER_NOT_FOUND", message: "Autista non trovato." }, { status: 404 });
+}
+
+async function verifyDriverBelongsToTenant(
+  admin: SupabaseClient,
+  tenantId: string,
+  input: { driverUserId?: string | null; driverProfileId?: string | null },
+  context: { userId?: string }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  const driverUserId = input.driverUserId ?? null;
+  const driverProfileId = input.driverProfileId ?? null;
+
+  if (!driverUserId && !driverProfileId) {
+    return { ok: true };
+  }
+
+  const verificationFailedResponse = (dbCode: string | null) => {
+    auditLog({
+      event: "assign_service_driver_verification_failed",
+      level: "error",
+      tenantId,
+      userId: context.userId ?? null,
+      details: {
+        action: "assign",
+        hasDriverUserId: Boolean(driverUserId),
+        hasDriverProfileId: Boolean(driverProfileId),
+        dbCode,
+      },
+    });
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        { ok: false, error: "DRIVER_VERIFICATION_FAILED", message: "Errore durante la verifica dell'autista." },
+        { status: 500 }
+      ),
+    };
+  };
+
+  let profileUserId: string | null = null;
+
+  if (driverUserId) {
+    const { data, error } = await admin
+      .from("memberships")
+      .select("user_id")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", driverUserId)
+      .eq("role", "driver")
+      .maybeSingle();
+
+    if (error) return verificationFailedResponse((error as { code?: string }).code ?? null);
+    if (!data?.user_id) return { ok: false, response: driverNotFoundResponse() };
+  }
+
+  if (driverProfileId) {
+    const { data, error } = await admin
+      .from("driver_profiles")
+      .select("id, user_id")
+      .eq("tenant_id", tenantId)
+      .eq("id", driverProfileId)
+      .maybeSingle();
+
+    if (error) return verificationFailedResponse((error as { code?: string }).code ?? null);
+    if (!data?.id) return { ok: false, response: driverNotFoundResponse() };
+    profileUserId = (data.user_id as string | null) ?? null;
+  }
+
+  // Coppia incoerente: il profilo indicato è già collegato a un altro utente.
+  if (driverUserId && driverProfileId && profileUserId && profileUserId !== driverUserId) {
+    return { ok: false, response: driverNotFoundResponse() };
+  }
+
+  return { ok: true };
+}
+
 // Elimina, in modo best-effort, il trip_group appena creato dalla richiesta
 // corrente quando il successivo insert su assignments fallisce (CONC-01).
 // Va chiamata solo con un groupId proveniente da un insert eseguito nella
@@ -88,6 +171,19 @@ export async function POST(request: NextRequest) {
     }
 
     const date = service.date as string;
+
+    // SEC-05: verifica ownership tenant del driver, solo per l'azione "assign"
+    // (remove non tocca driver_user_id/driver_profile_id). Deve avvenire prima
+    // di qualunque altro guard/scrittura successiva.
+    if (action === "assign") {
+      const driverOwnership = await verifyDriverBelongsToTenant(
+        auth.admin,
+        tenantId,
+        { driverUserId: body.driver_user_id ?? null, driverProfileId: body.driver_profile_id ?? null },
+        { userId }
+      );
+      if (!driverOwnership.ok) return driverOwnership.response;
+    }
 
     // Verifica disponibilità confermata
     const { data: availability } = await auth.admin

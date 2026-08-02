@@ -26,7 +26,7 @@ const UNIQUE_VIOLATION_ERROR = {
  * conflitto, non un placeholder.
  */
 function createConcurrencyAwareSupabase(
-  seed: Partial<Record<"services" | "daily_availability_confirmations" | "assignments" | "trip_groups" | "hotels" | "status_events", Row[]>> = {}
+  seed: Partial<Record<"services" | "daily_availability_confirmations" | "assignments" | "trip_groups" | "hotels" | "status_events" | "memberships" | "driver_profiles", Row[]>> = {}
 ) {
   const tables: Record<string, Row[]> = {
     services: [...(seed.services ?? [])],
@@ -35,6 +35,9 @@ function createConcurrencyAwareSupabase(
     trip_groups: [...(seed.trip_groups ?? [])],
     hotels: [...(seed.hotels ?? [])],
     status_events: [...(seed.status_events ?? [])],
+    // SEC-05: il guard driver ownership interroga anche queste due tabelle.
+    memberships: [...(seed.memberships ?? [])],
+    driver_profiles: [...(seed.driver_profiles ?? [])],
   };
 
   let simulateUniqueConstraint = true;
@@ -208,6 +211,12 @@ function serviceRow(id: string, overrides: Row = {}): Row {
 function baseSeed(overrides: Parameters<typeof createConcurrencyAwareSupabase>[0] = {}) {
   return createConcurrencyAwareSupabase({
     daily_availability_confirmations: [{ tenant_id: TENANT_A, date: TEST_DATE, confirmed: true }],
+    // SEC-05: DRIVER_A/DRIVER_B devono risultare autisti validi del tenant A,
+    // altrimenti il nuovo guard ownership li rifiuterebbe prima della race.
+    memberships: [
+      { user_id: DRIVER_A, tenant_id: TENANT_A, role: "driver" },
+      { user_id: DRIVER_B, tenant_id: TENANT_A, role: "driver" },
+    ],
     ...overrides,
   });
 }
