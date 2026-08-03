@@ -7,17 +7,17 @@ Regole operative (stesse del modulo Navette):
 - Nessun task tocca WhatsApp, template, webhook Meta.
 - Separazione esplicita tra: bug runtime, hardening, audit-doc, ML validation/safety/quality/architecture.
 
-## Stato Milestone 1 (aggiornato 2026-08-03, sessione di riallineamento pomeridiana)
+## Stato Milestone 1 (aggiornato 2026-08-03, sessione di riallineamento post-CONC-02)
 
-11 task CRITICAL/HIGH/MEDIUM completati e pushati su main, tutti verificati presenti nel codice reale in questa sessione (grep sui marker chiave, non solo dal log commit):
+13 task CRITICAL/HIGH/MEDIUM completati e pushati su main, tutti verificati presenti nel codice reale in questa sessione (grep sui marker chiave, non solo dal log commit):
 
-M1-01 (SEC-01, `27f5624`), M1-02 (SEC-02, `966f2a5`), M1-03 (CONC-01, `b33ce74`), M1-05 (FUNC-01, `6235acb`), M1-10 (SEC-05, perimetro `assign-service`, `2712d76`), M1-17 (RACE-01, `c44f6d9`) + fix semantica upsert post-RACE-01 (`983e1a1`), M1-07 (CONC-03, `3976d4c`), SEC-05 residuo su `departure-bus-assign` (`4307c18`), M1-15 (FUNC-02, `1089b9f`), M1-16 (FUNC-03, `e05c43b`).
+M1-01 (SEC-01, `27f5624`), M1-02 (SEC-02, `966f2a5`), M1-03 (CONC-01, `b33ce74`), M1-05 (FUNC-01, `6235acb`), M1-10 (SEC-05, perimetro `assign-service`, `2712d76`), M1-17 (RACE-01, `c44f6d9`) + fix semantica upsert post-RACE-01 (`983e1a1`), M1-07 (CONC-03, `3976d4c`), SEC-05 residuo su `departure-bus-assign` (`4307c18`), M1-15 (FUNC-02, `1089b9f`), M1-16 (FUNC-03, `e05c43b`), SEC-04 (`6d66f06`), M1-06 (CONC-02, `21a25cb`).
 
 Tutti con test dedicati verdi e reviewer indipendente APPROVATO.
 
-**Prossimo task scelto**: M1-04 (SEC-04) — broken access control orizzontale su `driver-status` (un driver può alterare lo stato di un servizio non suo). Non ancora implementato — vedi perimetro dettagliato e Top 10 in `docs/plans/assignments-working-status.md`.
+**Prossimo task scelto**: M1-07 follow-up — CONC-03 residuo su `departure-bus-assign` (overlap mezzo, pattern già collaudato su `assign-service`). Non ancora implementato — vedi perimetro dettagliato e Top 10 in `docs/plans/assignments-working-status.md`.
 
-Il modulo **non è completo**: restano aperti M1-04 (SEC-04, prossimo), M1-06, M1-08, M1-09, M1-11..M1-14, M1.5-*, M2-*. SEC-05/CONC-03/FUNC-02/FUNC-03 su `piano-giorno/trips`/`departure-bus-assign` restano item di follow-up separati dagli stessi finding già chiusi su `assign-service` (vedi note sotto e Top 10 in working-status.md).
+Il modulo **non è completo**: restano aperti CONC-03 residuo (prossimo), SEC-05/FUNC-02/FUNC-03 residui su `piano-giorno/trips`/`departure-bus-assign`, M1-08, M1-09, M1-11, M1-14, M1.5-*, M2-*. Tutti gli item "residuo" sono follow-up separati dagli stessi finding già chiusi su `assign-service` (vedi note sotto e Top 10 in working-status.md).
 
 ## Milestone 1 — Alta stagione (bug runtime + hardening critico/alto)
 
@@ -46,11 +46,11 @@ Il modulo **non è completo**: restano aperti M1-04 (SEC-04, prossimo), M1-06, M
   - Test dedicati: `tests/unit/assign-service-concurrency.test.ts` (20 casi, verdi). Cleanup `trip_groups` orfano su conflitto (`cleanupCreatedTripGroup`), risposta `SERVICE_ALREADY_ASSIGNED` 409.
   - Reviewer: APPROVATO.
 
-- [ ] **M1-04 — SEC-04: tenant/titolarità guard su `driver-status`** (bug runtime — HIGH) — ⭐ **PROSSIMO TASK (sessione di riallineamento 2026-08-03)**
-  - Aggiungere verifica `assignments.driver_user_id/driver_profile_id = utente corrente` quando ruolo = driver.
-  - Test: driver non può modificare stato di servizio non suo.
-  - Stima: S.
-  - **Riconfermato aperto in questa sessione**: nessuno degli 11 fix completati finora tocca `app/api/ops/driver-status/route.ts`. Resta l'unico finding HIGH aperto che rappresenta un vero broken access control (privilege escalation orizzontale tra driver dello stesso tenant), non solo un problema di integrità dati — per questo scelto come prossimo task atomico. Vedi perimetro dettagliato in `assignments-working-status.md`.
+- [x] **M1-04 — SEC-04: tenant/titolarità guard su `driver-status`** (bug runtime — HIGH) — **COMPLETATO**
+  - Commit: `6d66f06` — "fix: verify driver owns service before status update (SEC-04)".
+  - Implementato: quando `membership.role === "driver"`, verificata l'esistenza di un `assignments` con `service_id` richiesto e `driver_user_id = auth.user.id` (tenant-scoped), prima di qualunque scrittura. Driver non titolare → `403 DRIVER_STATUS_FORBIDDEN`. admin/operator/supervisor invariati (nessuna restrizione aggiuntiva, comportamento già corretto). Servizio inesistente/cross-tenant → `404` invariato (non trasformato in 403).
+  - Test dedicati: `tests/unit/driver-status-access-control.test.ts` (nuovo, verde), inclusi test di sensibilità (bypass ownership → failure reale).
+  - Reviewer: APPROVATO (security + indipendente).
 
 - [x] **M1-05 — FUNC-01 (parziale): riuso validazioni in `departure-bus-assign`** (hardening — CRITICAL/HIGH) — **COMPLETATO**
   - Riusare `validateSingleServiceGeography`/controlli disponibilità già esistenti in `assign-service`.
@@ -62,10 +62,12 @@ Il modulo **non è completo**: restano aperti M1-04 (SEC-04, prossimo), M1-06, M
   - Reviewer: APPROVATO (funzionale + indipendente, sessione 2026-08-02).
   - **Nota — parziale per design**: questo task copre solo disponibilità+geografia, come da titolo. Stato servizio (FUNC-02) e sospensione driver (FUNC-03) restano deliberatamente fuori scope, vedi M1-15/M1-16 sotto.
 
-- [ ] **M1-06 — CONC-02: vero controllo overlap orario stesso driver** (hardening — HIGH)
-  - Aggiungere check overlap `[start,end)` esplicito, applicato anche quando si usa `driver_profile_id`.
-  - Test: due assegnazioni sovrapposte allo stesso driver bloccate/warning.
-  - Stima: M.
+- [x] **M1-06 — CONC-02: vero controllo overlap orario stesso driver** (hardening — HIGH) — **COMPLETATO (perimetro `assign-service` soltanto)**
+  - Commit: `21a25cb` — "fix: block overlapping driver assignment in assign-service (CONC-02)".
+  - Implementato: `checkDriverOverlap()`, stesso schema di `checkVehicleOverlap` (CONC-03) — finestra fissa 30 min, `vehicleIntervalsOverlap` riusata — applicato per **entrambi** gli identificatori (`driver_user_id` e/o `driver_profile_id`), colmando il gap segnalato in audit (l'euristica geografica esistente scattava solo con `driver_user_id`). Eseguito prima dell'euristica geografica esistente (riordinamento necessario: quest'ultima intercettava lo stesso scenario con un messaggio meno chiaro). Overlap reale → `409 DRIVER_OVERLAP`; errore query → `500 DRIVER_OVERLAP_CHECK_FAILED` fail-closed.
+  - Test dedicati: `tests/unit/assign-service-driver-overlap.test.ts` (nuovo, 20 casi, verdi), inclusi test di sensibilità (bypass guard e rimozione filtro tenant su entrambe le query → failure reali).
+  - Reviewer: APPROVATO (security + indipendente).
+  - **Follow-up separato**: `departure-bus-assign`/`piano-giorno/trips` restano item aperti dello stesso finding CONC-02.
 
 - [x] **M1-07 — CONC-03: controllo overlap mezzo in `assign-service`** (hardening — HIGH) — **COMPLETATO (perimetro `assign-service` soltanto)**
   - Commit: `3976d4c` — "fix: block overlapping vehicle assignment in assign-service (CONC-03)".

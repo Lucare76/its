@@ -1,9 +1,9 @@
 # Stato di lavoro — modulo Assegnazioni
 
-## STATO GENERALE: 11 TASK CRITICAL/HIGH/MEDIUM COMPLETATI E PUSHATI, RIALLINEAMENTO ESEGUITO (2026-08-03, sessione pomeridiana)
+## STATO GENERALE: 13 TASK CRITICAL/HIGH/MEDIUM COMPLETATI E PUSHATI, RIALLINEAMENTO ESEGUITO DOPO CONC-02 (2026-08-03)
 
 - **Branch**: main
-- **HEAD attuale**: `e05c43b` (allineato con `origin/main`, verificato con `git rev-parse HEAD`/`git rev-parse origin/main` il 2026-08-03)
+- **HEAD attuale**: `21a25cb` (allineato con `origin/main`, verificato con `git rev-parse HEAD`/`git rev-parse origin/main` il 2026-08-03)
 - **Worktree**: pulito (`git status --short` vuoto; cartella `exports/` non presente/non tracciata in questa sessione — da ignorare comunque se ricompare, non aprire, non modificare)
 - **Data ultimo riallineamento**: 2026-08-03 (sessione read-only, nessun codice/test modificato in questa sessione)
 
@@ -22,67 +22,71 @@
 | 9 | SEC-05 residuo | Tenant ownership driver in `departure-bus-assign` (`assign_driver`) | `4307c18` | `tests/unit/departure-bus-assign-driver-tenant-guard.test.ts` (nuovo) | APPROVATO |
 | 10 | FUNC-02 | Guard stato servizio (denylist su enum reale + `is_draft`) in `assign-service` | `1089b9f` | `tests/unit/assign-service-status-guard.test.ts` (24 casi, nuovo) | APPROVATO (funzionale + indipendente) |
 | 11 | FUNC-03 | Guard operatività driver (`memberships.suspended`/`driver_profiles.active`) in `assign-service` | `e05c43b` | `tests/unit/assign-service-driver-status-guard.test.ts` (20 casi, nuovo) | APPROVATO (funzionale/security + indipendente) |
+| 12 | SEC-04 | Titolarità driver su `driver-status` (`assignments.driver_user_id = auth.user.id`, solo ruolo driver) | `6d66f06` | `tests/unit/driver-status-access-control.test.ts` (nuovo) | APPROVATO (security + indipendente) |
+| 13 | CONC-02 | Overlap orario reale stesso autista in `assign-service` (`driver_user_id` e/o `driver_profile_id`) | `21a25cb` | `tests/unit/assign-service-driver-overlap.test.ts` (20 casi, nuovo) | APPROVATO (security + indipendente) |
 
-Tutti e 11 verificati presenti nel codice reale in questa sessione di riallineamento (grep sui marker chiave: `VEHICLE_OVERLAP`, `SERVICE_NOT_ASSIGNABLE`, `DRIVER_NOT_ACTIVE`, `verifyDriverBelongsToTenant` in `departure-bus-assign`, più esistenza dei 4 nuovi file di test). Sessione di riallineamento puramente read-only: nessun test rieseguito in questa sessione (già verificati verdi nelle sessioni di implementazione precedenti), nessun codice toccato.
+Tutti e 13 verificati presenti nel codice reale in questa sessione di riallineamento (grep sui marker chiave: `DRIVER_STATUS_FORBIDDEN` in `driver-status/route.ts`, `DRIVER_OVERLAP` in `assign-service/route.ts` [6 occorrenze], più esistenza dei relativi file di test dedicati). Sessione di riallineamento puramente read-only: nessun test rieseguito in questa sessione (già verificati verdi nelle sessioni di implementazione precedenti), nessun codice toccato.
 
-## Rivalutazione finding aperti (sessione 2026-08-03, riallineamento pomeridiano)
+## Rivalutazione finding aperti (sessione 2026-08-03, riallineamento post-CONC-02)
 
 | ID | Titolo | Severità | Stato | Rischio operativo | Dipendenze | Difficoltà | Rischio regressione | Stima tempo | Adatto come prossimo task atomico? |
 |---|---|---|---|---|---|---|---|---|---|
-| SEC-04 | Broken access control orizzontale in `driver-status` (driver altera stato servizio non suo) | HIGH | **APERTO** — **prossimo task scelto** | Alto: un driver (anche compromesso) può marcare `completato`/`cancelled`/`problema` il servizio di un collega, inquinando dati operativi e reportistica in tempo reale | Nessuna | S | Basso (guard additivo, pattern già usato 6 volte in questa milestone) | ~1 sessione | **Sì** — 1 route, no migrazione, no UI, rollback singolo commit, test handler-level |
-| SEC-05 (trips) | driver_user_id/driver_profile_id non verificati esplicitamente contro il tenant in `piano-giorno/trips` | MEDIUM | APERTO — protezione solo incidentale | Medio: mitigato indirettamente da `driver_daily_availability` (tenant-scoped), ma non è un controllo esplicito — un cambio futuro a quella tabella romperebbe silenziosamente la protezione | Nessuna diretta | S | Basso | ~1 sessione | Sì, ma priorità minore di SEC-04 (già una mitigazione indiretta funzionante) |
-| CONC-02 | Nessun vero controllo overlap orario stesso driver (solo euristica geografica) | HIGH | APERTO | Alto in alta stagione: doppie assegnazioni allo stesso driver non rilevate, specie via `driver_profile_id` (controllo assente del tutto) | Nessuna | M | Basso-medio (pattern CONC-03 già collaudato, ma serve gestire sia `driver_user_id` che `driver_profile_id`) | ~1 sessione | Sì — stesso schema di CONC-03, route unica `assign-service` |
-| CONC-03 (departure-bus-assign) | Overlap mezzo non controllato in `departure-bus-assign` | HIGH | APERTO — follow-up del finding chiuso su `assign-service` | Alto: bus di partenza Rete Ischia, volume potenzialmente alto in alta stagione | Nessuna diretta (pattern pronto da `assign-service`) | S-M | Basso | ~1 sessione | Sì |
+| CONC-03 (departure-bus-assign) | Overlap mezzo non controllato in `departure-bus-assign` | HIGH | APERTO — **prossimo task scelto** | Alto: bus di partenza Rete Ischia, volume potenzialmente alto in alta stagione, doppio impegno mezzo non rilevato | Nessuna diretta (pattern collaudato 2 volte: `assign-service` CONC-03 e CONC-02) | S-M (più complesso di CONC-03 su assign-service: `assign_driver` gestisce un batch di `service_ids`, non un singolo servizio) | Basso | ~1 sessione | **Sì** — 1 route, no migrazione, no UI, rollback singolo commit, test handler-level |
+| SEC-05 (trips) | driver_user_id/driver_profile_id non verificati esplicitamente contro il tenant in `piano-giorno/trips` | MEDIUM | APERTO — protezione solo incidentale | Medio: mitigato indirettamente da `driver_daily_availability` (tenant-scoped), ma non è un controllo esplicito — un cambio futuro a quella tabella romperebbe silenziosamente la protezione | Nessuna diretta | S | Basso | ~1 sessione | Sì, priorità minore di CONC-03 residuo (già una mitigazione indiretta funzionante) |
 | FUNC-02 (trips/departure-bus-assign) | Nessun guard stato servizio nelle altre due route | MEDIUM | APERTO — follow-up del finding chiuso su `assign-service` | Medio: stesso rischio già mitigato su `assign-service`, ora relativamente più visibile come incoerenza tra route | Nessuna | S | Basso (denylist già definita e testata) | ~1 sessione | Sì |
 | FUNC-03 (trips/departure-bus-assign) | Nessun guard operatività driver nelle altre due route | MEDIUM | APERTO — follow-up del finding chiuso su `assign-service` | Basso-medio: operativo, non sicurezza | Nessuna | S | Basso (helper già scritto, da clonare) | ~1 sessione | Sì |
+| CONC-02 (departure-bus-assign/trips) | Nessun overlap orario driver nelle altre due route | HIGH | APERTO — follow-up del finding chiuso su `assign-service` | Alto in alta stagione: stesso gap del finding appena chiuso, ora replicato su due route non ancora coperte | Nessuna diretta (pattern appena collaudato) | S-M | Basso | ~1 sessione | Sì — candidato forte per la sessione successiva a CONC-03 residuo |
 | SEC-03 | Join `services!inner` senza filtro tenant esplicito | HIGH (originale) → **MEDIUM** (rivalutato) | APERTO | Basso-medio: rischio ridotto perché SEC-01/SEC-02/SEC-05 ora impediscono la creazione di `assignments` cross-tenant a monte — questo resta un gap di difesa-in-profondità, non più uno sfruttabile diretto noto | Nessuna | XS | Molto basso | Poche ore | Sì, ma bassa urgenza (rischio residuo, non attivo) |
 | CONC-06 | Snapshot `locked_by_operator` non rivalidato al commit in `auto-assign` regenerate_all | HIGH | APERTO | Medio: finestra di race stretta, richiede due operatori attivi in contemporanea sullo stesso giorno | Nessuna | M | **Medio-alto** — `auto-assign/route.ts` è un file da ~2000 righe, area ad alta complessità, rischio di regressione più concreto | Più di 1 sessione probabile | **No** — file grande, fuori dal criterio "singola sessione a basso rischio" |
-| SEC-06 | Error leak sistemico (messaggi Supabase raw) | MEDIUM | APERTO | Basso: information disclosure sullo schema, non leak dati cross-tenant | Nessuna | M (multi-file) | Basso | 1-2 sessioni | No — tocca più route contemporaneamente, non "una sola route" |
+| SEC-06 | Error leak sistemico (messaggi Supabase raw) | MEDIUM | APERTO | Basso: information disclosure sullo schema, non leak dati cross-tenant | Nessuna | M (multi-file) | Basso | 1-2 sessioni | **No** — tocca più route contemporaneamente, non "una sola route" |
 | CONC-07 | `assign-service` non scrive audit trail business-level | MEDIUM | APERTO | Basso: gap di osservabilità, non di sicurezza/integrità | Nessuna | S | Basso | ~1 sessione | Sì, ma priorità bassa (non blocca operatività) |
-| M1-04..M1-16 residui minori (M1-08, M1-09, M1-11, M1-14) | (vedi sopra, dettaglio checklist) | vario | APERTO | vario | — | — | — | — | vedi righe sopra |
+| M1-08, M1-09, M1-11, M1-14 | (vedi checklist per dettaglio) | vario | APERTO | vario | — | — | — | — | vedi righe sopra (SEC-03=M1-08, CONC-06=M1-09, SEC-06=M1-11, CONC-07=M1-14) |
 | TEST-01/TEST-03 | Copertura test HTTP-level/tenant isolation | HIGH (originale) → **LARGAMENTE MITIGATO** | quasi CHIUSO per `assign-service`/`departure-bus-assign` | Basso ora | — | — | — | — | Non è più un task a sé, effetto collaterale dei fix comportamentali |
 | Lock/source asimmetria | `locked_by_operator`/`assignment_source` diversi tra route | INFO | **CHIUSO come non-issue** | — | — | — | — | — | — |
 | RACE-01 | DELETE+INSERT non atomico | MEDIUM/HIGH | **CHIUSO** | — | — | — | — | — | — |
+| SEC-04 | Broken access control orizzontale in `driver-status` | HIGH | **CHIUSO** (`6d66f06`) | — | — | — | — | — | — |
+| CONC-02 (assign-service) | Overlap orario stesso driver | HIGH | **CHIUSO** (`21a25cb`, perimetro `assign-service`) | — | — | — | — | — | — |
 | DB-01/DB-02/DB-07, ML-01/ML-02, TEST-02/04/05, UI-* | (vedi audit §24) | vario | APERTO, non rivalutati in dettaglio | — | — | — | — | — | No — richiedono design/migrazione o toccano UI/ML, fuori dai criteri di "prossimo task atomico" |
 
-**Nessun finding chiuso indirettamente in questa sessione** (puramente read-only): gli 11 task completati nelle sessioni precedenti sono stati solo verificati, non modificati. TEST-01/TEST-03 sono l'unica eccezione — la loro mitigazione è un effetto collaterale reale e verificabile dei fix comportamentali già fatti (non richiede più un task dedicato per `assign-service`/`departure-bus-assign`).
+**Nessun finding chiuso indirettamente in questa sessione** (puramente read-only): i 13 task completati nelle sessioni precedenti sono stati solo verificati, non modificati. TEST-01/TEST-03 restano l'unica eccezione — la loro mitigazione è un effetto collaterale reale e verificabile dei fix comportamentali già fatti.
 
-## Top 10 priorità (criteri: sicurezza + rischio operativo + facilità di fix)
+## Top 10 priorità (criteri: sicurezza + corruzione dati + falso successo + impossibilità operativa + concorrenza + stato servizio/driver + audit + UX + performance + ML)
 
-1. **SEC-04** (HIGH) — broken access control su `driver-status`, unico finding aperto che è un vero problema di sicurezza (privilege escalation orizzontale), non solo integrità dati. Stima S, nessuna dipendenza, rischio regressione basso. — **prossimo task scelto**.
-2. **CONC-02** (HIGH) — overlap driver non controllato in `assign-service`, stesso schema di CONC-03 già collaudato. Stima M.
-3. **CONC-03 residuo** (HIGH) — overlap mezzo ancora aperto su `departure-bus-assign`, volume operativo alto in alta stagione. Stima S-M.
-4. **SEC-05 residuo** (`trips`, MEDIUM) — protezione solo incidentale, fragile a refactoring futuri non correlati.
-5. **FUNC-02 residuo** (`trips`/`departure-bus-assign`, MEDIUM) — denylist già pronta da clonare.
-6. **FUNC-03 residuo** (`trips`/`departure-bus-assign`, MEDIUM) — helper già pronto da clonare.
-7. **CONC-06** (HIGH ma penalizzato per complessità/rischio regressione) — rivalidazione lock in `auto-assign`, file grande, non adatto a "singola sessione a basso rischio" ma severità intrinseca alta.
-8. **SEC-03** (rivalutato MEDIUM, rischio residuo basso) — filtro tenant esplicito sul join, difesa in profondità.
-9. **CONC-07** (MEDIUM) — audit trail mancante su `assign-service`, gap di osservabilità non di sicurezza.
-10. **SEC-06** (MEDIUM, multi-file) — sanitizzazione errori Supabase raw, rischio basso (information disclosure schema).
+1. **CONC-03 residuo** (HIGH, `departure-bus-assign`) — overlap mezzo, volume operativo alto in alta stagione (bus Rete Ischia). Stima S-M. — **prossimo task scelto**.
+2. **CONC-02 residuo** (HIGH, `departure-bus-assign`/`piano-giorno/trips`) — overlap driver, stesso gap appena chiuso su `assign-service`, ora il candidato HIGH più forte subito dopo CONC-03 residuo. Stima S-M.
+3. **SEC-05 residuo** (`trips`, MEDIUM) — protezione solo incidentale, fragile a refactoring futuri non correlati.
+4. **FUNC-02 residuo** (`trips`/`departure-bus-assign`, MEDIUM) — denylist già pronta da clonare.
+5. **FUNC-03 residuo** (`trips`/`departure-bus-assign`, MEDIUM) — helper già pronto da clonare.
+6. **CONC-06** (HIGH ma penalizzato per complessità/rischio regressione) — rivalidazione lock in `auto-assign`, file grande, non adatto a "singola sessione a basso rischio" ma severità intrinseca alta.
+7. **SEC-03** (rivalutato MEDIUM, rischio residuo basso) — filtro tenant esplicito sul join, difesa in profondità.
+8. **CONC-07** (MEDIUM) — audit trail mancante su `assign-service`, gap di osservabilità non di sicurezza.
+9. **SEC-06** (MEDIUM, multi-file) — sanitizzazione errori Supabase raw, rischio basso (information disclosure schema).
+10. **M2-\*** (strutturali: EXCLUDE constraint DB, RPC transazionali, lock collaborativo, unificazione scoring) — richiedono design multi-sessione, fuori scope per task atomici singoli.
 
-## Prossimo task scelto: M1-04 — SEC-04, guard titolarità su `driver-status`
+## Prossimo task scelto: M1-07 follow-up — CONC-03 residuo, overlap mezzo su `departure-bus-assign`
 
-**Motivazione**: tra tutti i finding ancora aperti, SEC-04 è l'unico non ancora toccato da nessuno degli 11 fix completati **e** l'unico che rappresenta un vero problema di controllo accessi (un driver autenticato può alterare lo stato — incluso marcarlo `completato`/`cancelled`/`problema` — di un servizio assegnato a un collega, semplicemente conoscendone o indovinandone il `service_id`), non solo un rischio di integrità dati come la maggior parte dei finding residui. Rispetto ai candidati alternativi:
-- **CONC-02**/**CONC-03 residuo** sono HIGH ma di categoria "overlap", una classe di rischio più bassa nella gerarchia di priorità usata in questa milestone (cross-tenant/controllo-accessi > perdita dati > overlap).
-- **SEC-05/FUNC-02/FUNC-03 residui** sono ripetizioni dello stesso pattern già chiuso su `assign-service`, a rischio/complessità già noti — buoni candidati per le prossime sessioni ma meno urgenti di un broken access control non ancora mitigato affatto.
-- **CONC-06** ha severità intrinseca alta ma tocca `auto-assign` (file da ~2000 righe): rischio di regressione più alto, probabilmente non completabile in una singola sessione a basso rischio.
+**Motivazione**: tra i candidati confrontati (A: SEC-05 residuo trips: MEDIUM; B: CONC-03 residuo departure-bus-assign/trips: HIGH; C: FUNC-02 residuo: MEDIUM; D: FUNC-03 residuo: MEDIUM; E: SEC-03: MEDIUM rivalutato, rischio residuo basso; F: SEC-06: MEDIUM ma multi-route, esclude il criterio "una sola route"; G: CONC-06: HIGH ma file da ~2000 righe, rischio di regressione troppo alto per una singola sessione a basso rischio), **CONC-03 residuo** è l'unico HIGH che soddisfa integralmente tutti i criteri richiesti: tocca una sola route (`app/api/ops/departure-bus-assign/route.ts`), nessuna migrazione, nessuna UI, rollback a singolo commit, testabile a livello handler, pattern già collaudato due volte in questa milestone (CONC-03 e CONC-02 su `assign-service`). Il volume operativo della route (bus di partenza Rete Ischia) rende il rischio concreto in alta stagione.
 
-SEC-04 soddisfa tutti i criteri richiesti: tocca una sola route (`app/api/ops/driver-status/route.ts`), nessuna migrazione, nessuna modifica UI, rollback con un solo commit, testabile a livello handler (pattern identico ai guard già scritti per `assign-service`), implementabile in una singola sessione.
+CONC-02 residuo sulle stesse due route è il candidato immediatamente successivo (stesso schema appena chiuso, stima S-M).
 
-## Perimetro del prossimo task (SEC-04 su `driver-status`) — non implementato
+## Perimetro del prossimo task (CONC-03 su `departure-bus-assign`) — non implementato
 
-- **Finding**: SEC-04 — `app/api/ops/driver-status/route.ts` (POST, cambio stato servizio) ammette il ruolo `driver` ma non verifica che l'`assignments.driver_user_id` (o `driver_profile_id` collegato) corrisponda all'utente chiamante — solo `services.tenant_id` è verificato. L'endpoint GET analogo (`driver-data/route.ts`) applica correttamente questo filtro: il pattern corretto esiste già nel codebase, non è replicato qui.
-- **Causa**: nessuna query di titolarità sull'assignment prima dell'update di `services.status`/insert su `status_events`.
-- **Route**: `app/api/ops/driver-status/route.ts`, unico endpoint coinvolto.
-- **Action**: quando `membership.role === "driver"`, dopo la verifica tenant esistente, verificare che esista un `assignments` con `service_id` = quello richiesto e (`driver_user_id` = utente corrente OPPURE `driver_profile_id` collegato all'utente corrente); se assente, bloccare. Ruoli `admin`/`operator`/`supervisor` restano invariati (nessuna restrizione aggiuntiva, comportamento attuale già corretto per loro).
-- **Status HTTP**: coerente con lo stile già usato nel modulo — `403`/`404` da valutare in fase di implementazione (verificare se la route usa già un pattern di risposta per casi simili prima di introdurne uno nuovo).
-- **Test**: nuovo file `tests/unit/driver-status-ownership-guard.test.ts` — driver titolare del servizio (successo, invariato), driver non titolare (bloccato), admin/operator/supervisor (invariati, nessuna restrizione), servizio inesistente/cross-tenant (comportamento attuale invariato), errore query (fail-closed).
-- **Fail-closed**: sì — errore di query sulla titolarità deve bloccare l'update, non procedere silenziosamente.
-- **Regressioni**: nessuna prevista — task additivo; verificare che non rompa il flusso legittimo con `driver_profile_id` (alcuni driver potrebbero non avere `driver_user_id` diretto).
+- **Finding**: CONC-03 — `app/api/ops/departure-bus-assign/route.ts` (azione `assign_driver`) non controlla overlap orario dello stesso mezzo (`vehicle_label`) prima dell'upsert su `assignments`, a differenza di `assign-service` (già corretto).
+- **Causa**: nessuna chiamata a una funzione di overlap mezzo prima della scrittura; il controllo esiste solo in `assign-service` (`checkVehicleOverlap`, locale, non esportata) e in `piano-giorno/trips` (`validateVehicleTimelinePayload`, locale).
+- **Route**: `app/api/ops/departure-bus-assign/route.ts`, azione `assign_driver` soltanto (`remove_driver`/`create_driver_account` invariate).
+- **Differenza chiave rispetto al fix già fatto su `assign-service`**: `assign_driver` accetta un **batch** di `service_ids` con un **singolo** `vehicle_label` per l'intero batch (non un servizio alla volta) — il controllo overlap deve valutare la finestra oraria di ciascun servizio del batch contro gli altri impegni del mezzo, e deve anche considerare eventuali overlap **interni al batch stesso** (due servizi del batch che si sovrappongono tra loro), non solo contro impegni esterni preesistenti.
+- **File**: `app/api/ops/departure-bus-assign/route.ts` soltanto. Decisione da prendere in fase di implementazione: clonare localmente il pattern di `checkVehicleOverlap` (coerente con l'approccio già usato per tutti i "residuo" precedenti in questa milestone, che non hanno introdotto astrazioni condivise premature) oppure estrarre un helper comune — non decidere in questa sessione read-only.
+- **Query**: `trip_groups` attivi stesso tenant/data/`vehicle_label` (esclusi i gruppi del batch corrente se si tratta di un aggiornamento) → `assignments` in quei gruppi → confronto intervalli con `vehicleIntervalsOverlap`.
+- **Status HTTP**: `409` su overlap rilevato.
+- **Risposta JSON**: `{ ok:false, error:"VEHICLE_OVERLAP", message:"Il mezzo è già impegnato in un altro servizio nello stesso orario." }` (stesso testo già usato in `assign-service`, per coerenza UX).
+- **Test**: nuovo file `tests/unit/departure-bus-assign-vehicle-overlap.test.ts` — mezzo libero, overlap con impegno esterno preesistente, overlap interno al batch, tenant isolation, confini temporali, errore DB fail-closed, `remove_driver`/`create_driver_account` invariati, SEC-01/SEC-05/RACE-01/FUNC-01 invariati.
+- **Fail-closed**: sì — errore di query blocca la scrittura (500), non procede in silenzio.
+- **Regressioni**: nessuna prevista — task additivo; verificare che non rompa il caso legittimo di riassegnazione dello stesso batch allo stesso mezzo (self-overlap da escludere).
 - **Rollback**: revert del singolo commit dedicato.
-- **Commit suggerito**: `fix: verify driver owns the service before status update (SEC-04)`.
+- **Definition of Done**: come da `assignments-hardening-checklist.md`.
+- **Commit suggerito**: `fix: block overlapping vehicle assignment in departure bus assignment (CONC-03 residuo)`.
 
-I candidati immediatamente successivi, in ordine: CONC-02 (overlap driver su `assign-service`), CONC-03 residuo (overlap mezzo su `departure-bus-assign`), SEC-05/FUNC-02/FUNC-03 residui su `piano-giorno/trips`.
+I candidati immediatamente successivi, in ordine: CONC-02 residuo (overlap driver su `departure-bus-assign`/`trips`), SEC-05/FUNC-02/FUNC-03 residui su `piano-giorno/trips`.
 
 ## Cose da NON modificare
 
@@ -102,7 +106,7 @@ cat docs/plans/assignments-working-status.md
 cat docs/plans/assignments-hardening-checklist.md
 ```
 
-Poi partire dal "Prossimo task scelto" sopra (M1-04/SEC-04 su `driver-status/route.ts`), seguendo il Definition of Done della checklist. Non implementare due finding nello stesso task.
+Poi partire dal "Prossimo task scelto" sopra (M1-07 follow-up/CONC-03 residuo su `departure-bus-assign/route.ts`), seguendo il Definition of Done della checklist. Non implementare due finding nello stesso task.
 
 ## Procedura post-task (per ogni futuro task M1/M1.5/M2 completato)
 
