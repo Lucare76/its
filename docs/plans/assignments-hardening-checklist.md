@@ -7,13 +7,13 @@ Regole operative (stesse del modulo Navette):
 - Nessun task tocca WhatsApp, template, webhook Meta.
 - Separazione esplicita tra: bug runtime, hardening, audit-doc, ML validation/safety/quality/architecture.
 
-## Stato Milestone 1 (aggiornato 2026-08-02)
+## Stato Milestone 1 (aggiornato 2026-08-03)
 
-4 task CRITICAL completati e pushati su main: M1-01 (SEC-01, `27f5624`), M1-02 (SEC-02, `966f2a5`), M1-03 (CONC-01, `b33ce74`), M1-05 (FUNC-01, `6235acb`). Tutti con test dedicati verdi e reviewer indipendente APPROVATO. Dettaglio completo della rivalutazione in `docs/plans/assignments-working-status.md`.
+7 task CRITICAL/HIGH completati e pushati su main: M1-01 (SEC-01, `27f5624`), M1-02 (SEC-02, `966f2a5`), M1-03 (CONC-01, `b33ce74`), M1-05 (FUNC-01, `6235acb`), M1-10 (SEC-05, perimetro `assign-service`, `2712d76`), M1-17 (RACE-01, `c44f6d9`) + fix di semantica upsert post-RACE-01 (`983e1a1`, stesso finding, secondo commit dedicato per il reset esplicito dei metadati stale). Tutti con test dedicati verdi (98 test totali sui sei file di test toccati da questi fix, verificati in questa sessione con `pnpm exec vitest run`) e reviewer indipendente APPROVATO.
 
-**Prossimo task scelto**: M1-10 (SEC-05), perimetro ridotto a `app/api/ops/assign-service/route.ts` soltanto (vedi nota nel task sotto). Non ancora implementato.
+**Prossimo task scelto**: M1-07 (CONC-03), perimetro ridotto a `app/api/ops/assign-service/route.ts` soltanto (stesso pattern di split-per-route usato per SEC-05). Non ancora implementato — vedi perimetro dettagliato in `docs/plans/assignments-working-status.md`.
 
-Il modulo **non è completo**: restano aperti M1-04, M1-06, M1-07 (CONC-03, severità confermata), M1-08, M1-09, M1-10 (SEC-05, prossimo), M1-11..M1-16 (inclusi FUNC-02/FUNC-03, severità confermata), più il nuovo M1-17 (RACE-01) emerso durante FUNC-01.
+Il modulo **non è completo**: restano aperti M1-04, M1-06, M1-07 (CONC-03, prossimo), M1-08, M1-09, M1-11..M1-16 (inclusi FUNC-02/FUNC-03, severità confermata), M1.5-*, M2-*. SEC-05 su `departure-bus-assign`/`trips` e la semantica lock/source restano item di follow-up separati (vedi note sotto).
 
 ## Milestone 1 — Alta stagione (bug runtime + hardening critico/alto)
 
@@ -62,11 +62,12 @@ Il modulo **non è completo**: restano aperti M1-04, M1-06, M1-07 (CONC-03, seve
   - Test: due assegnazioni sovrapposte allo stesso driver bloccate/warning.
   - Stima: M.
 
-- [ ] **M1-07 — CONC-03: controllo overlap mezzo in `assign-service`** (hardening — HIGH) — **APERTO, severità confermata/aggravata**
+- [ ] **M1-07 — CONC-03: controllo overlap mezzo in `assign-service`** (hardening — HIGH) — **APERTO, severità confermata/aggravata** — ⭐ **PROSSIMO TASK**
   - Invocare `vehicleIntervalsOverlap`/`findVehicleTimelineConflict` anche qui.
   - Test: due assegnazioni sovrapposte sullo stesso mezzo bloccate.
   - Stima: S → **M** (nessuna funzione condivisa pronta: `trips/route.ts` implementa l'overlap con una funzione locale `validateVehicleTimelinePayload`, non riusa `vehicleIntervalsOverlap` di `lib/piano-vehicle-timeline.ts`; va deciso se riusare quella lib o clonare il pattern locale).
-  - **Rivalutato in questa sessione (2026-08-02)**: `validateDriverGeographicBatch` introdotto da FUNC-01 valida solo il tempo di trasferimento geografico del **driver**, non l'overlap dello **stesso mezzo** — non è un sostituto. Il gap è ora più visibile perché `piano-giorno/trips` blocca l'overlap mezzo mentre `assign-service`/`departure-bus-assign` (entrambe scritture dirette su `assignments`) no: un operatore può creare via queste due route un doppio impegno mezzo che `trips` avrebbe rifiutato. Severità confermata MEDIUM-HIGH.
+  - **Rivalutato 2026-08-02**: `validateDriverGeographicBatch` introdotto da FUNC-01 valida solo il tempo di trasferimento geografico del **driver**, non l'overlap dello **stesso mezzo** — non è un sostituto. Il gap è ora più visibile perché `piano-giorno/trips` blocca l'overlap mezzo mentre `assign-service`/`departure-bus-assign` (entrambe scritture dirette su `assignments`) no: un operatore può creare via queste due route un doppio impegno mezzo che `trips` avrebbe rifiutato. Severità confermata MEDIUM-HIGH.
+  - **Riconfermato invariato 2026-08-03**: SEC-05, RACE-01 e il fix di semantica upsert non toccano overlap mezzo (verificato: nessuna occorrenza di `vehicleIntervalsOverlap`/`findVehicleTimelineConflict` in `assign-service/route.ts` dopo i tre fix). **Perimetro scelto per il prossimo task atomico**: SOLO `app/api/ops/assign-service/route.ts`, stesso pattern di split-per-route usato per SEC-05 (M1-10) — `departure-bus-assign` resta follow-up separato dello stesso finding CONC-03.
   - File coinvolti: `app/api/ops/assign-service/route.ts`, `app/api/ops/departure-bus-assign/route.ts` (nessuno dei due controlla overlap mezzo).
 
 - [ ] **M1-08 — SEC-03: filtro tenant esplicito su join `services!inner`** (hardening — HIGH)
@@ -79,7 +80,12 @@ Il modulo **non è completo**: restano aperti M1-04, M1-06, M1-07 (CONC-03, seve
   - Test: lock impostato dopo lo snapshot iniziale non viene sovrascritto.
   - Stima: M.
 
-- [ ] **M1-10 — SEC-05: validazione tenant driver_user_id/driver_profile_id ovunque** (hardening — MEDIUM → **HIGH**) — ⭐ **PROSSIMO TASK (prima fetta atomica)**
+- [x] **M1-10 — SEC-05: validazione tenant driver_user_id/driver_profile_id ovunque** (hardening — MEDIUM → **HIGH**) — **COMPLETATO (perimetro `assign-service` soltanto)**
+  - Commit: `2712d76` — "fix: verify driver tenant ownership before manual assignment in assign-service (SEC-05)".
+  - Implementato: `verifyDriverBelongsToTenant()` in `assign-service/route.ts`, invocata solo per action `"assign"`, prima di qualunque guard/scrittura successiva (prima del check `daily_availability_confirmations`). Verifica `driver_user_id` contro `memberships` (tenant+role=driver) e `driver_profile_id` contro `driver_profiles` (tenant), più coerenza incrociata user/profile. Risposta `404 DRIVER_NOT_FOUND` identica per: driver inesistente, cross-tenant, coppia user/profile incoerente (non rivela il motivo). Errore di query → `500` fail-closed. FUNC-03 esplicitamente non toccato (commento nel codice).
+  - Test dedicati: `tests/unit/assign-service-driver-tenant-guard.test.ts` (nuovo, verde), più aggiornamento di `tests/unit/assign-service-concurrency.test.ts` per il nuovo guard. Verificati in questa sessione con `pnpm exec vitest run` (tutti verdi).
+  - Reviewer: APPROVATO (sessione di riallineamento 2026-08-03: verificato che il guard precede ogni scrittura, risposta 404 uniforme, FUNC-03 invariato).
+  - **Follow-up separato**: `departure-bus-assign` e `piano-giorno/trips` restano item aperti dello stesso finding SEC-05 (non implementati in questo task, per design — vedi nota storica sopra).
   - Estendere il controllo anche quando manca un veicolo nel payload.
   - Test: assegnazione con driver di altro tenant rifiutata.
   - Stima: S.
@@ -118,12 +124,18 @@ Il modulo **non è completo**: restano aperti M1-04, M1-06, M1-07 (CONC-03, seve
   - Stima: S.
   - **Rivalutato in questa sessione (2026-08-02)**: confermato ancora aperto. `memberships.suspended` (alias applicativo `access_suspended` in `driver-registry.ts:165`) è filtrato server-side solo in `auto-assign/route.ts:1068`; zero occorrenze in `assign-service`, `trips`, `departure-bus-assign`. Il filtro in `piano-giorno/page.tsx:2357` è puramente cosmetico (client-side, dentro un `useMemo` che alimenta solo il dropdown). Confermato **separabile da SEC-05**: guardie diverse (tenant vs stato sospensione), nessuna sovrapposizione di codice prevista.
 
-- [ ] **M1-17 — RACE-01 (nuovo, emerso durante FUNC-01): DELETE+INSERT non atomico in `departure-bus-assign` (assign_driver)** (bug runtime — MEDIUM/HIGH) — **NUOVO FINDING**
-  - Descrizione: `assign_driver` esegue `DELETE` seguito da `INSERT` su `assignments` come due statement separati, senza transazione. Confermato (non solo ipotizzato) un interleaving concreto in cui il `DELETE` del secondo operatore cancella silenziosamente la riga appena inserita dal primo, poi il proprio `INSERT` va a buon fine senza errore: lost update silenzioso, entrambi gli operatori ricevono 200, `sendPushToUser` notifica comunque il driver mascherando l'anomalia. Un interleaving diverso produce invece un 23505 correttamente intercettato dal codice esistente (`if (insertErr) throw`) — quindi il bug è solo per una parte degli intrecci possibili, non sempre.
+- [x] **M1-17 — RACE-01 (emerso durante FUNC-01): DELETE+INSERT non atomico in `departure-bus-assign` (assign_driver)** (bug runtime — MEDIUM/HIGH) — **COMPLETATO**
+  - Descrizione: `assign_driver` eseguiva `DELETE` seguito da `INSERT` su `assignments` come due statement separati, senza transazione. Confermato un interleaving concreto in cui il `DELETE` del secondo operatore cancellava silenziosamente la riga appena inserita dal primo, poi il proprio `INSERT` andava a buon fine senza errore: lost update silenzioso, entrambi gli operatori ricevevano 200.
   - Vincolo DB coinvolto: `assignments_service_tenant_unique (service_id, tenant_id)` (`0137_assignments_nullable_driver_unique.sql`).
-  - Soluzione minima proposta (non implementata): sostituire `DELETE`+`INSERT` con un `upsert(..., { onConflict: "service_id,tenant_id" })` — pattern già in uso in `piano-giorno/trips/route.ts:916`, nessuna RPC/transazione dedicata necessaria.
-  - Test: race condition simulata (due `assign_driver` concorrenti sullo stesso batch), verificare che l'assegnazione del "perdente" non sparisca silenziosamente.
-  - Stima: XS. Rollback: revert singolo commit. Nessuna migrazione.
+  - Commit: `c44f6d9` — "fix: replace delete-insert with upsert in departure bus assignment (RACE-01)". `DELETE`+`INSERT` sostituiti con `upsert(..., { onConflict: "service_id,tenant_id", ignoreDuplicates: false })` — un solo statement atomico, zero finestra di race.
+  - Test dedicati: `tests/unit/departure-bus-assign-race.test.ts` (nuovo, verde), più aggiornamento di `departure-bus-assign-operational-validation.test.ts`/`departure-bus-assign-tenant-isolation.test.ts` per il nuovo path upsert.
+  - Reviewer: APPROVATO (sessione 2026-08-03: verificato upsert atomico, nessun DELETE residuo, `onConflict` corretto, zero lost update nei test di race).
+  - **Sotto-task M1-17b — fix semantica UPSERT (emerso durante il review di RACE-01)** — **COMPLETATO**
+    - Descrizione: un `upsert` a differenza di `DELETE+INSERT` aggiorna solo le colonne presenti nel payload — i campi omessi (`driver_profile_id`, `group_id`, `assignment_source`, `locked_by_operator`, `assigned_by`, `assigned_at`, `lock_reason`) sarebbero sopravvissuti invariati sulla riga esistente invece di azzerarsi come faceva il vecchio `DELETE+INSERT`.
+    - Commit: `983e1a1` — "fix: reset stale assignment metadata in departure bus upsert". Payload esteso con reset esplicito: `driver_profile_id: null`, `group_id: null`, `assignment_source: null`, `locked_by_operator: false`, `lock_reason: null`, più `assigned_by`/`assigned_at` valorizzati con l'attore/istante corrente. Atomicità preservata (stesso singolo statement upsert).
+    - Test dedicati: `tests/unit/departure-bus-assign-upsert-semantics.test.ts` (nuovo, verde), aggiornamento `departure-bus-assign-tenant-isolation.test.ts`.
+    - Reviewer: APPROVATO (sessione 2026-08-03: verificati tutti i 7 campi elencati nel diff, nessun campo stale residuo, nessuna perdita di atomicità).
+  - Stima: XS. Rollback: revert dei due commit dedicati. Nessuna migrazione.
   - Dipendenze: nessuna. File: `app/api/ops/departure-bus-assign/route.ts` (azione `assign_driver`).
 
 ## Milestone 1.5 — UX (non bloccanti per produzione, ma a basso costo)
