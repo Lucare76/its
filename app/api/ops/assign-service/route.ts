@@ -197,6 +197,144 @@ async function checkVehicleOverlap(
   return { ok: true };
 }
 
+// ── CONC-02: nessun vero controllo di sovrapposizione oraria per lo stesso
+// autista era applicato in questa route. L'unico controllo esistente
+// (validateDriverGeographicBatch, sotto) è euristico — valuta solo il tempo
+// di trasferimento geografico tra zone — e scatta solo se è presente
+// body.driver_user_id, mai con driver_profile_id (gap confermato in audit).
+// Riusa esattamente lo stesso schema di CONC-03 (vehicleIntervalsOverlap,
+// finestra fissa 30 min, overlap [start,end) senza buffer) applicato però
+// all'identità del driver anziché al mezzo, e per ENTRAMBI gli identificatori
+// quando presenti — non solo driver_user_id. Nessuna scrittura prima del
+// guard, stesso pattern di risposta 409/500 sanificata.
+const DRIVER_OVERLAP_DURATION_MINUTES = 30;
+
+function driverOverlapResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "DRIVER_OVERLAP", message: "L'autista è già impegnato in un altro servizio nello stesso orario." },
+    { status: 409 }
+  );
+}
+
+function driverOverlapCheckFailedResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "DRIVER_OVERLAP_CHECK_FAILED", message: "Errore durante la verifica della disponibilità dell'autista." },
+    { status: 500 }
+  );
+}
+
+async function findActiveGroupIdsByDriverField(
+  admin: SupabaseClient,
+  tenantId: string,
+  date: string,
+  field: "driver_user_id" | "driver_profile_id",
+  value: string,
+  excludeGroupId?: string | null
+): Promise<{ ok: true; groupIds: string[] } | { ok: false; dbCode: string | null }> {
+  let query = admin
+    .from("trip_groups")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("date", date)
+    .eq("status", "active")
+    .eq(field, value);
+  if (excludeGroupId) query = query.neq("id", excludeGroupId);
+
+  const { data, error } = await query;
+  if (error) return { ok: false, dbCode: (error as { code?: string }).code ?? null };
+  return { ok: true, groupIds: (data ?? []).map((row) => row.id as string) };
+}
+
+// Verifica overlap reale dell'autista (driver_user_id e/o driver_profile_id)
+// contro gli altri trip_groups attivi dello stesso tenant/data. Va invocata
+// solo per l'azione "assign" e solo se almeno un identificatore driver è
+// presente — se assenti entrambi il comportamento resta invariato. Esclude
+// sempre il service_id corrente ed excludeGroupId (gruppo riusato) per non
+// generare un falso conflitto quando si aggiorna la stessa assegnazione.
+// Fail-closed: un errore di query blocca la scrittura (500 sanificato).
+async function checkDriverOverlap(
+  admin: SupabaseClient,
+  tenantId: string,
+  input: {
+    serviceId: string;
+    service: VehicleOverlapServiceFields;
+    driverUserId?: string | null;
+    driverProfileId?: string | null;
+    excludeGroupId?: string | null;
+  },
+  context: { userId?: string }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  const driverUserId = input.driverUserId ?? null;
+  const driverProfileId = input.driverProfileId ?? null;
+  if (!driverUserId && !driverProfileId) return { ok: true };
+
+  const candidateStart = serviceVehicleOperationalMinutes(input.service);
+  if (candidateStart == null) return { ok: true };
+  const candidateInterval = { start_min: candidateStart, end_min: candidateStart + DRIVER_OVERLAP_DURATION_MINUTES };
+
+  const dbErrorResponse = (stage: string, dbCode: string | null) => {
+    auditLog({
+      event: "assign_service_driver_overlap_check_failed",
+      level: "error",
+      tenantId,
+      userId: context.userId ?? null,
+      details: { serviceId: input.serviceId, stage, dbCode },
+    });
+    return { ok: false as const, response: driverOverlapCheckFailedResponse() };
+  };
+
+  const groupIds = new Set<string>();
+
+  if (driverUserId) {
+    const result = await findActiveGroupIdsByDriverField(
+      admin, tenantId, input.service.date, "driver_user_id", driverUserId, input.excludeGroupId
+    );
+    if (!result.ok) return dbErrorResponse("trip_groups_driver_user_id", result.dbCode);
+    for (const id of result.groupIds) groupIds.add(id);
+  }
+
+  if (driverProfileId) {
+    const result = await findActiveGroupIdsByDriverField(
+      admin, tenantId, input.service.date, "driver_profile_id", driverProfileId, input.excludeGroupId
+    );
+    if (!result.ok) return dbErrorResponse("trip_groups_driver_profile_id", result.dbCode);
+    for (const id of result.groupIds) groupIds.add(id);
+  }
+
+  if (groupIds.size === 0) return { ok: true };
+
+  const { data: assignmentsData, error: assignmentsError } = await admin
+    .from("assignments")
+    .select(
+      "service_id, services!inner(date, time, direction, pickup_hotel, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details)"
+    )
+    .eq("tenant_id", tenantId)
+    .in("group_id", Array.from(groupIds))
+    .neq("service_id", input.serviceId);
+
+  if (assignmentsError) return dbErrorResponse("assignments", (assignmentsError as { code?: string }).code ?? null);
+
+  for (const row of assignmentsData ?? []) {
+    const otherService = (row.services as unknown) as VehicleOverlapServiceFields | null;
+    if (!otherService) continue;
+    const otherStart = serviceVehicleOperationalMinutes(otherService);
+    if (otherStart == null) continue;
+    const otherInterval = { start_min: otherStart, end_min: otherStart + DRIVER_OVERLAP_DURATION_MINUTES };
+    if (vehicleIntervalsOverlap(candidateInterval, otherInterval, 0)) {
+      auditLog({
+        event: "assign_service_driver_overlap",
+        level: "warn",
+        tenantId,
+        userId: context.userId ?? null,
+        details: { serviceId: input.serviceId, hasDriverUserId: Boolean(driverUserId), hasDriverProfileId: Boolean(driverProfileId) },
+      });
+      return { ok: false, response: driverOverlapResponse() };
+    }
+  }
+
+  return { ok: true };
+}
+
 // ── SEC-05: verifica che driver_user_id/driver_profile_id ricevuti dal client
 // appartengano al tenant autenticato prima di scrivere l'assignment. La route
 // usa il client service-role (bypassa RLS): il controllo va fatto qui.
@@ -526,6 +664,31 @@ export async function POST(request: NextRequest) {
     }
 
     // ─── ASSIGN ───────────────────────────────────────────────────────────────
+    // CONC-02: verifica overlap orario reale dello stesso autista, per
+    // entrambi gli identificatori (driver_user_id e/o driver_profile_id).
+    // Eseguita PRIMA della validazione geografica euristica sotto: quest'ultima
+    // confronta solo tempi di trasferimento tra zone e, su un vero overlap
+    // esatto, produrrebbe comunque un 409 ma con un messaggio euristico meno
+    // chiaro ("zona sconosciuta", minuti disponibili) invece della diagnosi
+    // precisa DRIVER_OVERLAP — il controllo strutturale ha priorità su quello
+    // euristico. Deve avvenire prima di qualunque scrittura su
+    // trip_groups/assignments.
+    if (body.driver_user_id || body.driver_profile_id) {
+      const driverOverlapCheck = await checkDriverOverlap(
+        auth.admin,
+        tenantId,
+        {
+          serviceId: body.service_id,
+          service: service as unknown as VehicleOverlapServiceFields,
+          driverUserId: body.driver_user_id ?? null,
+          driverProfileId: body.driver_profile_id ?? null,
+          excludeGroupId: existingAssignment?.group_id ?? null,
+        },
+        { userId }
+      );
+      if (!driverOverlapCheck.ok) return driverOverlapCheck.response;
+    }
+
     if (body.driver_user_id) {
       const geoValidation = await validateDriverGeographicBatch(auth.admin, tenantId, body.driver_user_id, [{
         id: service.id as string,
