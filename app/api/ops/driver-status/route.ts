@@ -62,6 +62,40 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "Servizio non trovato." }, { status: 404 });
   }
 
+  // SEC-04: il body non porta alcun identificativo target (solo service_id) —
+  // il ruolo "driver" deve poter aggiornare solo servizi effettivamente
+  // assegnati a sé stesso. Senza questo guard, qualunque driver autenticato
+  // del tenant può alterare lo stato del servizio di un collega semplicemente
+  // conoscendone il service_id. Stesso pattern già usato in sola lettura da
+  // driver-data/route.ts:94-96 (assignments.driver_user_id = auth.user.id),
+  // qui applicato prima di qualsiasi scrittura. admin/operator/supervisor non
+  // hanno un concetto di "driver target" in questa route (nessun campo body
+  // lo esprime): il filtro tenant sul servizio, già esistente sopra, resta
+  // l'unica e sufficiente verifica di ownership per questi ruoli — invariato.
+  if (membership.role === "driver") {
+    const { data: ownedAssignment, error: ownershipError } = await admin
+      .from("assignments")
+      .select("id")
+      .eq("service_id", service_id)
+      .eq("tenant_id", tenantId)
+      .eq("driver_user_id", user.id)
+      .maybeSingle();
+
+    if (ownershipError) {
+      return NextResponse.json(
+        { ok: false, error: "DRIVER_STATUS_CHECK_FAILED", message: "Errore durante la verifica dell'autista." },
+        { status: 500 }
+      );
+    }
+
+    if (!ownedAssignment) {
+      return NextResponse.json(
+        { ok: false, error: "DRIVER_STATUS_FORBIDDEN", message: "Non puoi modificare lo stato di un altro autista." },
+        { status: 403 }
+      );
+    }
+  }
+
   // Recupera il radius_vehicle_id assegnato al driver per questo servizio
   let gpsLat: number | null = null;
   let gpsLng: number | null = null;
