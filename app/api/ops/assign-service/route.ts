@@ -44,6 +44,51 @@ type VehicleOverlapServiceFields = {
   ferry_details?: Record<string, unknown> | null;
 };
 
+// ── FUNC-02: nessun controllo server-side impediva l'assegnazione manuale a
+// servizi non più operativi. Denylist esplicita costruita sull'enum reale
+// public.service_status (supabase/migrations/0001_schema.sql:5 + aggiunte in
+// 0009/0132/0169, vedi lib/types.ts:33) più il flag is_draft (colonna
+// separata, 0001_schema.sql:38):
+// - "completato"/"cancelled": stati terminali — driver/page.tsx:529,535 li
+//   tratta esplicitamente come "storico", distinti da tutti gli altri stati
+//   attivi (incluso "problema", che segnala un'anomalia ma resta operativo:
+//   riassegnare durante "partito"/"caricato"/"scaricato"/"arrivato"/"problema"
+//   è un correttivo legittimo, es. autista indisponibile a metà corsa — non
+//   vengono bloccati).
+// - "needs_review": dati importati non ancora verificati manualmente
+//   (0009_inbound_attachments_and_needs_review.sql) — non è ancora un
+//   servizio pronto per il dispatch.
+// - "pending_cancellation": cancellazione in corso di decisione
+//   (0132_cancellation_requests.sql); alla finalizzazione
+//   (0179_finalize_cancellation_clears_assignments.sql) lo stato diventa
+//   "cancelled" o torna "new" e l'assignment viene comunque cancellato —
+//   assegnare ora sarebbe prematuro e verrebbe annullato a breve.
+// - is_draft=true: stesso segnale già usato da auto-assign per escludere i
+//   candidati dal pool (piano-giorno/auto-assign/route.ts:957,
+//   ".neq('status','cancelled').neq('is_draft', true)") — riusato qui, non
+//   inventato.
+// "new"/"assigned" restano assegnabili (assigned è il ramo di aggiornamento
+// legittimo, invariato). Nessuno stato "no_show" esiste nell'enum reale.
+const NON_ASSIGNABLE_SERVICE_STATUSES = new Set<string>([
+  "completato",
+  "cancelled",
+  "needs_review",
+  "pending_cancellation",
+]);
+
+function isServiceAssignableForManualAssignment(service: { status?: string | null; is_draft?: boolean | null }): boolean {
+  if (service.is_draft === true) return false;
+  if (service.status && NON_ASSIGNABLE_SERVICE_STATUSES.has(service.status)) return false;
+  return true;
+}
+
+function serviceNotAssignableResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "SERVICE_NOT_ASSIGNABLE", message: "Il servizio non può essere assegnato nello stato attuale." },
+    { status: 409 }
+  );
+}
+
 function serviceVehicleOperationalMinutes(service: VehicleOverlapServiceFields): number | null {
   const timeStr =
     service.direction === "departure"
@@ -302,7 +347,7 @@ export async function POST(request: NextRequest) {
     const { data: service, error: serviceErr } = await auth.admin
       .from("services")
       .select(
-        "id, date, status, time, pickup_hotel, direction, hotel_id, meeting_point, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details"
+        "id, date, status, is_draft, time, pickup_hotel, direction, hotel_id, meeting_point, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details"
       )
       .eq("id", body.service_id)
       .eq("tenant_id", tenantId)
@@ -313,6 +358,14 @@ export async function POST(request: NextRequest) {
     }
 
     const date = service.date as string;
+
+    // FUNC-02: guard stato servizio, solo per l'azione "assign" (remove deve
+    // restare sempre possibile, anche su un servizio non più operativo, per
+    // permettere di ripulire un'assegnazione residua es. dopo cancellazione).
+    // Deve precedere qualunque altro guard/scrittura successiva.
+    if (action === "assign" && !isServiceAssignableForManualAssignment(service as { status?: string | null; is_draft?: boolean | null })) {
+      return serviceNotAssignableResponse();
+    }
 
     // SEC-05: verifica ownership tenant del driver, solo per l'azione "assign"
     // (remove non tocca driver_user_id/driver_profile_id). Deve avvenire prima
