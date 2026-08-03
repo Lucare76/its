@@ -91,6 +91,20 @@ export async function POST(request: NextRequest) {
       });
       if (!ownership.ok) return ownership.response;
       const verifiedServiceIds = ownership.uniqueServiceIds;
+
+      // SEC-05 residuo: verifica ownership tenant del driver, prima di
+      // qualunque altro guard/scrittura successiva. Stesso pattern già usato
+      // in assign-service/departure-bus-assign. Perimetro: solo create_trip
+      // in questa sessione — update_trip/move_services/swap_driver restano
+      // follow-up separati dello stesso finding.
+      const driverOwnership = await verifyTripDriverBelongsToTenant(
+        auth.admin,
+        tenantId,
+        { driverUserId: driver_user_id ?? null, driverProfileId: driver_profile_id ?? null },
+        { actorUserId: userId, action: "create_trip" }
+      );
+      if (!driverOwnership.ok) return driverOwnership.response;
+
       const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, date);
       if (confirmationError) {
         return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
@@ -883,6 +897,91 @@ async function verifyServiceIdsBelongToTenant(
   }
 
   return { ok: true, uniqueServiceIds };
+}
+
+// ── SEC-05 residuo: verifica che driver_user_id/driver_profile_id ricevuti
+// dal client appartengano al tenant autenticato prima di scrivere
+// trip_groups/assignments. La route usa il client service-role (bypassa
+// RLS): il controllo va fatto qui, stesso pattern già usato in
+// assign-service/departure-bus-assign. Salta il controllo solo se nessuno
+// dei due campi è presente. Stessa risposta 404 generica per driver
+// inesistente, di altro tenant, o coppia user_id/profile_id incoerente —
+// non deve rivelare quale caso si sia verificato. Errore di query è
+// fail-closed (500). Non verifica lo stato sospeso/attivo del driver
+// (FUNC-03, fuori scope).
+function tripDriverNotFoundResponse(): NextResponse {
+  return NextResponse.json({ ok: false, error: "DRIVER_NOT_FOUND", message: "Autista non trovato." }, { status: 404 });
+}
+
+async function verifyTripDriverBelongsToTenant(
+  admin: SupabaseClient,
+  tenantId: string,
+  input: { driverUserId?: string | null; driverProfileId?: string | null },
+  context: { actorUserId?: string; action: "create_trip" }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  const driverUserId = input.driverUserId ?? null;
+  const driverProfileId = input.driverProfileId ?? null;
+
+  if (!driverUserId && !driverProfileId) {
+    return { ok: true };
+  }
+
+  const verificationFailedResponse = (dbCode: string | null) => {
+    auditLog({
+      event: "piano_trip_driver_verification_failed",
+      level: "error",
+      tenantId,
+      userId: context.actorUserId ?? null,
+      details: {
+        action: context.action,
+        hasDriverUserId: Boolean(driverUserId),
+        hasDriverProfileId: Boolean(driverProfileId),
+        dbCode,
+      },
+    });
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        { ok: false, error: "DRIVER_VERIFICATION_FAILED", message: "Errore durante la verifica dell'autista." },
+        { status: 500 }
+      ),
+    };
+  };
+
+  let profileUserId: string | null = null;
+
+  if (driverUserId) {
+    const { data, error } = await admin
+      .from("memberships")
+      .select("user_id")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", driverUserId)
+      .eq("role", "driver")
+      .maybeSingle();
+
+    if (error) return verificationFailedResponse((error as { code?: string }).code ?? null);
+    if (!data?.user_id) return { ok: false, response: tripDriverNotFoundResponse() };
+  }
+
+  if (driverProfileId) {
+    const { data, error } = await admin
+      .from("driver_profiles")
+      .select("id, user_id")
+      .eq("tenant_id", tenantId)
+      .eq("id", driverProfileId)
+      .maybeSingle();
+
+    if (error) return verificationFailedResponse((error as { code?: string }).code ?? null);
+    if (!data?.id) return { ok: false, response: tripDriverNotFoundResponse() };
+    profileUserId = (data.user_id as string | null) ?? null;
+  }
+
+  // Coppia incoerente: il profilo indicato è già collegato a un altro utente.
+  if (driverUserId && driverProfileId && profileUserId && profileUserId !== driverUserId) {
+    return { ok: false, response: tripDriverNotFoundResponse() };
+  }
+
+  return { ok: true };
 }
 
 async function _assignServicesToGroup(

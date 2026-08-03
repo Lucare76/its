@@ -45,7 +45,10 @@ function createTenantAwareSupabase(
     daily_availability_confirmations: [...(seed.daily_availability_confirmations ?? [])],
     driver_daily_availability: [...(seed.driver_daily_availability ?? [])],
     driver_profiles: [...(seed.driver_profiles ?? [])],
-    memberships: [...(seed.memberships ?? [])],
+    // SEC-05 residuo: DRIVER_A è l'unico driver usato in questo file
+    // (concentrato su SEC-02/tenant isolation dei servizi), seedato qui come
+    // membership valida del tenant A per non interferire con quegli scenari.
+    memberships: seed.memberships ?? [{ tenant_id: TENANT_A, user_id: DRIVER_A, role: "driver" }],
     hotels: [...(seed.hotels ?? [])],
     status_events: [...(seed.status_events ?? [])],
   };
