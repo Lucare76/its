@@ -64,6 +64,10 @@ function createConcurrencyAwareSupabase(
         filtered = filtered.filter((r) => values.includes(r[field]));
         return builder;
       },
+      neq(field: string, value: unknown) {
+        filtered = filtered.filter((r) => r[field] !== value);
+        return builder;
+      },
       not(field: string, _op: string, value: unknown) {
         filtered = filtered.filter((r) => r[field] !== value);
         return builder;

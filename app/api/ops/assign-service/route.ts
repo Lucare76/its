@@ -9,8 +9,148 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { validateDriverGeographicBatch } from "@/lib/server/geo-assignment";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { auditLog } from "@/lib/server/ops-audit";
+import { vehicleIntervalsOverlap } from "@/lib/piano-vehicle-timeline";
+import { effectiveServiceDisembarkTime, minutesFromHHMM } from "@/lib/piano-arrival-time";
 
 export const runtime = "nodejs";
+
+// ── CONC-03: nessun controllo di sovrapposizione oraria per lo stesso mezzo
+// (vehicle_label) era applicato in questa route, a differenza di
+// piano-giorno/trips (validateVehicleTimelinePayload). Stessa regola di
+// blocco reale già in uso lì: finestra fissa di 30 minuti per servizio,
+// overlap [start,end) senza buffer (i gap/warning di trips non si applicano
+// qui, solo il blocco vero e proprio). Riusa vehicleIntervalsOverlap
+// (lib/piano-vehicle-timeline.ts, già presente ma non invocato fuori dal
+// planner automatico) e effectiveServiceDisembarkTime/minutesFromHHMM
+// (lib/piano-arrival-time.ts) per calcolare l'orario operativo esattamente
+// come trips/route.ts (serviceOperationalTime), senza duplicarne la logica
+// interna né toccare quel file (fuori perimetro). vehicle_time_blocks non è
+// usato: piano-giorno/trips stesso non lo consulta per questo tipo di
+// blocco, solo per meccanismi di blocco manuale separati (fuori scope).
+const VEHICLE_OVERLAP_DURATION_MINUTES = 30;
+
+type VehicleOverlapServiceFields = {
+  date: string;
+  time: string | null;
+  direction: "arrival" | "departure";
+  pickup_hotel: string | null;
+  arrival_time?: string | null;
+  orario_barca?: string | null;
+  porto_bruno?: string | null;
+  barca_compagnia?: string | null;
+  booking_service_kind?: string | null;
+  service_type_code?: string | null;
+  vessel?: string | null;
+  ferry_details?: Record<string, unknown> | null;
+};
+
+function serviceVehicleOperationalMinutes(service: VehicleOverlapServiceFields): number | null {
+  const timeStr =
+    service.direction === "departure"
+      ? (service.pickup_hotel ?? service.time)?.slice(0, 5) ?? null
+      : effectiveServiceDisembarkTime(service) ?? service.time?.slice(0, 5) ?? null;
+  return timeStr ? minutesFromHHMM(timeStr) : null;
+}
+
+function vehicleOverlapResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "VEHICLE_OVERLAP", message: "Il mezzo è già impegnato in un altro servizio nello stesso orario." },
+    { status: 409 }
+  );
+}
+
+function vehicleCheckFailedResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "VEHICLE_CHECK_FAILED", message: "Errore durante la verifica della disponibilità del mezzo." },
+    { status: 500 }
+  );
+}
+
+// Verifica overlap reale del mezzo (vehicle_label) contro gli altri
+// trip_groups attivi dello stesso tenant/data. Va invocata solo per l'azione
+// "assign" e solo se vehicle_label è presente/non vuoto — se assente il
+// comportamento resta invariato (nessun controllo, come prima di CONC-03).
+// Esclude sempre il service_id corrente (sia via excludeGroupId sul gruppo
+// riusato, sia via filtro diretto sull'assignment) per non generare un falso
+// conflitto quando si aggiorna la stessa assegnazione. Fail-closed: un
+// errore di query blocca la scrittura (500 sanificato), non prosegue mai in
+// silenzio. Nessun dettaglio del servizio confliggente viene restituito al
+// client.
+async function checkVehicleOverlap(
+  admin: SupabaseClient,
+  tenantId: string,
+  input: {
+    serviceId: string;
+    service: VehicleOverlapServiceFields;
+    vehicleLabel: string;
+    excludeGroupId?: string | null;
+  },
+  context: { userId?: string }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  const label = input.vehicleLabel.trim();
+  if (!label) return { ok: true };
+
+  const candidateStart = serviceVehicleOperationalMinutes(input.service);
+  if (candidateStart == null) return { ok: true };
+  const candidateInterval = { start_min: candidateStart, end_min: candidateStart + VEHICLE_OVERLAP_DURATION_MINUTES };
+
+  const dbErrorResponse = (stage: string, dbCode: string | null) => {
+    auditLog({
+      event: "assign_service_vehicle_check_failed",
+      level: "error",
+      tenantId,
+      userId: context.userId ?? null,
+      details: { serviceId: input.serviceId, stage, dbCode },
+    });
+    return { ok: false as const, response: vehicleCheckFailedResponse() };
+  };
+
+  let groupsQuery = admin
+    .from("trip_groups")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("date", input.service.date)
+    .eq("status", "active")
+    .eq("vehicle_label", label);
+  if (input.excludeGroupId) groupsQuery = groupsQuery.neq("id", input.excludeGroupId);
+
+  const { data: groups, error: groupsError } = await groupsQuery;
+  if (groupsError) return dbErrorResponse("trip_groups", (groupsError as { code?: string }).code ?? null);
+
+  const groupIds = (groups ?? []).map((group) => group.id as string);
+  if (groupIds.length === 0) return { ok: true };
+
+  const { data: assignmentsData, error: assignmentsError } = await admin
+    .from("assignments")
+    .select(
+      "service_id, services!inner(date, time, direction, pickup_hotel, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details)"
+    )
+    .eq("tenant_id", tenantId)
+    .in("group_id", groupIds)
+    .neq("service_id", input.serviceId);
+
+  if (assignmentsError) return dbErrorResponse("assignments", (assignmentsError as { code?: string }).code ?? null);
+
+  for (const row of assignmentsData ?? []) {
+    const otherService = (row.services as unknown) as VehicleOverlapServiceFields | null;
+    if (!otherService) continue;
+    const otherStart = serviceVehicleOperationalMinutes(otherService);
+    if (otherStart == null) continue;
+    const otherInterval = { start_min: otherStart, end_min: otherStart + VEHICLE_OVERLAP_DURATION_MINUTES };
+    if (vehicleIntervalsOverlap(candidateInterval, otherInterval, 0)) {
+      auditLog({
+        event: "assign_service_vehicle_overlap",
+        level: "warn",
+        tenantId,
+        userId: context.userId ?? null,
+        details: { serviceId: input.serviceId, vehicleLabel: label },
+      });
+      return { ok: false, response: vehicleOverlapResponse() };
+    }
+  }
+
+  return { ok: true };
+}
 
 // ── SEC-05: verifica che driver_user_id/driver_profile_id ricevuti dal client
 // appartengano al tenant autenticato prima di scrivere l'assignment. La route
@@ -161,7 +301,9 @@ export async function POST(request: NextRequest) {
     // Recupera il servizio per avere la data
     const { data: service, error: serviceErr } = await auth.admin
       .from("services")
-      .select("id, date, status, time, pickup_hotel, direction, hotel_id, meeting_point")
+      .select(
+        "id, date, status, time, pickup_hotel, direction, hotel_id, meeting_point, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details"
+      )
       .eq("id", body.service_id)
       .eq("tenant_id", tenantId)
       .maybeSingle();
@@ -246,6 +388,24 @@ export async function POST(request: NextRequest) {
       if (!geoValidation.ok) {
         return NextResponse.json({ ok: false, error: geoValidation.error }, { status: 409 });
       }
+    }
+
+    // CONC-03: verifica overlap mezzo, solo se vehicle_label è presente/non
+    // vuoto — comportamento invariato altrimenti. Deve avvenire prima di
+    // qualunque scrittura su trip_groups/assignments.
+    if (body.vehicle_label && body.vehicle_label.trim()) {
+      const vehicleCheck = await checkVehicleOverlap(
+        auth.admin,
+        tenantId,
+        {
+          serviceId: body.service_id,
+          service: service as unknown as VehicleOverlapServiceFields,
+          vehicleLabel: body.vehicle_label,
+          excludeGroupId: existingAssignment?.group_id ?? null,
+        },
+        { userId }
+      );
+      if (!vehicleCheck.ok) return vehicleCheck.response;
     }
 
     let groupId: string;
