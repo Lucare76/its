@@ -6,8 +6,179 @@ import { ensureDriverProfileForMembership, reserveMembershipUsername } from "@/l
 import { sendPushToUser } from "@/lib/server/web-push";
 import { auditLog } from "@/lib/server/ops-audit";
 import { validateDriverGeographicBatch, type TripGeoServiceRow } from "@/lib/server/geo-assignment";
+import { vehicleIntervalsOverlap } from "@/lib/piano-vehicle-timeline";
+import { effectiveServiceDisembarkTime, minutesFromHHMM } from "@/lib/piano-arrival-time";
 
 export const runtime = "nodejs";
+
+// ── CONC-03 residuo: nessun controllo di sovrapposizione oraria per lo stesso
+// mezzo (vehicle_label) era applicato in questa route, a differenza di
+// assign-service (già corretto). Stessa regola di blocco reale già in uso lì:
+// finestra fissa di 30 minuti per servizio, overlap [start,end) senza buffer.
+// Riusa vehicleIntervalsOverlap (lib/piano-vehicle-timeline.ts) e
+// effectiveServiceDisembarkTime/minutesFromHHMM (lib/piano-arrival-time.ts),
+// stessa logica operational-time già usata in assign-service, duplicata qui
+// localmente (funzione pura, non esportata da quel file, fuori perimetro).
+//
+// Differenza rispetto ad assign-service: qui l'azione assign_driver riceve un
+// BATCH di service_ids con un unico vehicle_label per l'intero batch, mentre
+// assign-service gestisce un servizio alla volta. Un batch legittimo (vedi
+// app/(app)/rete-ischia/page.tsx: i gruppi sono costruiti per stesso
+// pickup_time/nave/porto) ha tipicamente un'unica finestra operativa ripetuta
+// su più passeggeri — non va trattato come N conflitti interni. Le finestre
+// vengono quindi deduplicate per (data, minuti) prima di qualunque confronto:
+// il conflitto interno scatta solo se il batch contiene finestre DISTINTE che
+// si sovrappongono tra loro (scenario anomalo, non il caso normale).
+//
+// Questa route non usa trip_groups (ogni upsert scrive group_id:null, vedi
+// RACE-01/semantica upsert sotto): il conflitto esterno viene quindi cercato
+// direttamente su assignments per tenant_id+vehicle_label, escludendo i
+// service_id del batch corrente — a differenza di assign-service (che passa
+// per trip_groups), questo cattura correttamente anche eventuali impegni
+// dello stesso mezzo creati da altre route (stesso vehicle_label è lo stesso
+// mezzo fisico, indipendentemente da quale route ha scritto la riga).
+//
+// Nessun filtro sullo stato del servizio esterno (completato/cancelled/ecc.):
+// stessa scelta già fatta in assign-service CONC-03, per coerenza (né trips
+// né auto-assign filtrano lo stato per questo tipo di blocco).
+const VEHICLE_OVERLAP_DURATION_MINUTES = 30;
+
+type DepartureVehicleOverlapServiceFields = {
+  date: string;
+  time: string | null;
+  direction: "arrival" | "departure";
+  pickup_hotel: string | null;
+  arrival_time?: string | null;
+  orario_barca?: string | null;
+  porto_bruno?: string | null;
+  barca_compagnia?: string | null;
+  booking_service_kind?: string | null;
+  service_type_code?: string | null;
+  vessel?: string | null;
+  ferry_details?: Record<string, unknown> | null;
+};
+
+function departureServiceOperationalMinutes(service: DepartureVehicleOverlapServiceFields): number | null {
+  const timeStr =
+    service.direction === "departure"
+      ? (service.pickup_hotel ?? service.time)?.slice(0, 5) ?? null
+      : effectiveServiceDisembarkTime(service) ?? service.time?.slice(0, 5) ?? null;
+  return timeStr ? minutesFromHHMM(timeStr) : null;
+}
+
+function vehicleOverlapResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "VEHICLE_OVERLAP", message: "Il mezzo è già impegnato in un altro servizio nello stesso orario." },
+    { status: 409 }
+  );
+}
+
+function vehicleCheckFailedResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "VEHICLE_CHECK_FAILED", message: "Errore durante la verifica della disponibilità del mezzo." },
+    { status: 500 }
+  );
+}
+
+// Verifica overlap reale del mezzo (vehicle_label) contro altri assignments
+// dello stesso tenant/mezzo esterni al batch corrente. Va invocata solo per
+// l'azione "assign_driver" e solo se vehicle_label è presente/non vuoto.
+// Fail-closed: un errore di query blocca la scrittura (500 sanificato).
+// Nessun dettaglio del servizio confliggente viene restituito al client.
+//
+// NOTA DI DESIGN — nessun controllo "interno al batch": una prima versione
+// confrontava a coppie le finestre distinte all'interno dello stesso batch,
+// ma questo rompeva uno scenario reale già coperto da test esistenti
+// (departure-bus-assign-operational-validation.test.ts, "batch trattato come
+// unica finestra geografica, non servizio per servizio"): un bus con più
+// fermate (hotel diversi, orari scaglionati di pochi minuti) è un batch
+// legittimo con finestre temporali DIVERSE per costruzione, non un errore.
+// Lo stesso principio è già applicato a FUNC-01 (validateDriverGeographicBatch
+// tratta l'intero batch come un'unica finestra operativa, non a coppie). Il
+// co-invio di più service_ids nella stessa richiesta assign_driver è di per
+// sé il segnale che l'operatore li considera un unico giro coordinato: non
+// esiste nel modello dati un modo affidabile per distinguere un batch
+// multi-fermata legittimo da un batch "malformato", quindi qualunque
+// controllo pairwise interno produrrebbe falsi positivi sistematici. Il
+// controllo esterno sotto resta comunque applicato per OGNI finestra del
+// batch (deduplicata), quindi una singola fermata in conflitto con un
+// impegno esterno preesistente viene comunque bloccata.
+async function checkDepartureBatchVehicleOverlap(
+  admin: SupabaseClient,
+  tenantId: string,
+  input: {
+    vehicleLabel: string;
+    services: Array<DepartureVehicleOverlapServiceFields & { id: string }>;
+  },
+  context: { userId?: string }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  const label = input.vehicleLabel.trim();
+  if (!label) return { ok: true };
+
+  type Window = { date: string; start: number; end: number };
+  const windowsByKey = new Map<string, Window>();
+  for (const svc of input.services) {
+    const start = departureServiceOperationalMinutes(svc);
+    if (start == null) continue;
+    const key = `${svc.date}|${start}`;
+    if (!windowsByKey.has(key)) {
+      windowsByKey.set(key, { date: svc.date, start, end: start + VEHICLE_OVERLAP_DURATION_MINUTES });
+    }
+  }
+  const windows = Array.from(windowsByKey.values());
+  if (windows.length === 0) return { ok: true };
+
+  // Conflitto esterno: altri assignments dello stesso tenant/mezzo, non
+  // filtrati per data a livello di query (nessuna colonna embedded
+  // affidabile da filtrare via dot-path su services), filtrati in memoria
+  // sotto insieme all'esclusione del batch corrente.
+  const excludeServiceIds = new Set(input.services.map((s) => s.id));
+
+  const { data: externalData, error: externalError } = await admin
+    .from("assignments")
+    .select(
+      "service_id, services!inner(date, time, direction, pickup_hotel, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details)"
+    )
+    .eq("tenant_id", tenantId)
+    .eq("vehicle_label", label);
+
+  if (externalError) {
+    auditLog({
+      event: "departure_bus_assign_vehicle_check_failed",
+      level: "error",
+      tenantId,
+      userId: context.userId ?? null,
+      details: { vehicleLabel: label, dbCode: (externalError as { code?: string }).code ?? null },
+    });
+    return { ok: false, response: vehicleCheckFailedResponse() };
+  }
+
+  for (const row of externalData ?? []) {
+    const otherServiceId = row.service_id as string;
+    if (excludeServiceIds.has(otherServiceId)) continue;
+    const otherService = (row.services as unknown) as DepartureVehicleOverlapServiceFields | null;
+    if (!otherService) continue;
+    const otherStart = departureServiceOperationalMinutes(otherService);
+    if (otherStart == null) continue;
+    const otherInterval = { start_min: otherStart, end_min: otherStart + VEHICLE_OVERLAP_DURATION_MINUTES };
+
+    for (const w of windows) {
+      if (w.date !== otherService.date) continue;
+      if (vehicleIntervalsOverlap({ start_min: w.start, end_min: w.end }, otherInterval, 0)) {
+        auditLog({
+          event: "departure_bus_assign_vehicle_overlap",
+          level: "warn",
+          tenantId,
+          userId: context.userId ?? null,
+          details: { vehicleLabel: label, kind: "external_assignment" },
+        });
+        return { ok: false, response: vehicleOverlapResponse() };
+      }
+    }
+  }
+
+  return { ok: true };
+}
 
 function makeAdminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
@@ -288,7 +459,9 @@ export async function POST(req: NextRequest) {
       // ── FUNC-01: caricamento dati operativi del batch (data, orario, geografia) ──
       const { data: batchServicesData, error: batchServicesError } = await auth.admin
         .from("services")
-        .select("id, date, time, pickup_hotel, direction, hotel_id, meeting_point")
+        .select(
+          "id, date, time, pickup_hotel, direction, hotel_id, meeting_point, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details"
+        )
         .eq("tenant_id", tenantId)
         .in("id", uniqueServiceIds);
 
@@ -378,6 +551,19 @@ export async function POST(req: NextRequest) {
           { status: 409 }
         );
       }
+
+      // CONC-03 residuo: verifica overlap mezzo (interno al batch + esterno),
+      // prima di qualunque scrittura su assignments.
+      const vehicleOverlapCheck = await checkDepartureBatchVehicleOverlap(
+        auth.admin,
+        tenantId,
+        {
+          vehicleLabel,
+          services: batchServices.map((s) => ({ ...s, id: s.id as string })) as Array<DepartureVehicleOverlapServiceFields & { id: string }>,
+        },
+        { userId: auth.user.id }
+      );
+      if (!vehicleOverlapCheck.ok) return vehicleOverlapCheck.response;
 
       // RACE-01: upsert al posto di DELETE+INSERT. Con due richieste concorrenti
       // sullo stesso batch, il DELETE dell'una poteva cancellare silenziosamente
