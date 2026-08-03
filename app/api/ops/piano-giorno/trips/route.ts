@@ -105,6 +105,18 @@ export async function POST(request: NextRequest) {
       );
       if (!driverOwnership.ok) return driverOwnership.response;
 
+      // FUNC-02 residuo: verifica che nessuno dei servizi selezionati sia in
+      // uno stato non operativo prima di creare il giro. Stessa denylist già
+      // in uso in assign-service (SERVICE_STATUS_CHECK), non nuova. Deve
+      // precedere availability/validateTripPayload e qualunque scrittura.
+      const serviceStatusCheck = await verifyTripServicesOperationalStatus(
+        auth.admin,
+        tenantId,
+        verifiedServiceIds,
+        { userId, action: "create_trip" }
+      );
+      if (!serviceStatusCheck.ok) return serviceStatusCheck.response;
+
       const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, date);
       if (confirmationError) {
         return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
@@ -979,6 +991,93 @@ async function verifyTripDriverBelongsToTenant(
   // Coppia incoerente: il profilo indicato è già collegato a un altro utente.
   if (driverUserId && driverProfileId && profileUserId && profileUserId !== driverUserId) {
     return { ok: false, response: tripDriverNotFoundResponse() };
+  }
+
+  return { ok: true };
+}
+
+// ── FUNC-02 residuo: nessun controllo server-side impediva la creazione di un
+// giro (create_trip) contenente servizi non più operativi. Stessa denylist
+// già validata e usata in assign-service/route.ts (isServiceAssignableForManualAssignment),
+// costruita sull'enum reale public.service_status (lib/types.ts:33) più il
+// flag is_draft — non ridefinita da zero, solo riapplicata qui perché
+// quell'helper non è condiviso/esportato (per design, vedi commento originale
+// in assign-service). "new"/"assigned"/"partito"/"caricato"/"scaricato"/
+// "arrivato"/"problema" restano assegnabili. Blocca solo "completato",
+// "cancelled", "needs_review", "pending_cancellation", is_draft=true.
+const NON_ASSIGNABLE_TRIP_SERVICE_STATUSES = new Set<string>([
+  "completato",
+  "cancelled",
+  "needs_review",
+  "pending_cancellation",
+]);
+
+function isTripServiceAssignable(service: { status?: string | null; is_draft?: boolean | null }): boolean {
+  if (service.is_draft === true) return false;
+  if (service.status && NON_ASSIGNABLE_TRIP_SERVICE_STATUSES.has(service.status)) return false;
+  return true;
+}
+
+function tripServiceNotAssignableResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "SERVICE_NOT_ASSIGNABLE", message: "Uno o più servizi non possono essere assegnati nello stato attuale." },
+    { status: 409 }
+  );
+}
+
+// Verifica lo stato operativo di tutti i service_ids (già confermati
+// tenant-scoped da SEC-02) prima di creare il giro. Fail-closed su errore di
+// query (500, nessuna scrittura). Va chiamata solo per create_trip, dopo
+// SEC-02/SEC-05 e prima di qualunque INSERT su trip_groups/assignments.
+async function verifyTripServicesOperationalStatus(
+  admin: SupabaseClient,
+  tenantId: string,
+  serviceIds: string[],
+  context: { userId?: string; action: "create_trip" }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  if (serviceIds.length === 0) {
+    return { ok: true };
+  }
+
+  const { data, error } = await admin
+    .from("services")
+    .select("id, status, is_draft")
+    .eq("tenant_id", tenantId)
+    .in("id", serviceIds);
+
+  if (error) {
+    auditLog({
+      event: "piano_trip_service_status_check_failed",
+      level: "error",
+      tenantId,
+      userId: context.userId ?? null,
+      details: {
+        action: context.action,
+        serviceCount: serviceIds.length,
+        dbCode: (error as { code?: string }).code ?? null,
+      },
+    });
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { ok: false, error: "SERVICE_STATUS_CHECK_FAILED", message: "Errore durante la verifica dello stato dei servizi." },
+        { status: 500 }
+      ),
+    };
+  }
+
+  const rows = (data ?? []) as { id: string; status: string | null; is_draft: boolean | null }[];
+  const hasNonAssignable = rows.some((row) => !isTripServiceAssignable(row));
+
+  if (hasNonAssignable) {
+    auditLog({
+      event: "piano_trip_service_status_guard_failed",
+      level: "warn",
+      tenantId,
+      userId: context.userId ?? null,
+      details: { action: context.action, serviceCount: serviceIds.length },
+    });
+    return { ok: false, response: tripServiceNotAssignableResponse() };
   }
 
   return { ok: true };
