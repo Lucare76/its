@@ -507,9 +507,13 @@ describe("Validazione operativa — departure-bus-assign API (FUNC-01)", () => {
     // assign-service lascia passare, quindi anche departure-bus-assign deve procedere.
     const fake = createOperationalSupabase({
       services: [
-        // Gap di 20 minuti: >= ai 15 minuti richiesti per zona sconosciuta
-        // (altrimenti sarebbe "block", non "warning" — vedi requiredTransferMinutes).
-        serviceRow(SERVICE_X1, { time: "09:20:00", hotel_id: null, meeting_point: null }),
+        // Gap di 35 minuti: >= ai 15 minuti richiesti per zona sconosciuta
+        // (altrimenti sarebbe "block", non "warning" — vedi requiredTransferMinutes)
+        // e >= alla finestra fissa di 30 minuti usata da CONC-02 residuo (guard
+        // successivo, indipendente): un gap di soli 20 minuti genererebbe ora
+        // un overlap driver reale e legittimo (409 DRIVER_OVERLAP), non testato
+        // qui — questo test resta mirato solo al comportamento del warning geo.
+        serviceRow(SERVICE_X1, { time: "09:35:00", hotel_id: null, meeting_point: null }),
         { id: "existing-svc", tenant_id: TENANT_A, date: DATE_1, time: "09:00:00", pickup_hotel: null, direction: "departure", hotel_id: null, meeting_point: null },
       ],
       assignments: [

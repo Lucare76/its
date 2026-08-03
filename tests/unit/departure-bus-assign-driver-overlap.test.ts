@@ -1,0 +1,636 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { NextRequest, NextResponse } from "next/server";
+
+const TENANT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const TENANT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const SERVICE_X1 = "a1111111-1111-4111-8111-111111111111";
+const SERVICE_X2 = "a2222222-2222-4222-8222-222222222222";
+const SERVICE_OTHER = "a3333333-3333-4333-8333-333333333333";
+const SERVICE_OTHER_TENANT_B = "a4444444-4444-4444-8444-444444444444";
+const DRIVER_A = "d1111111-1111-4111-8111-111111111111";
+const TEST_DATE = "2026-08-10";
+
+type Row = Record<string, unknown>;
+
+const RAW_DB_ERROR = { message: 'connection to server "internal-db-host.example" failed: SQLSTATE[08006]' };
+
+/**
+ * Fake Supabase in-memory, tenant-aware, dedicato ai test CONC-02 residuo
+ * (overlap driver) in departure-bus-assign. Applica realmente eq/in/not/
+ * maybeSingle sulle tabelle coinvolte, inclusa la query diretta su
+ * assignments filtrata per driver_user_id (questa route non usa trip_groups).
+ * La select su "assignments" distingue la query di overlap driver
+ * (.eq("driver_user_id",...)) da quella di overlap mezzo
+ * (.eq("vehicle_label",...)) e dalla query geo FUNC-01 (nessuno dei due).
+ */
+function createOperationalSupabase(
+  seed: {
+    services?: Row[];
+    assignments?: Row[];
+    dailyAvailabilityConfirmations?: Row[];
+    hotels?: Row[];
+    memberships?: Row[];
+  } = {}
+) {
+  const services: Row[] = [...(seed.services ?? [])];
+  const assignments: Row[] = [...(seed.assignments ?? [])];
+  const dailyAvailabilityConfirmations: Row[] = [...(seed.dailyAvailabilityConfirmations ?? [])];
+  const hotels: Row[] = [...(seed.hotels ?? [])];
+  const memberships: Row[] = seed.memberships ?? [{ tenant_id: TENANT_A, user_id: DRIVER_A, role: "driver" }];
+
+  const calls = {
+    assignmentsDelete: 0,
+    assignmentsInsert: 0,
+    insertedRows: [] as Row[],
+    driverOverlapQueried: 0,
+    vehicleOverlapQueried: 0,
+  };
+
+  const tableErrors: Record<string, { message: string } | null> = {};
+
+  function makeServicesSelectBuilder() {
+    let filtered = services;
+    const builder = {
+      eq(field: string, value: unknown) {
+        filtered = filtered.filter((row) => row[field] === value);
+        return builder;
+      },
+      in(field: string, values: unknown[]) {
+        filtered = filtered.filter((row) => values.includes(row[field]));
+        return builder;
+      },
+      then(resolve: (v: { data: Row[] | null; error: { message: string } | null }) => unknown, reject?: (e: unknown) => unknown) {
+        const err = tableErrors["services"] ?? null;
+        if (err) return Promise.resolve({ data: null, error: err }).then(resolve, reject);
+        return Promise.resolve({ data: filtered, error: null }).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
+  function makeDailyAvailabilityBuilder() {
+    let filtered = dailyAvailabilityConfirmations;
+    const builder = {
+      eq(field: string, value: unknown) {
+        filtered = filtered.filter((row) => row[field] === value);
+        return builder;
+      },
+      in(field: string, values: unknown[]) {
+        filtered = filtered.filter((row) => values.includes(row[field]));
+        return builder;
+      },
+      then(resolve: (v: { data: Row[] | null; error: null }) => unknown, reject?: (e: unknown) => unknown) {
+        return Promise.resolve({ data: filtered, error: null }).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
+  // Query di geo-validazione FUNC-01 (assignments per "altri giri" del
+  // driver): nessuna riga seed genera conflitto geografico in questi scenari
+  // (fuori scope di questo file).
+  function makeGeoAssignmentsSelectBuilder() {
+    const builder = {
+      eq(_field: string, _value: unknown) {
+        return builder;
+      },
+      not(_field: string, _op: string, _value: unknown) {
+        return builder;
+      },
+      then(resolve: (v: { data: Row[]; error: null }) => unknown, reject?: (e: unknown) => unknown) {
+        return Promise.resolve({ data: [], error: null }).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
+  // Select unica su "assignments": distingue la query in base ai filtri .eq()
+  // realmente applicati (driver_user_id -> overlap driver CONC-02 residuo;
+  // vehicle_label -> overlap mezzo CONC-03 residuo; nessuno dei due -> query
+  // geo FUNC-01, delegata al builder generico sopra).
+  function makeAssignmentsSelectBuilder() {
+    let filtered = assignments;
+    let sawDriverFilter = false;
+    let sawVehicleFilter = false;
+    const builder = {
+      eq(field: string, value: unknown) {
+        if (field === "driver_user_id") sawDriverFilter = true;
+        if (field === "vehicle_label") sawVehicleFilter = true;
+        filtered = filtered.filter((row) => row[field] === value);
+        return builder;
+      },
+      not(field: string, op: string, value: unknown) {
+        return makeGeoAssignmentsSelectBuilder().not(field, op, value);
+      },
+      then(resolve: (v: { data: Row[] | null; error: { message: string } | null }) => unknown, reject?: (e: unknown) => unknown) {
+        if (!sawDriverFilter && !sawVehicleFilter) {
+          return makeGeoAssignmentsSelectBuilder().then(resolve, reject);
+        }
+        if (sawDriverFilter) {
+          calls.driverOverlapQueried++;
+          const err = tableErrors["assignments_driver_overlap"] ?? null;
+          if (err) return Promise.resolve({ data: null, error: err }).then(resolve, reject);
+        } else if (sawVehicleFilter) {
+          calls.vehicleOverlapQueried++;
+        }
+        const withJoin = filtered.map((row) => ({
+          ...row,
+          services: services.find((s) => s.id === row.service_id) ?? null,
+        }));
+        return Promise.resolve({ data: withJoin, error: null }).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
+  function makeAssignmentsDeleteBuilder() {
+    let filtered = assignments;
+    const builder = {
+      eq(field: string, value: unknown) {
+        filtered = filtered.filter((row) => row[field] === value);
+        return builder;
+      },
+      in(field: string, values: unknown[]) {
+        filtered = filtered.filter((row) => values.includes(row[field]));
+        return builder;
+      },
+      then(resolve: (v: { data: null; error: null }) => unknown, reject?: (e: unknown) => unknown) {
+        calls.assignmentsDelete++;
+        const toRemove = new Set(filtered);
+        for (let i = assignments.length - 1; i >= 0; i--) {
+          if (toRemove.has(assignments[i])) assignments.splice(i, 1);
+        }
+        return Promise.resolve({ data: null, error: null }).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
+  function makeHotelsSelectBuilder() {
+    let filtered = hotels;
+    const builder = {
+      eq(field: string, value: unknown) {
+        filtered = filtered.filter((row) => row[field] === value);
+        return builder;
+      },
+      in(field: string, values: unknown[]) {
+        filtered = filtered.filter((row) => values.includes(row[field]));
+        return builder;
+      },
+      then(resolve: (v: { data: Row[]; error: null }) => unknown, reject?: (e: unknown) => unknown) {
+        return Promise.resolve({ data: filtered, error: null }).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
+  function makeMembershipsSelectBuilder() {
+    let filtered = memberships;
+    const builder = {
+      eq(field: string, value: unknown) {
+        filtered = filtered.filter((row) => row[field] === value);
+        return builder;
+      },
+      maybeSingle() {
+        return Promise.resolve({ data: filtered[0] ?? null, error: null });
+      },
+    };
+    return builder;
+  }
+
+  const admin = {
+    from(table: string) {
+      if (table === "services") {
+        return { select: () => makeServicesSelectBuilder() };
+      }
+      if (table === "daily_availability_confirmations") {
+        return { select: () => makeDailyAvailabilityBuilder() };
+      }
+      if (table === "assignments") {
+        return {
+          select: () => makeAssignmentsSelectBuilder(),
+          delete: () => makeAssignmentsDeleteBuilder(),
+          upsert(rows: Row[], _options?: { onConflict?: string; ignoreDuplicates?: boolean }) {
+            calls.assignmentsInsert++;
+            calls.insertedRows.push(...rows);
+            for (const row of rows) {
+              const idx = assignments.findIndex((a) => a.service_id === row.service_id && a.tenant_id === row.tenant_id);
+              if (idx >= 0) assignments[idx] = { ...assignments[idx], ...row };
+              else assignments.push(row);
+            }
+            return Promise.resolve({ error: null });
+          },
+        };
+      }
+      if (table === "hotels") {
+        return { select: () => makeHotelsSelectBuilder() };
+      }
+      if (table === "memberships") {
+        return { select: () => makeMembershipsSelectBuilder() };
+      }
+      throw new Error(`Unexpected table in test fake: ${table}`);
+    },
+  };
+
+  return {
+    admin,
+    assignments,
+    calls,
+    setDriverOverlapError(err: { message: string } | null) {
+      tableErrors["assignments_driver_overlap"] = err;
+    },
+  };
+}
+
+const mocks = vi.hoisted(() => ({
+  authorizePricingRequest: vi.fn(),
+  auditLog: vi.fn(),
+  sendPushToUser: vi.fn(),
+}));
+
+vi.mock("@/lib/server/pricing-auth", () => ({
+  authorizePricingRequest: mocks.authorizePricingRequest,
+}));
+vi.mock("@/lib/server/ops-audit", () => ({
+  auditLog: mocks.auditLog,
+}));
+vi.mock("@/lib/server/web-push", () => ({
+  sendPushToUser: mocks.sendPushToUser,
+}));
+
+import { POST } from "@/app/api/ops/departure-bus-assign/route";
+
+function serviceRow(id: string, overrides: Row = {}): Row {
+  return {
+    id,
+    tenant_id: TENANT_A,
+    date: TEST_DATE,
+    time: "10:00:00",
+    pickup_hotel: null,
+    direction: "departure",
+    hotel_id: null,
+    meeting_point: null,
+    arrival_time: null,
+    orario_barca: null,
+    porto_bruno: null,
+    barca_compagnia: null,
+    booking_service_kind: null,
+    service_type_code: null,
+    vessel: null,
+    ferry_details: null,
+    ...overrides,
+  };
+}
+
+function confirmedDate(date: string, tenantId: string = TENANT_A): Row {
+  return { tenant_id: tenantId, date, confirmed: true };
+}
+
+function makeRequest(body: Record<string, unknown>) {
+  return new NextRequest("http://localhost:3010/api/ops/departure-bus-assign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", authorization: "Bearer test-token" },
+    body: JSON.stringify(body),
+  });
+}
+function callPost(body: Record<string, unknown>) {
+  return POST(makeRequest(body));
+}
+
+function authorizeAs(fake: ReturnType<typeof createOperationalSupabase>, role: string = "operator") {
+  mocks.authorizePricingRequest.mockResolvedValue({
+    admin: fake.admin,
+    user: { id: "user-1", email: "op@test.dev" },
+    membership: { tenant_id: TENANT_A, role, suspended: false },
+  });
+}
+
+function assignBody(overrides: Record<string, unknown> = {}) {
+  return {
+    action: "assign_driver",
+    service_ids: [SERVICE_X1, SERVICE_X2],
+    driver_user_id: DRIVER_A,
+    vehicle_label: "DEP_BUS:1",
+    ...overrides,
+  };
+}
+
+describe("CONC-02 residuo — driver overlap guard in departure-bus-assign", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("1. batch singolo valido, autista libero: successo", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1)],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ ok: true });
+    expect(fake.calls.assignmentsInsert).toBe(1);
+  });
+
+  it("2. batch multi-servizio stesso giro (orari diversi, stesso autista): nessun falso conflitto interno", async () => {
+    const fake = createOperationalSupabase({
+      services: [
+        serviceRow(SERVICE_X1, { time: "09:00:00" }),
+        serviceRow(SERVICE_X2, { time: "09:02:00" }),
+      ],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ ok: true });
+  });
+
+  it("3. overlap con assignment esterno same-tenant: 409 DRIVER_OVERLAP (sensibile alla rimozione del guard)", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1, { time: "10:00:00" }), serviceRow(SERVICE_OTHER, { time: "10:00:00" })],
+      assignments: [{ id: "asg-other", tenant_id: TENANT_A, service_id: SERVICE_OTHER, driver_user_id: DRIVER_A, group_id: null }],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body).toEqual({
+      ok: false,
+      error: "DRIVER_OVERLAP",
+      message: "L'autista è già impegnato in un altro servizio nello stesso orario.",
+    });
+  });
+
+  it("4. zero scritture su overlap rilevato", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1, { time: "10:00:00" }), serviceRow(SERVICE_OTHER, { time: "10:00:00" })],
+      assignments: [{ id: "asg-other", tenant_id: TENANT_A, service_id: SERVICE_OTHER, driver_user_id: DRIVER_A, group_id: null }],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+
+    expect(fake.calls.assignmentsInsert).toBe(0);
+  });
+
+  it("5. stesso driver impegnato nel tenant B: nessun blocco (sensibile alla rimozione del filtro tenant)", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1, { time: "10:00:00" }), serviceRow(SERVICE_OTHER_TENANT_B, { tenant_id: TENANT_B, time: "10:00:00" })],
+      assignments: [{ id: "asg-tenantB", tenant_id: TENANT_B, service_id: SERVICE_OTHER_TENANT_B, driver_user_id: DRIVER_A, group_id: null }],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ ok: true });
+  });
+
+  it("6. batch corrente escluso dal confronto esterno (sensibile alla mancata esclusione)", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1, { time: "10:00:00" }), serviceRow(SERVICE_X2, { time: "10:00:00" })],
+      assignments: [
+        { id: "asg-x1", tenant_id: TENANT_A, service_id: SERVICE_X1, driver_user_id: DRIVER_A, group_id: null },
+        { id: "asg-x2", tenant_id: TENANT_A, service_id: SERVICE_X2, driver_user_id: DRIVER_A, group_id: null },
+      ],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ ok: true });
+  });
+
+  it("7a. confine temporale: il batch inizia esattamente quando l'esterno termina → nessun overlap, 200", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1, { time: "10:30:00" }), serviceRow(SERVICE_OTHER, { time: "10:00:00" })],
+      assignments: [{ id: "asg-other", tenant_id: TENANT_A, service_id: SERVICE_OTHER, driver_user_id: DRIVER_A, group_id: null }],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    expect(res.status).toBe(200);
+  });
+
+  it("7b. sovrapposizione parziale con esterno: 409", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1, { time: "10:15:00" }), serviceRow(SERVICE_OTHER, { time: "10:00:00" })],
+      assignments: [{ id: "asg-other", tenant_id: TENANT_A, service_id: SERVICE_OTHER, driver_user_id: DRIVER_A, group_id: null }],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    expect(res.status).toBe(409);
+  });
+
+  it("8. date differenti: nessun conflitto anche con stesso orario", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1, { date: "2026-08-11", time: "10:00:00" }), serviceRow(SERVICE_OTHER, { date: TEST_DATE, time: "10:00:00" })],
+      assignments: [{ id: "asg-other", tenant_id: TENANT_A, service_id: SERVICE_OTHER, driver_user_id: DRIVER_A, group_id: null }],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE), confirmedDate("2026-08-11")],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    expect(res.status).toBe(200);
+  });
+
+  it("9. driver_user_id assente: 400 body-validation invariato (già richiesto a monte)", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1)],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost({ action: "assign_driver", service_ids: [SERVICE_X1], vehicle_label: "DEP_BUS:1" });
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body).toEqual({ ok: false, error: "service_ids, driver_user_id e vehicle_label richiesti" });
+  });
+
+  it("10. errore query overlap driver: 500 DRIVER_OVERLAP_CHECK_FAILED, fail-closed, zero scritture", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1)],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    fake.setDriverOverlapError(RAW_DB_ERROR);
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toEqual({
+      ok: false,
+      error: "DRIVER_OVERLAP_CHECK_FAILED",
+      message: "Errore durante la verifica degli impegni dell'autista.",
+    });
+    expect(fake.calls.assignmentsInsert).toBe(0);
+    expect(mocks.auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "departure_bus_assign_driver_overlap_check_failed", level: "error" })
+    );
+  });
+
+  it("11. risposta sanificata: nessun service_id/tenant/dettaglio DB esposto", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1, { time: "10:00:00" }), serviceRow(SERVICE_OTHER, { time: "10:00:00" })],
+      assignments: [{ id: "asg-other", tenant_id: TENANT_A, service_id: SERVICE_OTHER, driver_user_id: DRIVER_A, group_id: null }],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    const raw = JSON.stringify(await res.json());
+
+    expect(raw).not.toMatch(new RegExp(SERVICE_OTHER));
+    expect(raw).not.toMatch(new RegExp(TENANT_A));
+    expect(raw.toLowerCase()).not.toMatch(/sqlstate|stack|supabase|postgres/);
+  });
+
+  it("12. SEC-01 invariato: service_id di tenant B blocca prima del guard driver", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_OTHER_TENANT_B, { tenant_id: TENANT_B })],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_OTHER_TENANT_B] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body).toEqual({ ok: false, error: "Uno o più servizi non trovati." });
+    expect(fake.calls.driverOverlapQueried).toBe(0);
+  });
+
+  it("13. SEC-05 invariato: driver inesistente blocca prima del guard overlap", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1)],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+      memberships: [],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body).toEqual({ ok: false, error: "DRIVER_NOT_FOUND", message: "Autista non trovato." });
+    expect(fake.calls.driverOverlapQueried).toBe(0);
+  });
+
+  it("14. FUNC-01 invariato: disponibilità non confermata blocca prima del guard driver", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1)],
+      dailyAvailabilityConfirmations: [],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error).toBe("DAILY_AVAILABILITY_NOT_CONFIRMED");
+    expect(fake.calls.driverOverlapQueried).toBe(0);
+  });
+
+  it("15. CONC-03 invariato: overlap mezzo continua a produrre 409 VEHICLE_OVERLAP su autista libero", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1, { time: "10:00:00" }), serviceRow(SERVICE_OTHER, { time: "10:00:00" })],
+      assignments: [{ id: "asg-other", tenant_id: TENANT_A, service_id: SERVICE_OTHER, vehicle_label: "DEP_BUS:1", group_id: null }],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error).toBe("VEHICLE_OVERLAP");
+  });
+
+  it("16. RACE-01 invariato: autista libero produce upsert (mai delete) anche con il nuovo guard attivo", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1)],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+
+    expect(fake.calls.assignmentsDelete).toBe(0);
+    expect(fake.calls.assignmentsInsert).toBe(1);
+  });
+
+  it("17. semantica upsert invariata: reset esplicito dei metadati stale sulla riga scritta", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1)],
+      dailyAvailabilityConfirmations: [confirmedDate(TEST_DATE)],
+    });
+    authorizeAs(fake);
+
+    await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+
+    expect(fake.calls.insertedRows[0]).toMatchObject({
+      driver_profile_id: null,
+      group_id: null,
+      assignment_source: null,
+      locked_by_operator: false,
+      lock_reason: null,
+    });
+  });
+
+  it("18. utente non autenticato: 401, zero query operative", async () => {
+    mocks.authorizePricingRequest.mockResolvedValue(NextResponse.json({ error: "Sessione non valida." }, { status: 401 }));
+    const fake = createOperationalSupabase({ services: [serviceRow(SERVICE_X1)] });
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+
+    expect(res.status).toBe(401);
+    expect(fake.calls.driverOverlapQueried).toBe(0);
+  });
+
+  it("19. ruolo non autorizzato: 403, zero query operative", async () => {
+    mocks.authorizePricingRequest.mockResolvedValue(NextResponse.json({ error: "Ruolo non autorizzato." }, { status: 403 }));
+    const fake = createOperationalSupabase({ services: [serviceRow(SERVICE_X1)] });
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+
+    expect(res.status).toBe(403);
+    expect(fake.calls.driverOverlapQueried).toBe(0);
+  });
+
+  it("20. remove_driver invariata: nessuna interrogazione del guard overlap driver", async () => {
+    const fake = createOperationalSupabase({
+      services: [serviceRow(SERVICE_X1)],
+      assignments: [{ id: "asg-1", tenant_id: TENANT_A, service_id: SERVICE_X1, driver_user_id: DRIVER_A, group_id: null }],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost({ action: "remove_driver", service_ids: [SERVICE_X1] });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ ok: true });
+    expect(fake.calls.assignmentsDelete).toBe(1);
+    expect(fake.calls.driverOverlapQueried).toBe(0);
+  });
+});

@@ -180,6 +180,104 @@ async function checkDepartureBatchVehicleOverlap(
   return { ok: true };
 }
 
+function driverOverlapResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "DRIVER_OVERLAP", message: "L'autista è già impegnato in un altro servizio nello stesso orario." },
+    { status: 409 }
+  );
+}
+
+function driverOverlapCheckFailedResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "DRIVER_OVERLAP_CHECK_FAILED", message: "Errore durante la verifica degli impegni dell'autista." },
+    { status: 500 }
+  );
+}
+
+// ── CONC-02 residuo: nessun controllo di sovrapposizione oraria per lo stesso
+// autista era applicato in questa route, a differenza di assign-service (già
+// corretto). Stesso schema di checkDepartureBatchVehicleOverlap (CONC-03
+// residuo) sopra, riusato per driver_user_id invece di vehicle_label: stessa
+// finestra fissa 30 minuti, stessa deduplica delle finestre del batch, stessa
+// assenza di controllo "interno al batch" — identica motivazione già
+// documentata sopra (un batch multi-fermata è lo STESSO autista che fa più
+// tappe in sequenza: orari diversi all'interno del batch non sono mai un
+// conflitto driver, sono la natura stessa del giro). Il controllo esterno
+// resta comunque applicato per ogni finestra del batch, escludendo i
+// service_id del batch corrente.
+async function checkDepartureBatchDriverOverlap(
+  admin: SupabaseClient,
+  tenantId: string,
+  input: {
+    driverUserId: string;
+    services: Array<DepartureVehicleOverlapServiceFields & { id: string }>;
+  },
+  context: { userId?: string }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  const driverUserId = input.driverUserId?.trim();
+  if (!driverUserId) return { ok: true };
+
+  type Window = { date: string; start: number; end: number };
+  const windowsByKey = new Map<string, Window>();
+  for (const svc of input.services) {
+    const start = departureServiceOperationalMinutes(svc);
+    if (start == null) continue;
+    const key = `${svc.date}|${start}`;
+    if (!windowsByKey.has(key)) {
+      windowsByKey.set(key, { date: svc.date, start, end: start + VEHICLE_OVERLAP_DURATION_MINUTES });
+    }
+  }
+  const windows = Array.from(windowsByKey.values());
+  if (windows.length === 0) return { ok: true };
+
+  const excludeServiceIds = new Set(input.services.map((s) => s.id));
+
+  const { data: externalData, error: externalError } = await admin
+    .from("assignments")
+    .select(
+      "service_id, services!inner(date, time, direction, pickup_hotel, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details)"
+    )
+    .eq("tenant_id", tenantId)
+    .eq("driver_user_id", driverUserId);
+
+  if (externalError) {
+    auditLog({
+      event: "departure_bus_assign_driver_overlap_check_failed",
+      level: "error",
+      tenantId,
+      userId: context.userId ?? null,
+      details: { dbCode: (externalError as { code?: string }).code ?? null },
+    });
+    return { ok: false, response: driverOverlapCheckFailedResponse() };
+  }
+
+  for (const row of externalData ?? []) {
+    const otherServiceId = row.service_id as string;
+    if (excludeServiceIds.has(otherServiceId)) continue;
+    const otherService = (row.services as unknown) as DepartureVehicleOverlapServiceFields | null;
+    if (!otherService) continue;
+    const otherStart = departureServiceOperationalMinutes(otherService);
+    if (otherStart == null) continue;
+    const otherInterval = { start_min: otherStart, end_min: otherStart + VEHICLE_OVERLAP_DURATION_MINUTES };
+
+    for (const w of windows) {
+      if (w.date !== otherService.date) continue;
+      if (vehicleIntervalsOverlap({ start_min: w.start, end_min: w.end }, otherInterval, 0)) {
+        auditLog({
+          event: "departure_bus_assign_driver_overlap",
+          level: "warn",
+          tenantId,
+          userId: context.userId ?? null,
+          details: { kind: "external_assignment" },
+        });
+        return { ok: false, response: driverOverlapResponse() };
+      }
+    }
+  }
+
+  return { ok: true };
+}
+
 function makeAdminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
@@ -551,6 +649,19 @@ export async function POST(req: NextRequest) {
           { status: 409 }
         );
       }
+
+      // CONC-02 residuo: verifica overlap orario esterno dello stesso autista,
+      // prima di qualunque scrittura su assignments.
+      const driverOverlapCheck = await checkDepartureBatchDriverOverlap(
+        auth.admin,
+        tenantId,
+        {
+          driverUserId,
+          services: batchServices.map((s) => ({ ...s, id: s.id as string })) as Array<DepartureVehicleOverlapServiceFields & { id: string }>,
+        },
+        { userId: auth.user.id }
+      );
+      if (!driverOverlapCheck.ok) return driverOverlapCheck.response;
 
       // CONC-03 residuo: verifica overlap mezzo (interno al batch + esterno),
       // prima di qualunque scrittura su assignments.
