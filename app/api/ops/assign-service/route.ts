@@ -280,6 +280,93 @@ async function verifyDriverBelongsToTenant(
   return { ok: true };
 }
 
+// ── FUNC-03: verifica che il driver, già confermato esistente/tenant-scoped
+// da SEC-05, sia anche operativo (non sospeso/non disattivato) prima di
+// consentire l'assegnazione manuale. Helper separato (non fuso con SEC-05)
+// per mantenere invariati i codici di errore esistenti di SEC-05 e per dare
+// alla query di stato un proprio codice 500 distinto, come richiesto.
+// Segnali reali riusati (stessi già usati da auto-assign, non inventati):
+// - memberships.suspended (0056_memberships_tenant_suspension.sql), alias
+//   applicativo "access_suspended" in lib/server/driver-registry.ts, escluso
+//   dai candidati auto-assign via `!driver.access_suspended`
+//   (piano-giorno/auto-assign/route.ts:1068);
+// - driver_profiles.active (0080_driver_profiles.sql), filtrato di default
+//   da loadDriverRegistry via `.eq("active", true)`.
+// Driver esistente ma non operativo -> 409 DRIVER_NOT_ACTIVE, mai confuso col
+// 404 di ownership. Non verifica disponibilità giornaliera (già gestita dal
+// guard FUNC-01 esistente più sotto) né altri stati funzionali.
+function driverNotActiveResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "DRIVER_NOT_ACTIVE", message: "L'autista non è attualmente disponibile per nuove assegnazioni." },
+    { status: 409 }
+  );
+}
+
+async function verifyDriverIsOperational(
+  admin: SupabaseClient,
+  tenantId: string,
+  input: { driverUserId?: string | null; driverProfileId?: string | null },
+  context: { userId?: string }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  const driverUserId = input.driverUserId ?? null;
+  const driverProfileId = input.driverProfileId ?? null;
+
+  if (!driverUserId && !driverProfileId) {
+    return { ok: true };
+  }
+
+  const statusCheckFailedResponse = (dbCode: string | null) => {
+    auditLog({
+      event: "assign_service_driver_status_check_failed",
+      level: "error",
+      tenantId,
+      userId: context.userId ?? null,
+      details: {
+        action: "assign",
+        hasDriverUserId: Boolean(driverUserId),
+        hasDriverProfileId: Boolean(driverProfileId),
+        dbCode,
+      },
+    });
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        { ok: false, error: "DRIVER_STATUS_CHECK_FAILED", message: "Errore durante la verifica dello stato dell'autista." },
+        { status: 500 }
+      ),
+    };
+  };
+
+  if (driverUserId) {
+    const { data, error } = await admin
+      .from("memberships")
+      .select("suspended")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", driverUserId)
+      .eq("role", "driver")
+      .maybeSingle();
+
+    if (error) return statusCheckFailedResponse((error as { code?: string }).code ?? null);
+    // Riga assente qui è inatteso (SEC-05 l'ha già confermata poco prima):
+    // fail-closed, non un falso successo silenzioso.
+    if (!data || data.suspended === true) return { ok: false, response: driverNotActiveResponse() };
+  }
+
+  if (driverProfileId) {
+    const { data, error } = await admin
+      .from("driver_profiles")
+      .select("active")
+      .eq("tenant_id", tenantId)
+      .eq("id", driverProfileId)
+      .maybeSingle();
+
+    if (error) return statusCheckFailedResponse((error as { code?: string }).code ?? null);
+    if (!data || data.active === false) return { ok: false, response: driverNotActiveResponse() };
+  }
+
+  return { ok: true };
+}
+
 // Elimina, in modo best-effort, il trip_group appena creato dalla richiesta
 // corrente quando il successivo insert su assignments fallisce (CONC-01).
 // Va chiamata solo con un groupId proveniente da un insert eseguito nella
@@ -378,6 +465,16 @@ export async function POST(request: NextRequest) {
         { userId }
       );
       if (!driverOwnership.ok) return driverOwnership.response;
+
+      // FUNC-03: verifica che il driver, già confermato tenant-scoped da
+      // SEC-05, sia anche operativo (non sospeso/non disattivato).
+      const driverOperational = await verifyDriverIsOperational(
+        auth.admin,
+        tenantId,
+        { driverUserId: body.driver_user_id ?? null, driverProfileId: body.driver_profile_id ?? null },
+        { userId }
+      );
+      if (!driverOperational.ok) return driverOperational.response;
     }
 
     // Verifica disponibilità confermata
