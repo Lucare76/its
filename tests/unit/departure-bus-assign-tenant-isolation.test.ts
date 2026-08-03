@@ -28,6 +28,10 @@ type Row = Record<string, unknown>;
 function createTenantAwareSupabase(seed: { services?: Row[]; assignments?: Row[] } = {}) {
   const services: Row[] = [...(seed.services ?? [])];
   const assignments: Row[] = [...(seed.assignments ?? [])];
+  // SEC-05 residuo: DRIVER_A è l'unico driver usato in questo file (concentrato
+  // su SEC-01/tenant isolation dei servizi), seedato qui come membership
+  // valida del tenant A per non interferire con quegli scenari.
+  const memberships: Row[] = [{ tenant_id: TENANT_A, user_id: DRIVER_A, role: "driver" }];
   const calls = {
     servicesSelect: 0,
     assignmentsDelete: 0,
@@ -181,6 +185,23 @@ function createTenantAwareSupabase(seed: { services?: Row[]; assignments?: Row[]
         return {
           select() {
             return makeDailyAvailabilityBuilder();
+          },
+        };
+      }
+      if (table === "memberships") {
+        return {
+          select() {
+            let filtered = memberships;
+            const builder = {
+              eq(field: string, value: unknown) {
+                filtered = filtered.filter((row) => row[field] === value);
+                return builder;
+              },
+              maybeSingle() {
+                return Promise.resolve({ data: filtered[0] ?? null, error: null });
+              },
+            };
+            return builder;
           },
         };
       }

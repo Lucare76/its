@@ -74,6 +74,63 @@ async function verifyServicesBelongToTenant(
   return { ok: true };
 }
 
+// ── SEC-05 residuo: verifica che driver_user_id ricevuto dal client
+// appartenga al tenant autenticato e abbia una membership con role="driver",
+// prima di scrivere l'assignment. La route usa il client service-role
+// (bypassa RLS): il controllo va fatto qui, come già fatto in assign-service.
+// Salta il controllo solo se driverUserId è assente (qui non può succedere:
+// assign_driver lo richiede a monte, ma l'helper resta difensivo). Stessa
+// risposta 404 generica per driver inesistente, di altro tenant, o utente
+// esistente ma senza membership "driver" — non deve rivelare quale caso si
+// sia verificato. Errore di query è fail-closed (500). Non verifica lo stato
+// sospeso/attivo del driver (FUNC-03, fuori scope) né driver_profile_id
+// (questa route non lo usa).
+async function verifyDriverBelongsToTenant(
+  admin: SupabaseClient,
+  tenantId: string,
+  driverUserId: string | null | undefined,
+  context: { actorUserId?: string; action: string }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  if (!driverUserId) return { ok: true };
+
+  const { data, error } = await admin
+    .from("memberships")
+    .select("user_id")
+    .eq("tenant_id", tenantId)
+    .eq("user_id", driverUserId)
+    .eq("role", "driver")
+    .maybeSingle();
+
+  if (error) {
+    auditLog({
+      event: "departure_bus_assign_driver_verification_failed",
+      level: "error",
+      tenantId,
+      userId: context.actorUserId ?? null,
+      details: { action: context.action, dbCode: (error as { code?: string }).code ?? null },
+    });
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { ok: false, error: "DRIVER_VERIFICATION_FAILED", message: "Errore durante la verifica dell'autista." },
+        { status: 500 }
+      ),
+    };
+  }
+
+  if (!data?.user_id) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { ok: false, error: "DRIVER_NOT_FOUND", message: "Autista non trovato." },
+        { status: 404 }
+      ),
+    };
+  }
+
+  return { ok: true };
+}
+
 // ── GET — lista autisti con stato account ─────────────────────────────────────
 
 export async function GET(req: NextRequest) {
@@ -219,6 +276,14 @@ export async function POST(req: NextRequest) {
         action: "assign_driver",
       });
       if (!ownership.ok) return ownership.response;
+
+      // SEC-05 residuo: verifica ownership tenant + ruolo driver, prima di
+      // qualunque caricamento dati operativo o scrittura successiva.
+      const driverOwnership = await verifyDriverBelongsToTenant(auth.admin, tenantId, driverUserId, {
+        actorUserId: auth.user.id,
+        action: "assign_driver",
+      });
+      if (!driverOwnership.ok) return driverOwnership.response;
 
       // ── FUNC-01: caricamento dati operativi del batch (data, orario, geografia) ──
       const { data: batchServicesData, error: batchServicesError } = await auth.admin

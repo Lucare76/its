@@ -33,6 +33,13 @@ function createOperationalSupabase(
     services: [...(seed.services ?? [])],
     daily_availability_confirmations: [...(seed.daily_availability_confirmations ?? [])],
     assignments: [...(seed.assignments ?? [])],
+    // SEC-05 residuo: entrambi i driver usati in questo file (vecchio/nuovo
+    // nella riassegnazione) sono membership valide del tenant A, per non
+    // interferire con gli scenari di semantica upsert testati qui.
+    memberships: [
+      { tenant_id: TENANT_A, user_id: OLD_DRIVER, role: "driver" },
+      { tenant_id: TENANT_A, user_id: NEW_DRIVER, role: "driver" },
+    ],
   };
 
   const calls = {

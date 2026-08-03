@@ -29,6 +29,13 @@ function createOperationalSupabase(
     services: [...(seed.services ?? [])],
     daily_availability_confirmations: [...(seed.daily_availability_confirmations ?? [])],
     assignments: [...(seed.assignments ?? [])],
+    // SEC-05 residuo: entrambi i driver usati in questo file (race tra due
+    // operatori) sono membership valide del tenant A per non interferire con
+    // gli scenari RACE-01, che non riguardano l'ownership del driver.
+    memberships: [
+      { tenant_id: TENANT_A, user_id: DRIVER_A, role: "driver" },
+      { tenant_id: TENANT_A, user_id: DRIVER_B_DRIVER, role: "driver" },
+    ],
   };
 
   const tableErrors: Record<string, { message: string } | null> = {};

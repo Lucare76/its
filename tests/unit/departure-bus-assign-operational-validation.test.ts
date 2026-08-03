@@ -31,7 +31,12 @@ function createOperationalSupabase(
   const assignments: Row[] = [...(seed.assignments ?? [])];
   const dailyAvailabilityConfirmations: Row[] = [...(seed.dailyAvailabilityConfirmations ?? [])];
   const hotels: Row[] = [...(seed.hotels ?? [])];
-  const memberships: Row[] = [...(seed.memberships ?? [])];
+  // SEC-05 residuo: DRIVER_A è il driver di default in tutti gli scenari di
+  // questo file (concentrato su FUNC-01, non su ownership del driver). Se il
+  // seed esplicita "memberships" (es. per il nome nei messaggi geo), quella
+  // lista sostituisce comunque il default: chi la fornisce se ne assume
+  // l'onere di includere role:"driver" per DRIVER_A dove serve.
+  const memberships: Row[] = seed.memberships ?? [{ tenant_id: TENANT_A, user_id: DRIVER_A, role: "driver" }];
 
   const calls = {
     assignmentsDelete: 0,
@@ -401,7 +406,7 @@ describe("Validazione operativa — departure-bus-assign API (FUNC-01)", () => {
       ],
       dailyAvailabilityConfirmations: [confirmedDate(DATE_1)],
       hotels: [{ id: "hotel-1", zone: "Ischia Porto" }],
-      memberships: [{ tenant_id: TENANT_A, user_id: DRIVER_A, full_name: "Mario Rossi" }],
+      memberships: [{ tenant_id: TENANT_A, user_id: DRIVER_A, role: "driver", full_name: "Mario Rossi" }],
     });
     authorizeAs(fake);
 
@@ -441,7 +446,7 @@ describe("Validazione operativa — departure-bus-assign API (FUNC-01)", () => {
       ],
       dailyAvailabilityConfirmations: [confirmedDate(DATE_1)],
       hotels: [{ id: "hotel-1", zone: "Ischia Porto" }],
-      memberships: [{ tenant_id: TENANT_A, user_id: DRIVER_A, full_name: "Mario Rossi" }],
+      memberships: [{ tenant_id: TENANT_A, user_id: DRIVER_A, role: "driver", full_name: "Mario Rossi" }],
     });
     authorizeAs(fake);
 
@@ -665,7 +670,7 @@ describe("Validazione operativa — departure-bus-assign API (FUNC-01)", () => {
       ],
       dailyAvailabilityConfirmations: [confirmedDate(DATE_1)],
       hotels: [{ id: "hotel-1", zone: "Ischia Porto" }],
-      memberships: [{ tenant_id: TENANT_A, user_id: DRIVER_A, full_name: "Mario Rossi" }],
+      memberships: [{ tenant_id: TENANT_A, user_id: DRIVER_A, role: "driver", full_name: "Mario Rossi" }],
     });
     authorizeAs(fake);
 
