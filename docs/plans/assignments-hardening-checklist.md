@@ -7,17 +7,19 @@ Regole operative (stesse del modulo Navette):
 - Nessun task tocca WhatsApp, template, webhook Meta.
 - Separazione esplicita tra: bug runtime, hardening, audit-doc, ML validation/safety/quality/architecture.
 
-## Stato Milestone 1 (aggiornato 2026-08-03, sessione di riallineamento post-CONC-02)
+## Stato Milestone 1 (aggiornato 2026-08-03, sessione di riallineamento post-CONC-02 residuo)
 
-13 task CRITICAL/HIGH/MEDIUM completati e pushati su main, tutti verificati presenti nel codice reale in questa sessione (grep sui marker chiave, non solo dal log commit):
+15 task CRITICAL/HIGH/MEDIUM completati e pushati su main, tutti verificati presenti nel codice reale in questa sessione (grep sui marker chiave, non solo dal log commit):
 
-M1-01 (SEC-01, `27f5624`), M1-02 (SEC-02, `966f2a5`), M1-03 (CONC-01, `b33ce74`), M1-05 (FUNC-01, `6235acb`), M1-10 (SEC-05, perimetro `assign-service`, `2712d76`), M1-17 (RACE-01, `c44f6d9`) + fix semantica upsert post-RACE-01 (`983e1a1`), M1-07 (CONC-03, `3976d4c`), SEC-05 residuo su `departure-bus-assign` (`4307c18`), M1-15 (FUNC-02, `1089b9f`), M1-16 (FUNC-03, `e05c43b`), SEC-04 (`6d66f06`), M1-06 (CONC-02, `21a25cb`).
+M1-01 (SEC-01, `27f5624`), M1-02 (SEC-02, `966f2a5`), M1-03 (CONC-01, `b33ce74`), M1-05 (FUNC-01, `6235acb`), M1-10 (SEC-05, perimetro `assign-service`, `2712d76`), M1-17 (RACE-01, `c44f6d9`) + fix semantica upsert post-RACE-01 (`983e1a1`), M1-07 (CONC-03, `3976d4c`), SEC-05 residuo su `departure-bus-assign` (`4307c18`), M1-15 (FUNC-02, `1089b9f`), M1-16 (FUNC-03, `e05c43b`), SEC-04 (`6d66f06`), M1-06 (CONC-02, `21a25cb`), CONC-03 residuo su `departure-bus-assign` (`7c5d081`), CONC-02 residuo su `departure-bus-assign` (`3d8356a`).
 
 Tutti con test dedicati verdi e reviewer indipendente APPROVATO.
 
-**Prossimo task scelto**: M1-07 follow-up — CONC-03 residuo su `departure-bus-assign` (overlap mezzo, pattern già collaudato su `assign-service`). Non ancora implementato — vedi perimetro dettagliato e Top 10 in `docs/plans/assignments-working-status.md`.
+**Analisi mirata `piano-giorno/trips` in questa sessione**: CONC-02 e CONC-03 sono **già mitigati** su questa route da codice preesistente (non toccato da nessun fix di questa milestone) — `validateVehicleTimelinePayload` (overlap mezzo reale, blocco strutturale) ed `evaluateDriverTimelineConflicts` (blocco reale su `availableMinutes<=5`, non solo euristica di zona). Confermano quanto già scritto nell'audit originale ("trips" = percorso più validato). Restano invece gap reali confermati su `trips`: SEC-05 (nessuna verifica tenant esplicita sul driver, solo protezione incidentale), FUNC-02 (nessun filtro su `services.status`), FUNC-03 (nessun filtro `suspended`/`active`).
 
-Il modulo **non è completo**: restano aperti CONC-03 residuo (prossimo), SEC-05/FUNC-02/FUNC-03 residui su `piano-giorno/trips`/`departure-bus-assign`, M1-08, M1-09, M1-11, M1-14, M1.5-*, M2-*. Tutti gli item "residuo" sono follow-up separati dagli stessi finding già chiusi su `assign-service` (vedi note sotto e Top 10 in working-status.md).
+**Prossimo task scelto**: SEC-05 residuo su `piano-giorno/trips`, perimetro ridotto alla sola action `create_trip`. Non ancora implementato — vedi perimetro dettagliato e Top 10 in `docs/plans/assignments-working-status.md`.
+
+Il modulo **non è completo**: restano aperti SEC-05 residuo su `trips` (prossimo), FUNC-02/FUNC-03 residui su `trips`/`departure-bus-assign`, M1-08, M1-09, M1-11, M1-14, M1.5-*, M2-*. Tutti gli item "residuo" sono follow-up separati dagli stessi finding già chiusi su `assign-service`/`departure-bus-assign` (vedi note sotto e Top 10 in working-status.md).
 
 ## Milestone 1 — Alta stagione (bug runtime + hardening critico/alto)
 
@@ -67,14 +69,16 @@ Il modulo **non è completo**: restano aperti CONC-03 residuo (prossimo), SEC-05
   - Implementato: `checkDriverOverlap()`, stesso schema di `checkVehicleOverlap` (CONC-03) — finestra fissa 30 min, `vehicleIntervalsOverlap` riusata — applicato per **entrambi** gli identificatori (`driver_user_id` e/o `driver_profile_id`), colmando il gap segnalato in audit (l'euristica geografica esistente scattava solo con `driver_user_id`). Eseguito prima dell'euristica geografica esistente (riordinamento necessario: quest'ultima intercettava lo stesso scenario con un messaggio meno chiaro). Overlap reale → `409 DRIVER_OVERLAP`; errore query → `500 DRIVER_OVERLAP_CHECK_FAILED` fail-closed.
   - Test dedicati: `tests/unit/assign-service-driver-overlap.test.ts` (nuovo, 20 casi, verdi), inclusi test di sensibilità (bypass guard e rimozione filtro tenant su entrambe le query → failure reali).
   - Reviewer: APPROVATO (security + indipendente).
-  - **Follow-up separato**: `departure-bus-assign`/`piano-giorno/trips` restano item aperti dello stesso finding CONC-02.
+  - **Follow-up `departure-bus-assign` — COMPLETATO**: commit `3d8356a` — "fix: block overlapping driver assignment in departure bus assignment (CONC-02 residuo)". Helper `checkDepartureBatchDriverOverlap()`, stesso schema (finestra 30 min, nessun conflitto interno al batch — batch = giro coordinato). Test: `tests/unit/departure-bus-assign-driver-overlap.test.ts` (21 casi). Reviewer: APPROVATO.
+  - **Follow-up residuo**: `piano-giorno/trips` **non richiede fix** — CONC-02 è già mitigato da `evaluateDriverTimelineConflicts` (blocco reale su prossimità temporale insufficiente, preesistente, non toccato da questa milestone). Verificato in questa sessione leggendo `trips/route.ts` integralmente.
 
 - [x] **M1-07 — CONC-03: controllo overlap mezzo in `assign-service`** (hardening — HIGH) — **COMPLETATO (perimetro `assign-service` soltanto)**
   - Commit: `3976d4c` — "fix: block overlapping vehicle assignment in assign-service (CONC-03)".
   - Implementato: `checkVehicleOverlap()` in `assign-service/route.ts`, invocata per l'azione `"assign"` quando `vehicle_label` è presente, prima di qualunque scrittura su `trip_groups`/`assignments`. Riusa `vehicleIntervalsOverlap`/`findVehicleTimelineConflict` (`lib/piano-vehicle-timeline.ts`) invece di clonare la logica locale di `trips/route.ts`. Overlap reale → `409 VEHICLE_OVERLAP`; errore query → `500 VEHICLE_CHECK_FAILED` fail-closed. Nessuna scrittura prima del guard.
   - Test dedicati: `tests/unit/assign-service-vehicle-overlap.test.ts` (nuovo, verde), inclusi test di sensibilità (bypass guard e rimozione filtro tenant → failure reale confermata).
   - Reviewer: APPROVATO (sessione 2026-08-03).
-  - **Follow-up separato**: `departure-bus-assign` resta item aperto dello stesso finding CONC-03 (non implementato in questo task, per design — split-per-route come già fatto per SEC-05).
+  - **Follow-up `departure-bus-assign` — COMPLETATO**: commit `7c5d081` — "fix: block overlapping vehicle assignment in departure bus assignment (CONC-03 residuo)". Helper `checkDepartureBatchVehicleOverlap()`; controllo "interno al batch" deliberatamente **non implementato** (evidenza reale: un test FUNC-01 preesistente dimostra che un batch multi-fermata legittimo ha finestre orarie diverse per costruzione — trattarle come conflitto avrebbe rotto un caso reale). Test: `tests/unit/departure-bus-assign-vehicle-overlap.test.ts` (19 casi). Reviewer: APPROVATO.
+  - **Follow-up residuo**: `piano-giorno/trips` **non richiede fix** — CONC-03 è già mitigato da `validateVehicleTimelinePayload` (overlap mezzo reale, preesistente, non toccato da questa milestone). Verificato in questa sessione.
 
 - [ ] **M1-08 — SEC-03: filtro tenant esplicito su join `services!inner`** (hardening — HIGH)
   - Aggiungere `tenant_id` alla select del join, filtro esplicito.
