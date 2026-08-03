@@ -321,12 +321,32 @@ export async function POST(req: NextRequest) {
       // sul vincolo unique assignments_service_tenant_unique (service_id, tenant_id)
       // — introdotto in 0137 proprio per supportare upsert — eliminando del tutto
       // la finestra di race: ogni riga esiste sempre, mai zero righe, mai duplicati.
+      //
+      // Semantica upsert (post RACE-01 fix): a differenza del vecchio DELETE+INSERT,
+      // un upsert aggiorna solo le colonne presenti nel payload — quelle omesse
+      // sopravvivono invariate sulla riga già esistente. Il vecchio DELETE+INSERT
+      // azzerava invece sempre driver_profile_id/group_id/assignment_source/
+      // locked_by_operator/assigned_by/assigned_at/lock_reason (mai valorizzati
+      // nell'INSERT, quindi sempre a NULL/default su ogni nuova riga). Per
+      // replicare esattamente quel comportamento senza perdere l'atomicità,
+      // questi campi vanno esplicitati qui: null/false replicano il default
+      // storico (nessun valore nuovo "manual_dispatch" introdotto, non supportato
+      // altrove nel dominio), mentre assigned_by/assigned_at registrano l'attore
+      // e l'istante di questa specifica riassegnazione manuale.
+      const now = new Date().toISOString();
       const { error: upsertErr } = await auth.admin.from("assignments").upsert(
         serviceIds.map((sid) => ({
           tenant_id: tenantId,
           service_id: sid,
           driver_user_id: driverUserId,
           vehicle_label: vehicleLabel,
+          driver_profile_id: null,
+          group_id: null,
+          assignment_source: null,
+          locked_by_operator: false,
+          assigned_by: auth.user.id,
+          assigned_at: now,
+          lock_reason: null,
         })),
         { onConflict: "service_id,tenant_id", ignoreDuplicates: false }
       );

@@ -518,11 +518,19 @@ describe("Tenant isolation — departure-bus-assign API (SEC-01)", () => {
       vehicle_label: "DEP_BUS:1",
     });
     expect(await resAssign.json()).toEqual({ ok: true });
-    expect(fakeAssign.calls.insertedRows[0]).toEqual({
+    // Semantica upsert (post fix regressione RACE-01): il payload esplicita
+    // ora anche i campi di metadato che il vecchio DELETE+INSERT azzerava
+    // implicitamente, cosi la riassegnazione non lascia dati stale.
+    expect(fakeAssign.calls.insertedRows[0]).toMatchObject({
       tenant_id: TENANT_A,
       service_id: SERVICE_A1,
       driver_user_id: DRIVER_A,
       vehicle_label: "DEP_BUS:1",
+      driver_profile_id: null,
+      group_id: null,
+      assignment_source: null,
+      locked_by_operator: false,
+      lock_reason: null,
     });
 
     const fakeRemove = createTenantAwareSupabase({
