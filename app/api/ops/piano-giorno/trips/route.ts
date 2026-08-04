@@ -546,6 +546,28 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: false, error: "service_ids obbligatori." }, { status: 400 });
       }
 
+      // FUNC-02 residuo: stesso guard/denylist già usati in create_trip/
+      // update_trip, riusato qui (nessun nuovo helper). Verifica solo i
+      // service_ids realmente ricevuti nel body (deduplicati), non l'intero
+      // insieme di servizi già presenti nel gruppo destinazione: un target
+      // group che contiene già un servizio bloccato ma non toccato da questa
+      // richiesta non deve mai far fallire lo spostamento. Eseguito PRIMA del
+      // branching gruppo-esistente/nuovo-giro — quindi prima dei guard SEC-05
+      // di questa action, a differenza dell'ordine in create_trip/update_trip
+      // — perché il ramo "nuovo giro" esegue un INSERT su trip_groups subito
+      // dopo il proprio guard SEC-05 e prima del guard SEC-05 "valori finali"
+      // comune a entrambi i rami: per garantire zero scritture in entrambi i
+      // rami con un'unica chiamata (nessun helper duplicato né doppia query),
+      // FUNC-02 deve necessariamente precedere qui ogni guard SEC-05.
+      const uniqueMovedServiceIds = [...new Set(service_ids)];
+      const serviceStatusCheck = await verifyTripServicesOperationalStatus(
+        auth.admin,
+        tenantId,
+        uniqueMovedServiceIds,
+        { userId, action: "move_services" }
+      );
+      if (!serviceStatusCheck.ok) return serviceStatusCheck.response;
+
       let destGroupId = target_group_id;
       const warnings: string[] = [];
       const hasExistingTargetGroup = Boolean(target_group_id);
@@ -1158,15 +1180,17 @@ function tripServiceNotAssignableResponse(): NextResponse {
   );
 }
 
-// Verifica lo stato operativo di tutti i service_ids (già confermati
-// tenant-scoped da SEC-02) prima di creare il giro. Fail-closed su errore di
-// query (500, nessuna scrittura). Va chiamata solo per create_trip, dopo
-// SEC-02/SEC-05 e prima di qualunque INSERT su trip_groups/assignments.
+// Verifica lo stato operativo dei service_ids passati (tenant-scoped tramite
+// il filtro tenant_id della query) prima di creare/modificare/spostare un
+// giro. Fail-closed su errore di query (500, nessuna scrittura). Riusata da
+// create_trip, update_trip e move_services: l'ordine rispetto ai guard
+// SEC-02/SEC-05 varia per action (vedi commenti nei rispettivi call site),
+// ma deve sempre precedere qualunque INSERT/UPDATE su trip_groups/assignments.
 async function verifyTripServicesOperationalStatus(
   admin: SupabaseClient,
   tenantId: string,
   serviceIds: string[],
-  context: { userId?: string; action: "create_trip" | "update_trip" }
+  context: { userId?: string; action: "create_trip" | "update_trip" | "move_services" }
 ): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
   if (serviceIds.length === 0) {
     return { ok: true };
