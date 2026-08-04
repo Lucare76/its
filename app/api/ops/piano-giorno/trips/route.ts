@@ -752,6 +752,23 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: false, error: groupsErr.message }, { status: 500 });
       }
 
+      // SEC-05 residuo: stesso guard già usato in create_trip/update_trip,
+      // riusato qui (nessun nuovo helper). swap_driver usa solo to_driver_id
+      // (un driver_user_id semplice) — from_driver_profile_id/
+      // to_driver_profile_id sono dichiarati nel tipo Body ma non usati da
+      // nessuna action, quindi nessun driverProfileId da verificare qui.
+      // Eseguito prima di qualunque scrittura, indipendentemente dal fatto
+      // che from_driver_id abbia o meno giri attivi per la data (altrimenti
+      // un to_driver_id invalido con zero giri sorgente passerebbe
+      // silenziosamente senza mai essere verificato).
+      const targetDriverOwnership = await verifyTripDriverBelongsToTenant(
+        auth.admin,
+        tenantId,
+        { driverUserId: to_driver_id, driverProfileId: null },
+        { actorUserId: userId, action: "swap_driver" }
+      );
+      if (!targetDriverOwnership.ok) return targetDriverOwnership.response;
+
       const groupIds = (groups ?? []).map((g) => g.id as string);
       if (!groupIds.length) {
         return NextResponse.json({ ok: true, affected: 0 });
@@ -994,7 +1011,7 @@ async function verifyTripDriverBelongsToTenant(
   admin: SupabaseClient,
   tenantId: string,
   input: { driverUserId?: string | null; driverProfileId?: string | null },
-  context: { actorUserId?: string; action: "create_trip" | "update_trip" }
+  context: { actorUserId?: string; action: "create_trip" | "update_trip" | "swap_driver" }
 ): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
   const driverUserId = input.driverUserId ?? null;
   const driverProfileId = input.driverProfileId ?? null;
