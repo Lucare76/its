@@ -591,6 +591,20 @@ export async function POST(request: NextRequest) {
         );
         if (!newGroupDriverOwnership.ok) return newGroupDriverOwnership.response;
 
+        // FUNC-03 residuo (ramo nuovo giro): stesso guard già usato in
+        // create_trip/update_trip/swap_driver, riusato qui (nessun nuovo
+        // helper). Verifica gli stessi driver_user_id/driver_profile_id del
+        // body appena confermati tenant-scoped da SEC-05 sopra — quelli che
+        // verranno scritti nell'insert di trip_groups poco sotto. Deve
+        // precedere quella scrittura, non seguirla.
+        const newGroupDriverOperational = await verifyTripDriverIsOperational(
+          auth.admin,
+          tenantId,
+          { driverUserId: driver_user_id ?? null, driverProfileId: driver_profile_id ?? null },
+          { actorUserId: userId, action: "move_services" }
+        );
+        if (!newGroupDriverOperational.ok) return newGroupDriverOperational.response;
+
         const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, date);
         if (confirmationError) {
           return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
@@ -713,6 +727,23 @@ export async function POST(request: NextRequest) {
         { actorUserId: userId, action: "move_services" }
       );
       if (!finalDriverOwnership.ok) return finalDriverOwnership.response;
+
+      // FUNC-03 residuo (valori finali, entrambi i rami): stesso guard già
+      // usato in create_trip/update_trip/swap_driver, riusato qui. Verifica
+      // destDriver/destDriverProfile — gli stessi valori FINALI appena
+      // confermati tenant-scoped da SEC-05 sopra — non i soli campi del
+      // body. Deve precedere timeline/eligibility e l'update di assignments
+      // più sotto, in entrambi i rami (nel ramo nuovo giro il driver è già
+      // stato verificato operativo prima dell'insert, ma qui si valida
+      // comunque il valore finale per difesa in profondità, coerente con
+      // SEC-05 sopra).
+      const finalDriverOperational = await verifyTripDriverIsOperational(
+        auth.admin,
+        tenantId,
+        { driverUserId: destDriver, driverProfileId: destDriverProfile },
+        { actorUserId: userId, action: "move_services" }
+      );
+      if (!finalDriverOperational.ok) return finalDriverOperational.response;
 
       if (destDriver && destGroupId) {
         const targetServiceIds = [...new Set([...(await loadGroupServiceIds(auth.admin, tenantId, destGroupId)), ...service_ids])];
@@ -1262,7 +1293,7 @@ async function verifyTripDriverIsOperational(
   admin: SupabaseClient,
   tenantId: string,
   input: { driverUserId?: string | null; driverProfileId?: string | null },
-  context: { actorUserId?: string; action: "create_trip" | "update_trip" | "swap_driver" }
+  context: { actorUserId?: string; action: "create_trip" | "update_trip" | "swap_driver" | "move_services" }
 ): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
   const driverUserId = input.driverUserId ?? null;
   const driverProfileId = input.driverProfileId ?? null;
