@@ -117,6 +117,20 @@ export async function POST(request: NextRequest) {
       );
       if (!serviceStatusCheck.ok) return serviceStatusCheck.response;
 
+      // FUNC-03 residuo: verifica che il driver, già confermato tenant-scoped
+      // da SEC-05, sia anche operativo (non sospeso/non disattivato). Stesso
+      // segnale già in uso in assign-service (verifyDriverIsOperational).
+      // Helper separato da SEC-05 per mantenere distinti 404 (ownership) da
+      // 409 (operatività). Deve precedere availability/validateTripPayload e
+      // qualunque scrittura.
+      const driverOperational = await verifyTripDriverIsOperational(
+        auth.admin,
+        tenantId,
+        { driverUserId: driver_user_id ?? null, driverProfileId: driver_profile_id ?? null },
+        { actorUserId: userId, action: "create_trip" }
+      );
+      if (!driverOperational.ok) return driverOperational.response;
+
       const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, date);
       if (confirmationError) {
         return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
@@ -1078,6 +1092,89 @@ async function verifyTripServicesOperationalStatus(
       details: { action: context.action, serviceCount: serviceIds.length },
     });
     return { ok: false, response: tripServiceNotAssignableResponse() };
+  }
+
+  return { ok: true };
+}
+
+// ── FUNC-03 residuo: verifica che il driver, già confermato esistente/
+// tenant-scoped da SEC-05, sia anche operativo (non sospeso/non
+// disattivato) prima di creare il giro. Stesso segnale reale già usato in
+// assign-service/route.ts (verifyDriverIsOperational): memberships.suspended
+// (0056_memberships_tenant_suspension.sql) e driver_profiles.active
+// (0080_driver_profiles.sql). Helper separato da SEC-05 per mantenere
+// distinti i codici di errore: 404 DRIVER_NOT_FOUND (ownership, SEC-05) resta
+// invariato, 409 DRIVER_NOT_ACTIVE è nuovo e specifico dell'operatività.
+// Salta il controllo se nessun identificativo driver è presente. Errore di
+// query è fail-closed (500, codice distinto). Non verifica disponibilità
+// giornaliera, overlap, o geografia — fuori perimetro FUNC-03.
+function tripDriverNotActiveResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "DRIVER_NOT_ACTIVE", message: "L'autista non è attualmente disponibile per nuove assegnazioni." },
+    { status: 409 }
+  );
+}
+
+async function verifyTripDriverIsOperational(
+  admin: SupabaseClient,
+  tenantId: string,
+  input: { driverUserId?: string | null; driverProfileId?: string | null },
+  context: { actorUserId?: string; action: "create_trip" }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  const driverUserId = input.driverUserId ?? null;
+  const driverProfileId = input.driverProfileId ?? null;
+
+  if (!driverUserId && !driverProfileId) {
+    return { ok: true };
+  }
+
+  const statusCheckFailedResponse = (dbCode: string | null) => {
+    auditLog({
+      event: "piano_trip_driver_status_check_failed",
+      level: "error",
+      tenantId,
+      userId: context.actorUserId ?? null,
+      details: {
+        action: context.action,
+        hasDriverUserId: Boolean(driverUserId),
+        hasDriverProfileId: Boolean(driverProfileId),
+        dbCode,
+      },
+    });
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        { ok: false, error: "DRIVER_STATUS_CHECK_FAILED", message: "Errore durante la verifica dello stato dell'autista." },
+        { status: 500 }
+      ),
+    };
+  };
+
+  if (driverUserId) {
+    const { data, error } = await admin
+      .from("memberships")
+      .select("suspended")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", driverUserId)
+      .eq("role", "driver")
+      .maybeSingle();
+
+    if (error) return statusCheckFailedResponse((error as { code?: string }).code ?? null);
+    // Riga assente qui è inatteso (SEC-05 l'ha già confermata poco prima):
+    // fail-closed, non un falso successo silenzioso.
+    if (!data || data.suspended === true) return { ok: false, response: tripDriverNotActiveResponse() };
+  }
+
+  if (driverProfileId) {
+    const { data, error } = await admin
+      .from("driver_profiles")
+      .select("active")
+      .eq("tenant_id", tenantId)
+      .eq("id", driverProfileId)
+      .maybeSingle();
+
+    if (error) return statusCheckFailedResponse((error as { code?: string }).code ?? null);
+    if (!data || data.active === false) return { ok: false, response: tripDriverNotActiveResponse() };
   }
 
   return { ok: true };
