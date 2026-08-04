@@ -1813,6 +1813,44 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      if (prepared.length > 0) {
+        // CONC-06: rivalida i lock subito prima di qualunque scrittura (trip_groups
+        // incluso) per ridurre la finestra di race tra la snapshot iniziale e la
+        // persistenza finale. Fail-closed su errore query.
+        const candidateServiceIds = prepared.flatMap(({ draft }) => draft.serviceIds);
+        const revalidateRes = await auth.admin
+          .from("assignments")
+          .select("service_id, locked_by_operator")
+          .eq("tenant_id", tenantId)
+          .in("service_id", candidateServiceIds);
+
+        if (revalidateRes.error) {
+          return NextResponse.json(
+            { ok: false, error: "Errore durante la rivalidazione delle assegnazioni." },
+            { status: 500 }
+          );
+        }
+
+        const raceDetected = (revalidateRes.data ?? []).some((row) => {
+          const sid = row.service_id as string | null;
+          if (!sid) return false;
+          const currentlyLocked = row.locked_by_operator === true;
+          const wasLockedInitially = lockedServiceIds.has(sid);
+          return currentlyLocked || currentlyLocked !== wasLockedInitially;
+        });
+
+        if (raceDetected) {
+          return NextResponse.json(
+            {
+              ok: false,
+              error:
+                "L'assegnazione automatica è stata interrotta perché alcuni servizi sono stati modificati durante l'elaborazione. Riprova.",
+            },
+            { status: 409 }
+          );
+        }
+      }
+
       const groupRows = prepared.map(({ draft: _, driverUserId, profileId, vehicle }) => ({
         tenant_id: tenantId,
         date,
