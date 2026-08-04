@@ -279,6 +279,26 @@ export async function POST(request: NextRequest) {
       if (!driverOwnership.ok) return driverOwnership.response;
 
       const effectiveServiceIds = verifiedServiceIds ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
+
+      // FUNC-02 residuo: stesso guard/denylist già usati in create_trip,
+      // riusato qui (nessun nuovo helper/denylist). Verificato sull'insieme
+      // FINALE dei servizi del giro (`effectiveServiceIds`, riga precedente),
+      // non sui soli service_ids ricevuti dal body: se il client omette
+      // service_ids, l'insieme finale resta quello già associato al gruppo
+      // (letto da loadGroupServiceIds), quindi un giro che contiene già un
+      // servizio bloccato viene comunque rifiutato — a meno che
+      // l'aggiornamento stesso lo rimuova esplicitamente dal nuovo
+      // service_ids, nel qual caso l'insieme finale non lo contiene più e
+      // l'update correttivo passa. Deve precedere availability/
+      // validateTripPayload e qualunque scrittura.
+      const serviceStatusCheck = await verifyTripServicesOperationalStatus(
+        auth.admin,
+        tenantId,
+        effectiveServiceIds,
+        { userId, action: "update_trip" }
+      );
+      if (!serviceStatusCheck.ok) return serviceStatusCheck.response;
+
       const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, groupDate);
       if (confirmationError) {
         return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
@@ -1064,7 +1084,7 @@ async function verifyTripServicesOperationalStatus(
   admin: SupabaseClient,
   tenantId: string,
   serviceIds: string[],
-  context: { userId?: string; action: "create_trip" }
+  context: { userId?: string; action: "create_trip" | "update_trip" }
 ): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
   if (serviceIds.length === 0) {
     return { ok: true };
