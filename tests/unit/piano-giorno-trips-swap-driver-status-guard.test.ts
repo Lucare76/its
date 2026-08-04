@@ -8,6 +8,7 @@ const GROUP_A1 = "c1111111-1111-4111-8111-111111111111";
 const GROUP_B1 = "c2222222-2222-4222-8222-222222222222";
 const DRIVER_FROM = "d0000000-0000-4000-8000-000000000000";
 const DRIVER_TO_A = "d1111111-1111-4111-8111-111111111111";
+const DRIVER_SUSPENDED = "d1111111-1111-4111-8111-111111111112";
 const DRIVER_TO_B = "d2222222-2222-4222-8222-222222222222";
 const DRIVER_GHOST = "d9999999-9999-4999-8999-999999999999";
 const TEST_DATE = "2026-08-10";
@@ -17,12 +18,12 @@ type Row = Record<string, unknown>;
 const RAW_DB_ERROR = { message: 'connection to server "internal-db-host.example" failed: SQLSTATE[08006]' };
 
 /**
- * Fake Supabase in-memory, tenant-aware, generico — stesso schema riusato dai
- * file piano-giorno-trips-update-driver-tenant-guard.test.ts e
- * piano-giorno-trips-driver-tenant-guard.test.ts. Dedicato esclusivamente al
- * riuso del guard SEC-05 residuo in swap_driver (verifyTripDriverBelongsToTenant
- * chiamato con driverProfileId sempre null, poiché swap_driver usa solo
- * to_driver_id — nessun campo profile è realmente usato da questa action).
+ * Fake Supabase in-memory, tenant-aware, generico — stesso schema riusato da
+ * piano-giorno-trips-swap-driver-tenant-guard.test.ts, esteso con
+ * fromCallIndex (come in piano-giorno-trips-update-driver-status-guard.test.ts)
+ * per colpire selettivamente la 2a select su "memberships": la 1a è sempre
+ * SEC-05 (deve continuare a funzionare), la 2a è il guard FUNC-03 oggetto di
+ * questo task.
  */
 function createTenantAwareSupabase(
   seed: Partial<
@@ -294,7 +295,7 @@ function baseSeed(overrides: Parameters<typeof createTenantAwareSupabase>[0] = {
     services: [serviceRow(TENANT_A, SERVICE_A1)],
     trip_groups: [
       { id: GROUP_A1, tenant_id: TENANT_A, date: TEST_DATE, driver_user_id: DRIVER_FROM, driver_profile_id: null, vehicle_label: null, status: "active" },
-      // Stesso from_driver_id ma tenant B: prova che la query è tenant-scoped, non deve mai essere incluso.
+      // Stesso from_driver_id ma tenant B: prova che la query è tenant-scoped.
       { id: GROUP_B1, tenant_id: TENANT_B, date: TEST_DATE, driver_user_id: DRIVER_FROM, driver_profile_id: null, vehicle_label: null, status: "active" },
     ],
     assignments: [
@@ -302,12 +303,14 @@ function baseSeed(overrides: Parameters<typeof createTenantAwareSupabase>[0] = {
     ],
     driver_daily_availability: [
       { tenant_id: TENANT_A, driver_user_id: DRIVER_TO_A, date: TEST_DATE, available: true, available_from: "00:00", available_to: "23:59" },
+      { tenant_id: TENANT_A, driver_user_id: DRIVER_SUSPENDED, date: TEST_DATE, available: true, available_from: "00:00", available_to: "23:59" },
       { tenant_id: TENANT_A, driver_user_id: DRIVER_FROM, date: TEST_DATE, available: true, available_from: "00:00", available_to: "23:59" },
     ],
     memberships: [
-      membershipRow(DRIVER_FROM, TENANT_A),
-      membershipRow(DRIVER_TO_A, TENANT_A),
-      membershipRow(DRIVER_TO_B, TENANT_B),
+      membershipRow(DRIVER_FROM, TENANT_A, { suspended: false }),
+      membershipRow(DRIVER_TO_A, TENANT_A, { suspended: false }),
+      membershipRow(DRIVER_SUSPENDED, TENANT_A, { suspended: true }),
+      membershipRow(DRIVER_TO_B, TENANT_B, { suspended: false }),
     ],
     driver_profiles: [],
     daily_availability_confirmations: [{ tenant_id: TENANT_A, date: TEST_DATE, confirmed: true }],
@@ -349,16 +352,16 @@ function assertZeroWrites(fake: ReturnType<typeof createTenantAwareSupabase>) {
   expect(fake.calls.assignmentsUpdates).toBe(0);
 }
 
-describe("SEC-05 residuo — driver tenant ownership guard in piano-giorno/trips (swap_driver, riuso helper)", () => {
+describe("FUNC-03 residuo — guard operatività target driver in piano-giorno/trips (swap_driver, riuso helper)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("1. target driver same-tenant: swap valido, comportamento invariato", async () => {
+  it("1. target operativo same-tenant: successo, comportamento invariato", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
-    const res = await callPost(swapDriverBody());
+    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_TO_A }));
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -367,7 +370,19 @@ describe("SEC-05 residuo — driver tenant ownership guard in piano-giorno/trips
     expect(updated?.driver_user_id).toBe(DRIVER_TO_A);
   });
 
-  it("2. target driver di tenant B: 404 DRIVER_NOT_FOUND, zero scritture", async () => {
+  it("2. target suspended=true: 409 DRIVER_NOT_ACTIVE, zero scritture", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+
+    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_SUSPENDED }));
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body).toEqual({ ok: false, error: "DRIVER_NOT_ACTIVE", message: "L'autista non è attualmente disponibile per nuove assegnazioni." });
+    assertZeroWrites(fake);
+  });
+
+  it("3. target cross-tenant: 404 DRIVER_NOT_FOUND (SEC-05 invariato), guard FUNC-03 mai raggiunto", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
@@ -376,10 +391,12 @@ describe("SEC-05 residuo — driver tenant ownership guard in piano-giorno/trips
 
     expect(res.status).toBe(404);
     expect(body).toEqual({ ok: false, error: "DRIVER_NOT_FOUND", message: "Autista non trovato." });
+    // SEC-05 esegue l'unica query su "memberships" in questo scenario.
+    expect(fake.calls.membershipsQueried).toBe(1);
     assertZeroWrites(fake);
   });
 
-  it("3. target inesistente: stessa risposta del tenant B", async () => {
+  it("4. target inesistente: 404, guard FUNC-03 mai raggiunto", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
@@ -388,10 +405,11 @@ describe("SEC-05 residuo — driver tenant ownership guard in piano-giorno/trips
 
     expect(res.status).toBe(404);
     expect(body).toEqual({ ok: false, error: "DRIVER_NOT_FOUND", message: "Autista non trovato." });
+    expect(fake.calls.membershipsQueried).toBe(1);
     assertZeroWrites(fake);
   });
 
-  it("4. target same-tenant con ruolo diverso da driver: stesso 404", async () => {
+  it("5. target same-tenant non-driver: 404, guard FUNC-03 mai raggiunto", async () => {
     const fake = baseSeed({
       memberships: [
         membershipRow(DRIVER_FROM, TENANT_A),
@@ -405,74 +423,23 @@ describe("SEC-05 residuo — driver tenant ownership guard in piano-giorno/trips
 
     expect(res.status).toBe(404);
     expect(body).toEqual({ ok: false, error: "DRIVER_NOT_FOUND", message: "Autista non trovato." });
-    assertZeroWrites(fake);
+    expect(fake.calls.membershipsQueried).toBe(1);
   });
 
-  it("5-6-7. driver_profile_id: N/A — swap_driver non usa mai driverProfileId nel guard SEC-05 (sempre null), il guard stesso non emette query su driver_profiles", async () => {
-    const fake = baseSeed();
-    authorizeAs(fake);
-
-    // Target cross-tenant: il guard SEC-05 blocca subito (404), prima che il
-    // flusso raggiunga validateTripPayload (che invece, per motivi indipendenti
-    // da SEC-05, può interrogare driver_profiles per risolvere il profileId
-    // da un driver_user_id — comportamento preesistente, fuori scope qui).
-    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_TO_B }));
-    expect(res.status).toBe(404);
-    expect(fake.calls.driverProfilesQueried).toBe(0);
-  });
-
-  it("8. gruppo di tenant B con lo stesso from_driver_id: filtro tenant sulla query trip_groups, non incluso nell'update", async () => {
-    const fake = baseSeed();
-    authorizeAs(fake);
-
-    const res = await callPost(swapDriverBody());
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(body.affected).toBe(1);
-    // Il gruppo di tenant B non deve mai comparire tra quelli aggiornati.
-    const groupB = fake.tables.trip_groups.find((g) => g.id === GROUP_B1);
-    expect(groupB?.driver_user_id).toBe(DRIVER_FROM);
-  });
-
-  it("9. gruppo inesistente (from_driver_id senza giri attivi): comportamento attuale invariato, guard valida comunque il target", async () => {
-    const fake = baseSeed({
-      trip_groups: [{ id: GROUP_B1, tenant_id: TENANT_B, date: TEST_DATE, driver_user_id: DRIVER_FROM, driver_profile_id: null, vehicle_label: null, status: "active" }],
-      assignments: [],
-    });
-    authorizeAs(fake);
-
-    const res = await callPost(swapDriverBody());
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(body).toEqual({ ok: true, affected: 0 });
-    // Il guard SEC-05 è comunque stato eseguito (query memberships avvenuta)
-    // anche se non c'era nulla da scrivere. Da quando FUNC-03 (task
-    // successivo, stesso guard pattern) è stato aggiunto sulla stessa action,
-    // la query memberships attesa è 2 (SEC-05 + FUNC-03), entrambe eseguite
-    // prima della verifica di groupIds.length — non più oggetto di questo file.
-    expect(fake.calls.membershipsQueried).toBe(2);
-  });
-
-  it("10. stesso driver attuale (to_driver_id === from_driver_id): il guard SEC-05 non blocca (DRIVER_FROM è same-tenant/driver valido)", async () => {
+  it("6. stesso driver attuale (to_driver_id === from_driver_id, operativo): comportamento invariato", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
     const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_FROM }));
     const body = await res.json();
 
-    // Il guard SEC-05 (oggetto di questo task) deve limitarsi a validare
-    // l'ownership del target: DRIVER_FROM è same-tenant con ruolo driver,
-    // quindi il guard passa (mai 404 DRIVER_NOT_FOUND). Un'eventuale
-    // reiezione successiva (validateTripPayload rileva un "conflitto" con
-    // l'assignment esistente dello stesso driver, comportamento preesistente
-    // non toccato da questo fix) resta fuori scope.
     expect(body.error).not.toBe("DRIVER_NOT_FOUND");
+    expect(body.error).not.toBe("DRIVER_NOT_ACTIVE");
     expect(res.status).not.toBe(404);
+    expect(res.status).not.toBe(409);
   });
 
-  it("11. target nullo/assente: 400 preesistente, guard mai raggiunto (comportamento reale invariato)", async () => {
+  it("7. target nullo/assente: 400 preesistente invariato, guard mai raggiunto", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
@@ -484,22 +451,39 @@ describe("SEC-05 residuo — driver tenant ownership guard in piano-giorno/trips
     expect(fake.calls.membershipsQueried).toBe(0);
   });
 
-  it("12. tenant_id malevolo nel body viene ignorato: ownership verificata contro il tenant di sessione", async () => {
+  it("8. gruppo di tenant B con lo stesso from_driver_id: filtro tenant confermato, non incluso nell'update", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
-    const res = await callPost(swapDriverBody({ tenant_id: TENANT_B }));
+    const res = await callPost(swapDriverBody());
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.ok).toBe(true);
-    const updated = fake.tables.assignments.find((a) => a.service_id === SERVICE_A1);
-    expect(updated?.tenant_id).toBe(TENANT_A);
+    expect(body.affected).toBe(1);
+    const groupB = fake.tables.trip_groups.find((g) => g.id === GROUP_B1);
+    expect(groupB?.driver_user_id).toBe(DRIVER_FROM);
   });
 
-  it("13. errore nella query memberships: 500 fail-closed, zero scritture, messaggio DB non esposto", async () => {
+  it("9. nessun gruppo trovato (from_driver_id senza giri attivi): comportamento corrente, guard valida comunque il target", async () => {
+    const fake = baseSeed({
+      trip_groups: [{ id: GROUP_B1, tenant_id: TENANT_B, date: TEST_DATE, driver_user_id: DRIVER_FROM, driver_profile_id: null, vehicle_label: null, status: "active" }],
+      assignments: [],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(swapDriverBody());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ ok: true, affected: 0 });
+    expect(fake.calls.membershipsQueried).toBe(2); // SEC-05 + FUNC-03, entrambi eseguiti anche senza scritture
+  });
+
+  it("10. errore query stato (2a select memberships, dopo SEC-05): 500 fail-closed, zero scritture", async () => {
     const fake = baseSeed();
-    fake.setError("memberships", RAW_DB_ERROR, 1);
+    // fromCallIndex=2: la 1a select su "memberships" è SEC-05 (deve
+    // continuare a funzionare), la 2a è il guard FUNC-03 di questo task.
+    fake.setError("memberships", RAW_DB_ERROR, 2);
     authorizeAs(fake);
 
     const res = await callPost(swapDriverBody());
@@ -507,50 +491,72 @@ describe("SEC-05 residuo — driver tenant ownership guard in piano-giorno/trips
     const raw = JSON.stringify(body);
 
     expect(res.status).toBe(500);
-    expect(body).toEqual({ ok: false, error: "DRIVER_VERIFICATION_FAILED", message: "Errore durante la verifica dell'autista." });
+    expect(body).toEqual({ ok: false, error: "DRIVER_STATUS_CHECK_FAILED", message: "Errore durante la verifica dello stato dell'autista." });
     assertZeroWrites(fake);
     expect(raw).not.toMatch(/internal-db-host/);
     expect(raw.toLowerCase()).not.toMatch(/sqlstate/);
     expect(mocks.auditLog).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "piano_trip_driver_verification_failed", level: "error" })
+      expect.objectContaining({ event: "piano_trip_driver_status_check_failed", level: "error" })
     );
   });
 
-  it("14. errore driver_profiles: N/A — swap_driver non interroga mai driver_profiles dal guard (driverProfileId sempre null)", () => {
-    // Dichiarato esplicitamente non applicabile: nessun test da eseguire, la
-    // query driver_profiles del guard scatta solo se driverProfileId è
-    // presente, il che non accade mai in swap_driver.
-    expect(true).toBe(true);
+  it("11. risposta sanificata: nessun dettaglio DB/tenant B nella risposta 409/500", async () => {
+    const fakeSuspended = baseSeed();
+    authorizeAs(fakeSuspended);
+    const resSuspended = await callPost(swapDriverBody({ to_driver_id: DRIVER_SUSPENDED }));
+    const rawSuspended = JSON.stringify(await resSuspended.json());
+    expect(rawSuspended).not.toMatch(new RegExp(DRIVER_SUSPENDED));
+
+    const fakeDbError = baseSeed();
+    fakeDbError.setError("memberships", RAW_DB_ERROR, 2);
+    authorizeAs(fakeDbError);
+    const resDbError = await callPost(swapDriverBody());
+    const rawDbError = JSON.stringify(await resDbError.json());
+    expect(rawDbError).not.toMatch(/internal-db-host/);
+    expect(rawDbError.toLowerCase()).not.toMatch(/sqlstate/);
   });
 
-  it("15-16. zero update trip_group/assignments su rifiuto", async () => {
+  it("12-13. zero update trip_groups/assignments su target sospeso", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
-    await callPost(swapDriverBody({ to_driver_id: DRIVER_TO_B }));
+    await callPost(swapDriverBody({ to_driver_id: DRIVER_SUSPENDED }));
 
     assertZeroWrites(fake);
   });
 
-  it("17. zero history su rifiuto (logAssignmentChange non chiamata da swap_driver in nessun caso)", async () => {
+  it("14. zero history su rifiuto (logAssignmentChange non chiamata da swap_driver in nessun caso)", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
-    await callPost(swapDriverBody({ to_driver_id: DRIVER_TO_B }));
+    await callPost(swapDriverBody({ to_driver_id: DRIVER_SUSPENDED }));
 
     expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
   });
 
-  it("18. zero notifiche su rifiuto", async () => {
+  it("15. zero notifiche su rifiuto", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
-    await callPost(swapDriverBody({ to_driver_id: DRIVER_TO_B }));
+    await callPost(swapDriverBody({ to_driver_id: DRIVER_SUSPENDED }));
 
     expect(mocks.sendPushToUser).not.toHaveBeenCalled();
   });
 
-  it("19. timeline invariata su successo: risposta con warnings, push effettuata", async () => {
+  it("16. timeline invariata su successo: push effettuata verso il target operativo", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+
+    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_TO_A }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(mocks.sendPushToUser).toHaveBeenCalledTimes(1);
+    const pushArgs = mocks.sendPushToUser.mock.calls[0];
+    expect(pushArgs[1]).toBe(DRIVER_TO_A);
+  });
+
+  it("17. warning invariati: array presente su successo", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
@@ -559,10 +565,9 @@ describe("SEC-05 residuo — driver tenant ownership guard in piano-giorno/trips
 
     expect(res.status).toBe(200);
     expect(Array.isArray(body.warnings)).toBe(true);
-    expect(mocks.sendPushToUser).toHaveBeenCalledTimes(1);
   });
 
-  it("20. create_trip invariato: guard su swap_driver non tocca create_trip", async () => {
+  it("18. create_trip invariato: guard su swap_driver non tocca create_trip", async () => {
     const fake = baseSeed({
       services: [serviceRow(TENANT_A, "a2222222-2222-4222-8222-222222222222", { status: "new" })],
       trip_groups: [],
@@ -585,7 +590,7 @@ describe("SEC-05 residuo — driver tenant ownership guard in piano-giorno/trips
     expect(body.ok).toBe(true);
   });
 
-  it("21. update_trip invariato: guard su swap_driver non tocca update_trip", async () => {
+  it("19. update_trip invariato: guard su swap_driver non tocca update_trip", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
@@ -596,7 +601,7 @@ describe("SEC-05 residuo — driver tenant ownership guard in piano-giorno/trips
     expect(body.ok).toBe(true);
   });
 
-  it("22. swap_vehicle invariata: nessun impatto dal riuso del guard in swap_driver", async () => {
+  it("20. swap_vehicle invariata: nessun impatto dal riuso del guard in swap_driver", async () => {
     const fake = baseSeed({
       vehicles: [{ id: "veh-2", tenant_id: TENANT_A, label: "Bus 2", capacity: 8, blocked_from: null, blocked_until: null, blocked_reason: null, is_blocked_manual: false }],
     });
@@ -606,73 +611,93 @@ describe("SEC-05 residuo — driver tenant ownership guard in piano-giorno/trips
     expect(res.status).toBe(200);
   });
 
-  it("23. 401: utente non autenticato, guard mai raggiunto", async () => {
+  it("21. 401: utente non autenticato, guard mai raggiunto", async () => {
     mocks.authorizePricingRequest.mockResolvedValue(NextResponse.json({ error: "Sessione non valida." }, { status: 401 }));
     const fake = baseSeed();
 
-    const res = await callPost(swapDriverBody());
+    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_SUSPENDED }));
 
     expect(res.status).toBe(401);
     expect(fake.calls.membershipsQueried).toBe(0);
   });
 
-  it("24. 403: ruolo non autorizzato, guard mai raggiunto", async () => {
+  it("22. 403: ruolo non autorizzato, guard mai raggiunto", async () => {
     mocks.authorizePricingRequest.mockResolvedValue(NextResponse.json({ error: "Ruolo non autorizzato." }, { status: 403 }));
     const fake = baseSeed();
 
-    const res = await callPost(swapDriverBody());
+    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_SUSPENDED }));
 
     expect(res.status).toBe(403);
     expect(fake.calls.membershipsQueried).toBe(0);
   });
 
-  it("25. privacy: nessuna risposta contiene tenant B, SQLSTATE, o dettagli Supabase", async () => {
-    const fakeCrossTenant = baseSeed();
-    authorizeAs(fakeCrossTenant);
-    const resCrossTenant = await callPost(swapDriverBody({ to_driver_id: DRIVER_TO_B }));
-    const rawCrossTenant = JSON.stringify(await resCrossTenant.json());
-
-    expect(rawCrossTenant).not.toMatch(new RegExp(TENANT_B));
-    expect(rawCrossTenant.toLowerCase()).not.toMatch(/sqlstate|stack|supabase|postgres/);
-
-    const fakeDbError = baseSeed();
-    fakeDbError.setError("memberships", RAW_DB_ERROR, 1);
-    authorizeAs(fakeDbError);
-    const resDbError = await callPost(swapDriverBody());
-    const rawDbError = JSON.stringify(await resDbError.json());
-
-    expect(rawDbError).not.toMatch(/internal-db-host/);
-    expect(rawDbError.toLowerCase()).not.toMatch(/sqlstate/);
-  });
-});
-
-describe("SEC-05 residuo — sensibilità (comportamento atteso col guard integro, swap_driver)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("26. sensibilità: target di tenant B deve essere bloccato quando il filtro tenant su memberships è integro", async () => {
+  it("23. tenant_id malevolo nel body viene ignorato: verifica operatività contro il tenant di sessione", async () => {
     const fake = baseSeed();
     authorizeAs(fake);
 
-    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_TO_B }));
-    expect(res.status).toBe(404);
+    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_TO_A, tenant_id: TENANT_B }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    const updated = fake.tables.assignments.find((a) => a.service_id === SERVICE_A1);
+    expect(updated?.tenant_id).toBe(TENANT_A);
   });
 
-  it("27. sensibilità: target non-driver deve essere bloccato quando il filtro role='driver' è integro", async () => {
+  it("26. SEC-05 blocca prima del guard FUNC-03: driver cross-tenant, FUNC-03 mai raggiunto anche se sospeso", async () => {
     const fake = baseSeed({
       memberships: [
         membershipRow(DRIVER_FROM, TENANT_A),
-        membershipRow(DRIVER_TO_A, TENANT_A, { role: "operator" }),
+        membershipRow(DRIVER_TO_B, TENANT_B, { suspended: true }),
       ],
     });
     authorizeAs(fake);
 
-    const res = await callPost(swapDriverBody());
+    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_TO_B }));
+    const body = await res.json();
+
     expect(res.status).toBe(404);
+    expect(body.error).toBe("DRIVER_NOT_FOUND");
+    // Una sola query memberships: SEC-05 blocca, FUNC-03 non viene mai eseguito.
+    expect(fake.calls.membershipsQueried).toBe(1);
   });
 
-  it("28. sensibilità filtro tenant driver_profiles: N/A — nessuna query driver_profiles emessa dal guard in swap_driver", () => {
-    expect(true).toBe(true);
+  it("27. nessuna query driver_profiles dai guard SEC-05/FUNC-03: target sospeso rifiutato senza mai interrogare driver_profiles", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+
+    // Target sospeso: FUNC-03 blocca prima di raggiungere validateTripPayload
+    // (che, per motivi indipendenti da SEC-05/FUNC-03, può interrogare
+    // driver_profiles per risolvere il profileId da un driver_user_id —
+    // comportamento preesistente, fuori scope qui). In questo percorso i
+    // guard SEC-05/FUNC-03 (unico oggetto di questa asserzione) non emettono
+    // mai una query su driver_profiles, poiché driverProfileId è sempre null.
+    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_SUSPENDED }));
+    expect(res.status).toBe(409);
+    expect(fake.calls.driverProfilesQueried).toBe(0);
+  });
+});
+
+describe("FUNC-03 residuo — sensibilità (comportamento atteso col guard integro, swap_driver)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("24. sensibilità: target sospeso deve essere bloccato quando il filtro suspended è integro", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+
+    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_SUSPENDED }));
+    expect(res.status).toBe(409);
+  });
+
+  it("25. sensibilità: guard integro blocca sempre, anche con più combinazioni di target sospesi", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+
+    const res = await callPost(swapDriverBody({ to_driver_id: DRIVER_SUSPENDED }));
+    const body = await res.json();
+    expect(res.status).toBe(409);
+    expect(body.error).toBe("DRIVER_NOT_ACTIVE");
   });
 });

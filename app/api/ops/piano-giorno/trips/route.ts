@@ -769,6 +769,20 @@ export async function POST(request: NextRequest) {
       );
       if (!targetDriverOwnership.ok) return targetDriverOwnership.response;
 
+      // FUNC-03 residuo: stesso guard già usato in create_trip/update_trip,
+      // riusato qui (nessun nuovo helper). Verifica solo memberships.suspended
+      // per to_driver_id — nessun driverProfileId (swap_driver non usa un
+      // profilo reale, vedi nota SEC-05 sopra), quindi nessuna query su
+      // driver_profiles. Deve precedere timeline/availability e qualunque
+      // scrittura.
+      const targetDriverOperational = await verifyTripDriverIsOperational(
+        auth.admin,
+        tenantId,
+        { driverUserId: to_driver_id, driverProfileId: null },
+        { actorUserId: userId, action: "swap_driver" }
+      );
+      if (!targetDriverOperational.ok) return targetDriverOperational.response;
+
       const groupIds = (groups ?? []).map((g) => g.id as string);
       if (!groupIds.length) {
         return NextResponse.json({ ok: true, affected: 0 });
@@ -1187,7 +1201,7 @@ async function verifyTripDriverIsOperational(
   admin: SupabaseClient,
   tenantId: string,
   input: { driverUserId?: string | null; driverProfileId?: string | null },
-  context: { actorUserId?: string; action: "create_trip" | "update_trip" }
+  context: { actorUserId?: string; action: "create_trip" | "update_trip" | "swap_driver" }
 ): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
   const driverUserId = input.driverUserId ?? null;
   const driverProfileId = input.driverProfileId ?? null;
