@@ -7,21 +7,23 @@ Regole operative (stesse del modulo Navette):
 - Nessun task tocca WhatsApp, template, webhook Meta.
 - Separazione esplicita tra: bug runtime, hardening, audit-doc, ML validation/safety/quality/architecture.
 
-## Stato Milestone 1 (aggiornato 2026-08-04, sessione di riallineamento dopo pacchetto update_trip + swap_driver)
+## Stato Milestone 1 — CHIUSA (2026-08-04, sessione di chiusura finale dopo pacchetto move_services)
 
-23 task CRITICAL/HIGH/MEDIUM completati e pushati su main, tutti verificati presenti nel codice reale in questa sessione (grep sui marker chiave, non solo dal log commit):
+**MILESTONE 1 ASSEGNAZIONI — CHIUSA, RISCHI STRUTTURALI RINVIATI A M2**
 
-M1-01 (SEC-01, `27f5624`), M1-02 (SEC-02, `966f2a5`), M1-03 (CONC-01, `b33ce74`), M1-05 (FUNC-01, `6235acb`), M1-10 (SEC-05, perimetro `assign-service`, `2712d76`), M1-17 (RACE-01, `c44f6d9`) + fix semantica upsert post-RACE-01 (`983e1a1`), M1-07 (CONC-03, `3976d4c`), SEC-05 residuo su `departure-bus-assign` (`4307c18`), M1-15 (FUNC-02, `1089b9f`), M1-16 (FUNC-03, `e05c43b`), SEC-04 (`6d66f06`), M1-06 (CONC-02, `21a25cb`), CONC-03 residuo su `departure-bus-assign` (`7c5d081`), CONC-02 residuo su `departure-bus-assign` (`3d8356a`), SEC-05 residuo su `piano-giorno/trips` action `create_trip` (`1e10f0c`), FUNC-02 residuo su `piano-giorno/trips` action `create_trip` (`7243e3e`), FUNC-03 residuo su `piano-giorno/trips` action `create_trip` (`0e769d2`), **SEC-05 residuo su `piano-giorno/trips` action `update_trip` (`f6492d2`)**, **FUNC-02 residuo su `piano-giorno/trips` action `update_trip` (`c227d26`)**, **FUNC-03 residuo su `piano-giorno/trips` action `update_trip` (`5166c46`)**, **SEC-05 residuo su `piano-giorno/trips` action `swap_driver` (`530fd38`)**, **FUNC-03 residuo su `piano-giorno/trips` action `swap_driver` (`052e7c9`)**.
+26 task CRITICAL/HIGH/MEDIUM completati e pushati su main, tutti verificati presenti nel codice reale in questa sessione (grep sui marker chiave, non solo dal log commit):
 
-Tutti con test dedicati verdi e reviewer indipendente APPROVATO.
+M1-01 (SEC-01, `27f5624`), M1-02 (SEC-02, `966f2a5`), M1-03 (CONC-01, `b33ce74`), M1-05 (FUNC-01, `6235acb`), M1-10 (SEC-05, perimetro `assign-service`, `2712d76`), M1-17 (RACE-01, `c44f6d9`) + fix semantica upsert post-RACE-01 (`983e1a1`), M1-07 (CONC-03, `3976d4c`), SEC-05 residuo su `departure-bus-assign` (`4307c18`), M1-15 (FUNC-02, `1089b9f`), M1-16 (FUNC-03, `e05c43b`), SEC-04 (`6d66f06`), M1-06 (CONC-02, `21a25cb`), CONC-03 residuo su `departure-bus-assign` (`7c5d081`), CONC-02 residuo su `departure-bus-assign` (`3d8356a`), SEC-05 residuo su `piano-giorno/trips` action `create_trip` (`1e10f0c`), FUNC-02 residuo su `piano-giorno/trips` action `create_trip` (`7243e3e`), FUNC-03 residuo su `piano-giorno/trips` action `create_trip` (`0e769d2`), SEC-05 residuo su `piano-giorno/trips` action `update_trip` (`f6492d2`), FUNC-02 residuo su `piano-giorno/trips` action `update_trip` (`c227d26`), FUNC-03 residuo su `piano-giorno/trips` action `update_trip` (`5166c46`), SEC-05 residuo su `piano-giorno/trips` action `swap_driver` (`530fd38`), FUNC-03 residuo su `piano-giorno/trips` action `swap_driver` (`052e7c9`), **SEC-05 residuo su `piano-giorno/trips` action `move_services` (`bb92f55`)**, **FUNC-02 residuo su `piano-giorno/trips` action `move_services` (`f30e49e`)**, **FUNC-03 residuo su `piano-giorno/trips` action `move_services` (`4a2f683`)**.
+
+Tutti con test dedicati verdi e reviewer indipendente APPROVATO. I 3 commit del pacchetto `move_services` rieseguiti in questa sessione (106/106 test verdi sui 3 file dedicati).
 
 **Analisi mirata `piano-giorno/trips` (sessioni 2026-08-03/2026-08-04)**: CONC-02 e CONC-03 sono **già mitigati** su questa route da codice preesistente — `validateVehicleTimelinePayload`/`evaluateDriverTimelineConflicts`, mai toccati da questa milestone.
 
-SEC-05/FUNC-02/FUNC-03 sono ora **chiusi su `create_trip`, `update_trip` e `swap_driver`** (FUNC-02 non applicabile a `swap_driver`, che non ha `service_ids` nel contratto). Rilettura integrale in questa sessione delle 4 action residue (`move_services`, `swap_vehicle`, `delete_trip`, `delay_vessel`) ha stabilito che **solo `move_services` ha tutti e 3 i finding realmente aperti** — `swap_vehicle` e `delete_trip` non hanno alcun campo driver/servizio client-controlled applicabile a questi 3 finding (non un'omissione: il loro contratto reale non lo prevede), `delay_vessel` non ha un campo driver ma presenta un micro-gap FUNC-02-variante a bassa severità (filtro stato servizio incompleto sul reschedule orario, non equivalente all'helper esistente). Vedi tabella completa in `docs/plans/assignments-working-status.md`.
+SEC-05/FUNC-02/FUNC-03 sono ora **chiusi su tutte le 4 action applicabili**: `create_trip`, `update_trip`, `swap_driver` e `move_services` (FUNC-02 non applicabile a `swap_driver`, che non ha `service_ids` nel contratto). `swap_vehicle` e `delete_trip` non hanno alcun campo driver/servizio client-controlled applicabile a questi 3 finding (non un'omissione: il loro contratto reale non lo prevede), `delay_vessel` non ha un campo driver ma presenta un micro-gap FUNC-02-variante a bassa severità (filtro stato servizio incompleto sul reschedule orario, non equivalente all'helper esistente, rinviato a M2). Vedi tabella completa in `docs/plans/assignments-working-status.md`.
 
-**Prossimo task scelto**: SEC-05 residuo su `piano-giorno/trips`, azione `move_services`. Non ancora implementato — vedi perimetro dettagliato in `docs/plans/assignments-working-status.md`.
+**Decisione finale (sessione 2026-08-04)**: con la chiusura del pacchetto `move_services`, tutti i finding CRITICAL/HIGH/MEDIUM atomizzabili "1 route, basso rischio di regressione" sono chiusi. I 4 finding residui — **M1-08 (SEC-03)**, **M1-09 (CONC-06)**, **M1-11 (SEC-06)**, **M1-14 (CONC-07)** — sono stati riverificati sul codice reale in questa sessione (non solo sulla documentazione) e **riclassificati esplicitamente come Milestone 2** (vedi sezione Milestone 2 sotto per il dettaglio aggiornato di ciascuno): nessuno di essi è oggi uno sfruttabile diretto o un bug di correttezza attivo, ma **non si dichiara "nessun rischio"** — CONC-06 resta un rischio HIGH concreto (race condition su lock operatore), rinviato per la dimensione del file (1955 righe) e non per assenza di impatto. Il micro-gap FUNC-02-variante LOW su `delay_vessel` è anch'esso rinviato a M2. Dettaglio completo della rivalutazione in `docs/plans/assignments-working-status.md`.
 
-Il modulo **non è completo**: restano aperti SEC-05/FUNC-02/FUNC-03 residui su `move_services` (prossimo: SEC-05), il micro-gap FUNC-02-variante LOW su `delay_vessel`, SEC-03, SEC-06, CONC-06, CONC-07, M1-08, M1-09, M1-11, M1-14, M1.5-*, M2-*. Tutti gli item "residuo" sono follow-up separati dagli stessi finding già chiusi su `assign-service`/`departure-bus-assign`/`create_trip`/`update_trip`/`swap_driver` (vedi note sotto e Top 10 in working-status.md).
+Il modulo Assegnazioni **M1 è completo**. Restano aperti solo item strutturali/multi-route di M2 (CONC-06, SEC-03, SEC-06, CONC-07, il micro-gap `delay_vessel`) e gli item M1.5/M2 già noti (M1.5-*, M2-01..M2-12). Prossimo macro-step raccomandato: **CONC-06** (vedi Milestone 2 sotto).
 
 ## Milestone 1 — Alta stagione (bug runtime + hardening critico/alto)
 
@@ -82,16 +84,6 @@ Il modulo **non è completo**: restano aperti SEC-05/FUNC-02/FUNC-03 residui su 
   - **Follow-up `departure-bus-assign` — COMPLETATO**: commit `7c5d081` — "fix: block overlapping vehicle assignment in departure bus assignment (CONC-03 residuo)". Helper `checkDepartureBatchVehicleOverlap()`; controllo "interno al batch" deliberatamente **non implementato** (evidenza reale: un test FUNC-01 preesistente dimostra che un batch multi-fermata legittimo ha finestre orarie diverse per costruzione — trattarle come conflitto avrebbe rotto un caso reale). Test: `tests/unit/departure-bus-assign-vehicle-overlap.test.ts` (19 casi). Reviewer: APPROVATO.
   - **Follow-up residuo**: `piano-giorno/trips` **non richiede fix** — CONC-03 è già mitigato da `validateVehicleTimelinePayload` (overlap mezzo reale, preesistente, non toccato da questa milestone). Verificato in questa sessione.
 
-- [ ] **M1-08 — SEC-03: filtro tenant esplicito su join `services!inner`** (hardening — HIGH)
-  - Aggiungere `tenant_id` alla select del join, filtro esplicito.
-  - Test: nessun dato di altro tenant in messaggi d'errore.
-  - Stima: XS.
-
-- [ ] **M1-09 — CONC-06: rivalidazione lock al commit di `auto-assign` regenerate_all** (hardening — HIGH)
-  - Rileggere `locked_by_operator` immediatamente prima dell'upsert finale.
-  - Test: lock impostato dopo lo snapshot iniziale non viene sovrascritto.
-  - Stima: M.
-
 - [x] **M1-10 — SEC-05: validazione tenant driver_user_id/driver_profile_id ovunque** (hardening — MEDIUM → **HIGH**) — **COMPLETATO (perimetro `assign-service` soltanto)**
   - Commit: `2712d76` — "fix: verify driver tenant ownership before manual assignment in assign-service (SEC-05)".
   - Implementato: `verifyDriverBelongsToTenant()` in `assign-service/route.ts`, invocata solo per action `"assign"`, prima di qualunque guard/scrittura successiva (prima del check `daily_availability_confirmations`). Verifica `driver_user_id` contro `memberships` (tenant+role=driver) e `driver_profile_id` contro `driver_profiles` (tenant), più coerenza incrociata user/profile. Risposta `404 DRIVER_NOT_FOUND` identica per: driver inesistente, cross-tenant, coppia user/profile incoerente (non rivela il motivo). Errore di query → `500` fail-closed. FUNC-03 esplicitamente non toccato (commento nel codice).
@@ -99,7 +91,7 @@ Il modulo **non è completo**: restano aperti SEC-05/FUNC-02/FUNC-03 residui su 
   - Reviewer: APPROVATO (sessione di riallineamento 2026-08-03: verificato che il guard precede ogni scrittura, risposta 404 uniforme, FUNC-03 invariato).
   - **Follow-up `departure-bus-assign` — COMPLETATO**: commit `4307c18` — "fix: verify driver tenant ownership in departure bus assignment". Helper `verifyDriverBelongsToTenant()` aggiunto ad `assign_driver`, stesso pattern 404 uniforme, guard prima di ogni scrittura. Test dedicati: `tests/unit/departure-bus-assign-driver-tenant-guard.test.ts` (nuovo, verde). Reviewer: APPROVATO.
   - **Follow-up `piano-giorno/trips` action `create_trip` — COMPLETATO**: commit `1e10f0c` — "fix: verify driver tenant ownership before create_trip in piano-giorno trips (SEC-05)". Helper `verifyTripDriverBelongsToTenant()`, stesso pattern 404 uniforme, invocato prima di ogni scrittura. Test dedicati: `tests/unit/piano-giorno-trips-driver-tenant-guard.test.ts`. Reviewer: APPROVATO.
-  - **Follow-up residuo**: `update_trip`, `delete_trip`, `move_services`, `swap_driver`, `swap_vehicle`, `delay_vessel` restano item aperti dello stesso finding SEC-05 (protezione solo incidentale via `driver_daily_availability`, mai esplicita — vedi nota storica sopra). Verificato con grep in sessione 2026-08-04: `verifyTripDriverBelongsToTenant` invocata una sola volta, solo in `create_trip`.
+  - **Follow-up `update_trip`/`swap_driver`/`move_services` — COMPLETATO**: commit `f6492d2` (update_trip), `530fd38` (swap_driver), `bb92f55` (move_services, entrambi i rami). `delete_trip`/`swap_vehicle`/`delay_vessel` restano **non applicabili** (nessun campo driver client-controlled nel loro contratto reale, vedi analisi mirata in `assignments-working-status.md`). SEC-05 è ora chiuso su tutte le action applicabili di `piano-giorno/trips`.
   - Estendere il controllo anche quando manca un veicolo nel payload.
   - Test: assegnazione con driver di altro tenant rifiutata.
   - Stima: S.
@@ -107,11 +99,6 @@ Il modulo **non è completo**: restano aperti SEC-05/FUNC-02/FUNC-03 residui su 
   - Impatto reale confermato: **integrità dati** (assignment con `tenant_id`=A ma `driver_user_id` di un driver B), **non leak diretto** — `driver-data/route.ts` e `sendPushToUser` filtrano comunque per il tenant della sessione del driver, quindi un driver di tenant B non vede né riceve notifiche per il servizio di tenant A (salvo membership multi-tenant, non verificata in questo audit).
   - **Perimetro scelto per il prossimo task atomico**: SOLO `app/api/ops/assign-service/route.ts` (route più piccola — 274 righe, un solo punto di scrittura, gap totale su entrambi i campi, pattern di verifica già pronto da clonare da `verifyServicesBelongToTenant` di `departure-bus-assign`). `departure-bus-assign` e `piano-giorno/trips` restano item di follow-up separati (stesso finding SEC-05, task atomici distinti da aprire dopo, per non mescolare più route in un solo commit).
   - Dipendenze: nessuna. Pattern riusabile già presente in due varianti nel codebase (`verifyServicesBelongToTenant` in `departure-bus-assign`, `verifyServiceIdsBelongToTenant` in `trips`).
-
-- [ ] **M1-11 — SEC-06: sanitizzazione errori Supabase raw** (hardening — MEDIUM)
-  - Messaggi generici lato client, log dettagliato server-side, su tutte le route toccate in questo audit.
-  - Test: nessun messaggio contiene dettagli Postgres/PostgREST raw.
-  - Stima: M (multi-file).
 
 - [x] **M1-12 — TEST-01: test HTTP-level per `assign-service`/`departure-bus-assign`** (test coverage — HIGH) — **LARGAMENTE MITIGATO come effetto collaterale dei fix M1-03/M1-05/M1-07/M1-10/M1-15/M1-16/M1-17**
   - Happy path, tenant isolation, race condition, driver sospeso: tutti ora coperti da test handler-level reali (`assign-service-concurrency`, `assign-service-driver-tenant-guard`, `assign-service-vehicle-overlap`, `assign-service-status-guard`, `assign-service-driver-status-guard`, `departure-bus-assign-tenant-isolation`, `departure-bus-assign-operational-validation`, `departure-bus-assign-race`, `departure-bus-assign-upsert-semantics`, `departure-bus-assign-driver-tenant-guard` — 9 file, centinaia di casi).
@@ -121,18 +108,13 @@ Il modulo **non è completo**: restano aperti SEC-05/FUNC-02/FUNC-03 residui su 
   - Uniformare con lo stesso pattern usato per shuttle-schedules: fatto per le due route sopra (tenant isolation esplicita e testata in ogni fix SEC-01/SEC-05/CONC-03/FUNC-02/FUNC-03).
   - **Non ancora chiuso**: `piano-giorno/trips` ha già `piano-giorno-trips-tenant-isolation.test.ts` (da SEC-02); `apply-driver-swap`/`apply-vehicle-binding`/`apply-resolution-suggestion`/`patch-vehicles`/`dispatch-data`/`suggestions` restano senza suite dedicata (vedi M2-08). Stima residua: M, solo per le route non ancora coperte.
 
-- [ ] **M1-14 — CONC-07: audit trail per `assign-service`** (hardening — MEDIUM)
-  - Chiamare `logAssignmentChange` anche da questo endpoint.
-  - Test: verifica scrittura `driver_assignment_history` su override manuale.
-  - Stima: S.
-
 - [x] **M1-15 — FUNC-02: blocco assegnazione su servizio già completato/partito/cancellato** (hardening — MEDIUM) — **COMPLETATO (perimetro `assign-service` soltanto)**
   - Commit: `1089b9f` — "fix: block manual assignment on non-operative service status (FUNC-02)".
   - Implementato: denylist `NON_ASSIGNABLE_SERVICE_STATUSES` costruita sull'enum reale `public.service_status` (non su una lista inventata) — blocca `completato`, `cancelled`, `needs_review`, `pending_cancellation`, più `is_draft=true` (stesso segnale già usato da `auto-assign`). **`partito`/`caricato`/`scaricato`/`arrivato`/`problema`/`assigned` restano assegnabili** (evidenza: `driver/page.tsx` tratta solo `completato`/`cancelled` come "storico", tutto il resto come attivo/correggibile). Guard solo su `action="assign"`, `remove` invariata (permette sempre la pulizia di un'assegnazione residua). 409 `SERVICE_NOT_ASSIGNABLE`, 404 ownership invariato (non trasformato in 409).
   - Test dedicati: `tests/unit/assign-service-status-guard.test.ts` (nuovo, 24 casi, verdi), inclusi test di sensibilità.
   - Reviewer: APPROVATO (funzionale + indipendente, sessione 2026-08-03).
   - **Follow-up `piano-giorno/trips` action `create_trip` — COMPLETATO**: commit `7243e3e` — "fix: block non-operative service status on create_trip in piano-giorno trips (FUNC-02)". Helper `verifyTripServicesOperationalStatus()`, stessa denylist. Test dedicati: `tests/unit/piano-giorno-trips-service-status-guard.test.ts`. Reviewer: APPROVATO.
-  - **Follow-up separato**: `departure-bus-assign`, e le action `update_trip`/`delete_trip`/`move_services`/`swap_driver`/`swap_vehicle`/`delay_vessel` di `trips` restano item aperti dello stesso finding FUNC-02.
+  - **Follow-up `update_trip`/`move_services` — COMPLETATO**: commit `c227d26` (update_trip), `f30e49e` (move_services, solo i service_ids realmente spostati, non l'intero target group). `swap_driver` non applicabile (nessun `service_ids` nel contratto). `delete_trip`/`swap_vehicle` restano non applicabili. `departure-bus-assign` e `delay_vessel` (micro-gap variante LOW) restano item separati, rinviati a M2.
 
 - [x] **M1-16 — FUNC-03: enforcement `access_suspended` server-side** (hardening — MEDIUM) — **COMPLETATO (perimetro `assign-service` soltanto)**
   - Commit: `e05c43b` — "fix: block manual assignment to suspended or inactive drivers (FUNC-03)".
@@ -140,7 +122,7 @@ Il modulo **non è completo**: restano aperti SEC-05/FUNC-02/FUNC-03 residui su 
   - Test dedicati: `tests/unit/assign-service-driver-status-guard.test.ts` (nuovo, 20 casi, verdi), inclusi test di sensibilità (filtro `suspended` rimosso e guard bypassato interamente → failure reali confermate).
   - Reviewer: APPROVATO (funzionale/security + indipendente, sessione 2026-08-03).
   - **Follow-up `piano-giorno/trips` action `create_trip` — COMPLETATO**: commit `0e769d2` — "fix: block non-operative drivers on create_trip in piano-giorno trips (FUNC-03)". Helper `verifyTripDriverIsOperational()`, stessi segnali (`memberships.suspended`/`driver_profiles.active`). Test dedicati: `tests/unit/piano-giorno-trips-driver-status-guard.test.ts` (24 casi, inclusi 3 esperimenti di sensibilità eseguiti dal vero). Reviewer: APPROVATO.
-  - **Follow-up separato**: `departure-bus-assign`, e le action `update_trip`/`delete_trip`/`move_services`/`swap_driver`/`swap_vehicle`/`delay_vessel` di `trips` restano item aperti dello stesso finding FUNC-03 (confermato separabile da SEC-05: guardie diverse, nessuna sovrapposizione).
+  - **Follow-up `update_trip`/`swap_driver`/`move_services` — COMPLETATO**: commit `5166c46` (update_trip), `052e7c9` (swap_driver), `4a2f683` (move_services, entrambi i rami). `delete_trip`/`swap_vehicle`/`delay_vessel` restano non applicabili (nessun campo driver nel contratto). `departure-bus-assign` resta item separato, rinviato a M2. FUNC-03 è ora chiuso su tutte le action applicabili di `piano-giorno/trips`.
 
 - [x] **M1-17 — RACE-01 (emerso durante FUNC-01): DELETE+INSERT non atomico in `departure-bus-assign` (assign_driver)** (bug runtime — MEDIUM/HIGH) — **COMPLETATO**
   - Descrizione: `assign_driver` eseguiva `DELETE` seguito da `INSERT` su `assignments` come due statement separati, senza transazione. Confermato un interleaving concreto in cui il `DELETE` del secondo operatore cancellava silenziosamente la riga appena inserita dal primo, poi il proprio `INSERT` andava a buon fine senza errore: lost update silenzioso, entrambi gli operatori ricevevano 200.
@@ -217,6 +199,26 @@ Il modulo **non è completo**: restano aperti SEC-05/FUNC-02/FUNC-03 residui su 
 
 - [ ] **M2-12 — UI-03: valutare libreria dnd touch-compatibile per `planning/page.tsx`** (UX strutturale — LOW)
   - Stima: M.
+
+- [ ] **M2-13 — CONC-06: rivalidazione lock al commit di `auto-assign` regenerate_all** (hardening strutturale — HIGH) — **riclassificato da M1-09, rinviato per dimensione file**
+  - Rileggere `locked_by_operator` immediatamente prima dell'upsert finale, invece dello snapshot preso a inizio handler (righe ~1094-1101, riusato fino all'upsert a righe ~1830-1878).
+  - Test: lock impostato dopo lo snapshot iniziale non viene sovrascritto da `regenerate_all`.
+  - Stima: M. **Prossimo macro-step raccomandato per M2** — unico rischio HIGH residuo con impatto concreto noto (race condition su lock operatore in alta stagione). Non adatto a una sessione atomica singola: `app/api/ops/piano-giorno/auto-assign/route.ts` è un file da 1955 righe, richiede probabilmente RPC/transazione per la rilettura atomica pre-scrittura.
+
+- [ ] **M2-14 — SEC-03: filtro tenant esplicito su join `services!inner`** (hardening — MEDIUM) — **riclassificato da M1-08, difesa in profondità**
+  - Aggiungere `tenant_id` alla select del join, filtro esplicito, su `assign-service.ts`/`trips.ts` (2 file).
+  - Test: nessun dato di altro tenant in messaggi d'errore.
+  - Stima: XS per file. Rischio residuo basso: SEC-01/SEC-02/SEC-05 (ora chiusi su tutte le route/azioni del modulo) impediscono già a monte la creazione di `assignments` cross-tenant — non è più uno sfruttabile diretto noto. Da fare insieme a M2-15 (SEC-06), stessa categoria "error/response hardening".
+
+- [ ] **M2-15 — SEC-06: sanitizzazione errori Supabase raw** (hardening — MEDIUM) — **riclassificato da M1-11, gap sistemico multi-route**
+  - Messaggi generici lato client, log dettagliato server-side. Rivalutato con grep su tutto `app/api/ops/` (sessione 2026-08-04): il gap **non è confinato al modulo Assegnazioni** — coinvolge decine di route non correlate (`whatsapp-inbox`, `fuel-entries`, `report-jobs`, `driver-file-import`, `bulk-delete-services`, ecc.), oltre a `trips.ts`/`patch-vehicles.ts`.
+  - Test: nessun messaggio contiene dettagli Postgres/PostgREST raw.
+  - Stima: L (decine di file). Richiede una strategia centralizzata (es. wrapper `dbErrorResponse` generico riusabile), non un fix per-file. Rischio: information disclosure di dettagli schema/DB, mai leak di dati cross-tenant.
+
+- [ ] **M2-16 — CONC-07: audit trail per `assign-service`/`departure-bus-assign`** (hardening — MEDIUM) — **riclassificato da M1-14, gap più esteso del previsto**
+  - Chiamare `logAssignmentChange` anche da questi due endpoint (confermato con grep in sessione 2026-08-04: zero occorrenze in **entrambi**, non solo `assign-service` come documentato in precedenza).
+  - Test: verifica scrittura `driver_assignment_history` su override manuale, su entrambe le route.
+  - Stima: S. Priorità bassa: gap di osservabilità/audit trail, non di sicurezza o integrità dati — la scrittura stessa resta corretta e tenant-scoped.
 
 ## Definition of Done (per ogni task)
 
