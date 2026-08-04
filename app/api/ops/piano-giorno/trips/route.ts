@@ -553,6 +553,22 @@ export async function POST(request: NextRequest) {
       // Se target_group_id è null → crea un nuovo giro
       if (!destGroupId) {
         if (!date) return NextResponse.json({ ok: false, error: "date obbligatoria per nuovo giro." }, { status: 400 });
+
+        // SEC-05 residuo (ramo nuovo giro): stesso guard già usato in
+        // create_trip/update_trip/swap_driver, riusato qui (nessun nuovo
+        // helper). driver_user_id/driver_profile_id del body vengono scritti
+        // direttamente nell'insert di trip_groups poco sotto — vanno
+        // verificati PRIMA di quella scrittura, non dopo (a differenza del
+        // guard sui "valori finali" più sotto, che protegge invece
+        // l'update di assignments comune a entrambi i rami).
+        const newGroupDriverOwnership = await verifyTripDriverBelongsToTenant(
+          auth.admin,
+          tenantId,
+          { driverUserId: driver_user_id ?? null, driverProfileId: driver_profile_id ?? null },
+          { actorUserId: userId, action: "move_services" }
+        );
+        if (!newGroupDriverOwnership.ok) return newGroupDriverOwnership.response;
+
         const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, date);
         if (confirmationError) {
           return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
@@ -655,6 +671,27 @@ export async function POST(request: NextRequest) {
       const destDriver = destGroup?.driver_user_id ?? driver_user_id ?? null;
       const destDriverProfile = destGroup?.driver_profile_id ?? driver_profile_id ?? null;
       const destVehicle = destGroup?.vehicle_label ?? vehicle_label ?? null;
+
+      // SEC-05 residuo (valori finali, entrambi i rami): stesso guard già
+      // usato in create_trip/update_trip/swap_driver, riusato qui. Verifica
+      // destDriver/destDriverProfile — i valori FINALI che verranno scritti
+      // su assignments.update poco sotto — non i soli campi del body. Copre
+      // in particolare il caso "giro destinazione esistente senza driver",
+      // dove destDriver ricade sul driver_user_id del body (riga precedente)
+      // mai verificato finora. Quando il giro destinazione ha già un driver
+      // proprio, destDriver proviene da un valore già persistito (validato
+      // da un'action precedente protetta da questo stesso guard) — non è un
+      // nuovo dato client-controlled, ma viene comunque riverificato qui per
+      // difesa in profondità, coerente con "il guard deve ricevere i valori
+      // finali reali". Deve precedere timeline/eligibility e la scrittura.
+      const finalDriverOwnership = await verifyTripDriverBelongsToTenant(
+        auth.admin,
+        tenantId,
+        { driverUserId: destDriver, driverProfileId: destDriverProfile },
+        { actorUserId: userId, action: "move_services" }
+      );
+      if (!finalDriverOwnership.ok) return finalDriverOwnership.response;
+
       if (destDriver && destGroupId) {
         const targetServiceIds = [...new Set([...(await loadGroupServiceIds(auth.admin, tenantId, destGroupId)), ...service_ids])];
         const { data: destGroupDate } = await auth.admin
@@ -1025,7 +1062,7 @@ async function verifyTripDriverBelongsToTenant(
   admin: SupabaseClient,
   tenantId: string,
   input: { driverUserId?: string | null; driverProfileId?: string | null },
-  context: { actorUserId?: string; action: "create_trip" | "update_trip" | "swap_driver" }
+  context: { actorUserId?: string; action: "create_trip" | "update_trip" | "swap_driver" | "move_services" }
 ): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
   const driverUserId = input.driverUserId ?? null;
   const driverProfileId = input.driverProfileId ?? null;
