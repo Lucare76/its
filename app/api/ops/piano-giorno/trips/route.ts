@@ -299,6 +299,20 @@ export async function POST(request: NextRequest) {
       );
       if (!serviceStatusCheck.ok) return serviceStatusCheck.response;
 
+      // FUNC-03 residuo: stesso guard già usato in create_trip, riusato qui
+      // (nessun nuovo helper). Verifica gli stessi valori finali usati da
+      // SEC-05 sopra (`driver_user_id ?? null` / `driver_profile_id ?? null`)
+      // — quelli che verranno effettivamente persistiti su
+      // trip_groups/assignments più sotto. Deve precedere availability/
+      // validateTripPayload e qualunque scrittura.
+      const driverOperational = await verifyTripDriverIsOperational(
+        auth.admin,
+        tenantId,
+        { driverUserId: driver_user_id ?? null, driverProfileId: driver_profile_id ?? null },
+        { actorUserId: userId, action: "update_trip" }
+      );
+      if (!driverOperational.ok) return driverOperational.response;
+
       const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, groupDate);
       if (confirmationError) {
         return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
@@ -1156,7 +1170,7 @@ async function verifyTripDriverIsOperational(
   admin: SupabaseClient,
   tenantId: string,
   input: { driverUserId?: string | null; driverProfileId?: string | null },
-  context: { actorUserId?: string; action: "create_trip" }
+  context: { actorUserId?: string; action: "create_trip" | "update_trip" }
 ): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
   const driverUserId = input.driverUserId ?? null;
   const driverProfileId = input.driverProfileId ?? null;
