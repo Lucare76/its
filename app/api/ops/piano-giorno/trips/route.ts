@@ -261,6 +261,23 @@ export async function POST(request: NextRequest) {
         if (!ownership.ok) return ownership.response;
         verifiedServiceIds = ownership.uniqueServiceIds;
       }
+
+      // SEC-05 residuo: stesso guard già usato in create_trip, riusato qui
+      // (nessun nuovo helper). Verifica contro i valori finali che verranno
+      // scritti su trip_groups/assignments più sotto (`driver_user_id ?? null`
+      // / `driver_profile_id ?? null`, righe ~315-330) — non i campi grezzi
+      // del body prima del default — così da coprire esattamente ciò che
+      // arriva a scrittura, incluso il caso di aggiornamento parziale in cui
+      // solo uno dei due campi viene inviato dal client. Deve precedere
+      // availability/validateTripPayload e qualunque scrittura.
+      const driverOwnership = await verifyTripDriverBelongsToTenant(
+        auth.admin,
+        tenantId,
+        { driverUserId: driver_user_id ?? null, driverProfileId: driver_profile_id ?? null },
+        { actorUserId: userId, action: "update_trip" }
+      );
+      if (!driverOwnership.ok) return driverOwnership.response;
+
       const effectiveServiceIds = verifiedServiceIds ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
       const confirmationError = await ensureAvailabilityConfirmed(auth.admin, tenantId, groupDate);
       if (confirmationError) {
@@ -943,7 +960,7 @@ async function verifyTripDriverBelongsToTenant(
   admin: SupabaseClient,
   tenantId: string,
   input: { driverUserId?: string | null; driverProfileId?: string | null },
-  context: { actorUserId?: string; action: "create_trip" }
+  context: { actorUserId?: string; action: "create_trip" | "update_trip" }
 ): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
   const driverUserId = input.driverUserId ?? null;
   const driverProfileId = input.driverProfileId ?? null;
