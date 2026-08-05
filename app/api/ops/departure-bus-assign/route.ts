@@ -466,6 +466,96 @@ async function verifyDriverIsOperational(
   return { ok: true };
 }
 
+// ── FUNC-02 residuo: nessun controllo server-side impediva l'assegnazione di
+// un autista (assign_driver) verso service_ids non più operativi. Stessa
+// denylist già validata e usata in assign-service (isServiceAssignableForManualAssignment)
+// e in piano-giorno/trips (isTripServiceAssignable/NON_ASSIGNABLE_TRIP_SERVICE_STATUSES),
+// costruita sull'enum reale public.service_status (lib/types.ts:33) più il
+// flag is_draft — non ridefinita da zero, solo riapplicata qui perché
+// quell'helper non è condiviso/esportato tra i moduli (per design, vedi
+// commento originale in assign-service). "new"/"assigned"/"partito"/
+// "caricato"/"scaricato"/"arrivato"/"problema" restano assegnabili. Blocca
+// solo "completato", "cancelled", "needs_review", "pending_cancellation",
+// is_draft=true. Nessuna nuova semantica introdotta.
+const NON_ASSIGNABLE_DEPARTURE_SERVICE_STATUSES = new Set<string>([
+  "completato",
+  "cancelled",
+  "needs_review",
+  "pending_cancellation",
+]);
+
+function isDepartureServiceAssignable(service: { status?: string | null; is_draft?: boolean | null }): boolean {
+  if (service.is_draft === true) return false;
+  if (service.status && NON_ASSIGNABLE_DEPARTURE_SERVICE_STATUSES.has(service.status)) return false;
+  return true;
+}
+
+function departureServiceNotAssignableResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "SERVICE_NOT_ASSIGNABLE", message: "Uno o più servizi non possono essere assegnati nello stato attuale." },
+    { status: 409 }
+  );
+}
+
+// Verifica lo stato operativo dei service_ids del batch (già confermati
+// tenant-scoped da SEC-01) prima di assegnare l'autista. Fail-closed su
+// errore di query (500, nessuna scrittura). Va chiamata solo per
+// assign_driver, dopo SEC-01/SEC-05/FUNC-03 e prima di qualunque lettura di
+// disponibilità/geografia/overlap o scrittura su assignments.
+async function verifyDepartureServicesOperationalStatus(
+  admin: SupabaseClient,
+  tenantId: string,
+  serviceIds: string[],
+  context: { userId?: string }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  if (serviceIds.length === 0) {
+    return { ok: true };
+  }
+
+  const { data, error } = await admin
+    .from("services")
+    .select("id, status, is_draft")
+    .eq("tenant_id", tenantId)
+    .in("id", serviceIds);
+
+  if (error) {
+    auditLog({
+      event: "departure_bus_assign_service_status_check_failed",
+      level: "error",
+      tenantId,
+      userId: context.userId ?? null,
+      details: {
+        action: "assign_driver",
+        serviceCount: serviceIds.length,
+        dbCode: (error as { code?: string }).code ?? null,
+      },
+    });
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { ok: false, error: "SERVICE_STATUS_CHECK_FAILED", message: "Errore durante la verifica dello stato dei servizi." },
+        { status: 500 }
+      ),
+    };
+  }
+
+  const rows = (data ?? []) as { id: string; status: string | null; is_draft: boolean | null }[];
+  const hasNonAssignable = rows.some((row) => !isDepartureServiceAssignable(row));
+
+  if (hasNonAssignable) {
+    auditLog({
+      event: "departure_bus_assign_failed",
+      level: "warn",
+      tenantId,
+      userId: context.userId ?? null,
+      details: { action: "assign_driver", reason: "service_not_assignable", serviceCount: serviceIds.length },
+    });
+    return { ok: false, response: departureServiceNotAssignableResponse() };
+  }
+
+  return { ok: true };
+}
+
 // ── GET — lista autisti con stato account ─────────────────────────────────────
 
 export async function GET(req: NextRequest) {
@@ -626,6 +716,17 @@ export async function POST(req: NextRequest) {
         userId: auth.user.id,
       });
       if (!driverOperational.ok) return driverOperational.response;
+
+      // FUNC-02 residuo: verifica che tutti i service_ids del batch siano
+      // ancora operativi, prima di qualunque lettura di disponibilità/
+      // geografia/overlap o scrittura su assignments.
+      const serviceStatusCheck = await verifyDepartureServicesOperationalStatus(
+        auth.admin,
+        tenantId,
+        uniqueServiceIds,
+        { userId: auth.user.id }
+      );
+      if (!serviceStatusCheck.ok) return serviceStatusCheck.response;
 
       // ── FUNC-01: caricamento dati operativi del batch (data, orario, geografia) ──
       const { data: batchServicesData, error: batchServicesError } = await auth.admin
