@@ -692,6 +692,7 @@ export async function POST(request: NextRequest) {
     if (body.driver_user_id) {
       const geoValidation = await validateDriverGeographicBatch(auth.admin, tenantId, body.driver_user_id, [{
         id: service.id as string,
+        date,
         time: service.time as string,
         pickup_hotel: service.pickup_hotel as string | null,
         direction: service.direction as "arrival" | "departure",

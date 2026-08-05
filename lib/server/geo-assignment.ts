@@ -218,6 +218,7 @@ export function geographicBlockMessage(driverName: string, result: GeographicCom
 
 export type TripGeoServiceRow = {
   id: string;
+  date: string;
   time: string;
   pickup_hotel: string | null;
   direction: "arrival" | "departure";
@@ -281,6 +282,32 @@ export function tripServicesToGeographicWindow(
 // assegnati allo stesso driver. I service_id del batch sono sempre esclusi
 // dagli "altri giri" del driver, anche se già presenti in assignments (caso
 // di riassegnazione dello stesso giro allo stesso driver).
+//
+// FUNC-01 (group_id=null residuo): la query non filtra più su
+// group_id IS NOT NULL. Le assegnazioni scritte da departure-bus-assign hanno
+// sempre group_id=null per design (quella route non usa trip_groups — vedi
+// commento RACE-01 in app/api/ops/departure-bus-assign/route.ts), quindi
+// erano finora invisibili a questo controllo: un giro bus già assegnato allo
+// stesso driver non veniva mai confrontato geograficamente con un nuovo
+// batch, né via departure-bus-assign né via assign-service. Includerle
+// richiede due accorgimenti, entrambi implementati sotto:
+//   1. raggruppamento — senza un batch id persistito, il segnale reale più
+//      affidabile per capire quali service_id appartengono allo stesso giro
+//      bus è assigned_at: ogni upsert di assign_driver scrive lo stesso
+//      timestamp (calcolato una sola volta) su tutte le righe del batch in
+//      un solo statement, quindi righe con lo stesso assigned_at sono sempre
+//      lo stesso giro. Righe storiche prive di assigned_at (precedenti alla
+//      colonna, migrazione 0198) restano finestre singole per service_id:
+//      nessuna aggregazione presunta, mai un'omissione, al più un confronto
+//      pairwise in più tra tappe dello stesso giro storico.
+//   2. filtro data — la finestra geografica confronta solo l'orario (HH:MM),
+//      senza mai considerare la data. Finché "altri giri" erano solo quelli
+//      con group_id valorizzato (pochi, tipicamente dello stesso giorno) il
+//      rischio era marginale; includendo anche i giri departure-bus-assign
+//      (che si accumulano su molte date per lo stesso driver, spesso con
+//      orari ricorrenti) va escluso esplicitamente ogni confronto tra date
+//      diverse, altrimenti un giro di un altro giorno genererebbe un falso
+//      conflitto sulla sola coincidenza dell'orario.
 export async function validateDriverGeographicBatch(
   admin: SupabaseClient,
   tenantId: string,
@@ -288,20 +315,23 @@ export async function validateDriverGeographicBatch(
   batchServices: TripGeoServiceRow[]
 ): Promise<DriverGeographicBatchResult> {
   const batchIds = new Set(batchServices.map((service) => service.id));
+  const batchDates = new Set(batchServices.map((service) => service.date));
 
   const { data: otherAssignments, error } = await admin
     .from("assignments")
-    .select("group_id, services!inner(id, time, pickup_hotel, direction, hotel_id, meeting_point)")
+    .select("group_id, assigned_at, services!inner(id, date, time, pickup_hotel, direction, hotel_id, meeting_point)")
     .eq("tenant_id", tenantId)
-    .eq("driver_user_id", driverUserId)
-    .not("group_id", "is", null);
+    .eq("driver_user_id", driverUserId);
 
   if (error) {
     return { ok: false, kind: "query_error", error: `Errore validazione geografica autista: ${error.message}` };
   }
 
   const otherAssignmentsForGeo = (otherAssignments ?? [])
-    .filter((assignment) => !batchIds.has(((assignment.services as unknown) as TripGeoServiceRow).id));
+    .filter((assignment) => {
+      const otherService = (assignment.services as unknown) as TripGeoServiceRow;
+      return !batchIds.has(otherService.id) && batchDates.has(otherService.date);
+    });
   const otherServices = otherAssignmentsForGeo.map((assignment) => (assignment.services as unknown) as TripGeoServiceRow);
 
   const hotelIds = [...otherServices, ...batchServices]
@@ -314,11 +344,10 @@ export async function validateDriverGeographicBatch(
 
   const otherServicesByGroup = new Map<string, TripGeoServiceRow[]>();
   for (const assignment of otherAssignmentsForGeo) {
-    const groupId = (assignment.group_id as string | null) ?? `service:${((assignment.services as unknown) as TripGeoServiceRow).id}`;
-    otherServicesByGroup.set(groupId, [
-      ...(otherServicesByGroup.get(groupId) ?? []),
-      (assignment.services as unknown) as TripGeoServiceRow,
-    ]);
+    const service = (assignment.services as unknown) as TripGeoServiceRow;
+    const assignedAt = assignment.assigned_at as string | null | undefined;
+    const groupKey = (assignment.group_id as string | null) ?? (assignedAt ? `null_group_batch:${assignedAt}` : `service:${service.id}`);
+    otherServicesByGroup.set(groupKey, [...(otherServicesByGroup.get(groupKey) ?? []), service]);
   }
 
   const windows = [

@@ -701,4 +701,65 @@ describe("Validazione operativa — departure-bus-assign API (FUNC-01)", () => {
     expect(body.error).not.toMatch(/connection refused/i);
     expect(fake.calls.assignmentsInsert).toBe(0);
   });
+
+  it("19. FUNC-01 (group_id=null residuo): un giro bus precedente assegnato via departure-bus-assign (group_id=null) è ora visibile e blocca un conflitto geografico reale", async () => {
+    // Prima del fix, la query di validateDriverGeographicBatch filtrava
+    // group_id IS NOT NULL: le assegnazioni scritte da questa stessa route
+    // (che ha sempre group_id=null, per design — non usa trip_groups) erano
+    // invisibili a qualunque controllo geografico successivo. Qui l'unica
+    // riga "esistente" ha group_id=null, esattamente come scriverebbe
+    // questa route: deve comunque generare un conflitto reale rilevato.
+    const fake = createOperationalSupabase({
+      services: [
+        serviceRow(SERVICE_X1, { time: "09:05:00", hotel_id: "hotel-1" }),
+        { id: "existing-svc", tenant_id: TENANT_A, date: DATE_1, time: "09:00:00", pickup_hotel: null, direction: "departure", hotel_id: null, meeting_point: "Forio" },
+      ],
+      assignments: [
+        {
+          id: "asg-existing",
+          tenant_id: TENANT_A,
+          service_id: "existing-svc",
+          driver_user_id: DRIVER_A,
+          group_id: null,
+          vehicle_label: "DEP_BUS:old",
+        },
+      ],
+      dailyAvailabilityConfirmations: [confirmedDate(DATE_1)],
+      hotels: [{ id: "hotel-1", zone: "Ischia Porto" }],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body).toEqual({
+      ok: false,
+      error: "DRIVER_GEOGRAPHIC_CONFLICT",
+      message: "L'autista ha un altro servizio incompatibile con questo gruppo bus.",
+    });
+    expect(fake.calls.assignmentsDelete).toBe(0);
+    expect(fake.calls.assignmentsInsert).toBe(0);
+  });
+
+  it("20. FUNC-01 (group_id=null residuo): un giro bus precedente group_id=null geograficamente compatibile non blocca (200)", async () => {
+    const fake = createOperationalSupabase({
+      services: [
+        serviceRow(SERVICE_X1, { time: "20:00:00", hotel_id: "hotel-1" }),
+        { id: "existing-svc", tenant_id: TENANT_A, date: DATE_1, time: "09:00:00", pickup_hotel: null, direction: "departure", hotel_id: null, meeting_point: "Forio" },
+      ],
+      assignments: [
+        { id: "asg-existing", tenant_id: TENANT_A, service_id: "existing-svc", driver_user_id: DRIVER_A, group_id: null, vehicle_label: "DEP_BUS:old" },
+      ],
+      dailyAvailabilityConfirmations: [confirmedDate(DATE_1)],
+      hotels: [{ id: "hotel-1", zone: "Ischia Porto" }],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody({ service_ids: [SERVICE_X1] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ ok: true });
+  });
 });
