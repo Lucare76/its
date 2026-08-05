@@ -400,6 +400,72 @@ async function verifyDriverBelongsToTenant(
   return { ok: true };
 }
 
+// ── FUNC-03 residuo: verifica che il driver, già confermato esistente/tenant-
+// scoped da SEC-05, sia anche operativo (non sospeso) prima di consentire
+// l'assegnazione manuale. Helper separato (non fuso con SEC-05) per mantenere
+// invariati i codici di errore esistenti di SEC-05 e dare alla query di stato
+// un proprio codice 500 distinto. Segnale reale riusato (stesso già usato da
+// assign-service e piano-giorno/trips, non inventato): memberships.suspended
+// (0056_memberships_tenant_suspension.sql). Questa route persiste solo
+// driver_user_id (mai driver_profile_id, vedi verifyDriverBelongsToTenant
+// sopra): nessuna query su driver_profiles qui.
+// Driver esistente ma sospeso -> 409 DRIVER_NOT_ACTIVE, mai confuso col 404 di
+// ownership. Non verifica disponibilità giornaliera/geografia/overlap (già
+// gestiti dai guard esistenti più sotto).
+function driverNotActiveResponse(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "DRIVER_NOT_ACTIVE", message: "L'autista non è attualmente disponibile per nuove assegnazioni." },
+    { status: 409 }
+  );
+}
+
+async function verifyDriverIsOperational(
+  admin: SupabaseClient,
+  tenantId: string,
+  driverUserId: string,
+  context: { userId?: string }
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+  const { data, error } = await admin
+    .from("memberships")
+    .select("suspended")
+    .eq("tenant_id", tenantId)
+    .eq("user_id", driverUserId)
+    .eq("role", "driver")
+    .maybeSingle();
+
+  if (error) {
+    auditLog({
+      event: "departure_bus_assign_driver_status_check_failed",
+      level: "error",
+      tenantId,
+      userId: context.userId ?? null,
+      details: { action: "assign_driver", dbCode: (error as { code?: string }).code ?? null },
+    });
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { ok: false, error: "DRIVER_STATUS_CHECK_FAILED", message: "Errore durante la verifica dello stato dell'autista." },
+        { status: 500 }
+      ),
+    };
+  }
+
+  // Riga assente qui è inatteso (SEC-05 l'ha già confermata poco prima):
+  // fail-closed, non un falso successo silenzioso.
+  if (!data || data.suspended === true) {
+    auditLog({
+      event: "departure_bus_assign_failed",
+      level: "warn",
+      tenantId,
+      userId: context.userId ?? null,
+      details: { action: "assign_driver", reason: "driver_not_active" },
+    });
+    return { ok: false, response: driverNotActiveResponse() };
+  }
+
+  return { ok: true };
+}
+
 // ── GET — lista autisti con stato account ─────────────────────────────────────
 
 export async function GET(req: NextRequest) {
@@ -553,6 +619,13 @@ export async function POST(req: NextRequest) {
         action: "assign_driver",
       });
       if (!driverOwnership.ok) return driverOwnership.response;
+
+      // FUNC-03 residuo: verifica che il driver, già confermato tenant-scoped
+      // da SEC-05, sia anche operativo (non sospeso).
+      const driverOperational = await verifyDriverIsOperational(auth.admin, tenantId, driverUserId, {
+        userId: auth.user.id,
+      });
+      if (!driverOperational.ok) return driverOperational.response;
 
       // ── FUNC-01: caricamento dati operativi del batch (data, orario, geografia) ──
       const { data: batchServicesData, error: batchServicesError } = await auth.admin
