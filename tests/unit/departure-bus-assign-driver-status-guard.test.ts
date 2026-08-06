@@ -560,13 +560,28 @@ describe("FUNC-03 residuo — driver operational status guard in departure-bus-a
   });
 
   it("23. nessuna query driver_profiles nel guard FUNC-03 (questa route persiste solo driver_user_id)", async () => {
+    // Il guard FUNC-03 (verifyDriverIsOperational) stesso non ha mai
+    // interrogato driver_profiles (verifica memberships.suspended). Dopo
+    // CONC-07 una query driver_profiles esiste comunque nella route, ma solo
+    // DOPO il successo completo (lookup del profilo per lo storico
+    // strutturato) — non è parte del guard. Questa chiamata (driver sospeso)
+    // viene bloccata da FUNC-03 prima di CONC-07: zero query driver_profiles
+    // attribuibili al guard, invariante originale confermata.
     const fake = baseSeed();
     authorizeAs(fake);
 
     await callPost(assignBody({ driver_user_id: DRIVER_SUSPENDED }));
-    await callPost(assignBody());
-
     expect(fake.calls.driverProfilesQueried).toBe(0);
+  });
+
+  it("23b. CONC-07: la query driver_profiles compare solo dopo il successo (lookup per lo storico), mai nel guard", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+
+    const res = await callPost(assignBody());
+
+    expect(res.status).toBe(200);
+    expect(fake.calls.driverProfilesQueried).toBe(1);
   });
 
   it("24. audit su errore DB nella query suspended: evento dedicato, non confuso con SEC-05", async () => {
