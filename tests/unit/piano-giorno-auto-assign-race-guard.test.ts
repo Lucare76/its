@@ -397,4 +397,37 @@ describe("CONC-06 — rivalidazione lock in auto-assign", () => {
     expect(body.error).toContain("Disponibilita del giorno non confermata");
     assertZeroWrites(fake);
   });
+
+  it("9. isolamento tenant: un lock sullo stesso service_id ma su TENANT_B non blocca la rivalidazione di TENANT_A", async () => {
+    const TENANT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const fake = baseSeed({
+      // Riga "gemella" su un altro tenant, stesso service_id, locked=true.
+      // La rivalidazione reale filtra .eq("tenant_id", tenantId) prima di
+      // .in("service_id", ...): questa riga non deve mai essere osservata
+      // dalla query di TENANT_A.
+      assignments: [{ service_id: SERVICE_ARRIVAL, tenant_id: TENANT_B, locked_by_operator: true, group_id: null }],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(fake.calls.tripGroupsInserted).toHaveLength(1);
+    expect(fake.calls.assignmentsUpserted).toHaveLength(1);
+  });
+
+  it("10. batch vuoto: nessun servizio candidato, la rivalidazione viene saltata e non ci sono scritture né errori", async () => {
+    const fake = baseSeed({ services: [] });
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.assigned).toBe(0);
+    assertZeroWrites(fake);
+  });
 });
