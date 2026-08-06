@@ -38,6 +38,9 @@ function createConcurrencyAwareSupabase(
     // SEC-05: il guard driver ownership interroga anche queste due tabelle.
     memberships: [...(seed.memberships ?? [])],
     driver_profiles: [...(seed.driver_profiles ?? [])],
+    // CONC-07: destinazione dello storico strutturato fire-and-forget scritto
+    // dopo l'assegnazione riuscita — deve esistere perché l'insert non crashi.
+    driver_assignment_history: [],
   };
 
   let simulateUniqueConstraint = true;

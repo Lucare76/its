@@ -11,6 +11,8 @@ import { type SupabaseClient } from "@supabase/supabase-js";
 import { auditLog } from "@/lib/server/ops-audit";
 import { vehicleIntervalsOverlap } from "@/lib/piano-vehicle-timeline";
 import { effectiveServiceDisembarkTime, minutesFromHHMM } from "@/lib/piano-arrival-time";
+import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
+import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
 
 export const runtime = "nodejs";
 
@@ -572,7 +574,7 @@ export async function POST(request: NextRequest) {
     const { data: service, error: serviceErr } = await auth.admin
       .from("services")
       .select(
-        "id, date, status, is_draft, time, pickup_hotel, direction, hotel_id, meeting_point, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details"
+        "id, date, status, is_draft, time, pickup_hotel, direction, hotel_id, meeting_point, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details, pax"
       )
       .eq("id", body.service_id)
       .eq("tenant_id", tenantId)
@@ -633,7 +635,7 @@ export async function POST(request: NextRequest) {
     // Recupera assignment esistente
     const { data: existingAssignment } = await auth.admin
       .from("assignments")
-      .select("id, group_id")
+      .select("id, group_id, driver_profile_id, vehicle_label")
       .eq("service_id", body.service_id)
       .eq("tenant_id", tenantId)
       .maybeSingle();
@@ -832,6 +834,70 @@ export async function POST(request: NextRequest) {
       at: now,
       by_user_id: userId,
     }, { onConflict: "tenant_id,service_id,status", ignoreDuplicates: true });
+
+    // CONC-07: registra lo storico strutturato dell'assegnazione manuale,
+    // riusando esattamente il contratto già in uso da piano-giorno/trips
+    // (changeType "driver_swap" quando driver_profile_id cambia) e da
+    // apply-vehicle-binding (changeType "vehicle_binding" quando cambia solo
+    // vehicle_label). "Prima" letto dalla riga assignments già recuperata
+    // sopra (pre-mutazione). vehicle_label "" (default della colonna
+    // assignments, non nullable) è normalizzato a null per confrontarlo
+    // coerentemente con trip_groups.vehicle_label (nullable) e con l'assenza
+    // di mezzo. Nessun evento se né driver né mezzo sono cambiati. Scrittura
+    // fire-and-forget dopo il successo della mutazione principale, come negli
+    // altri chiamanti: non blocca né altera la risposta HTTP.
+    const prevDriverProfileId = (existingAssignment?.driver_profile_id as string | null | undefined) ?? null;
+    const newDriverProfileId = body.driver_profile_id ?? null;
+    const prevVehicleLabel = ((existingAssignment?.vehicle_label as string | null | undefined) ?? null) || null;
+    const newVehicleLabel = (body.vehicle_label ?? null) || null;
+    const driverChanged = prevDriverProfileId !== newDriverProfileId;
+    const vehicleChanged = prevVehicleLabel !== newVehicleLabel;
+
+    if (driverChanged || vehicleChanged) {
+      // driver_swap porta sempre con sé anche i valori mezzo (come in
+      // piano-giorno/trips: il driver_swap è loggato per l'intero giro,
+      // vehicle_label incluso, anche se solo il driver è cambiato).
+      // vehicle_binding NON include i campi driver (come in
+      // apply-vehicle-binding: quel changeType descrive solo il mezzo) —
+      // qui scatta solo quando il driver è rimasto invariato, quindi
+      // ometterlo non perde informazione.
+      const changeType = driverChanged ? ("driver_swap" as const) : ("vehicle_binding" as const);
+      const bookingKind = (service.booking_service_kind as string | null) ?? (service.service_type_code as string | null) ?? "";
+      const isNavetta = bookingKind === "navetta" || bookingKind === "shuttle_hotel" || bookingKind === "bus_city_hotel";
+      const driverFields = driverChanged
+        ? { fromDriverProfileId: prevDriverProfileId, toDriverProfileId: newDriverProfileId }
+        : {};
+      const features = extractFeatures({
+        serviceDate: date,
+        changeType,
+        ...driverFields,
+        fromVehicleLabel: prevVehicleLabel,
+        toVehicleLabel: newVehicleLabel,
+        direction: service.direction as string | null,
+        zone: service.meeting_point as string | null,
+        time: service.time as string | null,
+        vessel: (service.vessel as string | null) ?? (service.barca_compagnia as string | null) ?? null,
+        pax: (service.pax as number | null) ?? null,
+        isNavetta,
+      });
+      void logAssignmentChange(auth.admin, [{
+        tenantId,
+        serviceDate: date,
+        serviceId: body.service_id,
+        groupId,
+        changeType,
+        ...driverFields,
+        fromVehicleLabel: prevVehicleLabel,
+        toVehicleLabel: newVehicleLabel,
+        features,
+        operatorId: userId,
+      }])
+        .then(() => updateLearnedPatterns(auth.admin, tenantId))
+        // best-effort: un errore qui (insert history o aggiornamento pattern
+        // appresi) non deve mai propagarsi come unhandled rejection né
+        // alterare la risposta già inviata al client.
+        .catch(() => undefined);
+    }
 
     return NextResponse.json({ ok: true, group_id: groupId });
   } catch (err) {

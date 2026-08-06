@@ -39,6 +39,9 @@ function createTenantAwareSupabase(
     trip_groups: [...(seed.trip_groups ?? [])],
     daily_availability_confirmations: [...(seed.daily_availability_confirmations ?? [])],
     status_events: [...(seed.status_events ?? [])],
+    // CONC-07: destinazione dello storico strutturato fire-and-forget scritto
+    // dopo l'assegnazione riuscita — deve esistere perché l'insert non crashi.
+    driver_assignment_history: [],
   };
 
   const tableErrors: Record<string, { message: string } | null> = {};
