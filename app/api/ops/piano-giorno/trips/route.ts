@@ -513,6 +513,42 @@ export async function POST(request: NextRequest) {
       }
       const warnings = [...validation.warnings, ...vehicleConflict.warnings];
 
+      // CONC-07: il driver_swap esistente (blocco più sotto) copre già il
+      // caso "driver cambiato" a livello di gruppo. Il gap residuo è il
+      // cambio-solo-mezzo: driver invariato ma vehicle_label per-service
+      // diverso dal finale. prevVehicleLabel (sopra) è il valore del solo
+      // trip_group, non affidabile per ogni assignment del gruppo — quindi
+      // se il driver non cambia, snapshot minimo tenant-scoped degli
+      // assignments realmente presenti nel gruppo PRIMA della mutazione
+      // sotto, stesso pattern già validato in swap_vehicle. Se lo snapshot
+      // fallisce, vehicleSnapshotFailed viene marcato e nessun previous
+      // viene indovinato più sotto — ma l'update principale prosegue
+      // comunque (best-effort).
+      const driverChanged = (driver_profile_id ?? null) !== prevDriverProfileId;
+      let previousVehicleByServiceId = new Map<string, { vehicle_label?: string | null }>();
+      let vehicleSnapshotFailed = false;
+      if (!driverChanged) {
+        try {
+          const { data: previousAssignmentsData, error: previousAssignmentsError } = await auth.admin
+            .from("assignments")
+            .select("service_id, vehicle_label")
+            .eq("tenant_id", tenantId)
+            .eq("group_id", group_id);
+          if (previousAssignmentsError) {
+            vehicleSnapshotFailed = true;
+          } else {
+            previousVehicleByServiceId = new Map(
+              (previousAssignmentsData ?? []).map((row) => [
+                row.service_id as string,
+                row as { vehicle_label?: string | null },
+              ])
+            );
+          }
+        } catch {
+          vehicleSnapshotFailed = true;
+        }
+      }
+
       // Aggiorna trip_group
       await auth.admin
         .from("trip_groups")
@@ -593,7 +629,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Log driver swap se il driver_profile_id è cambiato
-      if ((driver_profile_id ?? null) !== prevDriverProfileId) {
+      if (driverChanged) {
         const allServiceIds = verifiedServiceIds ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
         const { data: featureServices } = allServiceIds.length > 0
           ? await auth.admin
@@ -647,6 +683,84 @@ export async function POST(request: NextRequest) {
         void logAssignmentChange(auth.admin, entries).then(() =>
           updateLearnedPatterns(auth.admin, tenantId).catch(() => undefined)
         );
+      } else if (!vehicleSnapshotFailed) {
+        // CONC-07: cambio-solo-mezzo (driver invariato). Riusa esattamente
+        // il contratto già in uso in swap_vehicle: changeType
+        // "vehicle_binding", nessun campo driver nell'entry, previous
+        // per-service dallo snapshot preso subito prima della mutazione
+        // sopra (mai il valore group-level, che può non coincidere con ogni
+        // assignment). "allServiceIds" qui è l'insieme FINALE del gruppo
+        // dopo add/remove — i servizi rimossi non ci sono più (nessun
+        // evento di rimozione), i servizi aggiunti hanno previous null nello
+        // snapshot (nessuna voce pre-esistente) e producono comunque un
+        // evento se viene loro assegnato un mezzo reale. Previous già
+        // uguale al finale non produce mai evento. Intero blocco avvolto in
+        // try/catch e fire-and-forget: mai bloccare né alterare la risposta
+        // principale già determinata.
+        try {
+          const allServiceIds = verifiedServiceIds ?? await loadGroupServiceIds(auth.admin, tenantId, group_id);
+          const newVehicleLabel = (effectiveVehicleLabel ?? null) || null;
+          const changedServiceIds = allServiceIds.filter((serviceId) => {
+            const previous = previousVehicleByServiceId.get(serviceId);
+            const prevLabel = (previous?.vehicle_label ?? null) || null;
+            return prevLabel !== newVehicleLabel;
+          });
+
+          if (changedServiceIds.length > 0) {
+            const { data: featureServices } = await auth.admin
+              .from("services")
+              .select(SERVICE_VALIDATION_COLUMNS)
+              .eq("tenant_id", tenantId)
+              .in("id", changedServiceIds);
+            const featureServiceRows = (featureServices ?? []) as ServiceValidationRow[];
+            const featureHotelIds = Array.from(new Set(featureServiceRows.map((service) => service.hotel_id).filter((id): id is string => Boolean(id))));
+            const { data: featureHotels } = featureHotelIds.length > 0
+              ? await auth.admin
+                  .from("hotels")
+                  .select("id, zone")
+                  .eq("tenant_id", tenantId)
+                  .in("id", featureHotelIds)
+              : { data: [] };
+            const featureServiceMap = new Map(featureServiceRows.map((service) => [service.id, service]));
+            const featureHotelMap = new Map((featureHotels ?? []).map((hotel) => [hotel.id as string, hotel as HotelValidationRow]));
+
+            const vehicleHistoryEntries = changedServiceIds.map((serviceId) => {
+              const previous = previousVehicleByServiceId.get(serviceId);
+              const prevLabel = (previous?.vehicle_label ?? null) || null;
+              const service = featureServiceMap.get(serviceId);
+              const hotel = service?.hotel_id ? featureHotelMap.get(service.hotel_id) : null;
+              const features = extractFeatures({
+                serviceDate: groupDate!,
+                changeType: "vehicle_binding",
+                fromVehicleLabel: prevLabel,
+                toVehicleLabel: newVehicleLabel,
+                direction: service?.direction ?? null,
+                zone: hotel?.zone ?? service?.meeting_point ?? null,
+                time: service ? serviceOperationalTime(service) : null,
+                vessel: service?.vessel ?? service?.barca_compagnia ?? null,
+                pax: service?.pax ?? null,
+                isNavetta: service ? isNavettaService(service) : false,
+              });
+              return {
+                tenantId,
+                serviceDate: groupDate!,
+                serviceId,
+                groupId: group_id,
+                changeType: "vehicle_binding" as const,
+                fromVehicleLabel: prevLabel,
+                toVehicleLabel: newVehicleLabel,
+                features,
+                operatorId: userId,
+              };
+            });
+
+            void logAssignmentChange(auth.admin, vehicleHistoryEntries)
+              .then(() => updateLearnedPatterns(auth.admin, tenantId))
+              .catch(() => undefined);
+          }
+        } catch {
+          // best-effort: mai bloccare né alterare la risposta principale già determinata.
+        }
       }
 
       return NextResponse.json({ ok: true, warnings });
