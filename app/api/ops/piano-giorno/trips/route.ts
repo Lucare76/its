@@ -1015,7 +1015,40 @@ export async function POST(request: NextRequest) {
       }
       const warnings = validation.warnings;
 
-      await Promise.all([
+      // CONC-07: snapshot "prima" degli assignments realmente coinvolti dallo
+      // swap, tenant-scoped, subito prima della mutazione bulk — stesso
+      // pattern già validato in move_services/departure-bus-assign. Se la
+      // lettura fallisce (errore Supabase o eccezione sincrona),
+      // previousSnapshotFailed viene marcato e la costruzione dello storico
+      // più sotto viene saltata per l'intera richiesta (mai previous values
+      // indovinati/falsi) — ma lo swap principale prosegue comunque: policy
+      // best-effort già stabilita altrove.
+      let previousByServiceId = new Map<
+        string,
+        { group_id?: string | null; driver_user_id?: string | null; driver_profile_id?: string | null; vehicle_label?: string | null }
+      >();
+      let previousSnapshotFailed = false;
+      try {
+        const { data: previousAssignmentsData, error: previousAssignmentsError } = await auth.admin
+          .from("assignments")
+          .select("service_id, group_id, driver_user_id, driver_profile_id, vehicle_label")
+          .eq("tenant_id", tenantId)
+          .in("group_id", groupIds);
+        if (previousAssignmentsError) {
+          previousSnapshotFailed = true;
+        } else {
+          previousByServiceId = new Map(
+            (previousAssignmentsData ?? []).map((row) => [
+              row.service_id as string,
+              row as { group_id?: string | null; driver_user_id?: string | null; driver_profile_id?: string | null; vehicle_label?: string | null },
+            ])
+          );
+        }
+      } catch {
+        previousSnapshotFailed = true;
+      }
+
+      const [tripGroupsUpdateResult, assignmentsUpdateResult] = await Promise.all([
         auth.admin.from("trip_groups").update({ driver_user_id: to_driver_id, updated_at: now }).in("id", groupIds).eq("tenant_id", tenantId),
         auth.admin.from("assignments").update({
           driver_user_id: to_driver_id,
@@ -1026,6 +1059,96 @@ export async function POST(request: NextRequest) {
           lock_reason: "manual_assignment_from_daily_plan",
         }).in("group_id", groupIds).eq("tenant_id", tenantId),
       ]);
+
+      // CONC-07: registra lo storico strutturato per ogni service_id
+      // realmente coinvolto nello swap (deduplicato via previousByServiceId,
+      // che è già una Map per service_id). Riusa esattamente il contratto già
+      // in uso in move_services/assign-service/departure-bus-assign:
+      // changeType "driver_swap" — nessun changeType nuovo. swap_driver non
+      // tocca vehicle_label, quindi non serve mai vehicle_binding qui.
+      // Rilevazione del cambiamento su driver_user_id (l'unico identificativo
+      // reale che questa action riceve dal body, come in
+      // departure-bus-assign) — non su driver_profile_id, che qui è solo
+      // best-effort/informativo. from_driver_id === to_driver_id non produce
+      // mai evento (nessuno swap reale). Condizionato al successo della
+      // mutazione bulk sopra e allo snapshot: nessun evento su mutazione
+      // fallita, nessun previous indovinato se lo snapshot è fallito. Intero
+      // blocco avvolto in try/catch e fire-and-forget: mai bloccare né
+      // alterare la risposta principale già determinata.
+      if (!tripGroupsUpdateResult.error && !assignmentsUpdateResult.error && !previousSnapshotFailed && from_driver_id !== to_driver_id) {
+        try {
+          const { data: newDriverProfileRow, error: newDriverProfileError } = await auth.admin
+            .from("driver_profiles")
+            .select("id")
+            .eq("tenant_id", tenantId)
+            .eq("user_id", to_driver_id)
+            .maybeSingle();
+          if (newDriverProfileError) throw new Error(newDriverProfileError.message);
+          const newDriverProfileId = (newDriverProfileRow?.id as string | undefined) ?? null;
+
+          const { data: featureServices } = await auth.admin
+            .from("services")
+            .select(SERVICE_VALIDATION_COLUMNS)
+            .eq("tenant_id", tenantId)
+            .in("id", movedServiceIds);
+          const featureServiceRows = (featureServices ?? []) as ServiceValidationRow[];
+          const featureHotelIds = Array.from(new Set(featureServiceRows.map((service) => service.hotel_id).filter((id): id is string => Boolean(id))));
+          const { data: featureHotels } = featureHotelIds.length > 0
+            ? await auth.admin
+                .from("hotels")
+                .select("id, zone")
+                .eq("tenant_id", tenantId)
+                .in("id", featureHotelIds)
+            : { data: [] };
+          const featureServiceMap = new Map(featureServiceRows.map((service) => [service.id, service]));
+          const featureHotelMap = new Map((featureHotels ?? []).map((hotel) => [hotel.id as string, hotel as HotelValidationRow]));
+
+          const historyEntries = [...previousByServiceId.entries()].flatMap(([serviceId, previous]) => {
+            const prevDriverUserId = previous?.driver_user_id ?? null;
+            if (prevDriverUserId === to_driver_id) return [];
+
+            const prevDriverProfileId = previous?.driver_profile_id ?? null;
+            const prevVehicleLabel = (previous?.vehicle_label ?? null) || null;
+            const service = featureServiceMap.get(serviceId);
+            const hotel = service?.hotel_id ? featureHotelMap.get(service.hotel_id) : null;
+            const features = extractFeatures({
+              serviceDate: date,
+              changeType: "driver_swap",
+              fromDriverProfileId: prevDriverProfileId,
+              toDriverProfileId: newDriverProfileId,
+              fromVehicleLabel: prevVehicleLabel,
+              toVehicleLabel: prevVehicleLabel,
+              direction: service?.direction ?? null,
+              zone: hotel?.zone ?? service?.meeting_point ?? null,
+              time: service ? serviceOperationalTime(service) : null,
+              vessel: service?.vessel ?? service?.barca_compagnia ?? null,
+              pax: service?.pax ?? null,
+              isNavetta: service ? isNavettaService(service) : false,
+            });
+            return [{
+              tenantId,
+              serviceDate: date,
+              serviceId,
+              groupId: previous?.group_id ?? null,
+              changeType: "driver_swap" as const,
+              fromDriverProfileId: prevDriverProfileId,
+              toDriverProfileId: newDriverProfileId,
+              fromVehicleLabel: prevVehicleLabel,
+              toVehicleLabel: prevVehicleLabel,
+              features,
+              operatorId: userId,
+            }];
+          });
+
+          if (historyEntries.length > 0) {
+            void logAssignmentChange(auth.admin, historyEntries)
+              .then(() => updateLearnedPatterns(auth.admin, tenantId))
+              .catch(() => undefined);
+          }
+        } catch {
+          // best-effort: mai bloccare né alterare la risposta principale già determinata.
+        }
+      }
 
       void sendPushToUser(tenantId, to_driver_id, {
         title: `🔄 Giri riassegnati — ${date}`,
