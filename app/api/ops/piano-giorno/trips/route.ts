@@ -197,6 +197,42 @@ export async function POST(request: NextRequest) {
 
       const groupId = group.id as string;
 
+      // CONC-07: snapshot "prima" degli assignments realmente coinvolti,
+      // tenant-scoped, subito prima dell'upsert — _assignServicesToGroup
+      // (helper condiviso con move_services, non modificato qui) esegue un
+      // upsert su (service_id, tenant_id): un servizio può già avere un
+      // assignment preesistente (es. da auto-assign) che l'upsert sovrascrive,
+      // quindi "previous" non è mai assunto null per default. Se la lettura
+      // fallisce (errore Supabase o eccezione sincrona), previousSnapshotFailed
+      // viene marcato e la costruzione dello storico più sotto viene saltata
+      // per l'intera richiesta (mai previous values indovinati/falsi) — ma la
+      // creazione del giro prosegue comunque: policy best-effort già stabilita
+      // altrove.
+      let previousByServiceId = new Map<
+        string,
+        { group_id?: string | null; driver_user_id?: string | null; driver_profile_id?: string | null; vehicle_label?: string | null }
+      >();
+      let previousSnapshotFailed = false;
+      try {
+        const { data: previousAssignmentsData, error: previousAssignmentsError } = await auth.admin
+          .from("assignments")
+          .select("service_id, group_id, driver_user_id, driver_profile_id, vehicle_label")
+          .eq("tenant_id", tenantId)
+          .in("service_id", verifiedServiceIds);
+        if (previousAssignmentsError) {
+          previousSnapshotFailed = true;
+        } else {
+          previousByServiceId = new Map(
+            (previousAssignmentsData ?? []).map((row) => [
+              row.service_id as string,
+              row as { group_id?: string | null; driver_user_id?: string | null; driver_profile_id?: string | null; vehicle_label?: string | null },
+            ])
+          );
+        }
+      } catch {
+        previousSnapshotFailed = true;
+      }
+
       // 2. Assignments + status update per ogni servizio
       await _assignServicesToGroup(
         auth.admin,
@@ -209,6 +245,124 @@ export async function POST(request: NextRequest) {
         userId,
         now
       );
+
+      // CONC-07: registra lo storico strutturato per ogni service_id
+      // realmente assegnato al nuovo giro. _assignServicesToGroup (helper
+      // condiviso, non modificato) non propaga errori dall'upsert: la
+      // "conferma successo" richiesta dal contratto arriva quindi da una
+      // rilettura tenant-scoped degli assignments realmente scritti con
+      // group_id = groupId — solo i service_id confermati con questo
+      // group_id producono un evento. Riusa esattamente il contratto già in
+      // uso in move_services/assign-service/departure-bus-assign/swap_driver/
+      // swap_vehicle: changeType "driver_swap" se il driver è cambiato (porta
+      // con sé anche i valori mezzo), "vehicle_binding" se è cambiato solo il
+      // mezzo — nessun changeType nuovo, nessun "manual_assign" inventato.
+      // Nessun evento se né driver né mezzo sono cambiati (caso tipico:
+      // create_trip senza driver né mezzo). Condizionato allo snapshot: nessun
+      // previous indovinato se lo snapshot è fallito. Intero blocco avvolto in
+      // try/catch e fire-and-forget: mai bloccare né alterare la risposta
+      // principale già determinata (già inviata sotto, invariata).
+      if (!previousSnapshotFailed) {
+        try {
+          const { data: confirmedAssignments } = await auth.admin
+            .from("assignments")
+            .select("service_id")
+            .eq("tenant_id", tenantId)
+            .eq("group_id", groupId)
+            .in("service_id", verifiedServiceIds);
+          const confirmedServiceIds = new Set((confirmedAssignments ?? []).map((row) => row.service_id as string));
+
+          const { data: featureServices } = await auth.admin
+            .from("services")
+            .select(SERVICE_VALIDATION_COLUMNS)
+            .eq("tenant_id", tenantId)
+            .in("id", verifiedServiceIds);
+          const featureServiceRows = (featureServices ?? []) as ServiceValidationRow[];
+          const featureHotelIds = Array.from(new Set(featureServiceRows.map((service) => service.hotel_id).filter((id): id is string => Boolean(id))));
+          const { data: featureHotels } = featureHotelIds.length > 0
+            ? await auth.admin
+                .from("hotels")
+                .select("id, zone")
+                .eq("tenant_id", tenantId)
+                .in("id", featureHotelIds)
+            : { data: [] };
+          const featureServiceMap = new Map(featureServiceRows.map((service) => [service.id, service]));
+          const featureHotelMap = new Map((featureHotels ?? []).map((hotel) => [hotel.id as string, hotel as HotelValidationRow]));
+
+          // Rilevazione del cambiamento su driver_user_id (l'identificativo
+          // sempre presente nel body, come in swap_driver/departure-bus-assign)
+          // — non su driver_profile_id, che il body di create_trip può
+          // legittimamente omettere pur specificando un driver reale.
+          // driver_profile_id per l'entry resta comunque valorizzato quando
+          // possibile: se il body lo fornisce esplicitamente viene usato
+          // direttamente, altrimenti risolto con un lookup tenant-scoped
+          // best-effort su driver_profiles a partire da driver_user_id.
+          const newDriverUserId = driver_user_id ?? null;
+          let newDriverProfileId = driver_profile_id ?? null;
+          if (!newDriverProfileId && newDriverUserId) {
+            const { data: newDriverProfileRow } = await auth.admin
+              .from("driver_profiles")
+              .select("id")
+              .eq("tenant_id", tenantId)
+              .eq("user_id", newDriverUserId)
+              .maybeSingle();
+            newDriverProfileId = (newDriverProfileRow?.id as string | undefined) ?? null;
+          }
+          const newVehicleLabel = (effectiveVehicleLabel ?? null) || null;
+
+          const historyEntries = verifiedServiceIds.flatMap((serviceId) => {
+            if (!confirmedServiceIds.has(serviceId)) return [];
+
+            const previous = previousByServiceId.get(serviceId);
+            const prevDriverUserId = previous?.driver_user_id ?? null;
+            const prevDriverProfileId = previous?.driver_profile_id ?? null;
+            const prevVehicleLabel = (previous?.vehicle_label ?? null) || null;
+            const driverChanged = prevDriverUserId !== newDriverUserId;
+            const vehicleChanged = prevVehicleLabel !== newVehicleLabel;
+            if (!driverChanged && !vehicleChanged) return [];
+
+            const changeType = driverChanged ? ("driver_swap" as const) : ("vehicle_binding" as const);
+            const service = featureServiceMap.get(serviceId);
+            const hotel = service?.hotel_id ? featureHotelMap.get(service.hotel_id) : null;
+            const driverFields = driverChanged
+              ? { fromDriverProfileId: prevDriverProfileId, toDriverProfileId: newDriverProfileId }
+              : {};
+            const features = extractFeatures({
+              serviceDate: date,
+              changeType,
+              ...driverFields,
+              fromVehicleLabel: prevVehicleLabel,
+              toVehicleLabel: newVehicleLabel,
+              direction: service?.direction ?? null,
+              zone: hotel?.zone ?? service?.meeting_point ?? null,
+              time: service ? serviceOperationalTime(service) : null,
+              vessel: service?.vessel ?? service?.barca_compagnia ?? null,
+              pax: service?.pax ?? null,
+              isNavetta: service ? isNavettaService(service) : false,
+            });
+            return [{
+              tenantId,
+              serviceDate: date,
+              serviceId,
+              groupId,
+              changeType,
+              ...driverFields,
+              fromVehicleLabel: prevVehicleLabel,
+              toVehicleLabel: newVehicleLabel,
+              features,
+              operatorId: userId,
+            }];
+          });
+
+          if (historyEntries.length > 0) {
+            void logAssignmentChange(auth.admin, historyEntries)
+              .then(() => updateLearnedPatterns(auth.admin, tenantId))
+              .catch(() => undefined);
+          }
+        } catch {
+          // best-effort: mai bloccare né alterare la risposta principale già determinata.
+        }
+      }
 
       // 3. Push all'autista se assegnato
       if (driver_user_id) {
