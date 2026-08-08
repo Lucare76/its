@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 import { escapeHtml } from "@/lib/server/escape-html";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -77,7 +78,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     })
     .eq("id", session.id);
 
-  if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
+  if (updateErr) {
+    auditLog({
+      event: "agency_review_update_failed",
+      level: "error",
+      tenantId: session.tenant_id as string,
+      details: { sessionId: session.id, message: updateErr.message },
+    });
+    return NextResponse.json({ error: "Impossibile registrare la risposta." }, { status: 500 });
+  }
 
   // Se ci sono modifiche, invia email all'operatore
   if (body.data.action === "modified" && body.data.modifications?.length) {
