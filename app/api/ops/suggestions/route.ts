@@ -4,6 +4,9 @@ import { generateSuggestions, type Suggestion, type SuggestionActionPayload } fr
 import type { Assignment, BusLotConfig, Hotel, Service } from "@/lib/types";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { fetchAllServices } from "@/lib/server/fetch-all-services";
+import { extractFeatures, logAssignmentChange, type AssignmentHistoryEntry } from "@/lib/server/assignment-history";
+import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
+import { effectiveServiceDisembarkTime } from "@/lib/piano-arrival-time";
 
 export const runtime = "nodejs";
 
@@ -39,6 +42,16 @@ function normalize(value: string | null | undefined) {
 
 function isActiveService(service: Service) {
   return service.status !== "cancelled" && service.status !== "completato" && service.is_draft !== true;
+}
+
+function movePaxOperationalTime(service: Service): string {
+  if (service.direction === "departure") return (service.time ?? "").slice(0, 5);
+  return effectiveServiceDisembarkTime(service) ?? (service.time ?? "").slice(0, 5);
+}
+
+function isNavettaService(service: Pick<Service, "booking_service_kind" | "service_type_code">): boolean {
+  const kind = service.booking_service_kind ?? service.service_type_code ?? "";
+  return kind === "navetta" || kind === "shuttle_hotel" || kind === "bus_city_hotel";
 }
 
 function matchesBusLot(service: Service, lot: BusLotConfig) {
@@ -110,9 +123,11 @@ async function executeMovePax(
     throw new Error("Payload spostamento incompleto.");
   }
 
-  const { services, assignments, busLotConfigs } = await loadState(auth);
+  const tenantId = auth.membership.tenant_id;
+  const { services, assignments, hotels, busLotConfigs } = await loadState(auth);
   const activeServices = services.filter(isActiveService);
   const assignmentsByServiceId = new Map(assignments.map((assignment) => [assignment.service_id, assignment]));
+  const hotelsById = new Map(hotels.map((hotel) => [hotel.id, hotel]));
   const fromBusLot = busLotConfigs.find((lot) => lot.id === payload.from_bus_id) ?? null;
 
   const candidates = activeServices
@@ -138,25 +153,70 @@ async function executeMovePax(
     throw new Error("Nessun servizio compatibile da spostare.");
   }
 
+  // CONC-07: previous vehicle_label/group_id già disponibili in
+  // assignmentsByServiceId, caricato prima di qualunque mutazione — nessuna
+  // query aggiuntiva necessaria. Riusa il contratto già validato in
+  // move_services/swap_vehicle: changeType "vehicle_binding" (qui il driver
+  // non viene mai toccato, quindi mai "driver_swap"), un entry al massimo per
+  // service_id, history costruita solo dopo la mutazione riuscita per quel
+  // servizio.
+  const toVehicleLabel = payload.to_bus_label;
+  const historyEntries: AssignmentHistoryEntry[] = [];
+
   for (const service of selected) {
     const existing = assignmentsByServiceId.get(service.id);
+    const prevVehicleLabel = existing?.vehicle_label ?? null;
+    const prevGroupId = existing?.group_id ?? null;
+
     if (existing) {
       const { error } = await auth.admin
         .from("assignments")
-        .update({ vehicle_label: payload.to_bus_label })
-        .eq("tenant_id", auth.membership.tenant_id)
+        .update({ vehicle_label: toVehicleLabel })
+        .eq("tenant_id", tenantId)
         .eq("id", existing.id);
       if (error) throw new Error(error.message);
-      continue;
+    } else {
+      const { error } = await auth.admin.from("assignments").insert({
+        tenant_id: tenantId,
+        service_id: service.id,
+        driver_user_id: null,
+        vehicle_label: toVehicleLabel
+      });
+      if (error) throw new Error(error.message);
     }
 
-    const { error } = await auth.admin.from("assignments").insert({
-      tenant_id: auth.membership.tenant_id,
-      service_id: service.id,
-      driver_user_id: null,
-      vehicle_label: payload.to_bus_label
-    });
-    if (error) throw new Error(error.message);
+    if (prevVehicleLabel !== toVehicleLabel) {
+      const hotel = service.hotel_id ? hotelsById.get(service.hotel_id) : null;
+      const features = extractFeatures({
+        serviceDate: service.date,
+        changeType: "vehicle_binding",
+        fromVehicleLabel: prevVehicleLabel,
+        toVehicleLabel,
+        direction: service.direction ?? null,
+        zone: hotel?.zone ?? service.meeting_point ?? null,
+        time: movePaxOperationalTime(service),
+        vessel: service.vessel ?? service.barca_compagnia ?? null,
+        pax: service.pax ?? null,
+        isNavetta: isNavettaService(service)
+      });
+      historyEntries.push({
+        tenantId,
+        serviceDate: service.date,
+        serviceId: service.id,
+        groupId: prevGroupId,
+        changeType: "vehicle_binding",
+        fromVehicleLabel: prevVehicleLabel,
+        toVehicleLabel,
+        features,
+        operatorId: auth.user.id
+      });
+    }
+  }
+
+  if (historyEntries.length > 0) {
+    void logAssignmentChange(auth.admin, historyEntries)
+      .then(() => updateLearnedPatterns(auth.admin, tenantId))
+      .catch(() => undefined);
   }
 
   return { moved_services: selected.length, moved_pax: movedPax };
