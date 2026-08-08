@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -80,7 +81,14 @@ export async function POST(request: NextRequest) {
     })
     .eq("id", quote.id);
 
-  if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
+  if (updateErr) {
+    auditLog({
+      event: "public_service_quote_accept_failed",
+      level: "error",
+      details: { quoteId: quote.id, message: updateErr.message },
+    });
+    return NextResponse.json({ error: "Impossibile completare l'accettazione del preventivo." }, { status: 500 });
+  }
 
   return NextResponse.json({ ok: true, already_accepted: false });
 }
