@@ -163,61 +163,78 @@ async function executeMovePax(
   const toVehicleLabel = payload.to_bus_label;
   const historyEntries: AssignmentHistoryEntry[] = [];
 
-  for (const service of selected) {
-    const existing = assignmentsByServiceId.get(service.id);
-    const prevVehicleLabel = existing?.vehicle_label ?? null;
-    const prevGroupId = existing?.group_id ?? null;
-
-    if (existing) {
-      const { error } = await auth.admin
-        .from("assignments")
-        .update({ vehicle_label: toVehicleLabel })
-        .eq("tenant_id", tenantId)
-        .eq("id", existing.id);
-      if (error) throw new Error(error.message);
-    } else {
-      const { error } = await auth.admin.from("assignments").insert({
-        tenant_id: tenantId,
-        service_id: service.id,
-        driver_user_id: null,
-        vehicle_label: toVehicleLabel
-      });
-      if (error) throw new Error(error.message);
-    }
-
-    if (prevVehicleLabel !== toVehicleLabel) {
-      const hotel = service.hotel_id ? hotelsById.get(service.hotel_id) : null;
-      const features = extractFeatures({
-        serviceDate: service.date,
-        changeType: "vehicle_binding",
-        fromVehicleLabel: prevVehicleLabel,
-        toVehicleLabel,
-        direction: service.direction ?? null,
-        zone: hotel?.zone ?? service.meeting_point ?? null,
-        time: movePaxOperationalTime(service),
-        vessel: service.vessel ?? service.barca_compagnia ?? null,
-        pax: service.pax ?? null,
-        isNavetta: isNavettaService(service)
-      });
-      historyEntries.push({
-        tenantId,
-        serviceDate: service.date,
-        serviceId: service.id,
-        groupId: prevGroupId,
-        changeType: "vehicle_binding",
-        fromVehicleLabel: prevVehicleLabel,
-        toVehicleLabel,
-        features,
-        operatorId: auth.user.id
-      });
-    }
-  }
-
-  if (historyEntries.length > 0) {
+  // CONC-07 (rischio residuo): il flush di historyEntries deve avvenire anche
+  // se un servizio successivo del batch fallisce a metà loop — altrimenti le
+  // mutazioni già persistite con successo (service precedenti) restano senza
+  // storico perché il throw usciva dalla funzione prima di raggiungere il
+  // flush unico di fine loop. Un solo punto di flush esegue per invocazione:
+  // o quello di fine try (tutti i servizi riusciti) o quello nel catch (solo
+  // le entry già committed prima del fallimento) — mai entrambi, quindi zero
+  // doppio evento. L'errore originale della mutazione DB viene sempre
+  // ripropagato invariato dopo il flush best-effort.
+  const flushHistory = () => {
+    if (historyEntries.length === 0) return;
     void logAssignmentChange(auth.admin, historyEntries)
       .then(() => updateLearnedPatterns(auth.admin, tenantId))
       .catch(() => undefined);
+  };
+
+  try {
+    for (const service of selected) {
+      const existing = assignmentsByServiceId.get(service.id);
+      const prevVehicleLabel = existing?.vehicle_label ?? null;
+      const prevGroupId = existing?.group_id ?? null;
+
+      if (existing) {
+        const { error } = await auth.admin
+          .from("assignments")
+          .update({ vehicle_label: toVehicleLabel })
+          .eq("tenant_id", tenantId)
+          .eq("id", existing.id);
+        if (error) throw new Error(error.message);
+      } else {
+        const { error } = await auth.admin.from("assignments").insert({
+          tenant_id: tenantId,
+          service_id: service.id,
+          driver_user_id: null,
+          vehicle_label: toVehicleLabel
+        });
+        if (error) throw new Error(error.message);
+      }
+
+      if (prevVehicleLabel !== toVehicleLabel) {
+        const hotel = service.hotel_id ? hotelsById.get(service.hotel_id) : null;
+        const features = extractFeatures({
+          serviceDate: service.date,
+          changeType: "vehicle_binding",
+          fromVehicleLabel: prevVehicleLabel,
+          toVehicleLabel,
+          direction: service.direction ?? null,
+          zone: hotel?.zone ?? service.meeting_point ?? null,
+          time: movePaxOperationalTime(service),
+          vessel: service.vessel ?? service.barca_compagnia ?? null,
+          pax: service.pax ?? null,
+          isNavetta: isNavettaService(service)
+        });
+        historyEntries.push({
+          tenantId,
+          serviceDate: service.date,
+          serviceId: service.id,
+          groupId: prevGroupId,
+          changeType: "vehicle_binding",
+          fromVehicleLabel: prevVehicleLabel,
+          toVehicleLabel,
+          features,
+          operatorId: auth.user.id
+        });
+      }
+    }
+  } catch (err) {
+    flushHistory();
+    throw err;
   }
+
+  flushHistory();
 
   return { moved_services: selected.length, moved_pax: movedPax };
 }

@@ -27,6 +27,7 @@ const TENANT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const TENANT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const SERVICE_1 = "a1111111-1111-4111-8111-111111111111";
 const SERVICE_2 = "a2222222-2222-4222-8222-222222222222";
+const SERVICE_3 = "a3333333-3333-4333-8333-333333333333";
 const SERVICE_TENANT_B = "a9999999-9999-4999-8999-999999999999";
 const GROUP_1 = "c1111111-1111-4111-8111-111111111111";
 const DRIVER_1 = "d0000000-0000-4000-8000-000000000000";
@@ -53,6 +54,7 @@ function createTenantAwareSupabase(
 
   const tableErrors: Record<string, { message: string } | undefined> = {};
   const tableUpdateErrors: Record<string, { message: string } | undefined> = {};
+  let failForServiceId: { table: string; serviceId: string; err: { message: string } } | null = null;
 
   function makeQueryBuilder(table: string, op: "select" | "update", updatePayload?: Row) {
     const rows = tables[table];
@@ -64,6 +66,14 @@ function createTenantAwareSupabase(
         return builder;
       },
       then(resolve: (v: { data: Row[] | null; error: { message: string } | null }) => unknown, reject?: (e: unknown) => unknown) {
+        if (
+          op === "update"
+          && failForServiceId
+          && table === failForServiceId.table
+          && filtered.some((r) => r.service_id === failForServiceId!.serviceId)
+        ) {
+          return Promise.resolve({ data: null, error: failForServiceId.err }).then(resolve, reject);
+        }
         if (op === "update" && tableUpdateErrors[table]) {
           return Promise.resolve({ data: null, error: tableUpdateErrors[table] }).then(resolve, reject);
         }
@@ -93,11 +103,20 @@ function createTenantAwareSupabase(
         },
         insert(rowsOrRow: Row | Row[]) {
           const rowsArr = Array.isArray(rowsOrRow) ? rowsOrRow : [rowsOrRow];
-          const inserted = rowsArr.map((r) => ({ id: r.id ?? `assignments-${Math.random().toString(36).slice(2)}`, ...r }));
-          tables[table].push(...inserted);
           return {
-            then(resolve: (v: { data: Row[]; error: null }) => unknown, reject?: (e: unknown) => unknown) {
+            then(resolve: (v: { data: Row[] | null; error: { message: string } | null }) => unknown, reject?: (e: unknown) => unknown) {
+              if (
+                failForServiceId
+                && table === failForServiceId.table
+                && rowsArr.some((r) => r.service_id === failForServiceId!.serviceId)
+              ) {
+                return Promise.resolve({ data: null, error: failForServiceId.err }).then(resolve, reject);
+              }
               if (tableErrors[table]) return Promise.resolve({ data: null, error: tableErrors[table] }).then(resolve, reject);
+              // insert riuscito: persiste solo ora, mai in caso di errore sopra —
+              // altrimenti un service "fallito" comparirebbe comunque nella tabella.
+              const inserted = rowsArr.map((r) => ({ id: r.id ?? `assignments-${Math.random().toString(36).slice(2)}`, ...r }));
+              tables[table].push(...inserted);
               return Promise.resolve({ data: inserted, error: null }).then(resolve, reject);
             },
           };
@@ -125,6 +144,9 @@ function createTenantAwareSupabase(
     },
     setUpdateError(table: string, err: { message: string } | null) {
       tableUpdateErrors[table] = err ?? undefined;
+    },
+    setFailForService(table: string, serviceId: string, err: { message: string }) {
+      failForServiceId = { table, serviceId, err };
     },
   };
 }
@@ -600,5 +622,275 @@ describe("CONC-07 — storico strutturato (driver_assignment_history) su move_pa
 
     const resolved = fake.tables.operations_suggestions.find((s) => s.suggestion_id === "sugg-overcapacity-1");
     expect(resolved?.resolved).toBe(true);
+  });
+
+  // ── PARTIAL SUCCESS + HISTORY FLUSH ─────────────────────────────────────
+  // executeMovePax processa più service in sequenza in un unico loop. Se il
+  // service N fallisce dopo che i service 1..N-1 sono già stati mutati con
+  // successo in DB, il throw usciva dalla funzione PRIMA del flush unico di
+  // fine loop, perdendo la history delle mutazioni già persistite. Il fix
+  // avvolge il loop in un try/catch: il catch flusha le entry già raccolte
+  // (mutazioni già committed) con lo stesso helper best-effort, poi ripropaga
+  // l'errore originale invariato. Un solo punto di flush esegue per
+  // invocazione (quello di fine try in caso di successo pieno, quello nel
+  // catch in caso di fallimento parziale) — mai entrambi.
+  function threeServiceSeed(overrides: Parameters<typeof createTenantAwareSupabase>[0] = {}) {
+    return baseSeed({
+      services: [
+        serviceRow(SERVICE_1, { pax: 2 }),
+        serviceRow(SERVICE_2, { pax: 2, time: "14:00:00" }),
+        serviceRow(SERVICE_3, { pax: 2, time: "18:00:00" }),
+      ],
+      assignments: [
+        { id: "asg-1", tenant_id: TENANT_A, service_id: SERVICE_1, group_id: GROUP_1, driver_user_id: DRIVER_1, driver_profile_id: null, vehicle_label: VEHICLE_FROM },
+        { id: "asg-2", tenant_id: TENANT_A, service_id: SERVICE_2, group_id: GROUP_1, driver_user_id: DRIVER_1, driver_profile_id: null, vehicle_label: VEHICLE_FROM },
+        { id: "asg-3", tenant_id: TENANT_A, service_id: SERVICE_3, group_id: GROUP_1, driver_user_id: DRIVER_1, driver_profile_id: null, vehicle_label: VEHICLE_FROM },
+      ],
+      ...overrides,
+    });
+  }
+
+  it("31. A+B riusciti (nessun fallimento): history A+B in un'unica chiamata, comportamento di successo pieno invariato", async () => {
+    const fake = baseSeed({
+      services: [serviceRow(SERVICE_1, { pax: 2 }), serviceRow(SERVICE_2, { pax: 2, time: "14:00:00" })],
+      assignments: [
+        { id: "asg-1", tenant_id: TENANT_A, service_id: SERVICE_1, group_id: GROUP_1, driver_user_id: DRIVER_1, driver_profile_id: null, vehicle_label: VEHICLE_FROM },
+        { id: "asg-2", tenant_id: TENANT_A, service_id: SERVICE_2, group_id: GROUP_1, driver_user_id: DRIVER_1, driver_profile_id: null, vehicle_label: VEHICLE_FROM },
+      ],
+    });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    const res = await callPost(movePaxBody({ pax: 4 }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(mocks.logAssignmentChange).toHaveBeenCalledTimes(1);
+    const entries = lastHistoryEntries();
+    expect(entries.map((e) => e.serviceId).sort()).toEqual([SERVICE_1, SERVICE_2].sort());
+  });
+
+  it("32. A fallisce (primo service del batch): zero history, nessuna mutazione precedente da preservare", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_1, { message: "update failed on A" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    const res = await callPost(movePaxBody({ pax: 6 }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("update failed on A");
+    expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
+    const unchangedB = fake.tables.assignments.find((a) => a.service_id === SERVICE_2);
+    expect(unchangedB?.vehicle_label).toBe(VEHICLE_FROM);
+  });
+
+  it("33. A riesce, B fallisce: history contiene solo A, B è escluso", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_2, { message: "update failed on B" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    const res = await callPost(movePaxBody({ pax: 6 }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("update failed on B");
+    expect(mocks.logAssignmentChange).toHaveBeenCalledTimes(1);
+    const entries = lastHistoryEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].serviceId).toBe(SERVICE_1);
+    expect(entries.some((e) => e.serviceId === SERVICE_2)).toBe(false);
+    // A mutato con successo in DB, B no (l'update per B è fallito prima di applicare il payload).
+    const mutatedA = fake.tables.assignments.find((a) => a.service_id === SERVICE_1);
+    const untouchedB = fake.tables.assignments.find((a) => a.service_id === SERVICE_2);
+    expect(mutatedA?.vehicle_label).toBe(VEHICLE_TO);
+    expect(untouchedB?.vehicle_label).toBe(VEHICLE_FROM);
+  });
+
+  it("34. A+B riescono, C fallisce: history contiene A+B in un'unica chiamata, C escluso", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_3, { message: "update failed on C" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    const res = await callPost(movePaxBody({ pax: 6 }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("update failed on C");
+    expect(mocks.logAssignmentChange).toHaveBeenCalledTimes(1);
+    const entries = lastHistoryEntries();
+    expect(entries.map((e) => e.serviceId).sort()).toEqual([SERVICE_1, SERVICE_2].sort());
+    expect(entries.some((e) => e.serviceId === SERVICE_3)).toBe(false);
+  });
+
+  it("35. errore originale della mutazione preservato esattamente (non mascherato dal flush)", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_2, { message: "vincolo univoco violato su assignments" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    const res = await callPost(movePaxBody({ pax: 6 }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.error).toBe("vincolo univoco violato su assignments");
+  });
+
+  it("36. logAssignmentChange rigetta durante il flush di partial-success: errore DB originale preservato, nessun dettaglio history esposto, nessun unhandled rejection", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_2, { message: "update failed on B" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+    mocks.logAssignmentChange.mockRejectedValueOnce(new Error("driver_assignment_history insert failed"));
+
+    const res = await callPost(movePaxBody({ pax: 6 }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("update failed on B");
+    expect(JSON.stringify(body)).not.toMatch(/driver_assignment_history/);
+  });
+
+  it("37. nessun doppio flush: logAssignmentChange chiamato una sola volta anche in partial-success", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_3, { message: "update failed on C" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    await callPost(movePaxBody({ pax: 6 }));
+
+    expect(mocks.logAssignmentChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("38. previous/new corretti nelle entry del flush parziale", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_3, { message: "update failed on C" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    await callPost(movePaxBody({ pax: 6 }));
+
+    const entries = lastHistoryEntries();
+    expect(entries.every((e) => e.fromVehicleLabel === VEHICLE_FROM)).toBe(true);
+    expect(entries.every((e) => e.toVehicleLabel === VEHICLE_TO)).toBe(true);
+  });
+
+  it("39. actor corretto nel flush parziale", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_3, { message: "update failed on C" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake, "operator-partial");
+
+    await callPost(movePaxBody({ pax: 6 }));
+
+    const entries = lastHistoryEntries();
+    expect(entries.every((e) => e.operatorId === "operator-partial")).toBe(true);
+  });
+
+  it("40. tenant corretto nel flush parziale", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_3, { message: "update failed on C" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    await callPost(movePaxBody({ pax: 6 }));
+
+    const entries = lastHistoryEntries();
+    expect(entries.every((e) => e.tenantId === TENANT_A)).toBe(true);
+  });
+
+  it("41. insert e update entrambi coperti nel flush parziale: A via insert (nessun assignment esistente, targeted via from_bus_id) riesce, B via update fallisce", async () => {
+    // SERVICE_1 non ha alcun assignment esistente: diventa candidato solo se
+    // targettato esplicitamente via from_bus_id (unico modo per selezionare
+    // un service senza assignment — il matching per from_bus_label richiede
+    // un vehicle_label esistente). SERVICE_2 ha un assignment esistente sul
+    // mezzo sorgente: percorso update.
+    const fake = baseSeed({
+      services: [serviceRow(SERVICE_1, { pax: 2 }), serviceRow(SERVICE_2, { pax: 2, time: "14:00:00" })],
+      assignments: [
+        { id: "asg-2", tenant_id: TENANT_A, service_id: SERVICE_2, group_id: GROUP_1, driver_user_id: DRIVER_1, driver_profile_id: null, vehicle_label: VEHICLE_FROM },
+      ],
+    });
+    fake.setFailForService("assignments", SERVICE_2, { message: "update failed on B" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    const res = await callPost(movePaxBody({ pax: 4, from_bus_id: SERVICE_1 }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.error).toBe("update failed on B");
+    expect(mocks.logAssignmentChange).toHaveBeenCalledTimes(1);
+    const entries = lastHistoryEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].serviceId).toBe(SERVICE_1);
+    expect(entries[0].fromVehicleLabel).toBeNull();
+    const insertedA = fake.tables.assignments.find((a) => a.service_id === SERVICE_1);
+    expect(insertedA?.vehicle_label).toBe(VEHICLE_TO);
+    expect(insertedA?.driver_user_id).toBeNull();
+    const untouchedB = fake.tables.assignments.find((a) => a.service_id === SERVICE_2);
+    expect(untouchedB?.vehicle_label).toBe(VEHICLE_FROM);
+  });
+
+  it("42. batch multi-service reale (3 service): A+B riusciti, C fallisce, risposta e history coerenti insieme", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_3, { message: "update failed on C" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    const res = await callPost(movePaxBody({ pax: 6 }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.ok).toBe(false);
+    const entries = lastHistoryEntries();
+    expect(entries).toHaveLength(2);
+    expect(new Set(entries.map((e) => e.serviceId)).size).toBe(2);
+  });
+
+  it("43. risposta di successo pieno invariata (regressione): stessa forma, nessun campo aggiunto dal fix", async () => {
+    const fake = baseSeed();
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    const res = await callPost(movePaxBody());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(Object.keys(body).sort()).toEqual(["moved_pax", "moved_services", "ok", "resolved"].sort());
+  });
+
+  it("44. risposta di errore invariata (partial failure): stessa forma { ok: false, error }", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_2, { message: "update failed on B" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    const res = await callPost(movePaxBody({ pax: 6 }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(Object.keys(body).sort()).toEqual(["error", "ok"].sort());
+  });
+
+  it("45. learned patterns non duplicati: updateLearnedPatterns chiamato una sola volta dopo il flush parziale", async () => {
+    const fake = threeServiceSeed();
+    fake.setFailForService("assignments", SERVICE_3, { message: "update failed on C" });
+    seedFetchAllServices(fake);
+    authorizeAs(fake);
+
+    await callPost(movePaxBody({ pax: 6 }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mocks.updateLearnedPatterns).toHaveBeenCalledTimes(1);
+    expect(mocks.updateLearnedPatterns).toHaveBeenCalledWith(fake.admin, TENANT_A);
   });
 });
