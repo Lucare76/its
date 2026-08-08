@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -54,6 +55,11 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
-    return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore" }, { status: 500 });
+    auditLog({
+      event: "cancel_respond_info_failed",
+      level: "error",
+      details: { message: err instanceof Error ? err.message : String(err) },
+    });
+    return NextResponse.json({ ok: false, error: "Si è verificato un errore durante il caricamento della richiesta." }, { status: 500 });
   }
 }
