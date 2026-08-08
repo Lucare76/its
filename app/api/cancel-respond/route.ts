@@ -12,6 +12,7 @@ import { sendEmail } from "@/lib/server/send-email";
 import { emailHtml } from "@/lib/server/email-layout";
 import { escapeHtml } from "@/lib/server/escape-html";
 import { notifyDriverServiceCancelled } from "@/lib/server/driver-cancellation-whatsapp";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -90,7 +91,14 @@ export async function POST(req: NextRequest) {
       });
 
       if (finalizeError) {
-        return NextResponse.json({ error: finalizeError.message }, { status: 500 });
+        auditLog({
+          event: "cancel_respond_finalize_failed",
+          level: "error",
+          tenantId,
+          serviceId: svc?.id as string | null,
+          details: { requestId: cr.id, message: finalizeError.message },
+        });
+        return NextResponse.json({ error: "Impossibile completare la richiesta di cancellazione." }, { status: 500 });
       }
 
       void notifyDriverServiceCancelled({
@@ -185,6 +193,11 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, action, status: newStatus });
   } catch (err) {
-    return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore" }, { status: 500 });
+    auditLog({
+      event: "cancel_respond_unhandled_error",
+      level: "error",
+      details: { message: err instanceof Error ? err.message : String(err) },
+    });
+    return NextResponse.json({ ok: false, error: "Si è verificato un errore durante l'elaborazione della richiesta." }, { status: 500 });
   }
 }
