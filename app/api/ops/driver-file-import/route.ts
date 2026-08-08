@@ -3,6 +3,8 @@ import * as XLSX from "xlsx";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { resolveHotelMatch } from "@/lib/server/hotel-matching";
+import { extractFeatures, logAssignmentChange, type AssignmentHistoryEntry } from "@/lib/server/assignment-history";
+import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
 
 export const runtime = "nodejs";
 
@@ -514,6 +516,78 @@ export async function POST(request: NextRequest) {
           preview,
           errors
         }, { status: 500 });
+      }
+
+      // CONC-07: storico strutturato per le assignments appena create.
+      // insertedIds proviene da .insert(inserts).select("id") sullo stesso
+      // batch nello stesso ordine di `inserts` (nessuna riga preesistente
+      // può comparire: i service_id sono appena generati in questa stessa
+      // richiesta) — previous è quindi sempre null per costruzione, nessuna
+      // query di snapshot necessaria. driver_profile_id non è mai popolato da
+      // questo import (solo driver_user_id, non tracciato dallo schema
+      // driver_assignment_history): risolto qui in sola lettura,
+      // best-effort, esclusivamente per arricchire lo storico — non altera
+      // la creazione dell'assignment né la risposta. Riusa il contratto già
+      // validato altrove: changeType "driver_swap" solo se il driver è
+      // risolvibile a un driver_profile_id reale (driverChanged: null →
+      // reale); vehicle_label è sempre "" per questo import (mai "" → ""
+      // reale), quindi non genera mai "vehicle_binding" — nessun evento
+      // inventato quando non c'è alcun segnale tracciabile.
+      try {
+        const { data: driverProfileRow } = await auth.admin
+          .from("driver_profiles")
+          .select("id")
+          .eq("tenant_id", auth.membership.tenant_id)
+          .eq("user_id", payload.data.driver_user_id)
+          .maybeSingle();
+        const toDriverProfileId = (driverProfileRow?.id as string | undefined) ?? null;
+        // vehicle_label per questo import è sempre "" (riga 501): normalizzato
+        // a null come da convenzione già in uso in assign-service/swap_vehicle.
+        const toVehicleLabel: string | null = null;
+
+        const historyEntries: AssignmentHistoryEntry[] = insertedIds.flatMap((serviceId, index) => {
+          const driverChanged = toDriverProfileId !== null;
+          const vehicleChanged = toVehicleLabel !== null;
+          if (!driverChanged && !vehicleChanged) return [];
+
+          const insertRow = inserts[index] as Record<string, unknown> | undefined;
+          const changeType = driverChanged ? ("driver_swap" as const) : ("vehicle_binding" as const);
+          const features = extractFeatures({
+            serviceDate: payload.data.service_date,
+            changeType,
+            fromDriverProfileId: null,
+            toDriverProfileId,
+            fromVehicleLabel: null,
+            toVehicleLabel,
+            direction: (insertRow?.direction as string | null) ?? null,
+            zone: (insertRow?.meeting_point as string | null) ?? null,
+            time: (insertRow?.time as string | null) ?? null,
+            vessel: (insertRow?.vessel as string | null) ?? null,
+            pax: (insertRow?.pax as number | null) ?? null,
+            isNavetta: insertRow?.booking_service_kind === "shuttle_hotel",
+          });
+          return [{
+            tenantId: auth.membership.tenant_id,
+            serviceDate: payload.data.service_date,
+            serviceId,
+            groupId: null,
+            changeType,
+            fromDriverProfileId: null,
+            toDriverProfileId,
+            fromVehicleLabel: null,
+            toVehicleLabel,
+            features,
+            operatorId: auth.user.id,
+          }];
+        });
+
+        if (historyEntries.length > 0) {
+          void logAssignmentChange(auth.admin, historyEntries)
+            .then(() => updateLearnedPatterns(auth.admin, auth.membership.tenant_id))
+            .catch(() => undefined);
+        }
+      } catch {
+        // best-effort: mai bloccare né alterare la risposta principale già determinata.
       }
 
       const statusEventsPayload = insertedIds.map((serviceId) => ({
