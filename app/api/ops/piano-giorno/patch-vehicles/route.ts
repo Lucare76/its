@@ -6,6 +6,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { extractFeatures, logAssignmentChange, type AssignmentHistoryEntry } from "@/lib/server/assignment-history";
+import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
+import { effectiveServiceDisembarkTime, type FerryArrivalServiceLike } from "@/lib/piano-arrival-time";
 
 export const runtime = "nodejs";
 
@@ -13,11 +16,33 @@ const schema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
+type FeatureServiceRow = FerryArrivalServiceLike & {
+  id: string;
+  hotel_id: string | null;
+  direction: string | null;
+  meeting_point: string | null;
+  pax: number | null;
+};
+
+function patchVehiclesOperationalTime(service: FeatureServiceRow): string | null {
+  const raw = service.direction === "departure"
+    ? (service.time ?? "")
+    : effectiveServiceDisembarkTime(service) ?? (service.time ?? "");
+  const trimmed = raw.slice(0, 5);
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function isNavettaFeatureRow(service: Pick<FeatureServiceRow, "booking_service_kind" | "service_type_code">): boolean {
+  const kind = service.booking_service_kind ?? service.service_type_code ?? "";
+  return kind === "navetta" || kind === "shuttle_hotel" || kind === "bus_city_hotel";
+}
+
 export async function POST(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator", "supervisor"]);
     if (auth instanceof NextResponse) return auth;
     const tenantId = auth.membership.tenant_id;
+    const userId = auth.user.id;
 
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const parsed = schema.safeParse(body);
@@ -93,9 +118,42 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // CONC-07: snapshot "prima" degli assignments dei giri candidati,
+    // tenant-scoped, letto in un'unica query batch subito prima della
+    // mutazione — stesso pattern già validato in swap_vehicle/executeMovePax.
+    // Se la lettura fallisce (errore Supabase o eccezione sincrona),
+    // previousSnapshotFailed viene marcato e la costruzione dello storico più
+    // sotto viene saltata per l'intera richiesta (mai previous values
+    // indovinati/falsi) — ma il patch principale prosegue comunque: policy
+    // best-effort già stabilita altrove.
+    const allGroupIds = groupsWithoutVehicle.map((g) => g.id as string);
+    const previousAssignmentsByGroupId = new Map<string, { service_id: string; vehicle_label: string | null }[]>();
+    let previousSnapshotFailed = false;
+    try {
+      const { data: previousAssignmentsData, error: previousAssignmentsError } = await auth.admin
+        .from("assignments")
+        .select("service_id, group_id, vehicle_label")
+        .eq("tenant_id", tenantId)
+        .in("group_id", allGroupIds);
+      if (previousAssignmentsError) {
+        previousSnapshotFailed = true;
+      } else {
+        for (const row of previousAssignmentsData ?? []) {
+          const groupId = row.group_id as string | null;
+          if (!groupId) continue;
+          const list = previousAssignmentsByGroupId.get(groupId) ?? [];
+          list.push({ service_id: row.service_id as string, vehicle_label: ((row.vehicle_label as string | null) ?? null) || null });
+          previousAssignmentsByGroupId.set(groupId, list);
+        }
+      }
+    } catch {
+      previousSnapshotFailed = true;
+    }
+
     // 5. Aggiorna trip_groups e assignments
     const now = new Date().toISOString();
     let updated = 0;
+    const historyCandidates: { serviceId: string; groupId: string; fromVehicleLabel: string | null; toVehicleLabel: string }[] = [];
 
     for (const group of groupsWithoutVehicle) {
       const groupId = group.id as string;
@@ -124,6 +182,89 @@ export async function POST(req: NextRequest) {
       if (tgRes.error) continue;
       if (assignRes.error) continue;
       updated++;
+
+      // CONC-07: storico solo per le righe assignments realmente coinvolte in
+      // questo giro (dallo snapshot "prima") il cui vehicle_label cambia
+      // davvero — nessun evento per righe già sul mezzo target (no-op).
+      if (!previousSnapshotFailed) {
+        const previousRows = previousAssignmentsByGroupId.get(groupId) ?? [];
+        for (const row of previousRows) {
+          if (row.vehicle_label === (vehicle.label || null)) continue;
+          historyCandidates.push({
+            serviceId: row.service_id,
+            groupId,
+            fromVehicleLabel: row.vehicle_label,
+            toVehicleLabel: vehicle.label,
+          });
+        }
+      }
+    }
+
+    // CONC-07: registra lo storico strutturato per tutte le righe realmente
+    // mutate, riusando esattamente il contratto già in uso in
+    // move_services/swap_vehicle/executeMovePax: changeType "vehicle_binding"
+    // (patch-vehicles non tocca mai il driver, quindi mai "driver_swap"),
+    // un entry al massimo per service_id (historyCandidates è costruito da
+    // previousAssignmentsByGroupId, una entry per row di assignments).
+    // Features arricchite con un'unica query batch su services/hotels (nessun
+    // N+1). Scrittura fire-and-forget dopo il successo del ciclo di
+    // mutazioni sopra: un errore qui non altera né la risposta né il
+    // risultato principale già determinato.
+    if (historyCandidates.length > 0) {
+      try {
+        const serviceIds = Array.from(new Set(historyCandidates.map((c) => c.serviceId)));
+        const { data: featureServices } = await auth.admin
+          .from("services")
+          .select("id, hotel_id, direction, meeting_point, time, arrival_time, orario_barca, porto_bruno, barca_compagnia, booking_service_kind, service_type_code, vessel, ferry_details, pax")
+          .eq("tenant_id", tenantId)
+          .in("id", serviceIds);
+        const featureServiceRows = (featureServices ?? []) as FeatureServiceRow[];
+        const featureServiceMap = new Map(featureServiceRows.map((service) => [service.id, service]));
+
+        const featureHotelIds = Array.from(
+          new Set(featureServiceRows.map((service) => service.hotel_id).filter((id): id is string => Boolean(id)))
+        );
+        const { data: featureHotels } = featureHotelIds.length > 0
+          ? await auth.admin.from("hotels").select("id, zone").eq("tenant_id", tenantId).in("id", featureHotelIds)
+          : { data: [] };
+        const featureHotelMap = new Map((featureHotels ?? []).map((hotel) => [hotel.id as string, hotel as { id: string; zone: string | null }]));
+
+        const historyEntries: AssignmentHistoryEntry[] = historyCandidates.map((candidate) => {
+          const service = featureServiceMap.get(candidate.serviceId);
+          const hotel = service?.hotel_id ? featureHotelMap.get(service.hotel_id) : null;
+          const features = extractFeatures({
+            serviceDate: date,
+            changeType: "vehicle_binding",
+            fromVehicleLabel: candidate.fromVehicleLabel,
+            toVehicleLabel: candidate.toVehicleLabel,
+            direction: service?.direction ?? null,
+            zone: hotel?.zone ?? service?.meeting_point ?? null,
+            time: service ? patchVehiclesOperationalTime(service) : null,
+            vessel: service?.vessel ?? service?.barca_compagnia ?? null,
+            pax: service?.pax ?? null,
+            isNavetta: service ? isNavettaFeatureRow(service) : false,
+          });
+          return {
+            tenantId,
+            serviceDate: date,
+            serviceId: candidate.serviceId,
+            groupId: candidate.groupId,
+            changeType: "vehicle_binding" as const,
+            fromVehicleLabel: candidate.fromVehicleLabel,
+            toVehicleLabel: candidate.toVehicleLabel,
+            features,
+            operatorId: userId,
+          };
+        });
+
+        if (historyEntries.length > 0) {
+          void logAssignmentChange(auth.admin, historyEntries)
+            .then(() => updateLearnedPatterns(auth.admin, tenantId))
+            .catch(() => undefined);
+        }
+      } catch {
+        // best-effort: mai bloccare né alterare la risposta principale già determinata.
+      }
     }
 
     return NextResponse.json({ ok: true, updated, total: groupsWithoutVehicle.length });
