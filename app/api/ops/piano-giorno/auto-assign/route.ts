@@ -1948,9 +1948,9 @@ export async function POST(request: NextRequest) {
                 };
               });
             });
-            void logAssignmentChange(batchAdmin, historyEntries).then(() =>
-              updateLearnedPatterns(batchAdmin, tenantId).catch(() => undefined)
-            );
+            void logAssignmentChange(batchAdmin, historyEntries)
+              .then(() => updateLearnedPatterns(batchAdmin, tenantId))
+              .catch(() => undefined);
           }
         }
       }

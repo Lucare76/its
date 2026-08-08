@@ -430,4 +430,78 @@ describe("CONC-06 — rivalidazione lock in auto-assign", () => {
     expect(body.assigned).toBe(0);
     assertZeroWrites(fake);
   });
+
+  // ── HARDENING promise chain logAssignmentChange().then(updateLearnedPatterns) ──
+  // Pattern precedente: `logAssignmentChange(...).then(() => updateLearnedPatterns(...).catch(() => undefined))`
+  // — il .catch() era annidato dentro il .then() e copriva solo la promise di
+  // updateLearnedPatterns, non un reject diretto di logAssignmentChange. Fix:
+  // `.then(() => updateLearnedPatterns(...)).catch(() => undefined)` — catch
+  // sull'intera catena. Nessuna modifica a mutazioni, payload history o risposta.
+  it("11. logAssignmentChange risolve: comportamento invariato, scrittura e risposta regolari", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(mocks.logAssignmentChange).toHaveBeenCalledTimes(1);
+    expect(mocks.updateLearnedPatterns).toHaveBeenCalledTimes(1);
+  });
+
+  it("12. logAssignmentChange rigetta: risposta principale invariata, nessun unhandled rejection", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+    mocks.logAssignmentChange.mockRejectedValueOnce(new Error("driver_assignment_history insert failed"));
+
+    const res = await callPost();
+    const body = await res.json();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(fake.calls.tripGroupsInserted).toHaveLength(1);
+    expect(fake.calls.assignmentsUpserted).toHaveLength(1);
+    expect(JSON.stringify(body)).not.toMatch(/driver_assignment_history/);
+  });
+
+  it("13. updateLearnedPatterns rigetta: risposta principale invariata, nessun unhandled rejection", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+    mocks.updateLearnedPatterns.mockRejectedValueOnce(new Error("learned patterns update failed"));
+
+    const res = await callPost();
+    const body = await res.json();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(fake.calls.tripGroupsInserted).toHaveLength(1);
+  });
+
+  it("14. history chiamata una sola volta, learning chiamato una sola volta", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+
+    await callPost();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mocks.logAssignmentChange).toHaveBeenCalledTimes(1);
+    expect(mocks.updateLearnedPatterns).toHaveBeenCalledTimes(1);
+  });
+
+  it("15. mutazione principale già completata prima del fire-and-forget history: scritture presenti anche se logAssignmentChange rigetta", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+    mocks.logAssignmentChange.mockRejectedValueOnce(new Error("history down"));
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.assigned).toBeGreaterThanOrEqual(1);
+    expect(fake.calls.assignmentsUpserted).toHaveLength(1);
+  });
 });

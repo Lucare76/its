@@ -271,7 +271,7 @@ export async function POST(request: NextRequest) {
       changeType: "resolution_suggestion" as const,
       features: { ...features, action: decision.suggestion.recommended_action },
       operatorId: auth.user.id,
-    })));
+    }))).catch(() => undefined);
 
     const superseded = await supersedeOverlappingOperatorDecisions(auth, {
       service_date: date,

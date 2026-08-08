@@ -160,9 +160,9 @@ export async function POST(request: NextRequest) {
         };
       })
     );
-    void logAssignmentChange(auth.admin, historyEntries).then(() =>
-      updateLearnedPatterns(auth.admin, auth.membership.tenant_id).catch(() => undefined)
-    );
+    void logAssignmentChange(auth.admin, historyEntries)
+      .then(() => updateLearnedPatterns(auth.admin, auth.membership.tenant_id))
+      .catch(() => undefined);
 
     return NextResponse.json({
       ok: true,

@@ -252,7 +252,9 @@ export async function POST(request: NextRequest) {
         });
       })(),
       operatorId: auth.user.id,
-    }))).then(() => updateLearnedPatterns(auth.admin, auth.membership.tenant_id).catch(() => undefined));
+    })))
+      .then(() => updateLearnedPatterns(auth.admin, auth.membership.tenant_id))
+      .catch(() => undefined);
 
     return NextResponse.json({
       ok: true,
