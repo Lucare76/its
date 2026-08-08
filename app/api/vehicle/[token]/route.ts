@@ -10,6 +10,7 @@ import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 
 import { checkRateLimit } from "@/lib/server/rate-limit";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -482,7 +483,14 @@ export async function POST(
       .select("id")
       .single();
 
-    if (err) return NextResponse.json({ error: err.message }, { status: 500 });
+    if (err) {
+      auditLog({
+        event: "vehicle_qr_km_start_failed",
+        level: "error",
+        details: { vehicleId: vehicle.id, message: err.message },
+      });
+      return NextResponse.json({ error: "Impossibile registrare l'inizio turno." }, { status: 500 });
+    }
 
     // Aggiorna km veicolo
     await admin.from("vehicles").update({ km: startKm }).eq("id", vehicle.id);
@@ -516,7 +524,14 @@ export async function POST(
       .update({ end_km: endKm, end_at: new Date().toISOString(), notes: notes || null })
       .eq("id", logId);
 
-    if (err) return NextResponse.json({ error: err.message }, { status: 500 });
+    if (err) {
+      auditLog({
+        event: "vehicle_qr_km_end_failed",
+        level: "error",
+        details: { vehicleId: vehicle.id, logId, message: err.message },
+      });
+      return NextResponse.json({ error: "Impossibile registrare la fine turno." }, { status: 500 });
+    }
 
     // Aggiorna km veicolo con il valore finale
     await admin.from("vehicles").update({ km: endKm }).eq("id", vehicle.id);
@@ -555,7 +570,14 @@ export async function POST(
       submitted_via_qr: true,
     });
 
-    if (err) return NextResponse.json({ error: err.message }, { status: 500 });
+    if (err) {
+      auditLog({
+        event: "vehicle_qr_fuel_failed",
+        level: "error",
+        details: { vehicleId: vehicle.id, message: err.message },
+      });
+      return NextResponse.json({ error: "Impossibile registrare il rifornimento." }, { status: 500 });
+    }
     return NextResponse.json({ ok: true });
   }
 
