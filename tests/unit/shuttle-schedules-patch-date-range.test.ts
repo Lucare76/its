@@ -3,6 +3,13 @@ import { NextRequest } from "next/server";
 
 const TENANT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
+// Date dinamiche relative a "oggi" reale (todayIsoDate() nella route non è
+// mockato): evita che i range hardcoded finiscano nel passato col passare
+// del tempo, facendo sparire le righe generate da buildRows.
+function isoDate(offsetDays: number) {
+  return new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 // Fake Supabase admin client that only tracks whether delete()/insert() on
 // "services" were invoked — enough to prove no write happens on invalid input.
 function createFakeSupabase() {
@@ -136,12 +143,12 @@ describe("PATCH /api/shuttle-schedules/[id] — intervallo valid_from/valid_to (
   });
 
   it("valid_from < valid_to (intervallo normale) → 200, delete=1, insert=1", async () => {
-    // 2026-08-01 è sabato e 2026-08-02 è domenica: days_of_week viene
-    // impostato a null per non dipendere dal giorno della settimana.
+    // Date dinamiche (domani/dopodomani): days_of_week è null per non
+    // dipendere dal giorno della settimana specifico.
     const res = await callPatch(VALID_SCHEDULE_ID, {
       ...VALID_PAYLOAD,
-      valid_from: "2026-08-01",
-      valid_to: "2026-08-02",
+      valid_from: isoDate(1),
+      valid_to: isoDate(2),
       days_of_week: null
     });
     const body = await res.json();
@@ -153,12 +160,12 @@ describe("PATCH /api/shuttle-schedules/[id] — intervallo valid_from/valid_to (
   });
 
   it("valid_from === valid_to (stesso giorno) → 200, delete=1, insert=1 (il controllo è < e non <=)", async () => {
-    // 2026-08-01 è sabato: days_of_week viene impostato a null per includere
-    // comunque il giorno unico dell'intervallo.
+    // Data dinamica (domani): days_of_week è null per includere comunque il
+    // giorno unico dell'intervallo, indipendentemente dal giorno settimanale.
     const res = await callPatch(VALID_SCHEDULE_ID, {
       ...VALID_PAYLOAD,
-      valid_from: "2026-08-01",
-      valid_to: "2026-08-01",
+      valid_from: isoDate(1),
+      valid_to: isoDate(1),
       days_of_week: null
     });
     const body = await res.json();

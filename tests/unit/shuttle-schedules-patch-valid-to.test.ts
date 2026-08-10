@@ -3,6 +3,13 @@ import { NextRequest } from "next/server";
 
 const TENANT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
+// Date dinamiche relative a "oggi" reale (todayIsoDate() nella route non è
+// mockato): evita che il range hardcoded finisca nel passato col passare
+// del tempo, facendo sparire le righe generate da buildRows.
+function isoDate(offsetDays: number) {
+  return new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 // Fake Supabase admin client that only tracks whether delete()/insert() on
 // "services" were invoked — enough to prove no write happens on invalid input.
 function createFakeSupabase() {
@@ -116,8 +123,8 @@ const VALID_PAYLOAD = {
   departure_time: "09:30",
   meeting_point: null,
   vessel: "Navetta",
-  valid_from: "2026-08-01",
-  valid_to: "2026-08-05",
+  valid_from: isoDate(1),
+  valid_to: isoDate(7),
   days_of_week: [1, 2, 3, 4, 5],
   notes: null
 };

@@ -12,6 +12,23 @@ function isoDate(offsetDays: number) {
 const TODAY = isoDate(0);
 const TOMORROW = isoDate(1);
 
+// Trova la prossima data (a partire da minOffsetDays giorni da oggi) che
+// cade nel giorno della settimana richiesto (0=domenica...6=sabato),
+// per i test che devono preservare un giorno settimanale specifico senza
+// dipendere da date hardcoded che finiscono nel passato.
+function nextWeekdayIsoDate(targetDow: number, minOffsetDays: number) {
+  for (let offset = minOffsetDays; offset < minOffsetDays + 14; offset++) {
+    const date = isoDate(offset);
+    if (new Date(`${date}T12:00:00`).getDay() === targetDow) return date;
+  }
+  throw new Error(`Nessuna data trovata per il giorno settimanale ${targetDow}`);
+}
+function addDaysIso(dateStr: string, days: number) {
+  const d = new Date(`${dateStr}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 type Row = Record<string, unknown>;
 
 const SHARED_KEY = {
@@ -424,8 +441,10 @@ describe("shuttle-schedules API — aggregated audit log (M1-08 / F-04)", () => 
     });
 
     it("13/14/15. deletedCount/insertedCount/deletedDateFrom/deletedDateTo corrispondono al range effettivo", async () => {
-      const rowA = serviceRow(TENANT_A, { date: "2026-08-05" });
-      const rowB = serviceRow(TENANT_A, { date: "2026-08-07" });
+      const dateA = isoDate(2);
+      const dateB = isoDate(4);
+      const rowA = serviceRow(TENANT_A, { date: dateA });
+      const rowB = serviceRow(TENANT_A, { date: dateB });
       const fake = createFakeSupabase({ services: [rowA, rowB], assignments: [] });
       authorizeAs(TENANT_A, fake);
 
@@ -433,8 +452,8 @@ describe("shuttle-schedules API — aggregated audit log (M1-08 / F-04)", () => 
 
       const [event] = eventsNamed("shuttle_schedule_updated");
       expect(event.details.deletedCount).toBe(2);
-      expect(event.details.deletedDateFrom).toBe("2026-08-05");
-      expect(event.details.deletedDateTo).toBe("2026-08-07");
+      expect(event.details.deletedDateFrom).toBe(dateA);
+      expect(event.details.deletedDateTo).toBe(dateB);
       expect(event.details.insertedCount).toBe(fake.calls.insertedRows.length);
     });
 
@@ -465,8 +484,12 @@ describe("shuttle-schedules API — aggregated audit log (M1-08 / F-04)", () => 
     it("18. modifica giorni è visibile nel diff quando i giorni precedenti sono ricostruibili dalle righe esistenti", async () => {
       // Two existing rows on different weekdays let us reconstruct "previous"
       // weekdays reliably from the actual future rows about to be deleted.
-      const rowMonday = serviceRow(TENANT_A, { date: "2026-08-03" }); // Monday
-      const rowTuesday = serviceRow(TENANT_A, { date: "2026-08-04" }); // Tuesday
+      // Date dinamiche: mondayDate è il prossimo lunedì futuro, tuesdayDate è
+      // il giorno immediatamente successivo (sempre martedì per costruzione).
+      const mondayDate = nextWeekdayIsoDate(1, 2);
+      const tuesdayDate = addDaysIso(mondayDate, 1);
+      const rowMonday = serviceRow(TENANT_A, { date: mondayDate }); // Monday
+      const rowTuesday = serviceRow(TENANT_A, { date: tuesdayDate }); // Tuesday
       const fake = createFakeSupabase({ services: [rowMonday, rowTuesday], assignments: [] });
       authorizeAs(TENANT_A, fake);
 
@@ -531,7 +554,7 @@ describe("shuttle-schedules API — aggregated audit log (M1-08 / F-04)", () => 
     });
 
     it("24. DELETE riuscita seguita da INSERT fallito: nessun evento di successo, evento di errore con deletePhaseCompleted:true e deletedCount", async () => {
-      const rowA = serviceRow(TENANT_A, { date: "2026-08-05" });
+      const rowA = serviceRow(TENANT_A, { date: isoDate(2) });
       const fake = createFakeSupabase({ services: [rowA], assignments: [] });
       fake.setFlatInsertError("insert failed after delete");
       authorizeAs(TENANT_A, fake);
