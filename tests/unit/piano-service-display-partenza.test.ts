@@ -22,17 +22,18 @@ function makePartenza(overrides: Record<string, unknown> = {}) {
 const hotelLaVilla = { id: "hotel-1", name: "La Villa", address: "Via Mortella", zone: "Forio", lat: 40.72, lng: 13.87, geo_status: null, geo_source: null, geo_accuracy: null, geo_verified_at: null };
 
 describe("getPianoServiceDisplay — PARTENZA", () => {
-  it("pickupLabel è null per evitare duplicati in PDF e UI", () => {
+  it("pickupLabel contiene il punto di pickup (fonte unica per detailLines, evita duplicati in PDF e UI)", () => {
     const display = getPianoServiceDisplay(makePartenza(), hotelLaVilla);
-    expect(display.pickupLabel).toBeNull();
+    expect(display.pickupLabel).toBe("La Villa");
   });
 
-  it("actionLabel contiene il Pickup (unica occorrenza)", () => {
+  it("il Pickup appare una sola volta in detailLines, non duplicato in actionLabel", () => {
     const display = getPianoServiceDisplay(makePartenza(), hotelLaVilla);
-    expect(display.actionLabel).toMatch(/^Pickup:/);
-    // Non ci devono essere due "Pickup:" separati
-    const occurrences = (display.actionLabel.match(/Pickup:/gi) ?? []).length;
-    expect(occurrences).toBe(1);
+    expect(display.detailLines).toContain("Pickup: La Villa");
+    const occurrencesInDetailLines = display.detailLines.filter((l) => l.startsWith("Pickup:")).length;
+    expect(occurrencesInDetailLines).toBe(1);
+    // actionLabel non deve ripetere il pickup: nessuna duplicazione tra i due campi.
+    expect(display.actionLabel).not.toContain("Pickup:");
   });
 
   it("placeLabel è il nome hotel (solo pickup, senza destinazione)", () => {

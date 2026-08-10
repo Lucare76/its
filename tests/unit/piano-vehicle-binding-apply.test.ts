@@ -83,8 +83,9 @@ describe("vehicle binding apply guard", () => {
     expect(source).toContain("validateVehicleTimelinePayload");
     expect(source).toContain("Overbooking bloccante");
     expect(source).toContain("canShareLargeVehicle");
-    expect(source).toContain("Mezzo capiente condiviso non disponibile con buffer sufficiente.");
-    expect(source).toContain("assegnato a un altro autista per questa giornata.");
+    expect(source).toContain("VEHICLE_SHARE_BUFFER_MINUTES");
+    expect(source).toContain("minuti tra servizio alle");
+    expect(source).toContain("mezzo usato anche da un altro autista nella stessa giornata.");
   });
 
   it("allows a clean hybrid preview with large vehicle sharing on timeline", () => {
