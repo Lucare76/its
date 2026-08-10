@@ -3,6 +3,19 @@ export interface BookingSearchRecord {
   phone?: string | null;
   billing_party_name?: string | null;
   agency_id?: string | null;
+  hotel_name?: string | null;
+  hotel_id?: string | null;
+  vessel?: string | null;
+  notes?: string | null;
+  transport_code?: string | null;
+  transport_code_return?: string | null;
+  transport_reference_outward?: string | null;
+  transport_reference_return?: string | null;
+  train_arrival_number?: string | null;
+  train_departure_number?: string | null;
+  booking_service_kind?: string | null;
+  service_type_code?: string | null;
+  id?: string | null;
 }
 
 /**
@@ -18,20 +31,35 @@ export function matchesBookingSearch(
   agencyFilter: string,
   agencyNameById: Map<string, string>
 ): boolean {
-  const q = searchQuery.trim().toLowerCase();
-  const ag = agencyFilter.trim().toLowerCase();
-  const hasQuery = q.length >= 2;
-  const hasAgency = ag.length >= 2;
+  const q = normalizeText(searchQuery);
+  const ag = normalizeText(agencyFilter);
+  const hasQuery = q.length >= 1;
+  const hasAgency = ag.length >= 1;
   const qDigits = q.replace(/\D/g, "");
+  const searchableText = [
+    record.customer_name,
+    record.hotel_name,
+    record.vessel,
+    record.notes,
+    record.transport_code,
+    record.transport_code_return,
+    record.transport_reference_outward,
+    record.transport_reference_return,
+    record.train_arrival_number,
+    record.train_departure_number,
+    record.booking_service_kind,
+    record.service_type_code,
+    record.id,
+  ].map((value) => normalizeText(value)).join(" ");
 
   const matchQuery = !hasQuery
-    || (record.customer_name ?? "").toLowerCase().includes(q)
+    || searchableText.includes(q)
     || (qDigits.length > 0 && (record.phone ?? "").replace(/\D/g, "").includes(qDigits));
 
   const agencyName = record.billing_party_name
     ?? (record.agency_id ? agencyNameById.get(record.agency_id) : null)
     ?? "";
-  const matchAgency = !hasAgency || agencyName.toLowerCase().includes(ag);
+  const matchAgency = !hasAgency || normalizeText(agencyName).includes(ag);
 
   return matchQuery && matchAgency;
 }
@@ -43,10 +71,18 @@ export function filterBookingsBySearch<T extends BookingSearchRecord>(
   agencyNameById: Map<string, string>,
   limit = 20
 ): T[] {
-  const hasQuery = searchQuery.trim().length >= 2;
-  const hasAgency = agencyFilter.trim().length >= 2;
+  const hasQuery = searchQuery.trim().length >= 1;
+  const hasAgency = agencyFilter.trim().length >= 1;
   if (!hasQuery && !hasAgency) return [];
   return records
     .filter((record) => matchesBookingSearch(record, searchQuery, agencyFilter, agencyNameById))
     .slice(0, limit);
+}
+
+function normalizeText(value?: string | null) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
 }

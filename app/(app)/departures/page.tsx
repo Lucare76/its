@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 
-import { formatIsoDateShort, getCustomerFullName, getDepartureFerryLabel, getTransportReferenceReturn } from "@/lib/service-display";
+import { formatIsoDateShort, getCustomerFullName, getDepartureFerryLabel, getDepartureTransportReference } from "@/lib/service-display";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import { supabase } from "@/lib/supabase/client";
 import type { Service, Hotel } from "@/lib/types";
@@ -611,7 +611,7 @@ export default function DeparturesPage() {
       Pax: item.service.pax,
       "Origine/Hotel": resolveHotelName(item.service),
       "Meeting point": resolvePickupNote(item.service) ?? resolveHotelName(item.service),
-      Riferimento: getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? "",
+      Riferimento: getDepartureFerryLabel(item.service) ?? getDepartureTransportReference(item.service) ?? "",
       Tipo: item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "",
       Agenzia: item.service.billing_party_name ?? "",
     }))
@@ -716,7 +716,7 @@ export default function DeparturesPage() {
             {departures.map((item) => {
               const hotelName = resolveHotelName(item.service);
               const meetingPoint = resolvePickupNote(item.service);
-              const riferimento = getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
+              const riferimento = getDepartureFerryLabel(item.service) ?? getDepartureTransportReference(item.service);
               const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
               const hint = pickupHints.get(item.service.id);
               return (
@@ -761,7 +761,7 @@ export default function DeparturesPage() {
           <div className="table-card-scroll hidden md:block">
           <div className="min-w-[760px] rounded-2xl border border-slate-200 bg-white shadow-sm">
             {/* Header */}
-            <div className="grid items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500 grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px]">
+            <div className="grid items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500 grid-cols-[28px_60px_minmax(160px,1.45fr)_40px_minmax(160px,1.15fr)_minmax(0,150px)_148px]">
               <div>
                 <input
                   type="checkbox"
@@ -785,13 +785,13 @@ export default function DeparturesPage() {
               {departures.map((item) => {
                 const hotelName = resolveHotelName(item.service);
                 const meetingPoint = resolvePickupNote(item.service);
-                const riferimento = getDepartureFerryLabel(item.service) ?? getTransportReferenceReturn(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
+                const riferimento = getDepartureFerryLabel(item.service) ?? getDepartureTransportReference(item.service);
                 const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
                 const hint = pickupHints.get(item.service.id);
                 return (
                   <div
                     key={item.instanceId}
-                    className={`grid items-center gap-3 px-4 py-3 transition hover:bg-slate-50/60 grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px] ${selectedDepIds.has(item.service.id) ? "bg-indigo-50/60" : ""}`}
+                    className={`grid items-center gap-3 px-4 py-3 transition hover:bg-slate-50/60 grid-cols-[28px_60px_minmax(160px,1.45fr)_40px_minmax(160px,1.15fr)_minmax(0,150px)_148px] ${selectedDepIds.has(item.service.id) ? "bg-indigo-50/60" : ""}`}
                   >
                     {/* CHECKBOX */}
                     <div>
@@ -846,12 +846,12 @@ export default function DeparturesPage() {
                       {riferimento ? (
                         <p className="truncate text-sm text-slate-600" title={riferimento}>{riferimento}</p>
                       ) : null}
-                      <span className="inline-flex rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-blue-700">
-                        {tipoLabel}
+                      <span className="inline-flex max-w-full rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-blue-700">
+                        <span className="block truncate" title={tipoLabel}>{tipoLabel}</span>
                       </span>
                     </div>
                     {/* AZIONI */}
-                    <div className="flex justify-end gap-1">
+                    <div className="flex shrink-0 justify-end gap-1">
                       <button
                         type="button"
                         onClick={() => setQrServiceId(item.service.id)}

@@ -155,11 +155,16 @@ function pickSameStopFirstBus<T extends { id: string; bus_line_id: string; capac
     !input.excludedLabels?.has(unit.label ?? "")
   );
   const hasRoom = (unit: T) => unit.capacity - (datePaxMap.get(unit.id) ?? 0) >= input.pax;
+  const firstWithRoom = lineUnits.find(hasRoom) ?? null;
 
   if (input.stopId) {
     const sameStopBusIds = stopBusMap.get(`${input.lineId}:${input.stopId}`) ?? new Set<string>();
     const sameStop = lineUnits.find((unit) => sameStopBusIds.has(unit.id) && hasRoom(unit));
-    if (sameStop) return sameStop;
+    if (sameStop) {
+      const sameStopIndex = lineUnits.findIndex((unit) => unit.id === sameStop.id);
+      const earlierWithRoom = sameStopIndex > 0 ? lineUnits.slice(0, sameStopIndex).find(hasRoom) ?? null : null;
+      return earlierWithRoom ?? sameStop;
+    }
   }
 
   if (input.preferredLabels?.length) {
@@ -169,7 +174,7 @@ function pickSameStopFirstBus<T extends { id: string; bus_line_id: string; capac
     if (preferred) return preferred;
   }
 
-  return lineUnits.find(hasRoom) ?? null;
+  return firstWithRoom;
 }
 
 const unitUpdateSchema = z.object({

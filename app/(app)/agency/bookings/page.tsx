@@ -113,6 +113,14 @@ function serviceOperationalDetail(row: BookingRow) {
   return row.vessel;
 }
 
+function normalizeSearchText(value?: string | null) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
+}
+
 function toModDraft(row: BookingRow): ModDraft {
   return {
     arrival_date:         row.arrival_date ?? row.date,
@@ -222,11 +230,25 @@ function AgencyBookingsPageInner() {
 
   const filtered = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
+    const query = normalizeSearchText(search);
+    const queryDigits = query.replace(/\D/g, "");
     return bookings.filter((row) => {
-      const bySearch =
-        row.customer_name.toLowerCase().includes(search.toLowerCase()) ||
-        row.hotel_name.toLowerCase().includes(search.toLowerCase()) ||
-        row.vessel.toLowerCase().includes(search.toLowerCase());
+      const haystack = [
+        row.customer_name,
+        row.hotel_name,
+        row.hotel_zone,
+        row.vessel,
+        row.phone,
+        row.transport_code,
+        row.bus_city_origin,
+        row.notes,
+        row.booking_service_kind,
+        serviceKindLabels[row.booking_service_kind ?? ""],
+        row.id,
+      ].map((value) => normalizeSearchText(value)).join(" ");
+      const bySearch = !query
+        || haystack.includes(query)
+        || (queryDigits.length > 0 && String(row.phone ?? "").replace(/\D/g, "").includes(queryDigits));
       const byKind        = kindFilter === "all" || row.booking_service_kind === kindFilter;
       const byStatus      = statusFilter === "all" || row.status === statusFilter;
       const byConfirmation = confirmationFilter === "all" || row.email_confirmation_status === confirmationFilter;
@@ -386,7 +408,7 @@ function AgencyBookingsPageInner() {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Cerca per nome o cognome del cliente..."
+          placeholder="Cerca cliente, telefono, hotel, codice..."
           className="flex-1 bg-transparent text-sm text-slate-700 placeholder:text-slate-400 outline-none"
         />
         {search && <button onClick={() => setSearch("")} className="text-slate-400 hover:text-slate-600 text-lg leading-none">×</button>}

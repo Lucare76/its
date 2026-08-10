@@ -107,6 +107,31 @@ export function getTransportReferenceReturn(service: Partial<Service> & {
   return clean(service.transport_reference_return) ?? clean(service.train_departure_number) ?? null;
 }
 
+function splitRoundTripReference(value?: string | null) {
+  const normalized = clean(value);
+  if (!normalized) return { outward: null, returnRef: null };
+  const parts = normalized
+    .split(/\s*(?:\/|\||;|\b(?:andata|ritorno)\b)\s*/i)
+    .map((part) => clean(part))
+    .filter((part): part is string => Boolean(part));
+  if (parts.length < 2) return { outward: normalized, returnRef: null };
+  return { outward: parts[0] ?? null, returnRef: parts[parts.length - 1] ?? null };
+}
+
+export function getDepartureTransportReference(service: Partial<Service> & {
+  transport_reference_return?: string | null;
+  train_departure_number?: string | null;
+  transport_code_return?: string | null;
+}) {
+  return clean(service.transport_reference_return)
+    ?? clean(service.train_departure_number)
+    ?? clean(service.transport_code_return)
+    ?? splitRoundTripReference(service.transport_code).returnRef
+    ?? clean(service.transport_code)
+    ?? clean(service.vessel)
+    ?? null;
+}
+
 function transportLabel(mode: TransportMode) {
   if (mode === "train") return "treno";
   if (mode === "hydrofoil") return "aliscafo";

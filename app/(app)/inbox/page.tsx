@@ -493,10 +493,15 @@ export default function InboxPage() {
 
   const canApprove = form.cliente_nome.trim() !== "" && form.hotel.trim() !== "" && form.data_arrivo.trim() !== "";
 
-  const searchResults = useMemo(
-    () => filterBookingsBySearch(services, searchQuery, agencyFilter, agenciesMap),
-    [searchQuery, agencyFilter, agenciesMap, services]
-  );
+  const searchResults = useMemo(() => {
+    const hotelNameById = new Map(hotels.map((hotel) => [hotel.id, hotel.name]));
+    return filterBookingsBySearch(
+      services.map((service) => ({ ...service, hotel_name: hotelNameById.get(service.hotel_id) ?? null })),
+      searchQuery,
+      agencyFilter,
+      agenciesMap
+    );
+  }, [searchQuery, agencyFilter, agenciesMap, hotels, services]);
 
   const pdfUploadStatus = useMemo(() => {
     if (pdfUploadSaving) return "Salvataggio in corso...";
@@ -653,7 +658,7 @@ export default function InboxPage() {
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cerca per nome, cognome o telefono..."
+            placeholder="Cerca nome, telefono, hotel, codice..."
             className="input-saas flex-1"
           />
           <input
@@ -669,7 +674,7 @@ export default function InboxPage() {
             </button>
           )}
         </div>
-        {(searchQuery.trim().length >= 2 || agencyFilter.trim().length >= 2) && (
+        {(searchQuery.trim().length >= 1 || agencyFilter.trim().length >= 1) && (
           searchResults.length === 0 ? (
             <p className="text-sm text-slate-500">Nessuna prenotazione trovata{searchQuery ? ` per "${searchQuery}"` : ""}{agencyFilter ? ` · agenzia "${agencyFilter}"` : ""}.</p>
           ) : (

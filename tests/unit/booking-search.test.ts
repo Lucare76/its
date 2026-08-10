@@ -11,6 +11,9 @@ const marcotulli: TestRecord = {
   phone: "+39 333-123 4567",
   billing_party_name: null,
   agency_id: "agency-la-villa",
+  hotel_name: "La Villa",
+  transport_code: "ITALO 8903 / ITALO 8938",
+  train_departure_number: "ITALO 8938",
 };
 
 const gerardo: TestRecord = {
@@ -19,6 +22,8 @@ const gerardo: TestRecord = {
   phone: "3491112233",
   billing_party_name: null,
   agency_id: "agency-royal-palm",
+  hotel_name: "Royal Palm Hotel Terme",
+  transport_code: "MEDMAR Napoli 17:00",
 };
 
 const noAgencyBooking: TestRecord = {
@@ -91,8 +96,15 @@ describe("matchesBookingSearch — campo nome/cognome/telefono", () => {
     expect(matchesBookingSearch(gerardo, "xyz", "", agencyNameById)).toBe(false);
   });
 
-  it("query sotto i 2 caratteri non filtra (nessun vincolo attivo su nome/telefono)", () => {
+  it("query da 1 carattere filtra gia' i risultati per suggerimento live", () => {
     expect(matchesBookingSearch(marcotulli, "s", "", agencyNameById)).toBe(true);
+    expect(matchesBookingSearch(gerardo, "s", "", agencyNameById)).toBe(false);
+  });
+
+  it("trova per hotel e codici operativi", () => {
+    expect(matchesBookingSearch(marcotulli, "villa", "", agencyNameById)).toBe(true);
+    expect(matchesBookingSearch(marcotulli, "8938", "", agencyNameById)).toBe(true);
+    expect(matchesBookingSearch(gerardo, "medmar", "", agencyNameById)).toBe(true);
   });
 });
 
@@ -130,7 +142,10 @@ describe("matchesBookingSearch — campo agenzia", () => {
 describe("filterBookingsBySearch", () => {
   it("nessuna query attiva restituisce lista vuota (evita di scaricare tutto il dataset)", () => {
     expect(filterBookingsBySearch(allRecords, "", "", agencyNameById)).toEqual([]);
-    expect(filterBookingsBySearch(allRecords, "a", "", agencyNameById)).toEqual([]);
+  });
+
+  it("con una sola lettera mostra gia' risultati compatibili", () => {
+    expect(filterBookingsBySearch(allRecords, "a", "", agencyNameById).length).toBeGreaterThan(0);
   });
 
   it("reset filtro: tornare a query vuota azzera i risultati coerentemente", () => {
