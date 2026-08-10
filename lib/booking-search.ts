@@ -1,6 +1,11 @@
 export interface BookingSearchRecord {
   customer_name?: string | null;
+  customer_first_name?: string | null;
+  customer_last_name?: string | null;
+  customer_display_name?: string | null;
+  customer_email?: string | null;
   phone?: string | null;
+  phone_e164?: string | null;
   billing_party_name?: string | null;
   agency_id?: string | null;
   hotel_name?: string | null;
@@ -14,7 +19,13 @@ export interface BookingSearchRecord {
   train_arrival_number?: string | null;
   train_departure_number?: string | null;
   booking_service_kind?: string | null;
+  service_type?: string | null;
   service_type_code?: string | null;
+  bus_city_origin?: string | null;
+  meeting_point?: string | null;
+  pickup_hotel?: string | null;
+  tour_name?: string | null;
+  excursion_title?: string | null;
   id?: string | null;
 }
 
@@ -36,8 +47,23 @@ export function matchesBookingSearch(
   const hasQuery = q.length >= 1;
   const hasAgency = ag.length >= 1;
   const qDigits = q.replace(/\D/g, "");
+  const agencyName = record.billing_party_name
+    ?? (record.agency_id ? agencyNameById.get(record.agency_id) : null)
+    ?? "";
+  const bookingOwnerLabel = agencyName || "Privato";
+  const fullName = [
+    record.customer_first_name,
+    record.customer_last_name,
+  ].map((value) => String(value ?? "").trim()).filter(Boolean).join(" ");
   const searchableText = [
     record.customer_name,
+    fullName,
+    record.customer_first_name,
+    record.customer_last_name,
+    record.customer_display_name,
+    record.customer_email,
+    bookingOwnerLabel,
+    agencyName ? null : "senza agenzia cliente privato privati",
     record.hotel_name,
     record.vessel,
     record.notes,
@@ -48,18 +74,21 @@ export function matchesBookingSearch(
     record.train_arrival_number,
     record.train_departure_number,
     record.booking_service_kind,
+    record.service_type,
     record.service_type_code,
+    record.bus_city_origin,
+    record.meeting_point,
+    record.pickup_hotel,
+    record.tour_name,
+    record.excursion_title,
     record.id,
   ].map((value) => normalizeText(value)).join(" ");
 
   const matchQuery = !hasQuery
     || searchableText.includes(q)
-    || (qDigits.length > 0 && (record.phone ?? "").replace(/\D/g, "").includes(qDigits));
+    || (qDigits.length > 0 && `${record.phone ?? ""} ${record.phone_e164 ?? ""}`.replace(/\D/g, "").includes(qDigits));
 
-  const agencyName = record.billing_party_name
-    ?? (record.agency_id ? agencyNameById.get(record.agency_id) : null)
-    ?? "";
-  const matchAgency = !hasAgency || normalizeText(agencyName).includes(ag);
+  const matchAgency = !hasAgency || normalizeText(bookingOwnerLabel).includes(ag);
 
   return matchQuery && matchAgency;
 }

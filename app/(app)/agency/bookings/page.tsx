@@ -16,6 +16,8 @@ type BookingRow = {
   status: string;
   pax: number;
   customer_name: string;
+  customer_first_name: string | null;
+  customer_last_name: string | null;
   service_type: "transfer" | "bus_tour";
   vessel: string;
   booking_service_kind: string | null;
@@ -111,6 +113,14 @@ function serviceOperationalDetail(row: BookingRow) {
   if (row.booking_service_kind === "transfer_train_hotel") return row.transport_code ? `Codice treno: ${row.transport_code}` : row.vessel;
   if (row.booking_service_kind === "transfer_airport_hotel") return row.transport_code ? `Codice volo: ${row.transport_code}` : row.vessel;
   return row.vessel;
+}
+
+function bookingCustomerLabel(row: Pick<BookingRow, "customer_name" | "customer_first_name" | "customer_last_name">) {
+  const joined = [row.customer_first_name, row.customer_last_name]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return row.customer_name?.trim() || joined || "Cliente N/D";
 }
 
 function normalizeSearchText(value?: string | null) {
@@ -234,7 +244,10 @@ function AgencyBookingsPageInner() {
     const queryDigits = query.replace(/\D/g, "");
     return bookings.filter((row) => {
       const haystack = [
+        bookingCustomerLabel(row),
         row.customer_name,
+        row.customer_first_name,
+        row.customer_last_name,
         row.hotel_name,
         row.hotel_zone,
         row.vessel,
@@ -477,7 +490,7 @@ function AgencyBookingsPageInner() {
                             >
                               <div className="flex flex-wrap items-start justify-between gap-2">
                                 <div>
-                                  <p className="text-sm font-semibold text-text">{row.customer_name}</p>
+                                  <p className="text-sm font-semibold text-text">{bookingCustomerLabel(row)}</p>
                                   <p className="text-xs text-muted">{serviceKindLabels[row.booking_service_kind ?? ""] ?? "Transfer"} · {row.hotel_name}</p>
                                 </div>
                                 <div className="flex flex-col items-end gap-1">
@@ -594,7 +607,7 @@ function AgencyBookingsPageInner() {
               <div className="space-y-3">
                 <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
                   <div className="min-w-0">
-                    <p className="text-xl font-bold text-slate-900 leading-tight truncate">{selectedBooking.customer_name}</p>
+                    <p className="text-xl font-bold text-slate-900 leading-tight truncate">{bookingCustomerLabel(selectedBooking)}</p>
                     <p className="mt-0.5 text-xs text-slate-500 font-medium uppercase tracking-wide">
                       {serviceKindLabels[selectedBooking.booking_service_kind ?? ""] ?? "Transfer"}
                     </p>
@@ -612,7 +625,7 @@ function AgencyBookingsPageInner() {
                 </div>
                 <div className="flex items-center gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700">
                   <span>Telefono: {selectedBooking.phone || "N/D"}</span>
-                  <WhatsAppButton phone={selectedBooking.phone} name={selectedBooking.customer_name} tenantId={tenantId} />
+                  <WhatsAppButton phone={selectedBooking.phone} name={bookingCustomerLabel(selectedBooking)} tenantId={tenantId} />
                 </div>
 
                 {/* Esito ultima modifica */}
@@ -731,7 +744,7 @@ function AgencyBookingsPageInner() {
                       </button>
                     ) : (
                       <div className="space-y-3">
-                        <p className="text-sm font-semibold text-amber-900">Annullamento — {selectedBooking.customer_name}</p>
+                        <p className="text-sm font-semibold text-amber-900">Annullamento — {bookingCustomerLabel(selectedBooking)}</p>
                         <div>
                           <p className="text-xs font-semibold text-amber-700 mb-1.5">Quale tratta vuoi annullare?</p>
                           <div className="flex flex-wrap gap-1.5">

@@ -42,6 +42,32 @@ const inactiveAgencyBooking: TestRecord = {
   agency_id: "agency-disattivata",
 };
 
+const privateBooking: TestRecord = {
+  id: "6",
+  customer_name: "Luca Verde",
+  customer_email: "luca.verde@example.com",
+  phone: "+39 333 000 7777",
+  billing_party_name: null,
+  agency_id: null,
+  hotel_name: "Hotel Arca",
+  booking_service_kind: "private_island",
+};
+
+const marcotulliSplitNameBusLine: TestRecord = {
+  id: "5",
+  customer_name: "",
+  customer_first_name: "Silvia",
+  customer_last_name: "Marcotulli",
+  phone: null,
+  billing_party_name: "Aleste Viaggi",
+  agency_id: null,
+  hotel_name: "La Villa",
+  booking_service_kind: "bus_city_hotel",
+  service_type_code: "bus_line",
+  bus_city_origin: "Roma Anagnina",
+  transport_code: "LINEA_CENTRO",
+};
+
 // Simula agenciesMap costruita SENZA filtro active=true (fix applicato in inbox/page.tsx):
 // contiene sia agenzie attive che disattivate.
 const agencyNameById = new Map<string, string>([
@@ -50,7 +76,7 @@ const agencyNameById = new Map<string, string>([
   ["agency-disattivata", "Agenzia Storica (disattivata)"],
 ]);
 
-const allRecords = [marcotulli, gerardo, noAgencyBooking, inactiveAgencyBooking];
+const allRecords = [marcotulli, gerardo, noAgencyBooking, inactiveAgencyBooking, marcotulliSplitNameBusLine, privateBooking];
 
 describe("matchesBookingSearch — campo nome/cognome/telefono", () => {
   it("trova per nome", () => {
@@ -59,6 +85,11 @@ describe("matchesBookingSearch — campo nome/cognome/telefono", () => {
 
   it("trova per cognome", () => {
     expect(matchesBookingSearch(marcotulli, "Marcotulli", "", agencyNameById)).toBe(true);
+  });
+
+  it("trova anche quando nome e cognome sono salvati in campi separati", () => {
+    expect(matchesBookingSearch(marcotulliSplitNameBusLine, "marcotulli", "", agencyNameById)).toBe(true);
+    expect(matchesBookingSearch(marcotulliSplitNameBusLine, "silvia marcotulli", "", agencyNameById)).toBe(true);
   });
 
   it("trova per nome parziale", () => {
@@ -106,6 +137,20 @@ describe("matchesBookingSearch — campo nome/cognome/telefono", () => {
     expect(matchesBookingSearch(marcotulli, "8938", "", agencyNameById)).toBe(true);
     expect(matchesBookingSearch(gerardo, "medmar", "", agencyNameById)).toBe(true);
   });
+
+  it("trova anche prenotazioni linea bus nel motore globale", () => {
+    expect(matchesBookingSearch(marcotulliSplitNameBusLine, "roma anagnina", "", agencyNameById)).toBe(true);
+    expect(matchesBookingSearch(marcotulliSplitNameBusLine, "bus_line", "", agencyNameById)).toBe(true);
+    expect(matchesBookingSearch(marcotulliSplitNameBusLine, "aleste", "", agencyNameById)).toBe(true);
+    expect(matchesBookingSearch(marcotulliSplitNameBusLine, "", "aleste", agencyNameById)).toBe(true);
+  });
+
+  it("trova anche prenotazioni private senza agenzia", () => {
+    expect(matchesBookingSearch(privateBooking, "luca", "", agencyNameById)).toBe(true);
+    expect(matchesBookingSearch(privateBooking, "privato", "", agencyNameById)).toBe(true);
+    expect(matchesBookingSearch(privateBooking, "luca.verde@example.com", "", agencyNameById)).toBe(true);
+    expect(matchesBookingSearch(privateBooking, "", "privato", agencyNameById)).toBe(true);
+  });
 });
 
 describe("matchesBookingSearch — campo agenzia", () => {
@@ -150,7 +195,7 @@ describe("filterBookingsBySearch", () => {
 
   it("reset filtro: tornare a query vuota azzera i risultati coerentemente", () => {
     const withQuery = filterBookingsBySearch(allRecords, "Silvia", "", agencyNameById);
-    expect(withQuery).toHaveLength(1);
+    expect(withQuery).toHaveLength(2);
     const afterReset = filterBookingsBySearch(allRecords, "", "", agencyNameById);
     expect(afterReset).toEqual([]);
   });

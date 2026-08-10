@@ -103,6 +103,18 @@ function text(value: unknown) {
   return typeof value === "string" ? value : value == null ? "" : String(value);
 }
 
+function serviceCustomerLabel(service: Pick<Service, "customer_name"> & Partial<Service>) {
+  const joined = [service.customer_first_name, service.customer_last_name]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return service.customer_name?.trim() || joined || "Cliente N/D";
+}
+
+function serviceOwnerLabel(service: Pick<Service, "agency_id" | "billing_party_name"> & Partial<Service>, agencyNameById: Map<string, string>) {
+  return service.billing_party_name ?? (service.agency_id ? agencyNameById.get(service.agency_id) : null) ?? "Privato";
+}
+
 // Converte qualsiasi stringa data in formato YYYY-MM-DD per <input type="date">
 // Se non riconoscibile restituisce "" (campo vuoto, l'utente la inserisce manualmente)
 function toDateValue(raw: string): string {
@@ -496,7 +508,11 @@ export default function InboxPage() {
   const searchResults = useMemo(() => {
     const hotelNameById = new Map(hotels.map((hotel) => [hotel.id, hotel.name]));
     return filterBookingsBySearch(
-      services.map((service) => ({ ...service, hotel_name: hotelNameById.get(service.hotel_id) ?? null })),
+      services.map((service) => ({
+        ...service,
+        customer_display_name: serviceCustomerLabel(service),
+        hotel_name: hotelNameById.get(service.hotel_id) ?? null,
+      })),
       searchQuery,
       agencyFilter,
       agenciesMap
@@ -691,7 +707,7 @@ export default function InboxPage() {
                   <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm hover:bg-slate-50">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-semibold text-slate-900 truncate">{s.customer_name}</p>
+                        <p className="font-semibold text-slate-900 truncate">{serviceCustomerLabel(s)}</p>
                         <span className="rounded font-mono bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 shrink-0">
                           #{s.id.slice(0, 8).toUpperCase()}
                         </span>
@@ -699,7 +715,9 @@ export default function InboxPage() {
                       <p className="text-xs text-slate-500">
                         {s.phone ?? "—"}
                         {s.pax ? <span className="ml-2 font-medium text-slate-700">{s.pax} pax</span> : null}
-                        {(() => { const ag = s.billing_party_name ?? (s.agency_id ? agenciesMap.get(s.agency_id) : null) ?? null; return ag ? <span className="ml-2 font-medium text-indigo-600">{ag}</span> : null; })()}
+                        <span className={`ml-2 font-medium ${s.billing_party_name || s.agency_id ? "text-indigo-600" : "text-emerald-600"}`}>
+                          {serviceOwnerLabel(s, agenciesMap)}
+                        </span>
                       </p>
                       {(() => { const h = hotels.find((h) => h.id === s.hotel_id); return h ? <p className="text-xs font-medium text-slate-700 truncate">🏨 {h.name}</p> : null; })()}
                       <p className="text-xs text-slate-500">
@@ -842,7 +860,7 @@ export default function InboxPage() {
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
                   <p className="font-semibold">Email già approvata</p>
                   {linkedService && (
-                    <p className="mt-1 text-xs">Servizio: {linkedService.customer_name} · {linkedService.date}</p>
+                    <p className="mt-1 text-xs">Servizio: {serviceCustomerLabel(linkedService)} · {linkedService.date}</p>
                   )}
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <Link href="/arrivals" className="btn-primary px-3 py-1.5 text-xs">Vai agli Arrivi</Link>
