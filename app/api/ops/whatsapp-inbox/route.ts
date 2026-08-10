@@ -3,6 +3,8 @@ import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { getTenantWhatsAppSettings, isWhatsAppCustomerCareWindowOpen, loadSyncedWhatsAppTemplates, logWhatsAppEvent, normalizeE164, normalizeWhatsAppWaId, sendWhatsAppMediaMessage, sendWhatsAppMessage, sendWhatsAppTextMessage } from "@/lib/server/whatsapp";
 import { matchWhatsAppInboundMessage } from "@/lib/server/whatsapp/matching";
+import { sanitizedErrorResponse } from "@/lib/server/api-error";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -246,7 +248,13 @@ export async function GET(request: NextRequest) {
   try {
     syncedTemplates = await loadSyncedWhatsAppTemplates(auth.admin, tenantId);
   } catch (error) {
-    templateFetchError = error instanceof Error ? error.message : "Impossibile caricare i template sincronizzati.";
+    templateFetchError = "Impossibile caricare i template sincronizzati.";
+    auditLog({
+      event: "whatsapp_inbox_load_templates_failed",
+      level: "error",
+      tenantId,
+      details: { message: error instanceof Error ? error.message : String(error) },
+    });
   }
   const url = new URL(request.url);
   const filter = url.searchParams.get("filter") ?? "open";
@@ -272,7 +280,15 @@ export async function GET(request: NextRequest) {
   }
 
   const { data: threads, error: threadError } = await threadQuery;
-  if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
+  if (threadError) {
+    return sanitizedErrorResponse(threadError, {
+      status: 500,
+      fallback: "Impossibile caricare le conversazioni.",
+      event: "whatsapp_inbox_list_threads_failed",
+      tenantId,
+      details: { filter },
+    });
+  }
 
   const threadRows = (threads ?? []) as Array<Record<string, unknown>>;
   const serviceIds = Array.from(new Set(
@@ -326,7 +342,15 @@ export async function GET(request: NextRequest) {
       .order("created_at", { ascending: true })
       .limit(500)
     : { data: [], error: null };
-  if (messageError) return NextResponse.json({ error: messageError.message }, { status: 500 });
+  if (messageError) {
+    return sanitizedErrorResponse(messageError, {
+      status: 500,
+      fallback: "Impossibile caricare i messaggi della conversazione.",
+      event: "whatsapp_inbox_list_messages_failed",
+      tenantId,
+      details: { threadId: selectedId ?? null },
+    });
+  }
 
   const waMessageIds = Array.from(new Set((messages ?? []).map((message) => message.wa_message_id).filter(Boolean) as string[]));
   const { data: messageStatuses, error: statusError } = waMessageIds.length
@@ -337,7 +361,15 @@ export async function GET(request: NextRequest) {
       .in("wa_message_id", waMessageIds)
       .order("created_at", { ascending: false })
     : { data: [], error: null };
-  if (statusError) return NextResponse.json({ error: statusError.message }, { status: 500 });
+  if (statusError) {
+    return sanitizedErrorResponse(statusError, {
+      status: 500,
+      fallback: "Impossibile caricare lo stato dei messaggi.",
+      event: "whatsapp_inbox_list_message_statuses_failed",
+      tenantId,
+      details: { threadId: selectedId ?? null },
+    });
+  }
 
   const latestStatusByMessageId = new Map<string, { status: string; failure_reason: string | null }>();
   for (const statusRow of messageStatuses ?? []) {
@@ -460,7 +492,15 @@ export async function PATCH(request: NextRequest) {
       })
       .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
       .eq("id", parsed.data.thread_id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) {
+      return sanitizedErrorResponse(error, {
+        status: 500,
+        fallback: "Impossibile associare la conversazione alla prenotazione.",
+        event: "whatsapp_inbox_associate_thread_failed",
+        tenantId: auth.membership.tenant_id,
+        details: { threadId: parsed.data.thread_id },
+      });
+    }
     return NextResponse.json({ ok: true });
   }
 
@@ -471,7 +511,15 @@ export async function PATCH(request: NextRequest) {
       .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
       .eq("id", parsed.data.thread_id)
       .maybeSingle();
-    if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
+    if (threadError) {
+      return sanitizedErrorResponse(threadError, {
+        status: 500,
+        fallback: "Impossibile eliminare la conversazione.",
+        event: "whatsapp_inbox_delete_lookup_failed",
+        tenantId: auth.membership.tenant_id,
+        details: { threadId: parsed.data.thread_id },
+      });
+    }
     if (!thread?.id) return NextResponse.json({ error: "Conversazione non trovata" }, { status: 404 });
 
     const { data: messageRows, error: messageRowsError } = await auth.admin
@@ -479,7 +527,15 @@ export async function PATCH(request: NextRequest) {
       .select("wa_message_id")
       .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
       .eq("thread_id", thread.id);
-    if (messageRowsError) return NextResponse.json({ error: messageRowsError.message }, { status: 500 });
+    if (messageRowsError) {
+      return sanitizedErrorResponse(messageRowsError, {
+        status: 500,
+        fallback: "Impossibile eliminare la conversazione.",
+        event: "whatsapp_inbox_delete_messages_lookup_failed",
+        tenantId: auth.membership.tenant_id,
+        details: { threadId: thread.id },
+      });
+    }
 
     const waMessageIds = Array.from(new Set((messageRows ?? []).map((row) => row.wa_message_id).filter(Boolean) as string[]));
     if (waMessageIds.length > 0) {
@@ -488,7 +544,15 @@ export async function PATCH(request: NextRequest) {
         .delete()
         .eq("tenant_id", auth.membership.tenant_id)
         .in("wa_message_id", waMessageIds);
-      if (statusDeleteError) return NextResponse.json({ error: statusDeleteError.message }, { status: 500 });
+      if (statusDeleteError) {
+        return sanitizedErrorResponse(statusDeleteError, {
+          status: 500,
+          fallback: "Impossibile eliminare la conversazione.",
+          event: "whatsapp_inbox_delete_statuses_failed",
+          tenantId: auth.membership.tenant_id,
+          details: { threadId: thread.id },
+        });
+      }
     }
 
     const { error: messagesDeleteError } = await auth.admin
@@ -496,14 +560,30 @@ export async function PATCH(request: NextRequest) {
       .delete()
       .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
       .eq("thread_id", thread.id);
-    if (messagesDeleteError) return NextResponse.json({ error: messagesDeleteError.message }, { status: 500 });
+    if (messagesDeleteError) {
+      return sanitizedErrorResponse(messagesDeleteError, {
+        status: 500,
+        fallback: "Impossibile eliminare la conversazione.",
+        event: "whatsapp_inbox_delete_messages_failed",
+        tenantId: auth.membership.tenant_id,
+        details: { threadId: thread.id },
+      });
+    }
 
     const { error: threadDeleteError } = await auth.admin
       .from("whatsapp_threads")
       .delete()
       .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
       .eq("id", thread.id);
-    if (threadDeleteError) return NextResponse.json({ error: threadDeleteError.message }, { status: 500 });
+    if (threadDeleteError) {
+      return sanitizedErrorResponse(threadDeleteError, {
+        status: 500,
+        fallback: "Impossibile eliminare la conversazione.",
+        event: "whatsapp_inbox_delete_thread_failed",
+        tenantId: auth.membership.tenant_id,
+        details: { threadId: thread.id },
+      });
+    }
 
     return NextResponse.json({ ok: true });
   }
@@ -516,7 +596,15 @@ export async function PATCH(request: NextRequest) {
       .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
       .eq("id", parsed.data.thread_id)
       .maybeSingle();
-    if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
+    if (threadError) {
+      return sanitizedErrorResponse(threadError, {
+        status: 500,
+        fallback: "Impossibile rinominare il contatto.",
+        event: "whatsapp_inbox_rename_contact_lookup_failed",
+        tenantId: auth.membership.tenant_id,
+        details: { threadId: parsed.data.thread_id },
+      });
+    }
     if (!thread?.id) return NextResponse.json({ error: "Conversazione non trovata" }, { status: 404 });
     if (!thread.contact_id) return NextResponse.json({ error: "Contatto non trovato per questa conversazione" }, { status: 404 });
     const { error } = await auth.admin
@@ -524,7 +612,15 @@ export async function PATCH(request: NextRequest) {
       .update({ manual_contact_name: contactName, updated_at: new Date().toISOString() })
       .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
       .eq("id", thread.contact_id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) {
+      return sanitizedErrorResponse(error, {
+        status: 500,
+        fallback: "Impossibile rinominare il contatto.",
+        event: "whatsapp_inbox_rename_contact_update_failed",
+        tenantId: auth.membership.tenant_id,
+        details: { threadId: thread.id },
+      });
+    }
     return NextResponse.json({ ok: true });
   }
 
@@ -548,7 +644,15 @@ export async function PATCH(request: NextRequest) {
       .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
       .eq("id", parsed.data.thread_id)
       .maybeSingle();
-    if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
+    if (threadError) {
+      return sanitizedErrorResponse(threadError, {
+        status: 500,
+        fallback: "Impossibile aggiornare il numero di telefono.",
+        event: "whatsapp_inbox_update_phone_lookup_failed",
+        tenantId: auth.membership.tenant_id,
+        details: { threadId: parsed.data.thread_id },
+      });
+    }
     if (!thread?.id) return NextResponse.json({ error: "Conversazione non trovata" }, { status: 404 });
 
     const nextWaId = normalizedPhone.replace(/^\+/, "");
@@ -560,21 +664,45 @@ export async function PATCH(request: NextRequest) {
         .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
         .eq("id", thread.contact_id)
       : { error: null };
-    if (contactError) return NextResponse.json({ error: contactError.message }, { status: 500 });
+    if (contactError) {
+      return sanitizedErrorResponse(contactError, {
+        status: 500,
+        fallback: "Impossibile aggiornare il numero di telefono.",
+        event: "whatsapp_inbox_update_phone_contact_failed",
+        tenantId: auth.membership.tenant_id,
+        details: { threadId: thread.id },
+      });
+    }
 
     const { error: threadUpdateError } = await auth.admin
       .from("whatsapp_threads")
       .update({ wa_id: nextWaId, phone_e164: normalizedPhone, updated_at: updateTimestamp })
       .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
       .eq("id", thread.id);
-    if (threadUpdateError) return NextResponse.json({ error: threadUpdateError.message }, { status: 500 });
+    if (threadUpdateError) {
+      return sanitizedErrorResponse(threadUpdateError, {
+        status: 500,
+        fallback: "Impossibile aggiornare il numero di telefono.",
+        event: "whatsapp_inbox_update_phone_thread_failed",
+        tenantId: auth.membership.tenant_id,
+        details: { threadId: thread.id },
+      });
+    }
 
     const { error: messagesUpdateError } = await auth.admin
       .from("whatsapp_messages")
       .update({ wa_id: nextWaId, phone_e164: normalizedPhone })
       .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
       .eq("thread_id", thread.id);
-    if (messagesUpdateError) return NextResponse.json({ error: messagesUpdateError.message }, { status: 500 });
+    if (messagesUpdateError) {
+      return sanitizedErrorResponse(messagesUpdateError, {
+        status: 500,
+        fallback: "Impossibile aggiornare il numero di telefono.",
+        event: "whatsapp_inbox_update_phone_messages_failed",
+        tenantId: auth.membership.tenant_id,
+        details: { threadId: thread.id },
+      });
+    }
 
     if (thread.booking_id) {
       const { error: serviceUpdateError } = await auth.admin
@@ -582,7 +710,15 @@ export async function PATCH(request: NextRequest) {
         .update({ phone: normalizedPhone, phone_e164: normalizedPhone })
         .eq("tenant_id", auth.membership.tenant_id)
         .eq("id", thread.booking_id);
-      if (serviceUpdateError) return NextResponse.json({ error: serviceUpdateError.message }, { status: 500 });
+      if (serviceUpdateError) {
+        return sanitizedErrorResponse(serviceUpdateError, {
+          status: 500,
+          fallback: "Impossibile aggiornare il numero di telefono.",
+          event: "whatsapp_inbox_update_phone_service_failed",
+          tenantId: auth.membership.tenant_id,
+          details: { threadId: thread.id },
+        });
+      }
     }
 
     return NextResponse.json({ ok: true, phone_e164: normalizedPhone, wa_id: nextWaId });
@@ -601,7 +737,15 @@ export async function PATCH(request: NextRequest) {
     .or(`tenant_id.eq.${auth.membership.tenant_id},tenant_id.is.null`)
     .eq("id", parsed.data.thread_id);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    return sanitizedErrorResponse(error, {
+      status: 500,
+      fallback: "Impossibile aggiornare la conversazione.",
+      event: "whatsapp_inbox_update_status_failed",
+      tenantId: auth.membership.tenant_id,
+      details: { threadId: parsed.data.thread_id, action: parsed.data.action },
+    });
+  }
   return NextResponse.json({ ok: true });
 }
 
@@ -658,7 +802,15 @@ export async function POST(request: NextRequest) {
       .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
       .eq("id", parsed.data.thread_id)
       .maybeSingle();
-    if (threadError) return NextResponse.json({ error: threadError.message }, { status: 500 });
+    if (threadError) {
+      return sanitizedErrorResponse(threadError, {
+        status: 500,
+        fallback: "Impossibile caricare la conversazione.",
+        event: "whatsapp_inbox_send_thread_lookup_failed",
+        tenantId,
+        details: { threadId: parsed.data.thread_id },
+      });
+    }
     if (!existingThread?.wa_id) {
       return NextResponse.json({ error: "Conversazione non trovata" }, { status: 404 });
     }
@@ -716,7 +868,13 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (latestInboundError) {
-      return NextResponse.json({ error: latestInboundError.message }, { status: 500 });
+      return sanitizedErrorResponse(latestInboundError, {
+        status: 500,
+        fallback: "Impossibile verificare la finestra di invio.",
+        event: "whatsapp_inbox_send_window_check_failed",
+        tenantId,
+        details: { threadId: thread.id },
+      });
     }
 
     const lastInboundAt = latestInbound?.timestamp ?? latestInbound?.created_at ?? null;
@@ -743,7 +901,15 @@ export async function POST(request: NextRequest) {
       .eq("name", templateName)
       .eq("language_code", templateLang)
       .maybeSingle();
-    if (tplError) return NextResponse.json({ error: tplError.message }, { status: 500 });
+    if (tplError) {
+      return sanitizedErrorResponse(tplError, {
+        status: 500,
+        fallback: "Impossibile caricare il template WhatsApp.",
+        event: "whatsapp_inbox_send_template_lookup_failed",
+        tenantId,
+        details: { threadId: thread.id, templateName },
+      });
+    }
     if (!tplRow) {
       return NextResponse.json({ error: "Template WhatsApp non trovato. Sincronizza i template da Impostazioni WhatsApp." }, { status: 400 });
     }
@@ -806,7 +972,8 @@ export async function POST(request: NextRequest) {
       return {
         ok: false as const,
         error: error instanceof Error ? error.message : "Invio WhatsApp non riuscito",
-        phoneE164: targetPhone
+        phoneE164: targetPhone,
+        internalError: true as const
       };
     }
   })();
@@ -908,6 +1075,15 @@ export async function POST(request: NextRequest) {
       error: sendResult.error ?? "unknown",
       mode: sendMode
     });
+    if ("internalError" in sendResult && sendResult.internalError) {
+      return sanitizedErrorResponse(new Error(sendResult.error ?? "Invio WhatsApp non riuscito"), {
+        status: 502,
+        fallback: "Invio WhatsApp non riuscito.",
+        event: "whatsapp_inbox_send_internal_error",
+        tenantId,
+        details: { threadId: thread.id, mode: sendMode },
+      });
+    }
     return NextResponse.json({ error: sendResult.error ?? "Invio WhatsApp non riuscito" }, { status: 502 });
   }
 
