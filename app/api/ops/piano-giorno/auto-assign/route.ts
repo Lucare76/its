@@ -36,6 +36,8 @@ import { effectiveServiceDisembarkTime } from "@/lib/piano-arrival-time";
 import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
 import { loadLearnedPatterns, updateLearnedPatterns } from "@/lib/server/learned-patterns";
 import { type SupabaseClient } from "@supabase/supabase-js";
+import { auditLog } from "@/lib/server/ops-audit";
+import { sanitizedErrorResponse } from "@/lib/server/api-error";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -1947,7 +1949,14 @@ export async function POST(request: NextRequest) {
         : { data: [] as Array<{ id: string }>, error: null };
 
       if (prepared.length > 0 && (groupsErr || !groups?.length)) {
-        errors.push(`Errore creazione giri: ${groupsErr?.message ?? "nessun ID restituito"}`);
+        auditLog({
+          event: "piano_auto_assign_groups_insert_failed",
+          level: "error",
+          tenantId,
+          userId,
+          details: { message: groupsErr?.message ?? "nessun ID restituito" },
+        });
+        errors.push("Errore creazione giri.");
       } else {
         const allAssignRows: Array<{
           tenant_id: string; service_id: string;
@@ -1990,9 +1999,36 @@ export async function POST(request: NextRequest) {
             batchAdmin.from("status_events").insert(allStatusEvents),
           ]);
 
-          if (assignRes.error) errors.push(`Assignments: ${assignRes.error.message}`);
-          if (svcRes.error) errors.push(`Services update: ${svcRes.error.message}`);
-          if (statusRes.error) errors.push(`Status events: ${statusRes.error.message}`);
+          if (assignRes.error) {
+            auditLog({
+              event: "piano_auto_assign_write_failed",
+              level: "error",
+              tenantId,
+              userId,
+              details: { step: "assignments", message: assignRes.error.message },
+            });
+            errors.push("Errore salvataggio assegnazioni.");
+          }
+          if (svcRes.error) {
+            auditLog({
+              event: "piano_auto_assign_write_failed",
+              level: "error",
+              tenantId,
+              userId,
+              details: { step: "services_update", message: svcRes.error.message },
+            });
+            errors.push("Errore aggiornamento stato servizi.");
+          }
+          if (statusRes.error) {
+            auditLog({
+              event: "piano_auto_assign_write_failed",
+              level: "error",
+              tenantId,
+              userId,
+              details: { step: "status_events", message: statusRes.error.message },
+            });
+            errors.push("Errore registrazione eventi stato.");
+          }
 
           if (!assignRes.error && !svcRes.error) {
             const historyEntries = prepared.flatMap(({ draft, profileId, vehicle }, idx) => {
@@ -2060,9 +2096,10 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ ok: true, assigned: assignedCount, trips: tripsCreated, skipped: unassignedCount, report, planner_used: plannerUsed });
   } catch (err) {
-    return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : "Errore." },
-      { status: 500 }
-    );
+    return sanitizedErrorResponse(err, {
+      status: 500,
+      fallback: "Errore durante l'auto-assign.",
+      event: "piano_auto_assign_unhandled_error",
+    });
   }
 }
