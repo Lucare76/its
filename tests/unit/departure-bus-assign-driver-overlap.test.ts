@@ -104,11 +104,19 @@ function createOperationalSupabase(
     return builder;
   }
 
-  // Select unica su "assignments": distingue la query in base ai filtri .eq()
-  // realmente applicati (driver_user_id -> overlap driver CONC-02 residuo;
-  // vehicle_label -> overlap mezzo CONC-03 residuo; nessuno dei due -> query
-  // geo FUNC-01, delegata al builder generico sopra).
-  function makeAssignmentsSelectBuilder() {
+  // Select unica su "assignments": distingue la query in base alla firma
+  // REALE di .select(cols) — non più in base ai soli filtri .eq() applicati,
+  // perché sia la query geo FUNC-01 (validateDriverGeographicBatch, che
+  // filtra anch'essa per driver_user_id) sia la query overlap CONC-02
+  // condividono lo stesso filtro .eq("driver_user_id", ...): un routing
+  // basato solo sui filtri le confondeva. FUNC-01 seleziona
+  // "group_id, assigned_at, services!inner(...)"; CONC-02/CONC-03
+  // selezionano "service_id, services!inner(...)" — colonne iniziali
+  // strutturalmente diverse, discriminante affidabile.
+  function makeAssignmentsSelectBuilder(cols: string) {
+    if (cols.trim().startsWith("group_id")) {
+      return makeGeoAssignmentsSelectBuilder();
+    }
     let filtered = assignments;
     let sawDriverFilter = false;
     let sawVehicleFilter = false;
@@ -208,7 +216,7 @@ function createOperationalSupabase(
       }
       if (table === "assignments") {
         return {
-          select: () => makeAssignmentsSelectBuilder(),
+          select: (cols: string) => makeAssignmentsSelectBuilder(cols),
           delete: () => makeAssignmentsDeleteBuilder(),
           upsert(rows: Row[], _options?: { onConflict?: string; ignoreDuplicates?: boolean }) {
             calls.assignmentsInsert++;

@@ -450,6 +450,13 @@ describe("FUNC-02 residuo — service operational status guard in departure-bus-
   });
 
   it("14. overlap driver invariato: conflitto esterno continua a bloccare con 409 dopo FUNC-02", async () => {
+    // Gap di 20 minuti: fuori dalla soglia FUNC-01 (buffer geografico "zona
+    // sconosciuta" 15 min, hotel_id/meeting_point null in questi seed) ma
+    // ancora dentro la finestra fissa di 30 minuti di CONC-02 — isola la
+    // guardia CONC-02 specificamente, evitando che FUNC-01 (aggiunta
+    // successivamente, valida anch'essa lo stesso autista/tenant) intercetti
+    // per prima lo stesso conflitto con un errore diverso (comportamento
+    // reale e corretto, ma non l'oggetto di questo test).
     const fake = baseSeed({
       assignments: [
         {
@@ -463,7 +470,7 @@ describe("FUNC-02 residuo — service operational status guard in departure-bus-
       services: [
         serviceRow(SERVICE_X1),
         serviceRow(SERVICE_X2),
-        serviceRow("c9999999-9999-4999-8999-999999999999", { time: "10:05:00" }),
+        serviceRow("c9999999-9999-4999-8999-999999999999", { time: "10:20:00" }),
       ],
     });
     authorizeAs(fake);
