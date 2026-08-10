@@ -4,6 +4,7 @@ import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
 import { buildServiceLabel, type AgencyBookingKind, type ServiceLabelContext } from "@/lib/service-label";
 import { sendAgencyConfirmedEmail, sendAgencyRejectedEmail } from "@/lib/server/agency-approval-email";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -176,7 +177,12 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       pricing: { suggested_price_cents: pricing.price_cents, source: pricing.source }
     });
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+    auditLog({
+      event: "agency_bookings_approve_get_failed",
+      level: "error",
+      details: { message: err instanceof Error ? err.message : String(err) },
+    });
+    return NextResponse.json({ error: "Errore interno." }, { status: 500 });
   }
 }
 
@@ -268,6 +274,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     return NextResponse.json({ ok: true, action, email_status: emailResult.status, email_error: emailResult.error });
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+    auditLog({
+      event: "agency_bookings_approve_post_failed",
+      level: "error",
+      details: { message: err instanceof Error ? err.message : String(err) },
+    });
+    return NextResponse.json({ error: "Errore interno." }, { status: 500 });
   }
 }

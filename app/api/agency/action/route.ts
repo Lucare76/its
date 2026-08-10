@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAgencyActionToken } from "@/lib/server/agency-action-token";
 import { sendEmail } from "@/lib/server/send-email";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -54,21 +55,28 @@ export async function GET(request: NextRequest) {
       action: payload.act
     });
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore." }, { status: 500 });
+    auditLog({
+      event: "agency_action_get_failed",
+      level: "error",
+      tenantId: payload.tid ?? null,
+      serviceId: payload.sid ?? null,
+      details: { message: err instanceof Error ? err.message : String(err) },
+    });
+    return NextResponse.json({ error: "Errore interno." }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
+  const body = await request.json().catch(() => null) as { token?: string; reason?: string } | null;
+  const token = body?.token ?? "";
+  const reason = (body?.reason ?? "").trim();
+
+  const payload = verifyAgencyActionToken(token);
+  if (!payload || payload.act !== "cancel") {
+    return NextResponse.json({ error: "Token non valido o scaduto." }, { status: 400 });
+  }
+
   try {
-    const body = await request.json().catch(() => null) as { token?: string; reason?: string } | null;
-    const token = body?.token ?? "";
-    const reason = (body?.reason ?? "").trim();
-
-    const payload = verifyAgencyActionToken(token);
-    if (!payload || payload.act !== "cancel") {
-      return NextResponse.json({ error: "Token non valido o scaduto." }, { status: 400 });
-    }
-
     const admin = adminClient();
 
     // Verifica il servizio
@@ -133,6 +141,13 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ ok: true, cancelled: true });
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore." }, { status: 500 });
+    auditLog({
+      event: "agency_action_post_failed",
+      level: "error",
+      tenantId: payload.tid ?? null,
+      serviceId: payload.sid ?? null,
+      details: { message: err instanceof Error ? err.message : String(err) },
+    });
+    return NextResponse.json({ error: "Errore interno." }, { status: 500 });
   }
 }

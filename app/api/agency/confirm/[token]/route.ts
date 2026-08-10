@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { buildServiceLabel, buildServiceLabelShort, type AgencyBookingKind, type ServiceLabelContext } from "@/lib/service-label";
 import { sendEmail as sendEmailUtil } from "@/lib/server/send-email";
 import { fmtDate } from "@/lib/server/email-layout";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -107,7 +108,12 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       price_cents: tokenRow.resolved_price_cents ?? null,
     });
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+    auditLog({
+      event: "agency_confirm_get_failed",
+      level: "error",
+      details: { message: err instanceof Error ? err.message : String(err) },
+    });
+    return NextResponse.json({ error: "Errore interno." }, { status: 500 });
   }
 }
 
@@ -167,6 +173,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     return NextResponse.json({ ok: true, response });
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Errore interno." }, { status: 500 });
+    auditLog({
+      event: "agency_confirm_post_failed",
+      level: "error",
+      details: { message: err instanceof Error ? err.message : String(err) },
+    });
+    return NextResponse.json({ error: "Errore interno." }, { status: 500 });
   }
 }
