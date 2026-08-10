@@ -436,7 +436,7 @@ describe("FUNC-03 residuo — driver operational status guard in departure-bus-a
   it("15. overlap driver invariato: conflitto orario esterno stesso autista continua a bloccare con 409", async () => {
     // Gap di 20 minuti: fuori dalla soglia FUNC-01 (buffer geografico "zona
     // sconosciuta" 15 min, hotel_id/meeting_point null in questi seed) ma
-    // ancora dentro la finestra fissa di 30 minuti di CONC-02 — isola la
+    // ancora dentro la finestra fissa di 30 minuti di CONC-02: isola la
     // guardia CONC-02 specificamente, evitando che FUNC-01 (aggiunta
     // successivamente, valida anch'essa lo stesso autista/tenant) intercetti
     // per prima lo stesso conflitto con un errore diverso (comportamento

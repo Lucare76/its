@@ -9,6 +9,7 @@ import type { PdfImportDetail } from "@/lib/server/pdf-imports";
 import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 import { ensureSupabaseClientReady, getClientSessionContext } from "@/lib/supabase/client-session";
 import type { Hotel, InboundEmail, Membership, Service } from "@/lib/types";
+import { filterBookingsBySearch } from "@/lib/booking-search";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -296,7 +297,7 @@ export default function InboxPage() {
 
   useEffect(() => {
     if (!supabase || !tenantId) return;
-    supabase.from("agencies").select("id, name").eq("tenant_id", tenantId).eq("active", true)
+    supabase.from("agencies").select("id, name").eq("tenant_id", tenantId)
       .then(({ data: rows }) => {
         if (rows) setAgenciesMap(new Map((rows as Array<{ id: string; name: string }>).map((a) => [a.id, a.name])));
       });
@@ -492,19 +493,10 @@ export default function InboxPage() {
 
   const canApprove = form.cliente_nome.trim() !== "" && form.hotel.trim() !== "" && form.data_arrivo.trim() !== "";
 
-  const searchResults = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    const ag = agencyFilter.trim().toLowerCase();
-    const hasQuery = q.length >= 2;
-    const hasAgency = ag.length >= 2;
-    if (!hasQuery && !hasAgency) return [];
-    return services.filter((s) => {
-      const matchQuery = !hasQuery || (s.customer_name ?? "").toLowerCase().includes(q) || (s.phone ?? "").replace(/\s/g, "").includes(q.replace(/\s/g, ""));
-      const agencyName = s.billing_party_name ?? (s.agency_id ? agenciesMap.get(s.agency_id) : null) ?? "";
-      const matchAgency = !hasAgency || agencyName.toLowerCase().includes(ag);
-      return matchQuery && matchAgency;
-    }).slice(0, 20);
-  }, [searchQuery, agencyFilter, agenciesMap, services]);
+  const searchResults = useMemo(
+    () => filterBookingsBySearch(services, searchQuery, agencyFilter, agenciesMap),
+    [searchQuery, agencyFilter, agenciesMap, services]
+  );
 
   const pdfUploadStatus = useMemo(() => {
     if (pdfUploadSaving) return "Salvataggio in corso...";

@@ -105,7 +105,7 @@ function createOperationalSupabase(
   }
 
   // Select unica su "assignments": distingue la query in base alla firma
-  // REALE di .select(cols) — non più in base ai soli filtri .eq() applicati,
+  // REALE di .select(cols) - non più in base ai soli filtri .eq() applicati,
   // perché sia la query geo FUNC-01 (validateDriverGeographicBatch, che
   // filtra anch'essa per driver_user_id) sia la query overlap CONC-02
   // condividono lo stesso filtro .eq("driver_user_id", ...): un routing
@@ -134,12 +134,12 @@ function createOperationalSupabase(
         if (!sawDriverFilter && !sawVehicleFilter) {
           return makeGeoAssignmentsSelectBuilder().then(resolve, reject);
         }
-        if (sawDriverFilter) {
+        if (sawVehicleFilter) {
+          calls.vehicleOverlapQueried++;
+        } else if (sawDriverFilter) {
           calls.driverOverlapQueried++;
           const err = tableErrors["assignments_driver_overlap"] ?? null;
           if (err) return Promise.resolve({ data: null, error: err }).then(resolve, reject);
-        } else if (sawVehicleFilter) {
-          calls.vehicleOverlapQueried++;
         }
         const withJoin = filtered.map((row) => ({
           ...row,

@@ -12,6 +12,7 @@ import {
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { agencyBookingCreateSchema } from "@/lib/validation";
+import { runGuardedSubmit } from "@/lib/guarded-submit";
 import {
   useServiceForm,
   useBusCatalog,
@@ -373,69 +374,71 @@ export default function OpsNewBookingPage() {
   };
 
   const submit = async (force = false) => {
-    if (reviewWarnings.length > 0) {
-      const errs: Record<string, string> = {};
-      if (isSnavKind) {
-        if (!form.customer_last_name.trim()) errs.customer_last_name = "Campo obbligatorio";
-      } else {
-        if (!form.customer_first_name.trim()) errs.customer_first_name = "Campo obbligatorio";
-        if (!form.customer_last_name.trim()) errs.customer_last_name = "Campo obbligatorio";
+    await runGuardedSubmit(submitting, setSubmitting, async () => {
+      if (reviewWarnings.length > 0) {
+        const errs: Record<string, string> = {};
+        if (isSnavKind) {
+          if (!form.customer_last_name.trim()) errs.customer_last_name = "Campo obbligatorio";
+        } else {
+          if (!form.customer_first_name.trim()) errs.customer_first_name = "Campo obbligatorio";
+          if (!form.customer_last_name.trim()) errs.customer_last_name = "Campo obbligatorio";
+        }
+        if (isPhoneRequired && !form.customer_phone.trim()) errs.customer_phone = "Campo obbligatorio";
+        if (!form.pax || isNaN(Number(form.pax)) || Number(form.pax) < 1) errs.pax = "Minimo 1 pax";
+        if (Number(form.pet_count || "0") > 0 && !form.pet_notes.trim()) errs.pet_notes = "Indica tipo/taglia animale";
+        if (!form.hotel_id && !isPrivateIsland) errs.hotel_id = "Seleziona la struttura";
+        if (!(showTripLeg && tripLeg === "return_only") && !form.arrival_date) errs.arrival_date = "Campo obbligatorio";
+        if (!(showTripLeg && tripLeg === "return_only") && !form.arrival_time) errs.arrival_time = "Campo obbligatorio";
+        if (!(showTripLeg && tripLeg === "outbound_only") && !form.departure_date) errs.departure_date = "Campo obbligatorio";
+        if (!(showTripLeg && tripLeg === "outbound_only") && !form.departure_time) errs.departure_time = "Campo obbligatorio";
+        if (isTransportCodeRequired && tripLeg !== "return_only" && !form.transport_code.trim()) errs.transport_code = "Campo obbligatorio";
+        if (isTransportCodeRequired && tripLeg !== "outbound_only" && contextLabels.transportCodeReturnLabel && !form.transport_code_return.trim()) errs.transport_code_return = "Campo obbligatorio";
+        if (isBusOriginRequired && !form.bus_city_origin.trim()) errs.bus_city_origin = "Campo obbligatorio";
+        if (isExcursionTitleRequired && !form.excursion_title.trim()) errs.excursion_title = "Campo obbligatorio";
+        if (isExcursionTitleRequired && !form.excursion_departure_port) errs.excursion_departure_port = "Campo obbligatorio";
+        if (isExcursionTitleRequired && !form.excursion_pickup_port) errs.excursion_pickup_port = "Campo obbligatorio";
+        setFieldErrors(errs);
+        setMessage("Compila tutti i campi obbligatori (*) prima di continuare.");
+        return;
       }
-      if (isPhoneRequired && !form.customer_phone.trim()) errs.customer_phone = "Campo obbligatorio";
-      if (!form.pax || isNaN(Number(form.pax)) || Number(form.pax) < 1) errs.pax = "Minimo 1 pax";
-      if (Number(form.pet_count || "0") > 0 && !form.pet_notes.trim()) errs.pet_notes = "Indica tipo/taglia animale";
-      if (!form.hotel_id && !isPrivateIsland) errs.hotel_id = "Seleziona la struttura";
-      if (!(showTripLeg && tripLeg === "return_only") && !form.arrival_date) errs.arrival_date = "Campo obbligatorio";
-      if (!(showTripLeg && tripLeg === "return_only") && !form.arrival_time) errs.arrival_time = "Campo obbligatorio";
-      if (!(showTripLeg && tripLeg === "outbound_only") && !form.departure_date) errs.departure_date = "Campo obbligatorio";
-      if (!(showTripLeg && tripLeg === "outbound_only") && !form.departure_time) errs.departure_time = "Campo obbligatorio";
-      if (isTransportCodeRequired && tripLeg !== "return_only" && !form.transport_code.trim()) errs.transport_code = "Campo obbligatorio";
-      if (isTransportCodeRequired && tripLeg !== "outbound_only" && contextLabels.transportCodeReturnLabel && !form.transport_code_return.trim()) errs.transport_code_return = "Campo obbligatorio";
-      if (isBusOriginRequired && !form.bus_city_origin.trim()) errs.bus_city_origin = "Campo obbligatorio";
-      if (isExcursionTitleRequired && !form.excursion_title.trim()) errs.excursion_title = "Campo obbligatorio";
-      if (isExcursionTitleRequired && !form.excursion_departure_port) errs.excursion_departure_port = "Campo obbligatorio";
-      if (isExcursionTitleRequired && !form.excursion_pickup_port) errs.excursion_pickup_port = "Campo obbligatorio";
-      setFieldErrors(errs);
-      setMessage("Compila tutti i campi obbligatori (*) prima di continuare.");
-      return;
-    }
 
-    const parsed = agencyBookingCreateSchema.safeParse(normalizedPayload);
-    if (!parsed.success) { await doSubmit(); return; }
+      const parsed = agencyBookingCreateSchema.safeParse(normalizedPayload);
+      if (!parsed.success) { await doSubmit(); return; }
 
-    if (!force && accessToken) {
-      const customerName = isSnavKind
-        ? form.customer_last_name.trim()
-        : `${form.customer_first_name.trim()} ${form.customer_last_name.trim()}`.trim();
-      const phone = form.customer_phone.trim();
-      if (customerName.length >= 2) {
-        try {
-          const res = await fetch(
-            `/api/agency/check-duplicate?name=${encodeURIComponent(customerName)}&phone=${encodeURIComponent(phone)}`,
-            { headers: { Authorization: `Bearer ${accessToken}` } }
-          );
-          const dupBody = await res.json() as {
-            found: boolean;
-            match_type?: "exact" | "name_only";
-            services?: Array<{ id: string; date: string; direction: string; hotel_name: string; agency_name: string | null; pax: number | null; phone: string | null; arrival_date: string | null; departure_date: string | null; }>;
-          };
-          if (dupBody.found && dupBody.services && dupBody.services.length > 0) {
-            setReplaceError(null);
-            setDuplicateWarning({
-              match_type: dupBody.match_type ?? "exact",
-              customer_name: customerName,
-              services: dupBody.services.map((s) => ({
-                ...s,
-                direction: s.direction === "arrival" ? "Arrivo" : "Partenza",
-              })),
-            });
-            return;
-          }
-        } catch { /* se il check fallisce, procedi */ }
+      if (!force && accessToken) {
+        const customerName = isSnavKind
+          ? form.customer_last_name.trim()
+          : `${form.customer_first_name.trim()} ${form.customer_last_name.trim()}`.trim();
+        const phone = form.customer_phone.trim();
+        if (customerName.length >= 2) {
+          try {
+            const res = await fetch(
+              `/api/agency/check-duplicate?name=${encodeURIComponent(customerName)}&phone=${encodeURIComponent(phone)}`,
+              { headers: { Authorization: `Bearer ${accessToken}` } }
+            );
+            const dupBody = await res.json() as {
+              found: boolean;
+              match_type?: "exact" | "name_only";
+              services?: Array<{ id: string; date: string; direction: string; hotel_name: string; agency_name: string | null; pax: number | null; phone: string | null; arrival_date: string | null; departure_date: string | null; }>;
+            };
+            if (dupBody.found && dupBody.services && dupBody.services.length > 0) {
+              setReplaceError(null);
+              setDuplicateWarning({
+                match_type: dupBody.match_type ?? "exact",
+                customer_name: customerName,
+                services: dupBody.services.map((s) => ({
+                  ...s,
+                  direction: s.direction === "arrival" ? "Arrivo" : "Partenza",
+                })),
+              });
+              return;
+            }
+          } catch { /* se il check fallisce, procedi */ }
+        }
       }
-    }
-    setDuplicateWarning(null);
-    await doSubmit();
+      setDuplicateWarning(null);
+      await doSubmit();
+    });
   };
 
   if (loading) return <div className="card p-4 text-sm text-slate-500">Caricamento...</div>;
