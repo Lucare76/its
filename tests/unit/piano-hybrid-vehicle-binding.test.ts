@@ -116,4 +116,20 @@ describe("hybrid vehicle binding", () => {
 
     expect(result.trips[0]?.proposed_vehicle_label).toBe("Custom Large");
   });
+
+  it("proposes a vehicle when the trip starts exactly at shift end even if it finishes later", () => {
+    const result = buildHybridVehicleBinding({
+      drivers: [{
+        driver_key: "driver:shift",
+        driver_name: "SHIFT",
+        max_vehicle_capacity: null,
+        availability: { available: true, available_from: "08:00", available_to: "20:00" },
+      }],
+      vehicles: [{ id: "van", label: "Van", capacity: 8 }],
+      trips: [{ group_id: "boundary-trip", driver_key: "driver:shift", start_time: "20:00", end_time: "20:45", pax: 1 }],
+    });
+
+    expect(result.trips[0]?.proposed_vehicle_label).toBe("Van");
+    expect(result.conflicts.some((conflict) => conflict.type === "driver_availability_blocker")).toBe(false);
+  });
 });

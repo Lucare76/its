@@ -14,6 +14,12 @@ export type DriverAvailabilityPolicy = {
   missingAvailability?: "allow" | "warning" | "blocker";
   missingBounds?: "allow" | "warning" | "blocker";
   defaultDurationMinutes?: number;
+  /**
+   * Default false: available_to gates only the interval start (shift end = last
+   * assignable start time). Set true only when the caller genuinely needs the
+   * driver to remain available through the end of the interval.
+   */
+  requireFullIntervalCoverage?: boolean;
 };
 
 export type DriverAvailabilityResult = {
@@ -64,8 +70,11 @@ export function canDriverCoverInterval(
   if (from != null && start < from) {
     return { allowed: false, severity: "blocker", reason: "Autista non disponibile in questa fascia oraria." };
   }
-  if (to != null && end > to) {
-    return { allowed: false, severity: "blocker", reason: "Autista non disponibile in questa fascia oraria." };
+  if (to != null) {
+    const exceedsShiftEnd = policy.requireFullIntervalCoverage ? end > to : start > to;
+    if (exceedsShiftEnd) {
+      return { allowed: false, severity: "blocker", reason: "Autista non disponibile in questa fascia oraria." };
+    }
   }
 
   for (const block of availability.blocks ?? []) {
