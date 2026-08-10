@@ -386,6 +386,29 @@ function hotelShiftLabel(service: ServiceRow, hotelMap: Map<string, HotelRow>) {
   return point ? point.replace(/^NAVETTA CICLO\s*-\s*/i, "").split(" / ")[0]?.trim() || point : "Hotel";
 }
 
+// Regola 1 (esclusività) — San Nicola ha un vincolo operativo ulteriore
+// rispetto alle altre navette hotel (President, Cristallo, ...): durante la
+// fascia l'autista dedicato non deve ricevere altri servizi nei "buchi" tra
+// una corsa e l'altra (blocco esclusivo sull'intera fascia, non solo sulla
+// singola corsa). Non esiste una colonna DB dedicata per marcare questa
+// esclusività (nessuna migrazione consentita per questo task): riusiamo lo
+// stesso discriminante testuale già in produzione per lo stesso hotel in
+// lib/piano-real-giro-diagnostics.ts (isSanNicolaCitaraStop — "san nicola"/
+// "citara" nel testo), applicato sia al nome hotel (quando hotel_id è
+// presente) sia ai campi di fallback usati da isHotelShuttle quando non lo è
+// (Citara è "il punto esclusivo del San Nicola", vedi commento di isHotelShuttle).
+function isSanNicolaShiftGroup(service: ServiceRow, hotelMap: Map<string, HotelRow>): boolean {
+  if (service.hotel_id) {
+    const hotel = hotelMap.get(service.hotel_id);
+    return Boolean(hotel?.name && hotel.name.toLowerCase().includes("san nicola"));
+  }
+  const text = [service.meeting_point, service.pickup_hotel, service.customer_name]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return text.includes("citara") || text.includes("san nicola");
+}
+
 function assignmentProfileForService(
   serviceId: string,
   assignmentByServiceId: Map<string, AssignmentRow>,
@@ -439,6 +462,43 @@ function hotelShiftBlockUnit(
     start: serviceTime,
     end: minutesToHHMM(blockEndMin),
     pax: service.pax,
+    min_vehicle_capacity: 0,
+    nonsplittable: true,
+    locked: true,
+    protected_from_backtracking: true,
+    buffer_minutes: 5,
+    current_driver_key: profileId,
+    _lockedDriverKey: profileId,
+  };
+}
+
+// San Nicola (Regola 5): blocco esclusivo sull'INTERA fascia — dal primo
+// servizio assegnato all'anchor fino all'ultimo (+ lo stesso margine di coda
+// già usato per la singola corsa), così i "buchi" tra una navetta e l'altra
+// restano riservati all'autista dedicato. Costruito UNA sola volta per
+// fascia (mattina e pomeriggio/sera restano blocchi distinti, dato che
+// arrivano da sotto-gruppi hotelShifts separati) — non estende mai il
+// blocco oltre i servizi realmente assegnati in questa fascia.
+function hotelShiftFasciaBlockUnit(
+  assignedServices: ServiceRow[],
+  hotelName: string,
+  profileId: string,
+): GlobalPlannerUnit & { _lockedDriverKey: string | null } {
+  const sorted = [...assignedServices].sort((a, b) =>
+    serviceOperationalTime(a).localeCompare(serviceOperationalTime(b))
+  );
+  const first = sorted[0]!;
+  const last = sorted[sorted.length - 1]!;
+  const startTime = serviceOperationalTime(first);
+  const blockEndMin = timeToMin(serviceOperationalTime(last)) + 25;
+  const totalPax = sorted.reduce((sum, s) => sum + s.pax, 0);
+  return {
+    id: `hotel_shift_exclusive_${hotelShiftKey(first).replace(/[^a-z0-9_-]+/gi, "_")}_${startTime.replace(":", "")}`,
+    type: "navetta_speciale",
+    label: `${hotelName} fascia ${startTime}-${minutesToHHMM(blockEndMin)} (blocco esclusivo)`,
+    start: startTime,
+    end: minutesToHHMM(blockEndMin),
+    pax: totalPax,
     min_vehicle_capacity: 0,
     nonsplittable: true,
     locked: true,
@@ -604,6 +664,8 @@ function buildHotelShiftDrafts(
       // Se l'anchor non può coprire un servizio specifico, resta non assegnato
       const anchorDriver = drivers.find((d) => d.profile_id === anchorProfileId) ?? null;
       const anchorName = anchorDriver?.full_name ?? "autista fascia";
+      const isSanNicola = isSanNicolaShiftGroup(sorted[0]!, hotelMap);
+      const assignedServicesThisShift: ServiceRow[] = [];
       for (const service of assignableShiftServices) {
         const canCover = anchorDriver
           ? driverCanCoverHotelShiftService(anchorDriver.profile_id, service, shiftServiceIds, driverAvailMap, assignedTimesByDriver)
@@ -626,11 +688,24 @@ function buildHotelShiftDrafts(
           userId: anchorDriver.user_id,
           suggestedVehicleLabel: null,
         });
-        gpBlockedUnits.push(hotelShiftBlockUnit(service, hotelName, anchorDriver.profile_id));
+        assignedServicesThisShift.push(service);
+        // President/Cristallo (e qualunque altro hotel non esclusivo): blocco
+        // stretto sulla singola corsa, come prima — i "buchi" tra una corsa e
+        // l'altra restano liberi per altri servizi compatibili (Regola 6/7).
+        // San Nicola: il blocco per-corsa viene sostituito, dopo il ciclo, da
+        // un unico blocco esclusivo sull'intera fascia (Regola 5).
+        if (!isSanNicola) {
+          gpBlockedUnits.push(hotelShiftBlockUnit(service, hotelName, anchorDriver.profile_id));
+        }
         assignedTimesByDriver.set(anchorDriver.profile_id, [
           ...(assignedTimesByDriver.get(anchorDriver.profile_id) ?? []),
           hotelShiftDriverEvent(service),
         ]);
+      }
+      if (isSanNicola && anchorDriver && assignedServicesThisShift.length > 0) {
+        gpBlockedUnits.push(
+          hotelShiftFasciaBlockUnit(assignedServicesThisShift, hotelName, anchorDriver.profile_id)
+        );
       }
     }
   }
