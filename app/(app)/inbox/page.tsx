@@ -9,7 +9,6 @@ import type { PdfImportDetail } from "@/lib/server/pdf-imports";
 import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 import { ensureSupabaseClientReady, getClientSessionContext } from "@/lib/supabase/client-session";
 import type { Hotel, InboundEmail, Membership, Service } from "@/lib/types";
-import { filterBookingsBySearch } from "@/lib/booking-search";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -30,6 +29,19 @@ type FormState = {
   note: string;
   numero_pratica: string;
   agenzia: string;
+};
+
+type GlobalBookingSearchResult = Partial<Service> & {
+  id: string;
+  date: string;
+  time: string;
+  status: Service["status"];
+  direction: Service["direction"];
+  pax: number;
+  customer_name: string;
+  phone: string | null;
+  hotel_name?: string | null;
+  owner_label?: string | null;
 };
 
 const EMPTY_FORM: FormState = {
@@ -244,6 +256,9 @@ export default function InboxPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [agencyFilter, setAgencyFilter] = useState<string>("");
   const [agenciesMap, setAgenciesMap] = useState<Map<string, string>>(new Map());
+  const [searchResults, setSearchResults] = useState<GlobalBookingSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
 
   const handleCopy = (text: string, field: string) => {
     void copyToClipboard(text).then(() => {
@@ -296,6 +311,7 @@ export default function InboxPage() {
         const supabaseSession = await supabase.auth.getSession();
         const token = supabaseSession.data.session?.access_token;
         if (!token) throw new Error("Sessione non valida.");
+        setAccessToken(token);
         await loadData(token);
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Errore caricamento inbox.");
@@ -505,19 +521,37 @@ export default function InboxPage() {
 
   const canApprove = form.cliente_nome.trim() !== "" && form.hotel.trim() !== "" && form.data_arrivo.trim() !== "";
 
-  const searchResults = useMemo(() => {
-    const hotelNameById = new Map(hotels.map((hotel) => [hotel.id, hotel.name]));
-    return filterBookingsBySearch(
-      services.map((service) => ({
-        ...service,
-        customer_display_name: serviceCustomerLabel(service),
-        hotel_name: hotelNameById.get(service.hotel_id) ?? null,
-      })),
-      searchQuery,
-      agencyFilter,
-      agenciesMap
-    );
-  }, [searchQuery, agencyFilter, agenciesMap, hotels, services]);
+  useEffect(() => {
+    const query = searchQuery.trim();
+    const agency = agencyFilter.trim();
+    if (!accessToken || (query.length < 1 && agency.length < 1)) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+
+    let active = true;
+    setSearchLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ limit: "50" });
+        if (query) params.set("q", query);
+        if (agency) params.set("agency", agency);
+        const res = await fetch(`/api/ops/search?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const body = (await res.json().catch(() => null)) as { ok?: boolean; results?: GlobalBookingSearchResult[] } | null;
+        if (active) setSearchResults(body?.ok ? body.results ?? [] : []);
+      } finally {
+        if (active) setSearchLoading(false);
+      }
+    }, 180);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [accessToken, searchQuery, agencyFilter]);
 
   const pdfUploadStatus = useMemo(() => {
     if (pdfUploadSaving) return "Salvataggio in corso...";
@@ -691,7 +725,9 @@ export default function InboxPage() {
           )}
         </div>
         {(searchQuery.trim().length >= 1 || agencyFilter.trim().length >= 1) && (
-          searchResults.length === 0 ? (
+          searchLoading ? (
+            <p className="text-sm text-slate-500">Ricerca in corso...</p>
+          ) : searchResults.length === 0 ? (
             <p className="text-sm text-slate-500">Nessuna prenotazione trovata{searchQuery ? ` per "${searchQuery}"` : ""}{agencyFilter ? ` · agenzia "${agencyFilter}"` : ""}.</p>
           ) : (
             <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
@@ -716,7 +752,7 @@ export default function InboxPage() {
                         {s.phone ?? "—"}
                         {s.pax ? <span className="ml-2 font-medium text-slate-700">{s.pax} pax</span> : null}
                         <span className={`ml-2 font-medium ${s.billing_party_name || s.agency_id ? "text-indigo-600" : "text-emerald-600"}`}>
-                          {serviceOwnerLabel(s, agenciesMap)}
+                          {s.owner_label ?? serviceOwnerLabel(s, agenciesMap)}
                         </span>
                       </p>
                       {(() => { const h = hotels.find((h) => h.id === s.hotel_id); return h ? <p className="text-xs font-medium text-slate-700 truncate">🏨 {h.name}</p> : null; })()}

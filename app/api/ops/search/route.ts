@@ -1,65 +1,76 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { fetchAllServices } from "@/lib/server/fetch-all-services";
+import { filterBookingsBySearch } from "@/lib/booking-search";
 
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(req, ["admin", "operator"]);
+    const auth = await authorizePricingRequest(req, ["admin", "operator", "supervisor"]);
     if (auth instanceof NextResponse) return auth;
     const tenantId = auth.membership.tenant_id;
 
     const q = (req.nextUrl.searchParams.get("q") ?? "").trim();
-    if (q.length < 2) return NextResponse.json({ ok: true, results: [] });
+    const agency = (req.nextUrl.searchParams.get("agency") ?? "").trim();
+    if (q.length < 1 && agency.length < 1) return NextResponse.json({ ok: true, results: [] });
 
     const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? "30"), 100);
 
-    // Cerca per nome completo, nome, cognome o telefono su tutti i servizi non cancellati
-    const { data, error } = await auth.admin
-      .from("services")
-      .select(`
-        id, date, time, status, direction, pax, customer_name, phone,
-        vessel, booking_service_kind, service_type,
-        arrival_date, arrival_time, departure_date, departure_time,
-        transport_code, notes, meeting_point,
-        hotels(name)
-      `)
-      .eq("tenant_id", tenantId)
-      .eq("is_draft", false)
-      .neq("status", "cancelled")
-      .or(`customer_name.ilike.%${q}%,customer_first_name.ilike.%${q}%,customer_last_name.ilike.%${q}%,phone.ilike.%${q}%`)
-      .order("date", { ascending: false })
-      .limit(limit);
+    const [servicesResult, hotelsResult, agenciesResult] = await Promise.all([
+      fetchAllServices(auth.admin, tenantId),
+      auth.admin.from("hotels").select("id,name").eq("tenant_id", tenantId),
+      auth.admin.from("agencies").select("id,name").eq("tenant_id", tenantId),
+    ]);
 
+    const error = servicesResult.error ?? hotelsResult.error ?? agenciesResult.error ?? null;
     if (error) throw new Error(error.message);
 
-    type Row = {
-      id: string; date: string; time: string; status: string;
-      direction: string; pax: number; customer_name: string; phone: string | null;
-      vessel: string | null; booking_service_kind: string | null; service_type: string | null;
-      arrival_date: string | null; arrival_time: string | null;
-      departure_date: string | null; departure_time: string | null;
-      transport_code: string | null; notes: string | null; meeting_point: string | null;
-      hotels: { name: string } | null;
-    };
+    const hotelNameById = new Map((hotelsResult.data ?? []).map((hotel: { id: string; name: string }) => [hotel.id, hotel.name]));
+    const agencyNameById = new Map((agenciesResult.data ?? []).map((item: { id: string; name: string }) => [item.id, item.name]));
+    const searchable = (servicesResult.data ?? [])
+      .filter((service) => !service.is_draft)
+      .map((service) => ({
+        ...service,
+        hotel_name: service.hotel_id ? hotelNameById.get(service.hotel_id) ?? null : null,
+      }));
 
-    const results = ((data ?? []) as unknown as Row[]).map((r) => ({
-      id: r.id,
-      customer_name: r.customer_name,
-      phone: r.phone,
-      date: r.date,
-      status: r.status,
-      direction: r.direction,
-      pax: r.pax,
-      vessel: r.vessel,
-      booking_service_kind: r.booking_service_kind,
-      arrival_date: r.arrival_date,
-      departure_date: r.departure_date,
-      transport_code: r.transport_code,
-      hotel_name: r.hotels?.name ?? null,
-      meeting_point: r.meeting_point,
-      notes: r.notes,
-    }));
+    const results = filterBookingsBySearch(searchable, q, agency, agencyNameById, limit)
+      .map((r) => {
+        const joinedName = [r.customer_first_name, r.customer_last_name].filter(Boolean).join(" ").trim();
+        const owner = r.billing_party_name ?? (r.agency_id ? agencyNameById.get(r.agency_id) : null) ?? "Privato";
+        return {
+          id: r.id,
+          customer_name: r.customer_name?.trim() || joinedName || "Cliente N/D",
+          customer_first_name: r.customer_first_name ?? null,
+          customer_last_name: r.customer_last_name ?? null,
+          customer_email: r.customer_email ?? null,
+          phone: r.phone ?? null,
+          phone_e164: r.phone_e164 ?? null,
+          date: r.date,
+          time: r.time,
+          status: r.status,
+          direction: r.direction,
+          pax: r.pax,
+          vessel: r.vessel ?? null,
+          booking_service_kind: r.booking_service_kind ?? null,
+          service_type: r.service_type ?? null,
+          service_type_code: r.service_type_code ?? null,
+          arrival_date: r.arrival_date ?? null,
+          arrival_time: r.arrival_time ?? null,
+          departure_date: r.departure_date ?? null,
+          departure_time: r.departure_time ?? null,
+          transport_code: r.transport_code ?? null,
+          bus_city_origin: r.bus_city_origin ?? null,
+          hotel_id: r.hotel_id ?? null,
+          hotel_name: r.hotel_name ?? null,
+          billing_party_name: r.billing_party_name ?? null,
+          agency_id: r.agency_id ?? null,
+          owner_label: owner,
+          meeting_point: r.meeting_point ?? null,
+          notes: r.notes ?? null,
+        };
+      });
 
     return NextResponse.json({ ok: true, results });
   } catch (error) {
