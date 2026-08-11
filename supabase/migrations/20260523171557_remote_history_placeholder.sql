@@ -1,0 +1,3 @@
+-- Placeholder for a migration already recorded and applied on the remote project.
+-- The original SQL is not available locally; no statements must be replayed.
+-- Keeping the version in source control aligns the CLI migration history.
