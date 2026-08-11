@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DateInput } from "@/components/ui";
 import {
   buildFerryScheduleOptions,
@@ -228,6 +228,10 @@ export default function OpsNewBookingPage() {
     reviewWarnings, resetForm,
   } = useServiceForm({ hotels, ferryScheduleRows, tenantId });
 
+  const handleBusDepartureTimeChange = useCallback((time: string) => {
+    setForm((prev) => prev.departure_time === time ? prev : { ...prev, departure_time: time });
+  }, [setForm]);
+
   const {
     busStops, busSearch, setBusSearch,
     busSearchOpen, setBusSearchOpen,
@@ -239,7 +243,7 @@ export default function OpsNewBookingPage() {
     bookingKind: form.booking_service_kind,
     hotelId: form.hotel_id,
     accessToken,
-    onDepartureTimeChange: (t) => setForm((prev) => ({ ...prev, departure_time: t })),
+    onDepartureTimeChange: handleBusDepartureTimeChange,
   });
 
   useEffect(() => {
