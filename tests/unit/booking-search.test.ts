@@ -227,4 +227,13 @@ describe("collapseLinkedBookingPairs", () => {
     ];
     expect(collapseLinkedBookingPairs(records).map((record) => record.id)).toEqual(["outbound", "single"]);
   });
+
+  it("mostra una sola pratica per righe importate dalla stessa mail anche senza link A/R", () => {
+    const records: TestRecord[] = [
+      { id: "mail-return", inbound_email_id: "email-1", direction: "departure", customer_name: "TEST" },
+      { id: "mail-outbound", inbound_email_id: "email-1", direction: "arrival", customer_name: "TEST" },
+      { id: "other-mail", inbound_email_id: "email-2", direction: "arrival", customer_name: "ALTRO" },
+    ];
+    expect(collapseLinkedBookingPairs(records).map((record) => record.id)).toEqual(["mail-outbound", "other-mail"]);
+  });
 });

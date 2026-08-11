@@ -43,6 +43,7 @@ export async function GET(req: NextRequest) {
         const owner = r.billing_party_name ?? (r.agency_id ? agencyNameById.get(r.agency_id) : null) ?? "Privato";
         return {
           id: r.id,
+          inbound_email_id: r.inbound_email_id ?? null,
           customer_name: r.customer_name?.trim() || joinedName || "Cliente N/D",
           customer_first_name: r.customer_first_name ?? null,
           customer_last_name: r.customer_last_name ?? null,
