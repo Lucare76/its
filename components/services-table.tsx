@@ -167,7 +167,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
     });
   }, [agencyFilter, assignedMap, baseServices, driverFilter, pdfMetaByServiceId, qualityFilter, reviewedFilter, serviceTypeFilter, sourceByServiceId, sourceFilter]);
 
-  const selectedService = selectedServiceId ? services.find((item) => item.id === selectedServiceId) : null;
+  const selectedService = selectedServiceId ? baseServices.find((item) => item.id === selectedServiceId) : null;
   const filteredOperationalStats = useMemo(() => {
     const needsAttention = filtered.filter((service) => {
       const pdfMeta = pdfMetaByServiceId.get(service.id);
@@ -499,7 +499,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
           data-testid="services-search"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Cerca cliente/telefono/nave"
+          placeholder="Cerca cliente, telefono, hotel, pax, data, orario..."
           className="input-saas"
         />
       </FilterBar>
@@ -591,7 +591,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                           {getCustomerFullName(service)}
                         </p>
                         <div className="mt-0.5 flex items-center gap-1.5">
-                          <p className="truncate text-xs text-slate-500">{service.phone || "telefono n/d"}</p>
+                          <p className="truncate text-xs text-slate-500">{service.phone || "telefono n/d"} | Pax {service.pax}</p>
                           <WhatsAppButton phone={service.phone_e164 ?? service.phone} name={getCustomerFullName(service)} tenantId={service.tenant_id} />
                         </div>
                       </td>
@@ -692,9 +692,14 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
         <aside className="card space-y-3 p-4 md:p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="font-semibold">Dettagli servizio</h3>
-            <button type="button" onClick={() => setSelectedServiceId(null)} className="text-sm text-muted">
-              Chiudi
-            </button>
+            <div className="flex items-center gap-2">
+              <a href={`/services/${selectedService.id}/edit`} className="btn-primary px-3 py-1.5 text-xs">
+                Modifica
+              </a>
+              <button type="button" onClick={() => setSelectedServiceId(null)} className="text-sm text-muted">
+                Chiudi
+              </button>
+            </div>
           </div>
           {(() => {
             const pdfMeta = pdfMetaByServiceId.get(selectedService.id);
@@ -717,6 +722,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
             <span>Telefono: {selectedService.phone || "N/D"}</span>
             <WhatsAppButton phone={selectedService.phone_e164 ?? selectedService.phone} name={getCustomerFullName(selectedService)} tenantId={selectedService.tenant_id} size="md" />
           </div>
+          <p className="text-sm">Pax: {selectedService.pax}</p>
           <p className="text-sm">Data andata: {formatIsoDateShort(selectedService.arrival_date ?? selectedService.date)}</p>
           <p className="text-sm">{getOutwardTimeLabel(selectedService)}: {getOutboundTime(selectedService) ?? "N/D"}</p>
           {selectedService.departure_date || getReturnTime(selectedService) ? (

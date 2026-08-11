@@ -62,7 +62,39 @@ export async function buildServicesQuery({ admin, filters, select }: BuildServic
 
   if (parsed.search.trim()) {
     const search = sanitizeOrValue(parsed.search.trim());
-    query = query.or(`customer_name.ilike.%${search}%,vessel.ilike.%${search}%,notes.ilike.%${search}%`);
+    const conditions = [
+      `customer_name.ilike.%${search}%`,
+      `customer_first_name.ilike.%${search}%`,
+      `customer_last_name.ilike.%${search}%`,
+      `phone.ilike.%${search}%`,
+      `vessel.ilike.%${search}%`,
+      `notes.ilike.%${search}%`,
+      `billing_party_name.ilike.%${search}%`,
+      `transport_code.ilike.%${search}%`,
+      `bus_city_origin.ilike.%${search}%`,
+      `booking_service_kind.ilike.%${search}%`
+    ];
+    if (/^\d{4}-\d{2}-\d{2}$/.test(search)) {
+      conditions.push(`arrival_date.eq.${search}`, `departure_date.eq.${search}`, `date.eq.${search}`);
+    }
+    if (/^\d{2}:\d{2}$/.test(search)) {
+      conditions.push(`time.eq.${search}`, `arrival_time.eq.${search}`, `departure_time.eq.${search}`);
+    }
+    const paxSearch = Number(search);
+    if (Number.isInteger(paxSearch) && paxSearch > 0 && paxSearch <= 999) {
+      conditions.push(`pax.eq.${paxSearch}`);
+    }
+    const { data: searchHotels, error: searchHotelsError } = await admin
+      .from("hotels")
+      .select("id")
+      .eq("tenant_id", parsed.tenant_id)
+      .or(`name.ilike.%${search}%,zone.ilike.%${search}%`);
+    if (searchHotelsError) throw searchHotelsError;
+    const searchHotelIds = (searchHotels ?? []).map((hotel) => hotel.id as string);
+    if (searchHotelIds.length > 0) {
+      conditions.push(`hotel_id.in.(${searchHotelIds.join(",")})`);
+    }
+    query = query.or(conditions.join(","));
   }
 
   if (parsed.zone.trim()) {
