@@ -127,6 +127,10 @@ function serviceOwnerLabel(service: Pick<Service, "agency_id" | "billing_party_n
   return service.billing_party_name ?? (service.agency_id ? agencyNameById.get(service.agency_id) : null) ?? "Privato";
 }
 
+function formatShortTime(value: string | null | undefined) {
+  return value ? value.slice(0, 5) : "";
+}
+
 // Converte qualsiasi stringa data in formato YYYY-MM-DD per <input type="date">
 // Se non riconoscibile restituisce "" (campo vuoto, l'utente la inserisce manualmente)
 function toDateValue(raw: string): string {
@@ -770,8 +774,8 @@ export default function InboxPage() {
                   const [y, m, d] = iso.split("-");
                   return `${d}/${m}/${y}`;
                 };
-                const arrivo = s.arrival_date ? `${fmtDate(s.arrival_date)} ${s.arrival_time ?? ""}`.trim() : null;
-                const partenza = s.departure_date ? `${fmtDate(s.departure_date)} ${s.departure_time ?? ""}`.trim() : null;
+                const arrivo = s.arrival_date ? `${fmtDate(s.arrival_date)} ${formatShortTime(s.arrival_time)}`.trim() : null;
+                const partenza = s.departure_date ? `${fmtDate(s.departure_date)} ${formatShortTime(s.departure_time)}`.trim() : null;
                 const hotelName = s.hotel_name?.trim() || hotels.find((hotel) => hotel.id === s.hotel_id)?.name || null;
                 return (
                   <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm hover:bg-slate-50">
@@ -794,7 +798,7 @@ export default function InboxPage() {
                         {arrivo && <span>✈️ Arr: {arrivo}</span>}
                         {arrivo && partenza && <span className="mx-1">·</span>}
                         {partenza && <span>🏠 Par: {partenza}</span>}
-                        {!arrivo && !partenza && fmtDate(s.date) && <span>{fmtDate(s.date)} {s.time}</span>}
+                        {!arrivo && !partenza && fmtDate(s.date) && <span>{fmtDate(s.date)} {formatShortTime(s.time)}</span>}
                       </p>
                     </div>
                     <div className="text-right shrink-0">
