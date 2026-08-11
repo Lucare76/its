@@ -27,6 +27,28 @@ export interface BookingSearchRecord {
   tour_name?: string | null;
   excursion_title?: string | null;
   id?: string | null;
+  linked_service_id?: string | null;
+  direction?: string | null;
+}
+
+export function collapseLinkedBookingPairs<T extends BookingSearchRecord>(records: T[]): T[] {
+  const positions = new Map<string, number>();
+  const collapsed: T[] = [];
+  for (const record of records) {
+    const id = String(record.id ?? "");
+    const linkedId = String(record.linked_service_id ?? "");
+    const key = linkedId ? [id, linkedId].sort().join(":") : `single:${id}`;
+    const position = positions.get(key);
+    if (position === undefined) {
+      positions.set(key, collapsed.length);
+      collapsed.push(record);
+      continue;
+    }
+    if (collapsed[position]?.direction === "departure" && record.direction === "arrival") {
+      collapsed[position] = record;
+    }
+  }
+  return collapsed;
 }
 
 /**

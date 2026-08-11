@@ -803,6 +803,12 @@ export default function InboxPage() {
                         "bg-amber-100 text-amber-700"
                       }`}>{s.status}</span>
                       <p className="text-xs text-slate-500 mt-0.5">{s.vessel ?? "—"}</p>
+                      <Link
+                        href={`/services/${s.id}/edit`}
+                        className="mt-1 mr-3 inline-block text-xs font-medium text-blue-600 hover:text-blue-800"
+                      >
+                        Modifica
+                      </Link>
                       {authRole === "admin" ? (
                         <button
                           type="button"
