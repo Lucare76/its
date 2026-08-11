@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DateInput } from "@/components/ui";
 import { PdfAdvancedReview } from "@/components/pdf/PdfAdvancedReview";
 import { getInboxPdfParsingSignal, isInboxPdfReviewOpen, isInboxPdfTestNoise } from "@/lib/pdf/parser";
@@ -225,6 +225,7 @@ export default function InboxPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [approvedServiceId, setApprovedServiceId] = useState<string | null>(null);
+  const approvalInFlightRef = useRef(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [authRole, setAuthRole] = useState<import("@/lib/types").UserRole | null>(null);
   const [pdfAdvancedOpen, setPdfAdvancedOpen] = useState(false);
@@ -258,6 +259,7 @@ export default function InboxPage() {
   const [agenciesMap, setAgenciesMap] = useState<Map<string, string>>(new Map());
   const [searchResults, setSearchResults] = useState<GlobalBookingSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   const handleCopy = (text: string, field: string) => {
@@ -599,9 +601,14 @@ export default function InboxPage() {
   };
 
   const approveEmail = async () => {
-    if (!selectedEmail || !tenantId) return;
+    if (!selectedEmail || !tenantId || approvalInFlightRef.current) return;
+    approvalInFlightRef.current = true;
     const token = await getToken();
-    if (!token) { setApproveError("Sessione scaduta."); return; }
+    if (!token) {
+      approvalInFlightRef.current = false;
+      setApproveError("Sessione scaduta.");
+      return;
+    }
     setSubmitting(true);
     setApproveError(null);
     try {
@@ -621,7 +628,33 @@ export default function InboxPage() {
     } catch (e) {
       setApproveError(e instanceof Error ? e.message : "Errore di rete.");
     } finally {
+      approvalInFlightRef.current = false;
       setSubmitting(false);
+    }
+  };
+
+  const deleteBooking = async (service: GlobalBookingSearchResult) => {
+    if (authRole !== "admin" || deletingServiceId) return;
+    const customer = serviceCustomerLabel(service);
+    if (!confirm(`Eliminare definitivamente la prenotazione di ${customer}?`)) return;
+    const token = await getToken();
+    if (!token) { setMessage("Sessione scaduta."); return; }
+    setDeletingServiceId(service.id);
+    try {
+      const res = await fetch(`/api/ops/services/${service.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        setMessage(body?.error ?? "Eliminazione prenotazione non riuscita.");
+        return;
+      }
+      setSearchResults((current) => current.filter((row) => row.id !== service.id));
+      setServices((current) => current.filter((row) => row.id !== service.id));
+      setMessage(`Prenotazione di ${customer} eliminata.`);
+    } finally {
+      setDeletingServiceId(null);
     }
   };
 
@@ -770,6 +803,16 @@ export default function InboxPage() {
                         "bg-amber-100 text-amber-700"
                       }`}>{s.status}</span>
                       <p className="text-xs text-slate-500 mt-0.5">{s.vessel ?? "—"}</p>
+                      {authRole === "admin" ? (
+                        <button
+                          type="button"
+                          onClick={() => void deleteBooking(s)}
+                          disabled={deletingServiceId !== null}
+                          className="mt-1 text-xs font-medium text-rose-600 hover:text-rose-800 disabled:opacity-50"
+                        >
+                          {deletingServiceId === s.id ? "Elimino..." : "Elimina prenotazione"}
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 );
