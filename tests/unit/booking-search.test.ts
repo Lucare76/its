@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchesBookingSearch, filterBookingsBySearch, type BookingSearchRecord } from "@/lib/booking-search";
+import { collapseLinkedBookingPairs, matchesBookingSearch, filterBookingsBySearch, type BookingSearchRecord } from "@/lib/booking-search";
 
 interface TestRecord extends BookingSearchRecord {
   id: string;
@@ -215,5 +215,16 @@ describe("filterBookingsBySearch", () => {
 
   it("SENSITIVITY: agenzia con nome vuoto in mappa non produce match spurii", () => {
     expect(filterBookingsBySearch(allRecords, "", "zz-non-esiste", agencyNameById)).toEqual([]);
+  });
+});
+
+describe("collapseLinkedBookingPairs", () => {
+  it("mostra una sola pratica per servizi A/R collegati e preferisce l'andata", () => {
+    const records: TestRecord[] = [
+      { id: "return", linked_service_id: "outbound", direction: "departure", customer_name: "TEST" },
+      { id: "outbound", linked_service_id: "return", direction: "arrival", customer_name: "TEST" },
+      { id: "single", customer_name: "SOLO ANDATA" },
+    ];
+    expect(collapseLinkedBookingPairs(records).map((record) => record.id)).toEqual(["outbound", "single"]);
   });
 });

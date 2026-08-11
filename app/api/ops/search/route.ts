@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { fetchAllServices } from "@/lib/server/fetch-all-services";
-import { filterBookingsBySearch } from "@/lib/booking-search";
+import { collapseLinkedBookingPairs, filterBookingsBySearch } from "@/lib/booking-search";
 
 export const runtime = "nodejs";
 
@@ -35,7 +35,9 @@ export async function GET(req: NextRequest) {
         hotel_name: service.hotel_id ? hotelNameById.get(service.hotel_id) ?? null : null,
       }));
 
-    const results = filterBookingsBySearch(searchable, q, agency, agencyNameById, limit)
+    const results = collapseLinkedBookingPairs(
+      filterBookingsBySearch(searchable, q, agency, agencyNameById, Math.max(limit * 2, 100))
+    ).slice(0, limit)
       .map((r) => {
         const joinedName = [r.customer_first_name, r.customer_last_name].filter(Boolean).join(" ").trim();
         const owner = r.billing_party_name ?? (r.agency_id ? agencyNameById.get(r.agency_id) : null) ?? "Privato";
@@ -69,6 +71,7 @@ export async function GET(req: NextRequest) {
           owner_label: owner,
           meeting_point: r.meeting_point ?? null,
           notes: r.notes ?? null,
+          linked_service_id: r.linked_service_id ?? null,
         };
       });
 
