@@ -36,7 +36,7 @@ export async function GET(
     const [serviceRes, hotelsRes, agenciesRes] = await Promise.all([
       auth.admin
         .from("services")
-        .select("id, customer_name, phone, phone_e164, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, transport_code, direction, booking_service_kind, service_type_code, reminder_status, sent_at, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
+        .select("id, customer_name, phone, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, transport_code, direction, booking_service_kind, service_type_code, reminder_status, sent_at, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
         .eq("id", serviceId)
         .eq("tenant_id", tenantId)
         .maybeSingle(),
@@ -60,7 +60,7 @@ export async function GET(
 
     return NextResponse.json({
       ok: true,
-      service: serviceRes.data,
+      service: { ...serviceRes.data, phone_e164: null },
       hotels: hotelsRes.data ?? [],
       agencies: agenciesRes.data ?? [],
     });
