@@ -1,7 +1,7 @@
 export type EnvRequirement = {
   key: string;
   requiredForBeta: boolean;
-  category: "core" | "agency" | "pdf" | "email" | "ops" | "whatsapp";
+  category: "core" | "agency" | "pdf" | "email" | "ops" | "whatsapp" | "medmar";
   notes: string;
 };
 
@@ -39,7 +39,9 @@ export const ENV_REQUIREMENTS: EnvRequirement[] = [
   { key: "WHATSAPP_TEMPLATE_LANGUAGE", requiredForBeta: false, category: "whatsapp", notes: "Optional tuning." },
   { key: "WHATSAPP_ALLOW_TEXT_FALLBACK", requiredForBeta: false, category: "whatsapp", notes: "Optional tuning." },
   { key: "UPSTASH_REDIS_REST_URL", requiredForBeta: false, category: "ops", notes: "Upstash Redis per rate limiting distribuito. Senza, il rate limit è in-memory (non efficace su Vercel multi-istanza)." },
-  { key: "UPSTASH_REDIS_REST_TOKEN", requiredForBeta: false, category: "ops", notes: "Token Upstash Redis (vedi UPSTASH_REDIS_REST_URL)." }
+  { key: "UPSTASH_REDIS_REST_TOKEN", requiredForBeta: false, category: "ops", notes: "Token Upstash Redis (vedi UPSTASH_REDIS_REST_URL)." },
+  { key: "MEDMAR_API_BASE_URL", requiredForBeta: false, category: "medmar", notes: "Override base URL API Medmar (Fase 1: nessun endpoint reale ancora verificato)." },
+  { key: "MEDMAR_SESSION_TOKEN", requiredForBeta: false, category: "medmar", notes: "Token di sessione Medmar ottenuto manualmente, in attesa di un login automatico documentato." }
 ];
 
 export function getEnvStatus() {

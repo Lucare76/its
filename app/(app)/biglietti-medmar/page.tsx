@@ -118,6 +118,40 @@ type TicketMemorySlot = {
   }>;
 };
 
+type MedmarPreflightLeg = {
+  direction: "outward" | "return";
+  route: { from: string; to: string } | null;
+  date: string;
+  requested_time: string | null;
+  matched_departure_time: string | null;
+  vessel: string | null;
+  id_corsa: number | string | null;
+  source: "live" | "local_fallback" | null;
+};
+
+type MedmarPreflightResult = {
+  ok: boolean;
+  can_issue: boolean;
+  status: "ok" | "no_match" | "ambiguous" | "not_medmar" | "manual_review" | "medmar_unavailable" | "medmar_auth_expired" | "error";
+  customer_name: string | null;
+  pratica: string | null;
+  pax: number;
+  outward: MedmarPreflightLeg | null;
+  return: MedmarPreflightLeg | null;
+  tariff: {
+    id_biglietto: number | string | null;
+    id_tariffa: number | string | null;
+    label: string | null;
+    unit_price_cents: number | null;
+    source: "medmar_live" | "ticket_memory" | "unknown";
+  } | null;
+  taxes: Array<{ label: string; amount_cents: number | null }>;
+  expected_total_cents: number | null;
+  is_live: boolean;
+  warnings: Array<{ code: string; message: string }>;
+  error: string | null;
+};
+
 function formatEur(cents: number | null | undefined) {
   if (typeof cents !== "number") return "—";
   return (cents / 100).toLocaleString("it-IT", { style: "currency", currency: "EUR" });
@@ -156,6 +190,9 @@ export default function BigliettiMedmarPage() {
   const [showSent, setShowSent] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [sendModal, setSendModal] = useState<{ group: BookingGroup; pdfFile: File | null } | null>(null);
+  const [verifying, setVerifying] = useState<string | null>(null); // key del gruppo in verifica
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [verifyModal, setVerifyModal] = useState<{ group: BookingGroup; result: MedmarPreflightResult } | null>(null);
   const [ticketMemories, setTicketMemories] = useState<TicketMemoryRecord[]>([]);
   const [ticketSlots, setTicketSlots] = useState<TicketMemorySlot[]>([]);
   const [memoryError, setMemoryError] = useState<string | null>(null);
@@ -186,6 +223,23 @@ export default function BigliettiMedmarPage() {
     await supabase.from("services").delete().in("id", g.allServiceIds).eq("tenant_id", tenantId);
     setDeleting(null);
     if (tenantId) void loadData(tenantId, dateFrom, dateTo);
+  };
+
+  const handleVerifyMedmar = async (g: BookingGroup) => {
+    if (!token) return;
+    setVerifying(g.key);
+    setVerifyError(null);
+    try {
+      const data = await apiFetch<MedmarPreflightResult>("/api/services/medmar-preflight", token, {
+        method: "POST",
+        body: JSON.stringify({ service_ids: g.allServiceIds }),
+      });
+      setVerifyModal({ group: g, result: data });
+    } catch (err) {
+      setVerifyError(err instanceof Error ? err.message : "Errore durante la verifica Medmar.");
+    } finally {
+      setVerifying(null);
+    }
   };
 
   const handleCopy = (text: string, key: string) => {
@@ -781,6 +835,15 @@ export default function BigliettiMedmarPage() {
                       {deleting === g.key ? "..." : "Elimina"}
                     </button>
                   </div>
+                  <div className="border-t border-slate-100 px-3 py-1.5">
+                    <button type="button" disabled={verifying === g.key} onClick={() => void handleVerifyMedmar(g)}
+                      className="w-full rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">
+                      {verifying === g.key ? "Verifica in corso..." : "🔍 Verifica emissione Medmar"}
+                    </button>
+                    {verifyError && !verifying && (
+                      <p className="mt-1 text-[10px] text-rose-600">{verifyError}</p>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -960,6 +1023,90 @@ export default function BigliettiMedmarPage() {
               {memorySubmitting ? "Salvataggio..." : "Salva ticket in memoria"}
             </button>
           </div>
+        </div>
+      </div>
+    )}
+    {verifyModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-slate-800">Verifica emissione Medmar</h2>
+            <button type="button" onClick={() => setVerifyModal(null)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="flex-1 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs font-semibold text-amber-800 text-center">
+              NESSUNA EMISSIONE ESEGUITA
+            </div>
+            {verifyModal.result.is_live && (
+              <span className="rounded-full bg-emerald-100 border border-emerald-300 px-2.5 py-1 text-[10px] font-bold text-emerald-700 whitespace-nowrap">
+                🟢 DATI MEDMAR LIVE
+              </span>
+            )}
+          </div>
+
+          <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 space-y-0.5">
+            <p className="text-sm font-semibold text-slate-800">{verifyModal.result.customer_name ?? verifyModal.group.customerName}</p>
+            <p className="text-xs text-slate-500">{verifyModal.result.pax} pax</p>
+            {verifyModal.result.pratica && <p className="text-xs text-slate-400 font-mono">Pratica: {verifyModal.result.pratica}</p>}
+          </div>
+
+          {verifyModal.result.error && (
+            <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600">{verifyModal.result.error}</p>
+          )}
+
+          {verifyModal.result.status === "medmar_auth_expired" && (
+            <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600">Sessione Medmar scaduta: impossibile verificare in tempo reale. Contattare l&apos;amministratore per rinnovare l&apos;accesso.</p>
+          )}
+          {verifyModal.result.status === "medmar_unavailable" && (
+            <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600">Medmar non ha risposto: nessuna emissione possibile finché il portale non è di nuovo raggiungibile.</p>
+          )}
+
+          {!verifyModal.result.error && (
+            <div className="space-y-2">
+              {([["outward", "Andata"], ["return", "Ritorno"]] as const).map(([field, label]) => {
+                const leg = verifyModal.result[field];
+                if (!leg) return null;
+                return (
+                  <div key={field} className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs">
+                    <p className="font-semibold text-slate-700">{label} — {leg.route ? `${leg.route.from} → ${leg.route.to}` : "tratta non determinata"}</p>
+                    <p className="text-slate-500">{leg.date} · richiesto {leg.requested_time ?? "—"} · corsa {leg.matched_departure_time ?? "non confermata"}{leg.vessel ? ` · ${leg.vessel}` : ""}</p>
+                    {leg.id_corsa != null && <p className="text-slate-400">id_corsa: {leg.id_corsa} {leg.source === "local_fallback" && "(fallback locale, solo diagnostico)"}</p>}
+                  </div>
+                );
+              })}
+
+              <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs">
+                <p className="font-semibold text-slate-700">Tariffa</p>
+                <p className="text-slate-500">{verifyModal.result.tariff?.label ?? "non determinata"}</p>
+                {(verifyModal.result.tariff?.id_biglietto != null || verifyModal.result.tariff?.id_tariffa != null) && (
+                  <p className="text-slate-400">id_biglietto: {verifyModal.result.tariff?.id_biglietto ?? "—"} · id_tariffa: {verifyModal.result.tariff?.id_tariffa ?? "—"}</p>
+                )}
+                <p className="text-slate-500">Prezzo unitario: {formatEur(verifyModal.result.tariff?.unit_price_cents)}</p>
+                {verifyModal.result.taxes.map((tax, i) => (
+                  <p key={i} className="text-slate-500">{tax.label}: {formatEur(tax.amount_cents)}</p>
+                ))}
+                <p className="text-slate-700 font-semibold">Totale previsto: {formatEur(verifyModal.result.expected_total_cents)}</p>
+              </div>
+
+              <p className="text-xs font-semibold text-slate-600">
+                Stato: {verifyModal.result.status} · {verifyModal.result.can_issue ? "dati sufficienti per una futura emissione" : "verifica manuale necessaria"}
+              </p>
+
+              {verifyModal.result.warnings.length > 0 && (
+                <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-1">
+                  {verifyModal.result.warnings.map((w, i) => (
+                    <p key={i} className="text-[11px] text-amber-800">⚠ {w.message}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <button type="button" onClick={() => setVerifyModal(null)}
+            className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
+            Chiudi
+          </button>
         </div>
       </div>
     )}
