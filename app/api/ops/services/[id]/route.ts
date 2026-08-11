@@ -1,8 +1,111 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { auditLog } from "@/lib/server/ops-audit";
+import { z } from "zod";
 
 export const runtime = "nodejs";
+
+const updateServiceSchema = z.object({
+  customer_name: z.string().nullable().optional(),
+  phone: z.string().nullable().optional(),
+  pax: z.number().int().min(1).max(999).optional(),
+  time: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  hotel_id: z.string().uuid().nullable().optional(),
+  agency_id: z.string().uuid().nullable().optional(),
+  billing_party_name: z.string().nullable().optional(),
+  meeting_point: z.string().nullable().optional(),
+  arrival_date: z.string().nullable().optional(),
+  arrival_time: z.string().nullable().optional(),
+  departure_date: z.string().nullable().optional(),
+  departure_time: z.string().nullable().optional(),
+  transport_code: z.string().nullable().optional(),
+});
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
+    if (auth instanceof NextResponse) return auth;
+
+    const { id: serviceId } = await params;
+    const tenantId = auth.membership.tenant_id;
+
+    const [serviceRes, hotelsRes, agenciesRes] = await Promise.all([
+      auth.admin
+        .from("services")
+        .select("id, customer_name, phone, phone_e164, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, transport_code, direction, booking_service_kind, service_type_code, reminder_status, sent_at, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
+        .eq("id", serviceId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle(),
+      auth.admin
+        .from("hotels")
+        .select("id, name")
+        .eq("tenant_id", tenantId)
+        .order("name"),
+      auth.admin
+        .from("agencies")
+        .select("id, name")
+        .eq("tenant_id", tenantId)
+        .eq("active", true)
+        .order("name"),
+    ]);
+
+    if (serviceRes.error) return NextResponse.json({ error: serviceRes.error.message }, { status: 500 });
+    if (!serviceRes.data) return NextResponse.json({ error: "Servizio non trovato." }, { status: 404 });
+    if (hotelsRes.error) return NextResponse.json({ error: hotelsRes.error.message }, { status: 500 });
+    if (agenciesRes.error) return NextResponse.json({ error: agenciesRes.error.message }, { status: 500 });
+
+    return NextResponse.json({
+      ok: true,
+      service: serviceRes.data,
+      hotels: hotelsRes.data ?? [],
+      agencies: agenciesRes.data ?? [],
+    });
+  } catch {
+    return NextResponse.json({ error: "Errore interno." }, { status: 500 });
+  }
+}
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const auth = await authorizePricingRequest(request, ["admin", "operator"]);
+    if (auth instanceof NextResponse) return auth;
+
+    const { id: serviceId } = await params;
+    const tenantId = auth.membership.tenant_id;
+    const parsed = updateServiceSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Payload non valido." }, { status: 400 });
+    }
+
+    const { error } = await auth.admin
+      .from("services")
+      .update(parsed.data)
+      .eq("id", serviceId)
+      .eq("tenant_id", tenantId);
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    auditLog({
+      event: "service_updated",
+      tenantId,
+      userId: auth.user.id,
+      role: auth.membership.role,
+      serviceId,
+      outcome: "updated",
+    });
+
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json({ error: "Errore interno." }, { status: 500 });
+  }
+}
 
 export async function DELETE(
   request: NextRequest,

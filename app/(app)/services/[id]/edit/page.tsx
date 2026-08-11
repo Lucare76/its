@@ -222,38 +222,34 @@ export default function ServiceEditPage() {
       const sessionData = await supabase.auth.getSession();
       const token = sessionData.data.session?.access_token ?? null;
       setAccessToken(token);
-
-      const [svcRes, hotelsRes, agenciesRes] = await Promise.all([
-        supabase
-          .from("services")
-          .select("id, customer_name, phone, phone_e164, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, transport_code, direction, booking_service_kind, service_type_code, reminder_status, sent_at, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
-          .eq("id", id)
-          .eq("tenant_id", session.tenantId)
-          .maybeSingle(),
-        supabase
-          .from("hotels")
-          .select("id, name")
-          .eq("tenant_id", session.tenantId)
-          .order("name"),
-        supabase
-          .from("agencies")
-          .select("id, name")
-          .eq("tenant_id", session.tenantId)
-          .eq("active", true)
-          .order("name"),
-      ]);
-
-      if (!active) return;
-      if (svcRes.error || !svcRes.data) {
-        setInitError("Servizio non trovato.");
+      if (!token) {
+        setInitError("Sessione non valida.");
         setLoading(false);
         return;
       }
 
-      const svc = svcRes.data as ServiceRow;
+      const response = await fetch(`/api/ops/services/${id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      const body = (await response.json().catch(() => null)) as {
+        service?: ServiceRow;
+        hotels?: HotelRow[];
+        agencies?: AgencyRow[];
+        error?: string;
+      } | null;
+
+      if (!active) return;
+      if (!response.ok || !body?.service) {
+        setInitError(body?.error ?? "Servizio non trovato.");
+        setLoading(false);
+        return;
+      }
+
+      const svc = body.service;
       setService(svc);
-      setHotels((hotelsRes.data ?? []) as HotelRow[]);
-      setAgencies((agenciesRes.data ?? []) as AgencyRow[]);
+      setHotels(body.hotels ?? []);
+      setAgencies(body.agencies ?? []);
 
       setCustomerName(svc.customer_name ?? "");
       setPhone(svc.phone ?? "");
@@ -298,14 +294,18 @@ export default function ServiceEditPage() {
   };
 
   const save = async () => {
-    if (!supabase || !tenantId || !service) return;
+    if (!tenantId || !service || !accessToken) return;
     if (time && !isValidTime(time)) { setError("Inserisci un orario valido nel formato HH:MM."); return; }
     setSaving(true);
     setError(null);
     const selectedAgency = agencies.find((a) => a.id === agencyId);
-    const { error: err } = await supabase
-      .from("services")
-      .update({
+    const response = await fetch(`/api/ops/services/${service.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
         customer_name: customerName,
         phone: phone.trim() || null,
         pax: Number(pax) || 1,
@@ -320,11 +320,11 @@ export default function ServiceEditPage() {
         departure_date: departureDate || null,
         departure_time: departureTime || null,
         transport_code: transportCode.trim() || null,
-      })
-      .eq("id", service.id)
-      .eq("tenant_id", tenantId);
+      }),
+    });
+    const body = (await response.json().catch(() => null)) as { error?: string } | null;
     setSaving(false);
-    if (err) { setError(err.message); return; }
+    if (!response.ok) { setError(body?.error ?? "Salvataggio non riuscito."); return; }
     if (accessToken && phone.trim()) {
       void fetch("/api/ops/whatsapp-contact", {
         method: "POST",
