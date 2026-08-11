@@ -13,7 +13,7 @@ type LineFamily = "ITALIA" | "CENTRO" | "ADRIATICA";
 
 export async function GET(request: NextRequest) {
   const auth = await authorizeServiceRoleRequest(request, {
-    roles: ["agency", "admin"],
+    roles: ["agency", "admin", "operator"],
     auditPrefix: "agency_bus_return_time"
   });
   if (auth instanceof NextResponse) return auth;

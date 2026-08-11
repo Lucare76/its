@@ -335,16 +335,31 @@ export function useBusCatalog(opts: {
   const [selectedBusStop, setSelectedBusStop] = useState<BusCatalogStop | null>(null);
   const [busReturnTime, setBusReturnTime] = useState<string | null>(null);
   const [busReturnTimeLoading, setBusReturnTimeLoading] = useState(false);
+  const [busCatalogLoaded, setBusCatalogLoaded] = useState(false);
+  const [busCatalogError, setBusCatalogError] = useState<string | null>(null);
   const [replaceError, setReplaceError] = useState<string | null>(null);
 
   // Load catalog when kind switches to bus_city_hotel
   useEffect(() => {
     if (bookingKind !== "bus_city_hotel" || !accessToken || busStops.length > 0) return;
-    startTransition(() => setBusLoading(true));
+    startTransition(() => {
+      setBusCatalogError(null);
+      setBusLoading(true);
+    });
     fetch("/api/agency/bus-catalog", { headers: { Authorization: `Bearer ${accessToken}` } })
-      .then((r) => r.json())
-      .then((body: { stops?: BusCatalogStop[] }) => { setBusStops(body.stops ?? []); })
-      .catch(() => {})
+      .then((r) => {
+        if (!r.ok) throw new Error(`Catalogo bus non disponibile (${r.status})`);
+        return r.json();
+      })
+      .then((body: { stops?: BusCatalogStop[] }) => {
+        setBusStops(body.stops ?? []);
+        setBusCatalogLoaded(true);
+      })
+      .catch((error: unknown) => {
+        setBusStops([]);
+        setBusCatalogLoaded(true);
+        setBusCatalogError(error instanceof Error ? error.message : "Catalogo bus non disponibile.");
+      })
       .finally(() => setBusLoading(false));
   }, [bookingKind, accessToken, busStops.length]);
 
@@ -379,7 +394,8 @@ export function useBusCatalog(opts: {
   return {
     busStops, busSearch, setBusSearch,
     busSearchOpen, setBusSearchOpen,
-    busLoading, selectedBusStop, setSelectedBusStop,
+    busLoading, busCatalogLoaded, busCatalogError,
+    selectedBusStop, setSelectedBusStop,
     busReturnTime, busReturnTimeLoading,
     replaceError, setReplaceError,
     reset,

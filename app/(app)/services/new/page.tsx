@@ -235,7 +235,8 @@ export default function OpsNewBookingPage() {
   const {
     busStops, busSearch, setBusSearch,
     busSearchOpen, setBusSearchOpen,
-    busLoading, selectedBusStop, setSelectedBusStop,
+    busLoading, busCatalogLoaded, busCatalogError,
+    selectedBusStop, setSelectedBusStop,
     busReturnTime, busReturnTimeLoading,
     replaceError, setReplaceError,
     reset: resetBus,
@@ -839,6 +840,22 @@ export default function OpsNewBookingPage() {
                 {busSearchOpen && busSearch.trim().length >= 2 ? (() => {
                   const q = busSearch.trim().toLowerCase();
                   const filtered = busStops.filter((s) => s.city.toLowerCase().includes(q)).slice(0, 10);
+                  if (busCatalogError) {
+                    return (
+                      <div className="absolute z-50 left-0 right-0 mt-1 rounded-xl border border-rose-200 bg-white px-4 py-3 shadow-lg">
+                        <p className="font-semibold text-rose-800">Catalogo linee bus non caricato</p>
+                        <p className="mt-1 text-xs text-rose-600">{busCatalogError}</p>
+                      </div>
+                    );
+                  }
+                  if (!busCatalogLoaded || busStops.length === 0) {
+                    return (
+                      <div className="absolute z-50 left-0 right-0 mt-1 rounded-xl border border-amber-200 bg-white px-4 py-3 shadow-lg">
+                        <p className="font-semibold text-amber-800">Catalogo linee bus non ancora disponibile</p>
+                        <p className="mt-1 text-xs text-amber-600">Attendi il caricamento e riprova a scrivere la cittÃ .</p>
+                      </div>
+                    );
+                  }
                   return filtered.length > 0 ? (
                     <ul className="absolute z-50 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
                       {filtered.map((s) => (
