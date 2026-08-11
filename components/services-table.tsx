@@ -75,6 +75,9 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
   const [shareLoading, setShareLoading] = useState(false);
   const [shareMessage, setShareMessage] = useState<string>("");
   const [shareUrlByServiceId, setShareUrlByServiceId] = useState<Record<string, string>>({});
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteMessage, setDeleteMessage] = useState<string>("");
+  const [deletedServiceIds, setDeletedServiceIds] = useState<Set<string>>(() => new Set());
 
   const assignedMap = useMemo(() => new Map(assignments.map((item) => [item.service_id, item])), [assignments]);
   const drivers = memberships.filter((member) => member.role === "driver");
@@ -148,7 +151,10 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
     };
   }, [search, services, statusFilter, tenantId, vesselFilter, zoneFilter]);
 
-  const baseServices = serverServices ?? services;
+  const baseServices = useMemo(
+    () => (serverServices ?? services).filter((service) => !deletedServiceIds.has(service.id)),
+    [deletedServiceIds, serverServices, services]
+  );
 
   const filtered = useMemo(() => {
     return baseServices.filter((service) => {
@@ -275,6 +281,46 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
     setShareUrlByServiceId((prev) => ({ ...prev, [selectedService.id]: "" }));
     setShareLoading(false);
     setShareMessage("Link revocato.");
+  };
+
+  const handleDeleteSelectedService = async () => {
+    if (!selectedService || !hasSupabaseEnv || !supabase || deleteLoading) return;
+    const customerName = getCustomerFullName(selectedService);
+    const confirmed = window.confirm(`Eliminare definitivamente la prenotazione di ${customerName}? L'operazione non e reversibile.`);
+    if (!confirmed) return;
+
+    setDeleteLoading(true);
+    setDeleteMessage("");
+    const { data, error } = await supabase.auth.getSession();
+    if (error || !data.session?.access_token) {
+      setDeleteLoading(false);
+      setDeleteMessage("Sessione non valida.");
+      return;
+    }
+
+    const response = await fetch(`/api/ops/services/${selectedService.id}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${data.session.access_token}`
+      }
+    });
+    const body = (await response.json().catch(() => null)) as { error?: string } | null;
+    if (!response.ok) {
+      setDeleteLoading(false);
+      setDeleteMessage(body?.error ?? "Eliminazione non riuscita.");
+      return;
+    }
+
+    const deletedId = selectedService.id;
+    setDeletedServiceIds((prev) => {
+      const next = new Set(prev);
+      next.add(deletedId);
+      return next;
+    });
+    setServerServices((prev) => (prev ? prev.filter((service) => service.id !== deletedId) : prev));
+    setSelectedServiceId(null);
+    setDeleteLoading(false);
+    setDeleteMessage("Prenotazione eliminata.");
   };
   const selectedTimeline = useMemo(() => {
     if (!selectedService) return [];
@@ -696,11 +742,20 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
               <a href={`/services/${selectedService.id}/edit`} className="btn-primary px-3 py-1.5 text-xs">
                 Modifica
               </a>
+              <button
+                type="button"
+                onClick={() => void handleDeleteSelectedService()}
+                disabled={deleteLoading}
+                className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+              >
+                {deleteLoading ? "Elimino..." : "Elimina"}
+              </button>
               <button type="button" onClick={() => setSelectedServiceId(null)} className="text-sm text-muted">
                 Chiudi
               </button>
             </div>
           </div>
+          {deleteMessage ? <p className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs text-rose-700">{deleteMessage}</p> : null}
           {(() => {
             const pdfMeta = pdfMetaByServiceId.get(selectedService.id);
             const source = sourceByServiceId.get(selectedService.id) ?? "manual";
