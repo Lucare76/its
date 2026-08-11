@@ -146,6 +146,15 @@ export async function POST(request: NextRequest) {
   if (!inbound_email_id) return NextResponse.json({ ok: false, error: "inbound_email_id mancante." }, { status: 400 });
   if (!form) return NextResponse.json({ ok: false, error: "Dati form mancanti." }, { status: 400 });
 
+  const { data: existingService } = await admin
+    .from("services")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("inbound_email_id", inbound_email_id)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
   const arrivalDate = parseDate(form.data_arrivo);
   if (!arrivalDate) return NextResponse.json({ ok: false, error: "Data arrivo non valida." }, { status: 422 });
   if (!clean(form.cliente_nome)) return NextResponse.json({ ok: false, error: "Nome cliente obbligatorio." }, { status: 422 });
@@ -206,9 +215,7 @@ export async function POST(request: NextRequest) {
   ].filter(Boolean).join(" | ");
 
   // ── Crea servizio confermato ──────────────────────────────────────────────
-  const { data: service, error: serviceError } = await admin
-    .from("services")
-    .insert({
+  const servicePayload = {
       tenant_id: tenantId,
       inbound_email_id,
       is_draft: false,
@@ -231,10 +238,38 @@ export async function POST(request: NextRequest) {
       status: "new",
       created_by_user_id: userId,
       booking_service_kind: bookingKind
-    })
-    .select("id").single();
+  };
+
+  // L'ingest email crea gia una bozza: l'approvazione deve confermare quel
+  // record, non inserirne uno identico. Se non esiste una bozza, crea il servizio.
+  const serviceResult = existingService?.id
+    ? await admin
+        .from("services")
+        .update(servicePayload)
+        .eq("tenant_id", tenantId)
+        .eq("id", existingService.id)
+        .select("id")
+        .single()
+    : await admin
+        .from("services")
+        .insert(servicePayload)
+        .select("id")
+        .single();
+  const { data: service, error: serviceError } = serviceResult;
 
   if (serviceError || !service?.id) {
+    if (serviceError?.code === "23505") {
+      const { data: concurrentService } = await admin
+        .from("services")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("inbound_email_id", inbound_email_id)
+        .limit(1)
+        .maybeSingle();
+      if (concurrentService?.id) {
+        return NextResponse.json({ ok: true, service_id: concurrentService.id, inbound_email_id, already_existed: true });
+      }
+    }
     return NextResponse.json({ ok: false, error: serviceError?.message ?? "Errore creazione servizio." }, { status: 500 });
   }
 
