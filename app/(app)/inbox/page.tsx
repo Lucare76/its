@@ -772,6 +772,7 @@ export default function InboxPage() {
                 };
                 const arrivo = s.arrival_date ? `${fmtDate(s.arrival_date)} ${s.arrival_time ?? ""}`.trim() : null;
                 const partenza = s.departure_date ? `${fmtDate(s.departure_date)} ${s.departure_time ?? ""}`.trim() : null;
+                const hotelName = s.hotel_name?.trim() || hotels.find((hotel) => hotel.id === s.hotel_id)?.name || null;
                 return (
                   <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm hover:bg-slate-50">
                     <div className="flex-1 min-w-0">
@@ -788,7 +789,7 @@ export default function InboxPage() {
                           {s.owner_label ?? serviceOwnerLabel(s, agenciesMap)}
                         </span>
                       </p>
-                      {(() => { const h = hotels.find((h) => h.id === s.hotel_id); return h ? <p className="text-xs font-medium text-slate-700 truncate">🏨 {h.name}</p> : null; })()}
+                      {hotelName ? <p className="text-xs font-medium text-slate-700 truncate">Hotel: {hotelName}</p> : null}
                       <p className="text-xs text-slate-500">
                         {arrivo && <span>✈️ Arr: {arrivo}</span>}
                         {arrivo && partenza && <span className="mx-1">·</span>}
