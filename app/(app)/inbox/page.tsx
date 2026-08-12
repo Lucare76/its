@@ -9,6 +9,7 @@ import type { PdfImportDetail } from "@/lib/server/pdf-imports";
 import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 import { ensureSupabaseClientReady, getClientSessionContext } from "@/lib/supabase/client-session";
 import type { Hotel, InboundEmail, Membership, Service } from "@/lib/types";
+import { bookingListTransportTimes } from "@/lib/booking-list-display";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -774,8 +775,7 @@ export default function InboxPage() {
                   const [y, m, d] = iso.split("-");
                   return `${d}/${m}/${y}`;
                 };
-                const arrivo = s.arrival_date ? `${fmtDate(s.arrival_date)} ${formatShortTime(s.arrival_time)}`.trim() : null;
-                const partenza = s.departure_date ? `${fmtDate(s.departure_date)} ${formatShortTime(s.departure_time)}`.trim() : null;
+                const transportTimes = bookingListTransportTimes(s);
                 const hotelName = s.hotel_name?.trim() || hotels.find((hotel) => hotel.id === s.hotel_id)?.name || null;
                 return (
                   <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm hover:bg-slate-50">
@@ -794,12 +794,17 @@ export default function InboxPage() {
                         </span>
                       </p>
                       {hotelName ? <p className="text-xs font-medium text-slate-700 truncate">Hotel: {hotelName}</p> : null}
-                      <p className="text-xs text-slate-500">
-                        {arrivo && <span>✈️ Arr: {arrivo}</span>}
-                        {arrivo && partenza && <span className="mx-1">·</span>}
-                        {partenza && <span>🏠 Par: {partenza}</span>}
-                        {!arrivo && !partenza && fmtDate(s.date) && <span>{fmtDate(s.date)} {formatShortTime(s.time)}</span>}
-                      </p>
+                      {transportTimes ? (
+                        <p className="text-xs text-slate-600">
+                          <span className="font-semibold text-slate-700">{transportTimes.serviceLabel}</span>
+                          <span className="mx-1">·</span>
+                          <span>{transportTimes.outwardLabel}: {transportTimes.outwardTime ?? "—"}</span>
+                          <span className="mx-1">·</span>
+                          <span>{transportTimes.returnLabel}: {transportTimes.returnTime ?? "—"}</span>
+                        </p>
+                      ) : (
+                        <p className="text-xs text-slate-500">{fmtDate(s.date)} {formatShortTime(s.time)}</p>
+                      )}
                     </div>
                     <div className="text-right shrink-0">
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
