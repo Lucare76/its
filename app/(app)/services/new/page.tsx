@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput } from "@/components/ui";
 import {
   buildFerryScheduleOptions,
@@ -185,6 +185,7 @@ export default function OpsNewBookingPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("Compila i campi obbligatori e conferma la prenotazione.");
   const [submitting, setSubmitting] = useState(false);
+  const submitInFlightRef = useRef(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [role, setRole] = useState<OpsRole | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -404,6 +405,9 @@ export default function OpsNewBookingPage() {
   };
 
   const submit = async (force = false) => {
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
+    try {
     await runGuardedSubmit(submitting, setSubmitting, async () => {
       if (reviewWarnings.length > 0) {
         const errs: Record<string, string> = {};
@@ -469,6 +473,9 @@ export default function OpsNewBookingPage() {
       setDuplicateWarning(null);
       await doSubmit();
     });
+    } finally {
+      submitInFlightRef.current = false;
+    }
   };
 
   if (loading) return <div className="card p-4 text-sm text-slate-500">Caricamento...</div>;

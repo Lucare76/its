@@ -798,9 +798,9 @@ export default function InboxPage() {
                         <p className="text-xs text-slate-600">
                           <span className="font-semibold text-slate-700">{transportTimes.serviceLabel}</span>
                           <span className="mx-1">·</span>
-                          <span>{transportTimes.outwardLabel}: {transportTimes.outwardTime ?? "—"}</span>
+                          <span>{transportTimes.outwardLabel}: {[transportTimes.outwardDate, transportTimes.outwardTime].filter(Boolean).join(" ") || "—"}</span>
                           <span className="mx-1">·</span>
-                          <span>{transportTimes.returnLabel}: {transportTimes.returnTime ?? "—"}</span>
+                          <span>{transportTimes.returnLabel}: {[transportTimes.returnDate, transportTimes.returnTime].filter(Boolean).join(" ") || "—"}</span>
                         </p>
                       ) : (
                         <p className="text-xs text-slate-500">{fmtDate(s.date)} {formatShortTime(s.time)}</p>

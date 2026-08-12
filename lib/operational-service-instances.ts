@@ -33,7 +33,11 @@ export function buildOperationalInstances(services: Service[]) {
     // Arrivi: usa arrival_date se esplicito, altrimenti service.date per servizi direction=arrival
     const arrivalDate = service.arrival_date ?? (service.direction === "arrival" ? service.date : null);
     const arrivalTime = service.arrival_time ?? service.outbound_time ?? service.time;
-    if (arrivalDate) {
+    // Le prenotazioni A/R moderne hanno due record collegati: ciascun record
+    // deve produrre soltanto l'istanza della propria direzione. I record legacy
+    // non collegati continuano invece a espandersi in arrivo + partenza.
+    const linkedPair = Boolean(service.linked_service_id);
+    if (arrivalDate && (!linkedPair || service.direction === "arrival")) {
       instances.push({
         instanceId: `${service.id}:arrival`,
         serviceId: service.id,
@@ -47,7 +51,7 @@ export function buildOperationalInstances(services: Service[]) {
     // Partenze: usa departure_date se esplicito, altrimenti service.date per servizi direction=departure
     const departureDate = service.departure_date ?? (service.direction === "departure" ? service.date : null);
     const departureTime = service.departure_time ?? service.return_time ?? service.time;
-    if (departureDate) {
+    if (departureDate && (!linkedPair || service.direction === "departure")) {
       instances.push({
         instanceId: `${service.id}:departure`,
         serviceId: service.id,

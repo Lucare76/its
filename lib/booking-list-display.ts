@@ -2,14 +2,16 @@ import type { Service } from "@/lib/types";
 
 type BookingListService = Partial<Pick<
   Service,
-  "booking_service_kind" | "time" | "arrival_time" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca"
+  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca"
 >>;
 
 export type BookingListTransportTimes = {
   serviceLabel: string;
   outwardLabel: string;
+  outwardDate: string | null;
   outwardTime: string | null;
   returnLabel: string;
+  returnDate: string | null;
   returnTime: string | null;
 };
 
@@ -25,8 +27,10 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
           ? "Formula MEDMAR Napoli"
           : "Formula MEDMAR Pozzuoli",
       outwardLabel: "Partenza andata",
+      outwardDate: cleanDate(service.arrival_date) ?? cleanDate(service.date),
       outwardTime: cleanTime(service.time),
       returnLabel: "Partenza ritorno",
+      returnDate: cleanDate(service.departure_date),
       returnTime: cleanTime(service.orario_barca),
     };
   }
@@ -44,10 +48,17 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
   return {
     serviceLabel: `${isAirport ? "Trasferimento aeroporto - hotel" : "Trasferimento stazione / bus - hotel"}${suffix}`,
     outwardLabel: isAirport ? "Arrivo volo" : "Arrivo treno/bus",
+    outwardDate: cleanDate(service.arrival_date) ?? cleanDate(service.date),
     outwardTime: cleanTime(service.train_arrival_time) ?? cleanTime(service.arrival_time),
     returnLabel: isAirport ? "Partenza volo" : "Partenza treno/bus",
+    returnDate: cleanDate(service.departure_date),
     returnTime: cleanTime(service.train_departure_time) ?? cleanTime(service.departure_time),
   };
+}
+
+function cleanDate(value: string | null | undefined) {
+  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : null;
 }
 
 function cleanTime(value: string | null | undefined) {
