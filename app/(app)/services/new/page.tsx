@@ -62,6 +62,14 @@ function nextSunday(fromDate: string, skipSame = false): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+function normalizeHotelSearch(value: string) {
+  return value
+    .trim()
+    .toLocaleLowerCase("it")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
+}
+
 function bookingContext(kind: BookingKind) {
   if (kind === "formula_snav" || kind === "formula_medmar_napoli" || kind === "formula_medmar_pozzuoli") {
     const label = kind === "formula_snav" ? "SNAV" : kind === "formula_medmar_napoli" ? "MEDMAR Napoli" : "MEDMAR Pozzuoli";
@@ -330,12 +338,21 @@ export default function OpsNewBookingPage() {
 
   const hasHotels = hotels.length > 0;
   const selectedHotel = hotels.find((hotel) => hotel.id === form.hotel_id) ?? null;
-  const normalizedHotelSearch = hotelSearch.trim().toLocaleLowerCase("it");
+  const normalizedHotelSearch = normalizeHotelSearch(hotelSearch);
   const hotelSuggestions = normalizedHotelSearch
-    ? hotels.filter((hotel) => hotel.name.toLocaleLowerCase("it").startsWith(normalizedHotelSearch)).slice(0, 8)
-    : hotels.slice(0, 8);
-  const exactHotelMatch = normalizedHotelSearch.length > 0
-    && hotels.some((hotel) => hotel.name.toLocaleLowerCase("it") === normalizedHotelSearch);
+    ? hotels
+        .filter((hotel) => normalizeHotelSearch(hotel.name).includes(normalizedHotelSearch))
+        .sort((left, right) => {
+          const leftName = normalizeHotelSearch(left.name);
+          const rightName = normalizeHotelSearch(right.name);
+          const leftStarts = leftName.startsWith(normalizedHotelSearch);
+          const rightStarts = rightName.startsWith(normalizedHotelSearch);
+          if (leftStarts !== rightStarts) return leftStarts ? -1 : 1;
+          return leftName.indexOf(normalizedHotelSearch) - rightName.indexOf(normalizedHotelSearch)
+            || left.name.localeCompare(right.name, "it");
+        })
+        .slice(0, 20)
+    : hotels.slice(0, 20);
   const selectedKind = form.booking_service_kind;
   const serviceKindLabel = useMemo(() => kindOptions.find((item) => item.value === selectedKind)?.label ?? "Servizio", [selectedKind]);
   const contextLabels = useMemo(() => bookingContext(selectedKind), [selectedKind]);
@@ -617,7 +634,7 @@ export default function OpsNewBookingPage() {
                       <span className="font-medium">{hotel.name}</span>{hotel.zone ? <span className="ml-2 text-xs text-slate-500">{hotel.zone}</span> : null}
                     </button>
                   ))}
-                  {normalizedHotelSearch && !exactHotelMatch ? (
+                  {normalizedHotelSearch && hotelSuggestions.length === 0 ? (
                     <button
                       type="button"
                       className="block w-full rounded-lg px-3 py-2 text-left font-medium text-blue-700 hover:bg-blue-50"
