@@ -39,6 +39,11 @@ export async function GET(req: NextRequest) {
       filterBookingsBySearch(searchable, q, agency, agencyNameById, Math.max(limit * 2, 100))
     ).slice(0, limit)
       .map((r) => {
+        const linked = r.linked_service_id
+          ? (servicesResult.data ?? []).find((candidate) => candidate.id === r.linked_service_id)
+          : null;
+        const arrivalLeg = r.direction === "arrival" ? r : linked?.direction === "arrival" ? linked : r;
+        const departureLeg = r.direction === "departure" ? r : linked?.direction === "departure" ? linked : null;
         const joinedName = [r.customer_first_name, r.customer_last_name].filter(Boolean).join(" ").trim();
         const owner = r.billing_party_name ?? (r.agency_id ? agencyNameById.get(r.agency_id) : null) ?? "Privato";
         return {
@@ -76,6 +81,10 @@ export async function GET(req: NextRequest) {
           meeting_point: r.meeting_point ?? null,
           notes: r.notes ?? null,
           linked_service_id: r.linked_service_id ?? null,
+          outbound_ferry_departure_time: arrivalLeg.time ?? null,
+          outbound_ferry_arrival_time: arrivalLeg.arrival_time ?? null,
+          return_pickup_time: departureLeg?.pickup_time ?? departureLeg?.departure_time ?? null,
+          return_ferry_departure_time: departureLeg?.orario_barca ?? null,
         };
       });
 

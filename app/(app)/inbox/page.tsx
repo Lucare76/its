@@ -799,7 +799,9 @@ export default function InboxPage() {
                           <span className="font-semibold text-slate-700">{transportTimes.serviceLabel}</span>
                           <span className="mx-1">·</span>
                           <span>{transportTimes.outwardLabel}: {[transportTimes.outwardDate, transportTimes.outwardTime].filter(Boolean).join(" ") || "—"}</span>
+                          {transportTimes.outwardArrivalTime ? <span className="ml-1">· Arrivo indicativo: {transportTimes.outwardArrivalTime}</span> : null}
                           <span className="mx-1">·</span>
+                          {transportTimes.returnPickupTime ? <span>Pickup: {transportTimes.returnPickupTime} · </span> : null}
                           <span>{transportTimes.returnLabel}: {[transportTimes.returnDate, transportTimes.returnTime].filter(Boolean).join(" ") || "—"}</span>
                         </p>
                       ) : (

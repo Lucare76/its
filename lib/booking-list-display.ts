@@ -3,7 +3,12 @@ import type { Service } from "@/lib/types";
 type BookingListService = Partial<Pick<
   Service,
   "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca"
->>;
+>> & {
+  outbound_ferry_departure_time?: string | null;
+  outbound_ferry_arrival_time?: string | null;
+  return_pickup_time?: string | null;
+  return_ferry_departure_time?: string | null;
+};
 
 export type BookingListTransportTimes = {
   serviceLabel: string;
@@ -13,6 +18,8 @@ export type BookingListTransportTimes = {
   returnLabel: string;
   returnDate: string | null;
   returnTime: string | null;
+  outwardArrivalTime?: string | null;
+  returnPickupTime?: string | null;
 };
 
 export function bookingListTransportTimes(service: BookingListService): BookingListTransportTimes | null {
@@ -26,12 +33,14 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
         : kind === "formula_medmar_napoli"
           ? "Formula MEDMAR Napoli"
           : "Formula MEDMAR Pozzuoli",
-      outwardLabel: "Partenza andata",
+      outwardLabel: "Traghetto/aliscafo dalla terraferma",
       outwardDate: cleanDate(service.arrival_date) ?? cleanDate(service.date),
-      outwardTime: cleanTime(service.time),
-      returnLabel: "Partenza ritorno",
+      outwardTime: cleanTime(service.outbound_ferry_departure_time) ?? cleanTime(service.time),
+      outwardArrivalTime: cleanTime(service.outbound_ferry_arrival_time) ?? cleanTime(service.arrival_time),
+      returnLabel: "Traghetto/aliscafo dall'isola",
       returnDate: cleanDate(service.departure_date),
-      returnTime: cleanTime(service.orario_barca),
+      returnTime: cleanTime(service.return_ferry_departure_time) ?? cleanTime(service.orario_barca),
+      returnPickupTime: cleanTime(service.return_pickup_time) ?? cleanTime(service.departure_time),
     };
   }
 

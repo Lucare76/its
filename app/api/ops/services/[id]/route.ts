@@ -20,7 +20,12 @@ const updateServiceSchema = z.object({
   departure_date: z.string().nullable().optional(),
   departure_time: z.string().nullable().optional(),
   orario_barca: z.string().nullable().optional(),
+  pickup_time: z.string().nullable().optional(),
   transport_code: z.string().nullable().optional(),
+  outbound_ferry_departure_time: z.string().nullable().optional(),
+  outbound_ferry_arrival_time: z.string().nullable().optional(),
+  return_pickup_time: z.string().nullable().optional(),
+  return_ferry_departure_time: z.string().nullable().optional(),
 });
 
 export async function GET(
@@ -37,7 +42,7 @@ export async function GET(
     const [serviceRes, hotelsRes, agenciesRes] = await Promise.all([
       auth.admin
         .from("services")
-        .select("id, customer_name, phone, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, orario_barca, transport_code, direction, booking_service_kind, service_type_code, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
+        .select("id, customer_name, phone, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, orario_barca, pickup_time, linked_service_id, transport_code, direction, booking_service_kind, service_type_code, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
         .eq("id", serviceId)
         .eq("tenant_id", tenantId)
         .maybeSingle(),
@@ -59,9 +64,18 @@ export async function GET(
     if (hotelsRes.error) return NextResponse.json({ error: hotelsRes.error.message }, { status: 500 });
     if (agenciesRes.error) return NextResponse.json({ error: agenciesRes.error.message }, { status: 500 });
 
+    const linkedServiceRes = serviceRes.data.linked_service_id
+      ? await auth.admin.from("services")
+        .select("id, direction, time, arrival_time, departure_time, orario_barca, pickup_time")
+        .eq("id", serviceRes.data.linked_service_id)
+        .eq("tenant_id", tenantId)
+        .maybeSingle()
+      : { data: null };
+
     return NextResponse.json({
       ok: true,
       service: { ...serviceRes.data, phone_e164: null, reminder_status: null, sent_at: null },
+      linked_service: linkedServiceRes.data ?? null,
       hotels: hotelsRes.data ?? [],
       agencies: agenciesRes.data ?? [],
     });
@@ -85,13 +99,49 @@ export async function PATCH(
       return NextResponse.json({ error: "Payload non valido." }, { status: 400 });
     }
 
+    const {
+      outbound_ferry_departure_time,
+      outbound_ferry_arrival_time,
+      return_pickup_time,
+      return_ferry_departure_time,
+      ...ordinaryUpdates
+    } = parsed.data;
+
+    const { data: current } = await auth.admin.from("services")
+      .select("id, direction, linked_service_id")
+      .eq("id", serviceId).eq("tenant_id", tenantId).maybeSingle();
+    if (!current) return NextResponse.json({ error: "Servizio non trovato." }, { status: 404 });
+
     const { error } = await auth.admin
       .from("services")
-      .update(parsed.data)
+      .update(ordinaryUpdates)
       .eq("id", serviceId)
       .eq("tenant_id", tenantId);
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    if (outbound_ferry_departure_time !== undefined || outbound_ferry_arrival_time !== undefined
+      || return_pickup_time !== undefined || return_ferry_departure_time !== undefined) {
+      const linked = current.linked_service_id
+        ? await auth.admin.from("services").select("id, direction").eq("id", current.linked_service_id).eq("tenant_id", tenantId).maybeSingle()
+        : { data: null };
+      const arrivalId = current.direction === "arrival" ? current.id : linked.data?.direction === "arrival" ? linked.data.id : null;
+      const departureId = current.direction === "departure" ? current.id : linked.data?.direction === "departure" ? linked.data.id : null;
+      if (arrivalId && (outbound_ferry_departure_time !== undefined || outbound_ferry_arrival_time !== undefined)) {
+        const { error: arrivalError } = await auth.admin.from("services").update({
+          ...(outbound_ferry_departure_time !== undefined ? { time: outbound_ferry_departure_time } : {}),
+          ...(outbound_ferry_arrival_time !== undefined ? { arrival_time: outbound_ferry_arrival_time } : {}),
+        }).eq("id", arrivalId).eq("tenant_id", tenantId);
+        if (arrivalError) return NextResponse.json({ error: arrivalError.message }, { status: 500 });
+      }
+      if (departureId && (return_pickup_time !== undefined || return_ferry_departure_time !== undefined)) {
+        const { error: departureError } = await auth.admin.from("services").update({
+          ...(return_pickup_time !== undefined ? { pickup_time: return_pickup_time, departure_time: return_pickup_time } : {}),
+          ...(return_ferry_departure_time !== undefined ? { orario_barca: return_ferry_departure_time } : {}),
+        }).eq("id", departureId).eq("tenant_id", tenantId);
+        if (departureError) return NextResponse.json({ error: departureError.message }, { status: 500 });
+      }
+    }
 
     auditLog({
       event: "service_updated",

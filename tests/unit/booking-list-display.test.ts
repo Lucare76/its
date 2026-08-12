@@ -15,7 +15,7 @@ describe("bookingListTransportTimes", () => {
     })).toMatchObject({ outwardDate: "12/08/2026", outwardTime: "10:25", returnDate: "19/08/2026", returnTime: "18:15" });
   });
 
-  it("mostra le partenze nave andata e ritorno per MEDMAR", () => {
+  it("mostra partenza e arrivo nave all'andata, pickup e nave al ritorno", () => {
     expect(bookingListTransportTimes({
       booking_service_kind: "formula_medmar_napoli",
       arrival_date: "2026-09-01",
@@ -26,6 +26,17 @@ describe("bookingListTransportTimes", () => {
       orario_barca: "19:10",
       train_arrival_time: null,
       train_departure_time: null,
-    })).toMatchObject({ outwardDate: "01/09/2026", outwardTime: "08:40", returnDate: "08/09/2026", returnTime: "19:10" });
+      outbound_ferry_departure_time: "08:40",
+      outbound_ferry_arrival_time: "10:05",
+      return_pickup_time: "17:30",
+      return_ferry_departure_time: "19:10",
+    })).toMatchObject({
+      outwardDate: "01/09/2026",
+      outwardTime: "08:40",
+      outwardArrivalTime: "10:05",
+      returnDate: "08/09/2026",
+      returnPickupTime: "17:30",
+      returnTime: "19:10",
+    });
   });
 });

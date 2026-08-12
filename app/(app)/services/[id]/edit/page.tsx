@@ -26,6 +26,8 @@ type ServiceRow = {
   departure_date: string | null;
   departure_time: string | null;
   orario_barca: string | null;
+  pickup_time: string | null;
+  linked_service_id: string | null;
   transport_code: string | null;
   direction: string | null;
   booking_service_kind: string | null;
@@ -85,6 +87,10 @@ export default function ServiceEditPage() {
   const [departureDate, setDepartureDate] = useState("");
   const [departureTime, setDepartureTime] = useState("");
   const [transportCode, setTransportCode] = useState("");
+  const [outboundFerryDeparture, setOutboundFerryDeparture] = useState("");
+  const [outboundFerryArrival, setOutboundFerryArrival] = useState("");
+  const [returnPickup, setReturnPickup] = useState("");
+  const [returnFerryDeparture, setReturnFerryDeparture] = useState("");
 
   const [internalNotes, setInternalNotes] = useState("");
   const [internalNotesSaving, setInternalNotesSaving] = useState(false);
@@ -238,6 +244,7 @@ export default function ServiceEditPage() {
       });
       const body = (await response.json().catch(() => null)) as {
         service?: ServiceRow;
+        linked_service?: Partial<ServiceRow> | null;
         hotels?: HotelRow[];
         agencies?: AgencyRow[];
         error?: string;
@@ -270,6 +277,13 @@ export default function ServiceEditPage() {
       setArrivalTime(((ferryFormula ? svc.time : svc.arrival_time) ?? "").slice(0, 5));
       setDepartureDate(svc.departure_date ?? "");
       setDepartureTime(((ferryFormula ? svc.orario_barca : svc.departure_time) ?? "").slice(0, 5));
+      const linked = body.linked_service ?? null;
+      const arrivalLeg = svc.direction === "arrival" ? svc : linked?.direction === "arrival" ? linked : svc;
+      const departureLeg = svc.direction === "departure" ? svc : linked?.direction === "departure" ? linked : null;
+      setOutboundFerryDeparture((arrivalLeg.time ?? "").slice(0, 5));
+      setOutboundFerryArrival((arrivalLeg.arrival_time ?? "").slice(0, 5));
+      setReturnPickup(((departureLeg?.pickup_time ?? departureLeg?.departure_time) ?? "").slice(0, 5));
+      setReturnFerryDeparture((departureLeg?.orario_barca ?? "").slice(0, 5));
       setTransportCode(svc.transport_code ?? "");
       setInternalNotes(svc.internal_notes ?? "");
       setInternalNotesUpdatedAt(svc.internal_notes_updated_at ?? null);
@@ -316,7 +330,7 @@ export default function ServiceEditPage() {
         customer_name: customerName,
         phone: phone.trim() || null,
         pax: Number(pax) || 1,
-        time: isFerryFormula ? (arrivalTime || null) : (time.trim() || null),
+        ...(!isFerryFormula ? { time: time.trim() || null } : {}),
         notes: notes.trim() || null,
         hotel_id: hotelId || null,
         agency_id: agencyId || null,
@@ -325,8 +339,14 @@ export default function ServiceEditPage() {
         arrival_date: arrivalDate || null,
         ...(isFerryFormula ? {} : { arrival_time: arrivalTime || null }),
         departure_date: departureDate || null,
-        ...(isFerryFormula ? { orario_barca: departureTime || null } : { departure_time: departureTime || null }),
+        ...(!isFerryFormula ? { departure_time: departureTime || null } : {}),
         transport_code: transportCode.trim() || null,
+        ...(isFerryFormula ? {
+          outbound_ferry_departure_time: outboundFerryDeparture || null,
+          outbound_ferry_arrival_time: outboundFerryArrival || null,
+          return_pickup_time: returnPickup || null,
+          return_ferry_departure_time: returnFerryDeparture || null,
+        } : {}),
       }),
     });
     const body = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -452,10 +472,10 @@ export default function ServiceEditPage() {
             Pax
             <input type="number" min="1" max="99" value={pax} onChange={(e) => setPax(e.target.value)} className="mt-1 input-saas w-full" />
           </label>
-          <label className="text-xs font-medium text-slate-600">
+          {!isFerryFormula ? <label className="text-xs font-medium text-slate-600">
             Orario
             <input type="time" step="300" value={time} onChange={(e) => setTime(e.target.value)} className="mt-1 input-saas w-full" />
-          </label>
+          </label> : null}
 
           {/* Telefono */}
           <label className="text-xs font-medium text-slate-600 sm:col-span-2">
@@ -476,24 +496,48 @@ export default function ServiceEditPage() {
           <div className="sm:col-span-2">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Date prenotazione</p>
             <div className="grid grid-cols-2 gap-3">
-              <label className="text-xs font-medium text-slate-600">
+              <label className={`text-xs font-medium text-slate-600 ${isFerryFormula ? "col-span-2" : ""}`}>
                 Data arrivo
                 <DateInput value={arrivalDate} onChange={(iso) => setArrivalDate(iso)} className="mt-1 input-saas w-full" />
               </label>
-              <label className="text-xs font-medium text-slate-600">
-                {isFerryFormula ? "Partenza mezzo andata" : "Ora arrivo"}
+              {!isFerryFormula ? <label className="text-xs font-medium text-slate-600">
+                Ora arrivo
                 <input type="time" step="300" value={arrivalTime} onChange={(e) => setArrivalTime(e.target.value)} className="mt-1 input-saas w-full" />
-              </label>
-              <label className="text-xs font-medium text-slate-600">
+              </label> : null}
+              <label className={`text-xs font-medium text-slate-600 ${isFerryFormula ? "col-span-2" : ""}`}>
                 Data partenza
                 <DateInput value={departureDate} onChange={(iso) => setDepartureDate(iso)} className="mt-1 input-saas w-full" />
               </label>
-              <label className="text-xs font-medium text-slate-600">
-                {isFerryFormula ? "Partenza mezzo ritorno" : "Ora partenza"}
+              {!isFerryFormula ? <label className="text-xs font-medium text-slate-600">
+                Ora partenza
                 <input type="time" step="300" value={departureTime} onChange={(e) => setDepartureTime(e.target.value)} className="mt-1 input-saas w-full" />
-              </label>
+              </label> : null}
             </div>
           </div>
+
+          {isFerryFormula ? (
+            <div className="sm:col-span-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-800">Orari marittimi e pickup — modificabili per emergenza</p>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-xs font-medium text-slate-700">
+                  Partenza traghetto/aliscafo dalla terraferma
+                  <input type="time" step="300" value={outboundFerryDeparture} onChange={(e) => setOutboundFerryDeparture(e.target.value)} className="mt-1 input-saas w-full" />
+                </label>
+                <label className="text-xs font-medium text-slate-700">
+                  Arrivo indicativo sull&apos;isola
+                  <input type="time" step="300" value={outboundFerryArrival} onChange={(e) => setOutboundFerryArrival(e.target.value)} className="mt-1 input-saas w-full" />
+                </label>
+                <label className="text-xs font-medium text-slate-700">
+                  Pickup hotel per la partenza
+                  <input type="time" step="300" value={returnPickup} onChange={(e) => setReturnPickup(e.target.value)} className="mt-1 input-saas w-full" />
+                </label>
+                <label className="text-xs font-medium text-slate-700">
+                  Partenza traghetto/aliscafo dall&apos;isola
+                  <input type="time" step="300" value={returnFerryDeparture} onChange={(e) => setReturnFerryDeparture(e.target.value)} className="mt-1 input-saas w-full" />
+                </label>
+              </div>
+            </div>
+          ) : null}
 
           {/* Rif. volo/treno */}
           <label className="text-xs font-medium text-slate-600 sm:col-span-2">
