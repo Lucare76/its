@@ -11,6 +11,8 @@ export type MedmarPreflightStatus =
   | "ambiguous"
   | "not_medmar"
   | "manual_review"
+  | "route_mismatch"
+  | "unsupported_passenger_type"
   | "medmar_unavailable"
   | "medmar_auth_expired"
   | "error";
@@ -45,12 +47,30 @@ export type MedmarPaginatedEnvelope<T> = {
   total: number | null;
 };
 
-/** Riga grezza (permissiva) di GET /api/biglietti/vendibili/{id_corsa}. */
+/**
+ * Riga di GET /api/biglietti/vendibili/{id_corsa} (Fase 1.6 — schema reale
+ * CONFERMATO da risposte JSON reali). Solo i nomi di campo realmente
+ * osservati: nessun alias inventato, nessun parsing multi-chiave permissivo.
+ * "re" ha significato non ancora documentato: viene solo catturato per
+ * diagnostica/Fase 2, mai usato per decidere can_issue.
+ */
 export type BigliettoVendibileRaw = {
+  id_corsa: number | string | null;
   id_biglietto: number | string | null;
+  id_tipologia_passeggero: number | null;
   id_tariffa: number | string | null;
-  label: string | null;
-  prezzo_cents: number | null;
+  id_log: number | string | null;
+  id_iva: number | string | null;
+  id_gruppo: number | string | null;
+  biglietto: string | null;
+  prezzo: number | null;
+  prezzo_prevendita: number | null;
+  quantita: number | null;
+  flag_ar: string | null;
+  flag_collegabile: boolean | number | null;
+  flag_targa: boolean | number | null;
+  checkin: boolean | null;
+  re: unknown;
 };
 
 export type MedmarPreflightWarning = { code: string; message: string };

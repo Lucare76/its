@@ -21,6 +21,7 @@ vi.mock("@/lib/server/medmar-booking/client", async (importOriginal) => {
 vi.mock("@/lib/server/medmar-booking/route-mapping", () => ({
   getIdTrattaForRouteCode: vi.fn(),
   getExpectedPortsForRouteCode: vi.fn().mockReturnValue(null),
+  isMirrorRouteCode: vi.fn().mockReturnValue(true),
 }));
 
 // Import DOPO i vi.mock, così runMedmarPreflight usa i moduli mockati.
@@ -42,18 +43,56 @@ function fakeAdmin(services: Row[], ticketMemory: Row[] = []) {
   } as unknown as import("@supabase/supabase-js").SupabaseClient;
 }
 
-const ARRIVAL_ROW: Row = {
-  id: SVC_ARR, tenant_id: TENANT_A, date: "2026-08-20", time: "08:40",
-  customer_name: "Mario Rossi", pax: 2, vessel: "Medmar", notes: "[practice:AAA]",
-  booking_service_kind: "formula_medmar_napoli", direction: "arrival", status: "new",
+function arrivalRow(overrides: Row = {}): Row {
+  return {
+    id: SVC_ARR, tenant_id: TENANT_A, date: "2026-08-20", time: "08:40",
+    customer_name: "Mario Rossi", pax: 2, vessel: "Medmar", notes: "[practice:AAA]",
+    booking_service_kind: "formula_medmar_napoli", direction: "arrival", status: "new",
+    ...overrides,
+  };
+}
+
+const ARRIVAL_ROW: Row = arrivalRow();
+
+const NAPOLI_ISCHIA_CORSA: Row = {
+  id_corsa: 131943, id_tratta: 59, partenza_data: "2026-08-20", partenza_ora: "08:40",
+  flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41,
+  porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA",
 };
 
-const AR_TARIFF_ROW = { id_biglietto: 370, id_tariffa: 6, label: "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR", prezzo_cents: 1025 };
-const TASSA_SBARCO_ROW = { id_biglietto: 999, id_tariffa: 12, label: "TASSA DI SBARCO", prezzo_cents: 150 };
+// Fixture "biglietto vendibile" nello schema reale confermato in Fase 1.6
+// (id_corsa, id_biglietto, id_tipologia_passeggero, id_tariffa, id_log,
+// id_iva, id_gruppo, biglietto, prezzo, prezzo_prevendita, quantita,
+// flag_ar, flag_collegabile, flag_targa, checkin, re).
+function arTariffRow(overrides: Row = {}): Row {
+  return {
+    id_corsa: 131943, id_biglietto: 370, id_tipologia_passeggero: 1, id_tariffa: 6,
+    id_log: 5001, id_iva: 22, id_gruppo: 1,
+    biglietto: "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR",
+    prezzo: 10.25, prezzo_prevendita: 10.25, quantita: 40,
+    flag_ar: "R", flag_collegabile: 1, flag_targa: 0, checkin: true, re: null,
+    ...overrides,
+  };
+}
+
+function tassaSbarcoRow(overrides: Row = {}): Row {
+  return {
+    id_corsa: 131943, id_biglietto: 999, id_tipologia_passeggero: 32, id_tariffa: 12,
+    id_log: 5002, id_iva: 22, id_gruppo: 1,
+    biglietto: "TASSA DI SBARCO",
+    prezzo: 1.5, prezzo_prevendita: 1.5, quantita: 40,
+    flag_ar: null, flag_collegabile: 0, flag_targa: 0, checkin: false, re: null,
+    ...overrides,
+  };
+}
+
+const AR_TARIFF_ROW = arTariffRow();
+const TASSA_SBARCO_ROW = tassaSbarcoRow();
 
 beforeEach(() => {
   vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReset();
   vi.mocked(routeMapping.getExpectedPortsForRouteCode).mockReset().mockReturnValue(null);
+  vi.mocked(routeMapping.isMirrorRouteCode).mockReset().mockReturnValue(true);
   vi.mocked(medmarClient.fetchCorseReadOnly).mockReset();
   vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockReset();
 });
@@ -172,12 +211,35 @@ describe("runMedmarPreflight — corse live", () => {
     expect(result.can_issue).toBe(false);
   });
 
+  it("route mismatch: id_tratta corrisponde ma i port IDs sono diversi -> status route_mismatch, can_issue false (bloccante, non solo warning)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(routeMapping.getExpectedPortsForRouteCode).mockReturnValue({ idPortoPartenza: 1, idPortoArrivo: 41 });
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
+      { ...NAPOLI_ISCHIA_CORSA, id_porto_partenza: 999, id_porto_arrivo: 998 },
+    ]);
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("route_mismatch");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.filter((w) => w.code === "port_mismatch")).toHaveLength(2);
+    expect(medmarClient.fetchBigliettiVendibiliReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("port mismatch: un solo port ID è diverso da quello atteso -> status route_mismatch, can_issue false", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(routeMapping.getExpectedPortsForRouteCode).mockReturnValue({ idPortoPartenza: 1, idPortoArrivo: 41 });
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
+      { ...NAPOLI_ISCHIA_CORSA, id_porto_partenza: 999 },
+    ]);
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("route_mismatch");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "port_mismatch")).toBe(true);
+  });
+
   it("corsa unica + tariffa AR + tassa di sbarco live -> status ok, can_issue true, is_live true (dati reali Napoli->Ischia)", async () => {
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
-    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
-      { id_corsa: 131943, id_tratta: 59, partenza_data: "2026-08-20", partenza_ora: "08:40", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA" },
-    ]);
-    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW]);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
 
     const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
 
@@ -187,31 +249,115 @@ describe("runMedmarPreflight — corse live", () => {
     expect(result.outward?.id_corsa).toBe(131943);
     expect(result.outward?.vessel).toBe("MEDMAR GIULIA");
     expect(result.outward?.source).toBe("live");
-    expect(result.tariff).toMatchObject({ id_biglietto: 370, id_tariffa: 6, source: "medmar_live" });
+    expect(result.tariff).toMatchObject({ id_biglietto: 370, id_tariffa: 6, source: "medmar_live", unit_price_cents: 1025 });
     expect(result.taxes).toEqual([{ label: "TASSA DI SBARCO", amount_cents: 150 }]);
     expect(result.expected_total_cents).toBe((1025 + 150) * 2);
     expect(medmarClient.fetchBigliettiVendibiliReadOnly).toHaveBeenCalledWith(131943);
-    // Nessun warning port_mismatch: i porti reali (1->NAPOLI, 41->ISCHIA) combaciano con la mappatura verificata.
+    // Nessun warning port_mismatch: i porti reali (1->NAPOLI, 41->ISCHIA) combaciano con la mappatura verificata (mock default: null -> nessuna verifica strutturale attivata).
     expect(result.warnings.some((w) => w.code === "port_mismatch")).toBe(false);
   });
 
-  it("porti della corsa live diversi da quelli attesi -> warning port_mismatch (non bloccante)", async () => {
+  it("1 adulto (pax=1) -> expected_total_cents calcolato senza moltiplicatore", async () => {
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
-    vi.mocked(routeMapping.getExpectedPortsForRouteCode).mockReturnValue({ idPortoPartenza: 1, idPortoArrivo: 41 });
-    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
-      { id_corsa: 131943, id_tratta: 59, partenza_data: "2026-08-20", partenza_ora: "08:40", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 999, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA" },
-    ]);
-    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW]);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ pax: 1 })]), TENANT_A, [SVC_ARR]);
+
+    expect(result.can_issue).toBe(true);
+    expect(result.pax).toBe(1);
+    expect(result.expected_total_cents).toBe(1025 + 150);
+  });
+
+  it("più adulti (pax=5) -> expected_total_cents scala correttamente", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ pax: 5 })]), TENANT_A, [SVC_ARR]);
+
+    expect(result.can_issue).toBe(true);
+    expect(result.pax).toBe(5);
+    expect(result.expected_total_cents).toBe((1025 + 150) * 5);
+  });
+
+  it("tassa di sbarco mancante (nessuna riga) -> tariffa AR comunque emissibile, taxes vuoto", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW] as never);
+
     const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
-    expect(result.warnings.some((w) => w.code === "port_mismatch")).toBe(true);
+
+    expect(result.can_issue).toBe(true);
+    expect(result.taxes).toEqual([]);
+    expect(result.expected_total_cents).toBe(1025 * 2);
+  });
+
+  it("prezzo AR nullo -> can_issue false, status manual_review, warning ticket_data_incomplete (mai emissione su dati incompleti)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([arTariffRow({ prezzo: null })] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+
+    expect(result.can_issue).toBe(false);
+    expect(result.status).toBe("manual_review");
+    expect(result.warnings.some((w) => w.code === "ticket_data_incomplete")).toBe(true);
+  });
+
+  it("prezzo AR malformato (NaN) -> can_issue false", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([arTariffRow({ prezzo: Number.NaN })] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+
+    expect(result.can_issue).toBe(false);
+  });
+
+  it("tassa di sbarco ambigua (più righe) -> can_issue false, status manual_review", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
+      AR_TARIFF_ROW,
+      tassaSbarcoRow({ id_biglietto: 999 }),
+      tassaSbarcoRow({ id_biglietto: 998, prezzo: 2 }),
+    ] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+
+    expect(result.can_issue).toBe(false);
+    expect(result.status).toBe("manual_review");
+    expect(result.warnings.some((w) => w.code === "ticket_data_incomplete")).toBe(true);
+  });
+
+  it("passenger type non supportato: biglietto compatibile per descrizione+flag_ar ma tipologia diversa da adulto -> status unsupported_passenger_type, can_issue false", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([arTariffRow({ id_tipologia_passeggero: 5 })] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+
+    expect(result.status).toBe("unsupported_passenger_type");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "unsupported_passenger_type")).toBe(true);
+  });
+
+  it("risposta biglietti/vendibili malformata (schema non riconosciuto) -> fail closed, status medmar_unavailable", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockRejectedValue(new medmarClient.MedmarBadResponseError("Risposta Medmar biglietti/vendibili non conforme allo schema atteso (fail-closed)."));
+
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+
+    expect(result.status).toBe("medmar_unavailable");
+    expect(result.can_issue).toBe(false);
   });
 
   it("tariffa AR non trovata nella risposta live -> fallback ticket_memory, is_live false, can_issue false", async () => {
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
-    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
-      { id_corsa: 131943, id_tratta: 59, partenza_data: "2026-08-20", partenza_ora: "08:40", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA" },
-    ]);
-    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([{ id_biglietto: 1, id_tariffa: 2, label: "ALTRA TARIFFA", prezzo_cents: 500 }]);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([arTariffRow({ biglietto: "ALTRA TARIFFA", flag_ar: null })] as never);
 
     const admin = fakeAdmin([ARRIVAL_ROW], [{ tenant_id: TENANT_A, matched_service_id: SVC_ARR, tariff_label: "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR", price_cents: 1025, quantity: 2 }]);
     const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR]);
@@ -220,6 +366,42 @@ describe("runMedmarPreflight — corse live", () => {
     expect(result.can_issue).toBe(false);
     expect(result.tariff?.source).toBe("ticket_memory");
     expect(result.warnings.some((w) => w.code === "ar_tariff_not_found_live")).toBe(true);
+  });
+
+  it("sensitivity: medmar_ticket_memory non può mai far tornare can_issue=true, anche con dati di memoria ricchi/completi", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([]);
+
+    const admin = fakeAdmin([ARRIVAL_ROW], [
+      { tenant_id: TENANT_A, matched_service_id: SVC_ARR, tariff_label: "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR", price_cents: 1025, quantity: 2 },
+    ]);
+    const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR]);
+
+    expect(result.can_issue).toBe(false);
+  });
+});
+
+describe("runMedmarPreflight — coerenza andata/ritorno su 6 tratte", () => {
+  it("andata Napoli->Ischia + ritorno Ischia->Pozzuoli (non speculari) -> status manual_review, can_issue false, warning leg_route_mismatch", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_pozzuoli" ? 14 : null));
+    vi.mocked(routeMapping.isMirrorRouteCode).mockReturnValue(false);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 59 ? [NAPOLI_ISCHIA_CORSA] : idTratta === 14
+        ? [{ id_corsa: 555, id_tratta: 14, partenza_data: "2026-08-25", partenza_ora: "11:10", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 41, id_porto_arrivo: 44, porto_partenza: "ISCHIA", porto_arrivo: "POZZUOLI", nave: "MEDMAR GIULIA" }]
+        : []
+    );
+
+    const admin = fakeAdmin([
+      ARRIVAL_ROW,
+      { id: SVC_DEP, tenant_id: TENANT_A, date: "2026-08-25", time: "11:10", customer_name: "Mario Rossi", pax: 2, vessel: "Medmar", notes: "[practice:AAA]", booking_service_kind: "formula_medmar_pozzuoli", direction: "departure", status: "new" },
+    ]);
+    const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR, SVC_DEP]);
+
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "leg_route_mismatch")).toBe(true);
+    expect(medmarClient.fetchBigliettiVendibiliReadOnly).not.toHaveBeenCalled();
   });
 });
 
@@ -246,9 +428,7 @@ describe("runMedmarPreflight — fail-closed (Medmar non disponibile / auth scad
 
   it("500 Medmar su biglietti vendibili -> status medmar_unavailable, can_issue false", async () => {
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
-    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
-      { id_corsa: 131943, id_tratta: 59, partenza_data: "2026-08-20", partenza_ora: "08:40", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA" },
-    ]);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
     vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockRejectedValue(new medmarClient.MedmarBadResponseError("Medmar ha risposto con errore 500."));
     const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
     expect(result.status).toBe("medmar_unavailable");
@@ -269,10 +449,8 @@ describe("runMedmarPreflight — nessuna chiamata mutativa", () => {
   it("in nessuno scenario viene chiamato un path mutativo Medmar", async () => {
     const assertSpy = vi.spyOn(medmarClient, "assertReadOnlyPath");
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
-    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
-      { id_corsa: 131943, id_tratta: 59, partenza_data: "2026-08-20", partenza_ora: "08:40", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA" },
-    ]);
-    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW]);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW] as never);
     await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
     // fetchCorseReadOnly/fetchBigliettiVendibiliReadOnly sono mockati (non
     // eseguono il vero medmarReadonlyFetch in questo test), quindi il vero
@@ -287,5 +465,10 @@ describe("runMedmarPreflight — nessuna chiamata mutativa", () => {
     const exportNames = Object.keys(medmarClient);
     const suspicious = exportNames.filter((name) => /prenota|disponibilita|scongela|^lock|manuale$/i.test(name));
     expect(suspicious).toEqual([]);
+  });
+
+  it("sensitivity: nessun path contenente 'prenotazioni' è mai raggiungibile tramite assertReadOnlyPath", () => {
+    expect(() => medmarClient.assertReadOnlyPath("/prenotazioni")).toThrow(medmarClient.MedmarMutationBlockedError);
+    expect(() => medmarClient.assertReadOnlyPath("/prenotazioni/lock-disponibilita")).toThrow(medmarClient.MedmarMutationBlockedError);
   });
 });

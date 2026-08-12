@@ -132,7 +132,7 @@ type MedmarPreflightLeg = {
 type MedmarPreflightResult = {
   ok: boolean;
   can_issue: boolean;
-  status: "ok" | "no_match" | "ambiguous" | "not_medmar" | "manual_review" | "medmar_unavailable" | "medmar_auth_expired" | "error";
+  status: "ok" | "no_match" | "ambiguous" | "not_medmar" | "manual_review" | "route_mismatch" | "unsupported_passenger_type" | "medmar_unavailable" | "medmar_auth_expired" | "error";
   customer_name: string | null;
   pratica: string | null;
   pax: number;

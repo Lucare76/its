@@ -6,34 +6,17 @@
  * inventato. Risposta paginata stile Laravel: { data: [...], current_page,
  * last_page, total, ... }.
  *
- * GET .../api/biglietti/vendibili/{id_corsa}: schema NON ancora confermato
- * da una risposta reale in questa fase — resta parsing permissivo
- * multi-chiave (stesso pattern di lib/server/radius-adapter.ts), da
- * restringere quando anche questo endpoint sarà verificato.
+ * GET .../api/biglietti/vendibili/{id_corsa}: schema reale CONFERMATO da
+ * risposte JSON reali (Fase 1.6). Parsing STRETTO: ogni campo viene letto
+ * dalla sua chiave reale esatta, MAI da un elenco di alias alternativi. Se
+ * l'envelope della risposta non è riconoscibile (né array, né { data: [...] }),
+ * il parsing fallisce esplicitamente (fail closed) — vedi schemaValid.
  *
  * Nessun valore viene mai inventato: se un campo non è presente, resta null
  * e va segnalato come warning dal chiamante (preflight.ts).
  */
 
 import type { CorsaMedmarRaw, BigliettoVendibileRaw, MedmarPaginatedEnvelope } from "./types";
-
-function asArray(json: unknown, ...keys: string[]): unknown[] {
-  if (Array.isArray(json)) return json;
-  if (json && typeof json === "object") {
-    for (const key of keys) {
-      const val = (json as Record<string, unknown>)[key];
-      if (Array.isArray(val)) return val;
-    }
-  }
-  return [];
-}
-
-function pick(row: Record<string, unknown>, ...keys: string[]): unknown {
-  for (const key of keys) {
-    if (row[key] !== undefined && row[key] !== null) return row[key];
-  }
-  return null;
-}
 
 function asStringOrNumber(value: unknown): number | string | null {
   if (typeof value === "number" || typeof value === "string") return value;
@@ -53,6 +36,10 @@ function asNumber(value: unknown): number | null {
 function asFlag(value: unknown): boolean | number | null {
   if (typeof value === "boolean" || typeof value === "number") return value;
   return null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
 }
 
 function parseCorsaRow(row: Record<string, unknown>): CorsaMedmarRaw {
@@ -90,48 +77,112 @@ export function parseCorsePage(json: unknown): { rows: CorsaMedmarRaw[]; paginat
   return { rows, pagination };
 }
 
-export function parseBigliettiVendibiliResponse(json: unknown): BigliettoVendibileRaw[] {
-  const rows = asArray(json, "biglietti", "data", "results", "items") as Record<string, unknown>[];
-  return rows.map((row) => {
-    const rawPrice = pick(row, "prezzo", "prezzo_cents", "price", "importo");
-    const priceNumber = typeof rawPrice === "number" ? rawPrice : typeof rawPrice === "string" ? Number(rawPrice.replace(",", ".")) : null;
-    // Se il valore sembra già espresso in centesimi (intero grande) lo si
-    // lascia come tale è impossibile saperlo con certezza senza una risposta
-    // reale: qui si assume EURO (come da esempio "10.25" osservato nella
-    // memoria ticket esistente) e si converte in centesimi.
-    const priceCents = priceNumber !== null && Number.isFinite(priceNumber) ? Math.round(priceNumber * 100) : null;
-
-    return {
-      id_biglietto: asStringOrNumber(pick(row, "id_biglietto", "idBiglietto")),
-      id_tariffa: asStringOrNumber(pick(row, "id_tariffa", "idTariffa")),
-      label: asString(pick(row, "label", "descrizione", "tariffa_label", "nome")),
-      prezzo_cents: priceCents,
-    };
-  });
+function extractBigliettiRows(json: unknown): Record<string, unknown>[] | null {
+  if (Array.isArray(json)) return json as Record<string, unknown>[];
+  if (json && typeof json === "object" && Array.isArray((json as Record<string, unknown>).data)) {
+    return (json as Record<string, unknown>).data as Record<string, unknown>[];
+  }
+  return null;
 }
 
-export type ArTariffMatch = {
-  tariff: BigliettoVendibileRaw | null;
-  tassaSbarco: BigliettoVendibileRaw | null;
-};
+function parseBigliettoRow(row: Record<string, unknown>): BigliettoVendibileRaw {
+  return {
+    id_corsa: asStringOrNumber(row.id_corsa),
+    id_biglietto: asStringOrNumber(row.id_biglietto),
+    id_tipologia_passeggero: asNumber(row.id_tipologia_passeggero),
+    id_tariffa: asStringOrNumber(row.id_tariffa),
+    id_log: asStringOrNumber(row.id_log),
+    id_iva: asStringOrNumber(row.id_iva),
+    id_gruppo: asStringOrNumber(row.id_gruppo),
+    biglietto: asString(row.biglietto),
+    prezzo: asNumber(row.prezzo),
+    prezzo_prevendita: asNumber(row.prezzo_prevendita),
+    quantita: asNumber(row.quantita),
+    flag_ar: asString(row.flag_ar),
+    flag_collegabile: asFlag(row.flag_collegabile),
+    flag_targa: asFlag(row.flag_targa),
+    checkin: asBoolean(row.checkin),
+    re: row.re ?? null,
+  };
+}
+
+/**
+ * Parsa GET .../api/biglietti/vendibili/{id_corsa}. schemaValid=false se
+ * l'envelope non è riconoscibile (né array, né { data: [...] }): il
+ * chiamante (client.ts) deve fail-closed in quel caso, non trattare come
+ * "0 biglietti". Righe singole con campi mancanti restano con quei campi a
+ * null (mai un valore indovinato) — è la selezione (findArTariffAndTax) a
+ * decidere se i dati disponibili bastano per can_issue.
+ */
+export function parseBigliettiVendibiliResponse(json: unknown): { rows: BigliettoVendibileRaw[]; schemaValid: boolean } {
+  const rawRows = extractBigliettiRows(json);
+  if (rawRows === null) {
+    return { rows: [], schemaValid: false };
+  }
+  return { rows: rawRows.map(parseBigliettoRow), schemaValid: true };
+}
+
+/** id_tipologia_passeggero osservato per l'adulto sulla tariffa AR (esempio reale verificato). */
+export const ADULT_TIPOLOGIA_PASSEGGERO = 1;
+/** id_tipologia_passeggero osservato per la tassa di sbarco in emissioni reali. */
+export const TASSA_SBARCO_TIPOLOGIA_PASSEGGERO = 32;
 
 const AR_TARIFF_LABEL_HINT = /PASSAGGIO PONTE ADULTO.*TARIFFA SPECIALE AR/i;
 const TASSA_SBARCO_HINT = /TASSA\s+DI\s+SBARCO/i;
 
+function isRoundTripFlag(flagAr: string | null): boolean {
+  return flagAr?.trim().toUpperCase() === "R";
+}
+
+export type ArTariffSelectionResult =
+  | { kind: "not_found" }
+  | { kind: "unsupported_passenger_type"; row: BigliettoVendibileRaw }
+  | {
+      kind: "found";
+      tariff: BigliettoVendibileRaw;
+      tassaSbarco: BigliettoVendibileRaw | null;
+      /** Non-null quando una tassa di sbarco è stata individuata nella risposta ma i dati non bastano a determinarla con certezza. */
+      taxIssue: "ambiguous" | "price_missing" | null;
+    };
+
 /**
- * Individua la tariffa "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR" e
- * l'eventuale riga collegata "TASSA DI SBARCO" tra i biglietti vendibili
- * restituiti da Medmar. Match primario sul label; id_biglietto=370/id_tariffa=6
- * (osservati realmente in un esempio) sono usati solo come conferma
- * secondaria, MAI come unico criterio (potrebbero non essere invarianti).
+ * Individua il biglietto "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR" e
+ * l'eventuale "TASSA DI SBARCO" tra i biglietti vendibili di una corsa.
+ *
+ * Fonte primaria di selezione: descrizione (biglietto) + flag_ar + tipologia
+ * passeggero live — MAI un id_biglietto/id_tariffa hardcoded come regola
+ * assoluta (possono cambiare tra listini/configurazioni). Gli ID live
+ * vengono comunque riportati nel risultato per un'eventuale Fase 2.
+ *
+ * Se un candidato corrisponde per descrizione+flag_ar ma la sua tipologia
+ * passeggero non è quella adulto nota (1), il gestionale contiene una
+ * tipologia non ancora mappata: kind "unsupported_passenger_type", mai
+ * accettata silenziosamente come adulto.
  */
-export function findArTariffAndTax(rows: BigliettoVendibileRaw[]): ArTariffMatch {
-  const tariff =
-    rows.find((r) => r.label && AR_TARIFF_LABEL_HINT.test(r.label)) ??
-    rows.find((r) => String(r.id_biglietto) === "370" && String(r.id_tariffa) === "6") ??
-    null;
+export function findArTariffAndTax(rows: BigliettoVendibileRaw[]): ArTariffSelectionResult {
+  const candidates = rows.filter((r) => r.biglietto && AR_TARIFF_LABEL_HINT.test(r.biglietto) && isRoundTripFlag(r.flag_ar));
 
-  const tassaSbarco = rows.find((r) => r.label && TASSA_SBARCO_HINT.test(r.label)) ?? null;
+  if (candidates.length === 0) {
+    return { kind: "not_found" };
+  }
 
-  return { tariff, tassaSbarco };
+  const adult = candidates.find((r) => r.id_tipologia_passeggero === ADULT_TIPOLOGIA_PASSEGGERO);
+  if (!adult) {
+    return { kind: "unsupported_passenger_type", row: candidates[0]! };
+  }
+
+  const taxMatches = rows.filter((r) => r.biglietto && TASSA_SBARCO_HINT.test(r.biglietto));
+  let tassaSbarco: BigliettoVendibileRaw | null = null;
+  let taxIssue: "ambiguous" | "price_missing" | null = null;
+
+  if (taxMatches.length > 1) {
+    taxIssue = "ambiguous";
+  } else if (taxMatches.length === 1) {
+    tassaSbarco = taxMatches[0]!;
+    if (tassaSbarco.prezzo == null) {
+      taxIssue = "price_missing";
+    }
+  }
+
+  return { kind: "found", tariff: adult, tassaSbarco, taxIssue };
 }

@@ -274,5 +274,9 @@ export async function fetchBigliettiVendibiliReadOnly(idCorsa: number | string):
   const search = new URLSearchParams({ id_tariffa: "", id_biglietto: "" });
   const path = `${MEDMAR_API_PATH_PREFIX}/biglietti/vendibili/${idCorsa}?${search.toString()}`;
   const json = await medmarReadonlyFetch(path);
-  return parseBigliettiVendibiliResponse(json);
+  const { rows, schemaValid } = parseBigliettiVendibiliResponse(json);
+  if (!schemaValid) {
+    throw new MedmarBadResponseError("Risposta Medmar biglietti/vendibili non conforme allo schema atteso (fail-closed).");
+  }
+  return rows;
 }

@@ -1,5 +1,6 @@
 /**
- * Orchestrazione del preflight Medmar One Click — Fase 1.5 "preflight live".
+ * Orchestrazione del preflight Medmar One Click — Fase 1.6 "mappatura
+ * completa tratte + schema reale biglietti vendibili".
  *
  * Usa le 2 chiamate READ-ONLY reali verso Medmar (ricerca corse, biglietti
  * vendibili) per determinare corsa/tariffa. course-matcher.ts (orari
@@ -8,13 +9,15 @@
  *
  * FAIL-CLOSED: se Medmar non risponde (rete/timeout/5xx) o il token è
  * scaduto (401/403), can_issue è SEMPRE false, indipendentemente da quello
- * che direbbe il fallback locale.
+ * che direbbe il fallback locale. Lo stesso vale per dati strutturali
+ * incoerenti (route_mismatch), tipologie passeggero non mappate
+ * (unsupported_passenger_type) e prezzi/tasse live mancanti o ambigui.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveRouteCodeFromService, matchCourseByRouteAndTime } from "./course-matcher";
 import { mapTariffFromTicketMemory } from "./ticket-mapper";
-import { getIdTrattaForRouteCode, getExpectedPortsForRouteCode } from "./route-mapping";
+import { getIdTrattaForRouteCode, getExpectedPortsForRouteCode, isMirrorRouteCode } from "./route-mapping";
 import type { CorsaMedmarRaw } from "./types";
 import type { MedmarTicketRouteCode } from "@/lib/medmar-ticket-memory";
 import {
@@ -72,18 +75,32 @@ function isCandidateCorsa(c: CorsaMedmarRaw, expected: { idTratta: number; date:
   return true;
 }
 
-function checkPortMismatch(c: CorsaMedmarRaw, routeCode: MedmarTicketRouteCode, warnings: MedmarPreflightWarning[]): void {
+/**
+ * Verifica strutturale BLOCCANTE della corsa candidata: id_tratta è già
+ * garantito da isCandidateCorsa, qui si controllano id_porto_partenza,
+ * id_porto_arrivo e la presenza di partenza_ora. Una corsa non viene MAI
+ * accettata solo perché id_tratta coincide se i port IDs non coincidono —
+ * qualunque incoerenza produce route_mismatch (can_issue sempre false), non
+ * un semplice warning.
+ */
+function findStructuralMismatches(c: CorsaMedmarRaw, routeCode: MedmarTicketRouteCode): MedmarPreflightWarning[] {
+  const mismatches: MedmarPreflightWarning[] = [];
   const expectedPorts = getExpectedPortsForRouteCode(routeCode);
-  if (!expectedPorts) return;
-  if (c.id_porto_partenza !== null && c.id_porto_partenza !== expectedPorts.idPortoPartenza) {
-    warnings.push({ code: "port_mismatch", message: `id_porto_partenza della corsa (${c.id_porto_partenza}) diverso da quello atteso per la tratta (${expectedPorts.idPortoPartenza}).` });
+  if (expectedPorts) {
+    if (c.id_porto_partenza !== null && c.id_porto_partenza !== expectedPorts.idPortoPartenza) {
+      mismatches.push({ code: "port_mismatch", message: `id_porto_partenza della corsa (${c.id_porto_partenza}) diverso da quello atteso per la tratta (${expectedPorts.idPortoPartenza}).` });
+    }
+    if (c.id_porto_arrivo !== null && c.id_porto_arrivo !== expectedPorts.idPortoArrivo) {
+      mismatches.push({ code: "port_mismatch", message: `id_porto_arrivo della corsa (${c.id_porto_arrivo}) diverso da quello atteso per la tratta (${expectedPorts.idPortoArrivo}).` });
+    }
   }
-  if (c.id_porto_arrivo !== null && c.id_porto_arrivo !== expectedPorts.idPortoArrivo) {
-    warnings.push({ code: "port_mismatch", message: `id_porto_arrivo della corsa (${c.id_porto_arrivo}) diverso da quello atteso per la tratta (${expectedPorts.idPortoArrivo}).` });
+  if (c.partenza_ora === null) {
+    mismatches.push({ code: "route_structural_incomplete", message: "partenza_ora mancante nella corsa restituita da Medmar: dati strutturali incompleti." });
   }
+  return mismatches;
 }
 
-type LiveLegStatus = "ok" | "no_match" | "ambiguous" | "manual_review" | "medmar_unavailable" | "medmar_auth_expired";
+type LiveLegStatus = "ok" | "no_match" | "ambiguous" | "route_mismatch" | "manual_review" | "medmar_unavailable" | "medmar_auth_expired";
 
 async function resolveLegLive(
   row: MedmarPreflightServiceRow,
@@ -164,7 +181,14 @@ async function resolveLegLive(
     }
 
     const only = candidates[0]!;
-    checkPortMismatch(only, routeCode, warnings);
+    const structuralMismatches = findStructuralMismatches(only, routeCode);
+    if (structuralMismatches.length > 0) {
+      warnings.push(...structuralMismatches);
+      leg.id_corsa = only.id_corsa;
+      leg.vessel = only.nave ?? leg.vessel;
+      return { leg, liveStatus: "route_mismatch" };
+    }
+
     leg.id_corsa = only.id_corsa;
     leg.vessel = only.nave ?? leg.vessel;
     leg.matched_departure_time = only.partenza_ora;
@@ -256,12 +280,30 @@ export async function runMedmarPreflight(
 
   const legStatuses = [outwardOutcome?.liveStatus, returnOutcome?.liveStatus].filter((s): s is LiveLegStatus => Boolean(s));
 
+  // Con 6 tratte mappate, andata e ritorno potrebbero risolvere su porti
+  // diversi (es. andata Napoli->Ischia + ritorno Ischia->Pozzuoli): la
+  // tariffa AR è pensata per un vero andata/ritorno sulla stessa coppia di
+  // porti, quindi un gruppo con gambe non speculari richiede revisione
+  // manuale, non un id_corsa di riferimento scelto arbitrariamente.
+  const outwardRouteCode = outwardOutcome?.leg.route_code ?? null;
+  const returnRouteCode = returnOutcome?.leg.route_code ?? null;
+  const legRouteMismatch =
+    outwardRouteCode !== null && returnRouteCode !== null && !isMirrorRouteCode(outwardRouteCode, returnRouteCode);
+  if (legRouteMismatch) {
+    warnings.push({
+      code: "leg_route_mismatch",
+      message: `La tratta di andata (${outwardRouteCode}) e quella di ritorno (${returnRouteCode}) non sono l'una lo specchio dell'altra: revisione manuale richiesta.`,
+    });
+  }
+
   let status: MedmarPreflightResult["status"];
   if (legStatuses.includes("medmar_auth_expired")) status = "medmar_auth_expired";
   else if (legStatuses.includes("medmar_unavailable")) status = "medmar_unavailable";
+  else if (legStatuses.includes("route_mismatch")) status = "route_mismatch";
   else if (legStatuses.includes("no_match")) status = "no_match";
   else if (legStatuses.includes("ambiguous")) status = "ambiguous";
   else if (legStatuses.includes("manual_review")) status = "manual_review";
+  else if (legRouteMismatch) status = "manual_review";
   else status = "ok";
 
   const baseResult: MedmarPreflightResult = {
@@ -284,9 +326,9 @@ export async function runMedmarPreflight(
 
   try {
     const vendibili = await fetchBigliettiVendibiliReadOnly(referenceLeg.id_corsa);
-    const { tariff: tariffRow, tassaSbarco } = findArTariffAndTax(vendibili);
+    const selection = findArTariffAndTax(vendibili);
 
-    if (!tariffRow) {
+    if (selection.kind === "not_found") {
       const fallback = await mapTariffFromTicketMemory(admin, tenantId, serviceIds);
       return {
         ...baseResult,
@@ -297,12 +339,48 @@ export async function runMedmarPreflight(
       };
     }
 
+    if (selection.kind === "unsupported_passenger_type") {
+      return {
+        ...baseResult,
+        status: "unsupported_passenger_type",
+        warnings: [...warnings, { code: "unsupported_passenger_type", message: `Trovato un biglietto AR compatibile per descrizione ma con id_tipologia_passeggero=${selection.row.id_tipologia_passeggero} non mappato (atteso adulto): revisione manuale richiesta.` }],
+      };
+    }
+
+    const { tariff: tariffRow, tassaSbarco, taxIssue } = selection;
+
+    // Prezzo live mancante, nullo o incoerente: mai can_issue=true su dati incompleti.
+    if (tariffRow.prezzo == null || !Number.isFinite(tariffRow.prezzo)) {
+      return {
+        ...baseResult,
+        status: "manual_review",
+        warnings: [...warnings, { code: "ticket_data_incomplete", message: "Prezzo della tariffa AR mancante o non numerico nella risposta Medmar live: dati insufficienti per l'emissione." }],
+      };
+    }
+
+    if (taxIssue) {
+      return {
+        ...baseResult,
+        status: "manual_review",
+        warnings: [
+          ...warnings,
+          {
+            code: "ticket_data_incomplete",
+            message: taxIssue === "ambiguous"
+              ? "Più righe TASSA DI SBARCO trovate nella risposta Medmar live: impossibile identificarla con certezza."
+              : "Tassa di sbarco individuata ma senza prezzo nella risposta Medmar live: impossibile calcolare il totale con certezza.",
+          },
+        ],
+      };
+    }
+
     const taxes: MedmarPreflightTaxLine[] = tassaSbarco
-      ? [{ label: tassaSbarco.label ?? "TASSA DI SBARCO", amount_cents: tassaSbarco.prezzo_cents }]
+      ? [{ label: tassaSbarco.biglietto ?? "TASSA DI SBARCO", amount_cents: Math.round(tassaSbarco.prezzo! * 100) }]
       : [];
 
-    const unitTotal = (tariffRow.prezzo_cents ?? 0) + (tassaSbarco?.prezzo_cents ?? 0);
-    const expectedTotalCents = tariffRow.prezzo_cents != null ? unitTotal * pax : null;
+    const unitPriceCents = Math.round(tariffRow.prezzo * 100);
+    const unitTotal = unitPriceCents + (taxes[0]?.amount_cents ?? 0);
+    const expectedTotalCents = unitTotal * pax;
 
     return {
       ...baseResult,
@@ -310,8 +388,8 @@ export async function runMedmarPreflight(
       tariff: {
         id_biglietto: tariffRow.id_biglietto,
         id_tariffa: tariffRow.id_tariffa,
-        label: tariffRow.label,
-        unit_price_cents: tariffRow.prezzo_cents,
+        label: tariffRow.biglietto,
+        unit_price_cents: unitPriceCents,
         source: "medmar_live",
       },
       taxes,
