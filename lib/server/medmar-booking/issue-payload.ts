@@ -1,4 +1,4 @@
-import { findArTariffAndTax, resolveBigliettoLabel } from "./live-parser";
+import { findArTariffAndTax, resolveBigliettoLabel, TASSA_SBARCO_TIPOLOGIA_PASSEGGERO } from "./live-parser";
 import type { BigliettoVendibileRaw, MedmarPreflightLeg, MedmarPreflightResult } from "./types";
 import type {
   MedmarBookingDetailLine,
@@ -28,6 +28,12 @@ function requiredText(value: string | null | undefined, field: string): string {
   const cleaned = (value ?? "").trim();
   if (!cleaned) throw new MedmarIssuePayloadError(`${field} mancante.`);
   return cleaned;
+}
+
+function assertTassaSbarcoTipologia(tax: BigliettoVendibileRaw): void {
+  if (tax.id_tipologia_passeggero !== TASSA_SBARCO_TIPOLOGIA_PASSEGGERO) {
+    throw new MedmarIssuePayloadError("tassa di sbarco con id_tipologia_passeggero inatteso: dati biglietto incompleti.");
+  }
 }
 
 function splitName(fullName: string | null): { nome: string; cognome: string } {
@@ -70,6 +76,7 @@ export function buildLockTickets(preflight: MedmarPreflightResult, vendibiliByCo
       descrizione: requiredText(label, "descrizione biglietto adulto"),
     });
     if (selection.tassaSbarco) {
+      assertTassaSbarcoTipologia(selection.tassaSbarco);
       const taxLabel = resolveBigliettoLabel(selection.tassaSbarco).label;
       lines.push({
         id_corsa: leg.id_corsa!,
@@ -142,6 +149,7 @@ export function buildBookingPayload(input: {
 
     if (selection.tassaSbarco) {
       const tax = selection.tassaSbarco;
+      assertTassaSbarcoTipologia(tax);
       dettaglio.push({
         biglietto: requiredText(resolveBigliettoLabel(tax).label, "label tassa"),
         flag_ar: flagAr,

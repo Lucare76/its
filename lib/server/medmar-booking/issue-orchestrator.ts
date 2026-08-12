@@ -5,8 +5,8 @@ import { runMedmarPreflight } from "./preflight";
 import { fetchBigliettiVendibiliReadOnly } from "./client";
 import { getMedmarIssueConfig, validateMedmarIssueConfig } from "./issue-config";
 import { createIssueRepository } from "./issue-repository";
-import { createMedmarMutationClient, MedmarMutationDefinitiveError, MedmarMutationRemoteUnknownError } from "./medmar-mutation-client";
-import { buildBookingPayload, buildLockTickets, MedmarIssuePayloadError, validateAdultFrozenTickets } from "./issue-payload";
+import { createMedmarMutationClient, MedmarMutationRemoteUnknownError } from "./medmar-mutation-client";
+import { buildBookingPayload, buildIssueCustomer, buildLockTickets, validateAdultFrozenTickets } from "./issue-payload";
 import { resolveMedmarIssueSessionContext } from "./issue-session-context";
 import type {
   IssueOrchestratorInput,
@@ -29,6 +29,21 @@ const IN_PROGRESS: ReadonlySet<MedmarIssueStatus> = new Set([
   "payment_started",
   "paid",
   "unlock_started",
+]);
+
+// Fase 2B.3: questi stati non sono piu' auto-retryable. Dopo il fix
+// stage-aware (ogni errore successivo all'invio di una mutazione remota
+// diventa remote_state_unknown), booking_failed_definitive/
+// payment_failed_definitive dovrebbero essere raggiungibili solo quando e'
+// dimostrabile che nulla e' stato inviato a Medmar — ma preferenza prudente:
+// restano bloccanti finche' non esiste un reconciliation flow reale.
+// manual_review era gia' concettualmente bloccante ma prima non aveva un
+// branch dedicato in existingAttemptResult e sarebbe silenziosamente
+// ripartito: bug chiuso qui.
+const BLOCKED_NO_RETRY: ReadonlySet<MedmarIssueStatus> = new Set([
+  "booking_failed_definitive",
+  "payment_failed_definitive",
+  "manual_review",
 ]);
 
 function buildIdempotencyKey(serviceIds: string[]): string {
@@ -64,11 +79,15 @@ async function transition(input: {
   errorCode?: string | null;
 }) {
   const previous = input.attempt.status;
-  const updated = await input.repo.updateAttempt(input.attempt.id, {
-    ...input.patch,
-    status: input.next,
-    last_error_code: input.errorCode ?? input.patch?.last_error_code ?? null,
-  });
+  const updated = await input.repo.updateAttempt(
+    input.attempt.id,
+    {
+      ...input.patch,
+      status: input.next,
+      last_error_code: input.errorCode ?? input.patch?.last_error_code ?? null,
+    },
+    previous
+  );
   await input.repo.addEvent({
     tenantId: input.tenantId,
     attemptId: input.attempt.id,
@@ -107,6 +126,16 @@ function existingAttemptResult(attempt: MedmarIssueAttempt, idempotencyKey: stri
   }
   if (IN_PROGRESS.has(attempt.status)) {
     return { ok: false, status: "already_in_progress", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Emissione Medmar gia in corso.", retry_allowed: false };
+  }
+  if (BLOCKED_NO_RETRY.has(attempt.status)) {
+    return {
+      ok: false,
+      status: "manual_review",
+      idempotency_key: idempotencyKey,
+      attempt_id: attempt.id,
+      error: "Emissione Medmar richiede verifica manuale prima di un nuovo tentativo.",
+      retry_allowed: false,
+    };
   }
   return null;
 }
@@ -195,6 +224,15 @@ export function createMedmarIssueOrchestrator(deps?: {
       return { ok: false, status: "manual_review", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Servizi non trovati nel tenant corrente.", retry_allowed: false };
     }
 
+    // Validazioni puramente locali (dati cliente) PRIMA di qualunque
+    // chiamata Medmar: un dato mancante non deve mai costare un lock reale.
+    try {
+      buildIssueCustomer(services);
+    } catch (err) {
+      await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "manual_review", eventType: "customer_data_invalid", errorCode: sanitizeError(err) });
+      return { ok: false, status: "manual_review", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Dati cliente incompleti per l'emissione Medmar.", retry_allowed: false };
+    }
+
     const fetchVendibili = deps?.fetchVendibili ?? fetchBigliettiVendibiliReadOnly;
     const vendibiliByCorsa = new Map<string, Awaited<ReturnType<typeof fetchBigliettiVendibiliReadOnly>>>();
     for (const leg of [preflight.outward, preflight.return]) {
@@ -204,7 +242,6 @@ export function createMedmarIssueOrchestrator(deps?: {
     }
 
     let lockTickets;
-    let bookingPayload;
     try {
       lockTickets = buildLockTickets(preflight, vendibiliByCorsa);
     } catch (err) {
@@ -212,19 +249,94 @@ export function createMedmarIssueOrchestrator(deps?: {
       return { ok: false, status: "manual_review", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Payload Medmar non costruibile con dati verificati.", retry_allowed: false };
     }
 
+    // Nulla e' ancora congelato in questo blocco: un fallimento qui (timeout,
+    // rete, rifiuto definitivo, o persist locale) non richiede scongela.
+    // Solo l'esito ambiguo della chiamata lock stessa (rete/timeout/5xx)
+    // diventa remote_state_unknown; tutto il resto resta lock_failed,
+    // provabilmente retryable perche' nessun posto e' stato congelato.
+    let lock;
     try {
       attempt = await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "lock_started", eventType: "lock_started" });
-      const lock = await mutationClient.lockAvailability({ biglietti: lockTickets, utente: sessionContext.turnoId });
-      if (lock.nonDisponibili.length > 0) {
-        await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "lock_failed", eventType: "lock_not_available", patch: { lock_snapshot: { nonDisponibili: lock.nonDisponibili.length } }, errorCode: "non_disponibili" });
-        return { ok: false, status: "lock_failed", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Medmar segnala biglietti non disponibili.", retry_allowed: true };
+      lock = await mutationClient.lockAvailability({ biglietti: lockTickets, utente: sessionContext.turnoId });
+    } catch (lockErr) {
+      const lockRemoteUnknown = lockErr instanceof MedmarMutationRemoteUnknownError;
+      await transition({
+        repo,
+        attempt,
+        tenantId: input.tenantId,
+        userId: input.userId,
+        next: lockRemoteUnknown ? "remote_state_unknown" : "lock_failed",
+        eventType: lockRemoteUnknown ? "remote_state_unknown" : "lock_failed",
+        patch: { remote_state_unknown: lockRemoteUnknown, last_error_message: lockErr instanceof Error ? lockErr.message : "Errore lock Medmar." },
+        errorCode: sanitizeError(lockErr),
+      });
+      if (lockRemoteUnknown) {
+        return { ok: false, status: "remote_state_unknown", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Stato Medmar da verificare manualmente. Non riprovare l'emissione.", retry_allowed: false };
       }
-      const frozenAdults = validateAdultFrozenTickets(lockTickets, lock.congelati);
-      attempt = await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "locked", eventType: "locked", patch: { lock_snapshot: { frozen_adults: frozenAdults } } });
+      return { ok: false, status: "lock_failed", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Lock Medmar fallito.", retry_allowed: true };
+    }
+    if (lock.nonDisponibili.length > 0) {
+      await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "lock_failed", eventType: "lock_not_available", patch: { lock_snapshot: { nonDisponibili: lock.nonDisponibili.length } }, errorCode: "non_disponibili" });
+      return { ok: false, status: "lock_failed", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Medmar segnala biglietti non disponibili.", retry_allowed: true };
+    }
 
+    // Da qui il lock e' riuscito: posti reali congelati su Medmar. Qualunque
+    // fallimento PRIMA che la POST /prenotazioni sia realmente inviata e'
+    // dimostrabilmente sicuro da rilasciare via scongela — booking mai
+    // inviato, stato lock non ambiguo. Policy scongela Fase 2B.3: mai
+    // cleanup automatico universale, solo quando queste condizioni sono
+    // dimostrabili; se anche lo scongela stesso fallisce in modo ambiguo,
+    // non possiamo piu' provare che i posti siano stati rilasciati, quindi
+    // diventa remote_state_unknown.
+    let frozenAdults;
+    let bookingPayload;
+    try {
+      frozenAdults = validateAdultFrozenTickets(lockTickets, lock.congelati);
+      attempt = await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "locked", eventType: "locked", patch: { lock_snapshot: { frozen_adults: frozenAdults } } });
       bookingPayload = buildBookingPayload({ preflight, services, vendibiliByCorsa, frozenAdults, config, sessionContext });
       attempt = await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "booking_started", eventType: "booking_started", patch: { booking_payload_hash: hashPayload(bookingPayload) } });
+    } catch (preSendErr) {
+      let unlockedSafely = true;
+      try {
+        await mutationClient.unlockAvailability({ biglietti: lockTickets, utente: sessionContext.turnoId });
+      } catch {
+        unlockedSafely = false;
+      }
+      if (!unlockedSafely) {
+        await transition({
+          repo,
+          attempt,
+          tenantId: input.tenantId,
+          userId: input.userId,
+          next: "remote_state_unknown",
+          eventType: "lock_release_ambiguous",
+          patch: { remote_state_unknown: true, last_error_message: sanitizeError(preSendErr) },
+          errorCode: sanitizeError(preSendErr),
+        });
+        return { ok: false, status: "remote_state_unknown", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Stato Medmar da verificare manualmente. Non riprovare l'emissione.", retry_allowed: false };
+      }
+      await transition({
+        repo,
+        attempt,
+        tenantId: input.tenantId,
+        userId: input.userId,
+        next: "lock_failed",
+        eventType: "pre_booking_validation_failed_unlocked",
+        errorCode: sanitizeError(preSendErr),
+      });
+      return { ok: false, status: "lock_failed", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Payload prenotazione non valido: posti rilasciati.", retry_allowed: true };
+    }
+
+    // Da qui una mutazione Medmar che POTREBBE gia' essere stata applicata
+    // (createBooking) sta per partire: qualunque errore successivo, di
+    // qualunque origine (rete, DB locale, transizione di stato), diventa
+    // remote_state_unknown e resta terminale — un secondo tentativo con la
+    // stessa idempotency key rieseguirebbe altrimenti lock+booking+payment
+    // da zero, con rischio reale di doppia prenotazione/doppio addebito.
+    let remoteBookingApplied = false;
+    try {
       const booking = await mutationClient.createBooking(bookingPayload);
+      remoteBookingApplied = true;
       const bookingTotalCents = centsFromEuros(booking.prezzo_totale);
       attempt = await transition({
         repo,
@@ -276,15 +388,8 @@ export function createMedmarIssueOrchestrator(deps?: {
         existing: false,
       };
     } catch (err) {
-      const remoteUnknown = err instanceof MedmarMutationRemoteUnknownError;
-      const definitive = err instanceof MedmarMutationDefinitiveError || err instanceof MedmarIssuePayloadError;
-      const next: MedmarIssueStatus = remoteUnknown
-        ? "remote_state_unknown"
-        : attempt.status === "payment_started"
-          ? "payment_failed_definitive"
-          : attempt.status === "booking_started"
-            ? "booking_failed_definitive"
-            : "lock_failed";
+      const remoteUnknown = remoteBookingApplied || err instanceof MedmarMutationRemoteUnknownError;
+      const next: MedmarIssueStatus = remoteUnknown ? "remote_state_unknown" : "booking_failed_definitive";
       await transition({
         repo,
         attempt,
@@ -292,13 +397,13 @@ export function createMedmarIssueOrchestrator(deps?: {
         userId: input.userId,
         next,
         eventType: next,
-        patch: { remote_state_unknown: remoteUnknown, last_error_message: definitive || remoteUnknown ? err.message : "Errore emissione Medmar." },
+        patch: { remote_state_unknown: remoteUnknown, last_error_message: err instanceof Error ? err.message : "Errore emissione Medmar." },
         errorCode: sanitizeError(err),
       });
       if (remoteUnknown) {
         return { ok: false, status: "remote_state_unknown", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Stato Medmar da verificare manualmente. Non riprovare l'emissione.", retry_allowed: false };
       }
-      return { ok: false, status: next, idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Emissione Medmar interrotta.", retry_allowed: next === "lock_failed" };
+      return { ok: false, status: next, idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Emissione Medmar interrotta.", retry_allowed: false };
     }
   };
 }

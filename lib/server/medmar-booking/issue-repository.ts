@@ -74,15 +74,20 @@ export function createIssueRepository(admin: SupabaseClient): IssueRepository {
       return { kind: "existing", attempt: normalizeAttempt(existing.data as Record<string, unknown>) };
     },
 
-    async updateAttempt(id, patch) {
+    async updateAttempt(id, patch, expectedStatus) {
+      // Conditional update (optimistic locking): only applies if the row is
+      // still in the status the caller last observed, closing the TOCTOU gap
+      // where two concurrent requests could both act on a stale read of the
+      // same attempt row.
       const update = await admin
         .from("medmar_issuing_attempts")
         .update(patch)
         .eq("id", id)
+        .eq("status", expectedStatus)
         .select("*")
         .single();
       if (update.error || !update.data) {
-        throw new Error("medmar_issue_attempt_update_failed");
+        throw new Error("medmar_issue_attempt_conflict");
       }
       return normalizeAttempt(update.data as Record<string, unknown>);
     },

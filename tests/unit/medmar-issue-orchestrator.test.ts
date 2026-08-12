@@ -53,7 +53,7 @@ function makeRepo(existing?: MedmarIssueAttempt): IssueRepository & { current: M
       store.created = true;
       return { kind: "created", attempt: store.current };
     },
-    async updateAttempt(_id, patch) {
+    async updateAttempt(_id, patch, _expectedStatus) {
       store.current = { ...store.current, ...patch, updated_at: new Date().toISOString() };
       return store.current;
     },
@@ -212,11 +212,23 @@ describe("medmar issue orchestrator", () => {
     expect(client.createBooking).not.toHaveBeenCalled();
   });
 
-  it("frozen adulto mancante -> lock_failed senza booking", async () => {
+  it("frozen adulto mancante -> lock_failed senza booking, scongela chiamato (lock riuscito, booking mai inviato)", async () => {
     const client = mutationClient({ lockAvailability: vi.fn().mockResolvedValue({ nonDisponibili: [], congelati: [] }) });
     const result = await run({ mutationClient: client });
     expect(result.ok).toBe(false);
     expect(result.status).toBe("lock_failed");
+    expect(client.createBooking).not.toHaveBeenCalled();
+    expect(client.unlockAvailability).toHaveBeenCalledTimes(1);
+  });
+
+  it("frozen adulto mancante e scongela stesso fallisce -> remote_state_unknown (non possiamo provare il rilascio)", async () => {
+    const client = mutationClient({
+      lockAvailability: vi.fn().mockResolvedValue({ nonDisponibili: [], congelati: [] }),
+      unlockAvailability: vi.fn().mockRejectedValue(new Error("scongela down")),
+    });
+    const result = await run({ mutationClient: client });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("remote_state_unknown");
     expect(client.createBooking).not.toHaveBeenCalled();
   });
 
@@ -254,5 +266,139 @@ describe("medmar issue orchestrator", () => {
     expect(result.status).toBe("remote_state_unknown");
     expect(client.payManual).toHaveBeenCalledTimes(1);
     expect(client.createBooking).toHaveBeenCalledTimes(1);
+  });
+
+  it("remote_state_unknown esistente resta terminale: zero mutazioni alla seconda execute", async () => {
+    const repo = makeRepo(attempt({ status: "remote_state_unknown", remote_state_unknown: true }));
+    const client = mutationClient();
+    const result = await run({ repo, mutationClient: client });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("remote_state_unknown");
+    expect(client.lockAvailability).not.toHaveBeenCalled();
+    expect(client.createBooking).not.toHaveBeenCalled();
+    expect(client.payManual).not.toHaveBeenCalled();
+  });
+
+  it("booking_failed_definitive esistente -> manual_review, nessun retry silenzioso (Fase 2B.3)", async () => {
+    const repo = makeRepo(attempt({ status: "booking_failed_definitive" }));
+    const client = mutationClient();
+    const result = await run({ repo, mutationClient: client });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("manual_review");
+    expect(result.retry_allowed).toBe(false);
+    expect(client.lockAvailability).not.toHaveBeenCalled();
+    expect(client.createBooking).not.toHaveBeenCalled();
+  });
+
+  it("payment_failed_definitive esistente -> manual_review, nessun retry silenzioso (Fase 2B.3)", async () => {
+    const repo = makeRepo(attempt({ status: "payment_failed_definitive" }));
+    const client = mutationClient();
+    const result = await run({ repo, mutationClient: client });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("manual_review");
+    expect(result.retry_allowed).toBe(false);
+    expect(client.lockAvailability).not.toHaveBeenCalled();
+    expect(client.payManual).not.toHaveBeenCalled();
+  });
+
+  it("DB persist fallisce subito dopo booking Medmar riuscito -> remote_state_unknown, zero payment, seconda execute zero mutazioni", async () => {
+    const repo = makeRepo();
+    const client = mutationClient();
+    const originalUpdate = repo.updateAttempt.bind(repo);
+    vi.spyOn(repo, "updateAttempt").mockImplementation(async (id, patch, expectedStatus) => {
+      if (patch && "medmar_id_prenotazione" in patch && patch.medmar_id_prenotazione) {
+        throw new Error("db_down_after_booking_success");
+      }
+      return originalUpdate(id, patch, expectedStatus);
+    });
+
+    const result = await run({ repo, mutationClient: client });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("remote_state_unknown");
+    expect(client.createBooking).toHaveBeenCalledTimes(1);
+    expect(client.payManual).not.toHaveBeenCalled();
+
+    const client2 = mutationClient();
+    const result2 = await run({ repo, mutationClient: client2 });
+    expect(result2.ok).toBe(false);
+    expect(result2.status).toBe("remote_state_unknown");
+    expect(client2.lockAvailability).not.toHaveBeenCalled();
+    expect(client2.createBooking).not.toHaveBeenCalled();
+    expect(client2.payManual).not.toHaveBeenCalled();
+  });
+
+  it("DB persist fallisce subito dopo pagamento Medmar riuscito -> remote_state_unknown, seconda execute zero mutazioni", async () => {
+    const repo = makeRepo();
+    const client = mutationClient();
+    const originalUpdate = repo.updateAttempt.bind(repo);
+    vi.spyOn(repo, "updateAttempt").mockImplementation(async (id, patch, expectedStatus) => {
+      if (patch && "medmar_numero" in patch && patch.medmar_numero) {
+        throw new Error("db_down_after_payment_success");
+      }
+      return originalUpdate(id, patch, expectedStatus);
+    });
+
+    const result = await run({ repo, mutationClient: client });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("remote_state_unknown");
+    expect(client.createBooking).toHaveBeenCalledTimes(1);
+    expect(client.payManual).toHaveBeenCalledTimes(1);
+
+    const client2 = mutationClient();
+    const result2 = await run({ repo, mutationClient: client2 });
+    expect(result2.ok).toBe(false);
+    expect(result2.status).toBe("remote_state_unknown");
+    expect(client2.lockAvailability).not.toHaveBeenCalled();
+    expect(client2.createBooking).not.toHaveBeenCalled();
+    expect(client2.payManual).not.toHaveBeenCalled();
+  });
+
+  it("cliente_sito incompleto -> manual_review prima del lock, zero chiamate Medmar mutative", async () => {
+    const repo = makeRepo();
+    vi.spyOn(repo, "loadServices").mockResolvedValue([
+      { id: SVC, tenant_id: TENANT, customer_name: "Mario Rossi", customer_email: "mario@example.test", customer_phone: null, pax: 1 },
+    ]);
+    const client = mutationClient();
+    const result = await run({ repo, mutationClient: client });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("manual_review");
+    expect(client.lockAvailability).not.toHaveBeenCalled();
+  });
+
+  it("tassa di sbarco con id_tipologia_passeggero diverso da 32 -> manual_review, zero lock (fail-closed)", async () => {
+    const repo = makeRepo();
+    const client = mutationClient();
+    const vendibiliConTassaErrata = () => [
+      ...vendibili(),
+      {
+        id_corsa: 131943,
+        id_biglietto: 371,
+        id_tipologia_passeggero: 99,
+        id_tariffa: 7,
+        id_iva: 78,
+        id_log: 58819,
+        nome: "TASSA DI SBARCO",
+        descrizione: "TASSA DI SBARCO",
+        prezzo: 1.5,
+        prezzo_ar: 0,
+        prezzo_prevendita: 0,
+        flag_ar_obbligatorio: true,
+        flag_targa: 0,
+        quantita_min_per_esclusivo: null,
+        quantita_max_per_esclusivo: null,
+      },
+    ];
+    const { createMedmarIssueOrchestrator } = await import("@/lib/server/medmar-booking/issue-orchestrator");
+    const result = await createMedmarIssueOrchestrator({
+      repo,
+      mutationClient: client,
+      runPreflight: vi.fn().mockResolvedValue(preflight()),
+      fetchVendibili: vi.fn().mockResolvedValue(vendibiliConTassaErrata()),
+      resolveSessionContext: vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT }),
+      config: { enabled: true, causaleId: 1, modalitaId: 5, vettoreAndataId: 1, vettoreRitornoId: 1 },
+    })({ admin: {} as never, tenantId: TENANT, userId: USER, serviceIds: [SVC] });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("manual_review");
+    expect(client.lockAvailability).not.toHaveBeenCalled();
   });
 });

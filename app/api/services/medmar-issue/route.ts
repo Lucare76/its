@@ -11,6 +11,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { auditLog } from "@/lib/server/ops-audit";
 import { issueInputSchema } from "@/lib/server/medmar-booking/validation";
 import { createMedmarIssueOrchestrator } from "@/lib/server/medmar-booking/issue-orchestrator";
+import { consumeConfirmationToken, MedmarConfirmationInvalidError } from "@/lib/server/medmar-booking/issue-confirmation";
 
 export const runtime = "nodejs";
 
@@ -20,11 +21,36 @@ export async function POST(request: NextRequest) {
 
   const parsed = issueInputSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
-    return NextResponse.json({ ok: false, error: "service_ids obbligatorio (array di UUID). Non passare dati Medmar dal browser." }, { status: 400 });
+    return NextResponse.json({ ok: false, error: "service_ids e confirmation_token obbligatori. Non passare dati Medmar dal browser." }, { status: 400 });
   }
 
   const admin = auth.admin as SupabaseClient;
   const tenantId = auth.membership.tenant_id;
+
+  // Gate di conferma server-side (Fase 2B.3): consuma atomicamente il
+  // confirmation_token PRIMA di invocare l'orchestratore. Se manca, e'
+  // scaduto, gia' usato o non corrisponde ai service_ids richiesti, zero
+  // chiamate all'orchestratore e quindi zero mutazioni Medmar.
+  try {
+    await consumeConfirmationToken(admin, {
+      tenantId,
+      token: parsed.data.confirmation_token,
+      serviceIds: parsed.data.service_ids,
+    });
+  } catch (err) {
+    auditLog({
+      event: "medmar_issue_confirmation_rejected",
+      level: "warn",
+      tenantId,
+      userId: auth.user.id,
+      role: auth.membership.role,
+      outcome: err instanceof MedmarConfirmationInvalidError ? "confirmation_invalid" : "confirmation_error",
+    });
+    return NextResponse.json(
+      { ok: false, status: "not_ready", error: "Conferma emissione non valida, scaduta o gia usata.", retry_allowed: false },
+      { status: 409 }
+    );
+  }
 
   try {
     const issue = createMedmarIssueOrchestrator();

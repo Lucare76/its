@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useReducer } from "react";
 import { DateInput } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
@@ -11,6 +11,14 @@ import {
   formatSlotLabel,
   type MedmarTicketRouteCode,
 } from "@/lib/medmar-ticket-memory";
+import {
+  medmarPrepareReducer,
+  canConfirmIssue,
+  isTokenExpired,
+  isRetryableIssueFailure,
+  serviceIdsMatch,
+  type MedmarPrepareState,
+} from "@/lib/medmar-issue-flow";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -168,6 +176,24 @@ type MedmarIssueResult =
       retry_allowed: boolean;
     };
 
+type MedmarPrepareApiResponse =
+  | {
+      ok: true;
+      confirmation_token: string;
+      expires_at: string;
+      expected_total_cents: number;
+      route: { outward: MedmarPreflightLeg | null; return: MedmarPreflightLeg | null };
+      pax: number;
+      service_ids: string[];
+      issuing_enabled: boolean;
+    }
+  | { ok: false; status: string; error: string };
+
+// Fase 2B.4: kill switch di fase, indipendente dalla capability
+// server-derived "issuing_enabled" restituita da /prepare. Entrambi devono
+// essere true perche' la CTA finale sia mai selezionabile — vedi
+// canConfirmIssue() in lib/medmar-issue-flow.ts per il gate sui dati, e il
+// controllo `!MEDMAR_ISSUING_UI_ENABLED` nel render per il gate di fase.
 const MEDMAR_ISSUING_UI_ENABLED = false;
 
 function formatEur(cents: number | null | undefined) {
@@ -187,6 +213,29 @@ async function apiFetch<T>(path: string, token: string, options?: RequestInit): 
   const body = await res.json().catch(() => null) as (T & { ok?: boolean; error?: string }) | null;
   if (!res.ok || !body?.ok) {
     throw new Error(body?.error ?? `Errore HTTP ${res.status}`);
+  }
+  return body;
+}
+
+/**
+ * A differenza di apiFetch, NON lancia su risposte non-2xx: prepare/issue
+ * restituiscono sempre un body JSON strutturato (ok/status/error) anche su
+ * 409/422/403, e la UI ha bisogno di quello status esatto (es.
+ * remote_state_unknown, already_in_progress) per l'error UX richiesta —
+ * un throw generico lo perderebbe.
+ */
+async function apiFetchJson<T>(path: string, token: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(options?.headers ?? {}),
+    },
+  });
+  const body = (await res.json().catch(() => null)) as T | null;
+  if (!body) {
+    throw new Error(`Errore HTTP ${res.status}`);
   }
   return body;
 }
@@ -211,8 +260,10 @@ export default function BigliettiMedmarPage() {
   const [verifying, setVerifying] = useState<string | null>(null); // key del gruppo in verifica
   const [verifyError, setVerifyError] = useState<string | null>(null);
   const [verifyModal, setVerifyModal] = useState<{ group: BookingGroup; result: MedmarPreflightResult } | null>(null);
-  const [issuing, setIssuing] = useState<string | null>(null);
-  const [issueResult, setIssueResult] = useState<MedmarIssueResult | null>(null);
+  const [medmarPrepareState, dispatchMedmarPrepare] = useReducer(
+    medmarPrepareReducer,
+    { phase: "idle" } as MedmarPrepareState
+  );
   const [ticketMemories, setTicketMemories] = useState<TicketMemoryRecord[]>([]);
   const [ticketSlots, setTicketSlots] = useState<TicketMemorySlot[]>([]);
   const [memoryError, setMemoryError] = useState<string | null>(null);
@@ -254,7 +305,7 @@ export default function BigliettiMedmarPage() {
         method: "POST",
         body: JSON.stringify({ service_ids: g.allServiceIds }),
       });
-      setIssueResult(null);
+      dispatchMedmarPrepare({ type: "RESET" });
       setVerifyModal({ group: g, result: data });
     } catch (err) {
       setVerifyError(err instanceof Error ? err.message : "Errore durante la verifica Medmar.");
@@ -263,31 +314,82 @@ export default function BigliettiMedmarPage() {
     }
   };
 
-  const handleIssueMedmar = async () => {
-    if (!token || !verifyModal || issuing) return;
-    const result = verifyModal.result;
-    const primaryLeg = result.outward ?? result.return;
-    const confirmed = confirm(
-      `Emettere biglietto Medmar?\n\nTratta: ${primaryLeg?.route ? `${primaryLeg.route.from} -> ${primaryLeg.route.to}` : "N/D"}\nData: ${primaryLeg?.date ?? "N/D"}\nOra: ${primaryLeg?.requested_time ?? "N/D"}\nPax: ${result.pax}\nPrezzo previsto: ${formatEur(result.expected_total_cents)}`
-    );
-    if (!confirmed) return;
-    setIssuing(verifyModal.group.key);
-    setIssueResult(null);
+  // STEP 1 -> STEP 2: preflight/local validation server-side, SOLO
+  // lettura verso Medmar. Nessuna mutazione Medmar puo' partire da questa
+  // chiamata (vedi app/api/services/medmar-issue/prepare/route.ts).
+  const handlePrepareMedmar = async () => {
+    if (!token || !verifyModal) return;
+    if (medmarPrepareState.phase === "preparing" || medmarPrepareState.phase === "prepared") return;
+    dispatchMedmarPrepare({ type: "PREPARE_START" });
     try {
-      const data = await apiFetch<MedmarIssueResult>("/api/services/medmar-issue", token, {
+      const data = await apiFetchJson<MedmarPrepareApiResponse>("/api/services/medmar-issue/prepare", token, {
         method: "POST",
         body: JSON.stringify({ service_ids: verifyModal.group.allServiceIds }),
       });
-      setIssueResult(data);
+      if (data.ok) {
+        dispatchMedmarPrepare({
+          type: "PREPARE_SUCCESS",
+          payload: {
+            confirmation_token: data.confirmation_token,
+            expires_at: data.expires_at,
+            expected_total_cents: data.expected_total_cents,
+            route: data.route,
+            pax: data.pax,
+            issuing_enabled: data.issuing_enabled,
+            service_ids: data.service_ids,
+          },
+        });
+      } else {
+        dispatchMedmarPrepare({ type: "PREPARE_FAILURE", status: data.status, error: data.error });
+      }
     } catch (err) {
-      setIssueResult({
-        ok: false,
+      dispatchMedmarPrepare({
+        type: "PREPARE_FAILURE",
+        status: "prepare_failed",
+        error: err instanceof Error ? err.message : "Preparazione emissione non riuscita.",
+      });
+    }
+  };
+
+  // STEP 2: consuma il confirmation_token single-use ottenuto da /prepare.
+  // Il vero gate di sicurezza e' server-side (token DB-backed + feature
+  // flag); questo controllo client-side e' solo UX (evita una chiamata
+  // inutile quando gia' sappiamo che non puo' avere successo).
+  const handleConfirmIssueMedmar = async () => {
+    if (!token || !verifyModal) return;
+    if (medmarPrepareState.phase !== "prepared") return;
+    if (!serviceIdsMatch(medmarPrepareState.service_ids, verifyModal.group.allServiceIds)) {
+      dispatchMedmarPrepare({
+        type: "ISSUE_FAILURE",
+        status: "confirmation_scope_mismatch",
+        error: "La conferma non corrisponde piu' ai servizi selezionati. Ripeti la preparazione.",
+        retry_allowed: false,
+      });
+      return;
+    }
+    if (isTokenExpired(medmarPrepareState)) {
+      dispatchMedmarPrepare({ type: "TOKEN_EXPIRED" });
+      return;
+    }
+    const confirmationToken = medmarPrepareState.confirmation_token;
+    dispatchMedmarPrepare({ type: "CONFIRM_START" });
+    try {
+      const data = await apiFetchJson<MedmarIssueResult>("/api/services/medmar-issue", token, {
+        method: "POST",
+        body: JSON.stringify({ service_ids: verifyModal.group.allServiceIds, confirmation_token: confirmationToken }),
+      });
+      if (data.ok) {
+        dispatchMedmarPrepare({ type: "ISSUE_SUCCESS", result: data });
+      } else {
+        dispatchMedmarPrepare({ type: "ISSUE_FAILURE", status: data.status, error: data.error, retry_allowed: data.retry_allowed });
+      }
+    } catch (err) {
+      dispatchMedmarPrepare({
+        type: "ISSUE_FAILURE",
         status: "request_failed",
         error: err instanceof Error ? err.message : "Emissione non riuscita.",
         retry_allowed: false,
       });
-    } finally {
-      setIssuing(null);
     }
   };
 
@@ -1080,7 +1182,11 @@ export default function BigliettiMedmarPage() {
         <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-semibold text-slate-800">Verifica emissione Medmar</h2>
-            <button type="button" onClick={() => setVerifyModal(null)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+            <button
+              type="button"
+              onClick={() => { setVerifyModal(null); dispatchMedmarPrepare({ type: "RESET" }); }}
+              className="text-slate-400 hover:text-slate-600 text-xl leading-none"
+            >×</button>
           </div>
 
           <div className="flex items-center gap-2">
@@ -1149,32 +1255,93 @@ export default function BigliettiMedmarPage() {
                   ))}
                 </div>
               )}
-              {issueResult && (
-                <div className={`rounded-lg border px-3 py-2 text-sm ${issueResult.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : issueResult.status === "remote_state_unknown" ? "border-rose-300 bg-rose-50 text-rose-700" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
-                  {issueResult.ok ? (
-                    <p className="font-semibold">Codice Medmar: {issueResult.medmar_numero}</p>
+            </div>
+          )}
+
+          {verifyModal.result.can_issue && verifyModal.result.is_live && (
+            <div className="space-y-3 border-t border-slate-100 pt-3">
+              <button
+                type="button"
+                onClick={() => void handlePrepareMedmar()}
+                disabled={medmarPrepareState.phase === "preparing" || medmarPrepareState.phase === "prepared" || medmarPrepareState.phase === "issuing" || medmarPrepareState.phase === "issued"}
+                className="w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {medmarPrepareState.phase === "preparing" ? "Verifica finale in corso..." : "Prepara emissione Medmar"}
+              </button>
+
+              {medmarPrepareState.phase === "prepare_failed" && (
+                <div className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                  <p className="font-semibold">{medmarPrepareState.error}</p>
+                </div>
+              )}
+
+              {(medmarPrepareState.phase === "prepared" || medmarPrepareState.phase === "issuing") && (
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 space-y-2">
+                  <p className="text-xs font-semibold text-indigo-900">Controlla attentamente i dati prima di procedere.</p>
+                  {([["outward", "Andata"], ["return", "Ritorno"]] as const).map(([field, label]) => {
+                    const leg = medmarPrepareState.route[field];
+                    if (!leg) return null;
+                    return (
+                      <p key={field} className="text-xs text-indigo-800">
+                        {label}: {leg.route ? `${leg.route.from} → ${leg.route.to}` : "tratta non determinata"} · {leg.date} · {leg.matched_departure_time ?? leg.requested_time ?? "—"}{leg.vessel ? ` · ${leg.vessel}` : ""}
+                      </p>
+                    );
+                  })}
+                  <p className="text-xs text-indigo-800">Passeggeri: {medmarPrepareState.pax}</p>
+                  <p className="text-sm font-semibold text-indigo-900">Prezzo totale da confermare: {formatEur(medmarPrepareState.expected_total_cents)}</p>
+                  {isTokenExpired(medmarPrepareState) ? (
+                    <p className="text-xs font-semibold text-rose-700">Conferma scaduta. Ripeti la verifica.</p>
                   ) : (
-                    <p className="font-semibold">
-                      {issueResult.status === "remote_state_unknown" ? "Stato Medmar da verificare manualmente. Non riprovare l'emissione." : issueResult.error}
-                    </p>
+                    <p className="text-[11px] text-indigo-700">Conferma valida fino alle {new Date(medmarPrepareState.expires_at).toLocaleTimeString("it-IT")}.</p>
                   )}
+                  {!medmarPrepareState.issuing_enabled && (
+                    <p className="text-[11px] text-amber-700">Emissione reale non ancora abilitata.</p>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => void handleConfirmIssueMedmar()}
+                    disabled={!MEDMAR_ISSUING_UI_ENABLED || !canConfirmIssue(medmarPrepareState) || medmarPrepareState.phase === "issuing"}
+                    className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {medmarPrepareState.phase === "issuing"
+                      ? "Emissione in corso..."
+                      : !MEDMAR_ISSUING_UI_ENABLED || !medmarPrepareState.issuing_enabled
+                        ? "Emissione reale non ancora abilitata"
+                        : isTokenExpired(medmarPrepareState)
+                          ? "Conferma scaduta"
+                          : "Conferma ed emetti biglietto Medmar"}
+                  </button>
+                </div>
+              )}
+
+              {medmarPrepareState.phase === "issue_failed" && (
+                <div className={`rounded-lg border px-3 py-2 text-sm ${medmarPrepareState.status === "remote_state_unknown" ? "border-rose-300 bg-rose-50 text-rose-700" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
+                  <p className="font-semibold">
+                    {medmarPrepareState.status === "remote_state_unknown"
+                      ? "Stato Medmar da verificare manualmente. Non riprovare."
+                      : medmarPrepareState.status === "already_in_progress"
+                        ? "Emissione già in corso."
+                        : medmarPrepareState.error}
+                  </p>
+                  {isRetryableIssueFailure(medmarPrepareState) && (
+                    <p className="mt-1 text-[11px]">Puoi ripetere la preparazione per un nuovo tentativo.</p>
+                  )}
+                </div>
+              )}
+
+              {medmarPrepareState.phase === "issued" && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 space-y-0.5">
+                  <p className="font-semibold">Biglietto Medmar emesso{medmarPrepareState.result.existing ? " (emissione gia' esistente)" : ""}</p>
+                  <p>Codice Medmar: {medmarPrepareState.result.medmar_numero}</p>
+                  <p>Prenotazione: {medmarPrepareState.result.medmar_id_prenotazione}</p>
+                  <p>Prezzo finale: {formatEur(medmarPrepareState.result.final_total_cents)}</p>
                 </div>
               )}
             </div>
           )}
 
-          {verifyModal.result.can_issue && verifyModal.result.is_live && (
-            <button
-              type="button"
-              onClick={() => void handleIssueMedmar()}
-              disabled={!MEDMAR_ISSUING_UI_ENABLED || issuing === verifyModal.group.key || issueResult?.status === "remote_state_unknown"}
-              className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {!MEDMAR_ISSUING_UI_ENABLED ? "Emissione non attiva in questa fase" : issuing === verifyModal.group.key ? "Emissione in corso..." : "Emetti biglietto Medmar"}
-            </button>
-          )}
-
-          <button type="button" onClick={() => setVerifyModal(null)}
+          <button type="button" onClick={() => { setVerifyModal(null); dispatchMedmarPrepare({ type: "RESET" }); }}
             className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
             Chiudi
           </button>

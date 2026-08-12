@@ -129,7 +129,7 @@ export type IssueRepository = {
     serviceIds: string[];
     createdBy: string;
   }): Promise<{ kind: "created"; attempt: MedmarIssueAttempt } | { kind: "existing"; attempt: MedmarIssueAttempt }>;
-  updateAttempt(id: string, patch: Partial<MedmarIssueAttempt>): Promise<MedmarIssueAttempt>;
+  updateAttempt(id: string, patch: Partial<MedmarIssueAttempt>, expectedStatus: MedmarIssueStatus): Promise<MedmarIssueAttempt>;
   addEvent(input: MedmarIssueEventInput): Promise<void>;
   loadServices(tenantId: string, serviceIds: string[]): Promise<MedmarIssueServiceRow[]>;
 };
