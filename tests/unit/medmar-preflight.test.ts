@@ -54,6 +54,17 @@ function arrivalRow(overrides: Row = {}): Row {
   };
 }
 
+function departureRow(overrides: Row = {}): Row {
+  return {
+    id: SVC_DEP, tenant_id: TENANT_A, date: "2026-08-25", time: "15:30",
+    orario_barca: "17:00",
+    customer_name: "Mario Rossi", pax: 2, vessel: "Medmar", notes: "[practice:AAA]",
+    booking_service_kind: "formula_medmar_pozzuoli", direction: "departure", status: "new",
+    meeting_point: "Ischia Porto",
+    ...overrides,
+  };
+}
+
 const ARRIVAL_ROW: Row = arrivalRow();
 
 const NAPOLI_ISCHIA_CORSA: Row = {
@@ -173,9 +184,67 @@ describe("runMedmarPreflight — corse live", () => {
       { id_corsa: 131943, id_tratta: 59, partenza_data: "2026-08-20", partenza_ora: "08:40", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA" },
       { id_corsa: 138399, id_tratta: 59, partenza_data: "2026-08-20", partenza_ora: "08:45", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "NEREIDE" },
     ]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
     const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.outward?.id_corsa).toBe(131943);
+    expect(result.outward?.candidate_count).toBe(1);
+    expect(result.outward?.match_source).toBe("booked_ferry_time");
+    expect(result.warnings.some((w) => w.code === "course_ambiguous")).toBe(false);
+  });
+
+  it("sensitivity: non sceglie la corsa piu vicina senza match esatto", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
+      { ...NAPOLI_ISCHIA_CORSA, id_corsa: 1, partenza_ora: "08:35" },
+      { ...NAPOLI_ISCHIA_CORSA, id_corsa: 2, partenza_ora: "08:45" },
+    ]);
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("no_match");
+    expect(result.can_issue).toBe(false);
+    expect(result.outward?.id_corsa).toBeNull();
+    expect(result.outward?.candidate_count).toBe(0);
+  });
+
+  it("HH:MM ITS combacia con HH:MM:SS Medmar", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([{ ...NAPOLI_ISCHIA_CORSA, partenza_ora: "08:40:00" }]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("ok");
+    expect(result.outward?.candidate_count).toBe(1);
+    expect(result.outward?.matched_departure_time).toBe("08:40:00");
+  });
+
+  it("orario nave ITS mancante -> manual_review senza chiamata Medmar", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ time: null })]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "booked_ferry_time_missing")).toBe(true);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("orario nave ITS malformato -> manual_review senza chiamata Medmar", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ time: "sera" })]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "booked_ferry_time_invalid")).toBe(true);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("piu corse stesso orario ma nave diversa restano ambiguous con vessel ITS generico", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
+      { ...NAPOLI_ISCHIA_CORSA, id_corsa: 1, partenza_ora: "08:40", nave: "MEDMAR GIULIA" },
+      { ...NAPOLI_ISCHIA_CORSA, id_corsa: 2, partenza_ora: "08:40", nave: "NEREIDE" },
+    ]);
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ vessel: "MEDMAR" })]), TENANT_A, [SVC_ARR]);
     expect(result.status).toBe("ambiguous");
     expect(result.can_issue).toBe(false);
+    expect(result.outward?.candidate_count).toBe(2);
   });
 
   it("corsa chiusa (flag_chiuso) viene ignorata -> status no_match", async () => {
@@ -380,6 +449,72 @@ describe("runMedmarPreflight — corse live", () => {
 });
 
 describe("runMedmarPreflight — coerenza andata/ritorno su 6 tratte", () => {
+  it("ritorno usa orario_barca e non time/pickup del servizio", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "ischia_napoli" ? 47 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
+      { id_corsa: 10, id_tratta: 47, partenza_data: "2026-08-25", partenza_ora: "15:30", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 41, id_porto_arrivo: 1, porto_partenza: "ISCHIA", porto_arrivo: "NAPOLI", nave: "MEDMAR GIULIA" },
+      { id_corsa: 11, id_tratta: 47, partenza_data: "2026-08-25", partenza_ora: "17:00", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 41, id_porto_arrivo: 1, porto_partenza: "ISCHIA", porto_arrivo: "NAPOLI", nave: "MEDMAR GIULIA" },
+    ]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+    const result = await runMedmarPreflight(
+      fakeAdmin([departureRow({ booking_service_kind: "formula_medmar_napoli", meeting_point: null, time: "15:30", orario_barca: "17:00" })]),
+      TENANT_A,
+      [SVC_DEP]
+    );
+    expect(medmarClient.fetchCorseReadOnly).toHaveBeenCalledWith({ idTratta: 47, partenzaDataDal: "2026-08-25", dopoLe: "17:00:00" });
+    expect(result.status).toBe("ok");
+    expect(result.return?.requested_time).toBe("17:00");
+    expect(result.return?.id_corsa).toBe(11);
+    expect(result.return?.match_source).toBe("booked_ferry_time");
+  });
+
+  it("andata e ritorno usano orari nave differenti senza ereditarli tra gambe", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 59
+        ? [{ ...NAPOLI_ISCHIA_CORSA, id_corsa: 20, id_tratta: 59, partenza_ora: "08:40" }]
+        : [
+            { id_corsa: 21, id_tratta: 47, partenza_data: "2026-08-25", partenza_ora: "08:40", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 41, id_porto_arrivo: 1, porto_partenza: "ISCHIA", porto_arrivo: "NAPOLI", nave: "MEDMAR GIULIA" },
+            { id_corsa: 22, id_tratta: 47, partenza_data: "2026-08-25", partenza_ora: "17:00", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 41, id_porto_arrivo: 1, porto_partenza: "ISCHIA", porto_arrivo: "NAPOLI", nave: "MEDMAR GIULIA" },
+          ]
+    );
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ booking_service_kind: "formula_medmar_napoli", time: "08:40" }),
+        departureRow({ booking_service_kind: "formula_medmar_napoli", meeting_point: null, time: "15:30", orario_barca: "17:00" }),
+      ]),
+      TENANT_A,
+      [SVC_ARR, SVC_DEP]
+    );
+    expect(result.status).toBe("ok");
+    expect(result.outward?.id_corsa).toBe(20);
+    expect(result.return?.id_corsa).toBe(22);
+    expect(result.return?.id_corsa).not.toBe(21);
+  });
+
+  it("booking storico di ritorno senza orario_barca -> manual_review e non usa departure_time/time", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(47);
+    const result = await runMedmarPreflight(
+      fakeAdmin([departureRow({ booking_service_kind: "formula_medmar_napoli", meeting_point: null, time: "15:30", orario_barca: null, departure_time: "17:00" })]),
+      TENANT_A,
+      [SVC_DEP]
+    );
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.return?.requested_time).toBeNull();
+    expect(result.warnings.some((w) => w.code === "booked_ferry_time_missing")).toBe(true);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("id_tratta corretto ma data sbagliata -> no_match", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([{ ...NAPOLI_ISCHIA_CORSA, partenza_data: "2026-08-21" }]);
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("no_match");
+    expect(result.can_issue).toBe(false);
+  });
+
   it("andata Napoli->Ischia + ritorno Ischia->Pozzuoli (non speculari) -> status manual_review, can_issue false, warning leg_route_mismatch", async () => {
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_pozzuoli" ? 14 : null));
     vi.mocked(routeMapping.isMirrorRouteCode).mockReturnValue(false);

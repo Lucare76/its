@@ -61,6 +61,19 @@ function toDopoLe(time: string | null): string {
   return match ? `${match[1]}:${match[2]}:00` : "00:00:00";
 }
 
+function normalizeMedmarClockTime(time: string | null | undefined): string | null {
+  const match = String(time ?? "").trim().match(/^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/);
+  if (!match) return null;
+  return `${match[1]!.padStart(2, "0")}:${match[2]}`;
+}
+
+function resolveBookedFerryTime(row: MedmarPreflightServiceRow, direction: "outward" | "return") {
+  const raw = direction === "return"
+    ? row.orario_barca ?? row.return_time ?? null
+    : row.outbound_time ?? row.time ?? null;
+  return { raw, normalized: normalizeMedmarClockTime(raw) };
+}
+
 function isFlagSet(flag: boolean | number | null): boolean {
   return flag === true || flag === 1;
 }
@@ -120,8 +133,10 @@ async function resolveLegLive(
     route_code: resolution.status === "resolved" ? resolution.routeCode : null,
     route: null,
     date: row.date,
-    requested_time: row.time,
+    requested_time: null,
     matched_departure_time: null,
+    candidate_count: null,
+    match_source: null,
     vessel: row.vessel,
     service_ids: [row.id],
     id_corsa: null,
@@ -156,8 +171,25 @@ async function resolveLegLive(
     return { leg, liveStatus: "manual_review" };
   }
 
+  const requestedFerryTime = resolveBookedFerryTime(row, direction);
+  leg.requested_time = requestedFerryTime.normalized ?? requestedFerryTime.raw ?? null;
+  if (!requestedFerryTime.raw) {
+    warnings.push({
+      code: "booked_ferry_time_missing",
+      message: `Orario nave prenotato mancante per ${direction === "outward" ? "andata" : "ritorno"}: revisione manuale richiesta.`,
+    });
+    return { leg, liveStatus: "manual_review" };
+  }
+  if (!requestedFerryTime.normalized) {
+    warnings.push({
+      code: "booked_ferry_time_invalid",
+      message: `Orario nave prenotato non valido per ${direction === "outward" ? "andata" : "ritorno"}: revisione manuale richiesta.`,
+    });
+    return { leg, liveStatus: "manual_review" };
+  }
+
   const localDiagnostic = () => {
-    const local = matchCourseByRouteAndTime(routeCode, row.time);
+    const local = matchCourseByRouteAndTime(routeCode, requestedFerryTime.normalized);
     if (local.status === "matched") {
       warnings.push({
         code: "local_schedule_diagnostic",
@@ -169,14 +201,37 @@ async function resolveLegLive(
   };
 
   try {
-    const corse = await fetchCorseReadOnly({ idTratta, partenzaDataDal: row.date, dopoLe: toDopoLe(row.time) });
+    const corse = await fetchCorseReadOnly({ idTratta, partenzaDataDal: row.date, dopoLe: toDopoLe(requestedFerryTime.normalized) });
     const candidates = corse.filter((c) => isCandidateCorsa(c, { idTratta, date: row.date }));
 
     if (candidates.length === 0) {
       localDiagnostic();
       return { leg, liveStatus: "no_match" };
     }
-    if (candidates.length > 1) {
+
+    const structurallyValid: CorsaMedmarRaw[] = [];
+    const structuralWarnings: MedmarPreflightWarning[] = [];
+    for (const candidate of candidates) {
+      const mismatches = findStructuralMismatches(candidate, routeCode);
+      if (mismatches.length === 0) structurallyValid.push(candidate);
+      else structuralWarnings.push(...mismatches);
+    }
+    if (structurallyValid.length === 0) {
+      warnings.push(...structuralWarnings);
+      leg.candidate_count = 0;
+      return { leg, liveStatus: "route_mismatch" };
+    }
+
+    const exactTimeMatches = structurallyValid.filter(
+      (candidate) => normalizeMedmarClockTime(candidate.partenza_ora) === requestedFerryTime.normalized
+    );
+    leg.candidate_count = exactTimeMatches.length;
+
+    if (exactTimeMatches.length === 0) {
+      localDiagnostic();
+      return { leg, liveStatus: "no_match" };
+    }
+    if (exactTimeMatches.length > 1) {
       warnings.push({
         code: "course_ambiguous",
         message: `Più corse Medmar live compatibili per ${direction === "outward" ? "andata" : "ritorno"}: revisione manuale richiesta.`,
@@ -184,22 +239,15 @@ async function resolveLegLive(
       return { leg, liveStatus: "ambiguous" };
     }
 
-    const only = candidates[0]!;
-    const structuralMismatches = findStructuralMismatches(only, routeCode);
-    if (structuralMismatches.length > 0) {
-      warnings.push(...structuralMismatches);
-      leg.id_corsa = only.id_corsa;
-      leg.vessel = only.nave ?? leg.vessel;
-      return { leg, liveStatus: "route_mismatch" };
-    }
-
+    const only = exactTimeMatches[0]!;
     leg.id_corsa = only.id_corsa;
     leg.vessel = only.nave ?? leg.vessel;
     leg.matched_departure_time = only.partenza_ora;
+    leg.match_source = "booked_ferry_time";
     leg.source = "live";
 
     const localMatchedTime = localDiagnostic();
-    if (localMatchedTime && only.partenza_ora && localMatchedTime !== only.partenza_ora) {
+    if (localMatchedTime && only.partenza_ora && normalizeMedmarClockTime(localMatchedTime) !== normalizeMedmarClockTime(only.partenza_ora)) {
       warnings.push({
         code: "local_schedule_mismatch",
         message: `L'orario Medmar live (${only.partenza_ora}) differisce dall'orario noto localmente (${localMatchedTime}).`,
@@ -235,7 +283,7 @@ export async function runMedmarPreflight(
 
   const { data, error } = await admin
     .from("services")
-    .select("id, tenant_id, date, time, customer_name, pax, vessel, notes, booking_service_kind, direction, status, meeting_point")
+    .select("id, tenant_id, date, time, outbound_time, return_time, orario_barca, customer_name, pax, vessel, notes, booking_service_kind, direction, status, meeting_point")
     .in("id", serviceIds)
     .eq("tenant_id", tenantId);
 

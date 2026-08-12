@@ -123,6 +123,8 @@ export type MedmarPreflightLeg = {
   date: string;
   requested_time: string | null;
   matched_departure_time: string | null;
+  candidate_count: number | null;
+  match_source: "booked_ferry_time" | null;
   vessel: string | null;
   service_ids: string[];
   /** Presente solo se determinata da chiamata live a Medmar. */
@@ -167,6 +169,8 @@ export type MedmarPreflightServiceRow = {
   tenant_id: string;
   date: string;
   time: string | null;
+  outbound_time?: string | null;
+  return_time?: string | null;
   customer_name: string | null;
   pax: number | null;
   vessel: string | null;
@@ -181,4 +185,5 @@ export type MedmarPreflightServiceRow = {
    * porto isolano della gamba (Fase 1.7).
    */
   meeting_point: string | null;
+  orario_barca?: string | null;
 };
