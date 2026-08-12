@@ -289,7 +289,14 @@ export async function fetchCorseReadOnly(params: {
 
     const path = buildCorsePagePath(params, page);
     const json = await medmarReadonlyFetch(path);
-    const { rows, pagination } = parseCorsePage(json);
+    const { rows, pagination, schemaValid, schemaError } = parseCorsePage(json);
+    // Fail-closed per-pagina: uno schema incompatibile su QUALUNQUE pagina
+    // (anche a metà paginazione) deve restare distinguibile da "nessuna
+    // corsa trovata" — mai troncare silenziosamente la raccolta a un
+    // risultato parziale che sembrerebbe completo.
+    if (!schemaValid) {
+      throw new MedmarBadResponseError(`Risposta Medmar corse non conforme allo schema atteso (${schemaError}) — fail-closed.`);
+    }
     collected.push(...rows);
 
     if (!pagination || pagination.lastPage === null) {
@@ -321,9 +328,9 @@ export async function fetchBigliettiVendibiliReadOnly(idCorsa: number | string):
   const search = new URLSearchParams({ id_tariffa: "", id_biglietto: "" });
   const path = `${MEDMAR_API_PATH_PREFIX}/biglietti/vendibili/${idCorsa}?${search.toString()}`;
   const json = await medmarReadonlyFetch(path);
-  const { rows, schemaValid } = parseBigliettiVendibiliResponse(json);
+  const { rows, schemaValid, schemaError } = parseBigliettiVendibiliResponse(json);
   if (!schemaValid) {
-    throw new MedmarBadResponseError("Risposta Medmar biglietti/vendibili non conforme allo schema atteso (fail-closed).");
+    throw new MedmarBadResponseError(`Risposta Medmar biglietti/vendibili non conforme allo schema atteso (${schemaError}) — fail-closed.`);
   }
   return rows;
 }

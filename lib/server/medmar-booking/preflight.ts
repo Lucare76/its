@@ -29,7 +29,7 @@ import {
   MedmarBadResponseError,
 } from "./client";
 import { MedmarNotConfiguredError, MedmarAuthFailedError } from "./auth";
-import { findArTariffAndTax } from "./live-parser";
+import { findArTariffAndTax, resolveBigliettoLabel } from "./live-parser";
 import { getRouteDefinition } from "@/lib/medmar-ticket-memory";
 import type {
   MedmarPreflightLeg,
@@ -355,7 +355,22 @@ export async function runMedmarPreflight(
       };
     }
 
-    const { tariff: tariffRow, tassaSbarco, taxIssue } = selection;
+    if (selection.kind === "ambiguous_tariff") {
+      return {
+        ...baseResult,
+        status: "manual_review",
+        warnings: [...warnings, { code: "ar_tariff_ambiguous", message: "Più righe candidate per la tariffa AR adulto nella risposta Medmar live: nessuna scelta arbitraria, revisione manuale richiesta." }],
+      };
+    }
+
+    const { tariff: tariffRow, labelSource, tassaSbarco, taxIssue } = selection;
+    if (labelSource === "nome") {
+      // La label primaria (descrizione) mancava su questa riga: la tariffa
+      // è comunque stata identificata correttamente (stessa regex sulla
+      // label secondaria), ma il caso è raro/inatteso e va segnalato per
+      // diagnostica — non blocca can_issue.
+      warnings.push({ code: "ar_label_from_nome", message: "Etichetta della tariffa AR risolta dal campo 'nome' (campo 'descrizione' assente o vuoto sulla riga): verificare se atteso." });
+    }
 
     // Prezzo live mancante, nullo o incoerente: mai can_issue=true su dati incompleti.
     if (tariffRow.prezzo == null || !Number.isFinite(tariffRow.prezzo)) {
@@ -383,7 +398,7 @@ export async function runMedmarPreflight(
     }
 
     const taxes: MedmarPreflightTaxLine[] = tassaSbarco
-      ? [{ label: tassaSbarco.biglietto ?? "TASSA DI SBARCO", amount_cents: Math.round(tassaSbarco.prezzo! * 100) }]
+      ? [{ label: resolveBigliettoLabel(tassaSbarco).label ?? "TASSA DI SBARCO", amount_cents: Math.round(tassaSbarco.prezzo! * 100) }]
       : [];
 
     const unitPriceCents = Math.round(tariffRow.prezzo * 100);
@@ -396,7 +411,7 @@ export async function runMedmarPreflight(
       tariff: {
         id_biglietto: tariffRow.id_biglietto,
         id_tariffa: tariffRow.id_tariffa,
-        label: tariffRow.biglietto,
+        label: resolveBigliettoLabel(tariffRow).label,
         unit_price_cents: unitPriceCents,
         source: "medmar_live",
       },

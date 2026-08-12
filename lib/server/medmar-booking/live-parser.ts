@@ -1,16 +1,26 @@
 /**
  * Parsing delle risposte live Medmar.
  *
- * GET .../api/corse/{id_tratta}: schema reale CONFERMATO da risposte JSON
- * reali (Fase 1.5B) — si usano SOLO i nomi di campo reali, nessun alias
- * inventato. Risposta paginata stile Laravel: { data: [...], current_page,
- * last_page, total, ... }.
+ * Fase 2A.2 — schema REALE riallineato dopo lo smoke test reale (Fase 2A.1),
+ * che ha dimostrato che lo schema Fase 1.5B/1.6 non era mai stato verificato
+ * contro l'envelope corretto. Tutte le risposte reali Medmar osservate
+ * (login, GET corse, GET biglietti/vendibili) condividono lo stesso
+ * envelope esterno: { return: true, output: ... } (vedi MedmarApiEnvelope
+ * in types.ts, e lo stesso pattern già usato da medmar-auth-provider.ts).
  *
- * GET .../api/biglietti/vendibili/{id_corsa}: schema reale CONFERMATO da
- * risposte JSON reali (Fase 1.6). Parsing STRETTO: ogni campo viene letto
- * dalla sua chiave reale esatta, MAI da un elenco di alias alternativi. Se
- * l'envelope della risposta non è riconoscibile (né array, né { data: [...] }),
- * il parsing fallisce esplicitamente (fail closed) — vedi schemaValid.
+ * GET .../api/corse/{id_tratta}: righe in output.data (stile paginazione
+ * Laravel, ma annidato sotto output — { return, output: { data: [...],
+ * current_page, last_page, total, ... } }).
+ *
+ * GET .../api/biglietti/vendibili/{id_corsa}: array DIRETTO sotto output
+ * ({ return, output: [...] }), non output.data.
+ *
+ * Parsing STRETTO su entrambi: return !== true, output mancante/malformato,
+ * o l'array atteso (output.data / output) non essendo un array producono
+ * SEMPRE schemaValid=false con un motivo (schemaError) — mai [] silenzioso.
+ * Uno schema incompatibile deve restare distinguibile da "nessuna riga
+ * trovata" (envelope valido, array vuoto): quest'ultimo è l'UNICO caso in
+ * cui rows=[] è accompagnato da schemaValid=true.
  *
  * Nessun valore viene mai inventato: se un campo non è presente, resta null
  * e va segnalato come warning dal chiamante (preflight.ts).
@@ -38,8 +48,24 @@ function asFlag(value: unknown): boolean | number | null {
   return null;
 }
 
-function asBoolean(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null;
+/**
+ * Valida l'envelope esterno comune { return: true, output }. Ritorna
+ * l'`output` grezzo se valido, altrimenti un motivo di fallimento esplicito
+ * (mai un valore indovinato). Stesso criterio stretto già usato per
+ * /authenticate (return === true, confronto stretto).
+ */
+function validateApiEnvelope(json: unknown): { valid: true; output: unknown } | { valid: false; error: string } {
+  if (!json || typeof json !== "object" || Array.isArray(json)) {
+    return { valid: false, error: "envelope_not_object" };
+  }
+  const obj = json as Record<string, unknown>;
+  if (obj.return !== true) {
+    return { valid: false, error: "return_not_true" };
+  }
+  if (!("output" in obj) || obj.output === undefined || obj.output === null) {
+    return { valid: false, error: "output_missing" };
+  }
+  return { valid: true, output: obj.output };
 }
 
 function parseCorsaRow(row: Record<string, unknown>): CorsaMedmarRaw {
@@ -59,30 +85,37 @@ function parseCorsaRow(row: Record<string, unknown>): CorsaMedmarRaw {
 }
 
 /**
- * Estrae righe corsa e metadati di paginazione da una singola pagina della
- * risposta GET .../api/corse/{id_tratta}. Se l'envelope di paginazione non è
- * riconoscibile (risposta malformata), pagination è null e il chiamante deve
- * trattarla come pagina unica (nessun crash, nessuna pagina inventata).
+ * Estrae righe corsa e metadati di paginazione dalla risposta reale GET
+ * .../api/corse/{id_tratta} ({ return: true, output: { data: [...],
+ * current_page, last_page, total } }). schemaValid=false (con schemaError)
+ * per QUALUNQUE envelope non riconosciuto — incluso il vecchio formato Fase
+ * 1.5B { data: [...] } a livello radice, che NON è mai stato reale e non
+ * deve più essere accettato. Il chiamante (client.ts) deve fail-closed su
+ * schemaValid=false, mai trattarlo come "nessuna corsa".
  */
-export function parseCorsePage(json: unknown): { rows: CorsaMedmarRaw[]; pagination: { currentPage: number | null; lastPage: number | null; total: number | null } | null } {
-  if (!json || typeof json !== "object" || !Array.isArray((json as Record<string, unknown>).data)) {
-    return { rows: [], pagination: null };
+export function parseCorsePage(json: unknown): {
+  rows: CorsaMedmarRaw[];
+  pagination: { currentPage: number | null; lastPage: number | null; total: number | null } | null;
+  schemaValid: boolean;
+  schemaError: string | null;
+} {
+  const envelope = validateApiEnvelope(json);
+  if (!envelope.valid) {
+    return { rows: [], pagination: null, schemaValid: false, schemaError: envelope.error };
   }
-  const envelope = json as MedmarPaginatedEnvelope<Record<string, unknown>>;
-  const rows = envelope.data.map(parseCorsaRow);
-  const currentPage = asNumber(envelope.current_page);
-  const lastPage = asNumber(envelope.last_page);
-  const total = asNumber(envelope.total);
-  const pagination = currentPage === null && lastPage === null && total === null ? null : { currentPage, lastPage, total };
-  return { rows, pagination };
-}
 
-function extractBigliettiRows(json: unknown): Record<string, unknown>[] | null {
-  if (Array.isArray(json)) return json as Record<string, unknown>[];
-  if (json && typeof json === "object" && Array.isArray((json as Record<string, unknown>).data)) {
-    return (json as Record<string, unknown>).data as Record<string, unknown>[];
+  const output = envelope.output;
+  if (!output || typeof output !== "object" || Array.isArray(output) || !Array.isArray((output as Record<string, unknown>).data)) {
+    return { rows: [], pagination: null, schemaValid: false, schemaError: "output_data_not_array" };
   }
-  return null;
+
+  const payload = output as MedmarPaginatedEnvelope<Record<string, unknown>>;
+  const rows = payload.data.map(parseCorsaRow);
+  const currentPage = asNumber(payload.current_page);
+  const lastPage = asNumber(payload.last_page);
+  const total = asNumber(payload.total);
+  const pagination = currentPage === null && lastPage === null && total === null ? null : { currentPage, lastPage, total };
+  return { rows, pagination, schemaValid: true, schemaError: null };
 }
 
 function parseBigliettoRow(row: Record<string, unknown>): BigliettoVendibileRaw {
@@ -91,35 +124,44 @@ function parseBigliettoRow(row: Record<string, unknown>): BigliettoVendibileRaw 
     id_biglietto: asStringOrNumber(row.id_biglietto),
     id_tipologia_passeggero: asNumber(row.id_tipologia_passeggero),
     id_tariffa: asStringOrNumber(row.id_tariffa),
-    id_log: asStringOrNumber(row.id_log),
     id_iva: asStringOrNumber(row.id_iva),
-    id_gruppo: asStringOrNumber(row.id_gruppo),
-    biglietto: asString(row.biglietto),
+    id_log: asStringOrNumber(row.id_log),
+    nome: asString(row.nome),
+    descrizione: asString(row.descrizione),
     prezzo: asNumber(row.prezzo),
+    prezzo_ar: asNumber(row.prezzo_ar),
     prezzo_prevendita: asNumber(row.prezzo_prevendita),
-    quantita: asNumber(row.quantita),
-    flag_ar: asString(row.flag_ar),
-    flag_collegabile: asFlag(row.flag_collegabile),
+    flag_ar_obbligatorio: asFlag(row.flag_ar_obbligatorio),
     flag_targa: asFlag(row.flag_targa),
-    checkin: asBoolean(row.checkin),
-    re: row.re ?? null,
+    quantita_min_per_esclusivo: asNumber(row.quantita_min_per_esclusivo),
+    quantita_max_per_esclusivo: asNumber(row.quantita_max_per_esclusivo),
   };
 }
 
 /**
- * Parsa GET .../api/biglietti/vendibili/{id_corsa}. schemaValid=false se
- * l'envelope non è riconoscibile (né array, né { data: [...] }): il
- * chiamante (client.ts) deve fail-closed in quel caso, non trattare come
- * "0 biglietti". Righe singole con campi mancanti restano con quei campi a
- * null (mai un valore indovinato) — è la selezione (findArTariffAndTax) a
- * decidere se i dati disponibili bastano per can_issue.
+ * Parsa GET .../api/biglietti/vendibili/{id_corsa} ({ return: true, output:
+ * [...] } — array DIRETTO sotto output, non output.data). schemaValid=false
+ * (con schemaError) per qualunque envelope non riconosciuto, inclusi i
+ * vecchi formati Fase 1.6 (array alla radice, o { data: [...] } alla
+ * radice) che NON sono mai stati reali. Righe singole con campi mancanti
+ * restano con quei campi a null (mai un valore indovinato) — è la
+ * selezione (findArTariffAndTax) a decidere se i dati disponibili bastano
+ * per can_issue.
  */
-export function parseBigliettiVendibiliResponse(json: unknown): { rows: BigliettoVendibileRaw[]; schemaValid: boolean } {
-  const rawRows = extractBigliettiRows(json);
-  if (rawRows === null) {
-    return { rows: [], schemaValid: false };
+export function parseBigliettiVendibiliResponse(json: unknown): {
+  rows: BigliettoVendibileRaw[];
+  schemaValid: boolean;
+  schemaError: string | null;
+} {
+  const envelope = validateApiEnvelope(json);
+  if (!envelope.valid) {
+    return { rows: [], schemaValid: false, schemaError: envelope.error };
   }
-  return { rows: rawRows.map(parseBigliettoRow), schemaValid: true };
+  if (!Array.isArray(envelope.output)) {
+    return { rows: [], schemaValid: false, schemaError: "output_not_array" };
+  }
+  const rawRows = envelope.output as Record<string, unknown>[];
+  return { rows: rawRows.map(parseBigliettoRow), schemaValid: true, schemaError: null };
 }
 
 /** id_tipologia_passeggero osservato per l'adulto sulla tariffa AR (esempio reale verificato). */
@@ -130,16 +172,40 @@ export const TASSA_SBARCO_TIPOLOGIA_PASSEGGERO = 32;
 const AR_TARIFF_LABEL_HINT = /PASSAGGIO PONTE ADULTO.*TARIFFA SPECIALE AR/i;
 const TASSA_SBARCO_HINT = /TASSA\s+DI\s+SBARCO/i;
 
-function isRoundTripFlag(flagAr: string | null): boolean {
-  return flagAr?.trim().toUpperCase() === "R";
+export type BigliettoLabelResolution =
+  | { label: string; source: "descrizione" | "nome" }
+  | { label: null; source: null };
+
+/**
+ * Risolve l'etichetta di un biglietto con precedenza deterministica FISSA
+ * (nessuna alias-list): descrizione (fonte primaria, etichetta estesa) se
+ * presente e non vuota, altrimenti nome (fonte secondaria, etichetta
+ * breve), altrimenti null. Esportata perché usata sia per identificare
+ * AR/tassa di sbarco (findArTariffAndTax) sia per la label mostrata nel
+ * risultato del preflight.
+ */
+export function resolveBigliettoLabel(row: BigliettoVendibileRaw): BigliettoLabelResolution {
+  const descrizione = row.descrizione?.trim();
+  if (descrizione) {
+    return { label: descrizione, source: "descrizione" };
+  }
+  const nome = row.nome?.trim();
+  if (nome) {
+    return { label: nome, source: "nome" };
+  }
+  return { label: null, source: null };
 }
 
 export type ArTariffSelectionResult =
   | { kind: "not_found" }
   | { kind: "unsupported_passenger_type"; row: BigliettoVendibileRaw }
+  /** Più righe candidate per l'adulto AR: nessuna scelta arbitraria, revisione manuale richiesta. */
+  | { kind: "ambiguous_tariff" }
   | {
       kind: "found";
       tariff: BigliettoVendibileRaw;
+      /** Quale campo ha prodotto la label del biglietto selezionato — solo diagnostico. */
+      labelSource: "descrizione" | "nome";
       tassaSbarco: BigliettoVendibileRaw | null;
       /** Non-null quando una tassa di sbarco è stata individuata nella risposta ma i dati non bastano a determinarla con certezza. */
       taxIssue: "ambiguous" | "price_missing" | null;
@@ -149,40 +215,65 @@ export type ArTariffSelectionResult =
  * Individua il biglietto "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR" e
  * l'eventuale "TASSA DI SBARCO" tra i biglietti vendibili di una corsa.
  *
- * Fonte primaria di selezione: descrizione (biglietto) + flag_ar + tipologia
- * passeggero live — MAI un id_biglietto/id_tariffa hardcoded come regola
- * assoluta (possono cambiare tra listini/configurazioni). Gli ID live
- * vengono comunque riportati nel risultato per un'eventuale Fase 2.
+ * Fonte primaria di selezione: label risolta da resolveBigliettoLabel
+ * (descrizione, o nome se descrizione assente) — MAI un id_biglietto/
+ * id_tariffa hardcoded come regola assoluta (possono cambiare tra
+ * listini/configurazioni). Gli ID live vengono comunque riportati nel
+ * risultato per diagnostica.
  *
- * Se un candidato corrisponde per descrizione+flag_ar ma la sua tipologia
- * passeggero non è quella adulto nota (1), il gestionale contiene una
- * tipologia non ancora mappata: kind "unsupported_passenger_type", mai
- * accettata silenziosamente come adulto.
+ * flag_ar_obbligatorio è un segnale SECONDARIO, mai discriminante da solo:
+ * la sua semantica reale osservata ("obbligatorio" per un solo esempio) è
+ * compatibile con un vincolo di vendita, non con "questo è il biglietto
+ * AR" — usarlo come condizione bloccante produrrebbe falsi negativi non
+ * verificati. Non viene quindi filtrato, solo letto e riportato.
+ *
+ * Se un candidato corrisponde per label ma la sua tipologia passeggero non
+ * è quella adulto nota (1), il gestionale contiene una tipologia non
+ * ancora mappata: kind "unsupported_passenger_type", mai accettata
+ * silenziosamente come adulto. Se più di un candidato adulto corrisponde,
+ * kind "ambiguous_tariff": scegliere il primo silenziosamente sarebbe un
+ * falso positivo potenziale, non un fail-safe.
  */
 export function findArTariffAndTax(rows: BigliettoVendibileRaw[]): ArTariffSelectionResult {
-  const candidates = rows.filter((r) => r.biglietto && AR_TARIFF_LABEL_HINT.test(r.biglietto) && isRoundTripFlag(r.flag_ar));
+  const withLabel = rows.map((row) => ({ row, resolved: resolveBigliettoLabel(row) }));
+
+  const candidates = withLabel.filter(
+    ({ resolved }) => resolved.label !== null && AR_TARIFF_LABEL_HINT.test(resolved.label)
+  );
 
   if (candidates.length === 0) {
     return { kind: "not_found" };
   }
 
-  const adult = candidates.find((r) => r.id_tipologia_passeggero === ADULT_TIPOLOGIA_PASSEGGERO);
-  if (!adult) {
-    return { kind: "unsupported_passenger_type", row: candidates[0]! };
+  const adults = candidates.filter(({ row }) => row.id_tipologia_passeggero === ADULT_TIPOLOGIA_PASSEGGERO);
+  if (adults.length === 0) {
+    return { kind: "unsupported_passenger_type", row: candidates[0]!.row };
   }
+  if (adults.length > 1) {
+    return { kind: "ambiguous_tariff" };
+  }
+  const { row: adult, resolved: adultLabel } = adults[0]!;
 
-  const taxMatches = rows.filter((r) => r.biglietto && TASSA_SBARCO_HINT.test(r.biglietto));
+  const taxMatches = withLabel.filter(
+    ({ resolved }) => resolved.label !== null && TASSA_SBARCO_HINT.test(resolved.label)
+  );
   let tassaSbarco: BigliettoVendibileRaw | null = null;
   let taxIssue: "ambiguous" | "price_missing" | null = null;
 
   if (taxMatches.length > 1) {
     taxIssue = "ambiguous";
   } else if (taxMatches.length === 1) {
-    tassaSbarco = taxMatches[0]!;
+    tassaSbarco = taxMatches[0]!.row;
     if (tassaSbarco.prezzo == null) {
       taxIssue = "price_missing";
     }
   }
 
-  return { kind: "found", tariff: adult, tassaSbarco, taxIssue };
+  return {
+    kind: "found",
+    tariff: adult,
+    labelSource: adultLabel.source as "descrizione" | "nome",
+    tassaSbarco,
+    taxIssue,
+  };
 }

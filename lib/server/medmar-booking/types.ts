@@ -21,7 +21,9 @@ export type MedmarPreflightStatus =
 
 /**
  * Riga corsa reale di GET .../api/corse/{id_tratta} (Fase 1.5B — schema
- * confermato da risposte JSON reali). Solo i campi usati dal matching sono
+ * confermato da risposte JSON reali; envelope di trasporto corretto in Fase
+ * 2A.2, vedi MedmarApiEnvelope sotto — l'array righe vive sotto
+ * output.data, non alla radice). Solo i campi usati dal matching sono
  * modellati (lo schema reale ne contiene molti altri: id_corsa_periodica,
  * id_listino, id_configurazione, diretta, tempo_percorrenza, stagione_*,
  * blocca_overbooking, flag_bypassa, bypassa, ruoli, tratta — non necessari
@@ -41,7 +43,19 @@ export type CorsaMedmarRaw = {
   nave: string | null;
 };
 
-/** Envelope di paginazione reale (stile Laravel) osservato su GET .../api/corse/{id_tratta}. */
+/**
+ * Envelope esterno comune a tutte le risposte reali osservate dell'API
+ * Medmar (Fase 2A.2 — confermato su /authenticate, GET corse, GET
+ * biglietti/vendibili tramite smoke test reale): { return: true, output: T }.
+ * "return" deve essere confrontato in modo stretto (=== true), stesso
+ * criterio già usato per /authenticate (vedi medmar-auth-provider.ts).
+ */
+export type MedmarApiEnvelope<T> = {
+  return: unknown;
+  output: T;
+};
+
+/** Payload di paginazione reale (stile Laravel) osservato sotto output di GET .../api/corse/{id_tratta}. */
 export type MedmarPaginatedEnvelope<T> = {
   data: T[];
   current_page: number | null;
@@ -50,40 +64,54 @@ export type MedmarPaginatedEnvelope<T> = {
 };
 
 /**
- * Riga di GET /api/biglietti/vendibili/{id_corsa} (Fase 1.6 — schema reale
- * CONFERMATO da risposte JSON reali). Solo i nomi di campo realmente
- * osservati: nessun alias inventato, nessun parsing multi-chiave permissivo.
- * "re" ha significato non ancora documentato: viene solo catturato per
- * diagnostica/Fase 2, mai usato per decidere can_issue.
+ * Riga di GET /api/biglietti/vendibili/{id_corsa} — schema riallineato in
+ * Fase 2A.2 sullo schema REALE osservato tramite smoke test reale (Fase
+ * 2A.1), che ha superseduto lo schema Fase 1.6 (mai stato reale: verificato
+ * contro un envelope sbagliato). Solo i nomi di campo realmente osservati:
+ * nessun alias inventato, nessun parsing multi-chiave permissivo. Campi
+ * reali osservati ma deliberatamente NON modellati qui perché di struttura
+ * ignota e non usati dalla logica attuale: gruppo, cumulativo, orePrevendita,
+ * biglietti_bonus, passeggeri_tipologia, collegati, collegabili, dipendenti.
  *
- * "quantita": semantica NON confermata (Fase 1.7). Compare identica (40) sia
- * sulla riga tariffa AR sia sulla riga tassa di sbarco nei fixture reali
- * osservati finora, il che è compatibile sia con "posti residui sulla corsa"
- * sia con "quantità massima vendibile per transazione/riga di listino" — nessun
- * comportamento osservato (né endpoint, né documentazione Medmar) la conferma
- * come disponibilità residua. Per questo NON viene usata per bloccare
- * can_issue: viene solo catturata per diagnostica. Per verificarla davvero
- * servirebbe osservare la stessa corsa/tariffa PRIMA e DOPO un'emissione reale
- * (fuori scope: nessuna emissione viene fatta da questo modulo) e confermare
- * che il valore diminuisce in modo coerente con i posti venduti.
+ * RIMOSSI rispetto allo schema Fase 1.6 (mai osservati realmente):
+ * "biglietto" (sostituito da nome/descrizione), "flag_ar" (sostituito da
+ * flag_ar_obbligatorio, booleano), "quantita" (sostituito da
+ * quantita_min_per_esclusivo/quantita_max_per_esclusivo), "checkin",
+ * "id_gruppo", "flag_collegabile", "re".
+ *
+ * "prezzo_ar" e "prezzo_prevendita": chiavi reali confermate, ma semantica
+ * NON confermata (la riga tariffa AR realmente osservata aveva prezzo=11.5,
+ * prezzo_ar/prezzo_prevendita non verificati come "il" prezzo AR). Catturati
+ * per diagnostica, MAI usati al posto di "prezzo" per il calcolo di
+ * can_issue finché non verificati con evidenza reale.
+ *
+ * "quantita_min_per_esclusivo" / "quantita_max_per_esclusivo": stessa
+ * cautela già documentata per "quantita" in Fase 1.7 — il nome ("per
+ * esclusivo") suggerisce un vincolo di vendita esclusiva, non posti
+ * residui. NON usati come guard di disponibilità. Per verificarli davvero
+ * servirebbe osservare la stessa corsa/tariffa PRIMA e DOPO un'emissione
+ * reale (fuori scope: nessuna emissione viene fatta da questo modulo).
  */
 export type BigliettoVendibileRaw = {
   id_corsa: number | string | null;
   id_biglietto: number | string | null;
   id_tipologia_passeggero: number | null;
   id_tariffa: number | string | null;
-  id_log: number | string | null;
   id_iva: number | string | null;
-  id_gruppo: number | string | null;
-  biglietto: string | null;
+  id_log: number | string | null;
+  /** Etichetta breve — fonte SECONDARIA di label (vedi resolveBigliettoLabel in live-parser.ts). */
+  nome: string | null;
+  /** Etichetta estesa — fonte PRIMARIA di label e di identificazione AR/tassa di sbarco. */
+  descrizione: string | null;
+  /** UNICO prezzo usato per can_issue (vedi commento sopra su prezzo_ar/prezzo_prevendita). */
   prezzo: number | null;
+  prezzo_ar: number | null;
   prezzo_prevendita: number | null;
-  quantita: number | null;
-  flag_ar: string | null;
-  flag_collegabile: boolean | number | null;
+  /** Segnale SECONDARIO/informativo, mai discriminante da solo per identificare l'AR (vedi live-parser.ts). */
+  flag_ar_obbligatorio: boolean | number | null;
   flag_targa: boolean | number | null;
-  checkin: boolean | null;
-  re: unknown;
+  quantita_min_per_esclusivo: number | null;
+  quantita_max_per_esclusivo: number | null;
 };
 
 export type MedmarPreflightWarning = { code: string; message: string };

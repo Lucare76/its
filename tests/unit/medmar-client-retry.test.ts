@@ -12,8 +12,9 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
+/** Envelope reale osservato via smoke test Fase 2A.1: { return: true, output: { data: [...], ... } }. */
 function corsePage(rows: unknown[]) {
-  return { data: rows, current_page: 1, last_page: 1, total: rows.length };
+  return { return: true, output: { data: rows, current_page: 1, last_page: 1, total: rows.length } };
 }
 
 const ROW_A = {
@@ -149,8 +150,8 @@ describe("client — retry-once su 401/403 (Fase 2A)", () => {
     __setMedmarAuthProviderForTests(provider);
     const fetchSpy = vi.spyOn(global, "fetch")
       .mockResolvedValueOnce(jsonResponse({ error: "unauthorized" }, 401)) // pagina 1, tentativo 1: 401
-      .mockResolvedValueOnce(jsonResponse({ data: [], current_page: 1, last_page: 2, total: 0 })) // pagina 1, tentativo 2: ok
-      .mockResolvedValueOnce(jsonResponse({ data: [ROW_A], current_page: 2, last_page: 2, total: 1 })); // pagina 2: ok, nessun 401
+      .mockResolvedValueOnce(jsonResponse({ return: true, output: { data: [], current_page: 1, last_page: 2, total: 0 } })) // pagina 1, tentativo 2: ok
+      .mockResolvedValueOnce(jsonResponse({ return: true, output: { data: [ROW_A], current_page: 2, last_page: 2, total: 1 } })); // pagina 2: ok, nessun 401
 
     const rows = await fetchCorseReadOnly({ idTratta: 47, partenzaDataDal: "2026-08-12", dopoLe: "00:00:00" });
     expect(rows).toHaveLength(1);

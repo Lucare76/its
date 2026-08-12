@@ -62,17 +62,22 @@ const NAPOLI_ISCHIA_CORSA: Row = {
   porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA",
 };
 
-// Fixture "biglietto vendibile" nello schema reale confermato in Fase 1.6
-// (id_corsa, id_biglietto, id_tipologia_passeggero, id_tariffa, id_log,
-// id_iva, id_gruppo, biglietto, prezzo, prezzo_prevendita, quantita,
-// flag_ar, flag_collegabile, flag_targa, checkin, re).
+// Fixture "biglietto vendibile" nello schema REALE confermato via smoke test
+// Fase 2A.1 (id_corsa, id_biglietto, id_tipologia_passeggero, id_tariffa,
+// id_iva, id_log, nome, descrizione, prezzo, prezzo_ar, prezzo_prevendita,
+// flag_ar_obbligatorio, flag_targa, quantita_min/max_per_esclusivo). Queste
+// righe sono consumate direttamente da fetchBigliettiVendibiliReadOnly
+// mockata: rappresentano righe già parsate, non l'envelope HTTP grezzo (che
+// è coperto da tests/unit/medmar-client-vendibili.test.ts).
 function arTariffRow(overrides: Row = {}): Row {
   return {
     id_corsa: 131943, id_biglietto: 370, id_tipologia_passeggero: 1, id_tariffa: 6,
-    id_log: 5001, id_iva: 22, id_gruppo: 1,
-    biglietto: "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR",
-    prezzo: 10.25, prezzo_prevendita: 10.25, quantita: 40,
-    flag_ar: "R", flag_collegabile: 1, flag_targa: 0, checkin: true, re: null,
+    id_iva: 22, id_log: 5001,
+    nome: "ADULTO - TARIFFA SPECIALE AR",
+    descrizione: "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR",
+    prezzo: 10.25, prezzo_ar: 0, prezzo_prevendita: 10.25,
+    flag_ar_obbligatorio: true, flag_targa: 0,
+    quantita_min_per_esclusivo: null, quantita_max_per_esclusivo: null,
     ...overrides,
   };
 }
@@ -80,10 +85,12 @@ function arTariffRow(overrides: Row = {}): Row {
 function tassaSbarcoRow(overrides: Row = {}): Row {
   return {
     id_corsa: 131943, id_biglietto: 999, id_tipologia_passeggero: 32, id_tariffa: 12,
-    id_log: 5002, id_iva: 22, id_gruppo: 1,
-    biglietto: "TASSA DI SBARCO",
-    prezzo: 1.5, prezzo_prevendita: 1.5, quantita: 40,
-    flag_ar: null, flag_collegabile: 0, flag_targa: 0, checkin: false, re: null,
+    id_iva: 22, id_log: 5002,
+    nome: "TASSA DI SBARCO",
+    descrizione: "TASSA DI SBARCO",
+    prezzo: 1.5, prezzo_ar: 0, prezzo_prevendita: 1.5,
+    flag_ar_obbligatorio: false, flag_targa: 0,
+    quantita_min_per_esclusivo: null, quantita_max_per_esclusivo: null,
     ...overrides,
   };
 }
@@ -347,7 +354,7 @@ describe("runMedmarPreflight — corse live", () => {
   it("tariffa AR non trovata nella risposta live -> fallback ticket_memory, is_live false, can_issue false", async () => {
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
     vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
-    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([arTariffRow({ biglietto: "ALTRA TARIFFA", flag_ar: null })] as never);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([arTariffRow({ descrizione: "ALTRA TARIFFA", nome: "ALTRA TARIFFA" })] as never);
 
     const admin = fakeAdmin([ARRIVAL_ROW], [{ tenant_id: TENANT_A, matched_service_id: SVC_ARR, tariff_label: "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR", price_cents: 1025, quantity: 2 }]);
     const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR]);
@@ -473,13 +480,13 @@ describe("runMedmarPreflight — risoluzione porto isolano Ischia/Casamicciola (
   });
 });
 
-describe("runMedmarPreflight — quantita (Fase 1.7: semantica non confermata, non usata come guard di disponibilità)", () => {
-  it("quantita nullo sulla tariffa AR -> can_issue resta true (quantita non è usata per bloccare l'emissione)", async () => {
+describe("runMedmarPreflight — quantita_min/max_per_esclusivo (Fase 2A.2: semantica non confermata, non usata come guard di disponibilità)", () => {
+  it("quantita_min/max_per_esclusivo null sulla tariffa AR -> can_issue resta true (non usati per bloccare l'emissione)", async () => {
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
     vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
     vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
-      arTariffRow({ quantita: null }),
-      tassaSbarcoRow({ quantita: null }),
+      arTariffRow({ quantita_min_per_esclusivo: null, quantita_max_per_esclusivo: null }),
+      tassaSbarcoRow({ quantita_min_per_esclusivo: null, quantita_max_per_esclusivo: null }),
     ] as never);
 
     const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
@@ -487,18 +494,50 @@ describe("runMedmarPreflight — quantita (Fase 1.7: semantica non confermata, n
     expect(result.can_issue).toBe(true);
   });
 
-  it("quantita negativo o 0 sulla tariffa AR -> can_issue resta true (nessun controllo di disponibilità implementato su dati non confermati)", async () => {
+  it("quantita_min/max_per_esclusivo negativo o 0 sulla tariffa AR -> can_issue resta true (nessun controllo di disponibilità implementato su dati non confermati)", async () => {
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
     vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
     vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
-      arTariffRow({ quantita: -1 }),
-      tassaSbarcoRow({ quantita: 0 }),
+      arTariffRow({ quantita_min_per_esclusivo: -1, quantita_max_per_esclusivo: -1 }),
+      tassaSbarcoRow({ quantita_min_per_esclusivo: 0, quantita_max_per_esclusivo: 0 }),
     ] as never);
 
     const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ pax: 5 })]), TENANT_A, [SVC_ARR]);
 
     expect(result.can_issue).toBe(true);
     expect(result.expected_total_cents).toBe((1025 + 150) * 5);
+  });
+
+  it("sensitivity: il vecchio campo 'quantita' (rimosso dallo schema reale) anche se presente nella riga non ha alcun effetto su can_issue", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
+      { ...arTariffRow(), quantita: 0 },
+      { ...tassaSbarcoRow(), quantita: 0 },
+    ] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+
+    expect(result.can_issue).toBe(true);
+  });
+});
+
+describe("runMedmarPreflight — schema vecchio (Fase 1.6) non deve mai produrre can_issue=true (Fase 2A.2)", () => {
+  it("fixture nel vecchio formato (biglietto/flag_ar invece di descrizione/flag_ar_obbligatorio) -> not_found, can_issue false", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    const oldShapedRow = {
+      id_corsa: 131943, id_biglietto: 370, id_tipologia_passeggero: 1, id_tariffa: 6,
+      id_log: 5001, id_iva: 22, id_gruppo: 1,
+      biglietto: "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR",
+      prezzo: 10.25, prezzo_prevendita: 10.25, quantita: 40,
+      flag_ar: "R", flag_collegabile: 1, flag_targa: 0, checkin: true, re: null,
+    };
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([oldShapedRow] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+
+    expect(result.can_issue).toBe(false);
   });
 });
 

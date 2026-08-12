@@ -5,20 +5,24 @@ process.env.MEDMAR_SESSION_TOKEN = "test-token";
 
 const { fetchCorseReadOnly, MedmarBadResponseError } = await import("@/lib/server/medmar-booking/client");
 
+/** Envelope reale osservato via smoke test Fase 2A.1: { return: true, output: { data, current_page, ... } }. */
 function laravelPage(rows: unknown[], opts: { currentPage: number; lastPage: number; total?: number }) {
   return {
-    data: rows,
-    current_page: opts.currentPage,
-    last_page: opts.lastPage,
-    total: opts.total ?? rows.length,
-    per_page: 10,
-    from: 1,
-    to: rows.length,
-    path: "https://medmar.example.test/production/biglietteria_api/public/index.php/api/corse/47",
-    next_page_url: opts.currentPage < opts.lastPage
-      ? `https://medmar.example.test/production/biglietteria_api/public/index.php/api/corse/47?page=${opts.currentPage + 1}`
-      : null,
-    prev_page_url: null,
+    return: true,
+    output: {
+      data: rows,
+      current_page: opts.currentPage,
+      last_page: opts.lastPage,
+      total: opts.total ?? rows.length,
+      per_page: 10,
+      from: 1,
+      to: rows.length,
+      path: "https://medmar.example.test/production/biglietteria_api/public/index.php/api/corse/47",
+      next_page_url: opts.currentPage < opts.lastPage
+        ? `https://medmar.example.test/production/biglietteria_api/public/index.php/api/corse/47?page=${opts.currentPage + 1}`
+        : null,
+      prev_page_url: null,
+    },
   };
 }
 
@@ -79,10 +83,37 @@ describe("fetchCorseReadOnly — paginazione reale (dati Ischia->Napoli, id_trat
     expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(30);
   });
 
-  it("paginazione malformata (last_page/current_page/total assenti): trattata come pagina singola, nessun crash", async () => {
-    const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValueOnce(jsonResponse({ data: [ROW_A] }));
+  it("paginazione malformata (last_page/current_page/total assenti) ma envelope reale valido: trattata come pagina singola, nessun crash", async () => {
+    const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValueOnce(jsonResponse({ return: true, output: { data: [ROW_A] } }));
     const rows = await fetchCorseReadOnly({ idTratta: 47, partenzaDataDal: "2026-08-12", dopoLe: "00:00:00" });
     expect(rows).toHaveLength(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("REGRESSIONE: il vecchio envelope Fase 1.5B ({ data: [...] } alla radice, senza return/output) non è mai stato reale e ora fallisce fail-closed", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(jsonResponse({ data: [ROW_A] }));
+    await expect(fetchCorseReadOnly({ idTratta: 47, partenzaDataDal: "2026-08-12", dopoLe: "00:00:00" })).rejects.toThrow(MedmarBadResponseError);
+  });
+
+  it("schema incompatibile è distinguibile da 'nessuna corsa trovata': output.data non è un array -> fail closed, non [] silenzioso", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(jsonResponse({ return: true, output: { data: "not-an-array" } }));
+    await expect(fetchCorseReadOnly({ idTratta: 47, partenzaDataDal: "2026-08-12", dopoLe: "00:00:00" })).rejects.toThrow(MedmarBadResponseError);
+  });
+
+  it("return: false -> fail closed anche con output.data array valido", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(jsonResponse({ return: false, output: { data: [ROW_A] } }));
+    await expect(fetchCorseReadOnly({ idTratta: 47, partenzaDataDal: "2026-08-12", dopoLe: "00:00:00" })).rejects.toThrow(MedmarBadResponseError);
+  });
+
+  it("output mancante -> fail closed", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(jsonResponse({ return: true }));
+    await expect(fetchCorseReadOnly({ idTratta: 47, partenzaDataDal: "2026-08-12", dopoLe: "00:00:00" })).rejects.toThrow(MedmarBadResponseError);
+  });
+
+  it("envelope valido con 0 corse -> array vuoto, NESSUN errore (distinto dai casi di schema incompatibile sopra)", async () => {
+    const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValueOnce(jsonResponse(laravelPage([], { currentPage: 1, lastPage: 1 })));
+    const rows = await fetchCorseReadOnly({ idTratta: 47, partenzaDataDal: "2026-08-12", dopoLe: "00:00:00" });
+    expect(rows).toEqual([]);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
