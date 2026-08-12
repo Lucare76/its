@@ -248,6 +248,14 @@ export async function POST(request: NextRequest) {
         pickup_time: pickupTimeReturn || null,
         linked_service_id: null,
         ...(bookingKind === "excursion" ? { meeting_point: excursionPickupPort } : {}),
+        // Il porto isolano del ritorno è indipendente da quello dell'andata
+        // (es. andata Pozzuoli->Ischia, ritorno Casamicciola->Pozzuoli): senza
+        // questo override meeting_point erediterebbe per spread (sopra) il
+        // porto di ARRIVO dell'andata, falsando resolveIslandPort (Fase 1.7).
+        // portoPartenza è già raccolto per-gamba dalla UI (usato per
+        // barca_compagnia sopra); se manca -> null -> fail-closed
+        // (manual_review nel preflight Medmar), mai un porto ereditato.
+        ...(isFerryKind ? { meeting_point: portoPartenza } : {}),
       };
       const { data: retData } = await auth.admin
         .from("services").insert(returnInsert).select("id").single();
