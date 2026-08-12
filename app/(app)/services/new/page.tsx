@@ -189,6 +189,8 @@ export default function OpsNewBookingPage() {
   const [newHotelAddress, setNewHotelAddress] = useState("");
   const [newHotelCity, setNewHotelCity] = useState("");
   const [savingHotel, setSavingHotel] = useState(false);
+  const [hotelSearch, setHotelSearch] = useState("");
+  const [hotelSearchOpen, setHotelSearchOpen] = useState(false);
 
   const [addingAgency, setAddingAgency] = useState(false);
   const [newAgencyName, setNewAgencyName] = useState("");
@@ -283,7 +285,6 @@ export default function OpsNewBookingPage() {
 
       const hotelRows = (hotelRes.data ?? []) as HotelOption[];
       setHotels(hotelRows);
-      if (hotelRows[0]?.id) setForm((prev) => ({ ...prev, hotel_id: prev.hotel_id || hotelRows[0]!.id }));
 
       const agencyRows = (agencyRes.data ?? []) as AgencyOption[];
       setAgencies(agencyRows);
@@ -328,6 +329,13 @@ export default function OpsNewBookingPage() {
   };
 
   const hasHotels = hotels.length > 0;
+  const selectedHotel = hotels.find((hotel) => hotel.id === form.hotel_id) ?? null;
+  const normalizedHotelSearch = hotelSearch.trim().toLocaleLowerCase("it");
+  const hotelSuggestions = normalizedHotelSearch
+    ? hotels.filter((hotel) => hotel.name.toLocaleLowerCase("it").startsWith(normalizedHotelSearch)).slice(0, 8)
+    : hotels.slice(0, 8);
+  const exactHotelMatch = normalizedHotelSearch.length > 0
+    && hotels.some((hotel) => hotel.name.toLocaleLowerCase("it") === normalizedHotelSearch);
   const selectedKind = form.booking_service_kind;
   const serviceKindLabel = useMemo(() => kindOptions.find((item) => item.value === selectedKind)?.label ?? "Servizio", [selectedKind]);
   const contextLabels = useMemo(() => bookingContext(selectedKind), [selectedKind]);
@@ -564,12 +572,7 @@ export default function OpsNewBookingPage() {
 
         {/* Hotel */}
         <div className="text-sm md:col-span-2">
-          <div className="flex items-center justify-between">
-            <span>Hotel / Struttura{isPrivateIsland ? "" : "*"}</span>
-            <button type="button" onClick={() => setAddingHotel((v) => !v)} className="text-xs text-blue-600 hover:underline">
-              {addingHotel ? "Annulla" : "+ Nuovo hotel"}
-            </button>
-          </div>
+          <span>Hotel / Struttura{isPrivateIsland ? "" : "*"}</span>
           {addingHotel ? (
             <div className="mt-2 space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3">
               <input className="input-saas" placeholder="Nome hotel*" value={newHotelName} onChange={(e) => setNewHotelName(e.target.value)} />
@@ -578,16 +581,61 @@ export default function OpsNewBookingPage() {
               <button type="button" onClick={() => void createHotel()} disabled={savingHotel || !newHotelName.trim()} className="btn-primary w-full py-1.5 text-xs disabled:opacity-60">
                 {savingHotel ? "Salvataggio..." : "Salva hotel"}
               </button>
+              <button type="button" onClick={() => setAddingHotel(false)} className="btn-secondary w-full py-1.5 text-xs">Annulla</button>
             </div>
           ) : (
-            <>
-              <select className="input-saas mt-1" value={form.hotel_id} onChange={(e) => setForm((prev) => ({ ...prev, hotel_id: e.target.value }))}>
-                {hotels.map((hotel) => (
-                  <option key={hotel.id} value={hotel.id}>{hotel.name}{hotel.zone ? ` - ${hotel.zone}` : ""}</option>
-                ))}
-              </select>
+            <div className="relative mt-1">
+              <input
+                className="input-saas"
+                role="combobox"
+                aria-expanded={hotelSearchOpen}
+                aria-controls="hotel-suggestions"
+                placeholder="Scrivi le iniziali della struttura..."
+                value={hotelSearchOpen ? hotelSearch : selectedHotel?.name ?? hotelSearch}
+                onFocus={() => { setHotelSearch(selectedHotel?.name ?? hotelSearch); setHotelSearchOpen(true); }}
+                onChange={(event) => {
+                  setHotelSearch(event.target.value);
+                  setHotelSearchOpen(true);
+                  setForm((prev) => ({ ...prev, hotel_id: "" }));
+                }}
+              />
+              {hotelSearchOpen ? (
+                <div id="hotel-suggestions" className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
+                  {hotelSuggestions.map((hotel) => (
+                    <button
+                      key={hotel.id}
+                      type="button"
+                      className="block w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setForm((prev) => ({ ...prev, hotel_id: hotel.id }));
+                        setHotelSearch(hotel.name);
+                        setHotelSearchOpen(false);
+                        setFieldErrors((prev) => { const next = { ...prev }; delete next.hotel_id; return next; });
+                      }}
+                    >
+                      <span className="font-medium">{hotel.name}</span>{hotel.zone ? <span className="ml-2 text-xs text-slate-500">{hotel.zone}</span> : null}
+                    </button>
+                  ))}
+                  {normalizedHotelSearch && !exactHotelMatch ? (
+                    <button
+                      type="button"
+                      className="block w-full rounded-lg px-3 py-2 text-left font-medium text-blue-700 hover:bg-blue-50"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setNewHotelName(hotelSearch.trim());
+                        setAddingHotel(true);
+                        setHotelSearchOpen(false);
+                      }}
+                    >
+                      + Aggiungi struttura “{hotelSearch.trim()}”
+                    </button>
+                  ) : null}
+                  {hotelSuggestions.length === 0 && !normalizedHotelSearch ? <p className="px-3 py-2 text-slate-500">Inizia a scrivere il nome.</p> : null}
+                </div>
+              ) : null}
               {fieldErrors.hotel_id ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.hotel_id}</span> : null}
-            </>
+            </div>
           )}
         </div>
 
