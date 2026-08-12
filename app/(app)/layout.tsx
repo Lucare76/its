@@ -103,6 +103,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     if (role === "driver" || role === "autista") return "/driver";
     return "/agency";
   };
+  const homeHref = redirectByRole(authRole);
+  const isHomePage = pathname === homeHref;
 
   const hardRedirect = (target: string) => {
     if (typeof window === "undefined") return;
@@ -1343,6 +1345,19 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             <h2 className="mt-0.5 line-clamp-1 text-xl font-extrabold tracking-tight text-slate-950 md:text-2xl">{title}</h2>
           </div>
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+            {!isHomePage ? (
+              <Link
+                href={homeHref}
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
+                title="Torna al cruscotto"
+                aria-label="Torna al cruscotto"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0" aria-hidden="true">
+                  <path d="m2.5 7.5 5.5-4.5 5.5 4.5M4 6.5v6h8v-6M6.5 12.5v-4h3v4" />
+                </svg>
+                <span>Cruscotto</span>
+              </Link>
+            ) : null}
             {authRole === "admin" || authRole === "supervisor" ? (
               <Link
                 href="/settings/users"
