@@ -53,6 +53,17 @@ export type MedmarPaginatedEnvelope<T> = {
  * osservati: nessun alias inventato, nessun parsing multi-chiave permissivo.
  * "re" ha significato non ancora documentato: viene solo catturato per
  * diagnostica/Fase 2, mai usato per decidere can_issue.
+ *
+ * "quantita": semantica NON confermata (Fase 1.7). Compare identica (40) sia
+ * sulla riga tariffa AR sia sulla riga tassa di sbarco nei fixture reali
+ * osservati finora, il che è compatibile sia con "posti residui sulla corsa"
+ * sia con "quantità massima vendibile per transazione/riga di listino" — nessun
+ * comportamento osservato (né endpoint, né documentazione Medmar) la conferma
+ * come disponibilità residua. Per questo NON viene usata per bloccare
+ * can_issue: viene solo catturata per diagnostica. Per verificarla davvero
+ * servirebbe osservare la stessa corsa/tariffa PRIMA e DOPO un'emissione reale
+ * (fuori scope: nessuna emissione viene fatta da questo modulo) e confermare
+ * che il valore diminuisce in modo coerente con i posti venduti.
  */
 export type BigliettoVendibileRaw = {
   id_corsa: number | string | null;
@@ -133,4 +144,11 @@ export type MedmarPreflightServiceRow = {
   booking_service_kind: string | null;
   direction: string | null;
   status: string | null;
+  /**
+   * Stesso campo/stessa regola già usati da
+   * lib/service-display.ts:getDepartureIschiaPort per distinguere Ischia da
+   * Casamicciola lato Pozzuoli. Usato da port-resolution.ts per risolvere il
+   * porto isolano della gamba (Fase 1.7).
+   */
+  meeting_point: string | null;
 };

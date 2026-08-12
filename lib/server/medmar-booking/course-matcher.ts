@@ -3,11 +3,11 @@
  * repository (lib/server/medmar-schedule.ts), NON una chiamata live a Medmar
  * (nessun endpoint "ricerca corse" è ancora documentato — vedi client.ts).
  *
- * Limite noto: i dati service (booking_service_kind + direction) permettono
- * di determinare il porto "esterno" (Napoli o Pozzuoli) e la direzione, ma
- * NON distinguono in modo affidabile Ischia da Casamicciola come porto
- * isolano. Si assume quindi Ischia come porto isolano di default e si
- * aggiunge sempre un warning esplicito da verificare manualmente.
+ * La risoluzione del route_code (quale porto isolano è coinvolto: Ischia o
+ * Casamicciola) NON avviene qui — vedi port-resolution.ts:resolveLegRouteCode,
+ * che usa booking_service_kind + meeting_point ed è fail-closed su unknown.
+ * Questo modulo resta solo un confronto diagnostico sugli orari noti per un
+ * route_code già risolto altrove.
  */
 
 import { MEDMAR_SCHEDULE } from "@/lib/server/medmar-schedule";
@@ -33,29 +33,6 @@ function toMinutes(time: string): number | null {
   const match = time.match(/^([0-2]\d):([0-5]\d)/);
   if (!match) return null;
   return Number(match[1]) * 60 + Number(match[2]);
-}
-
-/**
- * Determina il route_code Medmar (tratta) a partire dai dati service noti:
- * booking_service_kind ("formula_medmar_napoli" | "formula_medmar_pozzuoli")
- * e direction ("arrival" | "departure"). Assume sempre Ischia come porto
- * isolano (vedi limite documentato in testa al file).
- */
-export function resolveRouteCodeFromService(input: {
-  bookingServiceKind: string | null;
-  direction: string | null;
-}): MedmarTicketRouteCode | null {
-  const isArrival = input.direction === "arrival";
-  const isDeparture = input.direction === "departure";
-  if (!isArrival && !isDeparture) return null;
-
-  if (input.bookingServiceKind?.includes("medmar_napoli")) {
-    return isArrival ? "napoli_ischia" : "ischia_napoli";
-  }
-  if (input.bookingServiceKind?.includes("medmar_pozzuoli")) {
-    return isArrival ? "pozzuoli_ischia" : "ischia_pozzuoli";
-  }
-  return null;
 }
 
 /**

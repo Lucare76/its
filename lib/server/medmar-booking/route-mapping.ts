@@ -19,16 +19,14 @@
  * reali). id_listino è un concetto Medmar diverso (catalogo tariffe) e non
  * viene mai letto/usato da questo modulo: qui esiste SOLO id_tratta.
  *
- * LIMITE NOTO (non introdotto da questa fase, pre-esistente): i dati service
- * ITS (booking_service_kind + direction, vedi course-matcher.ts) non
- * distinguono Ischia da Casamicciola come porto isolano — resolveRouteCodeFromService
- * assume sempre Ischia. Le due voci casamicciola_pozzuoli/pozzuoli_casamicciola
- * sono quindi mappature verificate e corrette, ma NON ancora raggiungibili
- * automaticamente dal preflight reale finché i dati service non permettono di
- * riconoscere Casamicciola: un servizio Casamicciola oggi risolve comunque
- * su ischia_pozzuoli/pozzuoli_ischia (già così anche per Napoli, in Fase 1.5B).
- * Questo modulo non inventa una euristica per colmare quel limite — il
- * warning "island_port_assumed" (preflight.ts) segnala il caso.
+ * Le 6 tratte sono tutte raggiungibili automaticamente dal preflight reale
+ * (Fase 1.7): la risoluzione del porto isolano (Ischia vs Casamicciola) è in
+ * port-resolution.ts:resolveLegRouteCode, che usa booking_service_kind +
+ * meeting_point del servizio ITS ed è fail-closed su unknown (nessun
+ * fallback automatico verso Ischia). napoli_casamicciola/casamicciola_napoli
+ * restano intenzionalmente assenti da questa tabella: non sono tratte
+ * verificate, quindi anche se risolte a livello di porto risultano comunque
+ * manual_review qui (nessun id_tratta indovinato).
  *
  * Se il service ITS richiede una tratta non presente qui, il preflight
  * restituisce manual_review — mai un id_tratta indovinato.

@@ -15,7 +15,8 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { resolveRouteCodeFromService, matchCourseByRouteAndTime } from "./course-matcher";
+import { matchCourseByRouteAndTime } from "./course-matcher";
+import { resolveLegRouteCode } from "./port-resolution";
 import { mapTariffFromTicketMemory } from "./ticket-mapper";
 import { getIdTrattaForRouteCode, getExpectedPortsForRouteCode, isMirrorRouteCode } from "./route-mapping";
 import type { CorsaMedmarRaw } from "./types";
@@ -107,14 +108,15 @@ async function resolveLegLive(
   direction: "outward" | "return",
   warnings: MedmarPreflightWarning[]
 ): Promise<{ leg: MedmarPreflightLeg; liveStatus: LiveLegStatus }> {
-  const routeCode = resolveRouteCodeFromService({
+  const resolution = resolveLegRouteCode({
     bookingServiceKind: row.booking_service_kind,
     direction: row.direction,
+    meetingPoint: row.meeting_point,
   });
 
   const leg: MedmarPreflightLeg = {
     direction,
-    route_code: routeCode,
+    route_code: resolution.status === "resolved" ? resolution.routeCode : null,
     route: null,
     date: row.date,
     requested_time: row.time,
@@ -125,22 +127,23 @@ async function resolveLegLive(
     source: null,
   };
 
-  if (!routeCode) {
+  if (resolution.status === "unknown") {
     warnings.push({
       code: "route_not_determined",
-      message: `Tratta Medmar non determinabile dai dati del servizio (booking_service_kind=${row.booking_service_kind ?? "null"}).`,
+      message: `Tratta Medmar non determinabile in modo affidabile dai dati del servizio (motivo: ${resolution.reason}; booking_service_kind=${row.booking_service_kind ?? "null"}; meeting_point=${row.meeting_point ?? "null"}). Nessun porto viene assunto per default: revisione manuale richiesta.`,
     });
     return { leg, liveStatus: "manual_review" };
   }
 
+  const routeCode = resolution.routeCode;
   const def = getRouteDefinition(routeCode);
   leg.route = {
     from: def.departurePortKeywords[0]?.toUpperCase() ?? "?",
     to: def.arrivalPortKeywords[0]?.toUpperCase() ?? "?",
   };
   warnings.push({
-    code: "island_port_assumed",
-    message: "Porto isolano assunto = Ischia (i dati service non distinguono Casamicciola): verificare manualmente se necessario.",
+    code: "island_port_resolved",
+    message: `Porto isolano risolto = ${resolution.islandPort} (porto terraferma = ${resolution.mainlandPort}), da dati strutturati booking_service_kind + meeting_point.`,
   });
 
   const idTratta = getIdTrattaForRouteCode(routeCode);
@@ -228,7 +231,7 @@ export async function runMedmarPreflight(
 
   const { data, error } = await admin
     .from("services")
-    .select("id, tenant_id, date, time, customer_name, pax, vessel, notes, booking_service_kind, direction, status")
+    .select("id, tenant_id, date, time, customer_name, pax, vessel, notes, booking_service_kind, direction, status, meeting_point")
     .in("id", serviceIds)
     .eq("tenant_id", tenantId);
 

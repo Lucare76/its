@@ -91,11 +91,6 @@ function pathSegments(pathname: string): string[] {
   return pathname.split("/").filter(Boolean);
 }
 
-function tailSegments(pathname: string, n: number): string[] {
-  const segs = pathSegments(pathname);
-  return segs.slice(Math.max(0, segs.length - n));
-}
-
 function isMutativePath(pathname: string): boolean {
   // Tutto il flusso mutativo osservato (lock-disponibilita, prenotazioni,
   // manuale, scongela) vive sotto il segmento "prenotazioni": bloccarlo
@@ -103,14 +98,32 @@ function isMutativePath(pathname: string): boolean {
   return pathSegments(pathname).some((segment) => segment.toLowerCase() === "prenotazioni");
 }
 
+const API_PREFIX_SEGMENTS = pathSegments(MEDMAR_API_PATH_PREFIX);
+
+/**
+ * Verifica che il path, oltre al tail atteso, inizi ESATTAMENTE col prefisso
+ * API noto e non contenga altri segmenti intermedi (Fase 1.7 hardening: la
+ * versione precedente controllava solo il tail, permettendo in astratto a un
+ * path con prefisso arbitrario ma tail corretto di superare il guard).
+ */
+function hasExactPrefix(segs: string[]): boolean {
+  return API_PREFIX_SEGMENTS.every((seg, i) => segs[i] === seg);
+}
+
 function isCorseReadonlyPath(pathname: string): boolean {
-  const tail = tailSegments(pathname, 2);
-  return tail.length === 2 && tail[0] === "corse" && /^\d+$/.test(tail[1]!);
+  const segs = pathSegments(pathname);
+  if (segs.length !== API_PREFIX_SEGMENTS.length + 2) return false;
+  if (!hasExactPrefix(segs)) return false;
+  const tail = segs.slice(API_PREFIX_SEGMENTS.length);
+  return tail[0] === "corse" && /^\d+$/.test(tail[1]!);
 }
 
 function isBigliettiVendibiliReadonlyPath(pathname: string): boolean {
-  const tail = tailSegments(pathname, 3);
-  return tail.length === 3 && tail[0] === "biglietti" && tail[1] === "vendibili" && /^\d+$/.test(tail[2]!);
+  const segs = pathSegments(pathname);
+  if (segs.length !== API_PREFIX_SEGMENTS.length + 3) return false;
+  if (!hasExactPrefix(segs)) return false;
+  const tail = segs.slice(API_PREFIX_SEGMENTS.length);
+  return tail[0] === "biglietti" && tail[1] === "vendibili" && /^\d+$/.test(tail[2]!);
 }
 
 const CORSE_ALLOWED_QUERY_KEYS = new Set(["id_tratta", "partenza_data_dal", "dopo_le", "vendibile", "page"]);

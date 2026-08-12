@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { resolveRouteCodeFromService, matchCourseByRouteAndTime } from "@/lib/server/medmar-booking/course-matcher";
+import { matchCourseByRouteAndTime } from "@/lib/server/medmar-booking/course-matcher";
 import * as medmarClient from "@/lib/server/medmar-booking/client";
 import * as routeMapping from "@/lib/server/medmar-booking/route-mapping";
 
@@ -48,6 +48,7 @@ function arrivalRow(overrides: Row = {}): Row {
     id: SVC_ARR, tenant_id: TENANT_A, date: "2026-08-20", time: "08:40",
     customer_name: "Mario Rossi", pax: 2, vessel: "Medmar", notes: "[practice:AAA]",
     booking_service_kind: "formula_medmar_napoli", direction: "arrival", status: "new",
+    meeting_point: null,
     ...overrides,
   };
 }
@@ -95,18 +96,6 @@ beforeEach(() => {
   vi.mocked(routeMapping.isMirrorRouteCode).mockReset().mockReturnValue(true);
   vi.mocked(medmarClient.fetchCorseReadOnly).mockReset();
   vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockReset();
-});
-
-describe("course-matcher — resolveRouteCodeFromService", () => {
-  it("mappa arrivo Napoli -> napoli_ischia", () => {
-    expect(resolveRouteCodeFromService({ bookingServiceKind: "formula_medmar_napoli", direction: "arrival" })).toBe("napoli_ischia");
-  });
-  it("mappa partenza Pozzuoli -> ischia_pozzuoli", () => {
-    expect(resolveRouteCodeFromService({ bookingServiceKind: "formula_medmar_pozzuoli", direction: "departure" })).toBe("ischia_pozzuoli");
-  });
-  it("nessuna direzione -> null", () => {
-    expect(resolveRouteCodeFromService({ bookingServiceKind: "formula_medmar_napoli", direction: null })).toBeNull();
-  });
 });
 
 describe("course-matcher — matchCourseByRouteAndTime (solo diagnostico in Fase 1.5)", () => {
@@ -394,7 +383,7 @@ describe("runMedmarPreflight — coerenza andata/ritorno su 6 tratte", () => {
 
     const admin = fakeAdmin([
       ARRIVAL_ROW,
-      { id: SVC_DEP, tenant_id: TENANT_A, date: "2026-08-25", time: "11:10", customer_name: "Mario Rossi", pax: 2, vessel: "Medmar", notes: "[practice:AAA]", booking_service_kind: "formula_medmar_pozzuoli", direction: "departure", status: "new" },
+      { id: SVC_DEP, tenant_id: TENANT_A, date: "2026-08-25", time: "11:10", customer_name: "Mario Rossi", pax: 2, vessel: "Medmar", notes: "[practice:AAA]", booking_service_kind: "formula_medmar_pozzuoli", direction: "departure", status: "new", meeting_point: "Ischia Porto" },
     ]);
     const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR, SVC_DEP]);
 
@@ -402,6 +391,113 @@ describe("runMedmarPreflight — coerenza andata/ritorno su 6 tratte", () => {
     expect(result.can_issue).toBe(false);
     expect(result.warnings.some((w) => w.code === "leg_route_mismatch")).toBe(true);
     expect(medmarClient.fetchBigliettiVendibiliReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("andata Napoli->Ischia + ritorno Casamicciola->Pozzuoli (porti isolani diversi, risolti indipendentemente per gamba) -> manual_review, leg_route_mismatch", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "casamicciola_pozzuoli" ? 50 : null));
+    vi.mocked(routeMapping.isMirrorRouteCode).mockReturnValue(false);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 59 ? [NAPOLI_ISCHIA_CORSA] : idTratta === 50
+        ? [{ id_corsa: 556, id_tratta: 50, partenza_data: "2026-08-25", partenza_ora: "11:10", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 2, id_porto_arrivo: 44, porto_partenza: "CASAMICCIOLA", porto_arrivo: "POZZUOLI", nave: "MEDMAR GIULIA" }]
+        : []
+    );
+
+    // Ritorno: booking_service_kind pozzuoli + meeting_point che menziona
+    // Casamicciola -> porto isolano risolto in modo indipendente da quello
+    // dell'andata (Ischia), senza alcuna assunzione incrociata tra le gambe.
+    const admin = fakeAdmin([
+      ARRIVAL_ROW,
+      { id: SVC_DEP, tenant_id: TENANT_A, date: "2026-08-25", time: "11:10", customer_name: "Mario Rossi", pax: 2, vessel: "Medmar", notes: "[practice:AAA]", booking_service_kind: "formula_medmar_pozzuoli", direction: "departure", status: "new", meeting_point: "Casamicciola - Piazza Marina" },
+    ]);
+    const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR, SVC_DEP]);
+
+    expect(result.outward?.route_code).toBe("napoli_ischia");
+    expect(result.return?.route_code).toBe("casamicciola_pozzuoli");
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "leg_route_mismatch")).toBe(true);
+    expect(medmarClient.fetchBigliettiVendibiliReadOnly).not.toHaveBeenCalled();
+  });
+});
+
+describe("runMedmarPreflight — risoluzione porto isolano Ischia/Casamicciola (Fase 1.7)", () => {
+  it("servizio Pozzuoli con meeting_point che menziona Casamicciola -> route_code pozzuoli_casamicciola, corsa Casamicciola raggiungibile end-to-end", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "pozzuoli_casamicciola" ? 50 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
+      { id_corsa: 777, id_tratta: 50, partenza_data: "2026-08-20", partenza_ora: "08:40", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 44, id_porto_arrivo: 2, porto_partenza: "POZZUOLI", porto_arrivo: "CASAMICCIOLA", nave: "MEDMAR GIULIA" },
+    ]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+
+    const row = arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Casamicciola - Corso Garibaldi" });
+    const result = await runMedmarPreflight(fakeAdmin([row]), TENANT_A, [SVC_ARR]);
+
+    expect(result.outward?.route_code).toBe("pozzuoli_casamicciola");
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.warnings.some((w) => w.code === "island_port_resolved" && w.message.includes("casamicciola"))).toBe(true);
+  });
+
+  it("servizio Pozzuoli senza meeting_point (mancante) -> porto isolano unknown, manual_review, can_issue false, NESSUN fallback su Ischia", async () => {
+    const row = arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: null });
+    const result = await runMedmarPreflight(fakeAdmin([row]), TENANT_A, [SVC_ARR]);
+
+    expect(result.outward?.route_code).toBeNull();
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "route_not_determined")).toBe(true);
+    expect(result.warnings.some((w) => w.code === "island_port_resolved")).toBe(false);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("servizio Pozzuoli con meeting_point vuoto (stringa vuota) -> unknown, stesso comportamento fail-closed di meeting_point null", async () => {
+    const row = arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "   " });
+    const result = await runMedmarPreflight(fakeAdmin([row]), TENANT_A, [SVC_ARR]);
+
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+  });
+
+  it("sensitivity: nessun input con porto isolano non risolvibile produce mai un route_code contenente 'ischia' per default", async () => {
+    const inputs: Row[] = [
+      arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: null }),
+      arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: undefined }),
+      arrivalRow({ booking_service_kind: "formula_medmar_unknown", meeting_point: null }),
+      arrivalRow({ booking_service_kind: null, meeting_point: null }),
+    ];
+    for (const row of inputs) {
+      const result = await runMedmarPreflight(fakeAdmin([row]), TENANT_A, [SVC_ARR]);
+      expect(result.outward?.route_code ?? null).toBeNull();
+      expect(result.can_issue).toBe(false);
+    }
+  });
+});
+
+describe("runMedmarPreflight — quantita (Fase 1.7: semantica non confermata, non usata come guard di disponibilità)", () => {
+  it("quantita nullo sulla tariffa AR -> can_issue resta true (quantita non è usata per bloccare l'emissione)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
+      arTariffRow({ quantita: null }),
+      tassaSbarcoRow({ quantita: null }),
+    ] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+
+    expect(result.can_issue).toBe(true);
+  });
+
+  it("quantita negativo o 0 sulla tariffa AR -> can_issue resta true (nessun controllo di disponibilità implementato su dati non confermati)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
+      arTariffRow({ quantita: -1 }),
+      tassaSbarcoRow({ quantita: 0 }),
+    ] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ pax: 5 })]), TENANT_A, [SVC_ARR]);
+
+    expect(result.can_issue).toBe(true);
+    expect(result.expected_total_cents).toBe((1025 + 150) * 5);
   });
 });
 
