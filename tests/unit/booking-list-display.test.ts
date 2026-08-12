@@ -19,8 +19,9 @@ describe("bookingListTransportTimes", () => {
       time: "08:40",
       arrival_time: "10:05",
       departure_time: "17:30",
+      orario_barca: "19:10",
       train_arrival_time: null,
       train_departure_time: null,
-    })).toMatchObject({ outwardTime: "08:40", returnTime: "17:30" });
+    })).toMatchObject({ outwardTime: "08:40", returnTime: "19:10" });
   });
 });

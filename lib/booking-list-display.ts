@@ -1,9 +1,9 @@
 import type { Service } from "@/lib/types";
 
-type BookingListService = Pick<
+type BookingListService = Partial<Pick<
   Service,
-  "booking_service_kind" | "time" | "arrival_time" | "departure_time" | "train_arrival_time" | "train_departure_time"
->;
+  "booking_service_kind" | "time" | "arrival_time" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca"
+>>;
 
 export type BookingListTransportTimes = {
   serviceLabel: string;
@@ -27,7 +27,7 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
       outwardLabel: "Partenza andata",
       outwardTime: cleanTime(service.time),
       returnLabel: "Partenza ritorno",
-      returnTime: cleanTime(service.departure_time),
+      returnTime: cleanTime(service.orario_barca),
     };
   }
 

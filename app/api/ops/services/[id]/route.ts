@@ -19,6 +19,7 @@ const updateServiceSchema = z.object({
   arrival_time: z.string().nullable().optional(),
   departure_date: z.string().nullable().optional(),
   departure_time: z.string().nullable().optional(),
+  orario_barca: z.string().nullable().optional(),
   transport_code: z.string().nullable().optional(),
 });
 
@@ -36,7 +37,7 @@ export async function GET(
     const [serviceRes, hotelsRes, agenciesRes] = await Promise.all([
       auth.admin
         .from("services")
-        .select("id, customer_name, phone, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, transport_code, direction, booking_service_kind, service_type_code, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
+        .select("id, customer_name, phone, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, orario_barca, transport_code, direction, booking_service_kind, service_type_code, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
         .eq("id", serviceId)
         .eq("tenant_id", tenantId)
         .maybeSingle(),

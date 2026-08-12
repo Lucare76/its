@@ -25,6 +25,7 @@ type ServiceRow = {
   arrival_time: string | null;
   departure_date: string | null;
   departure_time: string | null;
+  orario_barca: string | null;
   transport_code: string | null;
   direction: string | null;
   booking_service_kind: string | null;
@@ -107,6 +108,9 @@ export default function ServiceEditPage() {
   const [savingHotel, setSavingHotel] = useState(false);
 
   const isBusBooking = service?.booking_service_kind === "bus_city_hotel" || service?.service_type_code === "bus_line";
+  const isFerryFormula = service?.booking_service_kind === "formula_snav"
+    || service?.booking_service_kind === "formula_medmar_napoli"
+    || service?.booking_service_kind === "formula_medmar_pozzuoli";
 
   async function loadBusQr(serviceId: string, token: string) {
     setQrLoading(true);
@@ -260,9 +264,12 @@ export default function ServiceEditPage() {
       setAgencyId(svc.agency_id ?? "");
       setMeetingPoint(svc.meeting_point ?? "");
       setArrivalDate(svc.arrival_date ?? "");
-      setArrivalTime((svc.arrival_time ?? "").slice(0, 5));
+      const ferryFormula = svc.booking_service_kind === "formula_snav"
+        || svc.booking_service_kind === "formula_medmar_napoli"
+        || svc.booking_service_kind === "formula_medmar_pozzuoli";
+      setArrivalTime(((ferryFormula ? svc.time : svc.arrival_time) ?? "").slice(0, 5));
       setDepartureDate(svc.departure_date ?? "");
-      setDepartureTime((svc.departure_time ?? "").slice(0, 5));
+      setDepartureTime(((ferryFormula ? svc.orario_barca : svc.departure_time) ?? "").slice(0, 5));
       setTransportCode(svc.transport_code ?? "");
       setInternalNotes(svc.internal_notes ?? "");
       setInternalNotesUpdatedAt(svc.internal_notes_updated_at ?? null);
@@ -309,16 +316,16 @@ export default function ServiceEditPage() {
         customer_name: customerName,
         phone: phone.trim() || null,
         pax: Number(pax) || 1,
-        time: time.trim() || null,
+        time: isFerryFormula ? (arrivalTime || null) : (time.trim() || null),
         notes: notes.trim() || null,
         hotel_id: hotelId || null,
         agency_id: agencyId || null,
         billing_party_name: selectedAgency?.name ?? null,
         meeting_point: meetingPoint.trim() || null,
         arrival_date: arrivalDate || null,
-        arrival_time: arrivalTime || null,
+        ...(isFerryFormula ? {} : { arrival_time: arrivalTime || null }),
         departure_date: departureDate || null,
-        departure_time: departureTime || null,
+        ...(isFerryFormula ? { orario_barca: departureTime || null } : { departure_time: departureTime || null }),
         transport_code: transportCode.trim() || null,
       }),
     });
@@ -474,7 +481,7 @@ export default function ServiceEditPage() {
                 <DateInput value={arrivalDate} onChange={(iso) => setArrivalDate(iso)} className="mt-1 input-saas w-full" />
               </label>
               <label className="text-xs font-medium text-slate-600">
-                Ora arrivo
+                {isFerryFormula ? "Partenza mezzo andata" : "Ora arrivo"}
                 <input type="time" step="300" value={arrivalTime} onChange={(e) => setArrivalTime(e.target.value)} className="mt-1 input-saas w-full" />
               </label>
               <label className="text-xs font-medium text-slate-600">
@@ -482,7 +489,7 @@ export default function ServiceEditPage() {
                 <DateInput value={departureDate} onChange={(iso) => setDepartureDate(iso)} className="mt-1 input-saas w-full" />
               </label>
               <label className="text-xs font-medium text-slate-600">
-                Ora partenza
+                {isFerryFormula ? "Partenza mezzo ritorno" : "Ora partenza"}
                 <input type="time" step="300" value={departureTime} onChange={(e) => setDepartureTime(e.target.value)} className="mt-1 input-saas w-full" />
               </label>
             </div>
