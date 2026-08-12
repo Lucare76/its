@@ -15,6 +15,8 @@ export type MedmarPreflightStatus =
   | "unsupported_passenger_type"
   | "medmar_unavailable"
   | "medmar_auth_expired"
+  /** MEDMAR_EMAIL/MEDMAR_PASSWORD (o, in compatibilità, MEDMAR_SESSION_TOKEN) assenti o a metà configurati: mai un crash, sempre can_issue=false. */
+  | "medmar_auth_not_configured"
   | "error";
 
 /**

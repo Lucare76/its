@@ -1,52 +1,34 @@
 /**
  * MedmarAuthProvider — livello di autenticazione isolato verso il portale Medmar.
  *
- * Il flusso di login reale (credenziali -> sessione) NON è ancora documentato
- * (vedi sprint "Medmar One Click Fase 1"). Non vengono quindi inventati
- * payload di login né endpoint di autenticazione. In attesa che il flusso
- * reale venga verificato, questo provider legge un token di sessione già
- * ottenuto manualmente (env var), senza mai hardcodarlo nel codice.
+ * Fase 2A: login automatico reale. Questo file resta il CONTRATTO stabile
+ * verso il resto del modulo (client.ts, preflight.ts): possiede solo il
+ * singleton e l'hook di test. L'implementazione (precedenza env, chiamata
+ * reale a /authenticate, parsing JWT, cache, single-flight) vive in
+ * medmar-auth-provider.ts — vedi quel file per i dettagli, incluso perché
+ * duplica localmente il prefisso di path invece di importarlo da client.ts
+ * (per evitare un import circolare client.ts -> auth.ts -> quel file ->
+ * client.ts).
  *
- * Quando il login automatico sarà documentato, sostituire l'implementazione
- * di getSession() seguendo lo stile cache-in-memory di lib/server/radius-adapter.ts
- * (OAuth2 refresh -> access token con scadenza), senza cambiare l'interfaccia.
+ * Il business code (client.ts, preflight.ts) chiede sempre e solo un token
+ * valido a questo modulo: non vede mai email/password.
  */
 
-export class MedmarNotConfiguredError extends Error {
-  constructor(message = "Autenticazione Medmar non configurata.") {
-    super(message);
-    this.name = "MedmarNotConfiguredError";
-  }
-}
+export {
+  MedmarNotConfiguredError,
+  MedmarAuthFailedError,
+  createMedmarAuthProvider,
+} from "./medmar-auth-provider";
+export type { MedmarSession, MedmarAuthProvider } from "./medmar-auth-provider";
 
-export type MedmarSession = {
-  bearerToken: string;
-  expiresAt: number;
-};
-
-export interface MedmarAuthProvider {
-  getSession(): Promise<MedmarSession>;
-}
-
-const SESSION_TTL_MS = 5 * 60 * 1000;
-
-class EnvTokenMedmarAuthProvider implements MedmarAuthProvider {
-  async getSession(): Promise<MedmarSession> {
-    const token = process.env.MEDMAR_SESSION_TOKEN?.trim();
-    if (!token) {
-      throw new MedmarNotConfiguredError(
-        "MEDMAR_SESSION_TOKEN non impostato: nessun flusso di login automatico Medmar è ancora documentato/verificato."
-      );
-    }
-    return { bearerToken: token, expiresAt: Date.now() + SESSION_TTL_MS };
-  }
-}
+import { createMedmarAuthProvider } from "./medmar-auth-provider";
+import type { MedmarAuthProvider } from "./medmar-auth-provider";
 
 let providerInstance: MedmarAuthProvider | null = null;
 
 export function getMedmarAuthProvider(): MedmarAuthProvider {
   if (!providerInstance) {
-    providerInstance = new EnvTokenMedmarAuthProvider();
+    providerInstance = createMedmarAuthProvider();
   }
   return providerInstance;
 }

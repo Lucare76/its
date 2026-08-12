@@ -28,6 +28,7 @@ import {
   MedmarNotAvailableError,
   MedmarBadResponseError,
 } from "./client";
+import { MedmarNotConfiguredError, MedmarAuthFailedError } from "./auth";
 import { findArTariffAndTax } from "./live-parser";
 import { getRouteDefinition } from "@/lib/medmar-ticket-memory";
 import type {
@@ -101,7 +102,7 @@ function findStructuralMismatches(c: CorsaMedmarRaw, routeCode: MedmarTicketRout
   return mismatches;
 }
 
-type LiveLegStatus = "ok" | "no_match" | "ambiguous" | "route_mismatch" | "manual_review" | "medmar_unavailable" | "medmar_auth_expired";
+type LiveLegStatus = "ok" | "no_match" | "ambiguous" | "route_mismatch" | "manual_review" | "medmar_unavailable" | "medmar_auth_expired" | "medmar_auth_not_configured";
 
 async function resolveLegLive(
   row: MedmarPreflightServiceRow,
@@ -207,12 +208,15 @@ async function resolveLegLive(
 
     return { leg, liveStatus: "ok" };
   } catch (err) {
+    if (err instanceof MedmarNotConfiguredError) {
+      return { leg, liveStatus: "medmar_auth_not_configured" };
+    }
     if (err instanceof MedmarAuthExpiredError) {
       return { leg, liveStatus: "medmar_auth_expired" };
     }
     warnings.push({
       code: "medmar_live_unavailable",
-      message: err instanceof MedmarNotAvailableError || err instanceof MedmarBadResponseError
+      message: err instanceof MedmarNotAvailableError || err instanceof MedmarBadResponseError || err instanceof MedmarAuthFailedError
         ? err.message
         : "Errore imprevisto nella chiamata Medmar live.",
     });
@@ -300,7 +304,8 @@ export async function runMedmarPreflight(
   }
 
   let status: MedmarPreflightResult["status"];
-  if (legStatuses.includes("medmar_auth_expired")) status = "medmar_auth_expired";
+  if (legStatuses.includes("medmar_auth_not_configured")) status = "medmar_auth_not_configured";
+  else if (legStatuses.includes("medmar_auth_expired")) status = "medmar_auth_expired";
   else if (legStatuses.includes("medmar_unavailable")) status = "medmar_unavailable";
   else if (legStatuses.includes("route_mismatch")) status = "route_mismatch";
   else if (legStatuses.includes("no_match")) status = "no_match";
@@ -400,13 +405,16 @@ export async function runMedmarPreflight(
       is_live: true,
     };
   } catch (err) {
+    if (err instanceof MedmarNotConfiguredError) {
+      return { ...baseResult, status: "medmar_auth_not_configured" };
+    }
     if (err instanceof MedmarAuthExpiredError) {
       return { ...baseResult, status: "medmar_auth_expired" };
     }
     return {
       ...baseResult,
       status: "medmar_unavailable",
-      warnings: [...warnings, { code: "medmar_live_unavailable", message: err instanceof MedmarNotAvailableError || err instanceof MedmarBadResponseError ? err.message : "Errore imprevisto nel recupero biglietti vendibili." }],
+      warnings: [...warnings, { code: "medmar_live_unavailable", message: err instanceof MedmarNotAvailableError || err instanceof MedmarBadResponseError || err instanceof MedmarAuthFailedError ? err.message : "Errore imprevisto nel recupero biglietti vendibili." }],
     };
   }
 }

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { matchCourseByRouteAndTime } from "@/lib/server/medmar-booking/course-matcher";
 import * as medmarClient from "@/lib/server/medmar-booking/client";
 import * as routeMapping from "@/lib/server/medmar-booking/route-mapping";
+import { MedmarNotConfiguredError, MedmarAuthFailedError } from "@/lib/server/medmar-booking/auth";
 
 const TENANT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const SVC_ARR = "s1111111-1111-4111-8111-111111111111";
@@ -538,6 +539,57 @@ describe("runMedmarPreflight — fail-closed (Medmar non disponibile / auth scad
     const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
     expect(result.status).toBe("no_match");
     expect(result.can_issue).toBe(false);
+  });
+});
+
+describe("runMedmarPreflight — Medmar non configurato (Fase 2A)", () => {
+  it("MedmarNotConfiguredError su ricerca corse -> status medmar_auth_not_configured, can_issue false, MAI un crash", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockRejectedValue(new MedmarNotConfiguredError());
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("medmar_auth_not_configured");
+    expect(result.can_issue).toBe(false);
+  });
+
+  it("MedmarNotConfiguredError su biglietti vendibili -> status medmar_auth_not_configured, can_issue false", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockRejectedValue(new MedmarNotConfiguredError());
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("medmar_auth_not_configured");
+    expect(result.can_issue).toBe(false);
+  });
+
+  it("medmar_auth_not_configured ha priorità su medmar_auth_expired quando le due gambe divergono", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_pozzuoli" ? 14 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) => {
+      if (idTratta === 59) throw new MedmarNotConfiguredError();
+      throw new medmarClient.MedmarAuthExpiredError();
+    });
+    const admin = fakeAdmin([
+      ARRIVAL_ROW,
+      { id: SVC_DEP, tenant_id: TENANT_A, date: "2026-08-25", time: "11:10", customer_name: "Mario Rossi", pax: 2, vessel: "Medmar", notes: "[practice:AAA]", booking_service_kind: "formula_medmar_pozzuoli", direction: "departure", status: "new", meeting_point: "Ischia Porto" },
+    ]);
+    const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR, SVC_DEP]);
+    expect(result.status).toBe("medmar_auth_not_configured");
+    expect(result.can_issue).toBe(false);
+  });
+
+  it("MedmarAuthFailedError (credenziali automatiche rifiutate da Medmar) -> status medmar_unavailable, can_issue false, messaggio senza dati sensibili", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockRejectedValue(new MedmarAuthFailedError("Medmar ha rifiutato le credenziali configurate."));
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("medmar_unavailable");
+    expect(result.can_issue).toBe(false);
+    const warningMsg = result.warnings.find((w) => w.code === "medmar_live_unavailable")?.message ?? "";
+    expect(warningMsg).not.toMatch(/password|Bearer|token/i);
+  });
+
+  it("sensitivity: nessun risultato del preflight contiene mai un token/Bearer/credenziale, in nessuno scenario auth", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockRejectedValue(new MedmarNotConfiguredError());
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+    expect(JSON.stringify(result)).not.toMatch(/Bearer |MEDMAR_PASSWORD|password/i);
   });
 });
 

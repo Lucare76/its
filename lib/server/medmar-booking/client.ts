@@ -71,7 +71,7 @@ export class MedmarNotAvailableError extends Error {
   }
 }
 
-/** 401/403 dalla risposta Medmar: token MEDMAR_SESSION_TOKEN scaduto/non valido. */
+/** 401/403 dalla risposta Medmar anche dopo un retry con token rinnovato: sessione scaduta/non autorizzata. */
 export class MedmarAuthExpiredError extends Error {
   constructor() {
     super("Sessione Medmar scaduta o non autorizzata (401/403).");
@@ -169,25 +169,20 @@ export function assertReadOnlyPath(path: string): void {
   throw new MedmarPathNotAllowedError(path);
 }
 
+type GuardedRequestResult = { kind: "ok"; json: unknown } | { kind: "unauthorized" };
+
 /**
- * Fetch guardato verso l'API Medmar. Metodo sempre GET (nessun override
- * possibile), nessuna funzione pubblica generica: solo i 2 wrapper dedicati
- * sotto. Il token MEDMAR_SESSION_TOKEN non viene MAI loggato qui.
+ * Esegue UNA richiesta GET verso Medmar con l'header Authorization già
+ * pronto. Non lancia mai per 401/403: li restituisce nel risultato, così è
+ * medmarReadonlyFetch (unico chiamante) a decidere se ritentare — vedi lì
+ * per il perché il retry vive un livello sopra, non qui.
  */
-async function medmarReadonlyFetch(path: string): Promise<unknown> {
-  assertReadOnlyPath(path);
-
-  if (!MEDMAR_API_BASE_URL) {
-    throw new MedmarNotAvailableError("MEDMAR_API_BASE_URL non configurato.");
-  }
-
-  const session = await getMedmarAuthProvider().getSession();
-
+async function performGuardedRequest(path: string, bearerToken: string): Promise<GuardedRequestResult> {
   let response: Response;
   try {
     response = await fetch(`${MEDMAR_API_BASE_URL}${path}`, {
       method: "GET",
-      headers: { Authorization: `Bearer ${session.bearerToken}` },
+      headers: { Authorization: `Bearer ${bearerToken}` },
       signal: AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS),
     });
   } catch (err) {
@@ -196,17 +191,56 @@ async function medmarReadonlyFetch(path: string): Promise<unknown> {
   }
 
   if (response.status === 401 || response.status === 403) {
-    throw new MedmarAuthExpiredError();
+    return { kind: "unauthorized" };
   }
   if (!response.ok) {
     throw new MedmarBadResponseError(`Medmar ha risposto con errore ${response.status}.`);
   }
 
   try {
-    return await response.json();
+    return { kind: "ok", json: await response.json() };
   } catch {
     throw new MedmarBadResponseError("Risposta Medmar non interpretabile (JSON non valido).");
   }
+}
+
+/**
+ * Fetch guardato verso l'API Medmar. Metodo sempre GET (nessun override
+ * possibile), nessuna funzione pubblica generica: solo i 2 wrapper dedicati
+ * sotto. Il token Medmar non viene MAI loggato qui.
+ *
+ * Su 401/403: invalida la sessione, richiede un nuovo token e ritenta la
+ * STESSA richiesta ESATTAMENTE una volta. assertReadOnlyPath viene
+ * rieseguito prima di ogni tentativo, sempre sullo stesso `path` (mai
+ * mutato tra i due tentativi) — nessuna finestra in cui una richiesta parte
+ * senza essere appena passata dal guard. Se anche il secondo tentativo è
+ * 401/403: MedmarAuthExpiredError, fail-closed, nessun ulteriore retry.
+ */
+async function medmarReadonlyFetch(path: string): Promise<unknown> {
+  assertReadOnlyPath(path);
+
+  if (!MEDMAR_API_BASE_URL) {
+    throw new MedmarNotAvailableError("MEDMAR_API_BASE_URL non configurato.");
+  }
+
+  const provider = getMedmarAuthProvider();
+
+  const firstSession = await provider.getValidToken();
+  const first = await performGuardedRequest(path, firstSession.bearerToken);
+  if (first.kind === "ok") {
+    return first.json;
+  }
+
+  // Primo tentativo 401/403: invalida e ritenta UNA sola volta (mai un loop).
+  provider.invalidateToken();
+  assertReadOnlyPath(path);
+  const secondSession = await provider.getValidToken();
+  const second = await performGuardedRequest(path, secondSession.bearerToken);
+  if (second.kind === "ok") {
+    return second.json;
+  }
+
+  throw new MedmarAuthExpiredError();
 }
 
 function buildCorsePagePath(params: { idTratta: number; partenzaDataDal: string; dopoLe: string }, page: number): string {

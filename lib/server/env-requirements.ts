@@ -40,8 +40,10 @@ export const ENV_REQUIREMENTS: EnvRequirement[] = [
   { key: "WHATSAPP_ALLOW_TEXT_FALLBACK", requiredForBeta: false, category: "whatsapp", notes: "Optional tuning." },
   { key: "UPSTASH_REDIS_REST_URL", requiredForBeta: false, category: "ops", notes: "Upstash Redis per rate limiting distribuito. Senza, il rate limit è in-memory (non efficace su Vercel multi-istanza)." },
   { key: "UPSTASH_REDIS_REST_TOKEN", requiredForBeta: false, category: "ops", notes: "Token Upstash Redis (vedi UPSTASH_REDIS_REST_URL)." },
-  { key: "MEDMAR_API_BASE_URL", requiredForBeta: false, category: "medmar", notes: "Override base URL API Medmar (Fase 1: nessun endpoint reale ancora verificato)." },
-  { key: "MEDMAR_SESSION_TOKEN", requiredForBeta: false, category: "medmar", notes: "Token di sessione Medmar ottenuto manualmente, in attesa di un login automatico documentato." }
+  { key: "MEDMAR_API_BASE_URL", requiredForBeta: false, category: "medmar", notes: "Base URL API Medmar (es. https://biglietteria.medmargroup.it), usata sia per le chiamate read-only sia per il login automatico (Fase 2A)." },
+  { key: "MEDMAR_EMAIL", requiredForBeta: false, category: "medmar", notes: "Credenziale login automatico Medmar (Fase 2A). Richiede anche MEDMAR_PASSWORD: se manca uno dei due, il preflight fallisce a runtime con medmar_auth_not_configured, mai a build time." },
+  { key: "MEDMAR_PASSWORD", requiredForBeta: false, category: "medmar", notes: "Vedi MEDMAR_EMAIL. Server-side only, mai NEXT_PUBLIC_*." },
+  { key: "MEDMAR_SESSION_TOKEN", requiredForBeta: false, category: "medmar", notes: "Percorso di compatibilità temporaneo (token di sessione ottenuto manualmente). Ignorato del tutto se MEDMAR_EMAIL+MEDMAR_PASSWORD sono presenti: nessun fallback automatico su credenziali automatiche fallite." }
 ];
 
 export function getEnvStatus() {
