@@ -152,6 +152,24 @@ type MedmarPreflightResult = {
   error: string | null;
 };
 
+type MedmarIssueResult =
+  | {
+      ok: true;
+      status: "completed";
+      medmar_id_prenotazione: string;
+      medmar_numero: string;
+      final_total_cents: number;
+      existing: boolean;
+    }
+  | {
+      ok: false;
+      status: string;
+      error: string;
+      retry_allowed: boolean;
+    };
+
+const MEDMAR_ISSUING_UI_ENABLED = false;
+
 function formatEur(cents: number | null | undefined) {
   if (typeof cents !== "number") return "—";
   return (cents / 100).toLocaleString("it-IT", { style: "currency", currency: "EUR" });
@@ -193,6 +211,8 @@ export default function BigliettiMedmarPage() {
   const [verifying, setVerifying] = useState<string | null>(null); // key del gruppo in verifica
   const [verifyError, setVerifyError] = useState<string | null>(null);
   const [verifyModal, setVerifyModal] = useState<{ group: BookingGroup; result: MedmarPreflightResult } | null>(null);
+  const [issuing, setIssuing] = useState<string | null>(null);
+  const [issueResult, setIssueResult] = useState<MedmarIssueResult | null>(null);
   const [ticketMemories, setTicketMemories] = useState<TicketMemoryRecord[]>([]);
   const [ticketSlots, setTicketSlots] = useState<TicketMemorySlot[]>([]);
   const [memoryError, setMemoryError] = useState<string | null>(null);
@@ -234,11 +254,40 @@ export default function BigliettiMedmarPage() {
         method: "POST",
         body: JSON.stringify({ service_ids: g.allServiceIds }),
       });
+      setIssueResult(null);
       setVerifyModal({ group: g, result: data });
     } catch (err) {
       setVerifyError(err instanceof Error ? err.message : "Errore durante la verifica Medmar.");
     } finally {
       setVerifying(null);
+    }
+  };
+
+  const handleIssueMedmar = async () => {
+    if (!token || !verifyModal || issuing) return;
+    const result = verifyModal.result;
+    const primaryLeg = result.outward ?? result.return;
+    const confirmed = confirm(
+      `Emettere biglietto Medmar?\n\nTratta: ${primaryLeg?.route ? `${primaryLeg.route.from} -> ${primaryLeg.route.to}` : "N/D"}\nData: ${primaryLeg?.date ?? "N/D"}\nOra: ${primaryLeg?.requested_time ?? "N/D"}\nPax: ${result.pax}\nPrezzo previsto: ${formatEur(result.expected_total_cents)}`
+    );
+    if (!confirmed) return;
+    setIssuing(verifyModal.group.key);
+    setIssueResult(null);
+    try {
+      const data = await apiFetch<MedmarIssueResult>("/api/services/medmar-issue", token, {
+        method: "POST",
+        body: JSON.stringify({ service_ids: verifyModal.group.allServiceIds }),
+      });
+      setIssueResult(data);
+    } catch (err) {
+      setIssueResult({
+        ok: false,
+        status: "request_failed",
+        error: err instanceof Error ? err.message : "Emissione non riuscita.",
+        retry_allowed: false,
+      });
+    } finally {
+      setIssuing(null);
     }
   };
 
@@ -1100,7 +1149,29 @@ export default function BigliettiMedmarPage() {
                   ))}
                 </div>
               )}
+              {issueResult && (
+                <div className={`rounded-lg border px-3 py-2 text-sm ${issueResult.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : issueResult.status === "remote_state_unknown" ? "border-rose-300 bg-rose-50 text-rose-700" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
+                  {issueResult.ok ? (
+                    <p className="font-semibold">Codice Medmar: {issueResult.medmar_numero}</p>
+                  ) : (
+                    <p className="font-semibold">
+                      {issueResult.status === "remote_state_unknown" ? "Stato Medmar da verificare manualmente. Non riprovare l'emissione." : issueResult.error}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
+          )}
+
+          {verifyModal.result.can_issue && verifyModal.result.is_live && (
+            <button
+              type="button"
+              onClick={() => void handleIssueMedmar()}
+              disabled={!MEDMAR_ISSUING_UI_ENABLED || issuing === verifyModal.group.key || issueResult?.status === "remote_state_unknown"}
+              className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {!MEDMAR_ISSUING_UI_ENABLED ? "Emissione non attiva in questa fase" : issuing === verifyModal.group.key ? "Emissione in corso..." : "Emetti biglietto Medmar"}
+            </button>
           )}
 
           <button type="button" onClick={() => setVerifyModal(null)}

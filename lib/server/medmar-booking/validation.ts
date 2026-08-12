@@ -10,3 +10,9 @@ export const preflightInputSchema = z.object({
 });
 
 export type PreflightInput = z.infer<typeof preflightInputSchema>;
+
+export const issueInputSchema = z.object({
+  service_ids: z.array(z.string().uuid()).min(1).max(20),
+}).strict();
+
+export type IssueInput = z.infer<typeof issueInputSchema>;

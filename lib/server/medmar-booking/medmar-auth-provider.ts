@@ -88,6 +88,9 @@ export type MedmarSession = {
    * trattare expiresAt<=Date.now() come "non cacheable / già scaduto".
    */
   expiresAt: number;
+  userId: number | null;
+  clienteId: string | null;
+  postazioneId: string | null;
 };
 
 export interface MedmarAuthProvider {
@@ -153,10 +156,42 @@ function readJwtExpMs(token: string): number | null {
   }
 }
 
-function sessionFromToken(token: string): MedmarSession {
+function asPositiveInt(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const cleaned = String(value).trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function extractSessionContext(output: unknown): Pick<MedmarSession, "userId" | "clienteId" | "postazioneId"> {
+  const empty = { userId: null, clienteId: null, postazioneId: null };
+  if (!output || typeof output !== "object" || Array.isArray(output)) return empty;
+  const user = (output as { user?: unknown }).user;
+  if (!user || typeof user !== "object" || Array.isArray(user)) return empty;
+  const userRecord = user as Record<string, unknown>;
+  const postazioni = Array.isArray(userRecord.utente_postazioni) ? userRecord.utente_postazioni : [];
+  const firstPostazione = postazioni.find((row) => row && typeof row === "object" && !Array.isArray(row)) as Record<string, unknown> | undefined;
+  return {
+    userId: asPositiveInt(userRecord.id),
+    clienteId: asNonEmptyString(userRecord.id_cliente),
+    postazioneId: asNonEmptyString(firstPostazione?.id_postazione),
+  };
+}
+
+function sessionFromToken(token: string, context?: Partial<Pick<MedmarSession, "userId" | "clienteId" | "postazioneId">>): MedmarSession {
   const expMs = readJwtExpMs(token);
   const expiresAt = expMs !== null && expMs > Date.now() ? expMs : 0;
-  return { bearerToken: token, expiresAt };
+  return {
+    bearerToken: token,
+    expiresAt,
+    userId: context?.userId ?? null,
+    clienteId: context?.clienteId ?? null,
+    postazioneId: context?.postazioneId ?? null,
+  };
 }
 
 async function loginWithCredentials(email: string, password: string): Promise<MedmarSession> {
@@ -199,16 +234,17 @@ async function loginWithCredentials(email: string, password: string): Promise<Me
   if (!body || typeof body !== "object") {
     throw new MedmarAuthFailedError("Risposta di autenticazione Medmar in un formato inatteso.");
   }
-  const parsed = body as { return?: unknown; output?: { token?: unknown } };
+  const parsed = body as { return?: unknown; output?: unknown };
   if (parsed.return !== true) {
     throw new MedmarAuthFailedError("Medmar ha rifiutato le credenziali configurate.");
   }
-  const token = parsed.output?.token;
+  const output = parsed.output;
+  const token = output && typeof output === "object" && !Array.isArray(output) ? (output as { token?: unknown }).token : null;
   if (typeof token !== "string" || token.trim().length === 0) {
     throw new MedmarAuthFailedError("Risposta di autenticazione Medmar priva di un token valido.");
   }
 
-  return sessionFromToken(token);
+  return sessionFromToken(token, extractSessionContext(output));
 }
 
 class MedmarAuthProviderImpl implements MedmarAuthProvider {

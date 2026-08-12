@@ -28,7 +28,7 @@ function makeJwt(payload: Record<string, unknown> | null): string {
 function authResponse(overrides: Partial<{ ret: unknown; token: unknown; userExtra: Record<string, unknown> }> = {}) {
   return {
     return: overrides.ret ?? true,
-    output: { token: overrides.token, user: overrides.userExtra ?? { id: 89, id_cliente: "54175", secret_note: "MUST-NEVER-LEAK" } },
+    output: { token: overrides.token, user: overrides.userExtra ?? { id: 89, id_cliente: "cliente-from-auth", utente_postazioni: [{ id_postazione: "77" }], secret_note: "MUST-NEVER-LEAK" } },
     extra: { message: null },
   };
 }
@@ -337,12 +337,32 @@ describe("medmar-auth-provider — sicurezza / sensitivity", () => {
     process.env.MEDMAR_PASSWORD = "secret";
   });
 
-  it("la sessione restituita contiene SOLO bearerToken+expiresAt, mai i dati utente/cliente annidati", async () => {
+  it("la sessione restituita conserva solo token, scadenza e contesto whitelistato", async () => {
     const token = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
-    vi.spyOn(global, "fetch").mockResolvedValueOnce(jsonResponse(authResponse({ token, userExtra: { id: 1, id_cliente: "999", pii: "should-not-appear" } })));
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(jsonResponse(authResponse({
+      token,
+      userExtra: {
+        id: 89,
+        id_cliente: "cliente-from-auth",
+        utente_postazioni: [{ id_postazione: "77", password: "nested-secret" }],
+        pii: "should-not-appear",
+      },
+    })));
     const session = await provider.getValidToken();
-    expect(Object.keys(session).sort()).toEqual(["bearerToken", "expiresAt"]);
-    expect(JSON.stringify(session)).not.toMatch(/id_cliente|pii|should-not-appear/);
+    expect(Object.keys(session).sort()).toEqual(["bearerToken", "clienteId", "expiresAt", "postazioneId", "userId"]);
+    expect(session.userId).toBe(89);
+    expect(session.clienteId).toBe("cliente-from-auth");
+    expect(session.postazioneId).toBe("77");
+    expect(JSON.stringify(session)).not.toMatch(/pii|should-not-appear|nested-secret|utente_postazioni/);
+  });
+
+  it("token manuale resta compatibile ma senza contesto sessione dinamico", async () => {
+    delete process.env.MEDMAR_EMAIL;
+    delete process.env.MEDMAR_PASSWORD;
+    const token = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    process.env.MEDMAR_SESSION_TOKEN = token;
+    const session = await provider.getValidToken();
+    expect(session).toMatchObject({ bearerToken: token, userId: null, clienteId: null, postazioneId: null });
   });
 
   it("nessun messaggio di errore contiene la password configurata", async () => {
