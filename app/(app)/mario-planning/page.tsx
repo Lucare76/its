@@ -162,6 +162,18 @@ function ColorPicker({ value, onChange }: { value: string; onChange: (k: string)
   );
 }
 
+function DirectionPicker({ value, onChange }: { value: "A" | "B"; onChange: (value: "A" | "B") => void }) {
+  return (
+    <div className="mb-3">
+      <p className="mb-1.5 text-xs font-medium text-slate-600">Tipo tratta</p>
+      <div className="flex gap-2">
+        <button type="button" onClick={() => onChange("A")} className={`rounded-lg border px-4 py-2 text-sm font-semibold ${value === "A" ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-700"}`}>Arrivo</button>
+        <button type="button" onClick={() => onChange("B")} className={`rounded-lg border px-4 py-2 text-sm font-semibold ${value === "B" ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-700"}`}>Partenza</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── SHARED: BOTTOM MODAL ─────────────────────────────────────────────────────
 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
@@ -643,7 +655,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
 // 2. PLANNING GRUPPI — due righe per data (giallo A + rosso B)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-type GruppiEdit = { date: string; row: "A" | "B"; colIndex: number; cellId: string | null };
+type GruppiEdit = { date: string; row: "A" | "B"; originalRow: "A" | "B"; colIndex: number; cellId: string | null };
 
 function GruppiPlanning({ token }: { token: string }) {
   const today = new Date();
@@ -683,7 +695,7 @@ function GruppiPlanning({ token }: { token: string }) {
   };
 
   const openEdit = (date: string, row: "A" | "B", colIndex: number, cell: PlanningCell | null) => {
-    setEditState({ date, row, colIndex, cellId: cell?.id ?? null });
+    setEditState({ date, row, originalRow: row, colIndex, cellId: cell?.id ?? null });
     setEditVal(cell?.content ?? "");
     setEditColor(cell?.bg_color ?? "green");
   };
@@ -711,6 +723,13 @@ function GruppiPlanning({ token }: { token: string }) {
             bg_color: editColor,
           }),
         });
+        if (editState.cellId && editState.row !== editState.originalRow) {
+          await fetch("/api/planning/cells", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ id: editState.cellId }),
+          });
+        }
       }
       await load();
     } finally { setSaving(false); setEditState(null); }
@@ -770,8 +789,9 @@ function GruppiPlanning({ token }: { token: string }) {
                 return [
                   // Row A — giallo
                   <tr key={`${date}_A`} className={bg}>
-                    <td className="sticky left-0 z-10 bg-yellow-300 text-yellow-900 border-r border-yellow-400 px-2 py-2 min-w-[82px] align-middle">
+                    <td className="sticky left-0 z-10 bg-slate-100 text-slate-800 border-r border-slate-200 px-2 py-2 min-w-[82px] align-middle">
                       <div className="font-bold text-[13px]">{shortDate(date)}</div>
+                      <div className="text-[10px] font-semibold uppercase">Arrivi</div>
                     </td>
                     <td className="px-2 py-2 align-middle">
                       <div className="flex flex-wrap gap-1.5 items-center">
@@ -788,8 +808,9 @@ function GruppiPlanning({ token }: { token: string }) {
                   </tr>,
                   // Row B — rosso
                   <tr key={`${date}_B`} className={bg}>
-                    <td className="sticky left-0 z-10 bg-red-500 text-white border-r border-red-600 px-2 py-2 min-w-[82px] align-middle">
+                    <td className="sticky left-0 z-10 bg-slate-200 text-slate-800 border-r border-slate-300 px-2 py-2 min-w-[82px] align-middle">
                       <div className="font-bold text-[13px]">{shortDate(date)}</div>
+                      <div className="text-[10px] font-semibold uppercase">Partenze</div>
                     </td>
                     <td className="px-2 py-2 align-middle">
                       <div className="flex flex-wrap gap-1.5 items-center">
@@ -826,6 +847,7 @@ function GruppiPlanning({ token }: { token: string }) {
           title={`${editState.cellId ? "Modifica" : "Aggiungi"} gruppo — ${shortDate(editState.date)} (${editState.row === "A" ? "Riga gialla" : "Riga rossa"})`}
           onClose={() => setEditState(null)}
         >
+          <DirectionPicker value={editState.row} onChange={(row) => setEditState((prev) => prev ? { ...prev, row } : prev)} />
           <textarea
             value={editVal}
             onChange={(e) => setEditVal(e.target.value)}
@@ -863,7 +885,7 @@ function GruppiPlanning({ token }: { token: string }) {
 // 3. RECUPERO TRATTA — date come righe, slot colorati per direzione
 // ═══════════════════════════════════════════════════════════════════════════════
 
-type TrattaEdit = { date: string; colIndex: number; cellId: string | null };
+type TrattaEdit = { date: string; row: "A" | "B"; originalRow: "A" | "B"; colIndex: number; cellId: string | null };
 
 function TrattaPlanning({ token }: { token: string }) {
   const today = new Date();
@@ -894,16 +916,16 @@ function TrattaPlanning({ token }: { token: string }) {
 
   const activeDates = [...new Set(cells.map((c) => c.cell_date))].sort();
 
-  const forDate = (date: string) =>
-    cells.filter((c) => c.cell_date === date).sort((a, b) => a.col_index - b.col_index);
+  const forRow = (date: string, row: "A" | "B") =>
+    cells.filter((c) => c.cell_date === date && (c.row_key === row || (row === "A" && c.row_key === date))).sort((a, b) => a.col_index - b.col_index);
 
-  const maxCol = (date: string) => {
-    const dc = forDate(date);
+  const maxCol = (date: string, row: "A" | "B") => {
+    const dc = forRow(date, row);
     return dc.length === 0 ? -1 : Math.max(...dc.map((c) => c.col_index));
   };
 
-  const openEdit = (date: string, colIndex: number, cell: PlanningCell | null) => {
-    setEditState({ date, colIndex, cellId: cell?.id ?? null });
+  const openEdit = (date: string, row: "A" | "B", colIndex: number, cell: PlanningCell | null) => {
+    setEditState({ date, row, originalRow: row, colIndex, cellId: cell?.id ?? null });
     setEditVal(cell?.content ?? "");
     setEditColor(cell?.bg_color ?? "red");
   };
@@ -925,12 +947,19 @@ function TrattaPlanning({ token }: { token: string }) {
           body: JSON.stringify({
             type: "route",
             cell_date: editState.date,
-            row_key: editState.date,
+            row_key: editState.row,
             col_index: editState.colIndex,
             content: editVal.trim().toUpperCase(),
             bg_color: editColor,
           }),
         });
+        if (editState.cellId && editState.row !== editState.originalRow) {
+          await fetch("/api/planning/cells", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ id: editState.cellId }),
+          });
+        }
       }
       await load();
     } finally { setSaving(false); setEditState(null); }
@@ -953,7 +982,7 @@ function TrattaPlanning({ token }: { token: string }) {
     if (!newDate) return;
     const [y, m] = newDate.split("-").map(Number);
     if (y !== year || m !== month) { alert(`Seleziona una data in ${MONTHS_IT[month - 1]} ${year}`); return; }
-    openEdit(newDate, maxCol(newDate) + 1, null);
+    openEdit(newDate, "A", maxCol(newDate, "A") + 1, null);
     setNewDate("");
   };
 
@@ -983,28 +1012,32 @@ function TrattaPlanning({ token }: { token: string }) {
                 </td>
               </tr>
             ) : (
-              activeDates.map((date, ri) => {
-                const dc = forDate(date);
-                return (
-                  <tr key={date} className={ri % 2 === 0 ? "bg-white" : "bg-gray-50/60"}>
-                    <td className="sticky left-0 z-10 bg-yellow-300 text-yellow-900 border-r border-yellow-400 px-2 py-2 min-w-[82px] align-middle">
-                      <div className="font-bold text-[13px]">{shortDate(date)}</div>
-                      <div className="text-[10px] opacity-60">{date.slice(0, 4)}</div>
-                    </td>
-                    <td className="px-2 py-2 align-middle">
-                      <div className="flex flex-wrap gap-1.5 items-center">
-                        {dc.map((cell) => (
-                          <button key={cell.id} onClick={() => openEdit(date, cell.col_index, cell)}
-                            className={`rounded px-2.5 py-1.5 text-[11px] font-bold min-w-[90px] text-center uppercase leading-tight hover:opacity-80 transition-opacity ${colorTw(cell.bg_color)}`}>
-                            {cell.content}
-                          </button>
-                        ))}
-                        <button onClick={() => openEdit(date, maxCol(date) + 1, null)}
-                          className="rounded px-2.5 py-1 text-xs border border-dashed border-gray-300 text-muted hover:bg-gray-100 transition-colors" title="Aggiungi">+</button>
-                      </div>
-                    </td>
-                  </tr>
-                );
+              activeDates.flatMap((date, ri) => {
+                const bg = ri % 2 === 0 ? "bg-white" : "bg-gray-50/60";
+                return (["A", "B"] as const).map((row) => {
+                  const dc = forRow(date, row);
+                  const isOutbound = row === "A";
+                  return (
+                    <tr key={`${date}_${row}`} className={bg}>
+                      <td className={`sticky left-0 z-10 border-r px-2 py-2 min-w-[110px] align-middle ${isOutbound ? "bg-slate-100 text-slate-800 border-slate-200" : "bg-slate-200 text-slate-800 border-slate-300"}`}>
+                        <div className="font-bold text-[13px]">{shortDate(date)}</div>
+                        <div className="text-[10px] font-semibold uppercase">{isOutbound ? "Arrivi" : "Partenze"}</div>
+                      </td>
+                      <td className="px-2 py-2 align-middle">
+                        <div className="flex flex-wrap gap-1.5 items-center">
+                          {dc.map((cell) => (
+                            <button key={cell.id} onClick={() => openEdit(date, row, cell.col_index, cell)}
+                              className={`rounded px-2.5 py-1.5 text-[11px] font-bold min-w-[90px] text-center uppercase leading-tight hover:opacity-80 transition-opacity ${colorTw(cell.bg_color)}`}>
+                              {cell.content}
+                            </button>
+                          ))}
+                          <button onClick={() => openEdit(date, row, maxCol(date, row) + 1, null)}
+                            className="rounded px-2.5 py-1 text-xs border border-dashed border-gray-300 text-muted hover:bg-gray-100 transition-colors" title={`Aggiungi ${isOutbound ? "arrivo" : "partenza"}`}>+</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                });
               })
             )}
           </tbody>
@@ -1021,9 +1054,10 @@ function TrattaPlanning({ token }: { token: string }) {
 
       {editState && (
         <Modal
-          title={`${editState.cellId ? "Modifica" : "Aggiungi"} — ${shortDate(editState.date)} ${editState.date.slice(0, 4)}`}
+          title={`${editState.cellId ? "Modifica" : "Aggiungi"} ${editState.row === "A" ? "andata" : "ritorno"} — ${shortDate(editState.date)} ${editState.date.slice(0, 4)}`}
           onClose={() => setEditState(null)}
         >
+          <DirectionPicker value={editState.row} onChange={(row) => setEditState((prev) => prev ? { ...prev, row } : prev)} />
           <textarea
             value={editVal}
             onChange={(e) => setEditVal(e.target.value)}

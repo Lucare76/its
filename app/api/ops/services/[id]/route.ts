@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { auditLog } from "@/lib/server/ops-audit";
 import { z } from "zod";
+import { findArrivalScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
 
 export const runtime = "nodejs";
 
@@ -39,10 +40,10 @@ export async function GET(
     const { id: serviceId } = await params;
     const tenantId = auth.membership.tenant_id;
 
-    const [serviceRes, hotelsRes, agenciesRes] = await Promise.all([
+    const [serviceRes, hotelsRes, agenciesRes, schedulesRes] = await Promise.all([
       auth.admin
         .from("services")
-        .select("id, customer_name, phone, pax, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, orario_barca, pickup_time, linked_service_id, transport_code, direction, booking_service_kind, service_type_code, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
+        .select("id, customer_name, phone, pax, date, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, orario_barca, pickup_time, linked_service_id, transport_code, direction, booking_service_kind, service_type_code, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
         .eq("id", serviceId)
         .eq("tenant_id", tenantId)
         .maybeSingle(),
@@ -57,25 +58,44 @@ export async function GET(
         .eq("tenant_id", tenantId)
         .eq("active", true)
         .order("name"),
+      auth.admin
+        .from("ferry_schedules")
+        .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to"),
     ]);
 
     if (serviceRes.error) return NextResponse.json({ error: serviceRes.error.message }, { status: 500 });
     if (!serviceRes.data) return NextResponse.json({ error: "Servizio non trovato." }, { status: 404 });
     if (hotelsRes.error) return NextResponse.json({ error: hotelsRes.error.message }, { status: 500 });
     if (agenciesRes.error) return NextResponse.json({ error: agenciesRes.error.message }, { status: 500 });
+    if (schedulesRes.error) return NextResponse.json({ error: schedulesRes.error.message }, { status: 500 });
 
     const linkedServiceRes = serviceRes.data.linked_service_id
       ? await auth.admin.from("services")
-        .select("id, direction, time, arrival_time, departure_time, orario_barca, pickup_time")
+        .select("id, direction, date, time, arrival_date, arrival_time, departure_time, orario_barca, pickup_time, booking_service_kind")
         .eq("id", serviceRes.data.linked_service_id)
         .eq("tenant_id", tenantId)
         .maybeSingle()
       : { data: null };
 
+    const arrivalLeg = serviceRes.data.direction === "arrival" ? serviceRes.data
+      : linkedServiceRes.data?.direction === "arrival" ? linkedServiceRes.data : null;
+    const arrivalSchedule = arrivalLeg ? findArrivalScheduleForService(
+      (schedulesRes.data ?? []) as FerryScheduleRow[],
+      arrivalLeg.arrival_date ?? arrivalLeg.date,
+      arrivalLeg.time,
+      arrivalLeg.booking_service_kind
+    ) : null;
+    const correctedService = arrivalLeg?.id === serviceRes.data.id && arrivalSchedule
+      ? { ...serviceRes.data, arrival_time: arrivalSchedule.arrivalTime }
+      : serviceRes.data;
+    const correctedLinked = arrivalLeg?.id === linkedServiceRes.data?.id && arrivalSchedule
+      ? { ...linkedServiceRes.data, arrival_time: arrivalSchedule.arrivalTime }
+      : linkedServiceRes.data;
+
     return NextResponse.json({
       ok: true,
-      service: { ...serviceRes.data, phone_e164: null, reminder_status: null, sent_at: null },
-      linked_service: linkedServiceRes.data ?? null,
+      service: { ...correctedService, phone_e164: null, reminder_status: null, sent_at: null },
+      linked_service: correctedLinked ?? null,
       hotels: hotelsRes.data ?? [],
       agencies: agenciesRes.data ?? [],
     });

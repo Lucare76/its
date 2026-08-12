@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { fetchAllServices } from "@/lib/server/fetch-all-services";
 import { collapseLinkedBookingPairs, filterBookingsBySearch } from "@/lib/booking-search";
+import { findArrivalScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
 
 export const runtime = "nodejs";
 
@@ -17,13 +18,14 @@ export async function GET(req: NextRequest) {
 
     const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? "30"), 100);
 
-    const [servicesResult, hotelsResult, agenciesResult] = await Promise.all([
+    const [servicesResult, hotelsResult, agenciesResult, schedulesResult] = await Promise.all([
       fetchAllServices(auth.admin, tenantId),
       auth.admin.from("hotels").select("id,name").eq("tenant_id", tenantId),
       auth.admin.from("agencies").select("id,name").eq("tenant_id", tenantId),
+      auth.admin.from("ferry_schedules").select("company,departure_port,arrival_port,departure_time,arrival_time,direction,days_of_week,valid_from,valid_to"),
     ]);
 
-    const error = servicesResult.error ?? hotelsResult.error ?? agenciesResult.error ?? null;
+    const error = servicesResult.error ?? hotelsResult.error ?? agenciesResult.error ?? schedulesResult.error ?? null;
     if (error) throw new Error(error.message);
 
     const hotelNameById = new Map((hotelsResult.data ?? []).map((hotel: { id: string; name: string }) => [hotel.id, hotel.name]));
@@ -44,6 +46,12 @@ export async function GET(req: NextRequest) {
           : null;
         const arrivalLeg = r.direction === "arrival" ? r : linked?.direction === "arrival" ? linked : r;
         const departureLeg = r.direction === "departure" ? r : linked?.direction === "departure" ? linked : null;
+        const arrivalSchedule = findArrivalScheduleForService(
+          (schedulesResult.data ?? []) as FerryScheduleRow[],
+          arrivalLeg.arrival_date ?? arrivalLeg.date,
+          arrivalLeg.time,
+          arrivalLeg.booking_service_kind ?? null
+        );
         const joinedName = [r.customer_first_name, r.customer_last_name].filter(Boolean).join(" ").trim();
         const owner = r.billing_party_name ?? (r.agency_id ? agencyNameById.get(r.agency_id) : null) ?? "Privato";
         return {
@@ -82,7 +90,7 @@ export async function GET(req: NextRequest) {
           notes: r.notes ?? null,
           linked_service_id: r.linked_service_id ?? null,
           outbound_ferry_departure_time: arrivalLeg.time ?? null,
-          outbound_ferry_arrival_time: arrivalLeg.arrival_time ?? null,
+          outbound_ferry_arrival_time: arrivalSchedule?.arrivalTime ?? arrivalLeg.arrival_time ?? null,
           return_pickup_time: departureLeg?.pickup_time ?? departureLeg?.departure_time ?? null,
           return_ferry_departure_time: departureLeg?.orario_barca ?? null,
         };

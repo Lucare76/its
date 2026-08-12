@@ -13,7 +13,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { buildServiceLabelShort } from "@/lib/service-label";
 import { auditLog } from "@/lib/server/ops-audit";
 import { appUrlFromRequest, ensureBusBookingQrCodes } from "@/lib/server/bus-booking-qr";
-import { computeIschiaArrivalTime } from "@/lib/ferry-schedule-options";
+import { computeIschiaArrivalTime, findArrivalScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
 import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 
@@ -156,6 +156,19 @@ export async function POST(request: NextRequest) {
     const baseDirection = tripLeg === "return_only" ? "departure" : "arrival";
     const baseVessel = vesselFromKind(bookingKind, transportCode, busCityOrigin);
     const ferryVesselTime = tripLeg === "return_only" ? ferryDepTime : d.arrival_time;
+    let resolvedFerryArrivalTime = computeIschiaArrivalTime(bookingKind, d.arrival_time ?? "") ?? d.arrival_time;
+    if (isFerryKind && tripLeg !== "return_only") {
+      const { data: scheduleRows } = await auth.admin
+        .from("ferry_schedules")
+        .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to");
+      const schedule = findArrivalScheduleForService(
+        (scheduleRows ?? []) as FerryScheduleRow[],
+        d.arrival_date,
+        d.arrival_time,
+        bookingKind
+      );
+      if (schedule?.arrivalTime) resolvedFerryArrivalTime = schedule.arrivalTime;
+    }
 
     const insert = {
       tenant_id: tenantId,
@@ -183,7 +196,7 @@ export async function POST(request: NextRequest) {
       notes,
       booking_service_kind: bookingKind,
       arrival_date: d.arrival_date,
-      arrival_time: computeIschiaArrivalTime(bookingKind, d.arrival_time ?? "") ?? d.arrival_time,
+      arrival_time: resolvedFerryArrivalTime,
       departure_date: d.departure_date,
       departure_time: d.departure_time,
       transport_code: transportCode || null,
