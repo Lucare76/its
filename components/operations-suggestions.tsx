@@ -195,6 +195,42 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
     if (suggestion.action_payload.action === "open_hotel") router.push("/hotels");
   };
 
+  const markSolved = async (suggestion: Suggestion) => {
+    const token = await getAccessToken();
+    if (!token) {
+      setMessage("Sessione non valida.");
+      return;
+    }
+
+    setExecutingId(suggestion.id);
+    const response = await fetch("/api/ops/suggestions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        suggestion_id: suggestion.id,
+        suggestion_type: suggestion.type,
+        action_payload: {
+          ...suggestion.action_payload,
+          action: "mark_resolved"
+        }
+      })
+    });
+
+    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    setExecutingId(null);
+    if (!response.ok || !body?.ok) {
+      setMessage(body?.error ?? "Suggerimento non archiviato.");
+      return;
+    }
+
+    setSuggestions((current) => current.filter((item) => item.id !== suggestion.id));
+    setMessage("Suggerimento archiviato.");
+    await load();
+  };
+
   const openWizard = (suggestion: Suggestion) => {
     setGuidedSuggestion(suggestion);
     setWizardStep(1);
@@ -360,14 +396,24 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
                   </div>
                   <p className="mt-2 text-sm leading-5 text-slate-700">{suggestion.description}</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => openWizard(suggestion)}
-                  disabled={executingId === suggestion.id}
-                  className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
-                >
-                  {executingId === suggestion.id ? "Esecuzione..." : "Guida"}
-                </button>
+                <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void markSolved(suggestion)}
+                    disabled={executingId === suggestion.id}
+                    className="rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                  >
+                    Ok risolto
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openWizard(suggestion)}
+                    disabled={executingId === suggestion.id}
+                    className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    {executingId === suggestion.id ? "Esecuzione..." : "Guida"}
+                  </button>
+                </div>
               </div>
             </article>
           );
