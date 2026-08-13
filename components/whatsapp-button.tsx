@@ -22,6 +22,17 @@ function normalizePhonePreview(input: string | null | undefined) {
   return /^\+\d{7,15}$/.test(cleaned) ? cleaned : null;
 }
 
+function absoluteAppUrl(url: string) {
+  if (/^https?:\/\//i.test(url)) return url;
+  return `${window.location.origin}${url.startsWith("/") ? url : `/${url}`}`;
+}
+
+function buildNewInboxUrl(phoneE164: string, name: string | null | undefined) {
+  const params = new URLSearchParams({ new: phoneE164 });
+  if (name?.trim()) params.set("name", name.trim());
+  return absoluteAppUrl(`/whatsapp?${params.toString()}`);
+}
+
 export function WhatsAppButton({ phone, name, tenantId, size = "sm" }: WhatsAppButtonProps) {
   const [busy, setBusy] = useState(false);
   const phoneE164 = useMemo(() => normalizePhonePreview(phone), [phone]);
@@ -31,7 +42,8 @@ export function WhatsAppButton({ phone, name, tenantId, size = "sm" }: WhatsAppB
 
   const openWhatsApp = async () => {
     if (disabled) return;
-    const popup = window.open("about:blank", "_blank", "noopener,noreferrer");
+    const fallbackUrl = buildNewInboxUrl(phoneE164, name);
+    const popup = window.open(fallbackUrl, "_blank", "noopener,noreferrer");
     try {
       const { data } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
       const token = data.session?.access_token;
@@ -43,13 +55,14 @@ export function WhatsAppButton({ phone, name, tenantId, size = "sm" }: WhatsAppB
       });
       const body = (await response.json().catch(() => null)) as { url?: string; error?: string } | null;
       if (!response.ok || !body?.url) throw new Error(body?.error ?? "WhatsApp non disponibile.");
+      const targetUrl = absoluteAppUrl(body.url);
       if (popup) {
-        popup.location.href = body.url;
+        popup.location.replace(targetUrl);
       } else {
-        window.open(body.url, "_blank", "noopener,noreferrer");
+        window.open(targetUrl, "_blank", "noopener,noreferrer");
       }
     } catch {
-      popup?.close();
+      if (!popup) window.open(fallbackUrl, "_blank", "noopener,noreferrer");
     } finally {
       setBusy(false);
     }
@@ -77,4 +90,3 @@ export function WhatsAppButton({ phone, name, tenantId, size = "sm" }: WhatsAppB
     </button>
   );
 }
-
