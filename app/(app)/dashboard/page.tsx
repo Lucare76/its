@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ExportServicesButton } from "@/components/export-services-button";
 import { OperationsSuggestions } from "@/components/operations-suggestions";
 import { EmptyState, SidePanel } from "@/components/ui";
 import { needsInboxReview } from "@/lib/inbox-review";
@@ -24,21 +23,16 @@ interface SuggestedGroup {
   suggestedVehicle: "VAN" | "CAR";
 }
 
+function BellIcon() {
+  return <span aria-hidden="true">●</span>;
+}
+
 function floorToThirtyMinutes(time: string) {
   const [rawHour = "0", rawMinute = "0"] = time.split(":");
   const hour = Number(rawHour);
   const minute = Number(rawMinute);
   const flooredMinute = Number.isFinite(minute) ? Math.floor(minute / 30) * 30 : 0;
   return `${String(Number.isFinite(hour) ? hour : 0).padStart(2, "0")}:${String(flooredMinute).padStart(2, "0")}`;
-}
-
-function BellIcon() {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4" aria-hidden="true">
-      <path d="M8 2.5a2.5 2.5 0 0 0-2.5 2.5v1.1c0 .7-.2 1.4-.5 2L4 10.5h8l-1-2.4c-.3-.6-.5-1.3-.5-2V5A2.5 2.5 0 0 0 8 2.5Z" />
-      <path d="M6.5 12a1.5 1.5 0 0 0 3 0" />
-    </svg>
-  );
 }
 
 const INITIAL_ALERT_NOW_MS = Date.UTC(2026, 0, 1, 0, 0, 0);
@@ -54,6 +48,12 @@ export default function OperatorDashboardPage() {
   const [pendingAccessRequestCount, setPendingAccessRequestCount] = useState(0);
   const [pendingAgencyReviewCount, setPendingAgencyReviewCount] = useState(0);
   const [activeBusGps, setActiveBusGps] = useState<number | null>(null);
+  const [dayOffset, setDayOffset] = useState<0 | 1>(0);
+  const [serviceView, setServiceView] = useState<"transfers" | "shuttles">("transfers");
+  const [operationsQuery, setOperationsQuery] = useState("");
+  const [directionFilter, setDirectionFilter] = useState<"all" | "arrival" | "departure">("all");
+  const [timeBandFilter, setTimeBandFilter] = useState<"all" | "morning" | "afternoon" | "evening">("all");
+  const [operationsPage, setOperationsPage] = useState(1);
 
   useEffect(() => {
     if (!supabase) return;
@@ -159,8 +159,11 @@ export default function OperatorDashboardPage() {
     );
   }
 
-  const todayIso = new Date(alertNowMs).toISOString().slice(0, 10);
-  const todayInstances = buildOperationalInstances(data.services).filter((instance) => instance.date === todayIso);
+  const todayIso = new Date(alertNowMs + dayOffset * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const isShuttleService = (service: Service) => service.booking_service_kind === "navetta" || service.booking_service_kind === "shuttle_hotel" || service.vessel?.trim().toLocaleLowerCase("it") === "navetta";
+  const allTodayInstances = buildOperationalInstances(data.services).filter((instance) => instance.date === todayIso);
+  const todayInstances = allTodayInstances.filter((instance) => serviceView === "shuttles" ? isShuttleService(instance.service) : !isShuttleService(instance.service));
+  const shuttleInstancesCount = allTodayInstances.filter((instance) => isShuttleService(instance.service)).length;
   const next48hIso = new Date(alertNowMs + 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const todayServiceIds = new Set(todayInstances.map((instance) => instance.serviceId));
   const todayServices = data.services.filter((service) => todayServiceIds.has(service.id));
@@ -172,23 +175,39 @@ export default function OperatorDashboardPage() {
     return !isInboxPdfTestNoise({ subject: email.subject, parsedJson }) && isInboxPdfReviewOpen(parsedJson);
   });
   const inboxToReview = data.inboundEmails.filter((email) => needsInboxReview(email.parsed_json));
-  const futureInstances = buildOperationalInstances(data.services).filter((instance) => instance.date > todayIso && instance.date <= next48hIso);
+  const futureInstances = buildOperationalInstances(data.services).filter((instance) => instance.date > todayIso && instance.date <= next48hIso && (serviceView === "shuttles" ? isShuttleService(instance.service) : !isShuttleService(instance.service)));
   const nextArrivals48h = futureInstances.filter((instance) => instance.direction === "arrival").slice(0, 6);
   const nextDepartures48h = futureInstances.filter((instance) => instance.direction === "departure").slice(0, 6);
-  const nextArrivalsBus48h = futureInstances.filter(
-    (instance) => instance.direction === "arrival" && (instance.service.service_type_code === "bus_line" || instance.service.booking_service_kind === "bus_city_hotel")
-  ).length;
-  const nextArrivalsOther48h = futureInstances.filter(
-    (instance) => instance.direction === "arrival" && !(instance.service.service_type_code === "bus_line" || instance.service.booking_service_kind === "bus_city_hotel")
-  ).length;
-  const nextDeparturesBus48h = futureInstances.filter(
-    (instance) => instance.direction === "departure" && (instance.service.service_type_code === "bus_line" || instance.service.booking_service_kind === "bus_city_hotel")
-  ).length;
-  const nextDeparturesOther48h = futureInstances.filter(
-    (instance) => instance.direction === "departure" && !(instance.service.service_type_code === "bus_line" || instance.service.booking_service_kind === "bus_city_hotel")
-  ).length;
+  const isBusLine = (instance: (typeof futureInstances)[number]) => instance.service.service_type_code === "bus_line" || instance.service.booking_service_kind === "bus_city_hotel";
+  const nextArrivalsBus48h = futureInstances.filter((instance) => instance.direction === "arrival" && isBusLine(instance)).length;
+  const nextArrivalsOther48h = futureInstances.filter((instance) => instance.direction === "arrival" && !isBusLine(instance)).length;
+  const nextDeparturesBus48h = futureInstances.filter((instance) => instance.direction === "departure" && isBusLine(instance)).length;
+  const nextDeparturesOther48h = futureInstances.filter((instance) => instance.direction === "departure" && !isBusLine(instance)).length;
   const hotelsById = new Map(data.hotels.map((hotel) => [hotel.id, hotel]));
   const assignmentsByServiceId = new Map(data.assignments.map((assignment) => [assignment.service_id, assignment]));
+  const operationalRows = (() => {
+    const query = operationsQuery.trim().toLocaleLowerCase("it");
+    return todayInstances.filter((instance) => {
+      if (directionFilter !== "all" && instance.direction !== directionFilter) return false;
+      const hour = Number(instance.time.slice(0, 2));
+      const band = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+      if (timeBandFilter !== "all" && band !== timeBandFilter) return false;
+      if (!query) return true;
+      const hotel = hotelsById.get(instance.service.hotel_id)?.name ?? "";
+      return [getCustomerFullName(instance.service), hotel, instance.service.vessel, instance.service.transport_code]
+        .some((value) => String(value ?? "").toLocaleLowerCase("it").includes(query));
+    });
+  })();
+  const operationsPerPage = 50;
+  const operationsPages = Math.max(1, Math.ceil(operationalRows.length / operationsPerPage));
+  const safeOperationsPage = Math.min(operationsPage, operationsPages);
+  const pagedOperationalRows = operationalRows.slice((safeOperationsPage - 1) * operationsPerPage, safeOperationsPage * operationsPerPage);
+  const timeBandCounts = todayInstances.reduce((counts, instance) => {
+    const hour = Number(instance.time.slice(0, 2));
+    const band = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+    counts[band] += 1;
+    return counts;
+  }, { morning: 0, afternoon: 0, evening: 0 });
 
   const unassignedServices = todayServices.filter(
     (service) => service.status === "new" || (service.status as string) === "unassigned" || !assignmentsByServiceId.has(service.id)
@@ -237,12 +256,7 @@ export default function OperatorDashboardPage() {
     return nowMs - sentAtMs > reminderAlertThresholdMs;
   });
   const pending = todayServices.filter((service) => service.status === "new").length;
-  const totalPax = todayServices
-    .filter((service) => (service.booking_service_kind as string | null) !== "navetta" && service.booking_service_kind !== "shuttle_hotel" && service.vessel?.toLowerCase().trim() !== "navetta")
-    .reduce((sum, service) => sum + service.pax, 0);
-  const sortedDates = [...new Set(todayServices.map((service) => service.date))].sort();
-  const defaultDateFrom = sortedDates[0] ?? todayIso;
-  const defaultDateTo = sortedDates[sortedDates.length - 1] ?? defaultDateFrom;
+  const totalPax = todayServices.reduce((sum, service) => sum + service.pax, 0);
 
   const applySuggestion = async (group: SuggestedGroup) => {
     if (!supabase || applyingGroupId || appliedGroupIds.includes(group.id) || skippedGroupIds.includes(group.id)) return;
@@ -289,43 +303,36 @@ export default function OperatorDashboardPage() {
   const todayLabel = new Date(alertNowMs).toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" });
 
   return (
-    <section className="page-section">
+    <section className="mx-auto max-w-[1500px] space-y-4 pb-8">
 
       {/* ── Hero strip ─────────────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden rounded-3xl px-4 py-5 text-white sm:px-6 sm:py-6 lg:px-8 lg:py-7" style={{ background: "linear-gradient(135deg,#1e3a8a 0%,#4338ca 50%,#7c3aed 100%)" }}>
-        <div className="absolute -top-16 -right-16 h-56 w-56 rounded-full bg-white/5" />
-        <div className="absolute -bottom-10 -left-10 h-40 w-40 rounded-full bg-white/5" />
+      <div className="relative px-1 py-1 text-slate-950">
         <div className="relative flex flex-wrap items-center justify-between gap-4">
           <div>
-            <p className="text-sm font-medium text-white/60 capitalize">{todayLabel}</p>
-            <h1 className="mt-1 text-2xl font-extrabold tracking-tight">Cruscotto operativo</h1>
-            <div className="mt-2 flex items-center gap-2">
-              <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${liveConnected ? "bg-emerald-500/20 text-emerald-200" : "bg-white/10 text-white/50"}`}>
+            <h1 className="text-3xl font-extrabold tracking-tight">Cruscotto</h1>
+            <p className="mt-1 text-sm font-medium capitalize text-slate-500">{todayLabel}</p>
+            <div className="mt-1 flex items-center gap-2">
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${liveConnected ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${liveConnected ? "bg-emerald-400 animate-pulse" : "bg-white/30"}`} />
                 {liveConnected ? "In tempo reale" : "Non in linea"}
               </span>
             </div>
           </div>
-          <div className="flex w-full flex-wrap gap-3 lg:w-auto lg:justify-end">
-            <ExportServicesButton defaultDateFrom={defaultDateFrom} defaultDateTo={defaultDateTo} className="w-full sm:w-auto" />
-            <button type="button" onClick={() => setIsSuggestionsOpen(true)}
-              className="w-full rounded-xl border border-white/25 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/20 sm:w-auto">
-              Supporto assegnazioni
-            </button>
+          <div className="flex w-full flex-wrap items-center gap-3 lg:w-auto lg:justify-end">
+            <div className="flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+              <button type="button" onClick={() => { setDayOffset(0); setOperationsPage(1); }} className={`rounded-lg px-5 py-2 text-sm font-semibold ${dayOffset === 0 ? "bg-indigo-600 text-white" : "text-slate-600"}`}>Oggi</button>
+              <button type="button" onClick={() => { setDayOffset(1); setOperationsPage(1); }} className={`rounded-lg px-5 py-2 text-sm font-semibold ${dayOffset === 1 ? "bg-indigo-600 text-white" : "text-slate-600"}`}>Domani</button>
+            </div>
             <Link href="/services/new"
-              className="w-full rounded-xl bg-white px-4 py-2 text-center text-sm font-bold text-indigo-700 shadow transition hover:bg-white/90 sm:w-auto">
+              className="btn-primary w-full px-6 py-3 text-center text-sm font-bold shadow-lg shadow-indigo-200 sm:w-auto">
               + Nuova prenotazione
-            </Link>
-            <Link href="/dispatch"
-              className="w-full rounded-xl border border-white/25 bg-white/10 px-4 py-2 text-center text-sm font-semibold text-white backdrop-blur transition hover:bg-white/20 sm:w-auto">
-              Assegnazioni
             </Link>
           </div>
         </div>
       </div>
 
       {/* ── Alert banner agenzie ─────────────────────────────────────────── */}
-      {pendingAgencyReviewCount > 0 && (
+      {false && pendingAgencyReviewCount > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-900 shadow-sm">
           <div className="flex items-center gap-3">
             <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-red-500 shadow-sm text-base">✏️</span>
@@ -337,7 +344,7 @@ export default function OperatorDashboardPage() {
           <Link href="/inbox/agency-reviews" className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 transition">Vai alle revisioni →</Link>
         </div>
       )}
-      {pendingAccessRequestCount > 0 && (
+      {false && pendingAccessRequestCount > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 shadow-sm">
           <div className="flex items-center gap-3">
             <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-amber-600 shadow-sm"><BellIcon /></span>
@@ -351,28 +358,76 @@ export default function OperatorDashboardPage() {
       )}
 
       {/* ── KPI grid ────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-6">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {[
           { icon: "⚡", label: "Operativo oggi", value: todayInstances.length, color: "#4338ca", bg: "#eef2ff", href: "/arrivals" },
           { icon: "✈️", label: "Arrivi oggi",     value: todayArrivals,         color: "#0369a1", bg: "#e0f2fe", href: "/arrivals" },
           { icon: "🚀", label: "Partenze oggi",   value: todayDepartures,       color: "#7c3aed", bg: "#f5f3ff", href: "/departures" },
           { icon: "👥", label: "Passeggeri",      value: totalPax,              color: "#0f766e", bg: "#f0fdfa", href: "/arrivals" },
-          { icon: "🚌", label: "Bus attivi GPS",   value: activeBusGps ?? "—",   color: activeBusGps !== null ? "#b45309" : "#94a3b8", bg: "#fffbeb", href: "/mappa-live" },
-          { icon: "⚠️", label: "Non assegnati",   value: pending,               color: pending > 0 ? "#dc2626" : "#64748b", bg: pending > 0 ? "#fef2f2" : "#f8fafc", href: "/dispatch" },
-          { icon: "📄", label: "PDF Inbox da revisionare", value: inboxPdfNeedsReview.length, color: inboxPdfNeedsReview.length > 0 ? "#d97706" : "#64748b", bg: inboxPdfNeedsReview.length > 0 ? "#fffbeb" : "#f8fafc", href: "/inbox" },
-          { icon: "📧", label: "Inbox",           value: inboxToReview.length,  color: inboxToReview.length > 0 ? "#dc2626" : "#64748b", bg: inboxToReview.length > 0 ? "#fef2f2" : "#f8fafc", href: "/inbox" },
+          { icon: "⚠️", label: "Anomalie", value: pending + inboxPdfNeedsReview.length + inboxToReview.length, color: pending + inboxPdfNeedsReview.length + inboxToReview.length > 0 ? "#dc2626" : "#64748b", bg: "#fef2f2", href: "/dispatch" },
         ].map(({ icon, label, value, color, bg, href }) => {
           const inner = (
-            <div className={`flex flex-col gap-3 rounded-2xl border border-slate-100 p-4 shadow-sm transition hover:shadow-md ${href ? "cursor-pointer hover:border-slate-300" : ""}`} style={{ backgroundColor: bg }}>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl">{icon}</span>
-                <span className="text-3xl font-extrabold tracking-tight" style={{ color }}>{value}</span>
-              </div>
-              <p className="text-xs font-semibold text-slate-500 leading-tight">{label}</p>
+            <div className={`flex min-h-[106px] items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md ${href ? "cursor-pointer hover:border-indigo-200" : ""}`}>
+              <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl text-2xl" style={{ backgroundColor: bg, color }}>{icon}</span>
+              <div><p className="text-sm font-medium text-slate-500">{label}</p><span className="text-3xl font-extrabold tracking-tight text-slate-950">{value}</span></div>
             </div>
           );
           return href ? <Link key={label} href={href} className="block">{inner}</Link> : <div key={label}>{inner}</div>;
         })}
+      </div>
+
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <section className="pms-panel overflow-hidden p-4 md:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-extrabold text-slate-950">Operatività di oggi</h2>
+              <p className="text-xs text-slate-500">Elenco operativo scalabile fino a 400 servizi e oltre.</p>
+            </div>
+            <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-700">{operationalRows.length} servizi</span>
+          </div>
+          <div className="mt-4 flex flex-col gap-2 lg:flex-row">
+            <input value={operationsQuery} onChange={(event) => { setOperationsQuery(event.target.value); setOperationsPage(1); }} className="input-saas min-w-0 flex-1" placeholder="Cerca cliente, hotel, corsa…" />
+            <div className="flex flex-wrap gap-2">
+              {([['all', `Tutti ${todayInstances.length}`], ['arrival', `Arrivi ${todayArrivals}`], ['departure', `Partenze ${todayDepartures}`]] as const).map(([value, label]) => (
+                <button key={value} type="button" onClick={() => { setDirectionFilter(value); setOperationsPage(1); }} className={directionFilter === value ? "btn-primary px-3 py-2 text-xs" : "btn-secondary px-3 py-2 text-xs"}>{label}</button>
+              ))}
+              <button type="button" onClick={() => { setServiceView((view) => view === "transfers" ? "shuttles" : "transfers"); setOperationsPage(1); }} className={serviceView === "shuttles" ? "btn-primary px-3 py-2 text-xs" : "btn-secondary px-3 py-2 text-xs"}>{serviceView === "shuttles" ? "Mostra transfer" : `Navette ${shuttleInstancesCount}`}</button>
+              <span className="btn-secondary cursor-default px-3 py-2 text-xs">50 per pagina</span>
+            </div>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {([['all', 'Tutta la giornata', todayInstances.length], ['morning', 'Mattina', timeBandCounts.morning], ['afternoon', 'Pomeriggio', timeBandCounts.afternoon], ['evening', 'Sera', timeBandCounts.evening]] as const).map(([value, label, count]) => (
+              <button key={value} type="button" onClick={() => { setTimeBandFilter(value); setOperationsPage(1); }} className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${timeBandFilter === value ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-500"}`}>{label} <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5">{count}</span></button>
+            ))}
+          </div>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[860px] text-left text-xs">
+              <thead className="border-b border-slate-200 text-[10px] font-bold uppercase tracking-wide text-slate-400"><tr><th className="px-3 py-2">Orario</th><th className="px-3 py-2">Cliente</th><th className="px-3 py-2">Hotel</th><th className="px-3 py-2">Trasporto</th><th className="px-3 py-2">Pax</th><th className="px-3 py-2">Autista / Veicolo</th><th className="px-3 py-2">Stato</th></tr></thead>
+              <tbody className="divide-y divide-slate-100">
+                {pagedOperationalRows.map((instance) => {
+                  const assignment = assignmentsByServiceId.get(instance.serviceId);
+                  const unassigned = !assignment;
+                  return <tr key={instance.instanceId} className={unassigned ? "bg-amber-50/60" : "hover:bg-slate-50"}>
+                    <td className="px-3 py-2.5 font-extrabold text-indigo-700">{instance.time}</td><td className="px-3 py-2.5 font-bold text-slate-800">{getCustomerFullName(instance.service)}</td><td className="px-3 py-2.5 text-slate-600">{hotelsById.get(instance.service.hotel_id)?.name ?? "—"}</td><td className="px-3 py-2.5 text-slate-600">{instance.service.vessel || instance.service.transport_code || "—"}</td><td className="px-3 py-2.5 font-semibold">{instance.service.pax}</td><td className="px-3 py-2.5 text-slate-600">{assignment ? `${assignment.driver_profile_id ? "Autista assegnato" : "Autista da confermare"} / ${assignment.vehicle_label || "Mezzo N/D"}` : "Non assegnato"}</td><td className="px-3 py-2.5"><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${unassigned ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>{unassigned ? "In attesa" : instance.service.status}</span></td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+            {pagedOperationalRows.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">Nessun servizio nel filtro selezionato.</p> : null}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
+            <p>Visualizzati {operationalRows.length === 0 ? 0 : (safeOperationsPage - 1) * operationsPerPage + 1}–{Math.min(safeOperationsPage * operationsPerPage, operationalRows.length)} di {operationalRows.length}</p>
+            <div className="flex gap-1"><button type="button" disabled={safeOperationsPage <= 1} onClick={() => setOperationsPage((page) => Math.max(1, page - 1))} className="btn-secondary px-3 py-1.5 disabled:opacity-40">‹</button><span className="btn-primary cursor-default px-3 py-1.5">{safeOperationsPage}</span><span className="btn-secondary cursor-default px-3 py-1.5">di {operationsPages}</span><button type="button" disabled={safeOperationsPage >= operationsPages} onClick={() => setOperationsPage((page) => Math.min(operationsPages, page + 1))} className="btn-secondary px-3 py-1.5 disabled:opacity-40">›</button></div>
+          </div>
+        </section>
+
+        <aside className="pms-panel p-5">
+          <h2 className="text-lg font-extrabold text-slate-950">Avvisi e attività</h2>
+          <div className="mt-3 divide-y divide-slate-100">
+            {[["Prenotazioni da verificare", inboxToReview.length, "bg-rose-100 text-rose-700"], ["Servizi senza autista", unassignedServices.length, "bg-amber-100 text-amber-700"], ["Revisioni agenzie", pendingAgencyReviewCount, "bg-indigo-100 text-indigo-700"], ["Bus attivi GPS", activeBusGps ?? 0, "bg-violet-100 text-violet-700"]].map(([label, value, tone]) => <div key={String(label)} className="flex items-center justify-between gap-3 py-3 text-sm"><span className="font-medium text-slate-700">{label}</span><span className={`min-w-8 rounded-lg px-2 py-1 text-center text-xs font-extrabold ${tone}`}>{value}</span></div>)}
+          </div>
+          <Link href="/dispatch" className="btn-secondary mt-5 w-full">Vedi tutte le attività</Link>
+        </aside>
       </div>
 
       {/* ── Avvisi operativi ─────────────────────────────────────────────── */}

@@ -1,7 +1,7 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isAllowed, isAllowedWithOverrides, type CapabilityOverrides, parseRole } from "@/lib/rbac";
@@ -808,14 +808,15 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         <div className="overflow-hidden rounded-[26px] border border-slate-800 bg-[#082b4c] p-3 shadow-[0_18px_45px_rgba(8,43,76,0.22)]">
 
           {/* Brand + collapse */}
-          <div className="mb-4 flex items-center justify-between gap-2 rounded-2xl px-3 py-3 text-white" style={{ background: "linear-gradient(135deg,#0b365d,#312e81,#5b21b6)" }}>
+          <div className="mb-4 flex items-center justify-between gap-2 rounded-2xl px-2.5 py-3 text-white" style={{ background: "linear-gradient(135deg,#0b365d,#312e81,#5b21b6)" }}>
             {!collapsed ? (
-              <div className="min-w-0">
-                <p className="text-[9px] font-bold uppercase tracking-[0.25em] text-white/60">Ischia Transfer</p>
-                <p className="text-sm font-extrabold text-white leading-tight tracking-tight">PMS operativo</p>
+              <div className="min-w-0 flex-1 px-1 py-1">
+                <Image src="/Logo its.png" alt="Ischia Transfer Service" width={174} height={56} className="h-auto w-full object-contain" priority />
               </div>
             ) : (
-              <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-xl bg-white/20 text-[11px] font-extrabold text-white">IT</div>
+              <div className="mx-auto flex h-9 w-9 items-center justify-center overflow-hidden">
+                <Image src="/brand/logo-ischia-transfer.png" alt="Ischia Transfer" width={36} height={36} className="h-full w-full object-contain" />
+              </div>
             )}
             <button
               type="button"
@@ -1338,7 +1339,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       </aside>
 
       <div className="min-w-0 space-y-4">
-        {pathname !== "/services/new" && pathname !== "/inbox" ? <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-5">
+        {pathname !== "/services/new" && pathname !== "/inbox" && pathname !== "/dashboard" ? <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Vista operativa</p>
