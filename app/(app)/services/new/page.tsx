@@ -357,6 +357,17 @@ export default function OpsNewBookingPage() {
   const selectedKind = form.booking_service_kind;
   const serviceKindLabel = useMemo(() => kindOptions.find((item) => item.value === selectedKind)?.label ?? "Servizio", [selectedKind]);
   const contextLabels = useMemo(() => bookingContext(selectedKind), [selectedKind]);
+  const selectBookingKind = (kind: BookingKind) => {
+    setForm((prev) => ({
+      ...prev,
+      booking_service_kind: kind,
+      arrival_date: kind === "bus_city_hotel" ? nextSunday(prev.arrival_date) : prev.arrival_date,
+      departure_date: kind === "bus_city_hotel" ? nextSunday(prev.departure_date, true) : prev.departure_date,
+      arrival_time: kind === "formula_snav" ? (snavArrivalOptions[0]?.time ?? prev.arrival_time) : kind === "formula_medmar_napoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "mainland_to_ischia", prev.arrival_date, { company: "medmar", departurePort: "napoli_beverello" })[0]?.time ?? prev.arrival_time) : kind === "formula_medmar_pozzuoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "mainland_to_ischia", prev.arrival_date, { company: "medmar", departurePort: "pozzuoli" })[0]?.time ?? prev.arrival_time) : prev.arrival_time,
+      departure_time: kind === "formula_snav" ? (snavDepartureOptions[0]?.time ?? prev.departure_time) : kind === "formula_medmar_napoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "ischia_to_mainland", prev.departure_date, { company: "medmar", arrivalPort: "napoli_beverello" })[0]?.time ?? prev.departure_time) : kind === "formula_medmar_pozzuoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "ischia_to_mainland", prev.departure_date, { company: "medmar", arrivalPort: "pozzuoli" })[0]?.time ?? prev.departure_time) : prev.departure_time
+    }));
+    if (kind !== "bus_city_hotel") resetBus();
+  };
 
   const doSubmit = async () => {
     if (!accessToken) { setMessage("Sessione non valida. Rifai login."); return; }
@@ -482,13 +493,21 @@ export default function OpsNewBookingPage() {
   if (!hasSupabaseEnv || !supabase) return <div className="card p-4 text-sm text-slate-500">Supabase non configurato.</div>;
 
   return (
-    <section className="mx-auto max-w-5xl page-section">
-      <div className="section-head">
+    <section className="mx-auto w-full max-w-[1400px] page-section">
+      <div className="section-head mb-1">
         <h1 className="section-title">Nuova prenotazione</h1>
         <p className="section-subtitle">Inserimento diretto da {role === "admin" ? "amministratore" : "operatore"}.</p>
       </div>
-      <div className="flex flex-wrap gap-2 mb-4">
-        <Link href="/services" className="btn-secondary px-3 py-1.5 text-xs">← Lista servizi</Link>
+      <div className="mb-4 flex flex-col gap-3 border-b border-slate-200 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex min-w-0 overflow-x-auto">
+          <button type="button" className="border-b-2 border-indigo-600 px-5 py-3 text-sm font-bold text-indigo-700">Inserimento manuale</button>
+          <Link href="/inbox" className="border-b-2 border-transparent px-5 py-3 text-sm font-semibold text-slate-500 hover:border-indigo-200 hover:text-indigo-700">Da agenzia / Automatiche</Link>
+        </div>
+        <Link href="/inbox" className="mb-2 text-sm font-semibold text-indigo-600 hover:text-indigo-800">Apri coda automatiche →</Link>
+      </div>
+      <div className="mb-5 flex items-start gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
+        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">i</span>
+        <p>Le prenotazioni ricevute da <strong>ALESTE VIAGGI</strong> e dalle altre agenzie vengono precompilate automaticamente. Verifica i dati nella coda prima di confermare.</p>
       </div>
 
       {!hasHotels ? (
@@ -498,32 +517,46 @@ export default function OpsNewBookingPage() {
         </article>
       ) : null}
 
-      <div className="card grid gap-3 p-4 md:grid-cols-2 md:p-5">
+      <div className="grid w-full items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="flex min-w-0 flex-col gap-5">
 
         {/* Tipo servizio */}
+        <div className="pms-panel order-2 grid gap-4 p-5 md:grid-cols-2">
+        <div className="md:col-span-2">
+          <div className="pms-step-title"><span className="pms-step-number">2</span> Tipo di servizio</div>
+        </div>
         <label className="text-sm md:col-span-2">
           Tipo servizio*
+          <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {([
+              ["formula_medmar_napoli", "MEDMAR Napoli", "⛴"],
+              ["formula_medmar_pozzuoli", "MEDMAR Pozzuoli", "⛴"],
+              ["formula_snav", "SNAV", "🚤"],
+              ["transfer_airport_hotel", "Aeroporto", "✈"],
+              ["transfer_train_hotel", "Stazione / Bus", "▣"],
+              ["transfer_port_hotel", "Porto / Altro", "•••"],
+            ] as const).map(([value, label, icon]) => (
+              <button key={value} type="button" onClick={() => selectBookingKind(value)} className={`pms-segment gap-2 ${selectedKind === value ? "pms-segment-active" : ""}`}>
+                <span>{icon}</span><span>{label}</span>
+              </button>
+            ))}
+          </div>
+          <span className="mt-3 block text-xs font-medium text-slate-500">Tutti i servizi</span>
           <select
             className="input-saas mt-1"
             value={form.booking_service_kind}
-            onChange={(e) => {
-              const kind = e.target.value as BookingKind;
-              setForm((prev) => ({
-                ...prev,
-                booking_service_kind: kind,
-                arrival_date: kind === "bus_city_hotel" ? nextSunday(prev.arrival_date) : prev.arrival_date,
-                departure_date: kind === "bus_city_hotel" ? nextSunday(prev.departure_date, true) : prev.departure_date,
-                arrival_time: kind === "formula_snav" ? (snavArrivalOptions[0]?.time ?? prev.arrival_time) : kind === "formula_medmar_napoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "mainland_to_ischia", prev.arrival_date, { company: "medmar", departurePort: "napoli_beverello" })[0]?.time ?? prev.arrival_time) : kind === "formula_medmar_pozzuoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "mainland_to_ischia", prev.arrival_date, { company: "medmar", departurePort: "pozzuoli" })[0]?.time ?? prev.arrival_time) : prev.arrival_time,
-                departure_time: kind === "formula_snav" ? (snavDepartureOptions[0]?.time ?? prev.departure_time) : kind === "formula_medmar_napoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "ischia_to_mainland", prev.departure_date, { company: "medmar", arrivalPort: "napoli_beverello" })[0]?.time ?? prev.departure_time) : kind === "formula_medmar_pozzuoli" ? (buildFerryScheduleOptions(ferryScheduleRows, "ischia_to_mainland", prev.departure_date, { company: "medmar", arrivalPort: "pozzuoli" })[0]?.time ?? prev.departure_time) : prev.departure_time
-              }));
-              if (kind !== "bus_city_hotel") resetBus();
-            }}
+            onChange={(e) => selectBookingKind(e.target.value as BookingKind)}
           >
             {kindOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
         </label>
+        </div>
 
         {/* Nome cliente */}
+        <div className="pms-panel order-1 grid gap-4 p-5 md:grid-cols-2 lg:grid-cols-6">
+        <div className="md:col-span-2 lg:col-span-6">
+          <div className="pms-step-title"><span className="pms-step-number">1</span> Cliente e prenotazione</div>
+        </div>
         {isSnavKind ? (
           <label className="text-sm md:col-span-2">
             Nome completo cliente*
@@ -560,7 +593,7 @@ export default function OpsNewBookingPage() {
           {fieldErrors.customer_phone ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.customer_phone}</span> : null}
         </label>
 
-        <label className="text-sm">
+        <label className={`text-sm ${isMedmarKind ? "hidden" : ""}`}>
           Pax prezzo pieno (2+ anni)*
           <input type="number" min={1} max={50} className="input-saas mt-1" value={form.pax}
             onChange={(e) => setForm((prev) => ({ ...prev, pax: e.target.value }))}
@@ -568,6 +601,53 @@ export default function OpsNewBookingPage() {
           <span className="mt-1 block text-xs text-slate-500">Dai 2 anni compiuti tutti pagano prezzo pieno.</span>
           {fieldErrors.pax ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.pax}</span> : null}
         </label>
+        {isMedmarKind ? (
+          <div className="md:col-span-2 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-indigo-950">Passeggeri Formula MEDMAR</p>
+                <p className="text-xs text-indigo-700">Indicare i passeggeri suddivisi per fascia di età.</p>
+              </div>
+              <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-indigo-700">Totale {form.pax}</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {([
+                ["medmar_infant_count", "Infant", "0-4 anni"],
+                ["medmar_child_count", "Bambino", "4-12 anni"],
+                ["medmar_adult_count", "Adulto", "12 anni in poi"],
+              ] as const).map(([field, label, ages]) => (
+                <label key={field} className="rounded-xl border border-indigo-100 bg-white p-3 text-sm">
+                  <span className="block font-bold text-slate-900">{label}</span>
+                  <span className="block text-xs text-slate-500">{ages}</span>
+                  <input type="number" min={0} max={16} className="input-saas mt-2" value={form[field]}
+                    onChange={(event) => setForm((prev) => {
+                      const next = { ...prev, [field]: event.target.value };
+                      const total = Number(next.medmar_infant_count || 0) + Number(next.medmar_child_count || 0) + Number(next.medmar_adult_count || 0);
+                      return { ...next, pax: String(total) };
+                    })}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <label className="text-sm lg:col-span-2">
+          Agenzia
+          <select className="input-saas mt-1" value={form.agency_id} onChange={(e) => setForm((prev) => ({ ...prev, agency_id: e.target.value }))}>
+            <option value="">Privato / nessuna agenzia</option>
+            {agencies.map((agency) => <option key={agency.id} value={agency.id}>{agency.name}</option>)}
+          </select>
+        </label>
+        <label className="text-sm md:col-span-2 lg:col-span-3">
+          Email cliente <span className="font-normal text-slate-400">(facoltativa per privati)</span>
+          <input type="email" className="input-saas mt-1" data-no-uppercase placeholder="cliente@email.it" value={form.customer_email}
+            onChange={(event) => setForm((prev) => ({ ...prev, customer_email: event.target.value }))}
+          />
+          {fieldErrors.customer_email ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.customer_email}</span> : null}
+        </label>
+        <details className="md:col-span-2 lg:col-span-6 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-700">Passeggeri speciali e animali</summary>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
         <label className="text-sm">
           Infant 0-1,99 anni
           <input type="number" min={0} max={16} className="input-saas mt-1" value={form.infant_count}
@@ -593,9 +673,11 @@ export default function OpsNewBookingPage() {
             {fieldErrors.pet_notes ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.pet_notes}</span> : null}
           </label>
         </div>
+          </div>
+        </details>
 
         {/* Hotel */}
-        <div className="text-sm md:col-span-2">
+        <div className="text-sm md:col-span-2 lg:col-span-6">
           <span>Hotel / Struttura{isPrivateIsland ? "" : "*"}</span>
           {addingHotel ? (
             <div className="mt-2 space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3">
@@ -665,7 +747,7 @@ export default function OpsNewBookingPage() {
 
         {/* Hotel destinazione (transfer_hotel_hotel) */}
         {isTransferHotelHotel ? (
-          <div className="text-sm md:col-span-2">
+          <div className="text-sm md:col-span-2 lg:col-span-6">
             <span>Hotel destinazione*</span>
             <select
               className="input-saas mt-1"
@@ -679,16 +761,21 @@ export default function OpsNewBookingPage() {
             </select>
           </div>
         ) : null}
+        </div>
 
         {/* Selettore tratta A/R */}
+        <div className="pms-panel order-3 grid gap-4 p-5 md:grid-cols-2">
+        <div className="md:col-span-2">
+          <div className="pms-step-title"><span className="pms-step-number">3</span> Tratte</div>
+        </div>
         {showTripLeg ? (
           <div className="md:col-span-2">
             <span className="text-sm font-medium text-slate-700">Tratta</span>
             <div className="mt-1 flex gap-2">
               {([
-                { value: "outbound_only", label: "Solo andata" },
+                { value: "outbound_only", label: "Solo arrivo" },
                 { value: "round_trip", label: "Andata e ritorno" },
-                { value: "return_only", label: "Solo ritorno" },
+                { value: "return_only", label: "Solo partenza" },
               ] as const).map(({ value, label }) => (
                 <button
                   key={value}
@@ -701,7 +788,7 @@ export default function OpsNewBookingPage() {
                       setForm((prev) => ({ ...prev, arrival_date: prev.departure_date, arrival_time: prev.departure_time }));
                     }
                   }}
-                  className={`flex-1 rounded-xl border py-2 text-xs font-semibold transition ${tripLeg === value ? "bg-slate-900 text-white border-slate-900" : "border-slate-200 text-slate-600 hover:border-slate-400"}`}
+                  className={`flex-1 rounded-xl border py-2.5 text-xs font-semibold transition ${tripLeg === value ? "border-indigo-600 bg-indigo-600 text-white shadow-sm" : "border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-700"}`}
                 >
                   {label}
                 </button>
@@ -741,7 +828,8 @@ export default function OpsNewBookingPage() {
         ) : (
           <>
             {/* Date arrivo */}
-            {!(showTripLeg && tripLeg === "return_only") && <div className="md:col-span-2 grid grid-cols-2 gap-3">
+            {!(showTripLeg && tripLeg === "return_only") && <div className="md:col-span-2 grid grid-cols-2 gap-3 rounded-2xl border border-blue-100 bg-blue-50/40 p-4">
+              <p className="col-span-2 text-sm font-extrabold uppercase tracking-wide text-blue-700">↓ Arrivo</p>
               <label className="text-sm">
                 {contextLabels.arrivalDateLabel}
                 <DateInput className={`input-saas mt-1${fieldErrors.arrival_date ? " border-rose-400" : ""}`} value={form.arrival_date}
@@ -782,7 +870,8 @@ export default function OpsNewBookingPage() {
             </div>}
 
             {/* Date ritorno */}
-            {!(showTripLeg && tripLeg === "outbound_only") && <div className="md:col-span-2 grid grid-cols-2 gap-3">
+            {!(showTripLeg && tripLeg === "outbound_only") && <div className="md:col-span-2 grid grid-cols-2 gap-3 rounded-2xl border border-violet-100 bg-violet-50/40 p-4">
+              <p className="col-span-2 text-sm font-extrabold uppercase tracking-wide text-violet-700">↑ Partenza</p>
               <label className="text-sm">
                 {contextLabels.departureDateLabel}
                 <DateInput className={`input-saas mt-1${fieldErrors.departure_date ? " border-rose-400" : selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
@@ -1097,10 +1186,53 @@ export default function OpsNewBookingPage() {
           </div>
         ) : null}
 
-        <button type="button" onClick={() => void submit()} disabled={submitting || reviewWarnings.length > 0}
-          className="btn-primary md:col-span-2 disabled:opacity-60">
+        </div>
+      </div>
+
+      <aside className="pms-panel top-5 p-5 xl:sticky">
+        <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+          <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-lg text-indigo-700">▣</span>
+          <div>
+            <p className="text-base font-bold text-slate-950">Riepilogo prenotazione</p>
+            <p className="text-xs text-slate-500">Si aggiorna mentre compili</p>
+          </div>
+        </div>
+        <div className="py-4">
+          <p className="text-base font-extrabold text-slate-950">{isSnavKind ? form.customer_last_name || "Cliente" : `${form.customer_first_name || "Nome"} ${form.customer_last_name || "Cognome"}`}</p>
+          <p className="mt-1 text-xs text-slate-500">{form.customer_phone || "Telefono non indicato"} · {form.pax || "0"} pax</p>
+          <p className="mt-2 text-sm font-bold text-indigo-700">{form.agency_id ? agencies.find((agency) => agency.id === form.agency_id)?.name : "Privato"}</p>
+          <p className="mt-1 text-xs font-medium text-slate-600">Hotel: {selectedHotel?.name ?? "Da selezionare"}</p>
+        </div>
+        {tripLeg !== "return_only" ? (
+          <div className="border-t border-dashed border-slate-200 py-4">
+            <p className="text-xs font-extrabold uppercase tracking-wide text-blue-700">Arrivo</p>
+            <p className="mt-2 text-sm font-semibold text-slate-800">{form.arrival_date || "Data da indicare"}</p>
+            <p className="mt-1 text-xs text-slate-600">{serviceKindLabel} · {form.arrival_time || "—"}</p>
+            {portoArrivo ? <p className="mt-1 text-xs text-slate-600">Arrivo a {portoArrivo}</p> : null}
+          </div>
+        ) : null}
+        {tripLeg !== "outbound_only" ? (
+          <div className="border-t border-dashed border-slate-200 py-4">
+            <p className="text-xs font-extrabold uppercase tracking-wide text-violet-700">Partenza</p>
+            <p className="mt-2 text-sm font-semibold text-slate-800">{form.departure_date || "Data da indicare"}</p>
+            {depRuleInfo?.pickup ? <p className="mt-1 text-xs text-slate-600">Pickup hotel {depRuleInfo.pickup}</p> : null}
+            <p className="mt-1 text-xs text-slate-600">{serviceKindLabel} · {isSnavMedmar ? ferryDepTime : form.departure_time || "—"}</p>
+          </div>
+        ) : null}
+        <div className={`mt-2 rounded-xl border p-3 text-xs ${reviewWarnings.length === 0 ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
+          <p className="font-bold">{reviewWarnings.length === 0 ? "Dati completi" : `${reviewWarnings.length} controlli da completare`}</p>
+          <p className="mt-1">{reviewWarnings.length === 0 ? "La prenotazione è pronta per essere confermata." : reviewWarnings[0]}</p>
+        </div>
+      </aside>
+      <div className="sticky bottom-0 z-20 col-span-full flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_-8px_30px_rgba(15,23,42,0.08)] backdrop-blur sm:flex-row sm:items-center">
+        <Link href="/services" className="btn-secondary sm:mr-auto">Annulla</Link>
+        <button type="button" onClick={() => void submit()} disabled={submitting || reviewWarnings.length > 0} className="btn-secondary disabled:opacity-60">
+          Salva e creane un&apos;altra
+        </button>
+        <button type="button" onClick={() => void submit()} disabled={submitting || reviewWarnings.length > 0} className="btn-primary min-w-56 disabled:opacity-60">
           {submitting ? "Creazione in corso..." : "Conferma prenotazione"}
         </button>
+      </div>
       </div>
 
       {/* Modal duplicato */}

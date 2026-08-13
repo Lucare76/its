@@ -43,8 +43,12 @@ export type FormState = {
   customer_first_name: string;
   customer_last_name: string;
   customer_phone: string;
+  customer_email: string;
   pax: string;
   infant_count: string;
+  medmar_infant_count: string;
+  medmar_child_count: string;
+  medmar_adult_count: string;
   pet_count: string;
   pet_notes: string;
   hotel_id: string;
@@ -72,8 +76,12 @@ function initialForm(firstHotelId = ""): FormState {
     customer_first_name: "",
     customer_last_name: "",
     customer_phone: "",
+    customer_email: "",
     pax: "2",
     infant_count: "0",
+    medmar_infant_count: "0",
+    medmar_child_count: "0",
+    medmar_adult_count: "2",
     pet_count: "0",
     pet_notes: "",
     hotel_id: firstHotelId,
@@ -247,6 +255,9 @@ export function useServiceForm(opts: {
     ...form,
     pax: Number(form.pax || "0"),
     infant_count: Number(form.infant_count || "0"),
+    medmar_infant_count: Number(form.medmar_infant_count || "0"),
+    medmar_child_count: Number(form.medmar_child_count || "0"),
+    medmar_adult_count: Number(form.medmar_adult_count || "0"),
     pet_count: Number(form.pet_count || "0"),
     pet_notes: form.pet_notes.trim(),
     notes: form.notes.trim(),

@@ -803,12 +803,12 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
   return (
     <>
-      <section className={`mx-auto grid min-h-[calc(100vh-86px)] w-full max-w-[1680px] grid-cols-1 gap-5 px-3 py-4 sm:px-4 md:py-6 lg:px-5 xl:px-6 ${authRole === "driver" || authRole === "autista" ? "" : "md:grid-cols-[auto_minmax(0,1fr)] md:gap-6"}`}>
-      <aside className={`sticky top-24 h-fit transition-all duration-200 ${authRole === "driver" || authRole === "autista" ? "hidden" : `hidden md:block ${collapsed ? "w-[72px]" : "w-[280px]"}`}`}>
-        <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white p-3 shadow-[0_8px_40px_rgba(15,23,42,0.10)]">
+      <section className={`grid min-h-screen w-full max-w-none grid-cols-1 gap-5 px-3 py-4 sm:px-4 md:py-5 lg:px-5 xl:px-6 ${authRole === "driver" || authRole === "autista" ? "" : "md:grid-cols-[auto_minmax(0,1fr)] md:gap-5"}`}>
+      <aside className={`sticky top-5 h-fit transition-all duration-200 ${authRole === "driver" || authRole === "autista" ? "hidden" : `hidden md:block ${collapsed ? "w-[72px]" : "w-[240px]"}`}`}>
+        <div className="overflow-hidden rounded-[26px] border border-slate-800 bg-[#082b4c] p-3 shadow-[0_18px_45px_rgba(8,43,76,0.22)]">
 
           {/* Brand + collapse */}
-          <div className="mb-3 flex items-center justify-between gap-2 rounded-2xl px-3 py-3 text-white" style={{ background: "linear-gradient(135deg,#1e3a8a,#4338ca,#7c3aed)" }}>
+          <div className="mb-4 flex items-center justify-between gap-2 rounded-2xl px-3 py-3 text-white" style={{ background: "linear-gradient(135deg,#0b365d,#312e81,#5b21b6)" }}>
             {!collapsed ? (
               <div className="min-w-0">
                 <p className="text-[9px] font-bold uppercase tracking-[0.25em] text-white/60">Ischia Transfer</p>
@@ -849,7 +849,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                         className={`flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 pr-8 transition ${
                           active
                             ? "bg-slate-900 text-white"
-                            : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                            : "text-slate-200 hover:bg-white/10 hover:text-white"
                         }`}
                       >
                         <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center transition">
@@ -893,17 +893,17 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     className={`relative flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 transition ${
                       active
                         ? "bg-slate-900 text-white"
-                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
-                    } ${collapsed ? "justify-center" : !collapsed && (isFav || favoritesEditMode) ? "pr-8" : ""}`}
+                        : "text-slate-200 hover:bg-white/10 hover:text-white"
+                    } ${collapsed ? "justify-center" : !collapsed && badge === 0 && (isFav || favoritesEditMode) ? "pr-8" : ""}`}
                   >
                   <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center transition">
                     <span className={iconWrapClass(active)}>{renderNavIcon(item.icon)}</span>
                   </span>
                   {!collapsed ? (
                     <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                      <span className={`truncate text-sm ${active ? "font-semibold" : "font-medium"}`}>{item.label}</span>
+                      <span className={`min-w-0 whitespace-nowrap text-[13px] ${active ? "font-semibold" : "font-medium"}`}>{item.label}</span>
                       {badge > 0 ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                        <span className="inline-flex min-w-6 shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 py-1 text-[10px] font-semibold text-white">
                           🔔 {badge > 99 ? "99+" : badge}
                         </span>
                       ) : null}
@@ -914,7 +914,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     </span>
                   ) : null}
                   </Link>
-                  {!collapsed && (isFav || favoritesEditMode) ? (
+                  {!collapsed && badge === 0 && (isFav || favoritesEditMode) ? (
                     <button
                       type="button"
                       onClick={() => toggleFavorite(item.href)}
@@ -945,8 +945,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     onClick={() => { if (!collapsed) setAgenzieOpen((v) => !v); }}
                     className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
                       groupActive
-                        ? "bg-slate-900 text-white"
-                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                        ? "bg-gradient-to-r from-indigo-600/85 to-violet-600/75 text-white"
+                        : "text-slate-200 hover:bg-white/10 hover:text-white"
                     } ${collapsed ? "justify-center" : ""}`}
                   >
                     <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center transition">
@@ -1029,7 +1029,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     } ${collapsed ? "justify-center" : ""}`}
                   >
                     {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-1 rounded-r-full bg-amber-500" /> : null}
-                    <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${groupActive ? "bg-indigo-600 text-white shadow-[0_2px_8px_rgba(99,102,241,0.30)]" : "bg-slate-100 text-slate-500"}`}>
+                    <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${groupActive ? "bg-white/20 text-white shadow-[0_2px_8px_rgba(99,102,241,0.30)]" : "bg-white/10 text-slate-300"}`}>
                       {renderNavIcon("O")}
                     </span>
                     {!collapsed ? (
@@ -1053,7 +1053,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     ) : null}
                   </button>
                   {!collapsed && isExpanded && (
-                    <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-amber-100 pl-2">
+                    <div className="ml-4 mt-1 space-y-0.5 border-l-2 border-indigo-400/30 pl-2">
                       {OPERATIVO_GROUP.items.map((item) => {
                         const active = matchesPath(pathname, item.href);
                         const isFav = favorites.includes(item.href);
@@ -1062,7 +1062,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                           <div key={item.href} className="group/fav relative">
                             <Link href={item.href}
                               className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                                active ? "bg-slate-900 text-white font-semibold" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                                active ? "bg-indigo-600 text-white font-semibold" : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
                               } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
                             >
                               <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
@@ -1099,12 +1099,12 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     onClick={() => { if (!collapsed) setMarioBossOpen((v) => !v); }}
                     className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
                       groupActive
-                        ? "border-slate-200 bg-white text-slate-950 shadow-[0_8px_20px_rgba(15,23,42,0.08)]"
-                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                        ? "border-indigo-400/40 bg-gradient-to-r from-indigo-600/85 to-violet-600/75 text-white shadow-[0_8px_20px_rgba(79,70,229,0.20)]"
+                        : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
                     } ${collapsed ? "justify-center" : ""}`}
                   >
                     {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-red-500" /> : null}
-                    <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-red-600 text-white shadow-sm" : "bg-white text-red-500 ring-1 ring-red-200"} ${marioBossOpen ? "h-10 w-10" : "h-8 w-8"}`}>
+                    <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-white/20 text-white shadow-sm" : "bg-white/10 text-indigo-300 ring-1 ring-white/10"} ${marioBossOpen ? "h-10 w-10" : "h-8 w-8"}`}>
                       <span className={`transition-all duration-300 ${marioBossOpen ? "text-2xl" : "text-base"}`} aria-hidden="true">🎮</span>
                     </span>
                     {!collapsed ? (
@@ -1117,7 +1117,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     ) : null}
                   </button>
                   {!collapsed && marioBossOpen && (
-                    <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-red-100 pl-2">
+                    <div className="ml-4 mt-1 space-y-0.5 border-l-2 border-indigo-400/30 pl-2">
                       {MARIO_BOSS_GROUP.items.map((item) => {
                         const active = matchesPath(pathname, item.href);
                         const isFav = favorites.includes(item.href);
@@ -1125,7 +1125,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                           <div key={item.href} className="group/fav relative">
                             <Link href={item.href}
                               className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                                active ? "bg-slate-900 text-white font-semibold" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                                active ? "bg-indigo-600 text-white font-semibold" : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
                               } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
                             >
                               <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
@@ -1159,12 +1159,12 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     onClick={() => { if (!collapsed) setKarmenPeachOpen((v) => !v); }}
                     className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
                       groupActive
-                        ? "border-slate-200 bg-white text-slate-950 shadow-[0_8px_20px_rgba(15,23,42,0.08)]"
-                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                        ? "border-indigo-400/40 bg-gradient-to-r from-indigo-600/85 to-violet-600/75 text-white shadow-[0_8px_20px_rgba(79,70,229,0.20)]"
+                        : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
                     } ${collapsed ? "justify-center" : ""}`}
                   >
                     {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-pink-500" /> : null}
-                    <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-pink-500 text-white shadow-sm" : "bg-white text-pink-400 ring-1 ring-pink-200"} ${karmenPeachOpen ? "h-10 w-10" : "h-8 w-8"}`}>
+                    <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-white/20 text-white shadow-sm" : "bg-white/10 text-violet-300 ring-1 ring-white/10"} ${karmenPeachOpen ? "h-10 w-10" : "h-8 w-8"}`}>
                       <span className={`transition-all duration-300 ${karmenPeachOpen ? "text-2xl" : "text-base"}`} aria-hidden="true">🌸</span>
                     </span>
                     {!collapsed ? (
@@ -1177,7 +1177,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     ) : null}
                   </button>
                   {!collapsed && karmenPeachOpen && (
-                    <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-pink-100 pl-2">
+                    <div className="ml-4 mt-1 space-y-0.5 border-l-2 border-violet-400/30 pl-2">
                       {KARMEN_PEACH_GROUP.items.map((item) => {
                         const active = matchesPath(pathname, item.href);
                         const isFav = favorites.includes(item.href);
@@ -1185,7 +1185,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                           <div key={item.href} className="group/fav relative">
                             <Link href={item.href}
                               className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                                active ? "bg-slate-900 text-white font-semibold" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                                active ? "bg-violet-600 text-white font-semibold" : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
                               } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
                             >
                               <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
@@ -1210,7 +1210,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
             {/* Impostazioni */}
             {settingsGroups.length > 0 ? (
-              <div className="mt-4 border-t border-slate-200 pt-3">
+              <div className="mt-4 border-t border-white/15 pt-3">
                 {!collapsed ? (
                   <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Impostazioni</p>
                 ) : null}
@@ -1220,8 +1220,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   onClick={() => setSettingsOpen((prev) => !prev)}
                   className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2.5 text-left transition ${
                     isSettingsExpanded
-                      ? "border-slate-200 bg-gradient-to-r from-slate-50 to-white text-slate-950 shadow-[0_2px_12px_rgba(15,23,42,0.06)]"
-                      : "border-transparent text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                      ? "border-indigo-400/40 bg-gradient-to-r from-indigo-600/80 to-violet-600/70 text-white shadow-[0_6px_18px_rgba(79,70,229,0.22)]"
+                      : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
                   } ${collapsed ? "justify-center" : ""}`}
                 >
                   <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center transition">
@@ -1233,7 +1233,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   {!collapsed ? (
                     <>
                       <span className="flex-1 truncate text-sm font-medium">Impostazioni</span>
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-200 ${isSettingsExpanded ? "rotate-180" : ""}`} aria-hidden="true">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className={`h-3.5 w-3.5 shrink-0 text-slate-300 transition-transform duration-200 ${isSettingsExpanded ? "rotate-180" : ""}`} aria-hidden="true">
                         <path d="M3.5 6l4.5 4 4.5-4" />
                       </svg>
                     </>
@@ -1243,7 +1243,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 {isSettingsExpanded && !collapsed ? (
                   <div className="mt-2 space-y-2 px-1">
                     {settingsGroups.map((group) => (
-                      <div key={group.title} className="space-y-0.5 rounded-2xl border border-slate-200/80 bg-white/80 p-2">
+                      <div key={group.title} className="space-y-0.5 rounded-2xl border border-white/10 bg-white/[0.055] p-2">
                         <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">{group.title}</p>
                         {group.items.map((item) => {
                           const active = matchesPath(pathname, item.href);
@@ -1253,7 +1253,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                               <Link
                                 href={item.href}
                                 className={`flex items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-sm transition ${
-                                  active ? "bg-slate-900 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                                  active ? "bg-indigo-600 text-white shadow-sm" : "text-slate-200 hover:bg-white/10 hover:text-white"
                                 } ${isFav || favoritesEditMode ? "pr-8" : ""}`}
                               >
                                 <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition ${iconWrapClass(active)}`}>
@@ -1281,7 +1281,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                               {isFav || favoritesEditMode ? (
                                 <button type="button" onClick={() => toggleFavorite(item.href)}
                                   title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
-                                  className={`absolute right-2 top-1/2 -translate-y-1/2 z-10 text-xs transition-all ${isFav ? "text-amber-400 hover:text-rose-500 opacity-100" : "text-slate-300 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"}`}
+                                  className={`absolute right-2 top-1/2 -translate-y-1/2 z-10 text-xs transition-all ${isFav ? "text-amber-400 hover:text-rose-400 opacity-100" : "text-slate-500 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"}`}
                                 >{isFav ? "★" : "☆"}</button>
                               ) : null}
                             </div>
@@ -1338,7 +1338,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       </aside>
 
       <div className="min-w-0 space-y-4">
-        <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-5">
+        {pathname !== "/services/new" && pathname !== "/inbox" ? <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Vista operativa</p>
@@ -1529,7 +1529,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
               ))}
             </div>
           ) : null}
-        </header>
+        </header> : null}
         {children}
       </div>
       {slaAlertMessage ? (

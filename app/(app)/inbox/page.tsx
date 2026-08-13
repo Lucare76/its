@@ -132,6 +132,13 @@ function formatShortTime(value: string | null | undefined) {
   return value ? value.slice(0, 5) : "";
 }
 
+function addIsoDays(isoDate: string, days: number) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const date = new Date(Date.UTC(year, (month ?? 1) - 1, day ?? 1));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 // Converte qualsiasi stringa data in formato YYYY-MM-DD per <input type="date">
 // Se non riconoscibile restituisce "" (campo vuoto, l'utente la inserisce manualmente)
 function toDateValue(raw: string): string {
@@ -264,6 +271,8 @@ export default function InboxPage() {
   const [agenciesMap, setAgenciesMap] = useState<Map<string, string>>(new Map());
   const [searchResults, setSearchResults] = useState<GlobalBookingSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [bookingFilter, setBookingFilter] = useState<"all" | "today" | "tomorrow" | "week" | "arrival" | "departure" | "review">("all");
+  const [expandedServiceId, setExpandedServiceId] = useState<string | null>(null);
   const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
@@ -730,8 +739,33 @@ export default function InboxPage() {
     return <div className="card p-4 text-sm text-slate-500">Caricamento posta in arrivo...</div>;
   }
 
+  const today = new Date().toISOString().slice(0, 10);
+  const activeServices = services.filter((service) => service.status !== "cancelled" && !service.is_draft);
+  const todayServices = activeServices.filter((service) => service.date === today);
+  const arrivalCount = todayServices.filter((service) => service.direction === "arrival").length;
+  const departureCount = todayServices.filter((service) => service.direction === "departure").length;
+  const reviewCount = inboundEmails.filter((email) => {
+    const parsedJson = (email.parsed_json as Record<string, unknown>) ?? null;
+    return !isInboxPdfTestNoise({ subject: email.subject, parsedJson }) && isInboxPdfReviewOpen(parsedJson);
+  }).length;
+  const tomorrow = addIsoDays(today, 1);
+  const weekEnd = addIsoDays(today, 7);
+  const bookingSource: GlobalBookingSearchResult[] = searchQuery.trim() || agencyFilter.trim()
+    ? searchResults
+    : activeServices;
+  const visibleBookings = bookingSource.filter((service) => {
+    const serviceDate = service.arrival_date ?? service.departure_date ?? service.date;
+    if (bookingFilter === "today") return serviceDate === today;
+    if (bookingFilter === "tomorrow") return serviceDate === tomorrow;
+    if (bookingFilter === "week") return serviceDate >= today && serviceDate <= weekEnd;
+    if (bookingFilter === "arrival") return service.direction === "arrival";
+    if (bookingFilter === "departure") return service.direction === "departure";
+    if (bookingFilter === "review") return service.status === "needs_review" || service.status === "new";
+    return true;
+  }).slice(0, 30);
+
   return (
-    <section className="space-y-4" data-testid="pdf-imports-page">
+    <section className="mx-auto max-w-[1400px] space-y-5" data-testid="pdf-imports-page">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold flex-1">Prenotazioni</h1>
         <Link href="/services/new" className="btn-primary px-4 py-2 text-sm">
@@ -739,105 +773,78 @@ export default function InboxPage() {
         </Link>
       </div>
 
-      {/* Barra di ricerca */}
-      <div className="card p-4 space-y-3">
-        <div className="flex gap-2">
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cerca nome, telefono, hotel, codice..."
-            className="input-saas flex-1"
-          />
-          <input
-            type="search"
-            value={agencyFilter}
-            onChange={(e) => setAgencyFilter(e.target.value)}
-            placeholder="Cerca per agenzia..."
-            className="input-saas flex-1"
-          />
-          {(searchQuery || agencyFilter) && (
-            <button type="button" onClick={() => { setSearchQuery(""); setAgencyFilter(""); }} className="btn-secondary px-3 py-2 text-xs">
-              ✕ Pulisci
-            </button>
-          )}
-        </div>
-        {(searchQuery.trim().length >= 1 || agencyFilter.trim().length >= 1) && (
-          searchLoading ? (
-            <p className="text-sm text-slate-500">Ricerca in corso...</p>
-          ) : searchResults.length === 0 ? (
-            <p className="text-sm text-slate-500">Nessuna prenotazione trovata{searchQuery ? ` per "${searchQuery}"` : ""}{agencyFilter ? ` · agenzia "${agencyFilter}"` : ""}.</p>
-          ) : (
-            <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
-              {searchResults.map((s) => {
-                const fmtDate = (iso: string | null | undefined) => {
-                  if (!iso) return null;
-                  const [y, m, d] = iso.split("-");
-                  return `${d}/${m}/${y}`;
-                };
-                const transportTimes = bookingListTransportTimes(s);
-                const hotelName = s.hotel_name?.trim() || hotels.find((hotel) => hotel.id === s.hotel_id)?.name || null;
-                return (
-                  <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm hover:bg-slate-50">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-semibold text-slate-900 truncate">{serviceCustomerLabel(s)}</p>
-                        <span className="rounded font-mono bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 shrink-0">
-                          #{s.id.slice(0, 8).toUpperCase()}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-500">
-                        {s.phone ?? "—"}
-                        {s.pax ? <span className="ml-2 font-medium text-slate-700">{s.pax} pax</span> : null}
-                        <span className={`ml-2 font-medium ${s.billing_party_name || s.agency_id ? "text-indigo-600" : "text-emerald-600"}`}>
-                          {s.owner_label ?? serviceOwnerLabel(s, agenciesMap)}
-                        </span>
-                      </p>
-                      {hotelName ? <p className="text-xs font-medium text-slate-700 truncate">Hotel: {hotelName}</p> : null}
-                      {transportTimes ? (
-                        <p className="text-xs text-slate-600">
-                          <span className="font-semibold text-slate-700">{transportTimes.serviceLabel}</span>
-                          <span className="mx-1">·</span>
-                          <span>{transportTimes.outwardLabel}: {[transportTimes.outwardDate, transportTimes.outwardTime].filter(Boolean).join(" ") || "—"}</span>
-                          {transportTimes.outwardArrivalTime ? <span className="ml-1">· Arrivo indicativo: {transportTimes.outwardArrivalTime}</span> : null}
-                          <span className="mx-1">·</span>
-                          {transportTimes.returnPickupTime ? <span>Pickup: {transportTimes.returnPickupTime} · </span> : null}
-                          <span>{transportTimes.returnLabel}: {[transportTimes.returnDate, transportTimes.returnTime].filter(Boolean).join(" ") || "—"}</span>
-                        </p>
-                      ) : (
-                        <p className="text-xs text-slate-500">{fmtDate(s.date)} {formatShortTime(s.time)}</p>
-                      )}
-                    </div>
-                    <div className="text-right shrink-0">
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                        s.status === "completato" || s.status === "arrivato" ? "bg-emerald-100 text-emerald-700" :
-                        s.status === "cancelled" ? "bg-rose-100 text-rose-600" :
-                        "bg-amber-100 text-amber-700"
-                      }`}>{s.status}</span>
-                      <p className="text-xs text-slate-500 mt-0.5">{s.vessel ?? "—"}</p>
-                      <Link
-                        href={`/services/${s.id}/edit`}
-                        className="mt-1 mr-3 inline-block text-xs font-medium text-blue-600 hover:text-blue-800"
-                      >
-                        Modifica
-                      </Link>
-                      {authRole === "admin" ? (
-                        <button
-                          type="button"
-                          onClick={() => void deleteBooking(s)}
-                          disabled={deletingServiceId !== null}
-                          className="mt-1 text-xs font-medium text-rose-600 hover:text-rose-800 disabled:opacity-50"
-                        >
-                          {deletingServiceId === s.id ? "Elimino..." : "Elimina prenotazione"}
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                );
-              })}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {[
+          { label: "Oggi", value: todayServices.length, tone: "bg-blue-50 text-blue-700", icon: "▣" },
+          { label: "Arrivi", value: arrivalCount, tone: "bg-emerald-50 text-emerald-700", icon: "↓" },
+          { label: "Partenze", value: departureCount, tone: "bg-violet-50 text-violet-700", icon: "↑" },
+          { label: "Da verificare", value: reviewCount, tone: "bg-amber-50 text-amber-700", icon: "◷" },
+          { label: "Totale attive", value: activeServices.length, tone: "bg-rose-50 text-rose-700", icon: "◎" },
+        ].map((item) => (
+          <article key={item.label} className="pms-panel flex items-center gap-3 p-4">
+            <span className={`inline-flex h-11 w-11 items-center justify-center rounded-xl text-xl font-bold ${item.tone}`}>{item.icon}</span>
+            <div>
+              <p className="text-xs font-semibold text-slate-500">{item.label}</p>
+              <p className="text-2xl font-extrabold leading-tight text-slate-950">{item.value}</p>
             </div>
-          )
-        )}
+          </article>
+        ))}
+      </div>
+
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+        <div className="relative min-w-0 flex-1">
+          <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">⌕</span>
+          <input type="search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Cerca per nome, codice prenotazione, telefono, hotel, agenzia..." className="input-saas w-full pl-11" />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {([
+            ["today", "Oggi"], ["tomorrow", "Domani"], ["week", "Questa settimana"],
+            ["arrival", "Arrivi"], ["departure", "Partenze"], ["review", "Da verificare"], ["all", "Filtri"],
+          ] as const).map(([value, label]) => (
+            <button key={value} type="button" onClick={() => setBookingFilter(value)}
+              className={bookingFilter === value ? "btn-primary px-4 py-2 text-sm" : "btn-secondary px-4 py-2 text-sm"}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {searchLoading ? <div className="pms-panel p-6 text-sm text-slate-500">Ricerca in corso...</div> : null}
+        {!searchLoading && visibleBookings.length === 0 ? <div className="pms-panel p-8 text-center text-sm text-slate-500">Nessuna prenotazione nel filtro selezionato.</div> : null}
+        {!searchLoading && visibleBookings.map((service, index) => {
+          const expanded = expandedServiceId === service.id || (expandedServiceId === null && index === 0);
+          const transportTimes = bookingListTransportTimes(service);
+          const hotelName = service.hotel_name?.trim() || hotels.find((hotel) => hotel.id === service.hotel_id)?.name || "Struttura non indicata";
+          const statusOk = ["completato", "arrivato", "assigned"].includes(service.status);
+          return (
+            <article key={service.id} className="pms-panel overflow-hidden">
+              <div className={`grid items-center gap-4 p-4 ${expanded ? "lg:grid-cols-[minmax(0,1fr)_190px]" : "lg:grid-cols-[minmax(280px,1fr)_1fr_1fr_auto]"}`}>
+                <div className="flex min-w-0 items-start gap-3">
+                  <button type="button" onClick={() => setExpandedServiceId(expanded ? "" : service.id)} className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-600">{expanded ? "⌃" : "⌄"}</button>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2"><p className="font-extrabold text-slate-900">{serviceCustomerLabel(service)}</p><span className="rounded bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-500">#{service.id.slice(0, 8).toUpperCase()}</span></div>
+                    <p className="mt-1 text-xs text-slate-500">☎ {service.phone || "—"}　·　{service.pax} pax　 <span className="font-bold text-indigo-600">{service.owner_label ?? serviceOwnerLabel(service, agenciesMap)}</span></p>
+                    <p className="mt-1 text-xs font-semibold text-slate-700">Hotel: {hotelName}</p>
+                  </div>
+                </div>
+                {!expanded && <><p className="text-xs text-slate-600"><strong className="text-blue-700">Arrivo</strong>　{transportTimes?.outwardDate ?? service.arrival_date ?? service.date}<br />{transportTimes?.outwardLabel}: {transportTimes?.outwardTime ?? service.arrival_time ?? "—"}</p><p className="text-xs text-slate-600"><strong className="text-violet-700">Partenza</strong>　{transportTimes?.returnDate ?? service.departure_date ?? "—"}<br />Pickup {transportTimes?.returnPickupTime ?? service.departure_time ?? "—"}</p></>}
+                <div className={expanded ? "text-right" : "flex items-center justify-end gap-2"}>
+                  <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${statusOk ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{service.status}</span>
+                  {!expanded ? <Link href={`/services/${service.id}/edit`} className="btn-secondary px-3 py-2 text-xs">Dettagli</Link> : null}
+                </div>
+              </div>
+              {expanded ? (
+                <div className="grid gap-4 border-t border-slate-100 px-4 pb-4 pt-1 lg:grid-cols-[minmax(0,1fr)_190px]">
+                  <div className="grid overflow-hidden rounded-xl border border-slate-200 md:grid-cols-2">
+                    <div className="space-y-2 bg-blue-50/50 p-5 text-sm text-slate-700"><p className="font-extrabold text-blue-700">↓　ARRIVO</p><p>▣　{transportTimes?.outwardDate ?? service.arrival_date ?? service.date}</p><p>◷　{transportTimes?.outwardLabel}: <strong>{transportTimes?.outwardTime ?? "—"}</strong></p>{transportTimes?.outwardArrivalTime ? <p>◷　Arrivo indicativo: <strong>{transportTimes.outwardArrivalTime}</strong></p> : null}<p>⌖　{hotelName}</p></div>
+                    <div className="space-y-2 border-l border-slate-200 bg-violet-50/50 p-5 text-sm text-slate-700"><p className="font-extrabold text-violet-700">↑　PARTENZA</p><p>▣　{transportTimes?.returnDate ?? service.departure_date ?? "—"}</p><p>◷　Pickup hotel: <strong>{transportTimes?.returnPickupTime ?? "—"}</strong></p><p>◷　{transportTimes?.returnLabel}: <strong>{transportTimes?.returnTime ?? "—"}</strong></p></div>
+                  </div>
+                  <div className="flex flex-col gap-2 border-l border-slate-200 pl-4"><Link href={`/services/${service.id}/edit`} className="btn-primary">Dettagli</Link><Link href={`/services/${service.id}/edit`} className="btn-secondary">✎ Modifica</Link><button type="button" className="btn-secondary">⇄ Cambio operativo</button>{authRole === "admin" ? <button type="button" onClick={() => void deleteBooking(service)} disabled={deletingServiceId !== null} className="btn-secondary text-rose-600">{deletingServiceId === service.id ? "Elimino..." : "Elimina"}</button> : null}</div>
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
       </div>
 
       {blockingNotice && (

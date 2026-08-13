@@ -518,21 +518,21 @@ export default function ServiceEditPage() {
           {isFerryFormula ? (
             <div className="sm:col-span-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-800">Orari marittimi e pickup — modificabili per emergenza</p>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="text-xs font-medium text-slate-700">
-                  Partenza traghetto/aliscafo dalla terraferma
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="flex flex-col text-xs font-medium text-slate-700">
+                  <span className="sm:min-h-8">Partenza traghetto/aliscafo dalla terraferma</span>
                   <input type="time" step="300" value={outboundFerryDeparture} onChange={(e) => setOutboundFerryDeparture(e.target.value)} className="mt-1 input-saas w-full" />
                 </label>
-                <label className="text-xs font-medium text-slate-700">
-                  Arrivo indicativo sull&apos;isola
+                <label className="flex flex-col text-xs font-medium text-slate-700">
+                  <span className="sm:min-h-8">Arrivo indicativo sull&apos;isola</span>
                   <input type="time" step="300" value={outboundFerryArrival} onChange={(e) => setOutboundFerryArrival(e.target.value)} className="mt-1 input-saas w-full" />
                 </label>
-                <label className="text-xs font-medium text-slate-700">
-                  Pickup hotel per la partenza
+                <label className="flex flex-col text-xs font-medium text-slate-700">
+                  <span className="sm:min-h-8">Pickup hotel per la partenza</span>
                   <input type="time" step="300" value={returnPickup} onChange={(e) => setReturnPickup(e.target.value)} className="mt-1 input-saas w-full" />
                 </label>
-                <label className="text-xs font-medium text-slate-700">
-                  Partenza traghetto/aliscafo dall&apos;isola
+                <label className="flex flex-col text-xs font-medium text-slate-700">
+                  <span className="sm:min-h-8">Partenza traghetto/aliscafo dall&apos;isola</span>
                   <input type="time" step="300" value={returnFerryDeparture} onChange={(e) => setReturnFerryDeparture(e.target.value)} className="mt-1 input-saas w-full" />
                 </label>
               </div>
