@@ -91,6 +91,10 @@ function createFakeAdmin(seed: Partial<Record<string, Row[]>> = {}) {
         filtered = filtered.slice(0, n);
         return builder;
       },
+      range(from: number, to: number) {
+        filtered = filtered.slice(from, to + 1);
+        return builder;
+      },
       maybeSingle() {
         bump(errKey);
         if (errors[errKey]) return Promise.resolve({ data: null, error: errors[errKey] });

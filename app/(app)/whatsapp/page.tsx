@@ -65,8 +65,12 @@ type MessageRow = {
 type InboxPayload = {
   ok?: boolean;
   threads?: ThreadRow[];
+  page?: number;
+  page_size?: number;
+  has_more?: boolean;
   selected_thread_id?: string | null;
   messages?: MessageRow[];
+  templates_included?: boolean;
   template_options?: TemplateOption[];
   template_fetch_error?: string | null;
   error?: string;
@@ -107,7 +111,14 @@ type ServiceSearchResult = {
 
 type LoadOptions = {
   silent?: boolean;
+  // true solo quando filtro o ricerca sono davvero cambiati: in quel caso la
+  // lista thread viene sostituita e la paginazione riparte da pagina 1.
+  // Assente/false in tutti gli altri reload (poll, cambio thread, azioni) così
+  // le pagine già caricate con "Carica altri" non vengono perse.
+  resetThreadsPagination?: boolean;
 };
+
+const THREADS_PAGE_SIZE = 50;
 
 const filters = [
   { value: "all", label: "Tutte" },
@@ -410,6 +421,26 @@ function mergeThreadsStable(current: ThreadRow[], incoming: ThreadRow[]) {
     return thread;
   });
   return changed ? merged : current;
+}
+
+// Usato dai reload "non di reset" (poll, cambio thread, refresh dopo azioni):
+// aggiorna i dati dei thread di pagina 1 ma NON scarta le pagine successive già
+// caricate con "Carica altri" (a differenza di mergeThreadsStable, che sostituisce
+// sempre l'intera lista con quella in arrivo).
+function mergeThreadsPreservingExtra(current: ThreadRow[], incomingPage1: ThreadRow[]) {
+  if (current.length === 0) return incomingPage1;
+  const currentById = new Map(current.map((thread) => [thread.id, thread]));
+  const incomingIds = new Set(incomingPage1.map((thread) => thread.id));
+  const refreshedPage1 = incomingPage1.map((thread) => {
+    const previous = currentById.get(thread.id);
+    return previous && areThreadsEqual(previous, thread) ? previous : thread;
+  });
+  const extra = current.filter((thread) => !incomingIds.has(thread.id));
+  const merged = [...refreshedPage1, ...extra];
+  if (merged.length === current.length && merged.every((thread, index) => thread === current[index])) {
+    return current;
+  }
+  return merged;
 }
 
 function areTemplateOptionsEqual(a: TemplateOption, b: TemplateOption) {
@@ -855,6 +886,9 @@ const WhatsAppMediaAttachment = memo(function WhatsAppMediaAttachment({
 
 export default function WhatsAppInboxPage() {
   const [threads, setThreads] = useState<ThreadRow[]>([]);
+  const [threadsPage, setThreadsPage] = useState(1);
+  const [threadsHasMore, setThreadsHasMore] = useState(false);
+  const [loadingMoreThreads, setLoadingMoreThreads] = useState(false);
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [templateOptions, setTemplateOptions] = useState<TemplateOption[]>([]);
   const [templateFetchError, setTemplateFetchError] = useState<string>("");
@@ -898,6 +932,9 @@ export default function WhatsAppInboxPage() {
   const sendingRef = useRef(false);
   const loadSequenceRef = useRef(0);
   const loadAbortRef = useRef<AbortController | null>(null);
+  const threadsPageRef = useRef(1);
+  const prevFilterRef = useRef(filter);
+  const prevSearchRef = useRef(search);
 
   useEffect(() => {
     selectedThreadIdRef.current = selectedThreadId;
@@ -1023,8 +1060,13 @@ export default function WhatsAppInboxPage() {
         if (showBlockingLoading) setLoading(false);
         return;
       }
-      const params = new URLSearchParams({ filter, q: search });
+      // load() carica sempre la pagina 1 della lista thread; le pagine successive
+      // vengono richieste solo da loadMoreThreads() (pulsante "Carica altri").
+      const params = new URLSearchParams({ filter, q: search, page: "1", page_size: String(THREADS_PAGE_SIZE) });
       if (nextThreadId) params.set("thread_id", nextThreadId);
+      // I template sono tenant-wide e stabili: li richiediamo solo al primo
+      // caricamento della pagina, non ad ogni poll/refresh silenzioso.
+      if (options?.silent) params.set("include_templates", "0");
       const response = await fetch(`/api/ops/whatsapp-inbox?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
         signal: abortController.signal,
@@ -1066,26 +1108,44 @@ export default function WhatsAppInboxPage() {
         }
         prevMsgMap.set(thread.id, currentLastAt);
       }
-      setThreads((current) => mergeThreadsStable(current, body.threads ?? []));
+      const incomingThreadsPage1 = body.threads ?? [];
+      if (options?.resetThreadsPagination) {
+        setThreads((current) => mergeThreadsStable(current, incomingThreadsPage1));
+        threadsPageRef.current = 1;
+        setThreadsPage(1);
+        setThreadsHasMore(Boolean(body.has_more));
+      } else {
+        setThreads((current) => mergeThreadsPreservingExtra(current, incomingThreadsPage1));
+        // Se l'operatore ha già caricato altre pagine, un refresh di sola pagina 1
+        // non ha informazioni sul resto: non tocchiamo has_more in quel caso.
+        if (threadsPageRef.current <= 1) {
+          setThreadsHasMore(Boolean(body.has_more));
+        }
+      }
       setMessages((current) => {
         if (keepNewChatDraft) return current.length === 0 ? current : [];
         const incoming = body.messages ?? [];
         if (nextSelectedThreadId !== currentSelectedThreadId) return normalizeMessages(incoming);
         return mergeMessagesStable(current, incoming);
       });
-      setTemplateOptions((current) => mergeTemplateOptionsStable(current, body.template_options ?? []));
-      setTemplateFetchError((current) => {
-        const incoming = body.template_fetch_error ?? "";
-        return current === incoming ? current : incoming;
-      });
-      setSelectedTemplateKey((current) => {
-        const available = body.template_options ?? [];
-        if (available.some((item) => item.key === current)) return current;
-        return available.find((item) => item.status === "APPROVED" && isManualTemplateSupported(item))?.key
-          ?? available.find(isManualTemplateSupported)?.key
-          ?? available[0]?.key
-          ?? "";
-      });
+      // templates_included è false solo quando abbiamo chiesto include_templates=0
+      // (refetch silenziosi): in quel caso il payload non contiene i template e
+      // non dobbiamo toccare lo stato già caricato al primo load.
+      if (body.templates_included !== false) {
+        setTemplateOptions((current) => mergeTemplateOptionsStable(current, body.template_options ?? []));
+        setTemplateFetchError((current) => {
+          const incoming = body.template_fetch_error ?? "";
+          return current === incoming ? current : incoming;
+        });
+        setSelectedTemplateKey((current) => {
+          const available = body.template_options ?? [];
+          if (available.some((item) => item.key === current)) return current;
+          return available.find((item) => item.status === "APPROVED" && isManualTemplateSupported(item))?.key
+            ?? available.find(isManualTemplateSupported)?.key
+            ?? available[0]?.key
+            ?? "";
+        });
+      }
       if (nextSelectedThreadId !== currentSelectedThreadId) {
         setSelectedThreadId(nextSelectedThreadId);
         setDraft("");
@@ -1098,6 +1158,43 @@ export default function WhatsAppInboxPage() {
   );
 
   loadRef.current = load;
+
+  const loadMoreThreads = useCallback(async () => {
+    if (loadingMoreThreads || !threadsHasMore) return;
+    setLoadingMoreThreads(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) return;
+      const nextPage = threadsPageRef.current + 1;
+      const params = new URLSearchParams({
+        filter,
+        q: search,
+        page: String(nextPage),
+        page_size: String(THREADS_PAGE_SIZE),
+        include_templates: "0",
+      });
+      // Stesso thread selezionato: non alteriamo la conversazione aperta,
+      // recuperiamo solo altri thread da aggiungere in fondo alla lista.
+      if (selectedThreadIdRef.current) params.set("thread_id", selectedThreadIdRef.current);
+      const response = await fetch(`/api/ops/whatsapp-inbox?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      const body = (await response.json().catch(() => null)) as InboxPayload | null;
+      if (!response.ok || !body?.ok) return;
+      const incoming = body.threads ?? [];
+      setThreads((current) => {
+        const existingIds = new Set(current.map((thread) => thread.id));
+        const additions = incoming.filter((thread) => !existingIds.has(thread.id));
+        return additions.length > 0 ? [...current, ...additions] : current;
+      });
+      threadsPageRef.current = nextPage;
+      setThreadsPage(nextPage);
+      setThreadsHasMore(Boolean(body.has_more));
+    } finally {
+      setLoadingMoreThreads(false);
+    }
+  }, [filter, search, loadingMoreThreads, threadsHasMore]);
 
   useEffect(() => () => {
     loadSequenceRef.current += 1;
@@ -1157,7 +1254,15 @@ export default function WhatsAppInboxPage() {
 
   useEffect(() => {
     const silent = hasLoadedRef.current;
-    const timeout = window.setTimeout(() => void load(selectedThreadId, silent ? { silent: true } : undefined), 250);
+    // Solo un vero cambio di filtro/ricerca deve azzerare la paginazione della
+    // lista thread; il solo cambio di thread selezionato non la tocca.
+    const resetThreadsPagination = prevFilterRef.current !== filter || prevSearchRef.current !== search;
+    prevFilterRef.current = filter;
+    prevSearchRef.current = search;
+    const timeout = window.setTimeout(() => void load(selectedThreadId, {
+      ...(silent ? { silent: true } : {}),
+      resetThreadsPagination,
+    }), 250);
     return () => window.clearTimeout(timeout);
   }, [filter, search, selectedThreadId, load]);
 
@@ -1679,6 +1784,20 @@ export default function WhatsAppInboxPage() {
                 </button>
               );
             })}
+
+            {/* Carica altri thread (paginazione lista) */}
+            {!loading && threadsHasMore && threads.length > 0 && (
+              <div className="p-3">
+                <button
+                  type="button"
+                  onClick={() => void loadMoreThreads()}
+                  disabled={loadingMoreThreads}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {loadingMoreThreads ? "Caricamento…" : "Carica altri"}
+                </button>
+              </div>
+            )}
 
             {/* Empty state */}
             {!loading && threads.length === 0 && (

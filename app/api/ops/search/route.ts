@@ -1,12 +1,75 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { fetchAllServices } from "@/lib/server/fetch-all-services";
 import { collapseLinkedBookingPairs, filterBookingsBySearch } from "@/lib/booking-search";
 import { ferryPortLabel, findArrivalScheduleForService, findDepartureScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
 import { getPickupRuleByRange, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { findFerryPickupRule, resolveAgencyLogic, type FerryPickupRule } from "@/lib/ferry-pickup-rules";
+import type { Service } from "@/lib/types";
 
 export const runtime = "nodejs";
+
+type AuthorizedSearchRequest = Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>;
+type SearchAdminClient = AuthorizedSearchRequest["admin"];
+
+const SERVICE_SEARCH_COLUMNS = [
+  "id",
+  "inbound_email_id",
+  "is_draft",
+  "customer_name",
+  "customer_first_name",
+  "customer_last_name",
+  "customer_email",
+  "phone",
+  "phone_e164",
+  "date",
+  "time",
+  "status",
+  "direction",
+  "pax",
+  "vessel",
+  "booking_service_kind",
+  "service_type",
+  "service_type_code",
+  "arrival_date",
+  "arrival_time",
+  "train_arrival_time",
+  "departure_date",
+  "departure_time",
+  "train_departure_time",
+  "orario_barca",
+  "pickup_time",
+  "transport_code",
+  "transport_code_return",
+  "transport_reference_outward",
+  "transport_reference_return",
+  "train_arrival_number",
+  "train_departure_number",
+  "bus_city_origin",
+  "hotel_id",
+  "billing_party_name",
+  "agency_id",
+  "meeting_point",
+  "pickup_hotel",
+  "tour_name",
+  "excursion_title",
+  "notes",
+  "linked_service_id",
+  "created_at",
+].join(", ");
+
+type SearchServiceRow = Partial<Service> & {
+  id: string;
+  created_at?: string | null;
+  hotel_name?: string | null;
+};
+
+type SearchQueryResult = { data: SearchServiceRow[] | null; error: { message: string } | null };
+type SearchQueryBuilder = PromiseLike<SearchQueryResult> & {
+  ilike(column: string, pattern: string): SearchQueryBuilder;
+  in(column: string, values: string[]): SearchQueryBuilder;
+  is(column: string, value: null): SearchQueryBuilder;
+  or(filters: string): SearchQueryBuilder;
+};
 
 function cleanTime(value: string | null | undefined): string | null {
   const match = String(value ?? "").match(/^(\d{2}):(\d{2})/);
@@ -31,6 +94,191 @@ function transferDepartureRuleType(kind: string | null | undefined): string | nu
   return `${prefix}_${transferBoatType(kind)}`;
 }
 
+function normalizeNeedle(value: string): string {
+  return value.trim().toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+}
+
+function textTokens(value: string): string[] {
+  return Array.from(new Set(
+    normalizeNeedle(value)
+      .split(/[\s,;:/\\|()[\]{}"'`]+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2)
+      .slice(0, 5)
+  ));
+}
+
+function phoneNeedles(value: string): string[] {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return [];
+  const candidates = [digits];
+  if (digits.startsWith("39") && digits.length > 6) candidates.push(digits.slice(2));
+  if (digits.length > 10) candidates.push(digits.slice(-10));
+  return Array.from(new Set(candidates.filter((candidate) => candidate.length >= 4)));
+}
+
+function isPrivateNeedle(value: string): boolean {
+  const normalized = normalizeNeedle(value);
+  return ["privato", "privati", "senza agenzia", "cliente privato"].some((needle) => normalized.includes(needle));
+}
+
+function canUsePostgrestOr(value: string): boolean {
+  return !/[(),]/.test(value);
+}
+
+function sortSearchRows(rows: SearchServiceRow[]): SearchServiceRow[] {
+  return [...rows].sort((a, b) => {
+    const created = String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
+    return created !== 0 ? created : String(a.id ?? "").localeCompare(String(b.id ?? ""));
+  });
+}
+
+function mergeSearchRows(rows: SearchServiceRow[][]): SearchServiceRow[] {
+  const byId = new Map<string, SearchServiceRow>();
+  for (const batch of rows) {
+    for (const row of batch) {
+      if (row?.id && !byId.has(row.id)) byId.set(row.id, row);
+    }
+  }
+  return sortSearchRows([...byId.values()]);
+}
+
+async function loadLookupMatches(
+  admin: SearchAdminClient,
+  tenantId: string,
+  q: string,
+  agency: string
+) {
+  const hotelPattern = `%${q}%`;
+  const agencyNeedle = agency || q;
+  const agencyPattern = `%${agencyNeedle}%`;
+  const [hotelsResult, agenciesResult] = await Promise.all([
+    q
+      ? admin.from("hotels").select("id,name,zone").eq("tenant_id", tenantId).ilike("name", hotelPattern).limit(100)
+      : Promise.resolve({ data: [], error: null }),
+    agencyNeedle
+      ? admin.from("agencies").select("id,name").eq("tenant_id", tenantId).ilike("name", agencyPattern).limit(100)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  const error = hotelsResult.error ?? agenciesResult.error ?? null;
+  if (error) throw new Error(error.message);
+  return {
+    matchedHotels: (hotelsResult.data ?? []) as Array<{ id: string; name: string; zone?: string | null }>,
+    matchedAgencies: (agenciesResult.data ?? []) as Array<{ id: string; name: string }>,
+  };
+}
+
+async function querySearchCandidates(
+  admin: SearchAdminClient,
+  tenantId: string,
+  input: {
+    q: string;
+    agency: string;
+    limit: number;
+    matchedHotelIds: string[];
+    matchedAgencyIds: string[];
+  }
+): Promise<SearchServiceRow[]> {
+  const perQueryLimit = Math.min(Math.max(input.limit * 8, 160), 500);
+  const batches: Array<PromiseLike<SearchQueryResult>> = [];
+  const run = (apply: (query: SearchQueryBuilder) => SearchQueryBuilder) => {
+    const query = admin
+      .from("services")
+      .select(SERVICE_SEARCH_COLUMNS)
+      .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .limit(perQueryLimit) as unknown as SearchQueryBuilder;
+    batches.push(apply(query));
+  };
+
+  if (input.q) {
+    const pattern = `%${input.q}%`;
+    const textFields = [
+      "customer_name",
+      "customer_first_name",
+      "customer_last_name",
+      "customer_email",
+      "billing_party_name",
+      "vessel",
+      "notes",
+      "transport_code",
+      "transport_code_return",
+      "transport_reference_outward",
+      "transport_reference_return",
+      "train_arrival_number",
+      "train_departure_number",
+      "booking_service_kind",
+      "service_type",
+      "service_type_code",
+      "bus_city_origin",
+      "meeting_point",
+      "pickup_hotel",
+      "tour_name",
+      "excursion_title",
+      "id",
+    ];
+    if (canUsePostgrestOr(input.q)) {
+      run((query) => query.or(textFields.map((field) => `${field}.ilike.${pattern}`).join(",")));
+    } else {
+      for (const field of textFields) run((query) => query.ilike(field, pattern));
+    }
+    for (const token of textTokens(input.q)) {
+      const tokenPattern = `%${token}%`;
+      run((query) => query.or([
+        `customer_name.ilike.${tokenPattern}`,
+        `customer_first_name.ilike.${tokenPattern}`,
+        `customer_last_name.ilike.${tokenPattern}`,
+      ].join(",")));
+    }
+    const phoneFilters = phoneNeedles(input.q).flatMap((needle) => [
+      `phone.ilike.%${needle}%`,
+      `phone_e164.ilike.%${needle}%`,
+    ]);
+    if (phoneFilters.length) {
+      run((query) => query.or(phoneFilters.join(",")));
+    }
+    if (input.matchedHotelIds.length) run((query) => query.in("hotel_id", input.matchedHotelIds));
+    if (input.matchedAgencyIds.length) run((query) => query.in("agency_id", input.matchedAgencyIds));
+    if (isPrivateNeedle(input.q)) {
+      run((query) => query.is("agency_id", null).is("billing_party_name", null));
+      run((query) => query.ilike("billing_party_name", "%privato%"));
+    }
+  }
+
+  if (input.agency) {
+    run((query) => query.ilike("billing_party_name", `%${input.agency}%`));
+    if (input.matchedAgencyIds.length) run((query) => query.in("agency_id", input.matchedAgencyIds));
+    if (isPrivateNeedle(input.agency)) {
+      run((query) => query.is("agency_id", null).is("billing_party_name", null));
+      run((query) => query.ilike("billing_party_name", "%privato%"));
+    }
+  }
+
+  if (!batches.length) return [];
+  const results = await Promise.all(batches);
+  const error = results.find((result) => result.error)?.error ?? null;
+  if (error) throw new Error(error.message);
+  return mergeSearchRows(results.map((result) => (result.data ?? []) as SearchServiceRow[]))
+    .filter((service) => service.is_draft !== true);
+}
+
+async function loadRowsByIds(
+  admin: SearchAdminClient,
+  tenantId: string,
+  ids: string[]
+): Promise<SearchServiceRow[]> {
+  const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+  if (!uniqueIds.length) return [];
+  const { data, error } = await admin
+    .from("services")
+    .select(SERVICE_SEARCH_COLUMNS)
+    .eq("tenant_id", tenantId)
+    .in("id", uniqueIds);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as SearchServiceRow[];
+}
+
 export async function GET(req: NextRequest) {
   try {
     const auth = await authorizePricingRequest(req, ["admin", "operator", "supervisor"]);
@@ -43,22 +291,49 @@ export async function GET(req: NextRequest) {
 
     const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? "30"), 100);
 
-    const [servicesResult, hotelsResult, agenciesResult, schedulesResult, ferryPickupRulesResult] = await Promise.all([
-      fetchAllServices(auth.admin, tenantId),
-      auth.admin.from("hotels").select("id,name,zone").eq("tenant_id", tenantId),
-      auth.admin.from("agencies").select("id,name").eq("tenant_id", tenantId),
+    const { matchedHotels, matchedAgencies } = await loadLookupMatches(auth.admin, tenantId, q, agency);
+    const candidateServices = await querySearchCandidates(auth.admin, tenantId, {
+      q,
+      agency,
+      limit,
+      matchedHotelIds: matchedHotels.map((hotel) => hotel.id),
+      matchedAgencyIds: matchedAgencies.map((agencyRow) => agencyRow.id),
+    });
+
+    const linkedServices = await loadRowsByIds(
+      auth.admin,
+      tenantId,
+      candidateServices.map((service) => String(service.linked_service_id ?? "")).filter(Boolean)
+    );
+    const serviceRows = mergeSearchRows([candidateServices, linkedServices]);
+    const hotelIds = Array.from(new Set([
+      ...matchedHotels.map((hotel) => hotel.id),
+      ...serviceRows.map((service) => String(service.hotel_id ?? "")).filter(Boolean),
+    ]));
+    const agencyIds = Array.from(new Set([
+      ...matchedAgencies.map((agencyRow) => agencyRow.id),
+      ...serviceRows.map((service) => String(service.agency_id ?? "")).filter(Boolean),
+    ]));
+
+    const [hotelsResult, agenciesResult, schedulesResult, ferryPickupRulesResult] = await Promise.all([
+      hotelIds.length
+        ? auth.admin.from("hotels").select("id,name,zone").eq("tenant_id", tenantId).in("id", hotelIds)
+        : Promise.resolve({ data: [], error: null }),
+      agencyIds.length
+        ? auth.admin.from("agencies").select("id,name").eq("tenant_id", tenantId).in("id", agencyIds)
+        : Promise.resolve({ data: [], error: null }),
       auth.admin.from("ferry_schedules").select("company,departure_port,arrival_port,departure_time,arrival_time,direction,days_of_week,valid_from,valid_to"),
       auth.admin.from("ferry_pickup_rules").select("*"),
     ]);
 
-    const error = servicesResult.error ?? hotelsResult.error ?? agenciesResult.error ?? schedulesResult.error ?? ferryPickupRulesResult.error ?? null;
+    const error = hotelsResult.error ?? agenciesResult.error ?? schedulesResult.error ?? ferryPickupRulesResult.error ?? null;
     if (error) throw new Error(error.message);
 
-    const hotelNameById = new Map((hotelsResult.data ?? []).map((hotel: { id: string; name: string }) => [hotel.id, hotel.name]));
-    const hotelZoneById = new Map((hotelsResult.data ?? []).map((hotel: { id: string; zone?: string | null }) => [hotel.id, hotel.zone ?? null]));
-    const agencyNameById = new Map((agenciesResult.data ?? []).map((item: { id: string; name: string }) => [item.id, item.name]));
-    const searchable = (servicesResult.data ?? [])
-      .filter((service) => !service.is_draft)
+    const hotelNameById = new Map([...(matchedHotels ?? []), ...(hotelsResult.data ?? [])].map((hotel: { id: string; name: string }) => [hotel.id, hotel.name]));
+    const hotelZoneById = new Map([...(matchedHotels ?? []), ...(hotelsResult.data ?? [])].map((hotel: { id: string; zone?: string | null }) => [hotel.id, hotel.zone ?? null]));
+    const agencyNameById = new Map([...(matchedAgencies ?? []), ...(agenciesResult.data ?? [])].map((item: { id: string; name: string }) => [item.id, item.name]));
+    const serviceById = new Map(serviceRows.map((service) => [service.id, service]));
+    const searchable = candidateServices
       .map((service) => ({
         ...service,
         hotel_name: service.hotel_id ? hotelNameById.get(service.hotel_id) ?? null : null,
@@ -69,7 +344,7 @@ export async function GET(req: NextRequest) {
     ).slice(0, limit)
       .map((r) => {
         const linked = r.linked_service_id
-          ? (servicesResult.data ?? []).find((candidate) => candidate.id === r.linked_service_id)
+          ? serviceById.get(String(r.linked_service_id))
           : null;
         const arrivalLeg = r.direction === "arrival" ? r : linked?.direction === "arrival" ? linked : r;
         const departureLeg = r.direction === "departure" ? r : linked?.direction === "departure" ? linked : null;
@@ -80,6 +355,7 @@ export async function GET(req: NextRequest) {
         const hotelZone = r.hotel_id ? hotelZoneById.get(r.hotel_id) ?? null : null;
         const transportType = transferTransportType(arrivalLeg.booking_service_kind);
         const ruleTransportTime = cleanTime(arrivalLeg.train_arrival_time) ?? cleanTime(arrivalLeg.arrival_time) ?? cleanTime(arrivalLeg.time);
+        const arrivalLegDate = arrivalLeg.arrival_date ?? arrivalLeg.date ?? "";
         const ferryPickupRule = transportType && ruleTransportTime
           ? findFerryPickupRule(
             ferryPickupRules,
@@ -87,19 +363,20 @@ export async function GET(req: NextRequest) {
             transportType,
             transferBoatType(arrivalLeg.booking_service_kind),
             ruleTransportTime,
-            arrivalLeg.arrival_date ?? arrivalLeg.date
+            arrivalLegDate
           )
           : null;
         const arrivalSchedule = findArrivalScheduleForService(
           schedules,
-          arrivalLeg.arrival_date ?? arrivalLeg.date,
-          arrivalLeg.time,
+          arrivalLegDate,
+          arrivalLeg.time ?? null,
           arrivalLeg.booking_service_kind ?? null
         );
         const returnFerryDepartureTime = departureLeg?.orario_barca ?? r.orario_barca ?? departureLeg?.departure_time ?? r.departure_time ?? null;
+        const returnLegDate = departureLeg?.departure_date ?? r.departure_date ?? r.date ?? "";
         const returnSchedule = findDepartureScheduleForService(
           schedules,
-          departureLeg?.departure_date ?? r.departure_date ?? r.date,
+          returnLegDate,
           returnFerryDepartureTime,
           departureLeg?.booking_service_kind ?? r.booking_service_kind ?? null
         );

@@ -12,6 +12,17 @@ type AuthorizedPricingRequest = Exclude<Awaited<ReturnType<typeof authorizePrici
 
 const unsupportedManualHeaderFormats = new Set(["IMAGE", "VIDEO", "DOCUMENT", "LOCATION"]);
 
+const DEFAULT_THREAD_PAGE_SIZE = 50;
+const MAX_THREAD_PAGE_SIZE = 100;
+const SEARCH_CANDIDATE_LIMIT = 500;
+
+// Stessa euristica già usata in app/api/ops/search/route.ts: virgole e parentesi
+// romperebbero la sintassi della stringa .or() di PostgREST, quindi in quel caso
+// ripieghiamo su .ilike() singole per campo invece di costruire l'OR combinato.
+function canUsePostgrestOr(value: string): boolean {
+  return !/[(),]/.test(value);
+}
+
 const patchSchema = z.object({
   thread_id: z.string().uuid(),
   action: z.enum(["mark_read", "close", "reopen", "delete", "associate", "update_phone", "rename_contact"]),
@@ -242,32 +253,100 @@ export async function GET(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
 
   const tenantId = auth.membership.tenant_id;
-  const settings = await getTenantWhatsAppSettings(auth.admin, tenantId);
+  const url = new URL(request.url);
+  // I template sono dati tenant-wide, stabili: il client li richiede una sola
+  // volta al mount e li tiene in stato locale. I refetch "silenziosi" (poll
+  // 12s/20s, cambio filtro/thread, refresh dopo mutazioni) passano
+  // include_templates=0 per evitare 2 query DB inutili ad ogni giro.
+  const includeTemplates = url.searchParams.get("include_templates") !== "0";
+  let settings: Awaited<ReturnType<typeof getTenantWhatsAppSettings>> | null = null;
   let syncedTemplates = [] as Awaited<ReturnType<typeof loadSyncedWhatsAppTemplates>>;
   let templateFetchError: string | null = null;
-  try {
-    syncedTemplates = await loadSyncedWhatsAppTemplates(auth.admin, tenantId);
-  } catch (error) {
-    templateFetchError = "Impossibile caricare i template sincronizzati.";
-    auditLog({
-      event: "whatsapp_inbox_load_templates_failed",
-      level: "error",
-      tenantId,
-      details: { message: error instanceof Error ? error.message : String(error) },
-    });
+  if (includeTemplates) {
+    settings = await getTenantWhatsAppSettings(auth.admin, tenantId);
+    try {
+      syncedTemplates = await loadSyncedWhatsAppTemplates(auth.admin, tenantId);
+    } catch (error) {
+      templateFetchError = "Impossibile caricare i template sincronizzati.";
+      auditLog({
+        event: "whatsapp_inbox_load_templates_failed",
+        level: "error",
+        tenantId,
+        details: { message: error instanceof Error ? error.message : String(error) },
+      });
+    }
   }
-  const url = new URL(request.url);
   const filter = url.searchParams.get("filter") ?? "open";
   const search = (url.searchParams.get("q") ?? "").trim();
   const searchDigits = search.replace(/\D/g, "");
   const selectedThreadId = url.searchParams.get("thread_id") ?? url.searchParams.get("thread");
 
+  const pageSizeParam = Number.parseInt(url.searchParams.get("page_size") ?? "", 10);
+  const pageSize = Number.isFinite(pageSizeParam) && pageSizeParam > 0
+    ? Math.min(pageSizeParam, MAX_THREAD_PAGE_SIZE)
+    : DEFAULT_THREAD_PAGE_SIZE;
+  const pageParam = Number.parseInt(url.searchParams.get("page") ?? "", 10);
+  const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
+  const offset = (page - 1) * pageSize;
+
+  // Ricerca lato DB: risolviamo prima gli id di contatti/prenotazioni che
+  // corrispondono al termine (query mirate e con LIMIT, mai fetchAllServices),
+  // poi filtriamo whatsapp_threads con un solo .or() su colonne native + IN(...).
+  // Sostituisce il vecchio pattern "fetch fino a 5000 thread + filtro in JS".
+  let searchContactIds: string[] = [];
+  let searchServiceIds: string[] = [];
+  if (search) {
+    const pattern = `%${search}%`;
+    if (canUsePostgrestOr(search)) {
+      const [contactsRes, servicesFieldsRes, servicesHotelRes] = await Promise.all([
+        auth.admin
+          .from("whatsapp_contacts")
+          .select("id")
+          .eq("tenant_id", tenantId)
+          .or(`profile_name.ilike.${pattern},customer_full_name.ilike.${pattern},manual_contact_name.ilike.${pattern},wa_profile_name.ilike.${pattern}`)
+          .limit(SEARCH_CANDIDATE_LIMIT),
+        auth.admin
+          .from("services")
+          .select("id")
+          .eq("tenant_id", tenantId)
+          .or(`customer_name.ilike.${pattern},customer_first_name.ilike.${pattern},customer_last_name.ilike.${pattern},phone.ilike.${pattern},phone_e164.ilike.${pattern},booking_service_kind.ilike.${pattern}`)
+          .limit(SEARCH_CANDIDATE_LIMIT),
+        auth.admin
+          .from("services")
+          .select("id, hotels!inner(name)")
+          .eq("tenant_id", tenantId)
+          .ilike("hotels.name", pattern)
+          .limit(SEARCH_CANDIDATE_LIMIT),
+      ]);
+      searchContactIds = (contactsRes.data ?? []).map((row: { id: string }) => String(row.id));
+      searchServiceIds = Array.from(new Set([
+        ...((servicesFieldsRes.data ?? []) as Array<{ id: string }>).map((row) => String(row.id)),
+        ...((servicesHotelRes.data ?? []) as Array<{ id: string }>).map((row) => String(row.id)),
+      ]));
+    } else {
+      // Il termine contiene virgole/parentesi: la sintassi .or() di PostgREST si
+      // romperebbe, quindi ripieghiamo su .ilike() singole per campo (nessuna
+      // ricerca sul nome hotel in questo ramo raro: caso limite accettato).
+      const contactFields = ["profile_name", "customer_full_name", "manual_contact_name", "wa_profile_name"] as const;
+      const serviceFields = ["customer_name", "customer_first_name", "customer_last_name", "phone", "phone_e164", "booking_service_kind"] as const;
+      const [contactsRows, serviceRows] = await Promise.all([
+        Promise.all(contactFields.map((field) =>
+          auth.admin.from("whatsapp_contacts").select("id").eq("tenant_id", tenantId).ilike(field, pattern).limit(SEARCH_CANDIDATE_LIMIT)
+        )),
+        Promise.all(serviceFields.map((field) =>
+          auth.admin.from("services").select("id").eq("tenant_id", tenantId).ilike(field, pattern).limit(SEARCH_CANDIDATE_LIMIT)
+        )),
+      ]);
+      searchContactIds = Array.from(new Set(contactsRows.flatMap((res) => ((res.data ?? []) as Array<{ id: string }>).map((row) => String(row.id)))));
+      searchServiceIds = Array.from(new Set(serviceRows.flatMap((res) => ((res.data ?? []) as Array<{ id: string }>).map((row) => String(row.id)))));
+    }
+  }
+
   let threadQuery = auth.admin
     .from("whatsapp_threads")
     .select("id, wa_id, phone_e164, customer_id, booking_id, transfer_id, last_message_at, last_message_preview, unread_count, assigned_to, status, match_status, match_suggestions, created_at, updated_at, whatsapp_contacts(profile_name,customer_full_name,manual_contact_name,wa_profile_name)")
     .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
-    .order("last_message_at", { ascending: false, nullsFirst: false })
-    .limit(search ? 5000 : filter === "all" ? 5000 : 100);
+    .order("last_message_at", { ascending: false, nullsFirst: false });
 
   if (filter === "unread") threadQuery = threadQuery.neq("status", "closed").gt("unread_count", 0);
   if (filter === "needs_review") threadQuery = threadQuery.eq("status", "needs_review");
@@ -275,22 +354,48 @@ export async function GET(request: NextRequest) {
   if (filter === "unassociated") threadQuery = threadQuery.is("booking_id", null).is("transfer_id", null);
   if (filter === "closed") threadQuery = threadQuery.eq("status", "closed");
   if (filter === "open") threadQuery = threadQuery.neq("status", "closed");
-  if (searchDigits.length >= 6) {
-    threadQuery = threadQuery.or(`wa_id.ilike.%${searchDigits}%,phone_e164.ilike.%${searchDigits}%`);
+
+  let searchYieldsNothing = false;
+  if (search) {
+    const searchClauses: string[] = [];
+    if (searchDigits.length >= 6) {
+      searchClauses.push(`wa_id.ilike.%${searchDigits}%`, `phone_e164.ilike.%${searchDigits}%`);
+    }
+    if (canUsePostgrestOr(search)) {
+      searchClauses.push(`last_message_preview.ilike.%${search}%`);
+    }
+    if (searchContactIds.length) searchClauses.push(`contact_id.in.(${searchContactIds.join(",")})`);
+    if (searchServiceIds.length) {
+      searchClauses.push(`booking_id.in.(${searchServiceIds.join(",")})`);
+      searchClauses.push(`transfer_id.in.(${searchServiceIds.join(",")})`);
+    }
+    if (searchClauses.length === 0) {
+      searchYieldsNothing = true;
+    } else {
+      threadQuery = threadQuery.or(searchClauses.join(","));
+    }
   }
 
-  const { data: threads, error: threadError } = await threadQuery;
-  if (threadError) {
-    return sanitizedErrorResponse(threadError, {
-      status: 500,
-      fallback: "Impossibile caricare le conversazioni.",
-      event: "whatsapp_inbox_list_threads_failed",
-      tenantId,
-      details: { filter },
-    });
+  let threadRows: Array<Record<string, unknown>> = [];
+  let hasMoreThreads = false;
+  if (!searchYieldsNothing) {
+    // Range inclusivo: chiediamo pageSize+1 righe per sapere se esiste una
+    // pagina successiva senza una query di COUNT separata.
+    const { data: threads, error: threadError } = await threadQuery.range(offset, offset + pageSize);
+    if (threadError) {
+      return sanitizedErrorResponse(threadError, {
+        status: 500,
+        fallback: "Impossibile caricare le conversazioni.",
+        event: "whatsapp_inbox_list_threads_failed",
+        tenantId,
+        details: { filter },
+      });
+    }
+    const fetched = (threads ?? []) as Array<Record<string, unknown>>;
+    hasMoreThreads = fetched.length > pageSize;
+    threadRows = fetched.slice(0, pageSize);
   }
 
-  const threadRows = (threads ?? []) as Array<Record<string, unknown>>;
   const serviceIds = Array.from(new Set(
     threadRows
       .map((row) => row.booking_id ?? row.transfer_id)
@@ -305,31 +410,10 @@ export async function GET(request: NextRequest) {
     : { data: [] };
   const serviceMap = new Map((services ?? []).map((service: Record<string, unknown>) => [String(service.id), service]));
 
-  const enrichedThreads: Array<Record<string, unknown>> = threadRows
-    .map((thread) => {
-      const serviceId = thread.booking_id ?? thread.transfer_id;
-      return { ...thread, service: serviceId ? serviceMap.get(String(serviceId)) ?? null : null };
-    })
-    .filter((rawThread) => {
-      const thread = rawThread as Record<string, unknown>;
-      if (!search) return true;
-      const normalizedSearch = search.toLowerCase();
-      const haystack = [
-        thread.wa_id,
-        thread.phone_e164,
-        (thread.whatsapp_contacts as { profile_name?: string; customer_full_name?: string; manual_contact_name?: string; wa_profile_name?: string } | null)?.manual_contact_name,
-        (thread.whatsapp_contacts as { profile_name?: string; customer_full_name?: string; manual_contact_name?: string; wa_profile_name?: string } | null)?.customer_full_name,
-        (thread.whatsapp_contacts as { profile_name?: string; customer_full_name?: string; manual_contact_name?: string; wa_profile_name?: string } | null)?.profile_name,
-        (thread.whatsapp_contacts as { profile_name?: string; customer_full_name?: string; manual_contact_name?: string; wa_profile_name?: string } | null)?.wa_profile_name,
-        (thread.service as Record<string, unknown> | null)?.customer_name,
-        (thread.service as Record<string, unknown> | null)?.phone,
-        (thread.service as Record<string, unknown> | null)?.booking_service_kind,
-        ((thread.service as Record<string, unknown> | null)?.hotels as { name?: string } | null)?.name,
-        thread.last_message_preview
-      ].filter(Boolean).join(" ").toLowerCase();
-      return haystack.includes(normalizedSearch)
-        || (searchDigits.length >= 6 && haystack.replace(/\D/g, "").includes(searchDigits));
-    });
+  const enrichedThreads: Array<Record<string, unknown>> = threadRows.map((thread) => {
+    const serviceId = thread.booking_id ?? thread.transfer_id;
+    return { ...thread, service: serviceId ? serviceMap.get(String(serviceId)) ?? null : null };
+  });
 
   const selectedId = selectedThreadId ?? enrichedThreads[0]?.id;
   const { data: messages, error: messageError } = selectedId
@@ -439,23 +523,29 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     ok: true,
     threads: enrichedThreads,
+    page,
+    page_size: pageSize,
+    has_more: hasMoreThreads,
     selected_thread_id: selectedId ?? null,
     messages: enrichedMessages,
-    template_options: syncedTemplates.map((template) => ({
-      key: template.meta_template_id,
-      label: template.name,
-      template: template.name,
-      language_code: template.language_code,
-      status: template.status,
-      category: template.category,
-      body_parameter_count: template.body_parameter_count,
-      body_text: template.body_text,
-      header_format: template.header_format,
-      is_tenant_default:
-        template.name === settings.default_template && template.language_code === settings.template_language,
-      is_tenant_arrival:
-        template.name === settings.arrival_template && template.language_code === settings.template_language
-    })),
+    templates_included: includeTemplates,
+    template_options: settings
+      ? syncedTemplates.map((template) => ({
+          key: template.meta_template_id,
+          label: template.name,
+          template: template.name,
+          language_code: template.language_code,
+          status: template.status,
+          category: template.category,
+          body_parameter_count: template.body_parameter_count,
+          body_text: template.body_text,
+          header_format: template.header_format,
+          is_tenant_default:
+            template.name === settings.default_template && template.language_code === settings.template_language,
+          is_tenant_arrival:
+            template.name === settings.arrival_template && template.language_code === settings.template_language
+        }))
+      : [],
     template_fetch_error: templateFetchError
   });
 }
