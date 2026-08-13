@@ -17,6 +17,9 @@ export default function ServicesPage() {
           breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Lista servizi" }]}
           actions={
             <div className="flex flex-wrap items-center gap-2">
+              <Link href="/dashboard" className="btn-secondary px-3 py-1.5 text-xs">
+                ← Cruscotto
+              </Link>
               <button type="button" onClick={() => void refresh()} className="btn-secondary px-3 py-1.5 text-xs" disabled={loading}>
                 Aggiorna
               </button>

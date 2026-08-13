@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { DateInput, EmptyState, PageHeader, SectionCard, StatCard } from "@/components/ui";
+import { DateInput, EmptyState, SectionCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { formatIsoDateShort, getCustomerFullName, getTransportReferenceOutward } from "@/lib/service-display";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
@@ -10,6 +10,20 @@ import type { Service, Hotel } from "@/lib/types";
 
 function isValidClockTime(value: string) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
+}
+
+function isShuttleService(service: Service) {
+  return service.booking_service_kind === "navetta" || service.booking_service_kind === "shuttle_hotel" || service.vessel?.trim().toLowerCase() === "navetta";
+}
+
+function TransportIcon({ service }: { service: Service }) {
+  const value = `${service.booking_service_kind ?? ""} ${service.service_type_code ?? ""} ${service.vessel ?? ""} ${service.transport_code ?? ""}`.toLowerCase();
+  const common = "h-6 w-6 shrink-0 text-slate-700";
+  if (value.includes("airport") || value.includes("volo") || value.includes("flight")) return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={common}><path d="m3 16 8-4-5-7 2-1 7 6 5-2c1.5-.6 2.5 1.4 1.1 2.2L15 14l-2 7-2 1v-7l-6 3-2-2Z"/></svg>;
+  if (value.includes("train") || value.includes("station") || value.includes("italo") || value.includes("treno")) return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={common}><rect x="5" y="3" width="14" height="15" rx="3"/><path d="M8 7h8M7 13h10M8 21l2-3m6 3-2-3"/><circle cx="9" cy="15" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="15" r="1" fill="currentColor" stroke="none"/></svg>;
+  if (value.includes("bus") || value.includes("navetta")) return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={common}><rect x="4" y="3" width="16" height="16" rx="3"/><path d="M7 7h10v6H7zM7 19v2m10-2v2M7 16h.01M17 16h.01"/></svg>;
+  if (value.includes("medmar") || value.includes("snav") || value.includes("ferry") || value.includes("traghetto") || value.includes("aliscafo")) return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={common}><path d="M5 11h14l-2 7H7l-2-7Zm3 0V6h8v5m-6-5V3h4v3M3 20c2 1 4 1 6 0 2 1 4 1 6 0 2 1 4 1 6 0"/></svg>;
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={common}><path d="M12 3 4 8v8l8 5 8-5V8l-8-5Z"/></svg>;
 }
 
 function formatArrivalServiceTypeLabel(service: Service) {
@@ -48,6 +62,66 @@ function AgencyKindBadge({ service }: { service: Service }) {
     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide ${entry.className}`}>
       {entry.label}
     </span>
+  );
+}
+
+function ArrivalDesktopTable({
+  rows,
+  hotelsById,
+  assignmentByServiceId,
+  driverById,
+  onDetails,
+  onEdit,
+  onMore,
+  page,
+  pageCount,
+  total,
+  onPageChange,
+}: {
+  rows: ReturnType<typeof buildOperationalInstances>;
+  hotelsById: Map<string | null, Hotel>;
+  assignmentByServiceId: Map<string, { driver_user_id: string | null; vehicle_label: string }>;
+  driverById: Map<string, string>;
+  onDetails: (serviceId: string) => void;
+  onEdit: (service: Service) => void;
+  onMore: (service: Service) => void;
+  page: number;
+  pageCount: number;
+  total: number;
+  onPageChange: (page: number) => void;
+}) {
+  return (
+    <div className="hidden overflow-hidden md:block">
+      <div className="w-full overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div className="grid grid-cols-[52px_minmax(125px,1.25fr)_32px_minmax(135px,1.15fr)_minmax(115px,.95fr)_minmax(100px,.8fr)_94px_124px] gap-2 border-b border-slate-200 px-3 py-3 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+          <span>Ora</span><span>Cliente</span><span>Pax</span><span>Provenienza / Corsa</span><span>Hotel</span><span>Autista / Veicolo</span><span>Stato</span><span className="text-right">Azioni</span>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {rows.map((item) => {
+            const service = item.service;
+            const assignment = assignmentByServiceId.get(service.id);
+            const driverName = assignment?.driver_user_id ? driverById.get(assignment.driver_user_id) : null;
+            const unassigned = !assignment || !driverName;
+            const review = service.status === "new";
+            const hotel = hotelsById.get(service.hotel_id)?.name ?? service.meeting_point ?? "Hotel N/D";
+            const reference = getTransportReferenceOutward(service) ?? service.transport_code ?? "Riferimento N/D";
+            return (
+              <div key={item.instanceId} className={`grid grid-cols-[52px_minmax(125px,1.25fr)_32px_minmax(135px,1.15fr)_minmax(115px,.95fr)_minmax(100px,.8fr)_94px_124px] items-center gap-2 px-3 py-3 ${unassigned ? "bg-amber-50/55" : "hover:bg-slate-50/70"}`}>
+                <strong className="text-sm text-indigo-700">{item.time}</strong>
+                <div className="min-w-0"><p className="whitespace-normal break-words text-sm font-bold leading-tight text-slate-800" title={getCustomerFullName(service)}>{getCustomerFullName(service)}</p><p className="mt-1 break-all text-[11px] text-slate-500">{service.phone || service.billing_party_name || "Telefono non indicato"}</p></div>
+                <span className="text-sm font-semibold text-slate-700">{service.pax}</span>
+                <div className="flex min-w-0 items-start gap-2"><TransportIcon service={service}/><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-semibold leading-tight text-slate-700" title={service.vessel || formatArrivalServiceTypeLabel(service)}>{service.vessel || formatArrivalServiceTypeLabel(service)}</p><p className="mt-1 whitespace-normal break-words text-[11px] leading-tight text-slate-500" title={reference}>{reference}</p></div></div>
+                <div className="min-w-0"><p className="whitespace-normal break-words text-sm font-semibold leading-tight text-slate-700" title={hotel}>{hotel}</p><p className="mt-1 whitespace-normal break-words text-[11px] leading-tight text-slate-500">{service.meeting_point || "Ischia"}</p></div>
+                <div className="min-w-0"><p className="whitespace-normal break-words text-sm font-medium leading-tight text-slate-700">{driverName || "Non assegnato"}</p><p className="mt-1 whitespace-normal break-words text-[11px] text-slate-500">{assignment?.vehicle_label || "—"}</p></div>
+                <span className={`w-fit whitespace-nowrap rounded-lg px-2 py-1 text-[10px] font-bold ${unassigned ? "border border-orange-200 bg-orange-50 text-orange-600" : review ? "border border-amber-200 bg-amber-50 text-amber-600" : "bg-indigo-50 text-indigo-700"}`}>{unassigned ? "Da assegnare" : review ? "Da verificare" : "Confermato"}</span>
+                <div className="flex justify-end gap-1"><button type="button" onClick={() => onDetails(service.id)} className="rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-600">Dettagli</button><button type="button" onClick={() => onEdit(service)} className="rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-600">Modifica</button><button type="button" onClick={() => onMore(service)} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-bold text-slate-600">•••</button></div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-xs text-slate-500"><span>Visualizzati {total === 0 ? 0 : (page - 1) * 50 + 1}–{Math.min(page * 50, total)} di {total}</span><div className="flex gap-1"><button type="button" disabled={page === 1} onClick={() => onPageChange(page - 1)} className="btn-secondary px-3 py-1.5 disabled:opacity-40">‹</button>{Array.from({ length: Math.min(pageCount, 5) }, (_, index) => index + 1).map((number) => <button type="button" key={number} onClick={() => onPageChange(number)} className={page === number ? "btn-primary px-3 py-1.5" : "btn-secondary px-3 py-1.5"}>{number}</button>)}<button type="button" disabled={page === pageCount} onClick={() => onPageChange(page + 1)} className="btn-secondary px-3 py-1.5 disabled:opacity-40">›</button></div></div>
+      </div>
+    </div>
   );
 }
 
@@ -484,6 +558,9 @@ export default function ArrivalsPage() {
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const [arrivalView, setArrivalView] = useState<"transfers" | "shuttles">("transfers");
+  const [timeBand, setTimeBand] = useState<"all" | "morning" | "afternoon" | "evening">("all");
+  const [currentPage, setCurrentPage] = useState(1);
   const [sortBy, setSortBy] = useState<"time" | "name" | "agency">("time");
   const [agenciesList, setAgenciesList] = useState<AgencyOption[]>([]);
 
@@ -695,19 +772,25 @@ export default function ArrivalsPage() {
     buildOperationalInstances(data.services).filter((i) => i.direction === "arrival"),
   [data.services]);
 
-  const arrivals = useMemo(() => {
+  const shuttleCount = allArrivalInstances.filter((item) => item.date === selectedDate && isShuttleService(item.service)).length;
+
+  const arrivals = (() => {
     const q = search.trim().toLowerCase();
     const selectedAgencyName = agencyFilter !== "all" ? agencyById.get(agencyFilter)?.name?.toLowerCase() : null;
     return allArrivalInstances
       .filter((instance) => {
         const svc = instance.service;
+        const hour = Number(instance.time.slice(0, 2));
+        const instanceBand = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
         const matchAgency = agencyFilter === "all"
           || svc.agency_id === agencyFilter
           || (selectedAgencyName != null && (svc.billing_party_name ?? "").toLowerCase().includes(selectedAgencyName));
         return (
           instance.date === selectedDate &&
+          (arrivalView === "shuttles" ? isShuttleService(svc) : !isShuttleService(svc)) &&
+          (timeBand === "all" || instanceBand === timeBand) &&
           matchAgency &&
-          (!q || (svc.customer_name ?? "").toLowerCase().includes(q) || (svc.phone ?? "").toLowerCase().includes(q))
+          (!q || [svc.customer_name, svc.phone, svc.vessel, svc.transport_code, resolveHotelName(svc), svc.billing_party_name].some((value) => String(value ?? "").toLowerCase().includes(q)))
         );
       })
       .sort((left, right) => {
@@ -726,7 +809,7 @@ export default function ArrivalsPage() {
         }
         return left.date !== right.date ? left.date.localeCompare(right.date) : left.time.localeCompare(right.time);
       });
-  }, [allArrivalInstances, selectedDate, agencyFilter, agencyById, search, sortBy]);
+  })();
 
   // Quanti arrivi ci sono in date diverse da quella selezionata (utile per suggerimento)
   const otherDatesCount = useMemo(() =>
@@ -734,10 +817,20 @@ export default function ArrivalsPage() {
   [allArrivalInstances, selectedDate]);
 
   const totalPax = arrivals.reduce((sum, item) => sum + item.service.pax, 0);
-  const busCount = arrivals.filter(
-    (item) => item.service.service_type_code === "bus_line" || item.service.booking_service_kind === "bus_city_hotel"
-  ).length;
-  const privateTransfers = Math.max(arrivals.length - busCount, 0);
+  const assignedServiceIds = new Set(data.assignments.map((assignment) => assignment.service_id));
+  const assignmentByServiceId = new Map(data.assignments.map((assignment) => [assignment.service_id, assignment]));
+  const driverById = new Map(data.memberships.map((member) => [member.user_id, member.full_name]));
+  const unassignedCount = arrivals.filter((item) => !assignedServiceIds.has(item.service.id)).length;
+  const reviewCount = arrivals.filter((item) => item.service.status === "new").length;
+  const rowsPerPage = 50;
+  const pageCount = Math.max(1, Math.ceil(arrivals.length / rowsPerPage));
+  const safeCurrentPage = Math.min(currentPage, pageCount);
+  const visibleArrivals = arrivals.slice((safeCurrentPage - 1) * rowsPerPage, safeCurrentPage * rowsPerPage);
+  const timeBandCounts = allArrivalInstances.filter((item) => item.date === selectedDate && !isShuttleService(item.service)).reduce((counts, item) => {
+    const hour = Number(item.time.slice(0, 2));
+    counts[hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening"] += 1;
+    return counts;
+  }, { morning: 0, afternoon: 0, evening: 0 });
 
   const buildRows = useCallback((): ExportRow[] =>
     arrivals.map((item) => ({
@@ -797,13 +890,22 @@ export default function ArrivalsPage() {
   };
 
   return (
-    <section className="page-section">
-      <PageHeader
-        title="Arrivi"
-        subtitle="Vista dedicata agli arrivi operativi della giornata selezionata."
-        breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Arrivi" }]}
-        actions={
-          <div className="grid w-full gap-3 rounded-2xl border border-slate-200 bg-white/80 px-3 py-3 shadow-sm backdrop-blur-sm sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_160px_minmax(0,1fr)_160px_auto]">
+    <section className="mx-auto max-w-[1500px] space-y-4 pb-8">
+      <header className="flex flex-wrap items-center justify-between gap-5">
+        <div className="flex flex-wrap items-end gap-8"><div><h1 className="text-3xl font-extrabold tracking-tight text-slate-950">Arrivi</h1><p className="mt-1 text-sm font-medium text-slate-500">{formatIsoDateShort(selectedDate)}</p></div><div className="flex items-center gap-2 pb-0.5"><button type="button" className="btn-secondary h-10 w-10 px-0" onClick={() => setSelectedDate(new Date(new Date(`${selectedDate}T12:00:00`).getTime() - 86400000).toISOString().slice(0, 10))}>‹</button><DateInput value={selectedDate} onChange={setSelectedDate} className="input-saas h-10 w-40"/><button type="button" className="btn-secondary h-10 w-10 px-0" onClick={() => setSelectedDate(new Date(new Date(`${selectedDate}T12:00:00`).getTime() + 86400000).toISOString().slice(0, 10))}>›</button></div></div>
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" onClick={handleCombinedPrint} className="btn-secondary px-4 py-2.5">Stampa giornata</button>
+          <button type="button" onClick={handleCombinedExcel} className="btn-secondary px-4 py-2.5">Esporta Excel</button>
+          <button type="button" onClick={() => { setAddForm((f) => ({ ...f, date: selectedDate })); setAddModal(true); setAddError(null); }} className="btn-primary px-5 py-3">+ Aggiungi arrivo</button>
+        </div>
+      </header>
+      <div className="hidden">
+        <button type="button" className="btn-secondary px-3 py-2" onClick={() => setSelectedDate(new Date(new Date(`${selectedDate}T12:00:00`).getTime() - 86400000).toISOString().slice(0, 10))}>‹</button>
+        <DateInput value={selectedDate} onChange={setSelectedDate} className="input-saas w-44" />
+        <button type="button" className="btn-secondary px-3 py-2" onClick={() => setSelectedDate(new Date(new Date(`${selectedDate}T12:00:00`).getTime() + 86400000).toISOString().slice(0, 10))}>›</button>
+      </div>
+      <div className="hidden">
+          <div className="grid w-full gap-3 sm:grid-cols-2">
             <label className="text-sm">
               <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Data</span>
               <DateInput value={selectedDate} onChange={setSelectedDate} className="input-saas mt-1 w-full" />
@@ -847,24 +949,35 @@ export default function ArrivalsPage() {
               <span>{agencyFilter === "all" ? "Tutte le agenzie" : (agencyOptions.find((a) => a.id === agencyFilter)?.name ?? agencyFilter)}</span>
             </div>
           </div>
-        }
-      />
+      </div>
 
       {errorMessage ? <EmptyState title="Arrivi non disponibili" description={errorMessage} compact /> : null}
 
-      <div className="grid gap-3 lg:grid-cols-3">
-        <StatCard label="Servizi arrivo" value={String(arrivals.length)} hint="Operativi per la giornata selezionata" loading={loading} />
-        <StatCard label="Pax totali" value={String(totalPax)} hint="Passeggeri da gestire in arrivo" loading={loading} />
-        <StatCard label="Linea bus" value={String(busCount)} hint={`${privateTransfers} altri servizi privati`} loading={loading} />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {[["↓","Arrivi",arrivals.length,"bg-emerald-50 text-emerald-600"],["♙","Passeggeri",totalPax,"bg-violet-50 text-violet-600"],["♙","Da assegnare",unassignedCount,"bg-orange-50 text-orange-600"],["⌕","Da verificare",reviewCount,"bg-amber-50 text-amber-600"],["◷","In ritardo",0,"bg-rose-50 text-rose-600"]].map(([icon,label,value,tone]) => <div key={String(label)} className="flex h-[104px] items-center gap-4 rounded-xl border border-slate-200 bg-white px-5 shadow-sm"><span className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-xl text-3xl ${tone}`}>{icon}</span><div><p className="text-sm font-medium text-slate-500">{label}</p><strong className="text-3xl leading-none text-slate-950">{value}</strong></div></div>)}
       </div>
 
+      <div className="hidden">
+        <div className="flex flex-col gap-3 xl:flex-row">
+          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} className="input-saas min-w-0 flex-1" placeholder="Cerca cliente, telefono, hotel, corsa, agenzia..." />
+          <select value={agencyFilter} onChange={(event) => setAgencyFilter(event.target.value)} className="input-saas xl:w-52"><option value="all">Tutte le agenzie</option>{agencyOptions.map((agency) => <option key={agency.id} value={agency.id}>{agency.name}</option>)}</select>
+          <select value={sortBy} onChange={(event) => setSortBy(event.target.value as "time" | "name" | "agency")} className="input-saas xl:w-40"><option value="time">Per orario</option><option value="name">Per cliente</option><option value="agency">Per agenzia</option></select>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {([['all', 'Tutti', arrivals.length], ['morning', 'Mattina', timeBandCounts.morning], ['afternoon', 'Pomeriggio', timeBandCounts.afternoon], ['evening', 'Sera', timeBandCounts.evening]] as const).map(([value, label, count]) => <button key={value} type="button" onClick={() => setTimeBand(value)} className={timeBand === value ? "btn-primary px-3 py-2 text-xs" : "btn-secondary px-3 py-2 text-xs"}>{label} {count}</button>)}
+          <button type="button" onClick={() => setArrivalView((view) => view === "transfers" ? "shuttles" : "transfers")} className={arrivalView === "shuttles" ? "btn-primary px-3 py-2 text-xs" : "btn-secondary border-dashed px-3 py-2 text-xs"}>{arrivalView === "shuttles" ? "Mostra transfer" : `Navette ${shuttleCount}`}</button>
+        </div>
+        <p className={`mt-3 text-xs font-medium ${arrivalView === "shuttles" ? "text-indigo-600" : "text-slate-500"}`}>{arrivalView === "shuttles" ? "Vista dedicata alle navette quotidiane" : "ⓘ Navette escluse dalla vista standard"}</p>
+      </div>
+
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_290px]">
       <SectionCard
         title="Lista arrivi"
         subtitle={`Giornata ${formatIsoDateShort(selectedDate)}`}
         loading={loading}
         loadingLines={6}
         actions={
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="hidden">
             <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
               {arrivals.length} servizi
             </span>
@@ -897,6 +1010,11 @@ export default function ArrivalsPage() {
           </div>
         }
       >
+        <div className="mb-4 border-b border-slate-200 pb-4">
+          <div className="flex flex-col gap-3 lg:flex-row"><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} className="input-saas min-w-0 flex-1" placeholder="Cerca cliente, telefono, hotel, corsa, agenzia..."/><button type="button" onClick={() => setSelectedDate(todayIso)} className="btn-secondary px-4">Oggi</button><button type="button" onClick={() => setSelectedDate(new Date(new Date(`${todayIso}T12:00:00`).getTime() + 86400000).toISOString().slice(0,10))} className="btn-secondary px-4">Domani</button><select value={agencyFilter} onChange={(event)=>setAgencyFilter(event.target.value)} className="input-saas lg:w-44"><option value="all">Filtri</option>{agencyOptions.map((agency)=><option key={agency.id} value={agency.id}>{agency.name}</option>)}</select></div>
+          <div className="mt-3 flex flex-wrap gap-2">{([['all','Tutti',arrivals.length],['morning','Mattina',timeBandCounts.morning],['afternoon','Pomeriggio',timeBandCounts.afternoon],['evening','Sera',timeBandCounts.evening]] as const).map(([value,label,count])=><button key={value} type="button" onClick={()=>setTimeBand(value)} className={timeBand===value?"btn-primary px-3 py-2 text-xs":"btn-secondary px-3 py-2 text-xs"}>{label} {count}</button>)}<button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={()=>setSearch("MEDMAR")}>MEDMAR</button><button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={()=>setSearch("SNAV")}>SNAV</button><button type="button" className="btn-secondary border-dashed px-3 py-2 text-xs" onClick={()=>setArrivalView((view)=>view==="transfers"?"shuttles":"transfers")}>{arrivalView==="shuttles"?"Mostra transfer":`Navette ${shuttleCount}`}</button></div>
+          <p className="mt-3 text-xs text-slate-500">ⓘ {arrivalView === "shuttles" ? "Vista dedicata alle navette quotidiane" : "Navette escluse dalla vista standard"}</p>
+        </div>
         {(bulkError ?? deleteError) && (
           <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{bulkError ?? deleteError}</div>
         )}
@@ -953,7 +1071,7 @@ export default function ArrivalsPage() {
               );
             })}
           </div>
-          <div className="table-card-scroll hidden md:block">
+          <div className="hidden">
           <div className="min-w-[760px] rounded-2xl border border-slate-200 bg-white shadow-sm">
             {/* Header */}
             <div className="grid grid-cols-[28px_60px_minmax(160px,1.5fr)_40px_minmax(160px,1.2fr)_minmax(130px,1fr)_128px] items-center gap-3 border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-[11px] uppercase tracking-wide text-slate-500">
@@ -1102,7 +1220,37 @@ export default function ArrivalsPage() {
             )}
           </div>
         )}
+        <ArrivalDesktopTable
+          rows={visibleArrivals}
+          hotelsById={hotelsById}
+          assignmentByServiceId={assignmentByServiceId}
+          driverById={driverById}
+          onDetails={setQrServiceId}
+          onEdit={setEditingService}
+          onMore={openCancelModal}
+          page={safeCurrentPage}
+          pageCount={pageCount}
+          total={arrivals.length}
+          onPageChange={setCurrentPage}
+        />
       </SectionCard>
+      <aside className="space-y-4">
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-extrabold text-slate-950">Controllo arrivi</h2>
+          <div className="mt-3 divide-y divide-slate-100">
+            {[["Senza autista", unassignedCount, "bg-orange-100 text-orange-700"], ["Senza veicolo", unassignedCount, "bg-indigo-100 text-indigo-700"], ["Dati da verificare", reviewCount, "bg-amber-100 text-amber-700"], ["Ritardi segnalati", 0, "bg-rose-100 text-rose-700"]].map(([label, value, tone]) => <div key={String(label)} className="flex items-center justify-between py-3 text-sm"><span className="font-medium text-slate-700">{label}</span><strong className={`min-w-8 rounded-lg px-2 py-1 text-center text-xs ${tone}`}>{value}</strong></div>)}
+          </div>
+          <a href="/control-room" className="btn-secondary mt-4 w-full border-indigo-300 text-indigo-700">Apri Control Room</a>
+        </section>
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-extrabold text-slate-950">Prossimi sbarchi</h2>
+          <div className="mt-3 divide-y divide-slate-100">
+            {arrivals.slice(0, 4).map((item) => <div key={`next-${item.instanceId}`} className="grid grid-cols-[48px_1fr_auto] gap-2 py-3 text-xs"><strong className="text-indigo-700">{item.time}</strong><div><p className="font-bold text-slate-800">{item.service.vessel || item.service.transport_code || "Arrivo"}</p><p className="text-slate-500">{item.service.meeting_point || "Ischia"}</p></div><span className="font-semibold text-slate-600">{item.service.pax} pax</span></div>)}
+            {arrivals.length === 0 ? <p className="py-5 text-center text-xs text-slate-400">Nessuno sbarco nel filtro attuale</p> : null}
+          </div>
+        </section>
+      </aside>
+      </div>
 
       {editingService && (
         <EditServiceModal

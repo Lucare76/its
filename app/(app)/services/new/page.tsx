@@ -413,6 +413,7 @@ export default function OpsNewBookingPage() {
 
     resetForm(hotels[0]?.id ?? "");
     resetBus();
+    router.push("/inbox");
   };
 
   const submit = async (force = false) => {
@@ -828,10 +829,10 @@ export default function OpsNewBookingPage() {
         ) : (
           <>
             {/* Date arrivo */}
-            {!(showTripLeg && tripLeg === "return_only") && <div className="md:col-span-2 grid grid-cols-2 gap-3 rounded-2xl border border-blue-100 bg-blue-50/40 p-4">
+            {!(showTripLeg && tripLeg === "return_only") && <div className="md:col-span-2 grid grid-cols-1 items-start gap-4 rounded-2xl border border-blue-100 bg-blue-50/40 p-4 sm:grid-cols-2">
               <p className="col-span-2 text-sm font-extrabold uppercase tracking-wide text-blue-700">↓ Arrivo</p>
-              <label className="text-sm">
-                {contextLabels.arrivalDateLabel}
+              <label className="block min-w-0 text-sm">
+                <span className="mb-1 block min-h-5">{contextLabels.arrivalDateLabel}</span>
                 <DateInput className={`input-saas mt-1${fieldErrors.arrival_date ? " border-rose-400" : ""}`} value={form.arrival_date}
                   onChange={(iso) => {
                     const newDate = iso;
@@ -847,8 +848,8 @@ export default function OpsNewBookingPage() {
                   <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
                 ) : null}
               </label>
-              <label className="text-sm">
-                {isSnavMedmar ? "Orario traghetto arrivo*" : contextLabels.arrivalTimeLabel}
+              <label className="block min-w-0 text-sm">
+                <span className="mb-1 block min-h-5">{isSnavMedmar ? "Orario traghetto arrivo*" : contextLabels.arrivalTimeLabel}</span>
                 {isSnavMedmar ? (
                   <select className="input-saas mt-1" value={form.arrival_time} onChange={(e) => setForm((prev) => ({ ...prev, arrival_time: e.target.value }))}>
                     {isSnavKind
@@ -870,10 +871,10 @@ export default function OpsNewBookingPage() {
             </div>}
 
             {/* Date ritorno */}
-            {!(showTripLeg && tripLeg === "outbound_only") && <div className="md:col-span-2 grid grid-cols-2 gap-3 rounded-2xl border border-violet-100 bg-violet-50/40 p-4">
+            {!(showTripLeg && tripLeg === "outbound_only") && <div className="md:col-span-2 grid grid-cols-1 items-start gap-4 rounded-2xl border border-violet-100 bg-violet-50/40 p-4 sm:grid-cols-2">
               <p className="col-span-2 text-sm font-extrabold uppercase tracking-wide text-violet-700">↑ Partenza</p>
-              <label className="text-sm">
-                {contextLabels.departureDateLabel}
+              <label className="block min-w-0 text-sm">
+                <span className="mb-1 block min-h-5">{contextLabels.departureDateLabel}</span>
                 <DateInput className={`input-saas mt-1${fieldErrors.departure_date ? " border-rose-400" : selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
                   value={form.departure_date} min={form.arrival_date}
                   onChange={(iso) => { setForm((prev) => ({ ...prev, departure_date: iso })); setFieldErrors((prev) => { const n = { ...prev }; delete n.departure_date; return n; }); }}
@@ -883,8 +884,8 @@ export default function OpsNewBookingPage() {
                   <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
                 ) : null}
               </label>
-              <label className="text-sm">
-                {isSnavMedmar ? "Orario traghetto partenza*" : contextLabels.departureTimeLabel}
+              <label className="block min-w-0 text-sm">
+                <span className="mb-1 block min-h-5">{isSnavMedmar ? "Orario traghetto partenza*" : contextLabels.departureTimeLabel}</span>
                 {isSnavMedmar ? (
                   <select
                     className="input-saas mt-1"
@@ -1310,7 +1311,7 @@ export default function OpsNewBookingPage() {
                             if (!res.ok || !body.ok) {
                               setReplaceError(body.error ?? "Errore durante la sostituzione. Riprova.");
                             } else {
-                              router.push(`/services`);
+                              router.push("/inbox");
                             }
                           } finally {
                             setSubmitting(false);
