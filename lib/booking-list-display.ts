@@ -59,9 +59,11 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
     outwardLabel: isAirport ? "Arrivo volo" : "Arrivo treno/bus",
     outwardDate: cleanDate(service.arrival_date) ?? cleanDate(service.date),
     outwardTime: cleanTime(service.train_arrival_time) ?? cleanTime(service.arrival_time),
+    outwardArrivalTime: cleanTime(service.outbound_ferry_arrival_time),
     returnLabel: isAirport ? "Partenza volo" : "Partenza treno/bus",
     returnDate: cleanDate(service.departure_date),
     returnTime: cleanTime(service.train_departure_time) ?? cleanTime(service.departure_time),
+    returnPickupTime: cleanTime(service.return_pickup_time),
   };
 }
 
