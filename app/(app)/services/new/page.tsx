@@ -553,12 +553,12 @@ export default function OpsNewBookingPage() {
         </div>
 
         {/* Nome cliente */}
-        <div className="pms-panel order-1 grid gap-4 p-5 md:grid-cols-2 lg:grid-cols-6">
-        <div className="md:col-span-2 lg:col-span-6">
+        <div className="pms-panel order-1 grid gap-4 p-5 md:grid-cols-2 lg:grid-cols-12">
+        <div className="md:col-span-2 lg:col-span-12">
           <div className="pms-step-title"><span className="pms-step-number">1</span> Cliente e prenotazione</div>
         </div>
         {isSnavKind ? (
-          <label className="text-sm md:col-span-2">
+          <label className="text-sm md:col-span-2 lg:col-span-4">
             Nome completo cliente*
             <input className="input-saas mt-1" placeholder="Es. Mario Rossi"
               value={form.customer_last_name}
@@ -568,14 +568,14 @@ export default function OpsNewBookingPage() {
           </label>
         ) : (
           <>
-            <label className="text-sm">
+            <label className="text-sm lg:col-span-2">
               Nome*
               <input className="input-saas mt-1" value={form.customer_first_name}
                 onChange={(e) => setForm((prev) => ({ ...prev, customer_first_name: e.target.value }))}
               />
               {fieldErrors.customer_first_name ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.customer_first_name}</span> : null}
             </label>
-            <label className="text-sm">
+            <label className="text-sm lg:col-span-2">
               Cognome*
               <input className="input-saas mt-1" value={form.customer_last_name}
                 onChange={(e) => setForm((prev) => ({ ...prev, customer_last_name: e.target.value }))}
@@ -585,7 +585,7 @@ export default function OpsNewBookingPage() {
           </>
         )}
 
-        <label className="text-sm">
+        <label className="text-sm lg:col-span-2">
           {isPhoneRequired ? "Telefono*" : "Telefono"}
           <input className="input-saas mt-1" value={form.customer_phone}
             onChange={(e) => setForm((prev) => ({ ...prev, customer_phone: e.target.value }))}
@@ -593,16 +593,16 @@ export default function OpsNewBookingPage() {
           {fieldErrors.customer_phone ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.customer_phone}</span> : null}
         </label>
 
-        <label className={`text-sm ${isMedmarKind ? "hidden" : ""}`}>
-          Pax prezzo pieno (2+ anni)*
+        <label className={`text-sm lg:col-span-2 ${isMedmarKind ? "hidden" : ""}`}>
+          Pax prezzo pieno*
           <input type="number" min={1} max={50} className="input-saas mt-1" value={form.pax}
             onChange={(e) => setForm((prev) => ({ ...prev, pax: e.target.value }))}
           />
-          <span className="mt-1 block text-xs text-slate-500">Dai 2 anni compiuti tutti pagano prezzo pieno.</span>
+          <span className="mt-1 block text-xs text-slate-500">2+ anni: prezzo pieno.</span>
           {fieldErrors.pax ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.pax}</span> : null}
         </label>
         {isMedmarKind ? (
-          <div className="md:col-span-2 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
+          <div className="md:col-span-2 lg:col-span-4 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-bold text-indigo-950">Passeggeri Formula MEDMAR</p>
@@ -631,21 +631,21 @@ export default function OpsNewBookingPage() {
             </div>
           </div>
         ) : null}
-        <label className="text-sm lg:col-span-2">
+        <label className="text-sm lg:col-span-4">
           Agenzia
           <select className="input-saas mt-1" value={form.agency_id} onChange={(e) => setForm((prev) => ({ ...prev, agency_id: e.target.value }))}>
             <option value="">Privato / nessuna agenzia</option>
             {agencies.map((agency) => <option key={agency.id} value={agency.id}>{agency.name}</option>)}
           </select>
         </label>
-        <label className="text-sm md:col-span-2 lg:col-span-3">
+        <label className="text-sm md:col-span-2 lg:col-span-6">
           Email cliente <span className="font-normal text-slate-400">(facoltativa per privati)</span>
           <input type="email" className="input-saas mt-1" data-no-uppercase placeholder="cliente@email.it" value={form.customer_email}
             onChange={(event) => setForm((prev) => ({ ...prev, customer_email: event.target.value }))}
           />
           {fieldErrors.customer_email ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.customer_email}</span> : null}
         </label>
-        <details className="md:col-span-2 lg:col-span-6 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+        <details className="md:col-span-2 lg:col-span-12 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
           <summary className="cursor-pointer text-sm font-semibold text-slate-700">Passeggeri speciali e animali</summary>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
         <label className="text-sm">
@@ -677,7 +677,7 @@ export default function OpsNewBookingPage() {
         </details>
 
         {/* Hotel */}
-        <div className="text-sm md:col-span-2 lg:col-span-6">
+        <div className="text-sm md:col-span-2 lg:col-span-12">
           <span>Hotel / Struttura{isPrivateIsland ? "" : "*"}</span>
           {addingHotel ? (
             <div className="mt-2 space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3">
