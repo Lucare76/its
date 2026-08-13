@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { fetchAllServices } from "@/lib/server/fetch-all-services";
 import { collapseLinkedBookingPairs, filterBookingsBySearch } from "@/lib/booking-search";
-import { findArrivalScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
+import { ferryPortLabel, findArrivalScheduleForService, findDepartureScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
 import { getPickupRuleByRange, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { findFerryPickupRule, resolveAgencyLogic, type FerryPickupRule } from "@/lib/ferry-pickup-rules";
 
@@ -96,6 +96,13 @@ export async function GET(req: NextRequest) {
           arrivalLeg.time,
           arrivalLeg.booking_service_kind ?? null
         );
+        const returnFerryDepartureTime = departureLeg?.orario_barca ?? r.orario_barca ?? departureLeg?.departure_time ?? r.departure_time ?? null;
+        const returnSchedule = findDepartureScheduleForService(
+          schedules,
+          departureLeg?.departure_date ?? r.departure_date ?? r.date,
+          returnFerryDepartureTime,
+          departureLeg?.booking_service_kind ?? r.booking_service_kind ?? null
+        );
         const departureRuleType = transferDepartureRuleType(departureLeg?.booking_service_kind);
         const departureTransportTime = cleanTime(departureLeg?.train_departure_time) ?? cleanTime(departureLeg?.departure_time) ?? cleanTime(departureLeg?.time);
         const departurePickupRule = departureRuleType && departureTransportTime
@@ -140,6 +147,12 @@ export async function GET(req: NextRequest) {
           outbound_ferry_arrival_time: ferryPickupRule?.arrivalTime ?? arrivalSchedule?.arrivalTime ?? arrivalLeg.arrival_time ?? null,
           return_pickup_time: departureLeg?.pickup_time ?? departurePickupRule?.pickup ?? departureLeg?.departure_time ?? null,
           return_ferry_departure_time: departureLeg?.orario_barca ?? departurePickupRule?.boat_t ?? null,
+          outbound_ferry_company: arrivalSchedule?.company?.toUpperCase() ?? null,
+          outbound_ferry_departure_port: arrivalSchedule ? ferryPortLabel(arrivalSchedule.departurePort) : null,
+          outbound_ferry_arrival_port: arrivalSchedule ? ferryPortLabel(arrivalSchedule.arrivalPort) : null,
+          return_ferry_company: returnSchedule?.company?.toUpperCase() ?? null,
+          return_ferry_departure_port: returnSchedule ? ferryPortLabel(returnSchedule.departurePort) : null,
+          return_ferry_arrival_port: returnSchedule ? ferryPortLabel(returnSchedule.arrivalPort) : null,
         };
       });
 

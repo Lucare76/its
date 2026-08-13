@@ -8,6 +8,12 @@ type BookingListService = Partial<Pick<
   outbound_ferry_arrival_time?: string | null;
   return_pickup_time?: string | null;
   return_ferry_departure_time?: string | null;
+  outbound_ferry_company?: string | null;
+  outbound_ferry_departure_port?: string | null;
+  outbound_ferry_arrival_port?: string | null;
+  return_ferry_company?: string | null;
+  return_ferry_departure_port?: string | null;
+  return_ferry_arrival_port?: string | null;
 };
 
 export type BookingListTransportTimes = {
@@ -20,6 +26,12 @@ export type BookingListTransportTimes = {
   returnTime: string | null;
   outwardArrivalTime?: string | null;
   returnPickupTime?: string | null;
+  outwardCompany?: string | null;
+  outwardRoute?: string | null;
+  outwardArrivalPort?: string | null;
+  returnCompany?: string | null;
+  returnRoute?: string | null;
+  returnDeparturePort?: string | null;
 };
 
 export function bookingListTransportTimes(service: BookingListService): BookingListTransportTimes | null {
@@ -37,10 +49,16 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
       outwardDate: cleanDate(service.arrival_date) ?? cleanDate(service.date),
       outwardTime: cleanTime(service.outbound_ferry_departure_time) ?? cleanTime(service.time),
       outwardArrivalTime: cleanTime(service.outbound_ferry_arrival_time) ?? cleanTime(service.arrival_time),
+      outwardCompany: service.outbound_ferry_company ?? null,
+      outwardRoute: routeLabel(service.outbound_ferry_departure_port, service.outbound_ferry_arrival_port),
+      outwardArrivalPort: service.outbound_ferry_arrival_port ?? null,
       returnLabel: "Traghetto/aliscafo dall'isola",
       returnDate: cleanDate(service.departure_date),
       returnTime: cleanTime(service.return_ferry_departure_time) ?? cleanTime(service.orario_barca),
       returnPickupTime: cleanTime(service.return_pickup_time) ?? cleanTime(service.departure_time),
+      returnCompany: service.return_ferry_company ?? null,
+      returnRoute: routeLabel(service.return_ferry_departure_port, service.return_ferry_arrival_port),
+      returnDeparturePort: service.return_ferry_departure_port ?? null,
     };
   }
 
@@ -75,4 +93,8 @@ function cleanDate(value: string | null | undefined) {
 function cleanTime(value: string | null | undefined) {
   const match = String(value ?? "").match(/^(\d{2}):(\d{2})/);
   return match ? `${match[1]}:${match[2]}` : null;
+}
+
+function routeLabel(from: string | null | undefined, to: string | null | undefined) {
+  return from && to ? `${from} → ${to}` : null;
 }
