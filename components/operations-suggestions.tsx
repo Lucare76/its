@@ -106,6 +106,9 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
   const [message, setMessage] = useState<string | null>(null);
   const [guidedSuggestion, setGuidedSuggestion] = useState<Suggestion | null>(null);
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
+  const [resolveCandidate, setResolveCandidate] = useState<Suggestion | null>(null);
+  const [resolutionNote, setResolutionNote] = useState("");
+  const [lastArchived, setLastArchived] = useState<Suggestion | null>(null);
 
   const activeSuggestions = useMemo(
     () =>
@@ -195,7 +198,7 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
     if (suggestion.action_payload.action === "open_hotel") router.push("/hotels");
   };
 
-  const markSolved = async (suggestion: Suggestion) => {
+  const markSolved = async (suggestion: Suggestion, note: string) => {
     const token = await getAccessToken();
     if (!token) {
       setMessage("Sessione non valida.");
@@ -212,6 +215,7 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
       body: JSON.stringify({
         suggestion_id: suggestion.id,
         suggestion_type: suggestion.type,
+        resolution_note: note,
         action_payload: {
           ...suggestion.action_payload,
           action: "mark_resolved"
@@ -227,7 +231,48 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
     }
 
     setSuggestions((current) => current.filter((item) => item.id !== suggestion.id));
+    setLastArchived(suggestion);
     setMessage("Suggerimento archiviato.");
+    setResolveCandidate(null);
+    setResolutionNote("");
+    await load();
+  };
+
+  const restoreLastArchived = async () => {
+    if (!lastArchived) return;
+    const token = await getAccessToken();
+    if (!token) {
+      setMessage("Sessione non valida.");
+      return;
+    }
+
+    setExecutingId(lastArchived.id);
+    const response = await fetch("/api/ops/suggestions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        suggestion_id: lastArchived.id,
+        suggestion_type: lastArchived.type,
+        resolution_note: "Ripristino immediato da dashboard",
+        action_payload: {
+          ...lastArchived.action_payload,
+          action: "restore"
+        }
+      })
+    });
+
+    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    setExecutingId(null);
+    if (!response.ok || !body?.ok) {
+      setMessage(body?.error ?? "Ripristino non completato.");
+      return;
+    }
+
+    setLastArchived(null);
+    setMessage("Suggerimento ripristinato.");
     await load();
   };
 
@@ -369,6 +414,55 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
         </div>
       ) : null}
 
+      {resolveCandidate ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-100 px-5 py-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Conferma archiviazione</p>
+              <h3 className="mt-1 text-base font-bold text-slate-900">{resolveCandidate.title}</h3>
+              <p className="mt-1 text-sm text-slate-600">Il suggerimento verra nascosto dai controlli operativi finche non viene ripristinato.</p>
+            </div>
+            <div className="space-y-3 px-5 py-4">
+              <div className={`rounded-lg border ${priorityStyle[resolveCandidate.priority].border} ${priorityStyle[resolveCandidate.priority].bg} p-3`}>
+                <p className="text-sm leading-5 text-slate-700">{resolveCandidate.description}</p>
+              </div>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Motivo / nota operatore
+                <textarea
+                  value={resolutionNote}
+                  onChange={(event) => setResolutionNote(event.target.value)}
+                  rows={3}
+                  maxLength={500}
+                  placeholder="Es. telefono recuperato, dato verificato manualmente..."
+                  className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-800 outline-none focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
+                />
+              </label>
+            </div>
+            <div className="flex flex-col gap-2 border-t border-slate-100 px-5 py-4 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setResolveCandidate(null);
+                  setResolutionNote("");
+                }}
+                disabled={executingId === resolveCandidate.id}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Annulla
+              </button>
+              <button
+                type="button"
+                onClick={() => void markSolved(resolveCandidate, resolutionNote)}
+                disabled={executingId === resolveCandidate.id}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {executingId === resolveCandidate.id ? "Archivio..." : "Archivia suggerimento"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
         <div>
           <h2 className="text-sm font-bold text-slate-900">Suggerimenti</h2>
@@ -399,7 +493,11 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
                 <div className="flex shrink-0 flex-wrap justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => void markSolved(suggestion)}
+                    onClick={() => {
+                      setResolveCandidate(suggestion);
+                      setResolutionNote("");
+                      setMessage(null);
+                    }}
                     disabled={executingId === suggestion.id}
                     className="rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
                   >
@@ -419,7 +517,16 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
           );
         })}
 
-        {message ? <p className="text-xs font-medium text-slate-500">{message}</p> : null}
+        {message ? (
+          <p className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500">
+            <span>{message}</span>
+            {lastArchived ? (
+              <button type="button" onClick={() => void restoreLastArchived()} className="rounded-full border border-slate-200 px-2 py-0.5 font-semibold text-slate-700 hover:bg-slate-50">
+                Annulla
+              </button>
+            ) : null}
+          </p>
+        ) : null}
       </div>
     </section>
   );

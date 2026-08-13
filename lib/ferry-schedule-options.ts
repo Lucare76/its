@@ -19,6 +19,7 @@ export interface FerryScheduleOption {
 export interface FerryArrivalMatch {
   departureTime: string;
   arrivalTime: string;
+  departurePort: string;
   arrivalPort: string;
   company: string;
 }
@@ -173,6 +174,7 @@ export function findArrivalScheduleForService(
   return {
     departureTime: time,
     arrivalTime,
+    departurePort: match.departure_port,
     arrivalPort: match.arrival_port,
     company: match.company,
   };

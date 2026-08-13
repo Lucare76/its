@@ -792,10 +792,9 @@ export default function InboxPage() {
       </div>
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-        <div className="relative min-w-0 flex-1">
-          <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">⌕</span>
-          <input type="search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Cerca per nome, codice prenotazione, telefono, hotel, agenzia..." className="input-saas w-full pl-11" />
+        <div className="min-w-0 flex-1">
+          <input type="text" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Cerca per nome, codice prenotazione, telefono, hotel, agenzia..." className="input-saas w-full" />
         </div>
         <div className="flex flex-wrap gap-2">
           {([

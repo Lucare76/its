@@ -56,9 +56,85 @@ type BookingQrSummary = {
   phone: string | null;
   codes: BookingQrRow[];
 };
+type ServiceChangeLog = {
+  id: string;
+  service_id: string;
+  root_service_id: string | null;
+  action: string;
+  changed_fields: string[] | null;
+  operator_name: string | null;
+  operator_email: string | null;
+  created_at: string;
+};
+type FerryLegMeta = {
+  company: string | null;
+  departure_port: string | null;
+  arrival_port: string | null;
+};
+type FerryMeta = {
+  outbound: FerryLegMeta | null;
+  return: FerryLegMeta | null;
+};
 
 function isValidTime(t: string) {
   return /^\d{2}:\d{2}$/.test(t.trim());
+}
+
+function formatLogDate(value: string) {
+  return new Intl.DateTimeFormat("it-IT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function fieldLabel(field: string) {
+  const labels: Record<string, string> = {
+    customer_name: "cliente",
+    phone: "telefono",
+    pax: "pax",
+    time: "orario",
+    notes: "note",
+    hotel_id: "hotel",
+    agency_id: "agenzia",
+    billing_party_name: "intestatario",
+    meeting_point: "meeting point",
+    arrival_date: "data arrivo",
+    arrival_time: "ora arrivo",
+    departure_date: "data partenza",
+    departure_time: "ora partenza",
+    orario_barca: "orario barca",
+    pickup_time: "pickup",
+    transport_code: "rif. volo/treno",
+  };
+  return labels[field] ?? field.replace(/_/g, " ");
+}
+
+function logFerryDetails(fields: string[] | null | undefined, ferryMeta: FerryMeta, isFerryFormula: boolean) {
+  if (!isFerryFormula) return [];
+  const changed = new Set(fields ?? []);
+  const details: string[] = [];
+  if (ferryMeta.outbound && (changed.has("time") || changed.has("arrival_time"))) {
+    const route = [ferryMeta.outbound.departure_port, ferryMeta.outbound.arrival_port].filter(Boolean).join(" → ");
+    const parts = [
+      ferryMeta.outbound.company ? `Andata nave ${ferryMeta.outbound.company}` : "Andata nave",
+      route ? `tratta ${route}` : null,
+      ferryMeta.outbound.arrival_port ? `porto di arrivo ${ferryMeta.outbound.arrival_port}` : null,
+    ].filter(Boolean);
+    details.push(parts.join(" · "));
+  }
+  if (ferryMeta.return && (changed.has("pickup_time") || changed.has("departure_time") || changed.has("orario_barca"))) {
+    const route = [ferryMeta.return.departure_port, ferryMeta.return.arrival_port].filter(Boolean).join(" → ");
+    const parts = [
+      ferryMeta.return.company ? `Ritorno nave ${ferryMeta.return.company}` : "Ritorno nave",
+      route ? `tratta ${route}` : null,
+      ferryMeta.return.departure_port ? `porto di partenza ${ferryMeta.return.departure_port}` : null,
+    ].filter(Boolean);
+    details.push(parts.join(" · "));
+  }
+  return details;
 }
 
 export default function ServiceEditPage() {
@@ -107,6 +183,8 @@ export default function ServiceEditPage() {
   const [qrBusy, setQrBusy] = useState<"generate" | "pdf" | "whatsapp" | null>(null);
   const [whatsAppBusy, setWhatsAppBusy] = useState(false);
   const [whatsAppMessage, setWhatsAppMessage] = useState<string | null>(null);
+  const [changeLogs, setChangeLogs] = useState<ServiceChangeLog[]>([]);
+  const [ferryMeta, setFerryMeta] = useState<FerryMeta>({ outbound: null, return: null });
 
   // Inline hotel creation
   const [addingHotel, setAddingHotel] = useState(false);
@@ -245,8 +323,10 @@ export default function ServiceEditPage() {
       const body = (await response.json().catch(() => null)) as {
         service?: ServiceRow;
         linked_service?: Partial<ServiceRow> | null;
+        ferry_meta?: FerryMeta;
         hotels?: HotelRow[];
         agencies?: AgencyRow[];
+        change_logs?: ServiceChangeLog[];
         error?: string;
       } | null;
 
@@ -261,6 +341,8 @@ export default function ServiceEditPage() {
       setService(svc);
       setHotels(body.hotels ?? []);
       setAgencies(body.agencies ?? []);
+      setChangeLogs(body.change_logs ?? []);
+      setFerryMeta(body.ferry_meta ?? { outbound: null, return: null });
 
       setCustomerName(svc.customer_name ?? "");
       setPhone(svc.phone ?? "");
@@ -282,8 +364,8 @@ export default function ServiceEditPage() {
       const departureLeg = svc.direction === "departure" ? svc : linked?.direction === "departure" ? linked : null;
       setOutboundFerryDeparture((arrivalLeg.time ?? "").slice(0, 5));
       setOutboundFerryArrival((arrivalLeg.arrival_time ?? "").slice(0, 5));
-      setReturnPickup(((departureLeg?.pickup_time ?? departureLeg?.departure_time) ?? "").slice(0, 5));
-      setReturnFerryDeparture((departureLeg?.orario_barca ?? "").slice(0, 5));
+      setReturnPickup(((departureLeg?.pickup_time ?? departureLeg?.departure_time ?? (ferryFormula ? svc.departure_time : null)) ?? "").slice(0, 5));
+      setReturnFerryDeparture(((departureLeg?.orario_barca ?? (ferryFormula ? svc.orario_barca : null)) ?? "").slice(0, 5));
       setTransportCode(svc.transport_code ?? "");
       setInternalNotes(svc.internal_notes ?? "");
       setInternalNotesUpdatedAt(svc.internal_notes_updated_at ?? null);
@@ -319,6 +401,7 @@ export default function ServiceEditPage() {
     if (time && !isValidTime(time)) { setError("Inserisci un orario valido nel formato HH:MM."); return; }
     setSaving(true);
     setError(null);
+    setSaved(false);
     const selectedAgency = agencies.find((a) => a.id === agencyId);
     const response = await fetch(`/api/ops/services/${service.id}`, {
       method: "PATCH",
@@ -331,7 +414,7 @@ export default function ServiceEditPage() {
         phone: phone.trim() || null,
         pax: Number(pax) || 1,
         ...(!isFerryFormula ? { time: time.trim() || null } : {}),
-        notes: notes.trim() || null,
+        notes: notes.trim(),
         hotel_id: hotelId || null,
         agency_id: agencyId || null,
         billing_party_name: selectedAgency?.name ?? null,
@@ -359,8 +442,25 @@ export default function ServiceEditPage() {
         body: JSON.stringify({ phone: phone.trim(), name: customerName.trim(), tenantId }),
       }).catch(() => {});
     }
+    setService((current) => current ? {
+      ...current,
+      customer_name: customerName,
+      phone: phone.trim() || null,
+      pax: Number(pax) || 1,
+      notes: notes.trim(),
+      hotel_id: hotelId || null,
+      agency_id: agencyId || null,
+      billing_party_name: selectedAgency?.name ?? null,
+      meeting_point: meetingPoint.trim() || null,
+      arrival_date: arrivalDate || null,
+      arrival_time: isFerryFormula ? outboundFerryArrival || null : arrivalTime || null,
+      departure_date: departureDate || null,
+      departure_time: isFerryFormula ? returnPickup || null : departureTime || null,
+      orario_barca: isFerryFormula ? returnFerryDeparture || null : current.orario_barca,
+      transport_code: transportCode.trim() || null,
+      time: isFerryFormula ? outboundFerryDeparture || null : time.trim() || null,
+    } : current);
     setSaved(true);
-    setTimeout(() => router.back(), 1200);
   };
 
   const sendWhatsAppReminder = async () => {
@@ -428,6 +528,7 @@ export default function ServiceEditPage() {
 
       <div className="mx-auto max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
         {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>}
+        {saved && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">Modifica applicata. Puoi restare qui o uscire quando vuoi.</p>}
         {saved && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">✓ Salvato</p>}
 
         <div className="grid gap-3 sm:grid-cols-2">
@@ -536,6 +637,32 @@ export default function ServiceEditPage() {
                   <input type="time" step="300" value={returnFerryDeparture} onChange={(e) => setReturnFerryDeparture(e.target.value)} className="mt-1 input-saas w-full" />
                 </label>
               </div>
+              {(ferryMeta.outbound || ferryMeta.return) ? (
+                <div className="mt-3 grid gap-2 text-xs text-slate-700">
+                  {ferryMeta.outbound ? (
+                    <div className="rounded-lg border border-amber-200 bg-white/70 px-3 py-2">
+                      <p className="font-semibold text-amber-900">
+                        Andata nave{ferryMeta.outbound.company ? ` · ${ferryMeta.outbound.company}` : ""}
+                      </p>
+                      <p className="mt-0.5">
+                        Tratta: {[ferryMeta.outbound.departure_port, ferryMeta.outbound.arrival_port].filter(Boolean).join(" → ")}
+                      </p>
+                      {ferryMeta.outbound.arrival_port ? <p className="mt-0.5">Porto di arrivo: <span className="font-semibold">{ferryMeta.outbound.arrival_port}</span></p> : null}
+                    </div>
+                  ) : null}
+                  {ferryMeta.return ? (
+                    <div className="rounded-lg border border-amber-200 bg-white/70 px-3 py-2">
+                      <p className="font-semibold text-amber-900">
+                        Ritorno nave{ferryMeta.return.company ? ` · ${ferryMeta.return.company}` : ""}
+                      </p>
+                      <p className="mt-0.5">
+                        Tratta: {[ferryMeta.return.departure_port, ferryMeta.return.arrival_port].filter(Boolean).join(" → ")}
+                      </p>
+                      {ferryMeta.return.departure_port ? <p className="mt-0.5">Porto di partenza: <span className="font-semibold">{ferryMeta.return.departure_port}</span></p> : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -621,6 +748,38 @@ export default function ServiceEditPage() {
         </div>
         {whatsAppMessage ? <p className="text-xs text-slate-600">{whatsAppMessage}</p> : null}
         {service.sent_at ? <p className="text-xs text-slate-500">Ultimo invio WhatsApp: {new Date(service.sent_at).toLocaleString("it-IT")}</p> : null}
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Log modifiche prenotazione</p>
+              <p className="mt-1 text-xs text-slate-500">Storico operatori, giorno e ora delle modifiche salvate.</p>
+            </div>
+          </div>
+          {changeLogs.length === 0 ? (
+            <p className="mt-3 text-sm text-slate-500">Nessuna modifica registrata.</p>
+          ) : (
+            <div className="mt-3 divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white">
+              {changeLogs.map((log) => {
+                const ferryDetails = logFerryDetails(log.changed_fields, ferryMeta, isFerryFormula);
+                return (
+                  <div key={log.id} className="flex flex-col gap-1 px-3 py-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800">{log.operator_name || log.operator_email || "Operatore"}</p>
+                      <p className="text-xs text-slate-500">
+                        Campi: {(log.changed_fields ?? []).map(fieldLabel).join(", ") || "modifica"}
+                      </p>
+                      {ferryDetails.map((detail) => (
+                        <p key={detail} className="mt-1 text-xs font-medium text-amber-800">{detail}</p>
+                      ))}
+                    </div>
+                    <p className="text-xs font-semibold text-slate-500">{formatLogDate(log.created_at)}</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
         {isBusBooking && (
           <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">

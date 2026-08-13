@@ -22,8 +22,9 @@ const cache = new Map<string, CacheEntry>();
 const executeSchema = z.object({
   suggestion_id: z.string().min(3),
   suggestion_type: z.enum(["overcapacity", "geo_issue", "missing_data", "imbalance"]).optional(),
+  resolution_note: z.string().trim().max(500).optional(),
   action_payload: z.object({
-    action: z.enum(["move_pax_between_buses", "open_service", "open_hotel", "mark_resolved"]),
+    action: z.enum(["move_pax_between_buses", "open_service", "open_hotel", "mark_resolved", "restore"]),
     from_bus_id: z.string().optional(),
     from_bus_label: z.string().optional(),
     to_bus_id: z.string().optional(),
@@ -98,20 +99,75 @@ async function markResolved(
   auth: Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>,
   suggestionId: string,
   suggestionType: string,
-  payload: SuggestionActionPayload
+  payload: SuggestionActionPayload,
+  resolutionNote?: string | null
 ) {
+  const operatorName = await getOperatorName(auth);
+  const baseRow = {
+    tenant_id: auth.membership.tenant_id,
+    suggestion_id: suggestionId,
+    type: suggestionType,
+    action_payload: payload,
+    resolved: true,
+    resolved_at: new Date().toISOString(),
+    resolved_by_user_id: auth.user.id
+  };
   const { error } = await auth.admin.from("operations_suggestions").upsert(
     {
-      tenant_id: auth.membership.tenant_id,
-      suggestion_id: suggestionId,
-      type: suggestionType,
-      action_payload: payload,
-      resolved: true,
-      resolved_at: new Date().toISOString(),
-      resolved_by_user_id: auth.user.id
+      ...baseRow,
+      resolved_by_name: operatorName,
+      resolution_note: resolutionNote?.trim() || null,
+      restored_at: null,
+      restored_by_user_id: null,
+      restored_by_name: null,
+      restore_note: null
     },
     { onConflict: "tenant_id,suggestion_id" }
   );
+  if (error && /column .* does not exist|schema cache/i.test(error.message)) {
+    const retry = await auth.admin.from("operations_suggestions").upsert(baseRow, { onConflict: "tenant_id,suggestion_id" });
+    if (retry.error) throw new Error(retry.error.message);
+    return;
+  }
+  if (error) throw new Error(error.message);
+}
+
+async function getOperatorName(auth: Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>) {
+  const { data } = await auth.admin
+    .from("memberships")
+    .select("full_name")
+    .eq("tenant_id", auth.membership.tenant_id)
+    .eq("user_id", auth.user.id)
+    .maybeSingle();
+  return String(data?.full_name ?? auth.user.email ?? "Operatore").trim() || "Operatore";
+}
+
+async function restoreSuggestion(
+  auth: Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>,
+  suggestionId: string,
+  restoreNote?: string | null
+) {
+  const operatorName = await getOperatorName(auth);
+  const { error } = await auth.admin
+    .from("operations_suggestions")
+    .update({
+      resolved: false,
+      restored_at: new Date().toISOString(),
+      restored_by_user_id: auth.user.id,
+      restored_by_name: operatorName,
+      restore_note: restoreNote?.trim() || null
+    })
+    .eq("tenant_id", auth.membership.tenant_id)
+    .eq("suggestion_id", suggestionId);
+  if (error && /column .* does not exist|schema cache/i.test(error.message)) {
+    const retry = await auth.admin
+      .from("operations_suggestions")
+      .update({ resolved: false })
+      .eq("tenant_id", auth.membership.tenant_id)
+      .eq("suggestion_id", suggestionId);
+    if (retry.error) throw new Error(retry.error.message);
+    return;
+  }
   if (error) throw new Error(error.message);
 }
 
@@ -276,11 +332,19 @@ export async function POST(request: NextRequest) {
     const payload = parsed.data.action_payload;
     let result: Record<string, unknown> = {};
 
+    if (payload.action === "restore") {
+      await restoreSuggestion(auth, parsed.data.suggestion_id, parsed.data.resolution_note);
+      for (const key of cache.keys()) {
+        if (key.startsWith(`${auth.membership.tenant_id}:`)) cache.delete(key);
+      }
+      return NextResponse.json({ ok: true, resolved: false, restored: true });
+    }
+
     if (payload.action === "move_pax_between_buses") {
       result = await executeMovePax(auth, payload);
     }
 
-    await markResolved(auth, parsed.data.suggestion_id, parsed.data.suggestion_type ?? payload.action, payload);
+    await markResolved(auth, parsed.data.suggestion_id, parsed.data.suggestion_type ?? payload.action, payload, parsed.data.resolution_note);
     for (const key of cache.keys()) {
       if (key.startsWith(`${auth.membership.tenant_id}:`)) cache.delete(key);
     }

@@ -5,7 +5,7 @@ export type SuggestionType = "overcapacity" | "geo_issue" | "missing_data" | "im
 export type SuggestionPriority = "critical" | "high" | "medium" | "low";
 
 export type SuggestionActionPayload = {
-  action: "move_pax_between_buses" | "open_service" | "open_hotel" | "mark_resolved";
+  action: "move_pax_between_buses" | "open_service" | "open_hotel" | "mark_resolved" | "restore";
   from_bus_id?: string;
   from_bus_label?: string;
   to_bus_id?: string;

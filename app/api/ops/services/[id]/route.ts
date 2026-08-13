@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { auditLog } from "@/lib/server/ops-audit";
 import { z } from "zod";
-import { findArrivalScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
+import {
+  ferryPortLabel,
+  findArrivalScheduleForService,
+  findDepartureScheduleForService,
+  type FerryScheduleRow
+} from "@/lib/ferry-schedule-options";
 
 export const runtime = "nodejs";
 
@@ -29,6 +34,83 @@ const updateServiceSchema = z.object({
   return_ferry_departure_time: z.string().nullable().optional(),
 });
 
+type ServiceSnapshot = Record<string, unknown> & { id: string; linked_service_id?: string | null };
+
+function compactUpdate(input: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+}
+
+function changedFields(before: ServiceSnapshot | null, after: ServiceSnapshot | null, fields: string[]) {
+  if (!before || !after) return fields;
+  return fields.filter((field) => JSON.stringify(before[field] ?? null) !== JSON.stringify(after[field] ?? null));
+}
+
+function ferryCompanyLabel(company: string | null | undefined) {
+  if (!company) return null;
+  return company.toUpperCase();
+}
+
+async function getOperatorName(auth: Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>) {
+  const { data } = await auth.admin
+    .from("memberships")
+    .select("full_name")
+    .eq("tenant_id", auth.membership.tenant_id)
+    .eq("user_id", auth.user.id)
+    .maybeSingle();
+  return String(data?.full_name ?? auth.user.email ?? "Operatore").trim() || "Operatore";
+}
+
+async function readServiceSnapshot(
+  auth: Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>,
+  tenantId: string,
+  serviceId: string
+) {
+  const { data } = await auth.admin
+    .from("services")
+    .select("*")
+    .eq("id", serviceId)
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  return (data ?? null) as ServiceSnapshot | null;
+}
+
+async function logServiceChange(input: {
+  auth: Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>;
+  tenantId: string;
+  serviceId: string;
+  rootServiceId: string;
+  before: ServiceSnapshot | null;
+  after: ServiceSnapshot | null;
+  fields: string[];
+}) {
+  const fields = changedFields(input.before, input.after, input.fields);
+  if (fields.length === 0) return;
+  const operatorName = await getOperatorName(input.auth);
+  const { error } = await input.auth.admin.from("service_change_logs").insert({
+    tenant_id: input.tenantId,
+    service_id: input.serviceId,
+    root_service_id: input.rootServiceId,
+    action: "updated",
+    changed_fields: fields,
+    before_data: input.before ?? {},
+    after_data: input.after ?? {},
+    operator_user_id: input.auth.user.id,
+    operator_name: operatorName,
+    operator_email: input.auth.user.email
+  });
+  if (error) {
+    auditLog({
+      event: "service_change_log_failed",
+      level: "warn",
+      tenantId: input.tenantId,
+      userId: input.auth.user.id,
+      role: input.auth.membership.role,
+      serviceId: input.serviceId,
+      details: { message: error.message }
+    });
+  }
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -40,7 +122,7 @@ export async function GET(
     const { id: serviceId } = await params;
     const tenantId = auth.membership.tenant_id;
 
-    const [serviceRes, hotelsRes, agenciesRes, schedulesRes] = await Promise.all([
+    const [serviceRes, hotelsRes, agenciesRes, schedulesRes, changeLogsRes] = await Promise.all([
       auth.admin
         .from("services")
         .select("id, customer_name, phone, pax, date, time, notes, hotel_id, agency_id, billing_party_name, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, orario_barca, pickup_time, linked_service_id, transport_code, direction, booking_service_kind, service_type_code, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
@@ -61,6 +143,13 @@ export async function GET(
       auth.admin
         .from("ferry_schedules")
         .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to"),
+      auth.admin
+        .from("service_change_logs")
+        .select("id, service_id, root_service_id, action, changed_fields, operator_name, operator_email, created_at")
+        .eq("tenant_id", tenantId)
+        .or(`service_id.eq.${serviceId},root_service_id.eq.${serviceId}`)
+        .order("created_at", { ascending: false })
+        .limit(20),
     ]);
 
     if (serviceRes.error) return NextResponse.json({ error: serviceRes.error.message }, { status: 500 });
@@ -71,7 +160,7 @@ export async function GET(
 
     const linkedServiceRes = serviceRes.data.linked_service_id
       ? await auth.admin.from("services")
-        .select("id, direction, date, time, arrival_date, arrival_time, departure_time, orario_barca, pickup_time, booking_service_kind")
+        .select("id, direction, date, time, arrival_date, arrival_time, departure_date, departure_time, orario_barca, pickup_time, booking_service_kind")
         .eq("id", serviceRes.data.linked_service_id)
         .eq("tenant_id", tenantId)
         .maybeSingle()
@@ -91,13 +180,35 @@ export async function GET(
     const correctedLinked = arrivalLeg?.id === linkedServiceRes.data?.id && arrivalSchedule
       ? { ...linkedServiceRes.data, arrival_time: arrivalSchedule.arrivalTime }
       : linkedServiceRes.data;
+    const departureLeg = serviceRes.data.direction === "departure" ? serviceRes.data
+      : linkedServiceRes.data?.direction === "departure" ? linkedServiceRes.data : null;
+    const returnFerryDepartureTime = departureLeg?.orario_barca ?? serviceRes.data.orario_barca ?? departureLeg?.departure_time ?? serviceRes.data.departure_time;
+    const returnSchedule = findDepartureScheduleForService(
+      (schedulesRes.data ?? []) as FerryScheduleRow[],
+      departureLeg?.departure_date ?? serviceRes.data.departure_date ?? serviceRes.data.date,
+      returnFerryDepartureTime,
+      departureLeg?.booking_service_kind ?? serviceRes.data.booking_service_kind
+    );
 
     return NextResponse.json({
       ok: true,
       service: { ...correctedService, phone_e164: null, reminder_status: null, sent_at: null },
       linked_service: correctedLinked ?? null,
+      ferry_meta: {
+        outbound: arrivalSchedule ? {
+          company: ferryCompanyLabel(arrivalSchedule.company),
+          departure_port: ferryPortLabel(arrivalSchedule.departurePort),
+          arrival_port: ferryPortLabel(arrivalSchedule.arrivalPort),
+        } : null,
+        return: returnSchedule ? {
+          company: ferryCompanyLabel(returnSchedule.company),
+          departure_port: ferryPortLabel(returnSchedule.departurePort),
+          arrival_port: ferryPortLabel(returnSchedule.arrivalPort),
+        } : null,
+      },
       hotels: hotelsRes.data ?? [],
       agencies: agenciesRes.data ?? [],
+      change_logs: changeLogsRes.error ? [] : changeLogsRes.data ?? [],
     });
   } catch {
     return NextResponse.json({ error: "Errore interno." }, { status: 500 });
@@ -128,38 +239,81 @@ export async function PATCH(
     } = parsed.data;
 
     const { data: current } = await auth.admin.from("services")
-      .select("id, direction, linked_service_id")
+      .select("*")
       .eq("id", serviceId).eq("tenant_id", tenantId).maybeSingle();
     if (!current) return NextResponse.json({ error: "Servizio non trovato." }, { status: 404 });
+    const currentSnapshot = current as ServiceSnapshot;
 
-    const { error } = await auth.admin
-      .from("services")
-      .update(ordinaryUpdates)
-      .eq("id", serviceId)
-      .eq("tenant_id", tenantId);
+    const mainUpdate = compactUpdate({
+      ...(ordinaryUpdates as Record<string, unknown>),
+      ...(ordinaryUpdates.notes === null ? { notes: "" } : {}),
+    });
+    if (Object.keys(mainUpdate).length > 0) {
+      const { error } = await auth.admin
+        .from("services")
+        .update(mainUpdate)
+        .eq("id", serviceId)
+        .eq("tenant_id", tenantId);
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+      const afterMain = await readServiceSnapshot(auth, tenantId, serviceId);
+      await logServiceChange({
+        auth,
+        tenantId,
+        serviceId,
+        rootServiceId: serviceId,
+        before: currentSnapshot,
+        after: afterMain,
+        fields: Object.keys(mainUpdate)
+      });
+    }
 
     if (outbound_ferry_departure_time !== undefined || outbound_ferry_arrival_time !== undefined
       || return_pickup_time !== undefined || return_ferry_departure_time !== undefined) {
       const linked = current.linked_service_id
-        ? await auth.admin.from("services").select("id, direction").eq("id", current.linked_service_id).eq("tenant_id", tenantId).maybeSingle()
+        ? await auth.admin.from("services").select("*").eq("id", current.linked_service_id).eq("tenant_id", tenantId).maybeSingle()
         : { data: null };
-      const arrivalId = current.direction === "arrival" ? current.id : linked.data?.direction === "arrival" ? linked.data.id : null;
-      const departureId = current.direction === "departure" ? current.id : linked.data?.direction === "departure" ? linked.data.id : null;
+      const linkedSnapshot = (linked.data ?? null) as ServiceSnapshot | null;
+      const arrivalBefore = current.direction === "arrival" ? currentSnapshot : linkedSnapshot?.direction === "arrival" ? linkedSnapshot : null;
+      const departureBefore = current.direction === "departure" ? currentSnapshot : linkedSnapshot?.direction === "departure" ? linkedSnapshot : currentSnapshot;
+      const arrivalId = arrivalBefore?.id ?? null;
+      const departureId = departureBefore?.id ?? null;
       if (arrivalId && (outbound_ferry_departure_time !== undefined || outbound_ferry_arrival_time !== undefined)) {
-        const { error: arrivalError } = await auth.admin.from("services").update({
+        const arrivalUpdate = compactUpdate({
           ...(outbound_ferry_departure_time !== undefined ? { time: outbound_ferry_departure_time } : {}),
           ...(outbound_ferry_arrival_time !== undefined ? { arrival_time: outbound_ferry_arrival_time } : {}),
-        }).eq("id", arrivalId).eq("tenant_id", tenantId);
+        });
+        const { error: arrivalError } = await auth.admin.from("services").update(arrivalUpdate).eq("id", arrivalId).eq("tenant_id", tenantId);
         if (arrivalError) return NextResponse.json({ error: arrivalError.message }, { status: 500 });
+        const arrivalAfter = await readServiceSnapshot(auth, tenantId, arrivalId);
+        await logServiceChange({
+          auth,
+          tenantId,
+          serviceId: arrivalId,
+          rootServiceId: serviceId,
+          before: arrivalBefore,
+          after: arrivalAfter,
+          fields: Object.keys(arrivalUpdate)
+        });
       }
       if (departureId && (return_pickup_time !== undefined || return_ferry_departure_time !== undefined)) {
-        const { error: departureError } = await auth.admin.from("services").update({
+        const departureUpdate = compactUpdate({
           ...(return_pickup_time !== undefined ? { pickup_time: return_pickup_time, departure_time: return_pickup_time } : {}),
           ...(return_ferry_departure_time !== undefined ? { orario_barca: return_ferry_departure_time } : {}),
-        }).eq("id", departureId).eq("tenant_id", tenantId);
+        });
+        const { error: departureError } = await auth.admin.from("services").update(departureUpdate).eq("id", departureId).eq("tenant_id", tenantId);
         if (departureError) return NextResponse.json({ error: departureError.message }, { status: 500 });
+        const departureAfter = await readServiceSnapshot(auth, tenantId, departureId);
+        await logServiceChange({
+          auth,
+          tenantId,
+          serviceId: departureId,
+          rootServiceId: serviceId,
+          before: departureBefore,
+          after: departureAfter,
+          fields: Object.keys(departureUpdate)
+        });
       }
     }
 
