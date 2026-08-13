@@ -16,6 +16,19 @@ function isValidClockTime(value: string) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
 }
 
+function isShuttleService(service: Service) {
+  return service.booking_service_kind === "navetta" || service.booking_service_kind === "shuttle_hotel" || service.vessel?.trim().toLowerCase() === "navetta";
+}
+
+function TransportIcon({ service }: { service: Service }) {
+  const value = `${service.booking_service_kind ?? ""} ${service.service_type_code ?? ""} ${service.vessel ?? ""} ${service.transport_code ?? ""}`.toLowerCase();
+  const common = "h-6 w-6 shrink-0 text-slate-700";
+  if (value.includes("airport") || value.includes("volo") || value.includes("flight")) return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={common}><path d="m3 16 8-4-5-7 2-1 7 6 5-2c1.5-.6 2.5 1.4 1.1 2.2L15 14l-2 7-2 1v-7l-6 3-2-2Z"/></svg>;
+  if (value.includes("train") || value.includes("station") || value.includes("italo") || value.includes("treno")) return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={common}><rect x="5" y="3" width="14" height="15" rx="3"/><path d="M8 7h8M7 13h10M8 21l2-3m6 3-2-3"/><circle cx="9" cy="15" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="15" r="1" fill="currentColor" stroke="none"/></svg>;
+  if (value.includes("bus") || value.includes("navetta")) return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={common}><rect x="4" y="3" width="16" height="16" rx="3"/><path d="M7 7h10v6H7zM7 19v2m10-2v2M7 16h.01M17 16h.01"/></svg>;
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={common}><path d="M5 11h14l-2 7H7l-2-7Zm3 0V6h8v5m-6-5V3h4v3M3 20c2 1 4 1 6 0 2 1 4 1 6 0 2 1 4 1 6 0"/></svg>;
+}
+
 // ─── Modal modifica partenza ──────────────────────────────────────────────────
 
 function EditDepartureModal({
@@ -278,6 +291,9 @@ export default function DeparturesPage() {
   const [selectedDate, setSelectedDate] = useState(todayIso);
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const [timeBand, setTimeBand] = useState<"all" | "morning" | "afternoon" | "evening">("all");
+  const [departureView, setDepartureView] = useState<"transfers" | "shuttles">("transfers");
+  const [currentPage, setCurrentPage] = useState(1);
 
   const hotelsById = useMemo(() => new Map(data.hotels.map((hotel) => [hotel.id, hotel])), [data.hotels]);
 
@@ -322,12 +338,14 @@ export default function DeparturesPage() {
     return buildOperationalInstances(data.services)
       .filter((instance) =>
         instance.direction === "departure" &&
-        (!q ? instance.date === selectedDate : true) &&
+        instance.date === selectedDate &&
         (agencyFilter === "all" || instance.service.billing_party_name?.trim().toLowerCase() === agencyFilter.toLowerCase()) &&
-        (!q || (instance.service.customer_name ?? "").toLowerCase().includes(q) || (instance.service.phone ?? "").toLowerCase().includes(q))
+        (!q || [instance.service.customer_name, instance.service.phone, instance.service.billing_party_name, instance.service.vessel, instance.service.transport_code, hotelsById.get(instance.service.hotel_id)?.name].some((value) => (value ?? "").toLowerCase().includes(q))) &&
+        (departureView === "shuttles" ? isShuttleService(instance.service) : !isShuttleService(instance.service)) &&
+        (timeBand === "all" || (Number(instance.time.slice(0, 2)) < 12 ? "morning" : Number(instance.time.slice(0, 2)) < 18 ? "afternoon" : "evening") === timeBand)
       )
       .sort((left, right) => left.time.localeCompare(right.time));
-  }, [data.services, selectedDate, agencyFilter, search]);
+  }, [data.services, selectedDate, agencyFilter, search, hotelsById, departureView, timeBand]);
 
   const totalPax = departures.reduce((sum, item) => sum + item.service.pax, 0);
   const busCount = departures.filter(
@@ -640,8 +658,56 @@ export default function DeparturesPage() {
   const handleCombinedExcel = () => void exportCombinedExcel(buildArrivalRows(), buildRows(), selectedDate);
   const handleCombinedPrint = () => void printCombined(buildArrivalRows(), buildRows(), formatIsoDateShort(selectedDate));
 
+  const assignmentByServiceId = new Map(data.assignments.map((assignment) => [assignment.service_id, assignment]));
+  const driverById = new Map(data.memberships.map((member) => [member.user_id, member.full_name]));
+  const unassignedCount = departures.filter((item) => !assignmentByServiceId.get(item.service.id)?.driver_user_id).length;
+  const reviewCount = departures.filter((item) => item.service.status === "new").length;
+  const shuttleCount = buildOperationalInstances(data.services).filter((item) => item.direction === "departure" && item.date === selectedDate && isShuttleService(item.service)).length;
+  const timeBandCounts = buildOperationalInstances(data.services).filter((item) => item.direction === "departure" && item.date === selectedDate && !isShuttleService(item.service)).reduce((counts, item) => {
+    const hour = Number(item.time.slice(0, 2));
+    counts[hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening"] += 1;
+    return counts;
+  }, { morning: 0, afternoon: 0, evening: 0 });
+  const rowsPerPage = 50;
+  const pageCount = Math.max(1, Math.ceil(departures.length / rowsPerPage));
+  const safePage = Math.min(currentPage, pageCount);
+  const visibleDepartures = departures.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
+
   return (
     <section className="page-section">
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap items-center gap-5">
+          <div><h1 className="text-3xl font-extrabold tracking-tight text-slate-950">Partenze</h1><p className="mt-1 text-sm text-slate-500">{new Intl.DateTimeFormat("it-IT", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date(`${selectedDate}T12:00:00`))}</p></div>
+          <div className="flex items-center gap-2"><button type="button" className="btn-secondary px-3 py-2" onClick={() => setSelectedDate(new Date(new Date(`${selectedDate}T12:00:00`).getTime() - 86400000).toISOString().slice(0,10))}>‹</button><DateInput value={selectedDate} onChange={setSelectedDate} className="input-saas w-40"/><button type="button" className="btn-secondary px-3 py-2" onClick={() => setSelectedDate(new Date(new Date(`${selectedDate}T12:00:00`).getTime() + 86400000).toISOString().slice(0,10))}>›</button></div>
+        </div>
+        <div className="flex flex-wrap gap-2"><button type="button" onClick={handlePrint} className="btn-secondary px-4 py-2">▣ Stampa giornata</button><button type="button" onClick={handleExcel} className="btn-secondary px-4 py-2">▤ Esporta Excel</button><button type="button" onClick={() => { setAddForm((form) => ({...form,date:selectedDate})); setAddModal(true); }} className="btn-primary px-5 py-2">＋ Aggiungi partenza</button></div>
+      </header>
+
+      {errorMessage ? <EmptyState title="Partenze non disponibili" description={errorMessage} compact /> : null}
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {[["↗","Partenze",departures.length,"bg-emerald-50 text-emerald-600"],["♙","Passeggeri",totalPax,"bg-violet-50 text-violet-600"],["♙","Da assegnare",unassignedCount,"bg-orange-50 text-orange-600"],["⌕","Da verificare",reviewCount,"bg-amber-50 text-amber-600"],["◷","In ritardo",0,"bg-rose-50 text-rose-600"]].map(([icon,label,value,tone]) => <div key={String(label)} className="flex h-[104px] items-center gap-4 rounded-xl border border-slate-200 bg-white px-5 shadow-sm"><span className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-xl text-3xl ${tone}`}>{icon}</span><div><p className="text-sm font-medium text-slate-500">{label}</p><strong className="text-3xl leading-none text-slate-950">{value}</strong></div></div>)}
+      </div>
+
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_290px]">
+        <SectionCard title="Lista partenze" subtitle={`Giornata ${formatIsoDateShort(selectedDate)}`} loading={loading} loadingLines={6}>
+          <div className="mb-4 border-b border-slate-200 pb-4">
+            <div className="flex flex-col gap-3 lg:flex-row"><input type="search" value={search} onChange={(event)=>setSearch(event.target.value)} className="input-saas min-w-0 flex-1" placeholder="Cerca cliente, telefono, hotel, corsa, agenzia..."/><button type="button" onClick={()=>setSelectedDate(todayIso)} className="btn-secondary px-4">Oggi</button><button type="button" onClick={()=>setSelectedDate(new Date(new Date(`${todayIso}T12:00:00`).getTime()+86400000).toISOString().slice(0,10))} className="btn-secondary px-4">Domani</button><select value={agencyFilter} onChange={(event)=>setAgencyFilter(event.target.value)} className="input-saas lg:w-44"><option value="all">Filtri</option>{agencyNames.filter((name)=>name!=="all").map((name)=><option key={name} value={name}>{name}</option>)}</select></div>
+            <div className="mt-3 flex flex-wrap gap-2">{([['all','Tutti',departures.length],['morning','Mattina',timeBandCounts.morning],['afternoon','Pomeriggio',timeBandCounts.afternoon],['evening','Sera',timeBandCounts.evening]] as const).map(([value,label,count])=><button key={value} type="button" onClick={()=>{setTimeBand(value);setCurrentPage(1);}} className={timeBand===value?"btn-primary px-3 py-2 text-xs":"btn-secondary px-3 py-2 text-xs"}>{label} {count}</button>)}<button type="button" onClick={()=>setSearch("MEDMAR")} className="btn-secondary px-3 py-2 text-xs">MEDMAR</button><button type="button" onClick={()=>setSearch("SNAV")} className="btn-secondary px-3 py-2 text-xs">SNAV</button><button type="button" onClick={()=>setDepartureView((view)=>view==="transfers"?"shuttles":"transfers")} className="btn-secondary border-dashed px-3 py-2 text-xs">{departureView==="shuttles"?"Mostra transfer":`Navette ${shuttleCount}`}</button></div>
+            <p className="mt-3 text-xs text-slate-500">ⓘ {departureView === "shuttles" ? "Vista dedicata alle navette quotidiane" : "Navette escluse dalla vista standard"}</p>
+          </div>
+          {departures.length === 0 ? <p className="py-12 text-center text-sm text-slate-500">Nessuna partenza nel filtro selezionato.</p> : <>
+          <div className="space-y-2 md:hidden">{visibleDepartures.map((item)=><article key={`compact-${item.instanceId}`} className="rounded-xl border border-slate-200 bg-white p-3"><div className="flex items-start justify-between gap-3"><div><p className="font-bold text-slate-800">{getCustomerFullName(item.service)}</p><p className="mt-1 text-xs text-slate-500">{resolveHotelName(item.service)}</p></div><strong className="rounded-lg bg-indigo-50 px-2 py-1 text-indigo-700">{item.time}</strong></div><div className="mt-3 flex items-center gap-2 text-sm text-slate-600"><TransportIcon service={item.service}/><span>{getDepartureFerryLabel(item.service)??getDepartureTransportReference(item.service)??"Corsa N/D"}</span></div><div className="mt-3 flex gap-2"><button type="button" onClick={()=>setQrServiceId(item.service.id)} className="btn-secondary px-3 py-1.5 text-xs">Dettagli</button><button type="button" onClick={()=>setEditingService(item.service)} className="btn-secondary px-3 py-1.5 text-xs">Modifica</button><button type="button" onClick={()=>openCancelModal(item.service)} className="btn-secondary px-3 py-1.5 text-xs">•••</button></div></article>)}</div>
+          <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white md:block">
+            <div className="grid grid-cols-[70px_minmax(125px,1.1fr)_32px_minmax(120px,1fr)_minmax(135px,1.15fr)_minmax(105px,.8fr)_94px_124px] gap-2 border-b border-slate-200 px-3 py-3 text-[10px] font-bold uppercase tracking-wide text-slate-500"><span>Ora pickup</span><span>Cliente</span><span>Pax</span><span>Hotel / Pickup</span><span>Corsa / Destinazione</span><span>Autista / Veicolo</span><span>Stato</span><span className="text-right">Azioni</span></div>
+            <div className="divide-y divide-slate-100">{visibleDepartures.map((item)=>{const service=item.service;const assignment=assignmentByServiceId.get(service.id);const driverName=assignment?.driver_user_id?driverById.get(assignment.driver_user_id):null;const unassigned=!driverName;const hotel=resolveHotelName(service);const transport=getDepartureFerryLabel(service)??getDepartureTransportReference(service)??service.vessel??"Corsa N/D";return <div key={item.instanceId} className={`grid grid-cols-[70px_minmax(125px,1.1fr)_32px_minmax(120px,1fr)_minmax(135px,1.15fr)_minmax(105px,.8fr)_94px_124px] items-center gap-2 px-3 py-3 ${unassigned?"bg-amber-50/55":"hover:bg-slate-50/70"}`}><strong className="text-sm text-indigo-700">{item.time}</strong><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-bold leading-tight text-slate-800">{getCustomerFullName(service)}</p><p className="mt-1 break-all text-[11px] text-slate-500">{service.phone||"Telefono non indicato"}</p></div><span className="text-sm font-semibold">{service.pax}</span><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-semibold leading-tight">{hotel}</p><p className="mt-1 whitespace-normal break-words text-[11px] text-slate-500">{resolvePickupNote(service)||"Pickup hotel"}</p></div><div className="flex min-w-0 items-start gap-2"><TransportIcon service={service}/><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-semibold leading-tight">{transport}</p><p className="mt-1 text-[11px] text-slate-500">{service.meeting_point||"Destinazione N/D"}</p></div></div><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-medium">{driverName||"Non assegnato"}</p><p className="mt-1 text-[11px] text-slate-500">{assignment?.vehicle_label||"—"}</p></div><span className={`w-fit whitespace-nowrap rounded-lg px-2 py-1 text-[10px] font-bold ${unassigned?"border border-orange-200 bg-orange-50 text-orange-600":service.status==="new"?"border border-amber-200 bg-amber-50 text-amber-600":"bg-indigo-50 text-indigo-700"}`}>{unassigned?"Da assegnare":service.status==="new"?"Da verificare":"Confermato"}</span><div className="flex justify-end gap-1"><button type="button" onClick={()=>setQrServiceId(service.id)} className="rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-600">Dettagli</button><button type="button" onClick={()=>setEditingService(service)} className="rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-600">Modifica</button><button type="button" onClick={()=>openCancelModal(service)} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-bold text-slate-600">•••</button></div></div>})}</div>
+            <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-xs text-slate-500"><span>Visualizzati {departures.length?((safePage-1)*rowsPerPage)+1:0}–{Math.min(safePage*rowsPerPage,departures.length)} di {departures.length}</span><div className="flex gap-1"><button type="button" disabled={safePage===1} onClick={()=>setCurrentPage(safePage-1)} className="btn-secondary px-3 py-1.5 disabled:opacity-40">‹</button><span className="btn-primary px-3 py-1.5">{safePage}</span><button type="button" disabled={safePage===pageCount} onClick={()=>setCurrentPage(safePage+1)} className="btn-secondary px-3 py-1.5 disabled:opacity-40">›</button></div></div>
+          </div></>}
+        </SectionCard>
+        <aside className="space-y-4"><div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-slate-950">Controllo partenze</h2><div className="mt-4 divide-y divide-slate-100">{[["Senza autista",unassignedCount,"bg-orange-100 text-orange-700"],["Senza veicolo",unassignedCount,"bg-indigo-100 text-indigo-700"],["Dati da verificare",reviewCount,"bg-amber-100 text-amber-700"],["Ritardi segnalati",0,"bg-rose-100 text-rose-700"]].map(([label,value,tone])=><div key={String(label)} className="flex items-center justify-between py-4 text-sm font-medium"><span>{label}</span><strong className={`rounded-lg px-2.5 py-1 ${tone}`}>{value}</strong></div>)}</div><a href="/control-room" className="btn-secondary mt-4 block w-full py-3 text-center">Apri Control Room</a></div><div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-slate-950">Prossime partenze</h2><div className="mt-3 divide-y divide-slate-100">{departures.slice(0,4).map((item)=><div key={`next-${item.instanceId}`} className="grid grid-cols-[48px_1fr_auto] gap-2 py-4 text-xs"><strong className="text-indigo-700">{item.time}</strong><div><p className="font-bold text-slate-800">{resolveHotelName(item.service)}</p><p className="mt-1 text-slate-500">{item.service.meeting_point||"Ischia Porto"}</p></div><span>{item.service.pax} pax</span></div>)}</div></div></aside>
+      </div>
+
+      <div className="hidden">
       <PageHeader
         title="Partenze"
         subtitle="Vista dedicata alle partenze operative della giornata selezionata."
@@ -920,6 +986,7 @@ export default function DeparturesPage() {
           </div>
         )}
       </SectionCard>
+      </div>
 
       {editingService && (
         <EditDepartureModal

@@ -1339,7 +1339,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       </aside>
 
       <div className="min-w-0 space-y-4">
-        {pathname !== "/services/new" && pathname !== "/inbox" && pathname !== "/dashboard" && pathname !== "/arrivals" ? <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-5">
+        {pathname !== "/services/new" && pathname !== "/inbox" && pathname !== "/dashboard" && pathname !== "/arrivals" && pathname !== "/departures" ? <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Vista operativa</p>
