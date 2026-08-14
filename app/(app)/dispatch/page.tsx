@@ -57,6 +57,30 @@ type DispatchDriver = {
 type RowState = { driverProfileId: string; vehicleLabel: string; saving: boolean; saved: boolean; error: string };
 type DateTab = "today" | "tomorrow" | "all";
 
+function todayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function tomorrowIsoDate(today: string) {
+  const next = new Date(`${today}T12:00:00`);
+  next.setDate(next.getDate() + 1);
+  return next.toISOString().slice(0, 10);
+}
+
+function readDispatchQueryParam(name: string) {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get(name)?.trim() ?? "";
+}
+
+function readInitialDateTab(): DateTab {
+  const date = readDispatchQueryParam("date");
+  if (!date) return "today";
+  const today = todayIsoDate();
+  if (date === today) return "today";
+  if (date === tomorrowIsoDate(today)) return "tomorrow";
+  return "all";
+}
+
 export default function DispatchPage() {
   const [loading, setLoading]         = useState(true);
   const [message, setMessage]         = useState("");
@@ -69,8 +93,8 @@ export default function DispatchPage() {
   const [driverProfiles, setDriverProfiles] = useState<DispatchDriver[]>([]);
   const [vehicles, setVehicles]       = useState<VehicleRecord[]>([]);
   const [token, setToken]             = useState<string | null>(null);
-  const [search, setSearch]           = useState("");
-  const [dateTab, setDateTab]         = useState<DateTab>("today");
+  const [search, setSearch]           = useState(() => readDispatchQueryParam("q"));
+  const [dateTab, setDateTab]         = useState<DateTab>(() => readInitialDateTab());
   const [rowStates, setRowStates] = useState<Record<string, Partial<RowState>>>({});
 
   useEffect(() => {
@@ -83,8 +107,14 @@ export default function DispatchPage() {
       const payload = await response.json().catch(() => null) as {
         ok?: boolean; services?: Service[]; assignments?: Assignment[];
         hotels?: Hotel[]; memberships?: Membership[]; driver_profiles?: DispatchDriver[]; vehicles?: VehicleRecord[];
+        error?: string;
       } | null;
-      if (!active || !response.ok || !payload?.ok) return false;
+      if (!active) return false;
+      if (!response.ok || !payload?.ok) {
+        setMessage(payload?.error ?? "Impossibile caricare il cambio operativo.");
+        return false;
+      }
+      setMessage("");
       setServices((payload.services ?? []) as Service[]);
       setAssignments((payload.assignments ?? []) as Assignment[]);
       setHotels((payload.hotels ?? []) as Hotel[]);
@@ -161,12 +191,8 @@ export default function DispatchPage() {
   }, [driverProfiles, tenantMemberships]);
   const tenantVehicles        = useMemo(() => (tenantId ? vehicles.filter((vehicle) => vehicle.tenant_id === tenantId) : vehicles), [vehicles, tenantId]);
 
-  const today    = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const tomorrow = useMemo(() => {
-    const next = new Date(`${today}T12:00:00`);
-    next.setDate(next.getDate() + 1);
-    return next.toISOString().slice(0, 10);
-  }, [today]);
+  const today    = useMemo(() => todayIsoDate(), []);
+  const tomorrow = useMemo(() => tomorrowIsoDate(today), [today]);
 
   const baseServices = useMemo(() =>
     tenantServices

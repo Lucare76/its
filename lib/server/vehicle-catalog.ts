@@ -68,7 +68,7 @@ export async function loadOperationalVehicles(
       .from("memberships")
       .select("user_id, full_name, role")
       .eq("tenant_id", tenantId)
-      .in("role", ["driver", "autista"]),
+      .eq("role", "driver"),
   ]);
 
   if (profilesResult.error) throw new Error(profilesResult.error.message);
