@@ -38,6 +38,7 @@ import type {
   MedmarPreflightResult,
   MedmarPreflightServiceRow,
   MedmarPreflightWarning,
+  MedmarPreflightTariff,
   MedmarPreflightTaxLine,
   MedmarPreflightPassengerTicket,
   MedmarPreflightTaxBreakdown,
@@ -566,115 +567,167 @@ export async function runMedmarPreflight(
     return baseResult;
   }
 
-  // Tutte le gambe live "ok": recupera tariffa/tasse dalla corsa determinata.
-  const referenceLeg = outwardOutcome?.leg.id_corsa != null ? outwardOutcome.leg : returnOutcome?.leg ?? null;
-  if (!referenceLeg?.id_corsa) {
+  // Tutte le gambe live "ok": recupera tariffa/tasse per OGNI gamba
+  // separatamente (Fase 2B.7 — bugfix: la versione precedente leggeva
+  // biglietti/vendibili di UNA SOLA corsa "di riferimento" e moltiplicava
+  // solo per pax, perdendo silenziosamente il prezzo della seconda gamba su
+  // un vero A/R). Ogni gamba ha la propria id_corsa e la propria risposta
+  // vendibili: nessun prezzo viene mai riusato tra andata e ritorno.
+  const legsToPrice = [outwardOutcome?.leg ?? null, returnOutcome?.leg ?? null].filter(
+    (l): l is MedmarPreflightLeg => l != null && l.id_corsa != null
+  );
+  if (legsToPrice.length === 0) {
     return { ...baseResult, status: "manual_review", warnings: [...warnings, { code: "no_id_corsa", message: "Nessun id_corsa live disponibile per recuperare la tariffa." }] };
   }
 
   try {
-    const vendibili = await fetchBigliettiVendibiliReadOnly(referenceLeg.id_corsa);
-    const selection = findArTariffAndTax(vendibili);
+    const priced: Array<{
+      leg: MedmarPreflightLeg;
+      tariff: MedmarPreflightTariff;
+      taxes: MedmarPreflightTaxLine[];
+      ticketBreakdown: MedmarPreflightTicketBreakdown;
+      totalCents: number;
+    }> = [];
 
-    if (selection.kind === "not_found") {
-      const fallback = await mapTariffFromTicketMemory(admin, tenantId, serviceIds);
-      return {
-        ...baseResult,
-        tariff: fallback.tariff,
-        expected_total_cents: fallback.expectedTotalCents,
-        is_live: false,
-        warnings: [...warnings, ...fallback.warnings, { code: "ar_tariff_not_found_live", message: "Tariffa AR non trovata nella risposta Medmar live: usata memoria ticket come riferimento diagnostico (non sufficiente per emissione)." }],
+    for (const leg of legsToPrice) {
+      const legLabel = leg.direction === "outward" ? "andata" : "ritorno";
+      const vendibili = await fetchBigliettiVendibiliReadOnly(leg.id_corsa!);
+      const selection = findArTariffAndTax(vendibili);
+
+      if (selection.kind === "not_found") {
+        const fallback = await mapTariffFromTicketMemory(admin, tenantId, serviceIds);
+        return {
+          ...baseResult,
+          tariff: fallback.tariff,
+          expected_total_cents: fallback.expectedTotalCents,
+          is_live: false,
+          warnings: [...warnings, ...fallback.warnings, { code: "ar_tariff_not_found_live", message: `Tariffa AR non trovata nella risposta Medmar live per la gamba di ${legLabel}: usata memoria ticket come riferimento diagnostico (non sufficiente per emissione).` }],
+        };
+      }
+
+      if (selection.kind === "unsupported_passenger_type") {
+        return {
+          ...baseResult,
+          status: "unsupported_passenger_type",
+          warnings: [...warnings, { code: "unsupported_passenger_type", message: `Trovato un biglietto AR compatibile per descrizione ma con id_tipologia_passeggero=${selection.row.id_tipologia_passeggero} non mappato (atteso adulto) sulla gamba di ${legLabel}: revisione manuale richiesta.` }],
+        };
+      }
+
+      if (selection.kind === "ambiguous_tariff") {
+        return {
+          ...baseResult,
+          status: "manual_review",
+          warnings: [...warnings, { code: "ar_tariff_ambiguous", message: `Più righe candidate per la tariffa AR adulto nella risposta Medmar live sulla gamba di ${legLabel}: nessuna scelta arbitraria, revisione manuale richiesta.` }],
+        };
+      }
+
+      const { tariff: tariffRow, labelSource, tassaSbarco, taxIssue } = selection;
+      if (labelSource === "nome") {
+        // La label primaria (descrizione) mancava su questa riga: la tariffa
+        // è comunque stata identificata correttamente (stessa regex sulla
+        // label secondaria), ma il caso è raro/inatteso e va segnalato per
+        // diagnostica — non blocca can_issue.
+        warnings.push({ code: "ar_label_from_nome", message: `Etichetta della tariffa AR risolta dal campo 'nome' sulla gamba di ${legLabel} (campo 'descrizione' assente o vuoto sulla riga): verificare se atteso.` });
+      }
+
+      // Prezzo live mancante, nullo o incoerente: mai can_issue=true su dati incompleti.
+      if (tariffRow.prezzo == null || !Number.isFinite(tariffRow.prezzo)) {
+        return {
+          ...baseResult,
+          status: "manual_review",
+          warnings: [...warnings, { code: "ticket_data_incomplete", message: `Prezzo della tariffa AR mancante o non numerico nella risposta Medmar live sulla gamba di ${legLabel}: dati insufficienti per l'emissione.` }],
+        };
+      }
+
+      if (taxIssue) {
+        return {
+          ...baseResult,
+          status: "manual_review",
+          warnings: [
+            ...warnings,
+            {
+              code: "ticket_data_incomplete",
+              message: (taxIssue === "ambiguous"
+                ? "Più righe TASSA DI SBARCO trovate nella risposta Medmar live"
+                : "Tassa di sbarco individuata ma senza prezzo nella risposta Medmar live") + ` sulla gamba di ${legLabel}: impossibile calcolare il totale con certezza.`,
+            },
+          ],
+        };
+      }
+
+      const taxes: MedmarPreflightTaxLine[] = tassaSbarco
+        ? [{ label: resolveBigliettoLabel(tassaSbarco).label ?? "TASSA DI SBARCO", amount_cents: Math.round(tassaSbarco.prezzo! * 100) }]
+        : [];
+
+      const unitPriceCents = Math.round(tariffRow.prezzo * 100);
+      // Totale di QUESTA gamba soltanto: unit_price × pax. Il totale A/R è
+      // la somma dei totali per-gamba fatta più sotto — MAI un'unica
+      // moltiplicazione unit_price × pax condivisa tra andata e ritorno.
+      const legTotalCents = (unitPriceCents + (taxes[0]?.amount_cents ?? 0)) * pax;
+
+      const tariff: MedmarPreflightTariff = {
+        id_biglietto: tariffRow.id_biglietto,
+        id_tariffa: tariffRow.id_tariffa,
+        label: resolveBigliettoLabel(tariffRow).label,
+        unit_price_cents: unitPriceCents,
+        source: "medmar_live",
       };
-    }
 
-    if (selection.kind === "unsupported_passenger_type") {
-      return {
-        ...baseResult,
-        status: "unsupported_passenger_type",
-        warnings: [...warnings, { code: "unsupported_passenger_type", message: `Trovato un biglietto AR compatibile per descrizione ma con id_tipologia_passeggero=${selection.row.id_tipologia_passeggero} non mappato (atteso adulto): revisione manuale richiesta.` }],
+      // Fase 2B.5/2B.7 — classificazione adult/child/infant/tax sulla STESSA
+      // risposta vendibili di QUESTA gamba (nessuna seconda chiamata Medmar
+      // per lo stesso id_corsa, ma una chiamata indipendente per gamba).
+      const passengerSelection = selectPassengerTariffs(vendibili);
+      const ticketBreakdown: MedmarPreflightTicketBreakdown = {
+        adult: buildCategoryTicket(passengers.adults, passengerSelection.adult),
+        child: buildCategoryTicket(passengers.children, passengerSelection.child),
+        infant: buildCategoryTicket(passengers.infants, passengerSelection.infant),
+        taxes: buildTaxBreakdown({ adult: passengers.adults, child: passengers.children, infant: passengers.infants }, passengerSelection),
       };
+
+      if (hasMinors) {
+        if (passengerSelection.child.kind === "ambiguous" || passengerSelection.infant.kind === "ambiguous") {
+          warnings.push({ code: "child_issue_payload_not_verified", message: `Più righe candidate per bambino/infant nella risposta Medmar live sulla gamba di ${legLabel}: revisione manuale richiesta oltre al blocco emissione minori.` });
+        }
+        if (passengers.children > 0 && passengerSelection.child.kind !== "found") {
+          warnings.push({ code: "child_ticket_not_found_live", message: `Bambino presente nel gruppo ma nessun biglietto BAMBINO corrispondente trovato nella risposta Medmar live sulla gamba di ${legLabel}.` });
+        }
+        if (passengers.infants > 0 && passengerSelection.infant.kind !== "found") {
+          warnings.push({ code: "infant_ticket_not_found_live", message: `Infant presente nel gruppo ma nessun biglietto INFANT corrispondente trovato nella risposta Medmar live sulla gamba di ${legLabel}.` });
+        }
+      }
+
+      priced.push({ leg, tariff, taxes, ticketBreakdown, totalCents: legTotalCents });
     }
 
-    if (selection.kind === "ambiguous_tariff") {
-      return {
-        ...baseResult,
-        status: "manual_review",
-        warnings: [...warnings, { code: "ar_tariff_ambiguous", message: "Più righe candidate per la tariffa AR adulto nella risposta Medmar live: nessuna scelta arbitraria, revisione manuale richiesta." }],
-      };
-    }
+    // Ogni gamba di legsToPrice ha prodotto una riga in priced (altrimenti la
+    // funzione sarebbe già uscita con un return anticipato sopra): la somma
+    // è quindi sempre determinabile con certezza qui — mai un A/R "ok" con
+    // una gamba non prezzata. expected_total_cents = somma dei totali
+    // per-gamba, MAI unit_price × pax calcolato una sola volta.
+    const expectedTotalCents = priced.reduce((sum, p) => sum + p.totalCents, 0);
 
-    const { tariff: tariffRow, labelSource, tassaSbarco, taxIssue } = selection;
-    if (labelSource === "nome") {
-      // La label primaria (descrizione) mancava su questa riga: la tariffa
-      // è comunque stata identificata correttamente (stessa regex sulla
-      // label secondaria), ma il caso è raro/inatteso e va segnalato per
-      // diagnostica — non blocca can_issue.
-      warnings.push({ code: "ar_label_from_nome", message: "Etichetta della tariffa AR risolta dal campo 'nome' (campo 'descrizione' assente o vuoto sulla riga): verificare se atteso." });
-    }
+    const outwardPriced = priced.find((p) => p.leg.direction === "outward") ?? null;
+    const returnPriced = priced.find((p) => p.leg.direction === "return") ?? null;
+    const referencePriced = outwardPriced ?? returnPriced!;
 
-    // Prezzo live mancante, nullo o incoerente: mai can_issue=true su dati incompleti.
-    if (tariffRow.prezzo == null || !Number.isFinite(tariffRow.prezzo)) {
-      return {
-        ...baseResult,
-        status: "manual_review",
-        warnings: [...warnings, { code: "ticket_data_incomplete", message: "Prezzo della tariffa AR mancante o non numerico nella risposta Medmar live: dati insufficienti per l'emissione." }],
-      };
-    }
-
-    if (taxIssue) {
-      return {
-        ...baseResult,
-        status: "manual_review",
-        warnings: [
-          ...warnings,
-          {
-            code: "ticket_data_incomplete",
-            message: taxIssue === "ambiguous"
-              ? "Più righe TASSA DI SBARCO trovate nella risposta Medmar live: impossibile identificarla con certezza."
-              : "Tassa di sbarco individuata ma senza prezzo nella risposta Medmar live: impossibile calcolare il totale con certezza.",
-          },
-        ],
-      };
-    }
-
-    const taxes: MedmarPreflightTaxLine[] = tassaSbarco
-      ? [{ label: resolveBigliettoLabel(tassaSbarco).label ?? "TASSA DI SBARCO", amount_cents: Math.round(tassaSbarco.prezzo! * 100) }]
-      : [];
-
-    const unitPriceCents = Math.round(tariffRow.prezzo * 100);
-    const unitTotal = unitPriceCents + (taxes[0]?.amount_cents ?? 0);
-    const expectedTotalCents = unitTotal * pax;
-
-    const tariff = {
-      id_biglietto: tariffRow.id_biglietto,
-      id_tariffa: tariffRow.id_tariffa,
-      label: resolveBigliettoLabel(tariffRow).label,
-      unit_price_cents: unitPriceCents,
-      source: "medmar_live" as const,
-    };
-
-    // Fase 2B.5 — classificazione adult/child/infant/tax sulla STESSA
-    // risposta vendibili già letta da findArTariffAndTax sopra (nessuna
-    // seconda chiamata Medmar). ticket_breakdown è popolato SEMPRE (anche
-    // nel percorso solo-adulti) perché il preflight deve mostrarlo secondo
-    // spec; can_issue/status per il percorso solo-adulti restano invariati.
-    const passengerSelection = selectPassengerTariffs(vendibili);
-    const ticketBreakdown: MedmarPreflightTicketBreakdown = {
-      adult: buildCategoryTicket(passengers.adults, passengerSelection.adult),
-      child: buildCategoryTicket(passengers.children, passengerSelection.child),
-      infant: buildCategoryTicket(passengers.infants, passengerSelection.infant),
-      taxes: buildTaxBreakdown({ adult: passengers.adults, child: passengers.children, infant: passengers.infants }, passengerSelection),
-    };
+    const outwardLeg = outwardOutcome?.leg
+      ? { ...outwardOutcome.leg, ticket_breakdown: outwardPriced?.ticketBreakdown ?? null, total_cents: outwardPriced?.totalCents ?? null }
+      : null;
+    const returnLeg = returnOutcome?.leg
+      ? { ...returnOutcome.leg, ticket_breakdown: returnPriced?.ticketBreakdown ?? null, total_cents: returnPriced?.totalCents ?? null }
+      : null;
 
     if (!hasMinors) {
       return {
         ...baseResult,
+        outward: outwardLeg,
+        return: returnLeg,
         can_issue: true,
-        tariff,
-        taxes,
+        tariff: referencePriced.tariff,
+        taxes: referencePriced.taxes,
         expected_total_cents: expectedTotalCents,
         is_live: true,
-        ticket_breakdown: ticketBreakdown,
+        ticket_breakdown: referencePriced.ticketBreakdown,
       };
     }
 
@@ -682,29 +735,27 @@ export async function runMedmarPreflight(
     // ma l'emissione resta VOLUTAMENTE fail-closed (Fase 2B.5 non abilita
     // ancora l'emissione automatica minori) — can_issue sempre false qui,
     // indipendentemente da quanto sia completo ticket_breakdown.
-    if (passengerSelection.child.kind === "ambiguous" || passengerSelection.infant.kind === "ambiguous") {
-      warnings.push({ code: "child_issue_payload_not_verified", message: "Più righe candidate per bambino/infant nella risposta Medmar live: revisione manuale richiesta oltre al blocco emissione minori." });
-    }
-    if (passengers.children > 0 && passengerSelection.child.kind !== "found") {
-      warnings.push({ code: "child_ticket_not_found_live", message: "Bambino presente nel gruppo ma nessun biglietto BAMBINO corrispondente trovato nella risposta Medmar live." });
-    }
-    if (passengers.infants > 0 && passengerSelection.infant.kind !== "found") {
-      warnings.push({ code: "infant_ticket_not_found_live", message: "Infant presente nel gruppo ma nessun biglietto INFANT corrispondente trovato nella risposta Medmar live." });
-    }
     warnings.push({
       code: "child_issue_payload_not_verified",
       message: "Il prezzo Medmar è stato verificato, ma l'emissione automatica dei minori non è ancora abilitata: revisione/emissione manuale richiesta.",
     });
 
+    const minorsAwareTotals = priced.map((p) => sumTicketBreakdownTotal(p.ticketBreakdown));
+    const minorsAwareTotal = minorsAwareTotals.every((t) => t != null)
+      ? minorsAwareTotals.reduce<number>((sum, t) => sum + (t as number), 0)
+      : null;
+
     return {
       ...baseResult,
+      outward: outwardLeg,
+      return: returnLeg,
       can_issue: false,
       status: "passenger_payload_pending_verification",
-      tariff,
-      taxes,
-      expected_total_cents: sumTicketBreakdownTotal(ticketBreakdown) ?? expectedTotalCents,
+      tariff: referencePriced.tariff,
+      taxes: referencePriced.taxes,
+      expected_total_cents: minorsAwareTotal ?? expectedTotalCents,
       is_live: true,
-      ticket_breakdown: ticketBreakdown,
+      ticket_breakdown: referencePriced.ticketBreakdown,
       warnings,
     };
   } catch (err) {

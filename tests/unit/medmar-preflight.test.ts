@@ -746,6 +746,166 @@ describe("runMedmarPreflight — modello single-row (Fase 2B.6: ritorno imbarcat
   });
 });
 
+describe("runMedmarPreflight — pricing A/R per-gamba (Fase 2B.7: bugfix totale A/R dimezzato)", () => {
+  // Fixture dedicata: prezzo 11.50 senza tassa di sbarco, cosi' i totali
+  // combaciano esattamente con l'evidenza reale riportata dall'utente
+  // (portale Medmar: andata=23,00 + ritorno=23,00 = 46,00 per 2 adulti).
+  function arTariff1150(overrides: Row = {}): Row {
+    return { ...arTariffRow({ prezzo: 11.5 }), ...overrides };
+  }
+
+  it("2 adulti, due righe collegate: outward e return prezzati separatamente (chiamate distinte a fetchBigliettiVendibiliReadOnly), totale = somma delle due gambe", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 59
+        ? [{ ...NAPOLI_ISCHIA_CORSA, id_corsa: 701, partenza_data: "2026-08-18", partenza_ora: "14:20" }]
+        : [{ id_corsa: 702, id_tratta: 47, partenza_data: "2026-08-23", partenza_ora: "17:00", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 41, id_porto_arrivo: 1, porto_partenza: "ISCHIA", porto_arrivo: "NAPOLI", nave: "MEDMAR GIULIA" }]
+    );
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockImplementation(async (idCorsa) =>
+      (idCorsa === 701 || idCorsa === 702 ? [arTariff1150({ id_corsa: idCorsa })] : []) as never
+    );
+
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ date: "2026-08-18", time: "14:20", booking_service_kind: "formula_medmar_napoli", pax: 2 }),
+        departureRow({ date: "2026-08-23", time: "15:30", orario_barca: "17:00", booking_service_kind: "formula_medmar_napoli", meeting_point: null, pax: 2 }),
+      ]),
+      TENANT_A,
+      [SVC_ARR, SVC_DEP]
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.outward?.id_corsa).toBe(701);
+    expect(result.return?.id_corsa).toBe(702);
+    // Prova diretta del bug segnalato: PRIMA del fix expected_total_cents
+    // era unit_price*pax di UNA sola gamba (2300, non 4600).
+    expect(result.outward?.total_cents).toBe(2300);
+    expect(result.return?.total_cents).toBe(2300);
+    expect(result.expected_total_cents).toBe(4600);
+    expect(result.expected_total_cents).not.toBe(result.outward?.total_cents);
+    expect(medmarClient.fetchBigliettiVendibiliReadOnly).toHaveBeenCalledWith(701);
+    expect(medmarClient.fetchBigliettiVendibiliReadOnly).toHaveBeenCalledWith(702);
+    expect(medmarClient.fetchBigliettiVendibiliReadOnly).toHaveBeenCalledTimes(2);
+  });
+
+  it("1 adulto, due righe collegate: outward=11,50 return=11,50 totale=23,00", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 59
+        ? [{ ...NAPOLI_ISCHIA_CORSA, id_corsa: 703, partenza_data: "2026-08-18", partenza_ora: "14:20" }]
+        : [{ id_corsa: 704, id_tratta: 47, partenza_data: "2026-08-23", partenza_ora: "17:00", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 41, id_porto_arrivo: 1, porto_partenza: "ISCHIA", porto_arrivo: "NAPOLI", nave: "MEDMAR GIULIA" }]
+    );
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([arTariff1150()] as never);
+
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ date: "2026-08-18", time: "14:20", booking_service_kind: "formula_medmar_napoli", pax: 1 }),
+        departureRow({ date: "2026-08-23", time: "15:30", orario_barca: "17:00", booking_service_kind: "formula_medmar_napoli", meeting_point: null, pax: 1 }),
+      ]),
+      TENANT_A,
+      [SVC_ARR, SVC_DEP]
+    );
+
+    expect(result.can_issue).toBe(true);
+    expect(result.outward?.total_cents).toBe(1150);
+    expect(result.return?.total_cents).toBe(1150);
+    expect(result.expected_total_cents).toBe(2300);
+  });
+
+  it("solo andata (nessun ritorno nel gruppo): expected_total_cents e' la sola gamba andata, comportamento invariato", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([{ ...NAPOLI_ISCHIA_CORSA, id_corsa: 705, partenza_data: "2026-08-18", partenza_ora: "14:20" }]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([arTariff1150()] as never);
+
+    const result = await runMedmarPreflight(
+      fakeAdmin([arrivalRow({ date: "2026-08-18", time: "14:20", booking_service_kind: "formula_medmar_napoli", pax: 2 })]),
+      TENANT_A,
+      [SVC_ARR]
+    );
+
+    expect(result.can_issue).toBe(true);
+    expect(result.outward?.total_cents).toBe(2300);
+    expect(result.return).toBeNull();
+    expect(result.expected_total_cents).toBe(2300);
+    expect(medmarClient.fetchBigliettiVendibiliReadOnly).toHaveBeenCalledTimes(1);
+  });
+
+  it("single-row A/R (Fase 2B.6 + 2B.7): ritorno imbarcato nella stessa riga, prezzato separatamente, totale = somma delle due gambe", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 59
+        ? [{ ...NAPOLI_ISCHIA_CORSA, id_corsa: 301, partenza_data: "2026-08-18", partenza_ora: "14:20" }]
+        : idTratta === 47
+          ? [{ id_corsa: 302, id_tratta: 47, partenza_data: "2026-08-23", partenza_ora: "17:00", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 41, id_porto_arrivo: 1, porto_partenza: "ISCHIA", porto_arrivo: "NAPOLI", nave: "MEDMAR GIULIA" }]
+          : []
+    );
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockImplementation(async (idCorsa) =>
+      (idCorsa === 301 || idCorsa === 302 ? [arTariff1150({ id_corsa: idCorsa })] : []) as never
+    );
+
+    const result = await runMedmarPreflight(fakeAdmin([singleRowRoundTrip({ pax: 2 })]), TENANT_A, [SVC_ARR]);
+
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.outward?.total_cents).toBe(2300);
+    expect(result.return?.total_cents).toBe(2300);
+    expect(result.expected_total_cents).toBe(4600);
+    expect(result.warnings.some((w) => w.code === "embedded_return_leg_used")).toBe(true);
+  });
+
+  it("prezzi asimmetrici tra andata e ritorno: ogni gamba usa la PROPRIA risposta vendibili, nessun prezzo riusato tra le gambe", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 59
+        ? [{ ...NAPOLI_ISCHIA_CORSA, id_corsa: 706, partenza_data: "2026-08-18", partenza_ora: "14:20" }]
+        : [{ id_corsa: 707, id_tratta: 47, partenza_data: "2026-08-23", partenza_ora: "17:00", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 41, id_porto_arrivo: 1, porto_partenza: "ISCHIA", porto_arrivo: "NAPOLI", nave: "MEDMAR GIULIA" }]
+    );
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockImplementation(async (idCorsa) => {
+      if (idCorsa === 706) return [arTariff1150({ id_corsa: 706, prezzo: 11.5 })] as never;
+      if (idCorsa === 707) return [arTariff1150({ id_corsa: 707, prezzo: 12 })] as never;
+      return [] as never;
+    });
+
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ date: "2026-08-18", time: "14:20", booking_service_kind: "formula_medmar_napoli", pax: 2 }),
+        departureRow({ date: "2026-08-23", time: "15:30", orario_barca: "17:00", booking_service_kind: "formula_medmar_napoli", meeting_point: null, pax: 2 }),
+      ]),
+      TENANT_A,
+      [SVC_ARR, SVC_DEP]
+    );
+
+    expect(result.outward?.total_cents).toBe(2300); // 11.50 * 2
+    expect(result.return?.total_cents).toBe(2400); // 12.00 * 2
+    expect(result.expected_total_cents).toBe(4700);
+  });
+
+  it("sensitivity: se la seconda gamba non fosse prezzata separatamente, expected_total_cents resterebbe 2300 invece di 4600", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 59
+        ? [{ ...NAPOLI_ISCHIA_CORSA, id_corsa: 708, partenza_data: "2026-08-18", partenza_ora: "14:20" }]
+        : [{ id_corsa: 709, id_tratta: 47, partenza_data: "2026-08-23", partenza_ora: "17:00", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 41, id_porto_arrivo: 1, porto_partenza: "ISCHIA", porto_arrivo: "NAPOLI", nave: "MEDMAR GIULIA" }]
+    );
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockImplementation(async (idCorsa) =>
+      (idCorsa === 708 || idCorsa === 709 ? [arTariff1150({ id_corsa: idCorsa })] : []) as never
+    );
+
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ date: "2026-08-18", time: "14:20", booking_service_kind: "formula_medmar_napoli", pax: 2 }),
+        departureRow({ date: "2026-08-23", time: "15:30", orario_barca: "17:00", booking_service_kind: "formula_medmar_napoli", meeting_point: null, pax: 2 }),
+      ]),
+      TENANT_A,
+      [SVC_ARR, SVC_DEP]
+    );
+
+    expect(result.expected_total_cents).not.toBe(2300);
+    expect(result.expected_total_cents).toBe(4600);
+  });
+});
+
 describe("runMedmarPreflight — risoluzione porto isolano Ischia/Casamicciola (Fase 1.7)", () => {
   it("servizio Pozzuoli con meeting_point che menziona Casamicciola -> route_code pozzuoli_casamicciola, corsa Casamicciola raggiungibile end-to-end", async () => {
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "pozzuoli_casamicciola" ? 50 : null));

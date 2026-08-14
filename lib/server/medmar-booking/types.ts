@@ -147,6 +147,21 @@ export type MedmarPreflightLeg = {
   id_corsa: number | string | null;
   /** "live" se determinata da Medmar in tempo reale, "local_fallback" se solo diagnostica, null se non determinata. */
   source: "live" | "local_fallback" | null;
+  /**
+   * Fase 2B.7 — dettaglio tariffa/tasse per QUESTA gamba soltanto, ricavato
+   * dalla risposta biglietti/vendibili della SUA id_corsa (mai riusato tra
+   * andata e ritorno). Opzionale/undefined quando la gamba non è stata
+   * ancora prezzata (route non risolta, corsa non trovata, ecc.) — usare
+   * `?? null` in lettura, mai assumere un default diverso da "non prezzato".
+   */
+  ticket_breakdown?: MedmarPreflightTicketBreakdown | null;
+  /**
+   * Fase 2B.7 — totale (tariffa + tasse) × pax per QUESTA gamba soltanto.
+   * MAI il totale A/R: il totale A/R è la somma di outward.total_cents +
+   * return.total_cents (vedi MedmarPreflightResult.expected_total_cents).
+   * null/undefined se non determinabile con certezza sui dati live.
+   */
+  total_cents?: number | null;
 };
 
 export type MedmarPreflightTariff = {
