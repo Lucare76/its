@@ -1763,15 +1763,14 @@ export default function WhatsAppInboxPage() {
 
         {/* ── Filter tabs + search ── */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative">
-            <span className="pointer-events-none absolute inset-y-0 left-3.5 z-10 flex items-center text-slate-400">
+          <div className="flex h-11 w-48 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 transition focus-within:border-indigo-500 focus-within:bg-white focus-within:shadow-[0_0_0_3px_rgba(99,102,241,.13)] sm:w-56">
+            <span className="pointer-events-none flex shrink-0 items-center text-slate-400">
               <IconSearch />
             </span>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="input-saas w-48 sm:w-56"
-              style={{ paddingLeft: "2.75rem" }}
+              className="min-w-0 flex-1 bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
               placeholder="Cerca nome, telefono…"
             />
           </div>
