@@ -129,7 +129,40 @@ export function filterBookingsBySearch<T extends BookingSearchRecord>(
   if (!hasQuery && !hasAgency) return [];
   return records
     .filter((record) => matchesBookingSearch(record, searchQuery, agencyFilter, agencyNameById))
+    .map((record, originalIndex) => ({
+      record,
+      originalIndex,
+      relevance: bookingSearchRelevance(record, searchQuery),
+    }))
+    .sort((left, right) => right.relevance - left.relevance || left.originalIndex - right.originalIndex)
+    .map(({ record }) => record)
     .slice(0, limit);
+}
+
+function bookingSearchRelevance(record: BookingSearchRecord, searchQuery: string): number {
+  const query = normalizeText(searchQuery);
+  if (!query) return 0;
+
+  const fullName = normalizeText([
+    record.customer_first_name,
+    record.customer_last_name,
+  ].filter(Boolean).join(" "));
+  const names = [
+    normalizeText(record.customer_name),
+    fullName,
+    normalizeText(record.customer_display_name),
+    normalizeText(record.customer_first_name),
+    normalizeText(record.customer_last_name),
+  ].filter(Boolean);
+
+  if (names.some((name) => name === query)) return 500;
+  if (names.some((name) => name.startsWith(query))) return 400;
+  if (names.some((name) => name.split(/\s+/).some((part) => part.startsWith(query)))) return 350;
+  if (names.some((name) => name.includes(query))) return 300;
+
+  const phoneDigits = query.replace(/\D/g, "");
+  if (phoneDigits && `${record.phone ?? ""} ${record.phone_e164 ?? ""}`.replace(/\D/g, "").includes(phoneDigits)) return 250;
+  return 100;
 }
 
 function normalizeText(value?: string | null) {

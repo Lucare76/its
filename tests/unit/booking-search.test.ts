@@ -185,6 +185,21 @@ describe("matchesBookingSearch — campo agenzia", () => {
 });
 
 describe("filterBookingsBySearch", () => {
+  it("mette prima le corrispondenze nel nome rispetto ai campi secondari", () => {
+    const secondaryMatch: BookingSearchRecord = {
+      id: "secondary",
+      customer_name: "HONCHARENNKO IVANCEVYH",
+      notes: "renn",
+    };
+    const nameMatch: BookingSearchRecord = {
+      id: "name",
+      customer_name: "LUCA RENNA",
+    };
+
+    const results = filterBookingsBySearch([secondaryMatch, nameMatch], "renn", "", agencyNameById);
+    expect(results.map((record) => record.id)).toEqual(["name", "secondary"]);
+  });
+
   it("nessuna query attiva restituisce lista vuota (evita di scaricare tutto il dataset)", () => {
     expect(filterBookingsBySearch(allRecords, "", "", agencyNameById)).toEqual([]);
   });
