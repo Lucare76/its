@@ -524,6 +524,15 @@ export default function ServiceEditPage() {
         title="Modifica servizio"
         subtitle={service.customer_name ?? ""}
         breadcrumbs={[{ label: "Cruscotto", href: "/dashboard" }, { label: "Modifica servizio" }]}
+        actions={
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            ← Indietro
+          </button>
+        }
       />
 
       <div className="mx-auto max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">

@@ -62,6 +62,48 @@ type SearchServiceRow = Partial<Service> & {
   hotel_name?: string | null;
 };
 
+type BusAllocationDetailRow = {
+  service_id: string;
+  direction: "arrival" | "departure" | string | null;
+  family_code: string | null;
+  line_name: string | null;
+  stop_name: string | null;
+  stop_city: string | null;
+  stop_pickup_note: string | null;
+  stop_pickup_time: string | null;
+  hotel_pickup_time: string | null;
+};
+
+type BusFerryConfigRow = {
+  bus_line_family_code: string;
+  departure_port: string;
+  arrival_port: string;
+  departure_time: string;
+};
+
+type BusLineRow = {
+  id: string;
+  family_code: string | null;
+  name: string | null;
+};
+
+type BusStopRow = {
+  id: string;
+  bus_line_id: string;
+  direction: "arrival" | "departure" | string | null;
+  stop_name: string | null;
+  city: string | null;
+  pickup_note: string | null;
+  pickup_time: string | null;
+};
+
+type HotelPickupTimeRow = {
+  hotel_name: string | null;
+  pickup_time_linea_italia: string | null;
+  pickup_time_linea_centro: string | null;
+  pickup_time_linea_adriatica: string | null;
+};
+
 type SearchQueryResult = { data: SearchServiceRow[] | null; error: { message: string } | null };
 type SearchQueryBuilder = PromiseLike<SearchQueryResult> & {
   ilike(column: string, pattern: string): SearchQueryBuilder;
@@ -131,6 +173,97 @@ function canUsePostgrestOr(value: string): boolean {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isUuid(value: string): boolean {
   return UUID_PATTERN.test(value.trim());
+}
+
+function isBusBooking(service: Pick<SearchServiceRow, "booking_service_kind" | "service_type_code">) {
+  return service.booking_service_kind === "bus_city_hotel" || service.service_type_code === "bus_line";
+}
+
+function busPickupPoint(allocation: BusAllocationDetailRow | null | undefined) {
+  const stop = allocation?.stop_name?.trim() || allocation?.stop_city?.trim() || "";
+  const note = allocation?.stop_pickup_note?.trim() || "";
+  if (stop && note && !stop.toLowerCase().includes(note.toLowerCase())) return `${stop} - ${note}`;
+  return stop || note || null;
+}
+
+function busFerryArrivalTime(
+  allocation: BusAllocationDetailRow | null | undefined,
+  configs: BusFerryConfigRow[],
+  schedules: FerryScheduleRow[]
+) {
+  const family = allocation?.family_code?.trim().toLowerCase();
+  if (!family) return null;
+  const config = configs.find((item) => item.bus_line_family_code?.trim().toLowerCase() === family);
+  if (!config) return null;
+  const departureTime = cleanTime(config.departure_time);
+  const schedule = schedules.find((row) =>
+    row.direction === "mainland_to_ischia" &&
+    row.departure_port === config.departure_port &&
+    row.arrival_port === config.arrival_port &&
+    cleanTime(row.departure_time) === departureTime
+  );
+  return cleanTime(schedule?.arrival_time) ?? null;
+}
+
+function busAllocationKey(row: BusAllocationDetailRow) {
+  return [
+    row.service_id,
+    row.direction ?? "",
+    row.family_code ?? "",
+    row.stop_name ?? "",
+    row.stop_pickup_time ?? "",
+    row.hotel_pickup_time ?? "",
+  ].join("|");
+}
+
+function findBusStopFallback(
+  service: SearchServiceRow,
+  direction: "arrival" | "departure",
+  stops: BusStopRow[],
+  lineById: Map<string, BusLineRow>
+): BusAllocationDetailRow | null {
+  const city = normalizeNeedle(String(service.bus_city_origin ?? ""));
+  if (!city) return null;
+  const serviceTime = cleanTime(direction === "arrival" ? service.arrival_time ?? service.time : service.departure_time ?? service.time);
+  const matches = stops.filter((stop) => {
+    if (stop.direction !== direction) return false;
+    const stopName = normalizeNeedle(String(stop.stop_name ?? ""));
+    const stopCity = normalizeNeedle(String(stop.city ?? ""));
+    return stopName === city || stopCity === city;
+  });
+  const stop =
+    matches.find((item) => cleanTime(item.pickup_time) === serviceTime) ??
+    matches[0] ??
+    null;
+  if (!stop) return null;
+  const line = lineById.get(stop.bus_line_id);
+  return {
+    service_id: service.id,
+    direction,
+    family_code: line?.family_code ?? null,
+    line_name: line?.name ?? null,
+    stop_name: stop.stop_name,
+    stop_city: stop.city,
+    stop_pickup_note: stop.pickup_note,
+    stop_pickup_time: stop.pickup_time,
+    hotel_pickup_time: null,
+  };
+}
+
+function hotelPickupForFamily(
+  hotelName: string | null | undefined,
+  familyCode: string | null | undefined,
+  rows: HotelPickupTimeRow[]
+) {
+  const normalizedHotel = normalizeNeedle(String(hotelName ?? ""));
+  if (!normalizedHotel) return null;
+  const row = rows.find((item) => normalizeNeedle(String(item.hotel_name ?? "")) === normalizedHotel);
+  if (!row) return null;
+  const family = normalizeNeedle(String(familyCode ?? ""));
+  if (family === "italia") return cleanTime(row.pickup_time_linea_italia);
+  if (family === "centro") return cleanTime(row.pickup_time_linea_centro);
+  if (family === "adriatica") return cleanTime(row.pickup_time_linea_adriatica);
+  return null;
 }
 
 function serviceTypeNeedles(value: string): Array<"transfer" | "bus_tour"> {
@@ -327,8 +460,9 @@ export async function GET(req: NextRequest) {
       ...matchedAgencies.map((agencyRow) => agencyRow.id),
       ...serviceRows.map((service) => String(service.agency_id ?? "")).filter(Boolean),
     ]));
+    const serviceIds = Array.from(new Set(serviceRows.map((service) => service.id).filter(Boolean)));
 
-    const [hotelsResult, agenciesResult, schedulesResult, ferryPickupRulesResult] = await Promise.all([
+    const [hotelsResult, agenciesResult, schedulesResult, ferryPickupRulesResult, busAllocationsResult, busFerryConfigsResult, busStopsResult, busLinesResult, hotelPickupTimesResult] = await Promise.all([
       hotelIds.length
         ? auth.admin.from("hotels").select("id,name,zone").eq("tenant_id", tenantId).in("id", hotelIds)
         : Promise.resolve({ data: [], error: null }),
@@ -337,14 +471,47 @@ export async function GET(req: NextRequest) {
         : Promise.resolve({ data: [], error: null }),
       auth.admin.from("ferry_schedules").select("company,departure_port,arrival_port,departure_time,arrival_time,direction,days_of_week,valid_from,valid_to"),
       auth.admin.from("ferry_pickup_rules").select("*"),
+      serviceIds.length
+        ? auth.admin
+          .from("ops_bus_allocation_details")
+          .select("service_id,direction,family_code,line_name,stop_name,stop_city,stop_pickup_note,stop_pickup_time,hotel_pickup_time")
+          .eq("tenant_id", tenantId)
+          .in("service_id", serviceIds)
+        : Promise.resolve({ data: [], error: null }),
+      auth.admin
+        .from("bus_line_ferry_config")
+        .select("bus_line_family_code,departure_port,arrival_port,departure_time")
+        .eq("tenant_id", tenantId),
+      auth.admin
+        .from("tenant_bus_line_stops")
+        .select("id,bus_line_id,direction,stop_name,city,pickup_note,pickup_time")
+        .eq("tenant_id", tenantId),
+      auth.admin
+        .from("tenant_bus_lines")
+        .select("id,family_code,name")
+        .eq("tenant_id", tenantId)
+        .eq("active", true),
+      auth.admin
+        .from("hotel_pickup_times")
+        .select("hotel_name,pickup_time_linea_italia,pickup_time_linea_centro,pickup_time_linea_adriatica"),
     ]);
 
-    const error = hotelsResult.error ?? agenciesResult.error ?? schedulesResult.error ?? ferryPickupRulesResult.error ?? null;
+    const error = hotelsResult.error ?? agenciesResult.error ?? schedulesResult.error ?? ferryPickupRulesResult.error ?? busAllocationsResult.error ?? busFerryConfigsResult.error ?? busStopsResult.error ?? busLinesResult.error ?? hotelPickupTimesResult.error ?? null;
     if (error) throw new Error(error.message);
 
     const hotelNameById = new Map([...(matchedHotels ?? []), ...(hotelsResult.data ?? [])].map((hotel: { id: string; name: string }) => [hotel.id, hotel.name]));
     const hotelZoneById = new Map([...(matchedHotels ?? []), ...(hotelsResult.data ?? [])].map((hotel: { id: string; zone?: string | null }) => [hotel.id, hotel.zone ?? null]));
     const agencyNameById = new Map([...(matchedAgencies ?? []), ...(agenciesResult.data ?? [])].map((item: { id: string; name: string }) => [item.id, item.name]));
+    const busAllocationsByServiceId = new Map<string, BusAllocationDetailRow[]>();
+    for (const allocation of (busAllocationsResult.data ?? []) as BusAllocationDetailRow[]) {
+      const rows = busAllocationsByServiceId.get(allocation.service_id) ?? [];
+      rows.push(allocation);
+      busAllocationsByServiceId.set(allocation.service_id, rows);
+    }
+    const busFerryConfigs = (busFerryConfigsResult.data ?? []) as BusFerryConfigRow[];
+    const busStops = (busStopsResult.data ?? []) as BusStopRow[];
+    const busLineById = new Map(((busLinesResult.data ?? []) as BusLineRow[]).map((line) => [line.id, line]));
+    const hotelPickupTimes = (hotelPickupTimesResult.data ?? []) as HotelPickupTimeRow[];
     const serviceById = new Map(serviceRows.map((service) => [service.id, service]));
     const searchable = candidateServices
       .map((service) => ({
@@ -398,6 +565,40 @@ export async function GET(req: NextRequest) {
         const departurePickupRule = departureRuleType && departureTransportTime
           ? getPickupRuleByRange(owner, departureRuleType, departureTransportTime, normalizeZonaIschia(hotelZone))
           : null;
+        const isBus =
+          isBusBooking(r) ||
+          isBusBooking(arrivalLeg) ||
+          (departureLeg ? isBusBooking(departureLeg) : false);
+        const arrivalBusFallback = isBus
+          ? findBusStopFallback(arrivalLeg, "arrival", busStops, busLineById) ?? findBusStopFallback(r, "arrival", busStops, busLineById)
+          : null;
+        const departureBusFallback = isBus
+          ? findBusStopFallback(departureLeg ?? r, "departure", busStops, busLineById) ?? findBusStopFallback(r, "departure", busStops, busLineById)
+          : null;
+        const busRows = [
+          ...(busAllocationsByServiceId.get(arrivalLeg.id) ?? []),
+          ...(departureLeg?.id ? busAllocationsByServiceId.get(departureLeg.id) ?? [] : []),
+          ...(busAllocationsByServiceId.get(r.id) ?? []),
+          ...(arrivalBusFallback ? [arrivalBusFallback] : []),
+          ...(departureBusFallback ? [departureBusFallback] : []),
+        ];
+        const busAllocations = Array.from(new Map(busRows.map((row) => [busAllocationKey(row), row])).values());
+        const arrivalBusAllocation = busAllocations.find((row) => row.direction === "arrival") ?? busAllocations[0] ?? null;
+        const departureBusAllocation =
+          busAllocations.find((row) => row.direction === "departure") ??
+          busAllocations.find((row) => Boolean(row.hotel_pickup_time)) ??
+          null;
+        const busFamily = departureBusAllocation?.family_code ?? arrivalBusAllocation?.family_code ?? null;
+        const busOutwardPickupTime =
+          cleanTime(arrivalBusAllocation?.stop_pickup_time) ??
+          cleanTime(arrivalLeg.train_arrival_time) ??
+          cleanTime(arrivalLeg.arrival_time);
+        const busArrivalTime = busFerryArrivalTime(arrivalBusAllocation, busFerryConfigs, schedules);
+        const busReturnPickupTime =
+          cleanTime(departureBusAllocation?.hotel_pickup_time) ??
+          hotelPickupForFamily(r.hotel_id ? hotelNameById.get(r.hotel_id) : null, busFamily, hotelPickupTimes) ??
+          cleanTime(departureLeg?.pickup_time) ??
+          cleanTime(r.pickup_time);
         return {
           id: r.id,
           inbound_email_id: r.inbound_email_id ?? null,
@@ -418,7 +619,7 @@ export async function GET(req: NextRequest) {
           service_type_code: r.service_type_code ?? null,
           arrival_date: r.arrival_date ?? null,
           arrival_time: r.arrival_time ?? null,
-          train_arrival_time: r.train_arrival_time ?? null,
+          train_arrival_time: isBus ? busOutwardPickupTime ?? r.train_arrival_time ?? null : r.train_arrival_time ?? null,
           departure_date: r.departure_date ?? null,
           departure_time: r.departure_time ?? null,
           train_departure_time: r.train_departure_time ?? null,
@@ -434,9 +635,14 @@ export async function GET(req: NextRequest) {
           notes: r.notes ?? null,
           linked_service_id: r.linked_service_id ?? null,
           outbound_ferry_departure_time: ferryPickupRule?.departureTime ?? arrivalLeg.time ?? null,
-          outbound_ferry_arrival_time: ferryPickupRule?.arrivalTime ?? arrivalSchedule?.arrivalTime ?? arrivalLeg.arrival_time ?? null,
-          return_pickup_time: departureLeg?.pickup_time ?? departurePickupRule?.pickup ?? departureLeg?.departure_time ?? null,
+          outbound_ferry_arrival_time: isBus
+            ? busArrivalTime
+            : ferryPickupRule?.arrivalTime ?? arrivalSchedule?.arrivalTime ?? arrivalLeg.arrival_time ?? null,
+          return_pickup_time: isBus
+            ? busReturnPickupTime ?? departureLeg?.departure_time ?? null
+            : departureLeg?.pickup_time ?? departurePickupRule?.pickup ?? departureLeg?.departure_time ?? null,
           return_ferry_departure_time: departureLeg?.orario_barca ?? departurePickupRule?.boat_t ?? null,
+          bus_outward_pickup_point: isBus ? busPickupPoint(arrivalBusAllocation) : null,
           outbound_ferry_company: arrivalSchedule?.company?.toUpperCase() ?? null,
           outbound_ferry_departure_port: arrivalSchedule ? ferryPortLabel(arrivalSchedule.departurePort) : null,
           outbound_ferry_arrival_port: arrivalSchedule ? ferryPortLabel(arrivalSchedule.arrivalPort) : null,

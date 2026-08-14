@@ -4,6 +4,8 @@ type BookingListService = Partial<Pick<
   Service,
   "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca"
 >> & {
+  pickup_time?: string | null;
+  bus_outward_pickup_point?: string | null;
   outbound_ferry_departure_time?: string | null;
   outbound_ferry_arrival_time?: string | null;
   return_pickup_time?: string | null;
@@ -32,6 +34,7 @@ export type BookingListTransportTimes = {
   returnCompany?: string | null;
   returnRoute?: string | null;
   returnDeparturePort?: string | null;
+  outwardPickupPoint?: string | null;
 };
 
 export function bookingListTransportTimes(service: BookingListService): BookingListTransportTimes | null {
@@ -72,16 +75,20 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
   if (!isAirport && !isStation) return null;
 
   const suffix = kind.endsWith("_exclusive") ? " (esclusivo)" : kind.endsWith("_aliscafo") ? " (aliscafo)" : "";
+  const isBusLine = kind === "bus_city_hotel";
+  const outwardTime = cleanTime(service.train_arrival_time) ?? cleanTime(service.arrival_time);
+  const outwardArrivalTime = cleanTime(service.outbound_ferry_arrival_time) ?? cleanTime(service.time);
   return {
     serviceLabel: `${isAirport ? "Trasferimento aeroporto - hotel" : "Trasferimento stazione / bus - hotel"}${suffix}`,
     outwardLabel: isAirport ? "Arrivo volo" : "Arrivo treno/bus",
     outwardDate: cleanDate(service.arrival_date) ?? cleanDate(service.date),
-    outwardTime: cleanTime(service.train_arrival_time) ?? cleanTime(service.arrival_time),
-    outwardArrivalTime: cleanTime(service.outbound_ferry_arrival_time),
+    outwardTime,
+    outwardArrivalTime: isBusLine && outwardArrivalTime === outwardTime ? null : outwardArrivalTime,
+    outwardPickupPoint: isBusLine ? service.bus_outward_pickup_point ?? null : null,
     returnLabel: isAirport ? "Partenza volo" : "Partenza treno/bus",
     returnDate: cleanDate(service.departure_date),
     returnTime: cleanTime(service.train_departure_time) ?? cleanTime(service.departure_time),
-    returnPickupTime: cleanTime(service.return_pickup_time),
+    returnPickupTime: cleanTime(service.return_pickup_time) ?? (isBusLine ? cleanTime(service.pickup_time) : null),
   };
 }
 
