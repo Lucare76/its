@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import Link from "next/link";
+import Image from "next/image";
 import { supabase } from "@/lib/supabase/client";
 import { DateInput } from "@/components/ui/date-input";
 
@@ -70,6 +72,28 @@ function isoToIt(iso: string) {
   return `${d}/${m}/${y}`;
 }
 
+function shiftIsoDate(iso: string, days: number) {
+  const value = new Date(`${iso}T12:00:00`);
+  value.setDate(value.getDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function vehicleThumbnailSrc(vehicle: Vehicle) {
+  const value = `${vehicle.label} ${vehicle.vehicle_size ?? ""}`.toLowerCase();
+  if (value.includes("bus") || (vehicle.capacity ?? 0) >= 18) return "/images/fleet-bus.png";
+  if (value.includes("auto") || value.includes("car") || (vehicle.capacity ?? 0) <= 5) return "/images/fleet-auto.png";
+  return "/images/fleet-van.png";
+}
+
+function AvailabilityKpiIcon({ type }: { type: "driver" | "vehicle" | "unassigned" | "conflict" | "blocked" }) {
+  const common = { width: 27, height: 27, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  if (type === "driver") return <svg {...common}><circle cx="12" cy="7" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg>;
+  if (type === "vehicle") return <svg {...common}><path d="M5 17h14l1-5-2-5H6l-2 5 1 5Z"/><path d="M7 7h10M5 12h14"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>;
+  if (type === "unassigned") return <svg {...common}><circle cx="10" cy="7" r="3.5"/><path d="M3.5 20a6.5 6.5 0 0 1 11.5-4.2"/><path d="m16 19 2 2 4-5"/></svg>;
+  if (type === "conflict") return <svg {...common}><path d="M10.3 3.6 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z" fill="currentColor" stroke="none"/><path d="M12 8v5M12 17h.01" stroke="white"/></svg>;
+  return <svg {...common}><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg>;
+}
+
 function emptyAvail(driverId: string, userId: string | null): DriverAvail {
   return {
     driver_profile_id: driverId,
@@ -130,6 +154,9 @@ export default function DisponibilitaPage() {
   const [newDriverName, setNewDriverName] = useState("");
   const [newDriverPhone, setNewDriverPhone] = useState("");
   const [addingDriver, setAddingDriver] = useState(false);
+  const [search, setSearch] = useState("");
+  const [driverFilter, setDriverFilter] = useState<"all" | "available" | "unavailable" | "no_access">("all");
+  const [vehicleFilter, setVehicleFilter] = useState<"all" | "available" | "unavailable">("all");
 
   useEffect(() => {
     supabase?.auth.getSession().then(({ data }: { data: { session: { access_token: string } | null } }) => {
@@ -423,34 +450,88 @@ export default function DisponibilitaPage() {
   const commitmentByVehicleId = new Map(commitments.map(c => [c.vehicle_id, c]));
   const availableVehicles = vehicles.filter(v => vehicleAvail.get(v.id)?.available !== false && !commitmentByVehicleId.has(v.id)).length;
   const availableVehiclesList = vehicles.filter(v => vehicleAvail.get(v.id)?.available !== false && !commitmentByVehicleId.has(v.id));
+  const unavailableDrivers = drivers.length - availableDrivers;
+  const unavailableVehicles = vehicles.length - availableVehicles;
+  const driversWithoutAccess = drivers.filter(driver => !driver.has_access || driver.access_suspended).length;
+  const driversWithoutVehicle = drivers.filter(driver => {
+    const availability = driverAvail.get(driver.id);
+    return availability?.available !== false && !availability?.vehicle_1_id;
+  }).length;
+  const conflictDriverIds = new Set<string>();
+  const vehicleOwners = new Map<string, string>();
+  for (const driver of drivers) {
+    const availability = driverAvail.get(driver.id);
+    if (availability?.available === false) continue;
+    for (const vehicleId of [availability?.vehicle_1_id, availability?.vehicle_2_id]) {
+      if (!vehicleId) continue;
+      const owner = vehicleOwners.get(vehicleId);
+      if (owner && owner !== driver.id) {
+        conflictDriverIds.add(owner);
+        conflictDriverIds.add(driver.id);
+      } else {
+        vehicleOwners.set(vehicleId, driver.id);
+      }
+    }
+  }
+  const normalizedSearch = search.trim().toLocaleLowerCase("it");
+  const visibleDrivers = drivers.filter(driver => {
+    const availability = driverAvail.get(driver.id);
+    const matchesSearch = !normalizedSearch || `${driver.full_name} ${driver.phone ?? ""}`.toLocaleLowerCase("it").includes(normalizedSearch);
+    if (!matchesSearch) return false;
+    if (driverFilter === "available") return availability?.available !== false;
+    if (driverFilter === "unavailable") return availability?.available === false;
+    if (driverFilter === "no_access") return !driver.has_access || driver.access_suspended;
+    return true;
+  });
+  const visibleVehicles = vehicles.filter(vehicle => {
+    const available = vehicleAvail.get(vehicle.id)?.available !== false && !commitmentByVehicleId.has(vehicle.id);
+    const matchesSearch = !normalizedSearch || `${vehicle.label} ${vehicle.plate ?? ""}`.toLocaleLowerCase("it").includes(normalizedSearch);
+    if (!matchesSearch) return false;
+    if (vehicleFilter === "available") return available;
+    if (vehicleFilter === "unavailable") return !available;
+    return true;
+  });
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <section className="mx-auto max-w-6xl page-section">
-      <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
+    <section className="page-section mx-auto max-w-[1280px] space-y-3">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Operativo giornaliero</p>
-          <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-slate-950">Disponibilità del giorno</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight text-slate-950">Disponibilità</h1>
+          <p className="mt-1 text-sm font-medium capitalize text-slate-500">{new Intl.DateTimeFormat("it-IT", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date(`${date}T12:00:00`))}</p>
         </div>
-        <p className="max-w-xl text-sm leading-6 text-slate-500">
-          Dichiara quali autisti e mezzi sono disponibili. Conferma prima di aprire il Piano del Giorno.
-        </p>
-      </div>
-
-      {/* Selettore data */}
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-        <label className="flex flex-wrap items-center gap-3 text-sm font-semibold text-slate-700">
-          <span>Data</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => setDate(shiftIsoDate(date, -1))} className="btn-secondary h-11 w-11 p-0 text-xl" aria-label="Giorno precedente">‹</button>
           <DateInput
             value={date}
             onChange={setDate}
-            className="h-10 w-36 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-slate-400 focus:bg-white"
+            className="h-11 w-40 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-800 shadow-sm outline-none transition focus:border-indigo-400"
           />
-        </label>
-        <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-500">
-          {loading ? "Caricamento..." : `${availableDrivers}/${drivers.length} autisti · ${availableVehicles}/${vehicles.length} mezzi`}
+          <button type="button" onClick={() => setDate(shiftIsoDate(date, 1))} className="btn-secondary h-11 w-11 p-0 text-xl" aria-label="Giorno successivo">›</button>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" disabled={confirming || loading} onClick={() => void handleConfirm()} className={`h-11 rounded-xl px-5 text-sm font-bold shadow-sm transition disabled:opacity-60 ${confirmed ? "border border-emerald-300 bg-white text-emerald-700" : "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-blue-200"}`}>
+            {confirming ? "Salvataggio..." : confirmed ? "✓ Disponibilità confermata" : "✓ Conferma disponibilità"}
+          </button>
+          <Link href="/piano-giorno" className="btn-secondary flex h-11 items-center px-5">▣ Piano del Giorno</Link>
+        </div>
+      </div>
+
+      <div className={`flex flex-col gap-3 rounded-xl border px-5 py-3.5 sm:flex-row sm:items-center ${confirmed ? "border-emerald-300 bg-emerald-50/80" : "border-amber-300 bg-amber-50/80"}`}>
+        <span className={`flex h-7 w-7 items-center justify-center rounded-full text-sm font-black text-white ${confirmed ? "bg-emerald-500" : "bg-amber-500"}`}>{confirmed ? "✓" : "!"}</span>
+        <p className={`flex-1 text-sm font-semibold ${confirmed ? "text-emerald-900" : "text-amber-900"}`}>{confirmed ? `Disponibilità confermata per il ${isoToIt(date)}${confirmedAt ? ` alle ${new Date(confirmedAt).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}` : ""}` : `Disponibilità non ancora confermata per il ${isoToIt(date)}. Il Piano del Giorno resta bloccato.`}</p>
+        {confirmed ? <button type="button" disabled={confirming} onClick={() => void handleConfirm()} className="rounded-lg border border-emerald-400 bg-white px-4 py-2 text-xs font-bold text-emerald-700">Annulla conferma</button> : null}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {([
+          ["driver", "Autisti disponibili", `${availableDrivers}/${drivers.length}`, "bg-blue-50 text-blue-600"],
+          ["vehicle", "Mezzi disponibili", `${availableVehicles}/${vehicles.length}`, "bg-violet-50 text-violet-600"],
+          ["unassigned", "Autisti senza mezzo", driversWithoutVehicle, "bg-orange-50 text-orange-600"],
+          ["conflict", "Conflitti", conflictDriverIds.size, "bg-rose-50 text-rose-600"],
+          ["blocked", "Mezzi con blocchi", new Set(blocks.map(block => block.vehicle_id)).size, "bg-amber-50 text-amber-600"],
+        ] as const).map(([icon, label, value, tone]) => <div key={label} className="flex h-[78px] items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 shadow-sm"><span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-lg ${tone}`}><AvailabilityKpiIcon type={icon} /></span><div><p className="text-[11px] font-medium text-slate-500">{label}</p><strong className="text-xl leading-none text-slate-950">{value}</strong></div></div>)}
       </div>
 
       {error ? <div className="card p-4 text-rose-600 text-sm mb-4">{error}</div> : null}
@@ -462,44 +543,25 @@ export default function DisponibilitaPage() {
         </div>
       ) : null}
 
-      {/* Banner conferma */}
-      <div className={`card p-4 mb-6 flex flex-col sm:flex-row items-start sm:items-center gap-3 ${confirmed ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"}`}>
-        <div className="flex-1">
-          {confirmed ? (
-            <p className="text-sm font-semibold text-emerald-800">
-              ✅ Disponibilità confermata per il {isoToIt(date)}
-              {confirmedAt ? <span className="ml-2 font-normal text-emerald-600 text-xs">({new Date(confirmedAt).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })})</span> : null}
-            </p>
-          ) : (
-            <p className="text-sm font-semibold text-amber-800">
-              ⏳ Disponibilità non ancora confermata per il {isoToIt(date)}.
-              Il Piano del Giorno non sarà operativo fino alla conferma.
-            </p>
-          )}
-        </div>
-        <button
-          type="button"
-          disabled={confirming || loading}
-          onClick={() => void handleConfirm()}
-          className={`px-4 py-2 rounded-xl text-sm font-bold transition disabled:opacity-60 ${confirmed ? "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}
-        >
-          {confirming ? "..." : confirmed ? "Annulla conferma" : "Conferma disponibilità del giorno"}
-        </button>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1.16fr)_minmax(0,.88fr)_205px]">
 
         {/* ══ AUTISTI ══════════════════════════════════════════════════════════ */}
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-base font-bold text-slate-700">Autisti ({availableDrivers}/{drivers.length} disponibili)</h2>
+        <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-xl font-extrabold text-slate-950">Autisti</h2>
             <button
               type="button"
               onClick={() => setShowAddDriver(!showAddDriver)}
-              className="text-xs border border-slate-300 rounded-lg px-2 py-1 text-slate-600 hover:bg-slate-50"
+              className="rounded-lg border border-indigo-300 px-3 py-2 text-xs font-bold text-indigo-600 hover:bg-indigo-50"
             >
               + Aggiungi autista
             </button>
+          </div>
+          <div className="mb-3 space-y-2">
+            <div className="relative"><span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">⌕</span><input value={search} onChange={event => setSearch(event.target.value)} className="input-saas h-9 w-full text-xs" style={{ paddingLeft: "2.5rem" }} placeholder="Cerca autista..." /></div>
+            <div className="flex flex-wrap gap-1.5">
+              {([["all", `Tutti ${drivers.length}`], ["available", `Disponibili ${availableDrivers}`], ["unavailable", `Indisponibili ${unavailableDrivers}`], ["no_access", `Senza accesso ${driversWithoutAccess}`]] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setDriverFilter(value)} className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-bold ${driverFilter === value ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-200 text-slate-500"}`}>{label}</button>)}
+            </div>
           </div>
 
           {/* Form aggiunta autista */}
@@ -537,9 +599,9 @@ export default function DisponibilitaPage() {
           <div className="space-y-2">
             {loading ? (
               <div className="card p-4 text-sm text-slate-400">Caricamento...</div>
-            ) : drivers.length === 0 ? (
+            ) : visibleDrivers.length === 0 ? (
               <div className="card p-4 text-sm text-slate-400">Nessun autista trovato.</div>
-            ) : drivers.map(driver => {
+            ) : visibleDrivers.map((driver, driverIndex) => {
               const avail = driverAvail.get(driver.id);
               const isAvailable = avail?.available !== false;
               const hasCambio = vehicleChangeEnabled.has(driver.id);
@@ -547,30 +609,35 @@ export default function DisponibilitaPage() {
               const w2 = vehicleWarning(driver.id, avail?.vehicle_2_id);
 
               return (
-                <div key={driver.id} className={`card p-3 transition ${isAvailable ? "" : "opacity-60 bg-slate-50"}`}>
+                <div key={driver.id} className={`grid gap-x-3 gap-y-1 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm transition sm:grid-cols-2 ${isAvailable ? "" : "bg-slate-50 opacity-60"}`}>
                   {/* ── Riga nome + toggle ─────────────────────────────── */}
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      disabled={saving === driver.id}
-                      onClick={() => void toggleDriver(driver.id)}
-                      className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${isAvailable ? "bg-emerald-500" : "bg-slate-300"}`}
-                    >
-                      <span className={`block w-4 h-4 rounded-full bg-white shadow mx-1 transition-transform ${isAvailable ? "translate-x-4" : ""}`} />
-                    </button>
-                    <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 sm:col-span-2">
+                    <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border border-slate-200 text-[10px] font-bold text-slate-600">{driverIndex + 1}</span>
+                    <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold text-slate-800">{driver.full_name}</p>
                       {driver.max_vehicle_capacity ? (
                         <p className="text-xs text-slate-400">Max {driver.max_vehicle_capacity} posti</p>
                       ) : null}
                     </div>
+                    <div className="text-center">
+                      <button
+                        type="button"
+                        disabled={saving === driver.id}
+                        onClick={() => void toggleDriver(driver.id)}
+                        className={`h-5 w-9 rounded-full transition-colors ${isAvailable ? "bg-emerald-500" : "bg-slate-300"}`}
+                      >
+                        <span className={`mx-1 block h-3 w-3 rounded-full bg-white shadow transition-transform ${isAvailable ? "translate-x-4" : ""}`} />
+                      </button>
+                      <span className={`mt-0.5 block text-[9px] font-semibold ${isAvailable ? "text-emerald-600" : "text-slate-400"}`}>{isAvailable ? "Disponibile" : "Non disponibile"}</span>
+                    </div>
                     {/* Orari disponibilità */}
                     {isAvailable ? (
-                      <div className="flex items-center gap-1 text-xs text-slate-500">
+                      <div className="flex items-end gap-1 text-xs text-slate-500">
+                        <span className="mb-2 hidden text-[9px] font-semibold text-slate-500 2xl:inline">Orario disponibilità</span>
                         <input
                           type="time"
                           value={avail?.available_from ?? ""}
-                          className="border rounded px-1 py-0.5 text-xs w-20"
+                          className="h-8 w-[74px] rounded-md border border-slate-200 px-1 text-xs"
                           onChange={e => updateAvailLocal(driver.id, { available_from: e.target.value || null })}
                           onBlur={() => void saveDriverAvail(driver.id)}
                         />
@@ -578,7 +645,7 @@ export default function DisponibilitaPage() {
                         <input
                           type="time"
                           value={avail?.available_to ?? ""}
-                          className="border rounded px-1 py-0.5 text-xs w-20"
+                          className="h-8 w-[74px] rounded-md border border-slate-200 px-1 text-xs"
                           onChange={e => updateAvailLocal(driver.id, { available_to: e.target.value || null })}
                           onBlur={() => void saveDriverAvail(driver.id)}
                         />
@@ -588,26 +655,28 @@ export default function DisponibilitaPage() {
 
                   {/* ── Note ─────────────────────────────────────────── */}
                   {isAvailable ? (
-                    <input
-                      type="text"
-                      placeholder="Note (opzionale)"
-                      value={avail?.notes ?? ""}
-                      maxLength={200}
-                      className="mt-2 w-full border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-600 placeholder:text-slate-300"
-                      onChange={e => updateAvailLocal(driver.id, { notes: e.target.value || null })}
-                      onBlur={() => void saveDriverAvail(driver.id)}
-                    />
+                    <label className="block self-start text-[9px] font-semibold text-slate-500">Note
+                      <input
+                        type="text"
+                        placeholder="Note (facoltative)..."
+                        value={avail?.notes ?? ""}
+                        maxLength={200}
+                        className="mt-0.5 h-8 w-full rounded-lg border border-slate-200 px-2 text-xs font-normal text-slate-600 placeholder:text-slate-300"
+                        onChange={e => updateAvailLocal(driver.id, { notes: e.target.value || null })}
+                        onBlur={() => void saveDriverAvail(driver.id)}
+                      />
+                    </label>
                   ) : null}
 
                   {/* ── Assegnazione mezzo ────────────────────────────── */}
                   {isAvailable ? (
-                    <div className="mt-2 space-y-1.5 border-t border-slate-100 pt-2">
+                    <div className="space-y-1 border-l border-slate-100 pl-3">
                       {/* Mezzo 1 */}
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs text-slate-500 w-14 flex-shrink-0">Mezzo:</span>
+                        <span className="w-14 flex-shrink-0 text-[9px] font-semibold text-slate-500">Mezzo 1</span>
                         <select
                           value={avail?.vehicle_1_id ?? ""}
-                          className={`flex-1 min-w-0 border rounded-lg px-2 py-1 text-xs ${!avail?.vehicle_1_id ? "border-amber-300 bg-amber-50" : "border-slate-200"}`}
+                          className={`h-8 min-w-0 flex-1 rounded-lg border px-2 text-xs ${!avail?.vehicle_1_id ? "border-amber-300 bg-amber-50" : "border-slate-200"}`}
                           onChange={e => {
                             updateAvailLocal(driver.id, { vehicle_1_id: e.target.value || null });
                             void saveDriverAvail(driver.id, { vehicle_1_id: e.target.value || null });
@@ -691,9 +760,9 @@ export default function DisponibilitaPage() {
 
                   {/* ── Badge accesso + form crea account ────────────── */}
                   {driver.access_suspended ? (
-                    <p className="mt-1.5 text-xs text-rose-600 font-medium">Accesso sospeso</p>
+                    <p className="mt-1.5 text-xs font-medium text-rose-600 sm:col-span-2">Accesso sospeso</p>
                   ) : !driver.has_access ? (
-                    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2">
+                    <div className="mt-1 rounded-lg border border-amber-200 bg-amber-50 p-2 sm:col-span-2">
                       {creatingAccessFor === driver.id ? (
                         <div className="space-y-2">
                           <p className="text-xs font-semibold text-amber-700">Crea account per {driver.full_name}</p>
@@ -739,17 +808,20 @@ export default function DisponibilitaPage() {
               );
             })}
           </div>
-        </div>
+        </section>
 
         {/* ══ MEZZI ════════════════════════════════════════════════════════════ */}
-        <div>
-          <h2 className="text-base font-bold text-slate-700 mb-3">Mezzi ({availableVehicles}/{vehicles.length} disponibili)</h2>
+        <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          <h2 className="text-xl font-extrabold text-slate-950">Mezzi</h2>
+          <div className="mb-3 mt-2 flex flex-wrap gap-1.5">
+            {([["all", `Tutti ${vehicles.length}`], ["available", `Disponibili ${availableVehicles}`], ["unavailable", `Indisponibili ${unavailableVehicles}`]] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setVehicleFilter(value)} className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-bold ${vehicleFilter === value ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-200 text-slate-500"}`}>{label}</button>)}
+          </div>
           <div className="space-y-2">
             {loading ? (
               <div className="card p-4 text-sm text-slate-400">Caricamento...</div>
-            ) : vehicles.length === 0 ? (
+            ) : visibleVehicles.length === 0 ? (
               <div className="card p-4 text-sm text-slate-400">Nessun mezzo trovato.</div>
-            ) : vehicles.map(vehicle => {
+            ) : visibleVehicles.map(vehicle => {
               const avail = vehicleAvail.get(vehicle.id);
               const commitment = commitmentByVehicleId.get(vehicle.id);
               const isAvailable = avail?.available !== false && !commitment;
@@ -767,27 +839,30 @@ export default function DisponibilitaPage() {
               })();
 
               return (
-                <div key={vehicle.id} className={`card p-3 transition ${isAvailable ? "" : "opacity-60 bg-slate-50"}`}>
-                  <div className="flex items-center gap-3">
+                <div key={vehicle.id} className={`rounded-xl border border-slate-200 bg-white p-2 shadow-sm transition ${isAvailable ? "" : "bg-slate-50 opacity-70"}`}>
+                  <div className="flex items-center gap-2">
+                    <div className="relative h-14 w-[76px] flex-shrink-0 overflow-hidden rounded-lg bg-white">
+                      <Image src={vehicleThumbnailSrc(vehicle)} alt={`Foto ${vehicle.label}`} fill sizes="76px" className="object-contain" quality={100} />
+                    </div>
                     <button
                       type="button"
                       disabled={saving === vehicle.id || Boolean(commitment)}
                       onClick={() => void toggleVehicle(vehicle.id, isAvailable)}
-                      className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${isAvailable ? "bg-emerald-500" : "bg-slate-300"}`}
+                      className={`h-6 w-10 flex-shrink-0 rounded-full transition-colors ${isAvailable ? "bg-emerald-500" : "bg-slate-300"}`}
                     >
                       <span className={`block w-4 h-4 rounded-full bg-white shadow mx-1 transition-transform ${isAvailable ? "translate-x-4" : ""}`} />
                     </button>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-sm font-semibold text-slate-800">{vehicle.label}</p>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <p className="text-sm font-bold leading-5 text-slate-800">{vehicle.label}</p>
                         {vehicle.plate && (
                           <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-500">{vehicle.plate}</span>
                         )}
-                        {assignedTo ? (
-                          <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[11px] font-semibold text-blue-700">{assignedTo}</span>
-                        ) : null}
                       </div>
-                      {vehicle.capacity ? <p className="text-xs text-slate-500">{vehicle.capacity} posti</p> : null}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {vehicle.capacity ? <p className="text-[11px] text-slate-500">{vehicle.capacity} posti</p> : null}
+                        {assignedTo ? <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">{assignedTo}</span> : null}
+                      </div>
                       {commitment ? (
                         <p className="mt-1 text-xs font-semibold text-rose-700">
                           Impegno: {COMMITMENT_LABELS[commitment.commitment_type] ?? commitment.commitment_type}
@@ -799,7 +874,7 @@ export default function DisponibilitaPage() {
                       <button
                         type="button"
                         onClick={() => setAddingBlockFor(addingBlockFor === vehicle.id ? null : vehicle.id)}
-                        className="text-xs border border-slate-300 rounded-lg px-2 py-1 text-slate-600 hover:bg-slate-50"
+                        className="flex-shrink-0 rounded-lg border border-indigo-300 px-2 py-1.5 text-[11px] font-semibold text-indigo-600 hover:bg-indigo-50"
                       >
                         + Blocco
                       </button>
@@ -844,13 +919,28 @@ export default function DisponibilitaPage() {
               );
             })}
           </div>
-        </div>
+        </section>
+
+        <aside className="space-y-3 xl:sticky xl:top-4">
+          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-lg font-extrabold text-slate-950">Controllo disponibilità</h2>
+            <div className="mt-3 divide-y divide-slate-100">
+              {[
+                ["▲", "Conflitti mezzo", conflictDriverIds.size, "bg-rose-100 text-rose-700"],
+                ["♟", "Autisti senza mezzo", driversWithoutVehicle, "bg-orange-100 text-orange-700"],
+                ["!", "Autisti senza accesso", driversWithoutAccess, "bg-amber-100 text-amber-700"],
+              ].map(([icon, label, value, tone]) => <div key={String(label)} className="flex items-center gap-2 py-3"><span className={`flex h-8 w-8 items-center justify-center rounded-lg text-xs font-black ${tone}`}>{icon}</span><span className="min-w-0 flex-1 text-xs font-semibold text-slate-600">{label}</span><strong className="text-lg text-slate-950">{value}</strong></div>)}
+            </div>
+            <Link href="/dispatch" className="mt-3 block rounded-lg border border-indigo-400 px-3 py-2.5 text-center text-xs font-bold text-indigo-600 hover:bg-indigo-50">Risolvi conflitti</Link>
+          </section>
+          <section className="rounded-xl border border-slate-200 bg-white p-4 text-xs text-slate-500 shadow-sm">
+            <h3 className="text-sm font-extrabold text-slate-900">Come funziona</h3>
+            <p className="mt-2 leading-5">Imposta orari, mezzi e blocchi. Poi conferma la giornata per abilitare il Piano del Giorno.</p>
+            <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 font-semibold">Oggi: {isoToIt(todayIso())}</div>
+          </section>
+        </aside>
       </div>
 
-      {/* Legenda date */}
-      <div className="mt-6 flex items-center justify-end gap-1 text-xs text-slate-400">
-        <span>Oggi: {isoToIt(todayIso())}</span>
-      </div>
     </section>
   );
 }
