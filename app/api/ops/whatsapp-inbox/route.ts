@@ -15,6 +15,17 @@ const unsupportedManualHeaderFormats = new Set(["IMAGE", "VIDEO", "DOCUMENT", "L
 const DEFAULT_THREAD_PAGE_SIZE = 50;
 const MAX_THREAD_PAGE_SIZE = 100;
 const SEARCH_CANDIDATE_LIMIT = 500;
+const INCREMENTAL_MESSAGES_LIMIT = 200;
+const PENDING_STATUS_LIMIT = 50;
+const MESSAGE_COLUMNS = "id, wa_message_id, reply_to_wa_message_id, direction, wa_id, phone_e164, message_type, template_name, text_body, media_id, media_mime_type, status, timestamp, created_at, booking_id, transfer_id, raw_message";
+// Colonne minime per il poll leggero (poll_mode=1): id, wa_id, phone_e164,
+// booking_id/transfer_id (associazione), last_message_at/preview, unread_count,
+// status, match_status, match_suggestions (badge "da verificare"), whatsapp_contacts
+// (nome contatto). Verificato via grep su app/(app)/whatsapp/page.tsx: customer_id,
+// assigned_to, created_at, updated_at non sono letti dal client (ThreadRow non li
+// dichiara), quindi vengono omessi solo qui per non toccare il payload del GET normale.
+const POLL_THREAD_COLUMNS = "id, wa_id, phone_e164, booking_id, transfer_id, last_message_at, last_message_preview, unread_count, status, match_status, match_suggestions, whatsapp_contacts(profile_name,customer_full_name,manual_contact_name,wa_profile_name)";
+const FULL_THREAD_COLUMNS = "id, wa_id, phone_e164, customer_id, booking_id, transfer_id, last_message_at, last_message_preview, unread_count, assigned_to, status, match_status, match_suggestions, created_at, updated_at, whatsapp_contacts(profile_name,customer_full_name,manual_contact_name,wa_profile_name)";
 
 // Stessa euristica già usata in app/api/ops/search/route.ts: virgole e parentesi
 // romperebbero la sintassi della stringa .or() di PostgREST, quindi in quel caso
@@ -248,6 +259,75 @@ async function upsertManualThread(
   };
 }
 
+function buildLatestStatusMap(
+  statusRows: Array<{ wa_message_id: string | null; status: string; raw_status: unknown }> | null | undefined
+) {
+  const map = new Map<string, { status: string; failure_reason: string | null }>();
+  for (const row of statusRows ?? []) {
+    if (!row.wa_message_id || map.has(row.wa_message_id)) continue;
+    map.set(row.wa_message_id, { status: row.status, failure_reason: extractStatusFailureReason(row.raw_status) });
+  }
+  return map;
+}
+
+function enrichMessages(
+  rawMessages: Array<Record<string, unknown>>,
+  latestStatusByMessageId: Map<string, { status: string; failure_reason: string | null }>,
+  replyLookupMap: Map<string, Record<string, unknown>>
+) {
+  return rawMessages.map((message) => {
+    const latestStatus = message.wa_message_id ? latestStatusByMessageId.get(message.wa_message_id as string) : null;
+    const rawMessage = typeof message.raw_message === "object" && message.raw_message !== null
+      ? message.raw_message as Record<string, unknown>
+      : null;
+    const documentMeta = rawMessage && typeof rawMessage.document === "object" && rawMessage.document !== null
+      ? rawMessage.document as { filename?: unknown }
+      : null;
+    const replyTarget = message.reply_to_wa_message_id
+      ? replyLookupMap.get(message.reply_to_wa_message_id as string)
+      : null;
+    return {
+      id: message.id,
+      wa_message_id: message.wa_message_id,
+      reply_to_wa_message_id: message.reply_to_wa_message_id,
+      direction: message.direction,
+      wa_id: message.wa_id,
+      phone_e164: message.phone_e164,
+      message_type: message.message_type,
+      template_name: message.template_name,
+      text_body: message.text_body,
+      media_id: message.media_id,
+      media_mime_type: message.media_mime_type,
+      status: latestStatus?.status ?? message.status,
+      failure_reason: latestStatus?.status === "failed" ? latestStatus.failure_reason : null,
+      timestamp: message.timestamp,
+      created_at: message.created_at,
+      booking_id: message.booking_id,
+      transfer_id: message.transfer_id,
+      media_filename: typeof documentMeta?.filename === "string" ? documentMeta.filename : null,
+      reply_to_message: replyTarget
+        ? {
+            id: replyTarget.id,
+            wa_message_id: replyTarget.wa_message_id,
+            direction: replyTarget.direction,
+            message_type: replyTarget.message_type,
+            template_name: replyTarget.template_name,
+            preview: compactMessagePreview(replyTarget as { message_type?: string | null; text_body?: string | null; template_name?: string | null })
+          }
+        : message.reply_to_wa_message_id
+          ? {
+              id: null,
+              wa_message_id: message.reply_to_wa_message_id,
+              direction: null,
+              message_type: null,
+              template_name: null,
+              preview: "Messaggio originale non trovato in questa conversazione"
+            }
+          : null,
+    };
+  });
+}
+
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "assistenza"]);
   if (auth instanceof NextResponse) return auth;
@@ -258,7 +338,15 @@ export async function GET(request: NextRequest) {
   // volta al mount e li tiene in stato locale. I refetch "silenziosi" (poll
   // 12s/20s, cambio filtro/thread, refresh dopo mutazioni) passano
   // include_templates=0 per evitare 2 query DB inutili ad ogni giro.
-  const includeTemplates = url.searchParams.get("include_templates") !== "0";
+  // poll_mode=1: refresh leggero usato dai timer 12s/20s e da visibilitychange
+  // (Sprint Performance 5). Salta sempre template/settings (oltre a rispettare
+  // include_templates=0 già inviato dal client), salta la query "services" e,
+  // se c'è un cursore messages_after/_id, rilegge solo i messaggi nuovi + gli
+  // status dei messaggi outbound ancora non definitivi, invece dell'intera
+  // conversazione. Il comportamento del GET normale (senza poll_mode) resta
+  // identico a prima: nessuna retrocompatibilità rotta.
+  const pollMode = url.searchParams.get("poll_mode") === "1";
+  const includeTemplates = !pollMode && url.searchParams.get("include_templates") !== "0";
   let settings: Awaited<ReturnType<typeof getTenantWhatsAppSettings>> | null = null;
   let syncedTemplates = [] as Awaited<ReturnType<typeof loadSyncedWhatsAppTemplates>>;
   let templateFetchError: string | null = null;
@@ -309,7 +397,7 @@ export async function GET(request: NextRequest) {
           .from("services")
           .select("id")
           .eq("tenant_id", tenantId)
-          .or(`customer_name.ilike.${pattern},customer_first_name.ilike.${pattern},customer_last_name.ilike.${pattern},phone.ilike.${pattern},phone_e164.ilike.${pattern},booking_service_kind.ilike.${pattern}`)
+          .or(`customer_name.ilike.${pattern},customer_first_name.ilike.${pattern},customer_last_name.ilike.${pattern},phone.ilike.${pattern},booking_service_kind.ilike.${pattern}`)
           .limit(SEARCH_CANDIDATE_LIMIT),
         auth.admin
           .from("services")
@@ -328,7 +416,7 @@ export async function GET(request: NextRequest) {
       // romperebbe, quindi ripieghiamo su .ilike() singole per campo (nessuna
       // ricerca sul nome hotel in questo ramo raro: caso limite accettato).
       const contactFields = ["profile_name", "customer_full_name", "manual_contact_name", "wa_profile_name"] as const;
-      const serviceFields = ["customer_name", "customer_first_name", "customer_last_name", "phone", "phone_e164", "booking_service_kind"] as const;
+      const serviceFields = ["customer_name", "customer_first_name", "customer_last_name", "phone", "booking_service_kind"] as const;
       const [contactsRows, serviceRows] = await Promise.all([
         Promise.all(contactFields.map((field) =>
           auth.admin.from("whatsapp_contacts").select("id").eq("tenant_id", tenantId).ilike(field, pattern).limit(SEARCH_CANDIDATE_LIMIT)
@@ -344,7 +432,7 @@ export async function GET(request: NextRequest) {
 
   let threadQuery = auth.admin
     .from("whatsapp_threads")
-    .select("id, wa_id, phone_e164, customer_id, booking_id, transfer_id, last_message_at, last_message_preview, unread_count, assigned_to, status, match_status, match_suggestions, created_at, updated_at, whatsapp_contacts(profile_name,customer_full_name,manual_contact_name,wa_profile_name)")
+    .select(pollMode ? POLL_THREAD_COLUMNS : FULL_THREAD_COLUMNS)
     .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
     .order("last_message_at", { ascending: false, nullsFirst: false });
 
@@ -404,7 +492,7 @@ export async function GET(request: NextRequest) {
   const { data: services } = serviceIds.length
     ? await auth.admin
       .from("services")
-      .select("id, customer_name, customer_first_name, customer_last_name, phone, phone_e164, date, time, booking_service_kind, hotel_id, hotels(name)")
+      .select("id, customer_name, customer_first_name, customer_last_name, phone, date, time, booking_service_kind, hotel_id, hotels(name)")
       .eq("tenant_id", tenantId)
       .in("id", serviceIds)
     : { data: [] };

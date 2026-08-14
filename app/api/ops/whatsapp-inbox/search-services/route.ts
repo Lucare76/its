@@ -13,9 +13,9 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await auth.admin
     .from("services")
-    .select("id, customer_name, customer_first_name, customer_last_name, phone, phone_e164, date, time, booking_service_kind, hotels(name)")
+    .select("id, customer_name, customer_first_name, customer_last_name, phone, date, time, booking_service_kind, hotels(name)")
     .eq("tenant_id", auth.membership.tenant_id)
-    .or(`customer_name.ilike.%${q}%,phone.ilike.%${q}%,phone_e164.ilike.%${q}%`)
+    .or(`customer_name.ilike.%${q}%,phone.ilike.%${q}%`)
     .order("date", { ascending: false })
     .limit(20);
 
