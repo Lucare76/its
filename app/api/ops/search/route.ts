@@ -25,7 +25,6 @@ const SERVICE_SEARCH_COLUMNS = [
   "customer_last_name",
   "customer_email",
   "phone",
-  "phone_e164",
   "date",
   "time",
   "status",
@@ -44,9 +43,6 @@ const SERVICE_SEARCH_COLUMNS = [
   "orario_barca",
   "pickup_time",
   "transport_code",
-  "transport_code_return",
-  "transport_reference_outward",
-  "transport_reference_return",
   "train_arrival_number",
   "train_departure_number",
   "bus_city_origin",
@@ -55,8 +51,6 @@ const SERVICE_SEARCH_COLUMNS = [
   "agency_id",
   "meeting_point",
   "pickup_hotel",
-  "tour_name",
-  "excursion_title",
   "notes",
   "linked_service_id",
   "created_at",
@@ -139,6 +133,14 @@ function isUuid(value: string): boolean {
   return UUID_PATTERN.test(value.trim());
 }
 
+function serviceTypeNeedles(value: string): Array<"transfer" | "bus_tour"> {
+  const normalized = normalizeNeedle(value);
+  const needles: Array<"transfer" | "bus_tour"> = [];
+  if (normalized.includes("transfer")) needles.push("transfer");
+  if (normalized.includes("bus") || normalized.includes("tour")) needles.push("bus_tour");
+  return Array.from(new Set(needles));
+}
+
 function sortSearchRows(rows: SearchServiceRow[]): SearchServiceRow[] {
   return [...rows].sort((a, b) => {
     const created = String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
@@ -218,19 +220,13 @@ async function querySearchCandidates(
       "vessel",
       "notes",
       "transport_code",
-      "transport_code_return",
-      "transport_reference_outward",
-      "transport_reference_return",
       "train_arrival_number",
       "train_departure_number",
       "booking_service_kind",
-      "service_type",
       "service_type_code",
       "bus_city_origin",
       "meeting_point",
       "pickup_hotel",
-      "tour_name",
-      "excursion_title",
     ];
     if (canUsePostgrestOr(input.q)) {
       run((query) => query.or(textFields.map((field) => `${field}.ilike.${pattern}`).join(",")));
@@ -247,12 +243,14 @@ async function querySearchCandidates(
     }
     const phoneFilters = phoneNeedles(input.q).flatMap((needle) => [
       `phone.ilike.%${needle}%`,
-      `phone_e164.ilike.%${needle}%`,
     ]);
     if (phoneFilters.length) {
       run((query) => query.or(phoneFilters.join(",")));
     }
     if (isUuid(input.q)) run((query) => query.eq("id", input.q));
+    for (const serviceType of serviceTypeNeedles(input.q)) {
+      run((query) => query.eq("service_type", serviceType));
+    }
     if (input.matchedHotelIds.length) run((query) => query.in("hotel_id", input.matchedHotelIds));
     if (input.matchedAgencyIds.length) run((query) => query.in("agency_id", input.matchedAgencyIds));
     if (isPrivateNeedle(input.q)) {
