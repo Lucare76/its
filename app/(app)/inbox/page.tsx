@@ -124,6 +124,21 @@ function serviceCustomerLabel(service: Pick<Service, "customer_name"> & Partial<
   return service.customer_name?.trim() || joined || "Cliente N/D";
 }
 
+function isRecurringShuttleService(service: {
+  booking_service_kind?: unknown;
+  service_type_code?: unknown;
+  route_kind?: unknown;
+  vessel?: unknown;
+}) {
+  const markers = [
+    service.booking_service_kind,
+    service.service_type_code,
+    service.route_kind,
+    service.vessel,
+  ].map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""));
+  return markers.some((value) => value === "navetta" || value === "shuttle_hotel" || value === "shuttle");
+}
+
 function serviceOwnerLabel(service: Pick<Service, "agency_id" | "billing_party_name"> & Partial<Service>, agencyNameById: Map<string, string>) {
   return service.billing_party_name ?? (service.agency_id ? agencyNameById.get(service.agency_id) : null) ?? "Privato";
 }
@@ -756,7 +771,7 @@ export default function InboxPage() {
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const activeServices = services.filter((service) => service.status !== "cancelled" && !service.is_draft);
+  const activeServices = services.filter((service) => service.status !== "cancelled" && !service.is_draft && !isRecurringShuttleService(service));
   const todayServices = activeServices.filter((service) => service.date === today);
   const arrivalCount = todayServices.filter((service) => service.direction === "arrival").length;
   const departureCount = todayServices.filter((service) => service.direction === "departure").length;
@@ -766,9 +781,10 @@ export default function InboxPage() {
   }).length;
   const tomorrow = addIsoDays(today, 1);
   const weekEnd = addIsoDays(today, 7);
-  const bookingSource: GlobalBookingSearchResult[] = searchQuery.trim() || agencyFilter.trim()
-    ? searchResults
-    : activeServices;
+  const hasBookingSearch = Boolean(searchQuery.trim() || agencyFilter.trim());
+  const bookingSource: GlobalBookingSearchResult[] = hasBookingSearch
+    ? searchResults.filter((service) => !isRecurringShuttleService(service))
+    : [];
   const visibleBookings = bookingSource.filter((service) => {
     const serviceDate = service.arrival_date ?? service.departure_date ?? service.date;
     if (bookingFilter === "today") return serviceDate === today;
@@ -826,7 +842,8 @@ export default function InboxPage() {
       <div className="space-y-3">
         {searchLoading ? <div className="pms-panel p-6 text-sm text-slate-500">Ricerca in corso...</div> : null}
         {!searchLoading && searchError ? <div className="pms-panel border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">Errore ricerca: {searchError}</div> : null}
-        {!searchLoading && !searchError && visibleBookings.length === 0 ? <div className="pms-panel p-8 text-center text-sm text-slate-500">Nessuna prenotazione nel filtro selezionato.</div> : null}
+        {!searchLoading && !searchError && !hasBookingSearch ? <div className="pms-panel p-8 text-center text-sm text-slate-500">Cerca una prenotazione per nome, codice, telefono, hotel o agenzia.</div> : null}
+        {!searchLoading && !searchError && hasBookingSearch && visibleBookings.length === 0 ? <div className="pms-panel p-8 text-center text-sm text-slate-500">Nessuna prenotazione trovata.</div> : null}
         {!searchLoading && visibleBookings.map((service, index) => {
           const expanded = expandedServiceId === service.id || (expandedServiceId === null && index === 0);
           const transportTimes = bookingListTransportTimes(service);
