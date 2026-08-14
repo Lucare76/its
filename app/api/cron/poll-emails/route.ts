@@ -1,16 +1,20 @@
 /**
  * GET /api/cron/poll-emails
- * Polling IMAP ogni 15 minuti — scarica nuove email inbound e le processa.
+ * Polling IMAP — scarica nuove email inbound e le processa.
  * Vercel Cron: schedule ogni-15-minuti (via cron-job.org su Hobby plan)
  *
- * Riusa la logica esistente in runEmailOperationalImport (lib/server/email-test-import.ts).
- * Dopo ogni import manda push notification agli admin/operator se ci sono nuovi booking.
+ * Sprint Performance 8: passa da pollEmailNow() (lib/server/email-poll.ts),
+ * lo stesso entrypoint usato da /api/email/operational-import. Lock e
+ * cooldown condivisi garantiscono che, se questo trigger e un altro
+ * (Vercel Cron, cron-job.org, refresh manuale Inbox) partono vicini nel
+ * tempo, solo uno dei due apra davvero una connessione IMAP.
+ * Dopo ogni import reale manda push notification agli admin/operator se ci sono nuovi booking.
  *
  * Env vars IMAP: IMAP_HOST, IMAP_PORT, IMAP_USER, IMAP_PASS, IMAP_TLS (optional)
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { runEmailOperationalImport } from "@/lib/server/email-test-import";
+import { pollEmailNow } from "@/lib/server/email-poll";
 import { sendPushToTenantRoles } from "@/lib/server/web-push";
 
 export const runtime = "nodejs";
@@ -35,11 +39,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  // IMAP configurato?
-  if (!process.env.IMAP_HOST || !process.env.IMAP_USER || !process.env.IMAP_PASS) {
-    return NextResponse.json({ ok: false, error: "IMAP non configurato.", imap_not_configured: true });
-  }
-
   const admin = adminClient();
 
   // Risolvi tenant (usa INBOUND_DEFAULT_TENANT_ID o primo tenant)
@@ -52,34 +51,59 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "Nessun tenant disponibile." }, { status: 400 });
   }
 
-  try {
-    // runEmailOperationalImport richiede un auth context
-    const fakeAuth = {
-      admin,
-      user: { id: "cron-system", email: null as string | null },
-      membership: { tenant_id: tenantId, role: "admin", suspended: false },
-    };
+  // runEmailOperationalImport richiede un auth context
+  const fakeAuth = {
+    admin,
+    user: { id: "cron-system", email: null as string | null },
+    membership: { tenant_id: tenantId, role: "admin", suspended: false },
+  };
 
-    const result = await runEmailOperationalImport(fakeAuth as Parameters<typeof runEmailOperationalImport>[0]);
+  // force=false: il cron rispetta lock e cooldown condivisi. Se questo giro
+  // arriva mentre un altro trigger (Vercel Cron, cron-job.org, o un refresh
+  // manuale) ha già un import in corso o appena completato, non apre una
+  // seconda connessione IMAP — vedi lib/server/email-poll.ts.
+  const result = await pollEmailNow(fakeAuth, { force: false });
 
-    // Se ci sono nuovi servizi importati, manda push agli admin/operator
-    const importedCount = (result as Record<string, unknown>).imported_count as number | undefined ?? 0;
-    if (importedCount > 0) {
-      await sendPushToTenantRoles(tenantId, ["admin", "operator"], {
-        title: `📧 ${importedCount} nuov${importedCount === 1 ? "a" : "e"} email${importedCount === 1 ? "" : ""} importat${importedCount === 1 ? "a" : "e"}`,
-        body: "Nuovi booking da processare in Posta in arrivo.",
-        url: "/inbox",
-        tag: "inbound-import",
-      });
+  if (result.status === "error") {
+    if (result.imap_not_configured) {
+      return NextResponse.json({ ok: false, error: "IMAP non configurato.", imap_not_configured: true });
     }
-
-    return NextResponse.json({ ok: true, ...result as object });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const message = result.error ?? "Unknown error";
     // IMAP non raggiungibile non è un errore critico
     if (message.includes("IMAP") || message.includes("imap") || message.includes("ECONNREFUSED")) {
       return NextResponse.json({ ok: false, error: `IMAP non raggiungibile: ${message}` });
     }
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
+
+  if (result.status === "skipped_in_progress" || result.status === "skipped_recent") {
+    return NextResponse.json({ ok: true, status: result.status, skipped: true, last_success_at: result.last_success_at ?? null });
+  }
+
+  // Se ci sono nuovi servizi importati, manda push agli admin/operator
+  const detail = result.detail!;
+  const importedCount = detail.draftsCreated;
+  if (importedCount > 0) {
+    await sendPushToTenantRoles(tenantId, ["admin", "operator"], {
+      title: `📧 ${importedCount} nuov${importedCount === 1 ? "a" : "e"} email${importedCount === 1 ? "" : ""} importat${importedCount === 1 ? "a" : "e"}`,
+      body: "Nuovi booking da processare in Posta in arrivo.",
+      url: "/inbox",
+      tag: "inbound-import",
+    });
+  }
+
+  return NextResponse.json({
+    ok: true,
+    status: "imported",
+    mailbox: detail.mailbox,
+    unreadFound: detail.unreadFound,
+    emailsProcessed: detail.emailsProcessed,
+    pdfFound: detail.pdfFound,
+    draftsCreated: detail.draftsCreated,
+    duplicateWarnings: detail.duplicateWarnings,
+    skippedNoPdf: detail.skippedNoPdf,
+    started_at: result.started_at,
+    finished_at: result.finished_at,
+    last_success_at: result.last_success_at,
+  });
 }

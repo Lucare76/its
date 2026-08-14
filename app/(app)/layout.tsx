@@ -747,26 +747,11 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     };
   }, [authRole, authTenantId, inboxSoundEnabled]);
 
-  // Polling automatico email ogni 5 minuti
-  useEffect(() => {
-    if (!authTenantId || !["admin", "operator"].includes(authRole ?? "")) return;
-
-    const doImport = async () => {
-      try {
-        const { data: sessionData } = await supabase!.auth.getSession();
-        const token = sessionData.session?.access_token;
-        if (!token) return;
-        await fetch("/api/email/operational-import", {
-          method: "POST",
-          headers: { authorization: `Bearer ${token}` }
-        });
-      } catch { /* silenzioso */ }
-    };
-
-    doImport(); // prima chiamata subito
-    const interval = setInterval(doImport, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [authTenantId, authRole]);
+  // Sprint Performance 8: il polling IMAP automatico dal layout globale è
+  // stato rimosso. L'import email ora passa solo dal cron centralizzato
+  // (/api/cron/poll-emails) e dal refresh manuale in Inbox, entrambi tramite
+  // lo stesso lock/cooldown condiviso (lib/server/email-poll.ts). Il layout
+  // non apre più connessioni IMAP.
 
   // Carica preferiti quando userId è disponibile
   // NOTA: deve stare qui, prima dei return condizionali, per rispettare le regole degli hook

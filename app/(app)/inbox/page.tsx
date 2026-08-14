@@ -613,7 +613,12 @@ export default function InboxPage() {
     const token = await getToken();
     if (!token) { setMessage("Sessione non valida."); return; }
     setImportRefreshing(true);
-    const response = await fetch("/api/email/operational-import", {
+    // force=1: l'operatore ha premuto "Aggiorna" esplicitamente, quindi
+    // ignoriamo il cooldown (vuole un controllo reale ora). Il lock di
+    // concorrenza resta comunque attivo: se un import è già in corso su
+    // un'altra sessione, la richiesta torna "skipped_in_progress" senza
+    // aprire una seconda connessione IMAP.
+    const response = await fetch("/api/email/operational-import?force=1", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` }
     });
@@ -625,9 +630,15 @@ export default function InboxPage() {
     }
     await loadData(token);
     setImportRefreshing(false);
-    setMessage(
-      `Import eseguito. Email trovate: ${body?.unreadFound ?? 0}, PDF: ${body?.pdfFound ?? 0}, importate: ${body?.draftsCreated ?? 0}, duplicate: ${body?.duplicateWarnings ?? 0}.`
-    );
+    if (body?.status === "skipped_in_progress") {
+      setMessage("Import email già in corso (avviato da un'altra sessione/scheduler). Riprova tra qualche secondo.");
+    } else if (body?.status === "skipped_recent") {
+      setMessage("Import email già eseguito da poco: nessuna nuova connessione aperta.");
+    } else {
+      setMessage(
+        `Import eseguito. Email trovate: ${body?.unreadFound ?? 0}, PDF: ${body?.pdfFound ?? 0}, importate: ${body?.draftsCreated ?? 0}, duplicate: ${body?.duplicateWarnings ?? 0}.`
+      );
+    }
   };
 
   const deleteEmail = async () => {
