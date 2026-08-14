@@ -11,8 +11,56 @@ export const runtime = "nodejs";
 type AuthorizedSearchRequest = Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>;
 type SearchAdminClient = AuthorizedSearchRequest["admin"];
 
-// Compatibile con database che non hanno ancora tutte le colonne opzionali.
-const SERVICE_SEARCH_COLUMNS = "*";
+// Colonne esplicite: servono a ricerca (.ilike/.or), risposta JSON e ranking
+// (lib/booking-search.ts). Confermate esistenti in lib/types.ts (Service) e
+// usate altrove nell'app (new-booking, agency/bookings, service-display) —
+// ripristinate dopo una regressione che le aveva sostituite con select("*")
+// (payload più pesante, non più leggero, a differenza degli altri Sprint).
+const SERVICE_SEARCH_COLUMNS = [
+  "id",
+  "inbound_email_id",
+  "is_draft",
+  "customer_name",
+  "customer_first_name",
+  "customer_last_name",
+  "customer_email",
+  "phone",
+  "phone_e164",
+  "date",
+  "time",
+  "status",
+  "direction",
+  "pax",
+  "vessel",
+  "booking_service_kind",
+  "service_type",
+  "service_type_code",
+  "arrival_date",
+  "arrival_time",
+  "train_arrival_time",
+  "departure_date",
+  "departure_time",
+  "train_departure_time",
+  "orario_barca",
+  "pickup_time",
+  "transport_code",
+  "transport_code_return",
+  "transport_reference_outward",
+  "transport_reference_return",
+  "train_arrival_number",
+  "train_departure_number",
+  "bus_city_origin",
+  "hotel_id",
+  "billing_party_name",
+  "agency_id",
+  "meeting_point",
+  "pickup_hotel",
+  "tour_name",
+  "excursion_title",
+  "notes",
+  "linked_service_id",
+  "created_at",
+].join(", ");
 
 type SearchServiceRow = Partial<Service> & {
   id: string;
@@ -23,6 +71,7 @@ type SearchServiceRow = Partial<Service> & {
 type SearchQueryResult = { data: SearchServiceRow[] | null; error: { message: string } | null };
 type SearchQueryBuilder = PromiseLike<SearchQueryResult> & {
   ilike(column: string, pattern: string): SearchQueryBuilder;
+  eq(column: string, value: string): SearchQueryBuilder;
   in(column: string, values: string[]): SearchQueryBuilder;
   is(column: string, value: null): SearchQueryBuilder;
   or(filters: string): SearchQueryBuilder;
@@ -81,6 +130,13 @@ function isPrivateNeedle(value: string): boolean {
 
 function canUsePostgrestOr(value: string): boolean {
   return !/[(),]/.test(value);
+}
+
+// services.id è uuid: Postgres non supporta ILIKE (~~*) su uuid, quindi va
+// cercato con un'uguaglianza esatta e mai incluso nella lista textFields.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value.trim());
 }
 
 function sortSearchRows(rows: SearchServiceRow[]): SearchServiceRow[] {
@@ -151,8 +207,31 @@ async function querySearchCandidates(
 
   if (input.q) {
     const pattern = `%${input.q}%`;
-    // `id` e una colonna UUID: Postgres non consente ILIKE sugli UUID.
-    const textFields = ["customer_name", "billing_party_name", "vessel", "notes", "transport_code"];
+    // `id` (uuid) è deliberatamente escluso da questa lista e cercato sotto
+    // con .eq(), non con ILIKE (Postgres non supporta ILIKE su uuid).
+    const textFields = [
+      "customer_name",
+      "customer_first_name",
+      "customer_last_name",
+      "customer_email",
+      "billing_party_name",
+      "vessel",
+      "notes",
+      "transport_code",
+      "transport_code_return",
+      "transport_reference_outward",
+      "transport_reference_return",
+      "train_arrival_number",
+      "train_departure_number",
+      "booking_service_kind",
+      "service_type",
+      "service_type_code",
+      "bus_city_origin",
+      "meeting_point",
+      "pickup_hotel",
+      "tour_name",
+      "excursion_title",
+    ];
     if (canUsePostgrestOr(input.q)) {
       run((query) => query.or(textFields.map((field) => `${field}.ilike.${pattern}`).join(",")));
     } else {
@@ -160,12 +239,20 @@ async function querySearchCandidates(
     }
     for (const token of textTokens(input.q)) {
       const tokenPattern = `%${token}%`;
-      run((query) => query.ilike("customer_name", tokenPattern));
+      run((query) => query.or([
+        `customer_name.ilike.${tokenPattern}`,
+        `customer_first_name.ilike.${tokenPattern}`,
+        `customer_last_name.ilike.${tokenPattern}`,
+      ].join(",")));
     }
-    const phoneFilters = phoneNeedles(input.q).map((needle) => `phone.ilike.%${needle}%`);
+    const phoneFilters = phoneNeedles(input.q).flatMap((needle) => [
+      `phone.ilike.%${needle}%`,
+      `phone_e164.ilike.%${needle}%`,
+    ]);
     if (phoneFilters.length) {
       run((query) => query.or(phoneFilters.join(",")));
     }
+    if (isUuid(input.q)) run((query) => query.eq("id", input.q));
     if (input.matchedHotelIds.length) run((query) => query.in("hotel_id", input.matchedHotelIds));
     if (input.matchedAgencyIds.length) run((query) => query.in("agency_id", input.matchedAgencyIds));
     if (isPrivateNeedle(input.q)) {
@@ -321,7 +408,7 @@ export async function GET(req: NextRequest) {
           customer_last_name: r.customer_last_name ?? null,
           customer_email: r.customer_email ?? null,
           phone: r.phone ?? null,
-          phone_e164: null,
+          phone_e164: r.phone_e164 ?? null,
           date: r.date,
           time: r.time,
           status: r.status,
