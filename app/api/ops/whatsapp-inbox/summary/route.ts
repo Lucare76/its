@@ -32,22 +32,37 @@ export async function GET(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
 
   const tenantId = auth.membership.tenant_id;
-  const { data, error } = await auth.admin
-    .from("whatsapp_threads")
-    .select("id, phone_e164, last_message_at, last_message_preview, unread_count, whatsapp_contacts(manual_contact_name,customer_full_name,profile_name,wa_profile_name)")
-    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
-    .neq("status", "closed")
-    .gt("unread_count", 0)
-    .order("last_message_at", { ascending: false, nullsFirst: false })
-    .limit(50);
 
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  // Il badge globale ha bisogno solo del numero di thread non letti e dell'ultimo
+  // messaggio: una count "head" mirata + una singola riga LIMIT 1 costano molto
+  // meno del precedente fetch di fino a 50 righe complete (con join) ad ogni poll,
+  // ed evitano anche il bug per cui il badge si fermava a 50 anche con più unread.
+  const [{ count, error: countError }, { data: latestRows, error: latestError }] = await Promise.all([
+    auth.admin
+      .from("whatsapp_threads")
+      .select("id", { count: "exact", head: true })
+      .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+      .neq("status", "closed")
+      .gt("unread_count", 0),
+    auth.admin
+      .from("whatsapp_threads")
+      .select("id, phone_e164, last_message_at, last_message_preview, unread_count, whatsapp_contacts(manual_contact_name,customer_full_name,profile_name,wa_profile_name)")
+      .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+      .neq("status", "closed")
+      .gt("unread_count", 0)
+      .order("last_message_at", { ascending: false, nullsFirst: false })
+      .limit(1)
+  ]);
+
+  if (countError) {
+    return NextResponse.json({ ok: false, error: countError.message }, { status: 500 });
+  }
+  if (latestError) {
+    return NextResponse.json({ ok: false, error: latestError.message }, { status: 500 });
   }
 
-  const rows = ((data ?? []) as ThreadSummaryRow[]);
-  const unreadCount = rows.length;
-  const latest = rows[0] ?? null;
+  const unreadCount = count ?? 0;
+  const latest = ((latestRows ?? []) as ThreadSummaryRow[])[0] ?? null;
   const latestSender = latest ? contactName(latest.whatsapp_contacts) ?? latest.phone_e164 ?? "cliente" : null;
 
   return NextResponse.json({

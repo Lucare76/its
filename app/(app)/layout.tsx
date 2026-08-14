@@ -70,6 +70,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [favoritesEditMode, setFavoritesEditMode] = useState(false);
   const whatsAppSummaryInitializedRef = useRef(false);
   const latestWhatsAppMessageAtRef = useRef<string | null>(null);
+  const whatsAppSummaryInFlightRef = useRef(false);
+  const pathnameRef = useRef(pathname);
   const title = useMemo(() => pageTitle(pathname), [pathname]);
   const mainNav = useMemo(
     () =>
@@ -387,6 +389,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   };
 
   useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
+
+  useEffect(() => {
     if (!authTenantId || !["admin", "operator", "supervisor"].includes(authRole ?? "")) {
       whatsAppSummaryInitializedRef.current = false;
       latestWhatsAppMessageAtRef.current = null;
@@ -395,6 +401,12 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     let isActive = true;
 
     const refreshWhatsAppSummary = async () => {
+      // Il tab in background non ha bisogno di badge/notifiche in tempo reale:
+      // evitiamo di interrogare Supabase finché l'utente non torna sulla pagina.
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      // Evita fetch sovrapposti (es. tick dell'intervallo + refresh da visibilitychange).
+      if (whatsAppSummaryInFlightRef.current) return;
+      whatsAppSummaryInFlightRef.current = true;
       try {
         const { data: sessionData } = await supabase!.auth.getSession();
         const token = sessionData.session?.access_token;
@@ -421,24 +433,35 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         latestWhatsAppMessageAtRef.current = nextLatest;
         whatsAppSummaryInitializedRef.current = true;
 
-        if (initialized && nextLatest && nextLatest !== previousLatest && unreadCount > 0 && pathname !== "/whatsapp") {
+        if (initialized && nextLatest && nextLatest !== previousLatest && unreadCount > 0 && pathnameRef.current !== "/whatsapp") {
           const sender = payload.latest_sender ? ` da ${payload.latest_sender}` : "";
           const preview = payload.latest_preview ? `: ${payload.latest_preview}` : "";
           setLiveToastMessage(`Nuovo messaggio WhatsApp${sender}${preview}`.slice(0, 180));
           if (inboxSoundEnabled) playInboxSound();
         }
       } catch {
-        // Notifica non critica: se fallisce riproviamo al prossimo polling.
+        // Notifica non critica: se fallisce manteniamo l'ultimo stato noto e riproviamo al prossimo polling.
+      } finally {
+        whatsAppSummaryInFlightRef.current = false;
       }
     };
 
     void refreshWhatsAppSummary();
     const interval = window.setInterval(refreshWhatsAppSummary, 30_000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refreshWhatsAppSummary();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       isActive = false;
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [authRole, authTenantId, inboxSoundEnabled, pathname]);
+    // pathname NON è più una dipendenza: il polling globale non deve riavviarsi
+    // ad ogni cambio pagina. Il valore aggiornato di pathname è letto da
+    // pathnameRef (vedi effect sopra), così il controllo "non mostrare il toast
+    // se sono già su /whatsapp" resta corretto senza far ripartire l'intervallo.
+  }, [authRole, authTenantId, inboxSoundEnabled]);
 
   const playSlaAlarm = () => {
     if (typeof window === "undefined") return;

@@ -581,11 +581,6 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
 }
 
 async function resolveStatusTenant(admin: SupabaseClient, status: MetaStatus) {
-  const { data: sentMessage } = status.id
-    ? await admin.from("services").select("id, tenant_id").eq("message_id", status.id).maybeSingle()
-    : { data: null };
-  if (sentMessage?.tenant_id) return { tenantId: String(sentMessage.tenant_id), serviceId: String(sentMessage.id) };
-
   const { data: storedMessage } = status.id
     ? await admin.from("whatsapp_messages").select("tenant_id, booking_id").eq("wa_message_id", status.id).maybeSingle()
     : { data: null };
@@ -645,12 +640,6 @@ async function processStatus(admin: SupabaseClient, status: MetaStatus) {
 
   const mappedStatus = mapWebhookStatus(status.status);
   if (mappedStatus) {
-    const patch: { reminder_status: string; sent_at?: string } = { reminder_status: mappedStatus };
-    if (mappedStatus === "sent") patch.sent_at = timestamp;
-    let updateQuery = admin.from("services").update(patch).eq("message_id", status.id);
-    if (resolved.tenantId) updateQuery = updateQuery.eq("tenant_id", resolved.tenantId);
-    await updateQuery;
-
     await logWhatsAppEvent(admin, {
       tenant_id: resolved.tenantId,
       service_id: resolved.serviceId,

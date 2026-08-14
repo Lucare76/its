@@ -10,8 +10,6 @@ type ServiceRow = {
   date: string | null;
   time: string | null;
   notes?: string | null;
-  message_id?: string | null;
-  external_code?: string | null;
   source_quote_id?: string | null;
   booking_service_kind?: string | null;
   hotel_id?: string | null;
@@ -109,7 +107,7 @@ export async function matchWhatsAppInboundMessage(
 ): Promise<WhatsAppMatchResult> {
   const normalizedPhone = input.phoneE164 ?? normalizeWhatsAppWaId(input.waId);
   const exactPhones = Array.from(new Set([input.waId, normalizedPhone].filter(Boolean)));
-  const serviceColumns = "id, tenant_id, customer_name, phone, date, time, notes, message_id, external_code, source_quote_id, booking_service_kind, hotel_id";
+  const serviceColumns = "id, tenant_id, customer_name, phone, date, time, notes, source_quote_id, booking_service_kind, hotel_id";
   const exactPhone = exactPhones.length
     ? await admin.from("services").select(serviceColumns).in("phone", exactPhones).order("date", { ascending: true }).limit(20)
     : { data: [], error: null };
@@ -170,13 +168,9 @@ export async function matchWhatsAppInboundMessage(
     const tokenMatches = ((tokenRows ?? []) as ServiceRow[])
       .filter((row) => {
         const notes = (row.notes ?? "").toUpperCase();
-        const externalCode = (row.external_code ?? "").toUpperCase();
-        const messageId = (row.message_id ?? "").toUpperCase();
         const sourceQuoteId = (row.source_quote_id ?? "").toUpperCase();
         return upperTokens.some((token) =>
-          externalCode.includes(token)
-          || notes.includes(token)
-          || messageId.includes(token)
+          notes.includes(token)
           || sourceQuoteId === token
         );
       })
