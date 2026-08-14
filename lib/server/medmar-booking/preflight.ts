@@ -206,6 +206,80 @@ function findStructuralMismatches(c: CorsaMedmarRaw, routeCode: MedmarTicketRout
 
 type LiveLegStatus = "ok" | "no_match" | "ambiguous" | "route_mismatch" | "manual_review" | "medmar_unavailable" | "medmar_auth_expired" | "medmar_auth_not_configured";
 
+/**
+ * Fase 2B.6 — vero solo per il "modello single-row" (vedi commento su
+ * MedmarPreflightServiceRow.departure_date): la stessa riga porta sia i dati
+ * di andata (date/time/vessel) sia quelli di ritorno (departure_date +
+ * orario_barca/return_time), senza una seconda riga direction="departure".
+ * Se manca uno qualunque di questi due segnali, la prenotazione resta
+ * genuinamente sola andata (comportamento invariato).
+ */
+function hasEmbeddedReturnData(row: MedmarPreflightServiceRow): boolean {
+  return Boolean(row.departure_date) && Boolean(row.orario_barca ?? row.return_time);
+}
+
+/**
+ * Fase 2B.6 — ricostruisce la gamba di ritorno per il modello single-row,
+ * SENZA creare alcuna riga services reale: la riga sintetica vive solo in
+ * memoria e viene passata a resolveLegLive con lo stesso row.id, quindi
+ * leg.service_ids resta [row.id] esattamente come per la gamba di andata.
+ *
+ * formula_medmar_napoli: il porto isolano di ritorno è sempre Ischia
+ * (resolveIslandPort lo risolve così per costruzione, senza dipendere da
+ * meeting_point) — nessuna ambiguità, si procede con il matching live.
+ *
+ * formula_medmar_pozzuoli: il porto isolano di ritorno dipende da
+ * meeting_point (Ischia vs Casamicciola), ma nel modello single-row esiste
+ * UN SOLO meeting_point sulla riga (quello dell'andata) — riusarlo per il
+ * ritorno sarebbe un'assunzione silenziosa (l'andata potrebbe essere da
+ * Casamicciola e il ritorno verso Ischia, o viceversa). Fail-closed:
+ * manual_review, mai un porto indovinato.
+ */
+async function resolveEmbeddedReturnLeg(
+  row: MedmarPreflightServiceRow,
+  warnings: MedmarPreflightWarning[]
+): Promise<{ leg: MedmarPreflightLeg; liveStatus: LiveLegStatus }> {
+  if (row.booking_service_kind === "formula_medmar_pozzuoli") {
+    warnings.push({
+      code: "embedded_return_island_port_ambiguous",
+      message:
+        "Ritorno imbarcato nella stessa riga services (modello single-row) su tratta Pozzuoli: il porto isolano del ritorno non è determinabile da un campo distinto (l'unico meeting_point disponibile è quello dell'andata) — nessun fallback verso Ischia/Casamicciola, revisione manuale richiesta.",
+    });
+    return {
+      leg: {
+        direction: "return",
+        route_code: null,
+        route: null,
+        date: row.departure_date ?? row.date,
+        requested_time: null,
+        matched_departure_time: null,
+        candidate_count: null,
+        match_source: null,
+        vessel: row.vessel,
+        service_ids: [row.id],
+        id_corsa: null,
+        source: null,
+      },
+      liveStatus: "manual_review",
+    };
+  }
+
+  warnings.push({
+    code: "embedded_return_leg_used",
+    message:
+      "Ritorno ricostruito dai campi departure_date/departure_time/orario_barca della stessa riga services (modello single-row, nessuna seconda riga direction=\"departure\" collegata).",
+  });
+
+  const syntheticDepartureRow: MedmarPreflightServiceRow = {
+    ...row,
+    date: row.departure_date ?? row.date,
+    direction: "departure",
+    orario_barca: row.orario_barca ?? row.return_time ?? null,
+  };
+
+  return resolveLegLive(syntheticDepartureRow, "return", warnings);
+}
+
 async function resolveLegLive(
   row: MedmarPreflightServiceRow,
   direction: "outward" | "return",
@@ -372,7 +446,7 @@ export async function runMedmarPreflight(
 
   const { data, error } = await admin
     .from("services")
-    .select("id, tenant_id, date, time, outbound_time, return_time, orario_barca, customer_name, pax, vessel, notes, booking_service_kind, direction, status, meeting_point, ferry_details")
+    .select("id, tenant_id, date, time, outbound_time, return_time, orario_barca, customer_name, pax, vessel, notes, booking_service_kind, direction, status, meeting_point, ferry_details, departure_date, departure_time")
     .in("id", serviceIds)
     .eq("tenant_id", tenantId);
 
@@ -433,8 +507,21 @@ export async function runMedmarPreflight(
     return errorResult("no_leg_recognized", "Nessuna direzione (arrivo/partenza) riconosciuta nei servizi selezionati.", serviceIds);
   }
 
+  // Fase 2B.6 — modello single-row: solo quando l'UNICO servizio selezionato
+  // è una riga arrival che porta anche i dati di ritorno nei suoi stessi
+  // campi (nessuna riga departure reale nel gruppo). Limitato a rows.length
+  // === 1 per non alterare in alcun modo il comportamento già testato del
+  // modello a due righe, anche in presenza di dati departure_date storici
+  // "orfani" su una riga che fa comunque parte di un gruppo a 2+ righe.
+  const embeddedReturnRow =
+    rows.length === 1 && arrivalRow && !departureRow && hasEmbeddedReturnData(arrivalRow) ? arrivalRow : null;
+
   const outwardOutcome = arrivalRow ? await resolveLegLive(arrivalRow, "outward", warnings) : null;
-  const returnOutcome = departureRow ? await resolveLegLive(departureRow, "return", warnings) : null;
+  const returnOutcome = departureRow
+    ? await resolveLegLive(departureRow, "return", warnings)
+    : embeddedReturnRow
+      ? await resolveEmbeddedReturnLeg(embeddedReturnRow, warnings)
+      : null;
 
   const legStatuses = [outwardOutcome?.liveStatus, returnOutcome?.liveStatus].filter((s): s is LiveLegStatus => Boolean(s));
 

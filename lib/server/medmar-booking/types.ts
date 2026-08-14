@@ -257,4 +257,16 @@ export type MedmarPreflightServiceRow = {
    * passenger-composition.ts, mai letto altrove come testo libero.
    */
   ferry_details?: unknown;
+  /**
+   * Fase 2B.6 — "modello single-row": alcuni canali di prenotazione (es.
+   * app/api/agency/bookings/route.ts, o app/api/ops/new-booking/route.ts con
+   * trip_leg="outbound_only" ma date di ritorno comunque compilate) salvano
+   * andata E ritorno sulla STESSA riga services (direction resta "arrival"),
+   * senza creare una seconda riga collegata da linked_service_id. Letti SOLO
+   * per ricostruire in memoria la gamba di ritorno quando non esiste alcuna
+   * riga reale con direction="departure" — vedi resolveEmbeddedReturnLeg in
+   * preflight.ts. Mai scritti, mai propagati a service_ids.
+   */
+  departure_date?: string | null;
+  departure_time?: string | null;
 };
