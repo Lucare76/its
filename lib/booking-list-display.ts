@@ -2,7 +2,7 @@ import type { Service } from "@/lib/types";
 
 type BookingListService = Partial<Pick<
   Service,
-  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca"
+  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca" | "bus_city_origin"
 >> & {
   pickup_time?: string | null;
   bus_outward_pickup_point?: string | null;
@@ -78,14 +78,22 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
   const isBusLine = kind === "bus_city_hotel";
   const outwardTime = cleanTime(service.train_arrival_time) ?? cleanTime(service.arrival_time);
   const outwardArrivalTime = cleanTime(service.outbound_ferry_arrival_time) ?? cleanTime(service.time);
+  // Per la linea bus l'orario "outward" è la partenza dalla città di origine
+  // (es. Modena), non un arrivo: l'arrivo vero è già mostrato separatamente
+  // in outwardArrivalTime ("Arrivo indicativo").
+  const outwardLabel = isAirport
+    ? "Arrivo volo"
+    : isBusLine
+      ? (service.bus_city_origin ? `Partenza da ${service.bus_city_origin}` : "Partenza bus")
+      : "Arrivo treno";
   return {
-    serviceLabel: `${isAirport ? "Trasferimento aeroporto - hotel" : "Trasferimento stazione / bus - hotel"}${suffix}`,
-    outwardLabel: isAirport ? "Arrivo volo" : "Arrivo treno/bus",
+    serviceLabel: `${isAirport ? "Trasferimento aeroporto - hotel" : isBusLine ? "Linea Bus" : "Trasferimento stazione - hotel"}${suffix}`,
+    outwardLabel,
     outwardDate: cleanDate(service.arrival_date) ?? cleanDate(service.date),
     outwardTime,
     outwardArrivalTime: isBusLine && outwardArrivalTime === outwardTime ? null : outwardArrivalTime,
     outwardPickupPoint: isBusLine ? service.bus_outward_pickup_point ?? null : null,
-    returnLabel: isAirport ? "Partenza volo" : "Partenza treno/bus",
+    returnLabel: isAirport ? "Partenza volo" : isBusLine ? "Partenza bus" : "Partenza treno",
     returnDate: cleanDate(service.departure_date),
     returnTime: cleanTime(service.train_departure_time) ?? cleanTime(service.departure_time),
     returnPickupTime: cleanTime(service.return_pickup_time) ?? (isBusLine ? cleanTime(service.pickup_time) : null),

@@ -855,7 +855,7 @@ export default function InboxPage() {
                 <div className="flex min-w-0 items-start gap-3">
                   <button type="button" onClick={() => setExpandedServiceId(expanded ? "" : service.id)} className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-600">{expanded ? "⌃" : "⌄"}</button>
                   <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2"><p className="font-extrabold text-slate-900">{serviceCustomerLabel(service)}</p><span className="rounded bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-500">#{service.id.slice(0, 8).toUpperCase()}</span></div>
+                    <div className="flex flex-wrap items-center gap-2"><p className="font-extrabold text-slate-900">{serviceCustomerLabel(service)}</p><span className="rounded bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-500">#{service.id.slice(0, 8).toUpperCase()}</span>{service.booking_service_kind === "bus_city_hotel" ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">🚌 Bus</span> : null}</div>
                     <p className="mt-1 text-xs text-slate-500">☎ {service.phone || "—"}　·　{service.pax} pax　 <span className="font-bold text-indigo-600">{service.owner_label ?? serviceOwnerLabel(service, agenciesMap)}</span></p>
                     <p className="mt-1 text-xs font-semibold text-slate-700">Hotel: {hotelName}</p>
                   </div>
