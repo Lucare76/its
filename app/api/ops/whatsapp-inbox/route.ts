@@ -430,20 +430,13 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  let threadQuery = auth.admin
-    .from("whatsapp_threads")
-    .select(pollMode ? POLL_THREAD_COLUMNS : FULL_THREAD_COLUMNS)
-    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
-    .order("last_message_at", { ascending: false, nullsFirst: false });
-
-  if (filter === "unread") threadQuery = threadQuery.neq("status", "closed").gt("unread_count", 0);
-  if (filter === "needs_review") threadQuery = threadQuery.eq("status", "needs_review");
-  if (filter === "associated") threadQuery = threadQuery.or("booking_id.not.is.null,transfer_id.not.is.null");
-  if (filter === "unassociated") threadQuery = threadQuery.is("booking_id", null).is("transfer_id", null);
-  if (filter === "closed") threadQuery = threadQuery.eq("status", "closed");
-  if (filter === "open") threadQuery = threadQuery.neq("status", "closed");
-
+  // Le due select() sotto usano ciascuna una stringa-literal singola (non una
+  // ternaria condivisa): passare una union di due literal a .select() rompe il
+  // parser a livello di tipo di postgrest-js (ParserError su entrambi i rami).
+  // Duplicare la costruzione della query per ramo evita il problema restando
+  // comunque a costo zero a runtime (branch deciso una sola volta).
   let searchYieldsNothing = false;
+  let searchOrClause: string | null = null;
   if (search) {
     const searchClauses: string[] = [];
     if (searchDigits.length >= 6) {
@@ -460,13 +453,27 @@ export async function GET(request: NextRequest) {
     if (searchClauses.length === 0) {
       searchYieldsNothing = true;
     } else {
-      threadQuery = threadQuery.or(searchClauses.join(","));
+      searchOrClause = searchClauses.join(",");
     }
   }
 
   let threadRows: Array<Record<string, unknown>> = [];
   let hasMoreThreads = false;
   if (!searchYieldsNothing) {
+    let threadQuery = pollMode
+      ? auth.admin.from("whatsapp_threads").select(POLL_THREAD_COLUMNS)
+      : auth.admin.from("whatsapp_threads").select(FULL_THREAD_COLUMNS);
+    threadQuery = threadQuery
+      .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+      .order("last_message_at", { ascending: false, nullsFirst: false });
+    if (filter === "unread") threadQuery = threadQuery.neq("status", "closed").gt("unread_count", 0);
+    if (filter === "needs_review") threadQuery = threadQuery.eq("status", "needs_review");
+    if (filter === "associated") threadQuery = threadQuery.or("booking_id.not.is.null,transfer_id.not.is.null");
+    if (filter === "unassociated") threadQuery = threadQuery.is("booking_id", null).is("transfer_id", null);
+    if (filter === "closed") threadQuery = threadQuery.eq("status", "closed");
+    if (filter === "open") threadQuery = threadQuery.neq("status", "closed");
+    if (searchOrClause) threadQuery = threadQuery.or(searchOrClause);
+
     // Range inclusivo: chiediamo pageSize+1 righe per sapere se esiste una
     // pagina successiva senza una query di COUNT separata.
     const { data: threads, error: threadError } = await threadQuery.range(offset, offset + pageSize);
@@ -484,129 +491,223 @@ export async function GET(request: NextRequest) {
     threadRows = fetched.slice(0, pageSize);
   }
 
-  const serviceIds = Array.from(new Set(
-    threadRows
-      .map((row) => row.booking_id ?? row.transfer_id)
-      .filter(Boolean) as string[]
-  ));
-  const { data: services } = serviceIds.length
-    ? await auth.admin
-      .from("services")
-      .select("id, customer_name, customer_first_name, customer_last_name, phone, date, time, booking_service_kind, hotel_id, hotels(name)")
-      .eq("tenant_id", tenantId)
-      .in("id", serviceIds)
-    : { data: [] };
-  const serviceMap = new Map((services ?? []).map((service: Record<string, unknown>) => [String(service.id), service]));
+  // Fase 8: i dati servizio/prenotazione collegati non cambiano durante un poll
+  // silenzioso. In poll_mode saltiamo del tutto la query "services" e non
+  // includiamo la chiave "service" nell'oggetto thread: il client mantiene il
+  // valore già in stato invece di sovrascriverlo con null.
+  let enrichedThreads: Array<Record<string, unknown>>;
+  if (pollMode) {
+    enrichedThreads = threadRows;
+  } else {
+    const serviceIds = Array.from(new Set(
+      threadRows
+        .map((row) => row.booking_id ?? row.transfer_id)
+        .filter(Boolean) as string[]
+    ));
+    const { data: services } = serviceIds.length
+      ? await auth.admin
+        .from("services")
+        .select("id, customer_name, customer_first_name, customer_last_name, phone, date, time, booking_service_kind, hotel_id, hotels(name)")
+        .eq("tenant_id", tenantId)
+        .in("id", serviceIds)
+      : { data: [] };
+    const serviceMap = new Map((services ?? []).map((service: Record<string, unknown>) => [String(service.id), service]));
+    enrichedThreads = threadRows.map((thread) => {
+      const serviceId = thread.booking_id ?? thread.transfer_id;
+      return { ...thread, service: serviceId ? serviceMap.get(String(serviceId)) ?? null : null };
+    });
+  }
 
-  const enrichedThreads: Array<Record<string, unknown>> = threadRows.map((thread) => {
-    const serviceId = thread.booking_id ?? thread.transfer_id;
-    return { ...thread, service: serviceId ? serviceMap.get(String(serviceId)) ?? null : null };
-  });
+  // Fase 3/4: in poll_mode non si ricade mai sul primo thread della pagina se
+  // il client non ha esplicitamente selezionato un thread (mobile "list view" /
+  // nessuna chat aperta) — evita di rileggere una conversazione che non è
+  // visualizzata. Il GET normale mantiene il comportamento originale (auto
+  // selezione del primo thread al mount).
+  const selectedId = pollMode ? (selectedThreadId ?? null) : (selectedThreadId ?? enrichedThreads[0]?.id ?? null);
 
-  const selectedId = selectedThreadId ?? enrichedThreads[0]?.id;
-  const { data: messages, error: messageError } = selectedId
-    ? await auth.admin
+  const messagesAfter = url.searchParams.get("messages_after");
+  const messagesAfterId = url.searchParams.get("messages_after_id");
+  const useIncrementalMessages = pollMode && Boolean(selectedId) && Boolean(messagesAfter) && Boolean(messagesAfterId);
+
+  let enrichedMessages: Array<Record<string, unknown>> = [];
+  let statusUpdates: Array<{ id: string; wa_message_id: string; status: string; failure_reason: string | null }> = [];
+  let messagesMode: "full" | "incremental" = "full";
+
+  if (useIncrementalMessages && selectedId) {
+    // Fase 5/6: rileggiamo solo i messaggi inseriti dopo il cursore
+    // (created_at, con id come tie-break deterministico per timestamp
+    // identici — evita la fragilità di un confronto basato solo su
+    // timestamp). .gte() include anche il messaggio-cursore stesso, che
+    // viene poi escluso in JS dal tie-break qui sotto.
+    const { data: rawNewMessages, error: newMessagesError } = await auth.admin
       .from("whatsapp_messages")
-      .select("id, wa_message_id, reply_to_wa_message_id, direction, wa_id, phone_e164, message_type, template_name, text_body, media_id, media_mime_type, status, timestamp, created_at, booking_id, transfer_id, raw_message")
+      .select(MESSAGE_COLUMNS)
+      .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+      .eq("thread_id", selectedId)
+      .gte("created_at", messagesAfter as string)
+      .order("created_at", { ascending: true })
+      .limit(INCREMENTAL_MESSAGES_LIMIT);
+    if (newMessagesError) {
+      return sanitizedErrorResponse(newMessagesError, {
+        status: 500,
+        fallback: "Impossibile caricare i nuovi messaggi della conversazione.",
+        event: "whatsapp_inbox_list_new_messages_failed",
+        tenantId,
+        details: { threadId: selectedId },
+      });
+    }
+    const newMessages = (rawNewMessages ?? []).filter((message) => {
+      const createdAt = String(message.created_at);
+      if (createdAt > (messagesAfter as string)) return true;
+      if (createdAt < (messagesAfter as string)) return false;
+      return String(message.id) > (messagesAfterId as string);
+    });
+
+    // Fase 6: risolvi le anteprime di risposta ("reply_to") che puntano a
+    // messaggi più vecchi già caricati dal client ma non presenti in questo
+    // batch incrementale: lookup mirato e limitato, non l'intera conversazione.
+    const replyLookupMap = new Map<string, Record<string, unknown>>(
+      newMessages.filter((m) => m.wa_message_id).map((m) => [m.wa_message_id as string, m])
+    );
+    const missingReplyIds = Array.from(new Set(
+      newMessages
+        .map((m) => m.reply_to_wa_message_id)
+        .filter((id): id is string => Boolean(id) && !replyLookupMap.has(id as string))
+    ));
+    if (missingReplyIds.length > 0) {
+      const { data: replyTargets } = await auth.admin
+        .from("whatsapp_messages")
+        .select("id, wa_message_id, direction, message_type, template_name, text_body")
+        .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+        .in("wa_message_id", missingReplyIds)
+        .limit(missingReplyIds.length);
+      for (const target of replyTargets ?? []) {
+        if (target.wa_message_id) replyLookupMap.set(target.wa_message_id, target);
+      }
+    }
+
+    const newWaMessageIds = Array.from(new Set(newMessages.map((m) => m.wa_message_id).filter(Boolean) as string[]));
+    const { data: newMessageStatuses, error: newStatusError } = newWaMessageIds.length
+      ? await auth.admin
+        .from("whatsapp_message_statuses")
+        .select("wa_message_id, status, created_at, raw_status")
+        .eq("tenant_id", tenantId)
+        .in("wa_message_id", newWaMessageIds)
+        .order("created_at", { ascending: false })
+      : { data: [], error: null };
+    if (newStatusError) {
+      return sanitizedErrorResponse(newStatusError, {
+        status: 500,
+        fallback: "Impossibile caricare lo stato dei nuovi messaggi.",
+        event: "whatsapp_inbox_list_new_message_statuses_failed",
+        tenantId,
+        details: { threadId: selectedId },
+      });
+    }
+    enrichedMessages = enrichMessages(newMessages, buildLatestStatusMap(newMessageStatuses), replyLookupMap);
+    messagesMode = "incremental";
+
+    // Fase 7: i messaggi outbound già caricati possono avanzare di stato
+    // (sent -> delivered -> read) senza che arrivi alcun messaggio nuovo.
+    // Rileggiamo solo lo stato dei messaggi outbound non ancora in stato
+    // definitivo (read/failed), non l'intera cronologia di stato del thread.
+    const { data: pendingOutbound, error: pendingError } = await auth.admin
+      .from("whatsapp_messages")
+      .select("id, wa_message_id, status")
+      .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+      .eq("thread_id", selectedId)
+      .eq("direction", "outbound")
+      .neq("status", "read")
+      .neq("status", "failed")
+      .order("created_at", { ascending: false })
+      .limit(PENDING_STATUS_LIMIT);
+    if (pendingError) {
+      return sanitizedErrorResponse(pendingError, {
+        status: 500,
+        fallback: "Impossibile aggiornare lo stato dei messaggi.",
+        event: "whatsapp_inbox_pending_statuses_failed",
+        tenantId,
+        details: { threadId: selectedId },
+      });
+    }
+    const pendingWaMessageIds = Array.from(new Set(
+      (pendingOutbound ?? []).map((m) => m.wa_message_id).filter(Boolean) as string[]
+    ));
+    const { data: pendingStatusRows, error: pendingStatusError } = pendingWaMessageIds.length
+      ? await auth.admin
+        .from("whatsapp_message_statuses")
+        .select("wa_message_id, status, created_at, raw_status")
+        .eq("tenant_id", tenantId)
+        .in("wa_message_id", pendingWaMessageIds)
+        .order("created_at", { ascending: false })
+      : { data: [], error: null };
+    if (pendingStatusError) {
+      return sanitizedErrorResponse(pendingStatusError, {
+        status: 500,
+        fallback: "Impossibile aggiornare lo stato dei messaggi.",
+        event: "whatsapp_inbox_pending_status_lookup_failed",
+        tenantId,
+        details: { threadId: selectedId },
+      });
+    }
+    const pendingLatestStatus = buildLatestStatusMap(pendingStatusRows);
+    statusUpdates = (pendingOutbound ?? [])
+      .filter((m): m is { id: string; wa_message_id: string; status: string } => Boolean(m.wa_message_id))
+      .map((m) => {
+        const latest = pendingLatestStatus.get(m.wa_message_id);
+        return {
+          id: String(m.id),
+          wa_message_id: m.wa_message_id,
+          status: latest?.status ?? m.status,
+          failure_reason: latest?.status === "failed" ? latest.failure_reason : null,
+        };
+      });
+  } else if (selectedId) {
+    const { data: messages, error: messageError } = await auth.admin
+      .from("whatsapp_messages")
+      .select(MESSAGE_COLUMNS)
       .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
       .eq("thread_id", selectedId)
       .order("timestamp", { ascending: true, nullsFirst: true })
       .order("created_at", { ascending: true })
-      .limit(500)
-    : { data: [], error: null };
-  if (messageError) {
-    return sanitizedErrorResponse(messageError, {
-      status: 500,
-      fallback: "Impossibile caricare i messaggi della conversazione.",
-      event: "whatsapp_inbox_list_messages_failed",
-      tenantId,
-      details: { threadId: selectedId ?? null },
-    });
+      .limit(500);
+    if (messageError) {
+      return sanitizedErrorResponse(messageError, {
+        status: 500,
+        fallback: "Impossibile caricare i messaggi della conversazione.",
+        event: "whatsapp_inbox_list_messages_failed",
+        tenantId,
+        details: { threadId: selectedId },
+      });
+    }
+
+    const waMessageIds = Array.from(new Set((messages ?? []).map((message) => message.wa_message_id).filter(Boolean) as string[]));
+    const { data: messageStatuses, error: statusError } = waMessageIds.length
+      ? await auth.admin
+        .from("whatsapp_message_statuses")
+        .select("wa_message_id, status, created_at, raw_status")
+        .eq("tenant_id", tenantId)
+        .in("wa_message_id", waMessageIds)
+        .order("created_at", { ascending: false })
+      : { data: [], error: null };
+    if (statusError) {
+      return sanitizedErrorResponse(statusError, {
+        status: 500,
+        fallback: "Impossibile caricare lo stato dei messaggi.",
+        event: "whatsapp_inbox_list_message_statuses_failed",
+        tenantId,
+        details: { threadId: selectedId },
+      });
+    }
+
+    const messageByWaId = new Map<string, Record<string, unknown>>(
+      (messages ?? [])
+        .filter((message) => Boolean(message.wa_message_id))
+        .map((message) => [message.wa_message_id as string, message])
+    );
+    enrichedMessages = enrichMessages(messages ?? [], buildLatestStatusMap(messageStatuses), messageByWaId);
+    messagesMode = "full";
   }
-
-  const waMessageIds = Array.from(new Set((messages ?? []).map((message) => message.wa_message_id).filter(Boolean) as string[]));
-  const { data: messageStatuses, error: statusError } = waMessageIds.length
-    ? await auth.admin
-      .from("whatsapp_message_statuses")
-      .select("wa_message_id, status, created_at, raw_status")
-      .eq("tenant_id", tenantId)
-      .in("wa_message_id", waMessageIds)
-      .order("created_at", { ascending: false })
-    : { data: [], error: null };
-  if (statusError) {
-    return sanitizedErrorResponse(statusError, {
-      status: 500,
-      fallback: "Impossibile caricare lo stato dei messaggi.",
-      event: "whatsapp_inbox_list_message_statuses_failed",
-      tenantId,
-      details: { threadId: selectedId ?? null },
-    });
-  }
-
-  const latestStatusByMessageId = new Map<string, { status: string; failure_reason: string | null }>();
-  for (const statusRow of messageStatuses ?? []) {
-    if (!statusRow.wa_message_id || latestStatusByMessageId.has(statusRow.wa_message_id)) continue;
-    latestStatusByMessageId.set(statusRow.wa_message_id, {
-      status: statusRow.status,
-      failure_reason: extractStatusFailureReason(statusRow.raw_status)
-    });
-  }
-
-  const messageByWaId = new Map(
-    (messages ?? [])
-      .filter((message) => Boolean(message.wa_message_id))
-      .map((message) => [message.wa_message_id as string, message])
-  );
-
-  const enrichedMessages = (messages ?? []).map((message) => {
-    const latestStatus = message.wa_message_id ? latestStatusByMessageId.get(message.wa_message_id) : null;
-    const rawMessage = typeof message.raw_message === "object" && message.raw_message !== null
-      ? message.raw_message as Record<string, unknown>
-      : null;
-    const documentMeta = rawMessage && typeof rawMessage.document === "object" && rawMessage.document !== null
-      ? rawMessage.document as { filename?: unknown }
-      : null;
-    const replyTarget = message.reply_to_wa_message_id ? messageByWaId.get(message.reply_to_wa_message_id) : null;
-    return {
-      id: message.id,
-      wa_message_id: message.wa_message_id,
-      reply_to_wa_message_id: message.reply_to_wa_message_id,
-      direction: message.direction,
-      wa_id: message.wa_id,
-      phone_e164: message.phone_e164,
-      message_type: message.message_type,
-      template_name: message.template_name,
-      text_body: message.text_body,
-      media_id: message.media_id,
-      media_mime_type: message.media_mime_type,
-      status: latestStatus?.status ?? message.status,
-      failure_reason: latestStatus?.status === "failed" ? latestStatus.failure_reason : null,
-      timestamp: message.timestamp,
-      created_at: message.created_at,
-      booking_id: message.booking_id,
-      transfer_id: message.transfer_id,
-      media_filename: typeof documentMeta?.filename === "string" ? documentMeta.filename : null,
-      reply_to_message: replyTarget
-        ? {
-            id: replyTarget.id,
-            wa_message_id: replyTarget.wa_message_id,
-            direction: replyTarget.direction,
-            message_type: replyTarget.message_type,
-            template_name: replyTarget.template_name,
-            preview: compactMessagePreview(replyTarget)
-          }
-        : message.reply_to_wa_message_id
-          ? {
-              id: null,
-              wa_message_id: message.reply_to_wa_message_id,
-              direction: null,
-              message_type: null,
-              template_name: null,
-              preview: "Messaggio originale non trovato in questa conversazione"
-            }
-          : null,
-    };
-  });
 
   return NextResponse.json({
     ok: true,
@@ -616,6 +717,8 @@ export async function GET(request: NextRequest) {
     has_more: hasMoreThreads,
     selected_thread_id: selectedId ?? null,
     messages: enrichedMessages,
+    messages_mode: messagesMode,
+    status_updates: statusUpdates,
     templates_included: includeTemplates,
     template_options: settings
       ? syncedTemplates.map((template) => ({

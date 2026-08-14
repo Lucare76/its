@@ -62,6 +62,13 @@ type MessageRow = {
   } | null;
 };
 
+type StatusUpdate = {
+  id: string;
+  wa_message_id: string;
+  status: string;
+  failure_reason: string | null;
+};
+
 type InboxPayload = {
   ok?: boolean;
   threads?: ThreadRow[];
@@ -70,6 +77,11 @@ type InboxPayload = {
   has_more?: boolean;
   selected_thread_id?: string | null;
   messages?: MessageRow[];
+  // "incremental" = solo i messaggi nuovi (poll_mode con cursore): il client
+  // deve accodarli, non sostituire l'array. "full" (default, retrocompatibile
+  // con risposte che non impostano questo campo) = elenco completo.
+  messages_mode?: "full" | "incremental";
+  status_updates?: StatusUpdate[];
   templates_included?: boolean;
   template_options?: TemplateOption[];
   template_fetch_error?: string | null;
@@ -116,7 +128,39 @@ type LoadOptions = {
   // Assente/false in tutti gli altri reload (poll, cambio thread, azioni) così
   // le pagine già caricate con "Carica altri" non vengono perse.
   resetThreadsPagination?: boolean;
+  // Sprint Performance 5: true SOLO per i timer 12s/20s e per visibilitychange.
+  // Richiede poll_mode=1 al server (niente services/template, messaggi/status
+  // incrementali sul thread selezionato). Le altre chiamate "silenziose" (dopo
+  // mark_read/associate/mutazioni, cambio filtro/thread) restano full load.
+  pollMode?: boolean;
 };
+
+type MessagesCursor = { threadId: string; createdAt: string; id: string };
+
+// Fase 6: accoda solo i messaggi davvero nuovi (poll incrementale), senza
+// buttare via quelli già in stato — a differenza di mergeMessagesStable, che
+// assume che "incoming" sia l'elenco completo e autoritativo.
+function mergeMessagesIncremental(current: MessageRow[], incomingNew: MessageRow[]) {
+  if (incomingNew.length === 0) return current;
+  return normalizeMessages([...current, ...incomingNew]);
+}
+
+// Fase 7: applica solo gli status (spunte) dei messaggi outbound ancora non
+// definitivi, senza toccare gli altri campi del messaggio né rialloccare
+// l'array se non cambia nulla.
+function applyStatusUpdates(current: MessageRow[], updates: StatusUpdate[]) {
+  if (updates.length === 0) return current;
+  const byWaId = new Map(updates.map((update) => [update.wa_message_id, update]));
+  let changed = false;
+  const next = current.map((message) => {
+    const update = message.wa_message_id ? byWaId.get(message.wa_message_id) : undefined;
+    if (!update) return message;
+    if (message.status === update.status && (message.failure_reason ?? null) === update.failure_reason) return message;
+    changed = true;
+    return { ...message, status: update.status, failure_reason: update.failure_reason };
+  });
+  return changed ? next : current;
+}
 
 const THREADS_PAGE_SIZE = 50;
 
@@ -423,16 +467,25 @@ function mergeThreadsStable(current: ThreadRow[], incoming: ThreadRow[]) {
   return changed ? merged : current;
 }
 
+// Fase 8: in poll_mode il server non include affatto la chiave "service" (per
+// evitare la query sui services collegati). Se assente, manteniamo il valore
+// già in stato invece di considerarlo "cambiato a null".
+function reconcileIncomingThreadService(previous: ThreadRow | undefined, incoming: ThreadRow): ThreadRow {
+  if ("service" in incoming) return incoming;
+  return { ...incoming, service: previous?.service ?? null };
+}
+
 // Usato dai reload "non di reset" (poll, cambio thread, refresh dopo azioni):
 // aggiorna i dati dei thread di pagina 1 ma NON scarta le pagine successive già
 // caricate con "Carica altri" (a differenza di mergeThreadsStable, che sostituisce
 // sempre l'intera lista con quella in arrivo).
 function mergeThreadsPreservingExtra(current: ThreadRow[], incomingPage1: ThreadRow[]) {
-  if (current.length === 0) return incomingPage1;
+  if (current.length === 0) return incomingPage1.map((thread) => reconcileIncomingThreadService(undefined, thread));
   const currentById = new Map(current.map((thread) => [thread.id, thread]));
   const incomingIds = new Set(incomingPage1.map((thread) => thread.id));
-  const refreshedPage1 = incomingPage1.map((thread) => {
-    const previous = currentById.get(thread.id);
+  const refreshedPage1 = incomingPage1.map((rawThread) => {
+    const previous = currentById.get(rawThread.id);
+    const thread = reconcileIncomingThreadService(previous, rawThread);
     return previous && areThreadsEqual(previous, thread) ? previous : thread;
   });
   const extra = current.filter((thread) => !incomingIds.has(thread.id));
@@ -929,10 +982,17 @@ export default function WhatsAppInboxPage() {
   const selectedThreadIdRef = useRef<string | null>(null);
   const newChatModeRef = useRef(false);
   const loadRef = useRef<(nextThreadId?: string | null, options?: LoadOptions) => Promise<void>>(null!);
+  const runLightPollRef = useRef<(threadId: string | null) => void>(null!);
+  const lastPollAtRef = useRef(0);
   const sendingRef = useRef(false);
   const loadSequenceRef = useRef(0);
   const loadAbortRef = useRef<AbortController | null>(null);
   const threadsPageRef = useRef(1);
+  // Cursore (created_at + id del messaggio più recente conosciuto) usato per
+  // chiedere al server solo i messaggi nuovi durante il poll leggero. Tracciato
+  // per thread: si azzera implicitamente perché viene ricalcolato da zero ogni
+  // volta che l'elenco messaggi ricevuto è "full" (mount, cambio thread/filtro).
+  const messagesCursorRef = useRef<MessagesCursor | null>(null);
   const prevFilterRef = useRef(filter);
   const prevSearchRef = useRef(search);
 
@@ -1067,6 +1127,18 @@ export default function WhatsAppInboxPage() {
       // I template sono tenant-wide e stabili: li richiediamo solo al primo
       // caricamento della pagina, non ad ogni poll/refresh silenzioso.
       if (options?.silent) params.set("include_templates", "0");
+      // Sprint Performance 5: poll leggero solo per i call site esplicitamente
+      // marcati pollMode (timer 12s/20s, visibilitychange). Se conosciamo già
+      // un cursore per questo stesso thread, il server rilegge solo i nuovi
+      // messaggi + gli status ancora non definitivi invece dell'intera chat.
+      if (options?.pollMode) {
+        params.set("poll_mode", "1");
+        const cursor = messagesCursorRef.current;
+        if (nextThreadId && cursor && cursor.threadId === nextThreadId) {
+          params.set("messages_after", cursor.createdAt);
+          params.set("messages_after_id", cursor.id);
+        }
+      }
       const response = await fetch(`/api/ops/whatsapp-inbox?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
         signal: abortController.signal,
@@ -1122,12 +1194,31 @@ export default function WhatsAppInboxPage() {
           setThreadsHasMore(Boolean(body.has_more));
         }
       }
+      const incomingMessages = body.messages ?? [];
       setMessages((current) => {
         if (keepNewChatDraft) return current.length === 0 ? current : [];
-        const incoming = body.messages ?? [];
-        if (nextSelectedThreadId !== currentSelectedThreadId) return normalizeMessages(incoming);
-        return mergeMessagesStable(current, incoming);
+        if (nextSelectedThreadId !== currentSelectedThreadId) return normalizeMessages(incomingMessages);
+        if (body.messages_mode === "incremental") {
+          const appended = mergeMessagesIncremental(current, incomingMessages);
+          return applyStatusUpdates(appended, body.status_updates ?? []);
+        }
+        return mergeMessagesStable(current, incomingMessages);
       });
+      // Il cursore avanza in base ai soli messaggi ricevuti in QUESTA risposta:
+      // per un full load è l'intero elenco (ricalcola il massimo da zero, utile
+      // anche al cambio thread); per un poll incrementale sono solo le righe
+      // nuove, quindi il massimo può solo crescere. Se non c'è thread selezionato
+      // non c'è alcun cursore da mantenere.
+      if (nextSelectedThreadId) {
+        for (const message of incomingMessages) {
+          const cursor = messagesCursorRef.current;
+          if (!cursor || cursor.threadId !== nextSelectedThreadId || message.created_at > cursor.createdAt) {
+            messagesCursorRef.current = { threadId: nextSelectedThreadId, createdAt: message.created_at, id: message.id };
+          }
+        }
+      } else {
+        messagesCursorRef.current = null;
+      }
       // templates_included è false solo quando abbiamo chiesto include_templates=0
       // (refetch silenziosi): in quel caso il payload non contiene i template e
       // non dobbiamo toccare lo stato già caricato al primo load.
@@ -1158,6 +1249,21 @@ export default function WhatsAppInboxPage() {
   );
 
   loadRef.current = load;
+
+  // Fase 10: protezione minima contro il refresh visibilitychange che scatta
+  // a pochissima distanza da un tick del timer 12s/20s (o viceversa) — non
+  // tocca la cadenza dei timer, salta solo un poll se l'ultimo è avvenuto da
+  // meno di 3s. Passa sempre da loadRef.current (già tenuto aggiornato sopra),
+  // quindi la funzione può restare stabile e l'effect non ha bisogno di
+  // ridipendere da `load`.
+  useEffect(() => {
+    runLightPollRef.current = (threadId: string | null) => {
+      const now = Date.now();
+      if (now - lastPollAtRef.current < 3000) return;
+      lastPollAtRef.current = now;
+      void loadRef.current(threadId, { silent: true, pollMode: true });
+    };
+  }, []);
 
   const loadMoreThreads = useCallback(async () => {
     if (loadingMoreThreads || !threadsHasMore) return;
@@ -1270,7 +1376,7 @@ export default function WhatsAppInboxPage() {
     if (!selectedThreadId) return;
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") {
-        void loadRef.current(selectedThreadId, { silent: true });
+        runLightPollRef.current(selectedThreadId);
       }
     }, 12000);
     return () => window.clearInterval(interval);
@@ -1280,7 +1386,7 @@ export default function WhatsAppInboxPage() {
     if (selectedThreadId) return;
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") {
-        void loadRef.current(null, { silent: true });
+        runLightPollRef.current(null);
       }
     }, 20000);
     return () => window.clearInterval(interval);
@@ -1289,7 +1395,7 @@ export default function WhatsAppInboxPage() {
   useEffect(() => {
     const refreshWhenVisible = () => {
       if (document.visibilityState !== "visible") return;
-      void loadRef.current(selectedThreadIdRef.current, { silent: true });
+      runLightPollRef.current(selectedThreadIdRef.current);
     };
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => document.removeEventListener("visibilitychange", refreshWhenVisible);
