@@ -135,6 +135,8 @@ function parseBigliettoRow(row: Record<string, unknown>): BigliettoVendibileRaw 
     flag_targa: asFlag(row.flag_targa),
     quantita_min_per_esclusivo: asNumber(row.quantita_min_per_esclusivo),
     quantita_max_per_esclusivo: asNumber(row.quantita_max_per_esclusivo),
+    // Fase 2B.5: grezzo, non validato — vedi commento sul campo in types.ts.
+    collegati: "collegati" in row ? row.collegati ?? null : null,
   };
 }
 
@@ -276,4 +278,194 @@ export function findArTariffAndTax(rows: BigliettoVendibileRaw[]): ArTariffSelec
     tassaSbarco,
     taxIssue,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Fase 2B.5 — classificazione passeggero adult/child/infant/tax
+// ─────────────────────────────────────────────────────────────────────────
+
+/** id_biglietto/id_tipologia_passeggero osservato per BAMBINO (4-12 anni) sulla corsa reale 133760 — SOLO diagnostico, mai la regola di classificazione. */
+export const CHILD_LABEL_HINT = /^PASSAGGIO PONTE BAMBINO\b/i;
+/** Idem per INFANT (0-4 anni). */
+export const INFANT_LABEL_HINT = /^PASSAGGIO PONTE INFANT\b/i;
+
+export type MedmarPassengerCategory = "adult" | "child" | "infant";
+
+export type PassengerTicketClassification =
+  | { kind: MedmarPassengerCategory | "tax"; row: BigliettoVendibileRaw; labelSource: "descrizione" | "nome" }
+  | { kind: "unsupported"; row: BigliettoVendibileRaw; reason: "no_label_match" | "tipologia_mismatch" };
+
+/**
+ * Classifica un singolo biglietto vendibile come adult/child/infant/tax/
+ * unsupported. Criterio deterministico FISSO (Fase 2B.5), in quest'ordine:
+ *
+ * 1. descrizione/nome (via resolveBigliettoLabel, stessa precedenza usata
+ *    ovunque nel file) contro 4 regex ANCORATE e reciprocamente esclusive
+ *    (nessuna può mai matchare la stessa stringa di un'altra): questo è
+ *    l'UNICO segnale che decide la categoria. Adulto riusa
+ *    AR_TARIFF_LABEL_HINT byte-per-byte — stessa identica selezione già in
+ *    uso da findArTariffAndTax, per garanzia di non-regressione sul flusso
+ *    solo-adulti.
+ * 2. id_tipologia_passeggero è SOLO un sanity check SUCCESSIVO: nei dati
+ *    reali osservati (corsa 133760) adulto, bambino e infant condividono
+ *    TUTTI id_tipologia_passeggero=1 — usarlo per SCEGLIERE tra queste tre
+ *    categorie sarebbe il bug storico che questa fase corregge. Qui può
+ *    solo DECLASSARE un match a "unsupported" (tipologia_mismatch), mai
+ *    promuovere/riclassificare una categoria.
+ *
+ * Righe che non combaciano con nessuna delle 4 etichette (auto, moto,
+ * animale, "INT PASSEGGERO" o qualunque altra dicitura) restano
+ * "unsupported"/"no_label_match" per costruzione: nessun match parziale o
+ * fuzzy, nessun fallback su id_biglietto/id_log come regola primaria.
+ */
+export function classifyPassengerTicket(row: BigliettoVendibileRaw): PassengerTicketClassification {
+  const resolved = resolveBigliettoLabel(row);
+  if (resolved.label === null) {
+    return { kind: "unsupported", row, reason: "no_label_match" };
+  }
+  const label = resolved.label;
+  const labelSource = resolved.source;
+
+  if (AR_TARIFF_LABEL_HINT.test(label)) {
+    if (row.id_tipologia_passeggero !== ADULT_TIPOLOGIA_PASSEGGERO) {
+      return { kind: "unsupported", row, reason: "tipologia_mismatch" };
+    }
+    return { kind: "adult", row, labelSource };
+  }
+  if (CHILD_LABEL_HINT.test(label)) {
+    if (row.id_tipologia_passeggero !== ADULT_TIPOLOGIA_PASSEGGERO) {
+      return { kind: "unsupported", row, reason: "tipologia_mismatch" };
+    }
+    return { kind: "child", row, labelSource };
+  }
+  if (INFANT_LABEL_HINT.test(label)) {
+    if (row.id_tipologia_passeggero !== ADULT_TIPOLOGIA_PASSEGGERO) {
+      return { kind: "unsupported", row, reason: "tipologia_mismatch" };
+    }
+    return { kind: "infant", row, labelSource };
+  }
+  if (TASSA_SBARCO_HINT.test(label)) {
+    if (row.id_tipologia_passeggero !== TASSA_SBARCO_TIPOLOGIA_PASSEGGERO) {
+      return { kind: "unsupported", row, reason: "tipologia_mismatch" };
+    }
+    return { kind: "tax", row, labelSource };
+  }
+  return { kind: "unsupported", row, reason: "no_label_match" };
+}
+
+export type PassengerCategorySelection =
+  | { kind: "not_found" }
+  | { kind: "found"; ticket: BigliettoVendibileRaw; labelSource: "descrizione" | "nome" }
+  | { kind: "ambiguous" }
+  | { kind: "unsupported_passenger_type"; row: BigliettoVendibileRaw };
+
+function selectCategory(
+  classified: PassengerTicketClassification[],
+  category: MedmarPassengerCategory | "tax"
+): PassengerCategorySelection {
+  const matches = classified.filter((c): c is Extract<PassengerTicketClassification, { kind: typeof category }> => c.kind === category);
+  if (matches.length === 1) return { kind: "found", ticket: matches[0]!.row, labelSource: matches[0]!.labelSource };
+  if (matches.length > 1) return { kind: "ambiguous" };
+
+  // Nessun match diretto: se un'etichetta compatibile esiste ma con
+  // id_tipologia_passeggero inatteso, riportalo come segnale diagnostico
+  // (stesso trattamento già riservato all'adulto da findArTariffAndTax)
+  // invece di un generico "not_found" silenzioso.
+  const mismatched = classified.find(
+    (c) => c.kind === "unsupported" && c.reason === "tipologia_mismatch" && labelMatchesCategory(c.row, category)
+  );
+  if (mismatched) return { kind: "unsupported_passenger_type", row: mismatched.row };
+
+  return { kind: "not_found" };
+}
+
+function labelMatchesCategory(row: BigliettoVendibileRaw, category: MedmarPassengerCategory | "tax"): boolean {
+  const resolved = resolveBigliettoLabel(row);
+  if (resolved.label === null) return false;
+  if (category === "adult") return AR_TARIFF_LABEL_HINT.test(resolved.label);
+  if (category === "child") return CHILD_LABEL_HINT.test(resolved.label);
+  if (category === "infant") return INFANT_LABEL_HINT.test(resolved.label);
+  return TASSA_SBARCO_HINT.test(resolved.label);
+}
+
+export type PassengerTariffSelection = {
+  adult: PassengerCategorySelection;
+  child: PassengerCategorySelection;
+  infant: PassengerCategorySelection;
+  /** Tutte le righe classificate "tax" nella risposta (di norma 0 o 1). */
+  taxRows: BigliettoVendibileRaw[];
+};
+
+/**
+ * Applica classifyPassengerTicket a tutte le righe di una risposta
+ * biglietti/vendibili e seleziona, per ciascuna categoria passeggero, la
+ * riga corrispondente (found/not_found/ambiguous/unsupported_passenger_type
+ * — stessa semantica di findArTariffAndTax, generalizzata a 3 categorie).
+ * Non sostituisce findArTariffAndTax (che resta l'unica selezione usata dal
+ * percorso solo-adulti in issue-payload.ts): questa funzione serve al
+ * preflight per costruire ticket_breakdown.
+ */
+export function selectPassengerTariffs(rows: BigliettoVendibileRaw[]): PassengerTariffSelection {
+  const classified = rows.map(classifyPassengerTicket);
+  return {
+    adult: selectCategory(classified, "adult"),
+    child: selectCategory(classified, "child"),
+    infant: selectCategory(classified, "infant"),
+    taxRows: classified.filter((c) => c.kind === "tax").map((c) => c.row),
+  };
+}
+
+export type TaxLinkageResult =
+  | { linked: true; tax: BigliettoVendibileRaw; source: "collegati" | "heuristic_unverified" }
+  | { linked: false; source: "none" | "ambiguous" };
+
+function extractCollegatiTicketIds(collegati: unknown): Set<string> {
+  const ids = new Set<string>();
+  if (!Array.isArray(collegati)) return ids;
+  for (const entry of collegati) {
+    if (entry && typeof entry === "object" && "id_biglietto" in (entry as Record<string, unknown>)) {
+      const idVal = (entry as Record<string, unknown>).id_biglietto;
+      if (typeof idVal === "number" || typeof idVal === "string") ids.add(String(idVal));
+    }
+  }
+  return ids;
+}
+
+/**
+ * Deriva se una categoria passeggero (adult/child/infant) ha una tassa di
+ * sbarco collegata, per il titolo passeggero SPECIFICO passato.
+ *
+ * Fonte primaria (mai indovinata): passengerRow.collegati, se presente come
+ * array, confrontato per id_biglietto contro le righe classificate "tax"
+ * nella stessa risposta vendibili. Se collegati è un array (anche vuoto) e
+ * NON contiene l'id_biglietto della tassa, il risultato è "non collegata" —
+ * un dato osservato, non un'assunzione.
+ *
+ * Fallback (SOLO quando collegati non è un array, cioè il dato non è
+ * disponibile): usa l'evidenza osservata sui dati reali (corsa 133760:
+ * adulto e bambino pagano la tassa, infant no), ma SEMPRE etichettata
+ * "heuristic_unverified" — mai silenziosamente equivalente a un
+ * collegamento confermato via collegati[]. Con più di una riga tax nella
+ * risposta il collegamento è ambiguo per costruzione: nessuna scelta
+ * arbitraria.
+ */
+export function deriveTaxLinkage(
+  category: MedmarPassengerCategory,
+  passengerRow: BigliettoVendibileRaw,
+  taxRows: BigliettoVendibileRaw[]
+): TaxLinkageResult {
+  if (taxRows.length === 0) return { linked: false, source: "none" };
+  if (taxRows.length > 1) return { linked: false, source: "ambiguous" };
+  const tax = taxRows[0]!;
+  const taxId = tax.id_biglietto != null ? String(tax.id_biglietto) : null;
+
+  if (Array.isArray(passengerRow.collegati)) {
+    const linkedIds = extractCollegatiTicketIds(passengerRow.collegati);
+    return taxId != null && linkedIds.has(taxId) ? { linked: true, tax, source: "collegati" } : { linked: false, source: "none" };
+  }
+
+  if (category === "adult" || category === "child") {
+    return { linked: true, tax, source: "heuristic_unverified" };
+  }
+  return { linked: false, source: "none" };
 }

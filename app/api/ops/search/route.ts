@@ -11,51 +11,8 @@ export const runtime = "nodejs";
 type AuthorizedSearchRequest = Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>;
 type SearchAdminClient = AuthorizedSearchRequest["admin"];
 
-const SERVICE_SEARCH_COLUMNS = [
-  "id",
-  "inbound_email_id",
-  "is_draft",
-  "customer_name",
-  "customer_first_name",
-  "customer_last_name",
-  "customer_email",
-  "phone",
-  "phone_e164",
-  "date",
-  "time",
-  "status",
-  "direction",
-  "pax",
-  "vessel",
-  "booking_service_kind",
-  "service_type",
-  "service_type_code",
-  "arrival_date",
-  "arrival_time",
-  "train_arrival_time",
-  "departure_date",
-  "departure_time",
-  "train_departure_time",
-  "orario_barca",
-  "pickup_time",
-  "transport_code",
-  "transport_code_return",
-  "transport_reference_outward",
-  "transport_reference_return",
-  "train_arrival_number",
-  "train_departure_number",
-  "bus_city_origin",
-  "hotel_id",
-  "billing_party_name",
-  "agency_id",
-  "meeting_point",
-  "pickup_hotel",
-  "tour_name",
-  "excursion_title",
-  "notes",
-  "linked_service_id",
-  "created_at",
-].join(", ");
+// Compatibile con database che non hanno ancora tutte le colonne opzionali.
+const SERVICE_SEARCH_COLUMNS = "*";
 
 type SearchServiceRow = Partial<Service> & {
   id: string;
@@ -194,30 +151,8 @@ async function querySearchCandidates(
 
   if (input.q) {
     const pattern = `%${input.q}%`;
-    const textFields = [
-      "customer_name",
-      "customer_first_name",
-      "customer_last_name",
-      "customer_email",
-      "billing_party_name",
-      "vessel",
-      "notes",
-      "transport_code",
-      "transport_code_return",
-      "transport_reference_outward",
-      "transport_reference_return",
-      "train_arrival_number",
-      "train_departure_number",
-      "booking_service_kind",
-      "service_type",
-      "service_type_code",
-      "bus_city_origin",
-      "meeting_point",
-      "pickup_hotel",
-      "tour_name",
-      "excursion_title",
-      "id",
-    ];
+    // `id` e una colonna UUID: Postgres non consente ILIKE sugli UUID.
+    const textFields = ["customer_name", "billing_party_name", "vessel", "notes", "transport_code"];
     if (canUsePostgrestOr(input.q)) {
       run((query) => query.or(textFields.map((field) => `${field}.ilike.${pattern}`).join(",")));
     } else {
@@ -225,16 +160,9 @@ async function querySearchCandidates(
     }
     for (const token of textTokens(input.q)) {
       const tokenPattern = `%${token}%`;
-      run((query) => query.or([
-        `customer_name.ilike.${tokenPattern}`,
-        `customer_first_name.ilike.${tokenPattern}`,
-        `customer_last_name.ilike.${tokenPattern}`,
-      ].join(",")));
+      run((query) => query.ilike("customer_name", tokenPattern));
     }
-    const phoneFilters = phoneNeedles(input.q).flatMap((needle) => [
-      `phone.ilike.%${needle}%`,
-      `phone_e164.ilike.%${needle}%`,
-    ]);
+    const phoneFilters = phoneNeedles(input.q).map((needle) => `phone.ilike.%${needle}%`);
     if (phoneFilters.length) {
       run((query) => query.or(phoneFilters.join(",")));
     }
@@ -393,7 +321,7 @@ export async function GET(req: NextRequest) {
           customer_last_name: r.customer_last_name ?? null,
           customer_email: r.customer_email ?? null,
           phone: r.phone ?? null,
-          phone_e164: r.phone_e164 ?? null,
+          phone_e164: null,
           date: r.date,
           time: r.time,
           status: r.status,

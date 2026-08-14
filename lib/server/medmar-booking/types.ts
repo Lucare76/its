@@ -13,6 +13,14 @@ export type MedmarPreflightStatus =
   | "manual_review"
   | "route_mismatch"
   | "unsupported_passenger_type"
+  /**
+   * Fase 2B.5: gruppo con bambino/infant classificati correttamente e
+   * prezzo/tariffa determinabili, ma emissione volutamente NON abilitata
+   * ancora (payload di emissione minori non verificato contro Medmar
+   * reale). can_issue resta SEMPRE false su questo stato — vedi
+   * passengers/ticket_breakdown per i dati comunque disponibili.
+   */
+  | "passenger_payload_pending_verification"
   | "medmar_unavailable"
   | "medmar_auth_expired"
   /** MEDMAR_EMAIL/MEDMAR_PASSWORD (o, in compatibilità, MEDMAR_SESSION_TOKEN) assenti o a metà configurati: mai un crash, sempre can_issue=false. */
@@ -112,6 +120,14 @@ export type BigliettoVendibileRaw = {
   flag_targa: boolean | number | null;
   quantita_min_per_esclusivo: number | null;
   quantita_max_per_esclusivo: number | null;
+  /**
+   * Fase 2B.5: array grezzo di biglietti collegati (es. tassa di sbarco
+   * legata a un titolo passeggero), osservato realmente ma di struttura
+   * interna NON verificata su JSON grezzo — MAI parsato in campi tipizzati
+   * qui, solo attraversato difensivamente da deriveTaxLinkage in
+   * live-parser.ts (cerca un id_biglietto corrispondente). null se assente.
+   */
+  collegati: unknown;
 };
 
 export type MedmarPreflightWarning = { code: string; message: string };
@@ -146,6 +162,48 @@ export type MedmarPreflightTaxLine = {
   amount_cents: number | null;
 };
 
+/** Fase 2B.5 — categorie passeggero riconosciute per la classificazione biglietti (tax esclusa: non è un passeggero). */
+export type MedmarPassengerCategory = "adult" | "child" | "infant";
+
+/**
+ * Conteggio passeggeri per categoria di un gruppo di servizi. Fonte
+ * preferita: services.ferry_details.medmar_adult_count/medmar_child_count/
+ * medmar_infant_count (strutturato, catturato in fase di prenotazione — vedi
+ * lib/booking-ancillaries.ts). Se questi campi non sono mai stati
+ * valorizzati (prenotazioni precedenti alla Fase 2B.5, tutti a zero), si
+ * ricade su adults=pax/children=0/infants=0 (comportamento storico
+ * invariato) — MAI un'età dedotta da testo libero.
+ */
+export type MedmarPreflightPassengerCounts = {
+  adults: number;
+  children: number;
+  infants: number;
+  source: "medmar_counts" | "pax_fallback";
+};
+
+export type MedmarPreflightPassengerTicket = {
+  count: number;
+  id_biglietto: number | string | null;
+  id_log: number | string | null;
+  label: string | null;
+  unit_price_cents: number | null;
+  total_cents: number | null;
+};
+
+export type MedmarPreflightTaxBreakdown = {
+  count: number;
+  label: string | null;
+  unit_amount_cents: number | null;
+  total_amount_cents: number | null;
+};
+
+export type MedmarPreflightTicketBreakdown = {
+  adult: MedmarPreflightPassengerTicket | null;
+  child: MedmarPreflightPassengerTicket | null;
+  infant: MedmarPreflightPassengerTicket | null;
+  taxes: MedmarPreflightTaxBreakdown | null;
+};
+
 export type MedmarPreflightResult = {
   ok: boolean;
   can_issue: boolean;
@@ -162,6 +220,10 @@ export type MedmarPreflightResult = {
   is_live: boolean;
   warnings: MedmarPreflightWarning[];
   error: string | null;
+  /** Fase 2B.5 — null solo per gli status "early" (error/not_medmar/db_error) dove i servizi non sono nemmeno stati letti. */
+  passengers: MedmarPreflightPassengerCounts | null;
+  /** Fase 2B.5 — dettaglio per categoria, popolato solo quando la tariffa adulto live è stata determinata (stesso momento in cui tariff/taxes sopra vengono popolati). */
+  ticket_breakdown: MedmarPreflightTicketBreakdown | null;
 };
 
 export type MedmarPreflightServiceRow = {
@@ -186,4 +248,13 @@ export type MedmarPreflightServiceRow = {
    */
   meeting_point: string | null;
   orario_barca?: string | null;
+  /**
+   * Fase 2B.5 — jsonb popolato da lib/booking-ancillaries.ts alla creazione
+   * del servizio (app/api/ops/new-booking/route.ts). Contiene
+   * medmar_adult_count/medmar_child_count/medmar_infant_count quando la
+   * prenotazione li ha catturati; opzionale perché prenotazioni precedenti
+   * non hanno mai valorizzato questi campi. Parsato SOLO da
+   * passenger-composition.ts, mai letto altrove come testo libero.
+   */
+  ferry_details?: unknown;
 };

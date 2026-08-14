@@ -7,7 +7,7 @@ import { PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { GpsControlRoomEntry } from "@/lib/types";
 
-const DynamicMap = dynamic(() => import("@/components/control-room-map").then((mod) => mod.ControlRoomMap), {
+const DynamicMap = dynamic(() => import("@/components/control-room-map-shell").then((mod) => mod.ControlRoomMapShell), {
   ssr: false,
   loading: () => <div className="card p-4 text-sm text-slate-500">Caricamento control room...</div>
 });
@@ -423,6 +423,8 @@ export default function MappaLivePage() {
       ),
     [filteredEntries]
   );
+  // Il countdown provoca gia un render ogni secondo: usiamo il tempo corrente per mostrare l'eta del dato GPS.
+  // eslint-disable-next-line react-hooks/purity
   const fetchedAgoSeconds = fetchedAt ? Math.max(0, Math.floor((Date.now() - new Date(fetchedAt).getTime()) / 1000)) : null;
   const topAlerts = useMemo(
     () =>
@@ -602,6 +604,28 @@ export default function MappaLivePage() {
 
   return (
     <section className="space-y-4">
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div><h1 className="text-3xl font-extrabold tracking-tight text-slate-950">Control Room</h1><p className="mt-1 flex items-center gap-2 text-sm text-slate-500">{new Intl.DateTimeFormat("it-IT", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date())}<span>·</span><span>Aggiornamento in tempo reale</span><span className="h-2 w-2 rounded-full bg-emerald-500"/></p></div>
+        <div className="flex flex-wrap items-center gap-2"><select value={refreshSeconds} onChange={(event)=>setRefreshSeconds(Number(event.target.value))} className="input-saas w-40"><option value={20}>Refresh 20 sec</option><option value={30}>Refresh 30 sec</option><option value={60}>Refresh 60 sec</option></select><button type="button" onClick={handleManualRefresh} disabled={refreshing} className="btn-secondary px-4 py-2">{refreshing?"Aggiorno...":"Aggiorna ora"}</button><Link href="/services/new" className="btn-primary px-5 py-2">＋ Nuovo servizio</Link></div>
+      </header>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {[["▣","Servizi attivi",activeServiceEntries.length,"bg-emerald-50 text-emerald-600"],["▰","Mezzi in movimento",visibleSummary.moving,"bg-indigo-50 text-indigo-600"],["♙","Da verificare",visibleSummary.warning,"bg-orange-50 text-orange-600"],["◷","Fermi",visibleSummary.stopped,"bg-rose-50 text-rose-600"],["△","Emergenze",criticalEntries.length,"bg-red-50 text-red-600"]].map(([icon,label,value,tone])=><div key={String(label)} className="flex h-[86px] items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-sm"><span className={`flex h-12 w-12 items-center justify-center rounded-xl text-2xl ${tone}`}>{icon}</span><div><p className="text-xs font-medium text-slate-500">{label}</p><strong className="text-2xl text-slate-950">{value}</strong></div></div>)}
+      </div>
+
+      {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
+      {loading ? <div className="card p-6 text-sm text-slate-500">Caricamento control room GPS...</div> : <>
+      <div className="grid min-h-[620px] items-start gap-3 xl:grid-cols-[260px_minmax(520px,1fr)_280px]">
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"><div className="border-b border-slate-200 p-3"><h2 className="text-lg font-extrabold">Coda operativa</h2><input value={search} onChange={(event)=>setSearch(event.target.value)} className="input-saas mt-3 w-full" placeholder="Cerca mezzo, autista, cliente..."/><div className="mt-2 grid grid-cols-2 gap-2"><select value={lineFilter} onChange={(event)=>setLineFilter(event.target.value)} className="input-saas text-xs"><option value="all">Tutte le linee</option>{lineOptions.map((line)=><option key={line} value={line}>{line}</option>)}</select><select value={statusFilter} onChange={(event)=>setStatusFilter(event.target.value as typeof statusFilter)} className="input-saas text-xs"><option value="all">Tutti gli stati</option><option value="moving">In movimento</option><option value="stopped">Fermi</option><option value="warning">Warning</option><option value="offline">Offline</option></select></div></div><div className="max-h-[540px] space-y-2 overflow-y-auto p-3">{filteredEntries.map((entry)=>{const meta=statusMeta(entry.status_key);const active=selected?.radius_vehicle_id===entry.radius_vehicle_id;return <button key={entry.radius_vehicle_id} type="button" onClick={()=>setSelectedId(entry.radius_vehicle_id)} className={`w-full rounded-xl border p-3 text-left transition ${active?"border-indigo-400 bg-indigo-50 shadow-sm":"border-slate-200 hover:bg-slate-50"}`}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-bold text-slate-900">{entry.active_service?.customer_name??entry.pms_label??entry.label}</p><p className="mt-1 text-xs text-slate-500">{entry.line_name??"Linea non assegnata"}</p></div><span className={`h-2.5 w-2.5 shrink-0 rounded-full ${meta.dot}`}/></div><div className="mt-2 flex items-center justify-between text-xs"><span>{entry.driver_name??"Non assegnato"}</span><strong>{entry.active_service?.time??formatRelativeSeconds(entry.last_update_seconds)}</strong></div></button>})}</div></section>
+
+        <section className="relative min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"><div className="absolute left-4 top-4 z-[600] flex max-w-[calc(100%-8rem)] flex-wrap gap-2"><button type="button" onClick={handleResetFilters} className="btn-primary border-white/70 px-3 py-1.5 text-xs shadow-lg">Tutti i mezzi</button><button type="button" onClick={()=>setStatusFilter("moving")} className="btn-secondary bg-white/95 px-3 py-1.5 text-xs shadow-lg">In movimento</button><button type="button" onClick={()=>setStatusFilter("warning")} className="btn-secondary bg-white/95 px-3 py-1.5 text-xs shadow-lg">Da verificare</button></div><DynamicMap entries={filteredEntries} selectedId={selected?.radius_vehicle_id??null} onSelect={setSelectedId}/></section>
+
+        <aside className="space-y-3"><section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><h2 className="text-lg font-extrabold">Dettaglio mezzo</h2>{selected?<><div className="mt-4 flex items-start justify-between gap-2"><div><p className="font-bold text-slate-950">{selected.pms_label??selected.label}</p><p className="mt-1 text-xs text-slate-500">{selected.driver_name??"Autista non assegnato"}</p></div><span className={`rounded-lg border px-2 py-1 text-[10px] font-bold ${statusMeta(selected.status_key).badge}`}>{statusMeta(selected.status_key).label}</span></div><div className="mt-4 space-y-3 border-y border-slate-100 py-4 text-sm"><div><p className="text-[10px] font-bold uppercase text-slate-400">Posizione</p><p className="mt-1">{selected.current_address??selected.current_city??"Posizione non disponibile"}</p></div><div><p className="text-[10px] font-bold uppercase text-slate-400">Servizio attivo</p><p className="mt-1 font-semibold">{selected.active_service?.customer_name??"Nessun servizio PMS attivo"}</p>{selected.active_service?<p className="mt-1 text-xs text-slate-500">{selected.active_service.time} · {selected.active_service.hotel_name??"Destinazione non disponibile"}</p>:null}</div><div><p className="text-[10px] font-bold uppercase text-slate-400">Ultimo GPS</p><p className="mt-1">{formatRelativeSeconds(selected.last_update_seconds)} · {selected.speed_kmh!==null?`${Math.round(selected.speed_kmh)} km/h`:"velocità N/D"}</p></div></div><button type="button" onClick={()=>setSelectedId(selected.radius_vehicle_id)} className="btn-primary mt-4 w-full py-2.5">Segui sulla mappa</button><div className="mt-2 grid grid-cols-2 gap-2"><Link href="/fleet-ops" className="btn-secondary py-2 text-center text-xs">Dettaglio mezzo</Link><Link href="/dispatch" className="btn-secondary py-2 text-center text-xs">Cambio operativo</Link></div></>:<p className="mt-4 text-sm text-slate-500">Nessun mezzo disponibile.</p>}</section><section className="rounded-xl border border-rose-200 bg-white p-4 shadow-sm"><h2 className="text-base font-extrabold text-rose-700">Avvisi prioritari</h2><div className="mt-3 divide-y divide-slate-100">{topAlerts.length?topAlerts.map((alert)=><button key={`${alert.vehicleId}-${alert.title}`} type="button" onClick={()=>setSelectedId(alert.vehicleId)} className="flex w-full items-center justify-between gap-2 py-3 text-left text-xs"><span><strong className="block text-slate-800">{alert.title}</strong><span className="text-slate-500">{alert.vehicleLabel}</span></span><span>›</span></button>):<p className="py-4 text-sm text-emerald-700">Nessuna criticità rilevata.</p>}</div></section></aside>
+      </div>
+      <section className="relative overflow-hidden rounded-xl border border-slate-200 bg-white px-4 pb-4 pt-8 shadow-sm"><div className="absolute left-4 right-4 top-4 border-t border-dashed border-slate-300"/><div className="grid grid-cols-5 text-[10px] font-semibold text-slate-500"><span>08:00</span><span className="text-center">11:00</span><span className="text-center">14:00</span><span className="text-center">17:00</span><span className="text-right">20:00</span></div><div className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-5">{activeServiceEntries.slice(0,5).map((entry,index)=>{const tones=["border-blue-200 bg-blue-50 text-blue-800","border-violet-200 bg-violet-50 text-violet-800","border-emerald-200 bg-emerald-50 text-emerald-800","border-orange-200 bg-orange-50 text-orange-800","border-rose-200 bg-rose-50 text-rose-800"];return <button key={`timeline-${entry.radius_vehicle_id}`} type="button" onClick={()=>setSelectedId(entry.radius_vehicle_id)} className={`rounded-lg border px-3 py-2 text-left ${tones[index%tones.length]}`}><strong className="block text-xs">{entry.active_service?.time??"--:--"} · {entry.active_service?.customer_name??entry.pms_label??entry.label}</strong><span className="mt-1 block truncate text-[10px] opacity-75">{entry.active_service?.hotel_name??entry.current_city??"Destinazione non disponibile"}</span></button>})}</div></section>
+      </>}
+
+      <div className="hidden">
       <PageHeader
         title="Mappa Operativa"
         subtitle="Control room live per monitorare flotta, anomalie e stato mezzi senza cambiare schermata."
@@ -807,7 +831,7 @@ export default function MappaLivePage() {
       ) : (
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)]">
           <div className="space-y-4">
-            <DynamicMap entries={filteredEntries} selectedId={selected?.radius_vehicle_id ?? null} onSelect={setSelectedId} />
+            {false && <DynamicMap entries={filteredEntries} selectedId={selected?.radius_vehicle_id ?? null} onSelect={setSelectedId} />}
             {vehicleListSection}
           </div>
 
@@ -1029,6 +1053,7 @@ export default function MappaLivePage() {
           </div>
         </div>
       )}
+      </div>
     </section>
   );
 }

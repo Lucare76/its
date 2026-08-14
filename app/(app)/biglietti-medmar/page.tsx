@@ -137,10 +137,24 @@ type MedmarPreflightLeg = {
   source: "live" | "local_fallback" | null;
 };
 
+type MedmarPassengerTicket = {
+  count: number;
+  id_biglietto: number | string | null;
+  id_log: number | string | null;
+  label: string | null;
+  unit_price_cents: number | null;
+  total_cents: number | null;
+};
+
 type MedmarPreflightResult = {
   ok: boolean;
   can_issue: boolean;
-  status: "ok" | "no_match" | "ambiguous" | "not_medmar" | "manual_review" | "route_mismatch" | "unsupported_passenger_type" | "medmar_unavailable" | "medmar_auth_expired" | "error";
+  status:
+    | "ok" | "no_match" | "ambiguous" | "not_medmar" | "manual_review" | "route_mismatch"
+    | "unsupported_passenger_type"
+    // Fase 2B.5: bambino/infant classificati e prezzati correttamente, ma emissione volutamente ancora bloccata (vedi passengers/ticket_breakdown sotto).
+    | "passenger_payload_pending_verification"
+    | "medmar_unavailable" | "medmar_auth_expired" | "error";
   customer_name: string | null;
   pratica: string | null;
   pax: number;
@@ -158,6 +172,13 @@ type MedmarPreflightResult = {
   is_live: boolean;
   warnings: Array<{ code: string; message: string }>;
   error: string | null;
+  passengers: { adults: number; children: number; infants: number; source: "medmar_counts" | "pax_fallback" } | null;
+  ticket_breakdown: {
+    adult: MedmarPassengerTicket | null;
+    child: MedmarPassengerTicket | null;
+    infant: MedmarPassengerTicket | null;
+    taxes: { count: number; label: string | null; unit_amount_cents: number | null; total_amount_cents: number | null } | null;
+  } | null;
 };
 
 type MedmarIssueResult =
@@ -1243,6 +1264,38 @@ export default function BigliettiMedmarPage() {
                 ))}
                 <p className="text-slate-700 font-semibold">Totale previsto: {formatEur(verifyModal.result.expected_total_cents)}</p>
               </div>
+
+              {verifyModal.result.status === "passenger_payload_pending_verification" && verifyModal.result.ticket_breakdown && (
+                <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 space-y-2">
+                  <p className="text-xs font-semibold text-amber-900">Composizione passeggeri (prezzi Medmar live)</p>
+                  {([
+                    ["Adulto", verifyModal.result.ticket_breakdown.adult],
+                    ["Bambino", verifyModal.result.ticket_breakdown.child],
+                    ["Infant", verifyModal.result.ticket_breakdown.infant],
+                  ] as const).map(([label, t]) =>
+                    t ? (
+                      <p key={label} className="text-xs text-amber-800">
+                        {label} x {t.count} · {formatEur(t.unit_price_cents)} cad. · totale {formatEur(t.total_cents)}
+                      </p>
+                    ) : null
+                  )}
+                  {verifyModal.result.ticket_breakdown.taxes && verifyModal.result.ticket_breakdown.taxes.count > 0 && (
+                    <p className="text-xs text-amber-800">
+                      {verifyModal.result.ticket_breakdown.taxes.label ?? "Tassa di sbarco"} x {verifyModal.result.ticket_breakdown.taxes.count} · totale {formatEur(verifyModal.result.ticket_breakdown.taxes.total_amount_cents)}
+                    </p>
+                  )}
+                  <p className="text-sm font-semibold text-amber-900 pt-1 border-t border-amber-200">
+                    Il prezzo Medmar è stato verificato, ma l&apos;emissione automatica dei minori non è ancora abilitata.
+                  </p>
+                  <button
+                    type="button"
+                    disabled
+                    className="w-full rounded-xl bg-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-600 cursor-not-allowed"
+                  >
+                    Emissione minori non ancora disponibile
+                  </button>
+                </div>
+              )}
 
               <p className="text-xs font-semibold text-slate-600">
                 Stato: {verifyModal.result.status} · {verifyModal.result.can_issue ? "dati sufficienti per una futura emissione" : "verifica manuale necessaria"}

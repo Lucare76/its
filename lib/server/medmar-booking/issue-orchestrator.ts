@@ -4,6 +4,7 @@ import { auditLog } from "@/lib/server/ops-audit";
 import { runMedmarPreflight } from "./preflight";
 import { fetchBigliettiVendibiliReadOnly } from "./client";
 import { getMedmarIssueConfig, validateMedmarIssueConfig } from "./issue-config";
+import { loadPassengerComposition } from "./passenger-composition";
 import { createIssueRepository } from "./issue-repository";
 import { createMedmarMutationClient, MedmarMutationRemoteUnknownError } from "./medmar-mutation-client";
 import { buildBookingPayload, buildIssueCustomer, buildLockTickets, validateAdultFrozenTickets } from "./issue-payload";
@@ -146,6 +147,7 @@ export function createMedmarIssueOrchestrator(deps?: {
   runPreflight?: RunPreflightFn;
   fetchVendibili?: typeof fetchBigliettiVendibiliReadOnly;
   config?: ReturnType<typeof getMedmarIssueConfig>;
+  loadPassengerComposition?: typeof loadPassengerComposition;
   resolveSessionContext?: (input: { mutationClient: MedmarMutationClient }) => Promise<
     | { ok: true; context: MedmarIssueSessionContext }
     | { ok: false; status: "not_ready" | "remote_state_unknown"; error: string; retry_allowed: boolean }
@@ -158,6 +160,28 @@ export function createMedmarIssueOrchestrator(deps?: {
       return { ok: false, status: "feature_disabled", error: "Emissione Medmar disabilitata.", retry_allowed: false };
     }
     if (configBlocker) return { ok: false, status: "not_ready", error: "Configurazione emissione Medmar incompleta.", retry_allowed: false };
+
+    // Fase 2B.5 — pre-check LOCALE (nessuna chiamata Medmar, nessun attempt
+    // creato) eseguito PRIMA di qualunque mutazione, incluso openTurn (vedi
+    // resolveSessionContext poco sotto): il preflight COMPLETO viene
+    // eseguito più avanti, DOPO questo gate — senza questo pre-check un
+    // gruppo con bambino/infant arriverebbe comunque ad aprire un turno
+    // reale prima che il preflight possa dirlo. adults-only:
+    // composition.children===0 && infants===0, questo blocco è un no-op e
+    // il flusso prosegue identico a prima di questa fase.
+    const loadComposition = deps?.loadPassengerComposition ?? loadPassengerComposition;
+    const compositionResult = await loadComposition(input.admin, input.tenantId, input.serviceIds);
+    if (!compositionResult.ok) {
+      return { ok: false, status: "manual_review", error: "Impossibile verificare la composizione passeggeri prima dell'emissione.", retry_allowed: true };
+    }
+    if (compositionResult.composition.children > 0 || compositionResult.composition.infants > 0) {
+      return {
+        ok: false,
+        status: "child_issue_payload_not_verified",
+        error: "Emissione automatica non ancora abilitata per prenotazioni con bambino/infant.",
+        retry_allowed: false,
+      };
+    }
 
     const idempotencyKey = buildIdempotencyKey(input.serviceIds);
     const repo = deps?.repo ?? createIssueRepository(input.admin);

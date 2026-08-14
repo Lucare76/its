@@ -29,7 +29,9 @@ import {
   MedmarBadResponseError,
 } from "./client";
 import { MedmarNotConfiguredError, MedmarAuthFailedError } from "./auth";
-import { findArTariffAndTax, resolveBigliettoLabel } from "./live-parser";
+import { findArTariffAndTax, resolveBigliettoLabel, selectPassengerTariffs, deriveTaxLinkage } from "./live-parser";
+import type { PassengerCategorySelection, PassengerTariffSelection, MedmarPassengerCategory as LiveParserPassengerCategory } from "./live-parser";
+import { resolvePassengerComposition } from "./passenger-composition";
 import { getRouteDefinition } from "@/lib/medmar-ticket-memory";
 import type {
   MedmarPreflightLeg,
@@ -37,9 +39,96 @@ import type {
   MedmarPreflightServiceRow,
   MedmarPreflightWarning,
   MedmarPreflightTaxLine,
+  MedmarPreflightPassengerTicket,
+  MedmarPreflightTaxBreakdown,
+  MedmarPreflightTicketBreakdown,
 } from "./types";
 
 const CANCELLED_STATUSES = new Set(["cancelled", "pending_cancellation"]);
+
+function centsFromPrezzo(prezzo: number | null): number | null {
+  return prezzo != null && Number.isFinite(prezzo) ? Math.round(prezzo * 100) : null;
+}
+
+/**
+ * Fase 2B.5: costruisce la riga ticket_breakdown per una categoria
+ * (adult/child/infant). count=0 -> null (categoria assente dal gruppo, non
+ * un errore). count>0 ma tariffa non trovata/ambigua/non mappata -> prezzo
+ * unitario/totale null, MAI un valore indovinato — visibile comunque per
+ * diagnostica.
+ */
+function buildCategoryTicket(count: number, selection: PassengerCategorySelection): MedmarPreflightPassengerTicket | null {
+  if (count <= 0) return null;
+  if (selection.kind !== "found") {
+    return { count, id_biglietto: null, id_log: null, label: null, unit_price_cents: null, total_cents: null };
+  }
+  const unit = centsFromPrezzo(selection.ticket.prezzo);
+  return {
+    count,
+    id_biglietto: selection.ticket.id_biglietto,
+    id_log: selection.ticket.id_log,
+    label: resolveBigliettoLabel(selection.ticket).label,
+    unit_price_cents: unit,
+    total_cents: unit != null ? unit * count : null,
+  };
+}
+
+/**
+ * Fase 2B.5: quantità tax = numero di titoli (per categoria) che risultano
+ * REALMENTE collegati alla tassa (deriveTaxLinkage), mai il totale pax del
+ * gruppo. Ambiguità sul collegamento (più righe tax candidate) azzera il
+ * conteggio invece di indovinare quale tassa si applica.
+ */
+function buildTaxBreakdown(
+  counts: { adult: number; child: number; infant: number },
+  selection: PassengerTariffSelection
+): MedmarPreflightTaxBreakdown | null {
+  if (selection.taxRows.length === 0) return null;
+
+  const categories: Array<[LiveParserPassengerCategory, number, PassengerCategorySelection]> = [
+    ["adult", counts.adult, selection.adult],
+    ["child", counts.child, selection.child],
+    ["infant", counts.infant, selection.infant],
+  ];
+
+  let taxCount = 0;
+  let ambiguous = false;
+  for (const [category, count, categorySelection] of categories) {
+    if (count <= 0 || categorySelection.kind !== "found") continue;
+    const linkage = deriveTaxLinkage(category, categorySelection.ticket, selection.taxRows);
+    if (!linkage.linked) {
+      if (linkage.source === "ambiguous") ambiguous = true;
+      continue;
+    }
+    taxCount += count;
+  }
+
+  if (ambiguous) return { count: 0, label: null, unit_amount_cents: null, total_amount_cents: null };
+
+  const taxRow = selection.taxRows.length === 1 ? selection.taxRows[0]! : null;
+  const unit = taxRow ? centsFromPrezzo(taxRow.prezzo) : null;
+  return {
+    count: taxCount,
+    label: taxRow ? resolveBigliettoLabel(taxRow).label : null,
+    unit_amount_cents: unit,
+    total_amount_cents: unit != null ? unit * taxCount : null,
+  };
+}
+
+/** null se un componente ha count>0 ma prezzo non determinabile — mai un totale parziale indovinato. */
+function sumTicketBreakdownTotal(breakdown: MedmarPreflightTicketBreakdown): number | null {
+  let total = 0;
+  for (const part of [breakdown.adult, breakdown.child, breakdown.infant] as const) {
+    if (!part) continue;
+    if (part.total_cents == null) return null;
+    total += part.total_cents;
+  }
+  if (breakdown.taxes) {
+    if (breakdown.taxes.total_amount_cents == null) return null;
+    total += breakdown.taxes.total_amount_cents;
+  }
+  return total;
+}
 
 function extractPratica(notes: string | null): string | null {
   const match = (notes ?? "").match(/\[practice:([^\]]+)\]/);
@@ -283,7 +372,7 @@ export async function runMedmarPreflight(
 
   const { data, error } = await admin
     .from("services")
-    .select("id, tenant_id, date, time, outbound_time, return_time, orario_barca, customer_name, pax, vessel, notes, booking_service_kind, direction, status, meeting_point")
+    .select("id, tenant_id, date, time, outbound_time, return_time, orario_barca, customer_name, pax, vessel, notes, booking_service_kind, direction, status, meeting_point, ferry_details")
     .in("id", serviceIds)
     .eq("tenant_id", tenantId);
 
@@ -309,6 +398,8 @@ export async function runMedmarPreflight(
       outward: null, return: null, tariff: null, taxes: [], expected_total_cents: null, is_live: false,
       warnings: [{ code: "not_medmar", message: "Uno o più servizi selezionati non sono servizi Medmar (campo vessel)." }],
       error: null,
+      passengers: null,
+      ticket_breakdown: null,
     };
   }
 
@@ -321,6 +412,18 @@ export async function runMedmarPreflight(
   const pratica = extractPratica(first.notes);
   const groupKey = normalizeGroupKey(first.customer_name, pratica);
   const pax = Math.max(...rows.map((r) => r.pax ?? 1));
+  // Fase 2B.5 — fonte strutturata (services.ferry_details), MAI dedotta da
+  // notes. Fallback adults=pax/children=0/infants=0 quando non valorizzata
+  // (prenotazioni precedenti alla Fase 2B.5): preserva byte-per-byte il
+  // comportamento "solo adulti" già in produzione.
+  const passengers = resolvePassengerComposition(rows.map((r) => ({ pax: r.pax, ferry_details: r.ferry_details })));
+  const hasMinors = passengers.children > 0 || passengers.infants > 0;
+  if (passengers.source === "medmar_counts" && passengers.adults + passengers.children + passengers.infants !== pax) {
+    warnings.push({
+      code: "passenger_count_mismatch",
+      message: `Somma passeggeri per categoria (${passengers.adults + passengers.children + passengers.infants}) diversa dal campo pax del servizio (${pax}): verificare i dati di prenotazione.`,
+    });
+  }
 
   const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date));
   const arrivalRow = sorted.find((r) => r.direction === "arrival") ?? null;
@@ -368,6 +471,8 @@ export async function runMedmarPreflight(
     outward: outwardOutcome?.leg ?? null, return: returnOutcome?.leg ?? null,
     tariff: null, taxes: [], expected_total_cents: null, is_live: false,
     warnings, error: null,
+    passengers,
+    ticket_breakdown: null,
   };
 
   if (status !== "ok") {
@@ -453,19 +558,67 @@ export async function runMedmarPreflight(
     const unitTotal = unitPriceCents + (taxes[0]?.amount_cents ?? 0);
     const expectedTotalCents = unitTotal * pax;
 
+    const tariff = {
+      id_biglietto: tariffRow.id_biglietto,
+      id_tariffa: tariffRow.id_tariffa,
+      label: resolveBigliettoLabel(tariffRow).label,
+      unit_price_cents: unitPriceCents,
+      source: "medmar_live" as const,
+    };
+
+    // Fase 2B.5 — classificazione adult/child/infant/tax sulla STESSA
+    // risposta vendibili già letta da findArTariffAndTax sopra (nessuna
+    // seconda chiamata Medmar). ticket_breakdown è popolato SEMPRE (anche
+    // nel percorso solo-adulti) perché il preflight deve mostrarlo secondo
+    // spec; can_issue/status per il percorso solo-adulti restano invariati.
+    const passengerSelection = selectPassengerTariffs(vendibili);
+    const ticketBreakdown: MedmarPreflightTicketBreakdown = {
+      adult: buildCategoryTicket(passengers.adults, passengerSelection.adult),
+      child: buildCategoryTicket(passengers.children, passengerSelection.child),
+      infant: buildCategoryTicket(passengers.infants, passengerSelection.infant),
+      taxes: buildTaxBreakdown({ adult: passengers.adults, child: passengers.children, infant: passengers.infants }, passengerSelection),
+    };
+
+    if (!hasMinors) {
+      return {
+        ...baseResult,
+        can_issue: true,
+        tariff,
+        taxes,
+        expected_total_cents: expectedTotalCents,
+        is_live: true,
+        ticket_breakdown: ticketBreakdown,
+      };
+    }
+
+    // Bambino/infant presenti: preflight e prezzo possono essere completi,
+    // ma l'emissione resta VOLUTAMENTE fail-closed (Fase 2B.5 non abilita
+    // ancora l'emissione automatica minori) — can_issue sempre false qui,
+    // indipendentemente da quanto sia completo ticket_breakdown.
+    if (passengerSelection.child.kind === "ambiguous" || passengerSelection.infant.kind === "ambiguous") {
+      warnings.push({ code: "child_issue_payload_not_verified", message: "Più righe candidate per bambino/infant nella risposta Medmar live: revisione manuale richiesta oltre al blocco emissione minori." });
+    }
+    if (passengers.children > 0 && passengerSelection.child.kind !== "found") {
+      warnings.push({ code: "child_ticket_not_found_live", message: "Bambino presente nel gruppo ma nessun biglietto BAMBINO corrispondente trovato nella risposta Medmar live." });
+    }
+    if (passengers.infants > 0 && passengerSelection.infant.kind !== "found") {
+      warnings.push({ code: "infant_ticket_not_found_live", message: "Infant presente nel gruppo ma nessun biglietto INFANT corrispondente trovato nella risposta Medmar live." });
+    }
+    warnings.push({
+      code: "child_issue_payload_not_verified",
+      message: "Il prezzo Medmar è stato verificato, ma l'emissione automatica dei minori non è ancora abilitata: revisione/emissione manuale richiesta.",
+    });
+
     return {
       ...baseResult,
-      can_issue: true,
-      tariff: {
-        id_biglietto: tariffRow.id_biglietto,
-        id_tariffa: tariffRow.id_tariffa,
-        label: resolveBigliettoLabel(tariffRow).label,
-        unit_price_cents: unitPriceCents,
-        source: "medmar_live",
-      },
+      can_issue: false,
+      status: "passenger_payload_pending_verification",
+      tariff,
       taxes,
-      expected_total_cents: expectedTotalCents,
+      expected_total_cents: sumTicketBreakdownTotal(ticketBreakdown) ?? expectedTotalCents,
       is_live: true,
+      ticket_breakdown: ticketBreakdown,
+      warnings,
     };
   } catch (err) {
     if (err instanceof MedmarNotConfiguredError) {
@@ -488,5 +641,7 @@ function errorResult(code: string, message: string, serviceIds: string[]): Medma
     customer_name: null, pratica: null, pax: 0, outward: null, return: null,
     tariff: null, taxes: [], expected_total_cents: null, is_live: false,
     warnings: [], error: `${code}: ${message}`,
+    passengers: null,
+    ticket_breakdown: null,
   };
 }

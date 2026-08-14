@@ -134,15 +134,34 @@ function mutationClient(overrides: Partial<MedmarMutationClient> = {}): MedmarMu
   };
 }
 
-async function run(input: { repo?: IssueRepository; mutationClient?: MedmarMutationClient; preflightResult?: ReturnType<typeof preflight> }) {
+function passengerComposition(overrides: { adults?: number; children?: number; infants?: number } = {}) {
+  return {
+    ok: true as const,
+    composition: {
+      adults: overrides.adults ?? 1,
+      children: overrides.children ?? 0,
+      infants: overrides.infants ?? 0,
+      source: "pax_fallback" as const,
+    },
+  };
+}
+
+async function run(input: {
+  repo?: IssueRepository;
+  mutationClient?: MedmarMutationClient;
+  preflightResult?: ReturnType<typeof preflight>;
+  loadPassengerComposition?: ReturnType<typeof vi.fn>;
+  resolveSessionContext?: ReturnType<typeof vi.fn>;
+}) {
   const { createMedmarIssueOrchestrator } = await import("@/lib/server/medmar-booking/issue-orchestrator");
   return createMedmarIssueOrchestrator({
     repo: input.repo ?? makeRepo(),
     mutationClient: input.mutationClient ?? mutationClient(),
     runPreflight: vi.fn().mockResolvedValue(input.preflightResult ?? preflight()),
     fetchVendibili: vi.fn().mockResolvedValue(vendibili()),
-    resolveSessionContext: vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT }),
+    resolveSessionContext: (input.resolveSessionContext ?? vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT })) as never,
     config: { enabled: true, causaleId: 1, modalitaId: 5, vettoreAndataId: 1, vettoreRitornoId: 1 },
+    loadPassengerComposition: (input.loadPassengerComposition ?? vi.fn().mockResolvedValue(passengerComposition())) as never,
   })({ admin: {} as never, tenantId: TENANT, userId: USER, serviceIds: [SVC] });
 }
 
@@ -165,6 +184,68 @@ describe("medmar issue orchestrator", () => {
     expect(result.ok).toBe(false);
     expect(result.status).toBe("preflight_failed");
     expect(client.lockAvailability).not.toHaveBeenCalled();
+  });
+
+  it("27/29/30/31/32. Fase 2B.5 — bambino presente -> child_issue_payload_not_verified, ZERO resolveSessionContext (quindi zero openTurn)/lock/booking/payment, nessun attempt acquisito", async () => {
+    const client = mutationClient();
+    const repo = makeRepo();
+    const acquireSpy = vi.spyOn(repo, "acquireAttempt");
+    const resolveSessionContextSpy = vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT });
+    const result = await run({
+      mutationClient: client,
+      repo,
+      resolveSessionContext: resolveSessionContextSpy,
+      loadPassengerComposition: vi.fn().mockResolvedValue(passengerComposition({ adults: 1, children: 1 })),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("child_issue_payload_not_verified");
+    expect(result.retry_allowed).toBe(false);
+    expect(acquireSpy).not.toHaveBeenCalled();
+    // resolveSessionContext è il punto che nella produzione apre il turno
+    // (openTurn): non essendo mai invocato, openTurn non può essere partito.
+    expect(resolveSessionContextSpy).not.toHaveBeenCalled();
+    expect(client.openTurn).not.toHaveBeenCalled();
+    expect(client.lockAvailability).not.toHaveBeenCalled();
+    expect(client.createBooking).not.toHaveBeenCalled();
+    expect(client.payManual).not.toHaveBeenCalled();
+  });
+
+  it("28. Fase 2B.5 — infant presente -> child_issue_payload_not_verified, ZERO resolveSessionContext/mutazioni", async () => {
+    const client = mutationClient();
+    const resolveSessionContextSpy = vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT });
+    const result = await run({
+      mutationClient: client,
+      resolveSessionContext: resolveSessionContextSpy,
+      loadPassengerComposition: vi.fn().mockResolvedValue(passengerComposition({ adults: 1, infants: 1 })),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("child_issue_payload_not_verified");
+    expect(resolveSessionContextSpy).not.toHaveBeenCalled();
+    expect(client.lockAvailability).not.toHaveBeenCalled();
+  });
+
+  it("Fase 2B.5 — composizione passeggeri non verificabile (errore DB) -> manual_review retryable, ZERO resolveSessionContext/mutazioni (fail-closed, non fail-open)", async () => {
+    const client = mutationClient();
+    const resolveSessionContextSpy = vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT });
+    const result = await run({
+      mutationClient: client,
+      resolveSessionContext: resolveSessionContextSpy,
+      loadPassengerComposition: vi.fn().mockResolvedValue({ ok: false, error: "passenger_composition_lookup_failed" }),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("manual_review");
+    expect(result.retry_allowed).toBe(true);
+    expect(resolveSessionContextSpy).not.toHaveBeenCalled();
+  });
+
+  it("Fase 2B.5 — solo adulti (children=0, infants=0) -> il gate è un no-op, flusso invariato fino a completed", async () => {
+    const client = mutationClient();
+    const result = await run({ mutationClient: client, loadPassengerComposition: vi.fn().mockResolvedValue(passengerComposition({ adults: 2 })) });
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("completed");
+    expect(client.lockAvailability).toHaveBeenCalledTimes(1);
+    expect(client.createBooking).toHaveBeenCalledTimes(1);
+    expect(client.payManual).toHaveBeenCalledTimes(1);
   });
 
   it("feature flag false blocca prima di repo e mutazioni", async () => {
@@ -196,6 +277,7 @@ describe("medmar issue orchestrator", () => {
       fetchVendibili: vi.fn().mockResolvedValue(vendibili()),
       resolveSessionContext: vi.fn().mockResolvedValue({ ok: false, status: "not_ready", error: "Contesto Medmar incompleto.", retry_allowed: false }),
       config: { enabled: true, causaleId: 1, modalitaId: 5, vettoreAndataId: 1, vettoreRitornoId: 1 },
+      loadPassengerComposition: vi.fn().mockResolvedValue(passengerComposition()) as never,
     })({ admin: {} as never, tenantId: TENANT, userId: USER, serviceIds: [SVC] });
     expect(result.ok).toBe(false);
     expect(result.status).toBe("not_ready");
@@ -396,6 +478,7 @@ describe("medmar issue orchestrator", () => {
       fetchVendibili: vi.fn().mockResolvedValue(vendibiliConTassaErrata()),
       resolveSessionContext: vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT }),
       config: { enabled: true, causaleId: 1, modalitaId: 5, vettoreAndataId: 1, vettoreRitornoId: 1 },
+      loadPassengerComposition: vi.fn().mockResolvedValue(passengerComposition()) as never,
     })({ admin: {} as never, tenantId: TENANT, userId: USER, serviceIds: [SVC] });
     expect(result.ok).toBe(false);
     expect(result.status).toBe("manual_review");

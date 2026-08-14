@@ -76,7 +76,16 @@ export type MedmarIssueResult =
         | "lock_failed"
         | "booking_failed_definitive"
         | "payment_failed_definitive"
-        | "not_ready";
+        | "not_ready"
+        /**
+         * Fase 2B.5 — gruppo con bambino/infant: emissione mutativa
+         * VOLUTAMENTE bloccata prima di qualunque chiamata Medmar
+         * (openTurn incluso — vedi il pre-check in issue-orchestrator.ts
+         * eseguito PRIMA della risoluzione del contesto sessione/turno).
+         * Nessun attempt viene creato per questo stato: non è
+         * "in_progress" né terminale, solo un rifiuto locale immediato.
+         */
+        | "child_issue_payload_not_verified";
       idempotency_key?: string;
       attempt_id?: string;
       error: string;

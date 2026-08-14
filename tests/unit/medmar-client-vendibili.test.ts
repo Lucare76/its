@@ -18,6 +18,7 @@ const AR_ROW = {
   prezzo: 10.25, prezzo_ar: 0, prezzo_prevendita: 10.25,
   flag_ar_obbligatorio: true, flag_targa: 0,
   quantita_min_per_esclusivo: null, quantita_max_per_esclusivo: null,
+  collegati: null,
 };
 
 /** Envelope reale osservato via smoke test Fase 2A.1: { return: true, output: [...] }. */

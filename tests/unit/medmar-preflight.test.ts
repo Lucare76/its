@@ -657,6 +657,161 @@ describe("runMedmarPreflight — quantita_min/max_per_esclusivo (Fase 2A.2: sema
   });
 });
 
+// Fixture reali corsa 133760 (Fase 2B.5) — vedi lib/server/medmar-booking/live-parser.ts.
+function bambinoTariffRow(overrides: Row = {}): Row {
+  return {
+    id_corsa: 131943, id_biglietto: 17, id_tipologia_passeggero: 1, id_tariffa: 6,
+    id_iva: 32, id_log: 45656,
+    nome: "BAMBINO", descrizione: "PASSAGGIO PONTE BAMBINO (4-12 Anni)",
+    prezzo: 8, prezzo_ar: 8, prezzo_prevendita: 8,
+    flag_ar_obbligatorio: false, flag_targa: 0,
+    quantita_min_per_esclusivo: null, quantita_max_per_esclusivo: null,
+    collegati: null,
+    ...overrides,
+  };
+}
+
+function infantTariffRow(overrides: Row = {}): Row {
+  return {
+    id_corsa: 131943, id_biglietto: 20, id_tipologia_passeggero: 1, id_tariffa: 6,
+    id_iva: 32, id_log: 45663,
+    nome: "INFANT", descrizione: "PASSAGGIO PONTE INFANT (0-4 Anni)",
+    prezzo: 2.5, prezzo_ar: 2.5, prezzo_prevendita: 2.5,
+    flag_ar_obbligatorio: false, flag_targa: 0,
+    quantita_min_per_esclusivo: null, quantita_max_per_esclusivo: null,
+    collegati: null,
+    ...overrides,
+  };
+}
+
+describe("runMedmarPreflight — passeggeri misti adulto/bambino/infant (Fase 2B.5)", () => {
+  function mixedRow(overrides: Row = {}): Row {
+    return arrivalRow({
+      pax: 3,
+      ferry_details: { medmar_adult_count: 1, medmar_child_count: 1, medmar_infant_count: 1 },
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([NAPOLI_ISCHIA_CORSA]);
+  });
+
+  it("15/29. 1 adulto + 1 bambino + 1 infant -> status passenger_payload_pending_verification, can_issue false, ticket_breakdown popolato con prezzi live", async () => {
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
+      AR_TARIFF_ROW, bambinoTariffRow(), infantTariffRow(), TASSA_SBARCO_ROW,
+    ] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([mixedRow()]), TENANT_A, [SVC_ARR]);
+
+    expect(result.status).toBe("passenger_payload_pending_verification");
+    expect(result.can_issue).toBe(false);
+    expect(result.is_live).toBe(true);
+    expect(result.passengers).toEqual({ adults: 1, children: 1, infants: 1, source: "medmar_counts" });
+    expect(result.ticket_breakdown?.adult).toMatchObject({ count: 1, id_biglietto: 370, unit_price_cents: 1025, total_cents: 1025 });
+    expect(result.ticket_breakdown?.child).toMatchObject({ count: 1, id_biglietto: 17, unit_price_cents: 800, total_cents: 800 });
+    expect(result.ticket_breakdown?.infant).toMatchObject({ count: 1, id_biglietto: 20, unit_price_cents: 250, total_cents: 250 });
+    expect(result.warnings.some((w) => w.code === "child_issue_payload_not_verified")).toBe(true);
+  });
+
+  it("14/heuristic: nessun collegati sui biglietti -> tax qty 2 (adulto+bambino), infant escluso (fallback euristico esplicito)", async () => {
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
+      AR_TARIFF_ROW, bambinoTariffRow(), infantTariffRow(), TASSA_SBARCO_ROW,
+    ] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([mixedRow()]), TENANT_A, [SVC_ARR]);
+
+    expect(result.ticket_breakdown?.taxes).toMatchObject({ count: 2, unit_amount_cents: 150, total_amount_cents: 300 });
+  });
+
+  it("13. infant con collegati=[] (nessuna tax osservata) -> tax qty 1 (solo adulto), MAI una tax inventata per l'infant", async () => {
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
+      { ...AR_TARIFF_ROW, collegati: [{ id_biglietto: 999 }] },
+      infantTariffRow({ collegati: [] }),
+      TASSA_SBARCO_ROW,
+    ] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ pax: 2, ferry_details: { medmar_adult_count: 1, medmar_child_count: 0, medmar_infant_count: 1 } })]), TENANT_A, [SVC_ARR]);
+
+    expect(result.ticket_breakdown?.taxes).toMatchObject({ count: 1 });
+    expect(result.ticket_breakdown?.infant).toMatchObject({ count: 1, total_cents: 250 });
+  });
+
+  it("15. pricing misto: totale atteso = adulto*count + bambino*count + infant*count + tax(qty collegata)*prezzo tax", async () => {
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
+      AR_TARIFF_ROW, bambinoTariffRow(), infantTariffRow(), TASSA_SBARCO_ROW,
+    ] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([mixedRow()]), TENANT_A, [SVC_ARR]);
+
+    // adulto 1025 + bambino 800 + infant 250 + tax 2*150 = 2375
+    expect(result.expected_total_cents).toBe(1025 + 800 + 250 + 2 * 150);
+  });
+
+  it("16/17. sensitivity: nessun prezzo hardcoded — cambiare il prezzo live del bambino cambia il totale atteso", async () => {
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
+      AR_TARIFF_ROW, bambinoTariffRow({ prezzo: 99 }), infantTariffRow(), TASSA_SBARCO_ROW,
+    ] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([mixedRow()]), TENANT_A, [SVC_ARR]);
+
+    expect(result.ticket_breakdown?.child?.unit_price_cents).toBe(9900);
+    expect(result.expected_total_cents).toBe(1025 + 9900 + 250 + 2 * 150);
+  });
+
+  it("18. sensitivity: gruppo con SOLI adulti (children=0, infants=0 espliciti) -> comportamento invariato, can_issue true, status ok", async () => {
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+
+    const result = await runMedmarPreflight(
+      fakeAdmin([arrivalRow({ pax: 2, ferry_details: { medmar_adult_count: 2, medmar_child_count: 0, medmar_infant_count: 0 } })]),
+      TENANT_A,
+      [SVC_ARR]
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.expected_total_cents).toBe((1025 + 150) * 2);
+    expect(result.ticket_breakdown?.child).toBeNull();
+    expect(result.ticket_breakdown?.infant).toBeNull();
+  });
+
+  it("legacy: ferry_details mai valorizzato (prenotazioni precedenti alla Fase 2B.5) -> fallback adults=pax, comportamento identico a prima di questa fase", async () => {
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([ARRIVAL_ROW]), TENANT_A, [SVC_ARR]);
+
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.passengers).toEqual({ adults: 2, children: 0, infants: 0, source: "pax_fallback" });
+    expect(result.expected_total_cents).toBe((1025 + 150) * 2);
+  });
+
+  it("27/28. fail-closed: bambino presente -> can_issue sempre false anche con prezzo/tariffa completi", async () => {
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, bambinoTariffRow(), TASSA_SBARCO_ROW] as never);
+
+    const result = await runMedmarPreflight(
+      fakeAdmin([arrivalRow({ pax: 2, ferry_details: { medmar_adult_count: 1, medmar_child_count: 1, medmar_infant_count: 0 } })]),
+      TENANT_A,
+      [SVC_ARR]
+    );
+
+    expect(result.can_issue).toBe(false);
+    expect(result.status).toBe("passenger_payload_pending_verification");
+  });
+
+  it("sensitivity: bambino/infant con id_tipologia_passeggero=1 non vengono MAI conteggiati come adulto extra nel breakdown", async () => {
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([
+      AR_TARIFF_ROW, bambinoTariffRow({ id_tipologia_passeggero: 1 }), infantTariffRow({ id_tipologia_passeggero: 1 }), TASSA_SBARCO_ROW,
+    ] as never);
+
+    const result = await runMedmarPreflight(fakeAdmin([mixedRow()]), TENANT_A, [SVC_ARR]);
+
+    expect(result.ticket_breakdown?.adult).toMatchObject({ count: 1 });
+    expect(result.tariff?.id_biglietto).toBe(370);
+  });
+});
+
 describe("runMedmarPreflight — schema vecchio (Fase 1.6) non deve mai produrre can_issue=true (Fase 2A.2)", () => {
   it("fixture nel vecchio formato (biglietto/flag_ar invece di descrizione/flag_ar_obbligatorio) -> not_found, can_issue false", async () => {
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);

@@ -271,6 +271,7 @@ export default function InboxPage() {
   const [agenciesMap, setAgenciesMap] = useState<Map<string, string>>(new Map());
   const [searchResults, setSearchResults] = useState<GlobalBookingSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [bookingFilter, setBookingFilter] = useState<"all" | "today" | "tomorrow" | "week" | "arrival" | "departure" | "review">("all");
   const [expandedServiceId, setExpandedServiceId] = useState<string | null>(null);
   const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
@@ -543,11 +544,13 @@ export default function InboxPage() {
     if (!accessToken || (query.length < 1 && agency.length < 1)) {
       setSearchResults([]);
       setSearchLoading(false);
+      setSearchError(null);
       return;
     }
 
     let active = true;
     setSearchLoading(true);
+    setSearchError(null);
     const timer = setTimeout(async () => {
       try {
         const params = new URLSearchParams({ limit: "50" });
@@ -556,8 +559,21 @@ export default function InboxPage() {
         const res = await fetch(`/api/ops/search?${params.toString()}`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        const body = (await res.json().catch(() => null)) as { ok?: boolean; results?: GlobalBookingSearchResult[] } | null;
-        if (active) setSearchResults(body?.ok ? body.results ?? [] : []);
+        const body = (await res.json().catch(() => null)) as { ok?: boolean; results?: GlobalBookingSearchResult[]; error?: string } | null;
+        if (active) {
+          if (!res.ok || !body?.ok) {
+            setSearchResults([]);
+            setSearchError(body?.error ?? "Ricerca non disponibile.");
+          } else {
+            setSearchResults(body.results ?? []);
+            setSearchError(null);
+          }
+        }
+      } catch (searchRequestError) {
+        if (active) {
+          setSearchResults([]);
+          setSearchError(searchRequestError instanceof Error ? searchRequestError.message : "Ricerca non disponibile.");
+        }
       } finally {
         if (active) setSearchLoading(false);
       }
@@ -809,7 +825,8 @@ export default function InboxPage() {
 
       <div className="space-y-3">
         {searchLoading ? <div className="pms-panel p-6 text-sm text-slate-500">Ricerca in corso...</div> : null}
-        {!searchLoading && visibleBookings.length === 0 ? <div className="pms-panel p-8 text-center text-sm text-slate-500">Nessuna prenotazione nel filtro selezionato.</div> : null}
+        {!searchLoading && searchError ? <div className="pms-panel border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">Errore ricerca: {searchError}</div> : null}
+        {!searchLoading && !searchError && visibleBookings.length === 0 ? <div className="pms-panel p-8 text-center text-sm text-slate-500">Nessuna prenotazione nel filtro selezionato.</div> : null}
         {!searchLoading && visibleBookings.map((service, index) => {
           const expanded = expandedServiceId === service.id || (expandedServiceId === null && index === 0);
           const transportTimes = bookingListTransportTimes(service);

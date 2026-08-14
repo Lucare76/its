@@ -8,6 +8,7 @@ interface ControlRoomMapProps {
   entries: GpsControlRoomEntry[];
   selectedId: string | null;
   onSelect: (radiusVehicleId: string) => void;
+  compact?: boolean;
 }
 
 const DEFAULT_CENTER: [number, number] = [40.7395, 13.9124];
@@ -63,6 +64,13 @@ function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
   const showDetails = selected || critical;
   const size = selected ? 48 : critical ? 42 : 36;
   const speed = entry.speed_kmh !== null ? Math.round(entry.speed_kmh) : null;
+  const vehicleText = `${entry.pms_label ?? ""} ${entry.label} ${entry.line_name ?? ""}`.toLowerCase();
+  const vehicleKind = vehicleText.includes("bus") ? "bus" : vehicleText.includes("van") || vehicleText.includes("vito") || vehicleText.includes("ducato") ? "van" : "car";
+  const vehicleSvg = vehicleKind === "bus"
+    ? `<rect x="8" y="8" width="24" height="23" rx="5" fill="#fff" stroke="#1f2937" stroke-width="1.8"/><path d="M12 12h16v9H12z" fill="${accent}"/><circle cx="14" cy="30" r="3" fill="#1f2937"/><circle cx="27" cy="30" r="3" fill="#1f2937"/>`
+    : vehicleKind === "van"
+      ? `<path d="M7 25V14c0-3 2-5 5-5h12c4 0 7 3 7 7v9H7Z" fill="#fff" stroke="#1f2937" stroke-width="1.8"/><path d="M12 13h11v7H12z" fill="${accent}"/><circle cx="13" cy="27" r="3" fill="#1f2937"/><circle cx="27" cy="27" r="3" fill="#1f2937"/>`
+      : `<path d="M7 24l3-9c.7-2 2.3-3 4.5-3h11c2 0 3.5 1 4.2 2.8L33 24v5H7v-5Z" fill="#fff" stroke="#1f2937" stroke-width="1.8"/><path d="M12 16h15l2 6H10l2-6Z" fill="${accent}"/><circle cx="13" cy="29" r="3" fill="#1f2937"/><circle cx="28" cy="29" r="3" fill="#1f2937"/>`;
 
   return L.divIcon({
     className: "",
@@ -91,16 +99,7 @@ function busIcon(entry: GpsControlRoomEntry, selected: boolean) {
             box-shadow:inset 0 -1px 0 rgba(15,23,42,0.08);
           "></div>
           <svg xmlns="http://www.w3.org/2000/svg" width="${size - 13}" height="${size - 13}" viewBox="0 0 40 40" fill="none" style="position:relative;z-index:1;transform:rotate(45deg);">
-            <path d="M8.5 24.8v-8.4c0-4.1 3.3-7.4 7.4-7.4h7.8c3.9 0 6 1.7 6 5.2v10.6c0 1.9-1.5 3.5-3.5 3.5H12c-1.9 0-3.5-1.6-3.5-3.5Z" fill="#ffffff" stroke="#1f2937" stroke-width="1.8"/>
-            <path d="M11.2 14.9h15.4c1.2 0 1.9.5 1.9 1.5v1.4H10v-1.2c0-1.2.5-1.7 1.2-1.7Z" fill="${accent}"/>
-            <rect x="11.4" y="18.8" width="5.8" height="4.2" rx="0.9" fill="#eef4ff" stroke="#1f2937" stroke-width="1.3"/>
-            <rect x="17.8" y="18.8" width="5.8" height="4.2" rx="0.9" fill="#eef4ff" stroke="#1f2937" stroke-width="1.3"/>
-            <rect x="24.2" y="18.8" width="4" height="5.3" rx="0.9" fill="#eef4ff" stroke="#1f2937" stroke-width="1.3"/>
-            <path d="M13.8 25.8h9.2" stroke="${accent}" stroke-width="2" stroke-linecap="round"/>
-            <circle cx="14.8" cy="28" r="3.6" fill="#1f2937"/>
-            <circle cx="14.8" cy="28" r="2.1" fill="#ffffff"/>
-            <circle cx="25.8" cy="28" r="3.6" fill="#1f2937"/>
-            <circle cx="25.8" cy="28" r="2.1" fill="#ffffff"/>
+            ${vehicleSvg}
           </svg>
           ${offlineWithActiveService && !selected ? `
             <div style="
@@ -245,7 +244,7 @@ function spreadOverlapping(items: GpsControlRoomEntry[]): Array<GpsControlRoomEn
   return result;
 }
 
-export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMapProps) {
+export function ControlRoomMap({ entries, selectedId, onSelect, compact = false }: ControlRoomMapProps) {
   const [baseLayerLabel, setBaseLayerLabel] = useState(PROTOMAPS_URL ? "Protomaps in caricamento" : "CARTO in caricamento");
   const [operationalLayerEnabled, setOperationalLayerEnabled] = useState(true);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -443,9 +442,17 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
     }
   }, [entries, selectedId]);
 
+  const centerAll = () => {
+    const map = mapRef.current;
+    const validEntries = entries.filter((entry) => Number.isFinite(entry.lat) && Number.isFinite(entry.lng));
+    if (!map) return;
+    if (validEntries.length === 0) { map.setView(DEFAULT_CENTER, 12); return; }
+    map.fitBounds(L.latLngBounds(validEntries.map((entry) => [entry.lat, entry.lng] as [number, number])).pad(0.2), { maxZoom: 13, animate: true });
+  };
+
   return (
     <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.12)]">
-      <div className="border-b border-slate-200 bg-white px-5 py-4">
+      {!compact ? <div className="border-b border-slate-200 bg-white px-5 py-4">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Fleet Control</p>
@@ -468,17 +475,17 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
             </div>
           </div>
         </div>
-      </div>
+      </div> : null}
       <div className="relative">
         <div
           ref={containerRef}
-          style={{ height: "clamp(500px, 70vh, 820px)", width: "100%" }}
+          style={{ height: compact ? "clamp(520px, 64vh, 700px)" : "clamp(500px, 70vh, 820px)", width: "100%" }}
           className="bg-[#eef3f7] [&_.leaflet-container]:!bg-[#eef3f7] [&_.leaflet-control-attribution]:!rounded-tl-lg [&_.leaflet-control-attribution]:!bg-white/85 [&_.leaflet-control-attribution]:!text-[10px] [&_.leaflet-control-container]:z-[450] [&_.leaflet-control-zoom]:!overflow-hidden [&_.leaflet-control-zoom]:!rounded-lg [&_.leaflet-control-zoom]:!border [&_.leaflet-control-zoom]:!border-slate-200 [&_.leaflet-control-zoom]:!shadow-[0_10px_24px_rgba(15,23,42,0.14)] [&_.leaflet-control-zoom_a]:!text-slate-700 [&_.leaflet-control-zoom_a]:!h-10 [&_.leaflet-control-zoom_a]:!w-10 [&_.leaflet-control-zoom_a]:!leading-[38px] [&_.leaflet-control-zoom_a]:!border-slate-200 [&_.leaflet-control-zoom_a]:!bg-white/95 [&_.leaflet-control-zoom_a]:hover:!bg-slate-50 [&_.leaflet-pane.leaflet-tile-pane]:[filter:saturate(1.04)_contrast(1.02)_brightness(1.01)] [&_.leaflet-popup-content]:!m-0 [&_.leaflet-popup-content-wrapper]:!rounded-lg [&_.leaflet-popup-content-wrapper]:!p-3 [&_.leaflet-popup-content-wrapper]:!shadow-[0_18px_45px_rgba(15,23,42,0.18)] [&_.leaflet-popup-tip]:!shadow-none"
         />
 
         <div className="pointer-events-none absolute inset-x-0 top-0 h-12 bg-[linear-gradient(180deg,rgba(255,255,255,0.52)_0%,rgba(255,255,255,0)_100%)]" />
 
-        <div className="absolute left-4 top-4 z-[500] flex max-w-[calc(100%-6rem)] flex-wrap gap-2">
+        <div className={`absolute left-4 z-[500] flex max-w-[calc(100%-6rem)] flex-wrap gap-2 ${compact ? "top-16" : "top-4"}`}>
           <div className="rounded-lg border border-white/80 bg-white/94 px-3 py-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] backdrop-blur">
             <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-slate-700">
               <span className="inline-flex items-center gap-1.5 text-slate-900"><span className="h-2.5 w-2.5 rounded-full bg-slate-900" />{summary.total} live</span>
@@ -490,6 +497,8 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
           </div>
         </div>
 
+        <button type="button" onClick={centerAll} className="absolute right-4 top-28 z-[500] rounded-lg border border-white/80 bg-white/95 px-3 py-2 text-xs font-bold text-slate-700 shadow-lg backdrop-blur hover:bg-white">Centra tutti</button>
+
         <div className="absolute bottom-4 left-4 z-[500] rounded-lg border border-white/80 bg-white/94 px-3 py-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] backdrop-blur">
           <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-700">
             <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />In movimento</span>
@@ -498,6 +507,8 @@ export function ControlRoomMap({ entries, selectedId, onSelect }: ControlRoomMap
             <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" />Offline</span>
           </div>
         </div>
+
+        <div className="absolute bottom-4 right-4 z-[500] rounded-lg border border-white/80 bg-white/94 px-3 py-2 text-[11px] font-semibold text-slate-700 shadow-[0_12px_28px_rgba(15,23,42,0.12)] backdrop-blur">GPS live · {summary.total} mezzi</div>
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-[linear-gradient(0deg,rgba(255,255,255,0.40)_0%,rgba(255,255,255,0)_100%)]" />
 

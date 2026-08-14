@@ -5,6 +5,9 @@ import {
   resolveBigliettoLabel,
   ADULT_TIPOLOGIA_PASSEGGERO,
   TASSA_SBARCO_TIPOLOGIA_PASSEGGERO,
+  classifyPassengerTicket,
+  selectPassengerTariffs,
+  deriveTaxLinkage,
 } from "@/lib/server/medmar-booking/live-parser";
 import type { BigliettoVendibileRaw } from "@/lib/server/medmar-booking/types";
 
@@ -79,6 +82,7 @@ describe("live-parser — parseBigliettiVendibiliResponse (schema reale, Fase 2A
         flag_targa: 0,
         quantita_min_per_esclusivo: null,
         quantita_max_per_esclusivo: null,
+        collegati: null,
       },
     ]);
   });
@@ -161,6 +165,7 @@ describe("live-parser — parseBigliettiVendibiliResponse (schema reale, Fase 2A
       flag_targa: null,
       quantita_min_per_esclusivo: null,
       quantita_max_per_esclusivo: null,
+      collegati: null,
     });
   });
 
@@ -276,5 +281,204 @@ describe("live-parser — findArTariffAndTax (selezione da dati live, schema rea
     const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow({ quantita_min_per_esclusivo: 0, quantita_max_per_esclusivo: 0 })]));
     const result = findArTariffAndTax(rows);
     expect(result.kind).toBe("found");
+  });
+});
+
+describe("live-parser — classifyPassengerTicket / selectPassengerTariffs / deriveTaxLinkage (Fase 2B.5)", () => {
+  /** Riga reale osservata corsa 133760 — BAMBINO (4-12 anni), id_tipologia_passeggero=1 come l'adulto. */
+  function bambinoRow(overrides: Partial<BigliettoVendibileRaw> = {}): Record<string, unknown> {
+    return {
+      id_corsa: 133760,
+      id_biglietto: 17,
+      id_tipologia_passeggero: ADULT_TIPOLOGIA_PASSEGGERO,
+      id_tariffa: 6,
+      id_iva: 32,
+      id_log: 45656,
+      nome: "BAMBINO",
+      descrizione: "PASSAGGIO PONTE BAMBINO (4-12 Anni)",
+      prezzo: 8,
+      prezzo_ar: 8,
+      prezzo_prevendita: 8,
+      flag_ar_obbligatorio: false,
+      flag_targa: 0,
+      quantita_min_per_esclusivo: null,
+      quantita_max_per_esclusivo: null,
+      collegati: null,
+      ...overrides,
+    };
+  }
+
+  /** Riga reale osservata corsa 133760 — INFANT (0-4 anni), id_tipologia_passeggero=1 come l'adulto. */
+  function infantRow(overrides: Partial<BigliettoVendibileRaw> = {}): Record<string, unknown> {
+    return {
+      id_corsa: 133760,
+      id_biglietto: 20,
+      id_tipologia_passeggero: ADULT_TIPOLOGIA_PASSEGGERO,
+      id_tariffa: 6,
+      id_iva: 32,
+      id_log: 45663,
+      nome: "INFANT",
+      descrizione: "PASSAGGIO PONTE INFANT (0-4 Anni)",
+      prezzo: 2.5,
+      prezzo_ar: 2.5,
+      prezzo_prevendita: 2.5,
+      flag_ar_obbligatorio: false,
+      flag_targa: 0,
+      quantita_min_per_esclusivo: null,
+      quantita_max_per_esclusivo: null,
+      collegati: null,
+      ...overrides,
+    };
+  }
+
+  it("1. adulto AR speciale riconosciuto -> kind adult", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow()]));
+    expect(classifyPassengerTicket(rows[0]!).kind).toBe("adult");
+  });
+
+  it("2. bambino riconosciuto -> kind child", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bambinoRow()]));
+    expect(classifyPassengerTicket(rows[0]!).kind).toBe("child");
+  });
+
+  it("3. infant riconosciuto -> kind infant", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([infantRow()]));
+    expect(classifyPassengerTicket(rows[0]!).kind).toBe("infant");
+  });
+
+  it("4. tax riconosciuta -> kind tax", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([tassaRow()]));
+    expect(classifyPassengerTicket(rows[0]!).kind).toBe("tax");
+  });
+
+  it("5. auto NON classificata come pax -> kind unsupported", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow({ descrizione: "PASSAGGIO AUTO FINO A 4 METRI", nome: "AUTO" })]));
+    expect(classifyPassengerTicket(rows[0]!).kind).toBe("unsupported");
+  });
+
+  it("6. moto NON classificata come pax -> kind unsupported", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow({ descrizione: "TRASPORTO MOTO", nome: "MOTO" })]));
+    expect(classifyPassengerTicket(rows[0]!).kind).toBe("unsupported");
+  });
+
+  it("7. animale NON classificato come pax -> kind unsupported", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow({ descrizione: "TRASPORTO ANIMALE DOMESTICO", nome: "ANIMALE" })]));
+    expect(classifyPassengerTicket(rows[0]!).kind).toBe("unsupported");
+  });
+
+  it('8. "INT PASSEGGERO" (etichetta non riconosciuta) NON classificato come bambino -> kind unsupported', () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow({ descrizione: "INT PASSEGGERO", nome: "INT PASSEGGERO" })]));
+    expect(classifyPassengerTicket(rows[0]!).kind).toBe("unsupported");
+  });
+
+  it("9. sensitivity: bambino con id_tipologia_passeggero=1 (come l'adulto) NON diventa adult", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bambinoRow({ id_tipologia_passeggero: 1 })]));
+    const result = classifyPassengerTicket(rows[0]!);
+    expect(result.kind).toBe("child");
+    expect(result.kind).not.toBe("adult");
+  });
+
+  it("10. sensitivity: infant con id_tipologia_passeggero=1 (come l'adulto) NON diventa adult", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([infantRow({ id_tipologia_passeggero: 1 })]));
+    const result = classifyPassengerTicket(rows[0]!);
+    expect(result.kind).toBe("infant");
+    expect(result.kind).not.toBe("adult");
+  });
+
+  it("sensitivity: descrizione compatibile bambino ma id_tipologia_passeggero diverso da 1 -> unsupported (tipologia_mismatch), MAI child", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bambinoRow({ id_tipologia_passeggero: 7 })]));
+    const result = classifyPassengerTicket(rows[0]!);
+    expect(result.kind).toBe("unsupported");
+    if (result.kind === "unsupported") expect(result.reason).toBe("tipologia_mismatch");
+  });
+
+  it("sensitivity: id_biglietto 17 da solo (descrizione incompatibile) NON diventa la regola -> non classificato come child", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bambinoRow({ id_biglietto: 17, descrizione: "ALTRA TARIFFA", nome: "ALTRA TARIFFA" })]));
+    expect(classifyPassengerTicket(rows[0]!).kind).toBe("unsupported");
+  });
+
+  it("sensitivity: id_biglietto 20 da solo (descrizione incompatibile) NON diventa la regola -> non classificato come infant", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([infantRow({ id_biglietto: 20, descrizione: "ALTRA TARIFFA", nome: "ALTRA TARIFFA" })]));
+    expect(classifyPassengerTicket(rows[0]!).kind).toBe("unsupported");
+  });
+
+  it("selectPassengerTariffs: 1 adulto + 1 bambino + 1 infant + 1 tax -> tutte e 4 le categorie 'found'", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow(), bambinoRow(), infantRow(), tassaRow()]));
+    const selection = selectPassengerTariffs(rows);
+    expect(selection.adult.kind).toBe("found");
+    expect(selection.child.kind).toBe("found");
+    expect(selection.infant.kind).toBe("found");
+    expect(selection.taxRows).toHaveLength(1);
+  });
+
+  it("selectPassengerTariffs: nessun bambino nella risposta -> child not_found (non un errore)", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow()]));
+    expect(selectPassengerTariffs(rows).child.kind).toBe("not_found");
+  });
+
+  it("selectPassengerTariffs: due righe bambino candidate -> ambiguous, nessuna scelta arbitraria", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bambinoRow({ id_biglietto: 17 }), bambinoRow({ id_biglietto: 18 })]));
+    expect(selectPassengerTariffs(rows).child.kind).toBe("ambiguous");
+  });
+
+  it("11. tax: adulto con collegati che referenzia l'id_biglietto della tassa -> linked true, source collegati", () => {
+    const { rows } = parseBigliettiVendibiliResponse(
+      realEnvelope([bigliettoRow({ collegati: [{ id_biglietto: 413 }] }), tassaRow({ id_biglietto: 413 })])
+    );
+    const selection = selectPassengerTariffs(rows);
+    const adultRow = selection.adult.kind === "found" ? selection.adult.ticket : null;
+    expect(adultRow).not.toBeNull();
+    const linkage = deriveTaxLinkage("adult", adultRow!, selection.taxRows);
+    expect(linkage).toEqual({ linked: true, tax: expect.objectContaining({ id_biglietto: 413 }), source: "collegati" });
+  });
+
+  it("12. tax: bambino con collegati che referenzia l'id_biglietto della tassa -> linked true, source collegati", () => {
+    const { rows } = parseBigliettiVendibiliResponse(
+      realEnvelope([bambinoRow({ collegati: [{ id_biglietto: 413 }] }), tassaRow({ id_biglietto: 413 })])
+    );
+    const selection = selectPassengerTariffs(rows);
+    const childRow = selection.child.kind === "found" ? selection.child.ticket : null;
+    const linkage = deriveTaxLinkage("child", childRow!, selection.taxRows);
+    expect(linkage.linked).toBe(true);
+    if (linkage.linked) expect(linkage.source).toBe("collegati");
+  });
+
+  it("13. tax: infant con collegati=[] (nessun link osservato) -> linked false, MAI una tax inventata", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([infantRow({ collegati: [] }), tassaRow({ id_biglietto: 413 })]));
+    const selection = selectPassengerTariffs(rows);
+    const infantTicket = selection.infant.kind === "found" ? selection.infant.ticket : null;
+    const linkage = deriveTaxLinkage("infant", infantTicket!, selection.taxRows);
+    expect(linkage).toEqual({ linked: false, source: "none" });
+  });
+
+  it("13b. tax: infant con collegati assente (fallback euristico) resta comunque senza tax -> linked false", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([infantRow(), tassaRow({ id_biglietto: 413 })]));
+    const selection = selectPassengerTariffs(rows);
+    const infantTicket = selection.infant.kind === "found" ? selection.infant.ticket : null;
+    const linkage = deriveTaxLinkage("infant", infantTicket!, selection.taxRows);
+    expect(linkage).toEqual({ linked: false, source: "none" });
+  });
+
+  it("adulto/bambino senza collegati (dato non disponibile) -> fallback euristico ESPLICITAMENTE etichettato, mai silenzioso", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow(), tassaRow({ id_biglietto: 413 })]));
+    const selection = selectPassengerTariffs(rows);
+    const adultTicket = selection.adult.kind === "found" ? selection.adult.ticket : null;
+    const linkage = deriveTaxLinkage("adult", adultTicket!, selection.taxRows);
+    expect(linkage.linked).toBe(true);
+    if (linkage.linked) expect(linkage.source).toBe("heuristic_unverified");
+  });
+
+  it("sensitivity: due righe tax nella risposta -> linkage ambiguo, nessuna tax collegata scelta arbitrariamente", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow(), tassaRow({ id_biglietto: 413 }), tassaRow({ id_biglietto: 414 })]));
+    const selection = selectPassengerTariffs(rows);
+    const adultTicket = selection.adult.kind === "found" ? selection.adult.ticket : null;
+    expect(deriveTaxLinkage("adult", adultTicket!, selection.taxRows)).toEqual({ linked: false, source: "ambiguous" });
+  });
+
+  it("sensitivity: nessuna riga tax nella risposta -> linked false, source none per qualunque categoria", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow()]));
+    const selection = selectPassengerTariffs(rows);
+    const adultTicket = selection.adult.kind === "found" ? selection.adult.ticket : null;
+    expect(deriveTaxLinkage("adult", adultTicket!, selection.taxRows)).toEqual({ linked: false, source: "none" });
   });
 });
