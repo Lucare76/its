@@ -40,8 +40,11 @@ export function useTenantOperationalData(options?: Options) {
 
   const runRefresh = useCallback(async () => {
     const session = await getClientSessionContext();
-    const authSession = supabase ? await supabase.auth.getSession() : null;
-    const accessToken = authSession?.data.session?.access_token ?? null;
+    // Sprint Performance 12: the session context already carries the access
+    // token it resolved (or found cached). Calling supabase.auth.getSession()
+    // again here was a pure duplicate of work getClientSessionContext() just
+    // did.
+    const accessToken = session.accessToken;
     if (!supabase) {
       setTenantId(null);
       setUserId(null);

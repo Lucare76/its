@@ -57,6 +57,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [capabilityOverrides, setCapabilityOverrides] = useState<CapabilityOverrides>({});
   const [quotesAccess, setQuotesAccess] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
+  const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
+  const [passwordChangeTarget, setPasswordChangeTarget] = useState("/auth/update-password");
   const [inboxSoundEnabled, setInboxSoundEnabled] = useState(() => {
     if (typeof window === "undefined") return false;
     return localStorage.getItem("it-inbox-sound") === "true";
@@ -127,6 +129,14 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     return () => { authListener.subscription.unsubscribe(); };
   }, []);
 
+  // Identity/session resolution. Sprint Performance 12: this used to depend on
+  // `pathname` and therefore re-ran its entire getUser() + getSession() +
+  // /api/onboarding/tenant (+ agency-profile / settings-users / quotes-access)
+  // chain on every client-side navigation, even though this layout component
+  // never unmounts between pages in the same (app) route group. It now runs
+  // once per mount — pathname-dependent decisions (redirects) are handled by
+  // the separate route-gating effect below, which reads the state resolved
+  // here instead of re-fetching anything.
   useEffect(() => {
     let active = true;
 
@@ -135,15 +145,13 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       if (e2eOverride) {
         if (!active) return;
         setNeedsOnboarding(false);
+        setPasswordChangeRequired(false);
         setAuthRole(e2eOverride.role);
         setAuthTenantId(e2eOverride.tenantId);
         setAgencySetupRequired(false);
         setCapabilityOverrides({});
         setQuotesAccess(e2eOverride.role === "admin" || e2eOverride.role === "supervisor" || e2eOverride.role === "operator");
         setAuthLoading(false);
-        if (!isAllowedWithOverrides(pathname, e2eOverride.role, {})) {
-          hardRedirect(redirectByRole(e2eOverride.role));
-        }
         return;
       }
 
@@ -156,7 +164,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setCapabilityOverrides({});
         setQuotesAccess(false);
         setAuthLoading(false);
-        hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
+        hardRedirect(`/login?redirect=${encodeURIComponent(pathnameRef.current)}`);
         return;
       }
 
@@ -180,7 +188,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setCapabilityOverrides({});
         setQuotesAccess(false);
         setAuthLoading(false);
-        hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
+        hardRedirect(`/login?redirect=${encodeURIComponent(pathnameRef.current)}`);
         return;
       }
 
@@ -210,7 +218,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setCapabilityOverrides({});
         setQuotesAccess(false);
         setAuthLoading(false);
-        hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
+        hardRedirect(`/login?redirect=${encodeURIComponent(pathnameRef.current)}`);
         return;
       }
 
@@ -225,17 +233,23 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setCapabilityOverrides({});
         setQuotesAccess(false);
         setAuthLoading(false);
-        hardRedirect(`/login?redirect=${encodeURIComponent(pathname)}`);
+        hardRedirect(`/login?redirect=${encodeURIComponent(pathnameRef.current)}`);
         return;
       }
 
       const userMetadata = userData.user.user_metadata ?? {};
-      const passwordChangeRequired = userMetadata.password_change_required === true;
+      const isPasswordChangeRequired = userMetadata.password_change_required === true;
       const driverPasswordChangeRequired = userMetadata.force_password_change === true;
-      const passwordChangeTarget = driverPasswordChangeRequired ? "/driver/change-password" : "/auth/update-password";
-      if ((passwordChangeRequired || driverPasswordChangeRequired) && pathname !== passwordChangeTarget) {
-        hardRedirect(passwordChangeTarget);
-        return;
+      const resolvedPasswordChangeTarget = driverPasswordChangeRequired ? "/driver/change-password" : "/auth/update-password";
+      if (isPasswordChangeRequired || driverPasswordChangeRequired) {
+        setPasswordChangeRequired(true);
+        setPasswordChangeTarget(resolvedPasswordChangeTarget);
+        if (pathnameRef.current !== resolvedPasswordChangeTarget) {
+          hardRedirect(resolvedPasswordChangeTarget);
+          return;
+        }
+      } else {
+        setPasswordChangeRequired(false);
       }
 
       const onboardingResponse = await fetch("/api/onboarding/tenant", {
@@ -273,9 +287,6 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         setCapabilityOverrides({});
         setQuotesAccess(false);
         setAuthLoading(false);
-        if (pathname !== "/onboarding") {
-          hardRedirect("/onboarding");
-        }
         return;
       }
 
@@ -330,28 +341,47 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       }
       setQuotesAccess(resolvedQuotesAccess);
       setAuthLoading(false);
-      if (resolvedRole === "agency" && resolvedAgencySetupRequired && pathname !== "/agency/profile-setup") {
-        hardRedirect("/agency/profile-setup");
-        return;
-      }
-      if (resolvedRole === "agency" && !resolvedAgencySetupRequired && pathname === "/agency/profile-setup") {
-        hardRedirect("/agency");
-        return;
-      }
-      if (resolvedRole !== "admin" && resolvedRole !== "supervisor" && pathname.startsWith("/preventivo-ops") && !resolvedQuotesAccess) {
-        hardRedirect(redirectByRole(resolvedRole));
-        return;
-      }
-      if (!isAllowedWithOverrides(pathname, resolvedRole, onboardingPayload?.capability_overrides ?? {})) {
-        hardRedirect(redirectByRole(resolvedRole));
-      }
     };
 
     void runAuthCheck();
     return () => {
       active = false;
     };
-  }, [pathname, router]);
+    // Intentionally NOT depending on pathname/router: this chain resolves
+    // identity/tenant once per mount. Auth failures inside it hardRedirect via
+    // a full page load (window.location.replace), which remounts the layout
+    // and naturally re-runs this effect — no pathname dependency needed for
+    // correctness. See the route-gating effect below for pathname-reactive
+    // redirects that reuse the state resolved here without re-fetching.
+  }, []);
+
+  // Route-dependent redirect gating. Runs on every pathname change (real
+  // client-side navigation) but performs no getUser/getSession/onboarding-
+  // tenant calls — it only reacts to the identity state the effect above
+  // already resolved and cached. This is what keeps navigation between
+  // authenticated pages from re-triggering a full session/tenant resolution.
+  useEffect(() => {
+    if (authLoading) return;
+    if (needsOnboarding) {
+      if (pathname !== "/onboarding") hardRedirect("/onboarding");
+      return;
+    }
+    if (authRole === "agency" && agencySetupRequired && pathname !== "/agency/profile-setup") {
+      hardRedirect("/agency/profile-setup");
+      return;
+    }
+    if (authRole === "agency" && !agencySetupRequired && pathname === "/agency/profile-setup") {
+      hardRedirect("/agency");
+      return;
+    }
+    if (authRole !== "admin" && authRole !== "supervisor" && pathname.startsWith("/preventivo-ops") && !quotesAccess) {
+      hardRedirect(redirectByRole(authRole));
+      return;
+    }
+    if (!isAllowedWithOverrides(pathname, authRole, capabilityOverrides)) {
+      hardRedirect(redirectByRole(authRole));
+    }
+  }, [pathname, authLoading, needsOnboarding, authRole, agencySetupRequired, quotesAccess, capabilityOverrides]);
 
   useEffect(() => {
     if (!collapsed) return;

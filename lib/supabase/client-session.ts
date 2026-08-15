@@ -1,5 +1,6 @@
 import { parseRole } from "@/lib/rbac";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { createSessionCache, type SessionCacheGetOptions } from "@/lib/supabase/client-session-cache";
 import { resolvePreferredMembership } from "@/lib/tenant-preference";
 import type { UserRole } from "@/lib/types";
 
@@ -76,10 +77,58 @@ export async function ensureSupabaseClientReady(maxAttempts = 20) {
   return false;
 }
 
-export async function getClientSessionContext(): Promise<ClientSessionContext> {
-  const e2eOverride = getE2ETestSessionOverride();
-  if (e2eOverride) return e2eOverride;
+// Sprint Performance 12: getClientSessionContext() is called on every
+// authenticated page mount (directly or via useTenantOperationalData), each
+// time re-running getUser() + getSession() + a fetch to
+// /api/onboarding/tenant. Navigating Dashboard -> Arrivals -> Departures ->
+// Planning used to repeat that full chain 4x even though the user, tenant
+// and role never changed. A 45s TTL cache (comfortably inside a normal
+// browsing burst, short enough that a role/tenant change server-side is
+// picked up quickly) plus in-flight dedupe collapses concurrent/rapid calls
+// into a single real resolution. This is a CLIENT-ONLY optimization: every
+// protected API route still runs its own authorizePricingRequest /
+// authorizeServiceRoleRequest server-side check regardless of what this
+// cache returns.
+const SESSION_CACHE_TTL_MS = 45_000;
 
+const sessionCache = createSessionCache<ClientSessionContext>({
+  resolve: resolveClientSessionContext,
+  ttlMs: SESSION_CACHE_TTL_MS,
+  onEvent:
+    process.env.NODE_ENV !== "production"
+      ? (event) => console.debug(`[client-session] cache ${event}`)
+      : undefined
+});
+
+// Conservative invalidation: any event that can change who the user is (or
+// whether they're signed in at all) drops the cache so the next call
+// re-resolves for real instead of serving a stale identity. TOKEN_REFRESHED
+// is included because the cached accessToken would otherwise outlive the
+// Supabase-managed token it was read from.
+if (typeof window !== "undefined" && hasSupabaseEnv && supabase) {
+  supabase.auth.onAuthStateChange((event) => {
+    if (
+      event === "SIGNED_OUT" ||
+      event === "SIGNED_IN" ||
+      event === "USER_UPDATED" ||
+      event === "TOKEN_REFRESHED"
+    ) {
+      sessionCache.invalidate();
+    }
+  });
+}
+
+export function invalidateClientSessionCache(): void {
+  sessionCache.invalidate();
+}
+
+export function getClientSessionContext(options?: SessionCacheGetOptions): Promise<ClientSessionContext> {
+  const e2eOverride = getE2ETestSessionOverride();
+  if (e2eOverride) return Promise.resolve(e2eOverride);
+  return sessionCache.get(options);
+}
+
+async function resolveClientSessionContext(): Promise<ClientSessionContext> {
   if (!hasSupabaseEnv || !supabase) {
     return {
       mode: "supabase",
