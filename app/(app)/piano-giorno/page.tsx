@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase, hasSupabaseEnv } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
-import { DateInput, PageHeader } from "@/components/ui";
+import { DateInput } from "@/components/ui";
 import { WhatsAppButton } from "@/components/whatsapp-button";
 import { getPianoServiceDisplay } from "@/lib/piano-service-display";
 import { hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
@@ -1881,6 +1881,7 @@ export default function PianoGiornoPage() {
   const [planSearch, setPlanSearch] = useState("");
   const [expandedTripId, setExpandedTripId] = useState<string | null>(null);
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
+  const [showUnassignedFull, setShowUnassignedFull] = useState(false);
   const tripListRef = useRef<HTMLDivElement | null>(null);
   const unassignedSectionRef = useRef<HTMLDivElement | null>(null);
 
@@ -3255,14 +3256,81 @@ export default function PianoGiornoPage() {
             </a>
           </div>
         ) : null}
-        <PageHeader
-          title="Piano del Giorno"
-          subtitle="Controlla la giornata, risolvi le eccezioni e stampa i piani autista."
-          breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Piano del Giorno" }]}
-        />
+        <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <h1 className="text-4xl font-black tracking-tight text-slate-950">Piano del Giorno</h1>
+            <p className="mt-1 text-base font-semibold capitalize text-slate-500">{readableDate(date)}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className="flex h-11 w-11 items-center justify-center rounded-lg border border-slate-200 bg-white text-xl font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+              onClick={() => changeDate(addIsoDays(date, -1))}
+              title="Giorno precedente"
+            >
+              ‹
+            </button>
+            <DateInput
+              className="h-11 w-44 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-800 shadow-sm outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-100"
+              value={date}
+              onChange={changeDate}
+            />
+            <button
+              type="button"
+              className="flex h-11 w-11 items-center justify-center rounded-lg border border-slate-200 bg-white text-xl font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+              onClick={() => changeDate(addIsoDays(date, 1))}
+              title="Giorno successivo"
+            >
+              ›
+            </button>
+            <button
+              onClick={() => void handlePatchVehicles()}
+              disabled={patchingVehicles || autoAssigning || !token || !data}
+              className="h-11 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+            >
+              {patchingVehicles ? "Aggiorno..." : "Assegna mezzi"}
+            </button>
+            <button
+              onClick={() => void runAiPlan()}
+              disabled={aiPlanning || autoAssigning || !token || !data}
+              className="h-11 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+              title="Analizza il carico del giorno e propone priorita operative senza applicare modifiche"
+            >
+              {aiPlanning ? "AI al lavoro..." : "Analizza con AI"}
+            </button>
+            <button
+              onClick={() => { setShowImprevisti(true); setImpResult(null); }}
+              disabled={!token || !data}
+              className="h-11 rounded-lg border border-amber-200 bg-amber-50 px-4 text-sm font-bold text-amber-800 shadow-sm hover:bg-amber-100 disabled:opacity-50"
+              title="Gestisci imprevisti: sostituzione autista/mezzo o ritardo corsa"
+            >
+              Imprevisto
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("manual")}
+              className="h-11 rounded-lg bg-gradient-to-r from-blue-600 to-violet-600 px-5 text-sm font-black text-white shadow-lg shadow-blue-500/20 hover:from-blue-700 hover:to-violet-700"
+            >
+              ⊕ Nuovo giro
+            </button>
+            <button
+              className="h-11 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+              onClick={() => printDriverPlans(driverEntries, data?.trip_groups ?? [], tripServices, hotelMap, date, data?.ferry_schedules ?? [])}
+            >
+              Stampa
+            </button>
+            <button
+              onClick={handleAutoAssign}
+              disabled={availabilityLocked || autoAssigning || !token || !data}
+              className="h-11 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+            >
+              {autoAssigning ? "Genero..." : "Auto assegna"}
+            </button>
+          </div>
+        </div>
 
         {/* Barra superiore */}
-        <div className="toolbar flex-wrap gap-2">
+        <div className="hidden">
           <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white/80 px-3 py-2.5 shadow-sm backdrop-blur-sm">
             <div className="min-w-[180px] px-1">
               <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">Giornata operativa</p>
@@ -3536,7 +3604,7 @@ export default function PianoGiornoPage() {
         )}
 
         {/* ── Preview piano globale ── */}
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <button
             type="button"
             className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
@@ -3994,58 +4062,88 @@ export default function PianoGiornoPage() {
         )}
 
         {data && viewMode === "plan" && (
-          <div className="space-y-4">
-            <div className={`grid gap-3 ${planModCount > 0 ? "md:grid-cols-5" : "md:grid-cols-4"}`}>
+          <div className="space-y-5">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
               <button
                 type="button"
                 onClick={showAllTrips}
-                className="card p-4 text-left transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Servizi</p>
-                <p className="mt-1 text-3xl font-bold text-slate-900">{totalServices}</p>
-                <p className="text-xs text-slate-500">{assignedServices} gia pianificati</p>
+                <div className="flex items-center gap-4">
+                  <span className="flex h-14 w-14 items-center justify-center rounded-lg bg-blue-50 text-2xl font-black text-blue-600">□</span>
+                  <span>
+                    <span className="block text-sm font-semibold text-slate-500">Servizi</span>
+                    <span className="block text-3xl font-black leading-none text-slate-950">{totalServices}</span>
+                    <span className="mt-1 block text-xs text-slate-500">{assignedServices} pianificati</span>
+                  </span>
+                </div>
               </button>
               <button
                 type="button"
                 onClick={showAllTrips}
-                className="card p-4 text-left transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Giri</p>
-                <p className="mt-1 text-3xl font-bold text-slate-900">{tripRows.length}</p>
-                <p className="text-xs text-slate-500">{tripRows.filter((t) => t.group.driver_user_id || t.group.driver_profile_id).length} con autista</p>
+                <div className="flex items-center gap-4">
+                  <span className="flex h-14 w-14 items-center justify-center rounded-lg bg-violet-50 text-2xl font-black text-violet-600">⌘</span>
+                  <span>
+                    <span className="block text-sm font-semibold text-slate-500">Giri</span>
+                    <span className="block text-3xl font-black leading-none text-slate-950">{tripRows.length}</span>
+                    <span className="mt-1 block text-xs text-slate-500">{tripRows.filter((t) => t.group.driver_user_id || t.group.driver_profile_id).length} con autista</span>
+                  </span>
+                </div>
               </button>
               <button
                 type="button"
                 onClick={showIssues}
-                className="card p-4 text-left transition hover:-translate-y-0.5 hover:border-red-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-red-500"
+                className="rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-red-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-red-500"
               >
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Da sistemare</p>
-                <p className={`mt-1 text-3xl font-bold ${blockerCount > 0 ? "text-red-600" : "text-emerald-600"}`}>
-                  {planIssues.length}
-                </p>
-                <p className="text-xs text-slate-500">{blockerCount} bloccanti</p>
+                <div className="flex items-center gap-4">
+                  <span className="flex h-14 w-14 items-center justify-center rounded-lg bg-rose-50 text-2xl font-black text-rose-600">△</span>
+                  <span>
+                    <span className="block text-sm font-semibold text-slate-500">Conflitti</span>
+                    <span className={`block text-3xl font-black leading-none ${blockerCount > 0 ? "text-red-600" : "text-slate-950"}`}>{planIssues.length}</span>
+                    <span className="mt-1 block text-xs text-slate-500">{blockerCount} bloccanti</span>
+                  </span>
+                </div>
               </button>
               <button
                 type="button"
-                onClick={showUnassigned}
-                className="card p-4 text-left transition hover:-translate-y-0.5 hover:border-amber-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-amber-500"
+                onClick={showAllTrips}
+                className="rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
               >
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Fuori piano</p>
-                <p className={`mt-1 text-3xl font-bold ${unassignedServices.length > 0 ? "text-amber-600" : "text-slate-900"}`}>
-                  {unassignedServices.length}
-                </p>
-                <p className="text-xs text-slate-500">servizi non inseriti in un giro</p>
-              </button>
-              {planModCount > 0 && (
-                <div className="card p-4 text-left border-emerald-200">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">Modifiche</p>
-                  <p className="mt-1 text-3xl font-bold text-emerald-700">{planModCount}</p>
-                  <p className="text-xs text-slate-500">apportate oggi</p>
+                <div className="flex items-center gap-4">
+                  <span className="flex h-14 w-14 items-center justify-center rounded-lg bg-emerald-50 text-2xl font-black text-emerald-600">♙</span>
+                  <span>
+                    <span className="block text-sm font-semibold text-slate-500">Autisti</span>
+                    <span className="block text-3xl font-black leading-none text-slate-950">{driverEntries.length}/{data?.driver_profiles.length || driverEntries.length}</span>
+                    <span className="mt-1 block text-xs text-slate-500">disponibili</span>
+                  </span>
                 </div>
-              )}
+              </button>
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm">
+                <div className="flex items-center gap-4">
+                  <span className="flex h-14 w-14 items-center justify-center rounded-lg bg-sky-50 text-2xl font-black text-sky-600">▭</span>
+                  <span>
+                    <span className="block text-sm font-semibold text-slate-500">Mezzi</span>
+                    <span className="block text-3xl font-black leading-none text-slate-950">{data?.vehicles.length ?? 0}</span>
+                    <span className="mt-1 block text-xs text-slate-500">disponibili</span>
+                  </span>
+                </div>
+              </div>
             </div>
 
-            <ContinentDispatchSection data={data.continent_dispatch} tenantId={activeTenantId} />
+            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-black text-slate-950">Smistamento terraferma</h2>
+                  <p className="text-xs text-slate-500">Bruno, fornitori e servizi continente da smistare.</p>
+                </div>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-black text-slate-600">
+                  continente
+                </span>
+              </div>
+              <ContinentDispatchSection data={data?.continent_dispatch} tenantId={activeTenantId} />
+            </div>
 
             {planWindows.length > 0 && (
               <div className="card p-4">
@@ -4114,7 +4212,7 @@ export default function PianoGiornoPage() {
               </div>
             )}
 
-            {unassignedServices.length > 0 && (
+            {showUnassignedFull && unassignedServices.length > 0 && (
               <div ref={unassignedSectionRef} className="card p-4 scroll-mt-24">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -4205,65 +4303,85 @@ export default function PianoGiornoPage() {
               </div>
             )}
 
-            <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-              <div className="space-y-4">
-                <div className="card p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <h2 className="text-sm font-bold text-slate-800">Problemi da risolvere</h2>
-                      <p className="text-xs text-slate-500">Prima stampa solo quando questa lista e pulita.</p>
-                    </div>
-                    {planIssues.length === 0 && (
-                      <span className="rounded bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Ok</span>
-                    )}
+            <div className="grid gap-3 xl:grid-cols-[285px_minmax(0,1fr)_300px] 2xl:grid-cols-[330px_minmax(0,1fr)_320px]">
+              <aside className="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                  <div>
+                    <h2 className="text-base font-black text-slate-950">Giri del giorno</h2>
+                    <p className="text-xs text-slate-500">{tripRows.length} giri pianificati</p>
                   </div>
-
-                  <div className="mt-3 space-y-2">
-                    {planIssues.length === 0 ? (
-                      <p className="rounded border border-emerald-100 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
-                        Nessun problema evidente. Puoi stampare i piani autista.
-                      </p>
-                    ) : (
-                      planIssues.slice(0, 8).map((issue) => (
-                        <div
-                          key={issue.id}
-                          className={`rounded border px-3 py-2 ${
-                            issue.severity === "blocker"
-                              ? "border-red-200 bg-red-50"
-                              : "border-amber-200 bg-amber-50"
-                          }`}
-                        >
-                          <p className={`text-sm font-semibold ${issue.severity === "blocker" ? "text-red-800" : "text-amber-800"}`}>
-                            {issue.title}
-                          </p>
-                          <p className={`text-xs ${issue.severity === "blocker" ? "text-red-600" : "text-amber-700"}`}>
-                            {issue.detail}
-                          </p>
-                        </div>
-                      ))
-                    )}
-                    {planIssues.length > 8 && (
-                      <button
-                        onClick={() => setViewMode("manual")}
-                        className="w-full rounded border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                      >
-                        Apri strumenti manuali per vedere gli altri {planIssues.length - 8}
-                      </button>
-                    )}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("manual")}
+                    className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                    title="Filtra giri"
+                  >
+                    ≡
+                  </button>
                 </div>
-              </div>
+                <div className="max-h-[600px] space-y-2 overflow-y-auto bg-slate-50/40 p-3">
+                  {tripRows.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-white px-4 py-8 text-center">
+                      <p className="text-sm font-bold text-slate-800">Nessun giro creato</p>
+                      <p className="mt-1 text-xs text-slate-500">Usa auto assegna o crea un giro manuale.</p>
+                    </div>
+                  ) : (
+                    tripRows.slice(0, 18).map((trip) => (
+                      <button
+                        key={trip.group.id}
+                        type="button"
+                        onClick={() => {
+                          setExpandedTripId(trip.group.id);
+                          tripListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        }}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-left shadow-sm transition hover:border-blue-200 hover:bg-blue-50/40"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-mono text-xl font-black text-slate-950">{trip.time}</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-500">{trip.driverName}</p>
+                          </div>
+                          <div className="flex flex-col items-end gap-1">
+                            <span className={`rounded px-2 py-1 text-[10px] font-black uppercase ${
+                              trip.direction === "arrival"
+                                ? "bg-blue-50 text-blue-700"
+                                : trip.direction === "departure"
+                                  ? "bg-amber-50 text-amber-700"
+                                  : "bg-slate-100 text-slate-600"
+                            }`}>
+                              {directionLabel(trip.direction)}
+                            </span>
+                            <span className={`rounded px-2 py-1 text-[10px] font-bold ${
+                              trip.issueCount > 0 ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"
+                            }`}>
+                              {trip.issueCount > 0 ? "Da verificare" : "Pronto"}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-2 space-y-1 text-xs text-slate-600">
+                          <p className="truncate">🚐 {trip.group.vehicle_label ?? "Mezzo da assegnare"}</p>
+                          <p className="truncate">⛴ {trip.routeLabel}</p>
+                          <p className="truncate">👥 {trip.pax} pax · {trip.hotelLabel}</p>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                  {tripRows.length > 18 ? (
+                    <p className="px-2 py-1 text-xs font-semibold text-blue-700">Vedi tutti i giri ({tripRows.length}) →</p>
+                  ) : null}
+                </div>
+              </aside>
 
-              <div className="card overflow-hidden">
+              <div className="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
                 <div className="border-b border-slate-100 px-4 py-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <h2 className="text-sm font-bold text-slate-800">Giri del giorno</h2>
-                      <p className="text-xs text-slate-500">Lista ordinata per orario, pensata per controllo rapido.</p>
+                      <h2 className="text-base font-black text-slate-950">Timeline operativa</h2>
+                      <p className="text-xs text-slate-500">Lista ordinata per orario, autista e mezzo.</p>
                     </div>
                     <button
                       onClick={() => setViewMode("manual")}
-                      className="rounded border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
                     >
                       Modifica piano
                     </button>
@@ -4271,7 +4389,7 @@ export default function PianoGiornoPage() {
 
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <input
-                      className="input-saas min-w-[220px] flex-1 text-sm"
+                      className="h-11 min-w-[260px] flex-1 rounded-lg border border-slate-200 bg-slate-50 px-4 text-sm outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-100"
                       placeholder="Cerca cliente, hotel, autista..."
                       value={planSearch}
                       onChange={(e) => setPlanSearch(e.target.value)}
@@ -4280,9 +4398,9 @@ export default function PianoGiornoPage() {
                       <button
                         key={filter}
                         onClick={() => setPlanFilter(filter)}
-                        className={`rounded border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        className={`rounded-lg border px-3 py-2 text-xs font-bold transition-colors ${
                           planFilter === filter
-                            ? "border-slate-800 bg-slate-800 text-white"
+                            ? "border-blue-600 bg-blue-600 text-white"
                             : "border-slate-200 text-slate-600 hover:bg-slate-50"
                         }`}
                       >
@@ -4297,9 +4415,9 @@ export default function PianoGiornoPage() {
                   </p>
                 </div>
 
-                <div ref={tripListRef} className="max-h-[calc(100vh-360px)] min-h-[420px] scroll-mt-24 overflow-y-auto divide-y divide-slate-100">
+                <div ref={tripListRef} className="max-h-[600px] min-h-[420px] scroll-mt-24 overflow-y-auto">
                   {tripRows.length === 0 ? (
-                    <div className="flex min-h-[300px] flex-col items-center justify-center px-6 text-center">
+                    <div className="flex min-h-[260px] flex-col items-center justify-center border-t border-slate-100 px-6 text-center">
                       <p className="text-lg font-bold text-slate-800">Nessun giro pianificato</p>
                       <p className="mt-1 max-w-md text-sm text-slate-500">
                         Genera una proposta automatica per costruire il piano, poi correggi solo le eccezioni.
@@ -4321,10 +4439,10 @@ export default function PianoGiornoPage() {
                     filteredTripRows.map((trip) => {
                       const isExpanded = expandedTripId === trip.group.id;
                       return (
-                      <div key={trip.group.id} className="px-4 py-3 hover:bg-slate-50">
-                        <div className="flex flex-wrap items-start gap-3">
-                          <div className="w-16 shrink-0">
-                            <p className="font-mono text-lg font-bold text-slate-900">{trip.time}</p>
+                      <div key={trip.group.id} className="border-b border-slate-100 px-4 py-3 hover:bg-slate-50/70">
+                        <div className="grid items-start gap-4 text-sm md:grid-cols-[72px_minmax(260px,1fr)_minmax(160px,0.7fr)_120px]">
+                          <div>
+                            <p className="font-mono text-lg font-black text-blue-700">{trip.time}</p>
                             <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
                               trip.direction === "arrival"
                                 ? "bg-blue-50 text-blue-700"
@@ -4336,9 +4454,9 @@ export default function PianoGiornoPage() {
                             </span>
                           </div>
 
-                          <div className="min-w-[220px] flex-1">
+                          <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                              <p className="font-semibold text-slate-900">{trip.routeLabel}</p>
+                              <p className="font-black text-slate-900">{trip.routeLabel}</p>
                               <span className="text-xs text-slate-400">verso</span>
                               <p className="font-semibold text-slate-700">{trip.hotelLabel}</p>
                             </div>
@@ -4347,23 +4465,23 @@ export default function PianoGiornoPage() {
                             </p>
                           </div>
 
-                          <div className="min-w-[180px] shrink-0 text-sm">
-                            <p className={(trip.group.driver_user_id || trip.group.driver_profile_id) ? "font-semibold text-slate-800" : "font-semibold text-red-700"}>
+                          <div className="min-w-0 text-sm">
+                            <p className={(trip.group.driver_user_id || trip.group.driver_profile_id) ? "truncate font-semibold text-slate-800" : "truncate font-semibold text-amber-700"}>
                               {trip.driverName}
                             </p>
-                            <p className={trip.group.vehicle_label ? "text-xs text-slate-500" : "text-xs text-amber-700"}>
+                            <p className={trip.group.vehicle_label ? "truncate text-xs text-slate-500" : "truncate text-xs text-amber-700"}>
                               {trip.group.vehicle_label ?? "Mezzo da assegnare"}
                               {trip.group.vehicle_capacity ? ` · ${trip.group.vehicle_capacity} posti` : ""}
                             </p>
                           </div>
 
-                          <div className="shrink-0">
+                          <div className="flex flex-col items-end gap-2">
                             {trip.issueCount > 0 ? (
-                              <span className="rounded bg-red-50 px-2 py-1 text-xs font-semibold text-red-700">
+                              <span className="rounded-lg bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700">
                                 {trip.issueCount} da verificare
                               </span>
                             ) : (
-                              <span className="rounded bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
+                              <span className="rounded-lg bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700">
                                 pronto
                               </span>
                             )}
@@ -4545,6 +4663,141 @@ export default function PianoGiornoPage() {
                   )}
                 </div>
               </div>
+
+              <aside className="space-y-4">
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-base font-black text-slate-950">Controlli</h2>
+                      <p className="text-xs text-slate-500">Risolvi le anomalie prima della stampa.</p>
+                    </div>
+                    {planIssues.length === 0 ? (
+                      <span className="rounded bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Ok</span>
+                    ) : (
+                      <span className="rounded bg-red-50 px-2 py-1 text-xs font-black text-red-700">{planIssues.length}</span>
+                    )}
+                  </div>
+
+                  <div className="mt-3 divide-y divide-slate-100">
+                    {planIssues.length === 0 ? (
+                      <p className="rounded border border-emerald-100 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
+                        Nessun problema evidente.
+                      </p>
+                    ) : (
+                      planIssues.slice(0, 4).map((issue) => (
+                        <div key={issue.id} className="flex items-center gap-3 py-3">
+                          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sm font-black ${
+                            issue.severity === "blocker" ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-600"
+                          }`}>
+                            {issue.severity === "blocker" ? "!" : "?"}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-bold text-slate-800">{issue.title}</p>
+                            <p className="line-clamp-1 text-xs text-slate-500">{issue.detail}</p>
+                          </div>
+                          <span className={`rounded px-2 py-1 text-xs font-black ${
+                            issue.severity === "blocker" ? "bg-red-600 text-white" : "bg-amber-500 text-white"
+                          }`}>
+                            1
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("manual")}
+                    className="mt-3 w-full rounded-lg border border-blue-600 px-3 py-2 text-sm font-black text-blue-700 hover:bg-blue-50"
+                  >
+                    Risolvi conflitti
+                  </button>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div>
+                      <h2 className="text-base font-black text-slate-950">Servizi non assegnati</h2>
+                      <p className="text-xs text-slate-500">Anteprima rapida, espandibile in vista completa.</p>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-black text-slate-600">{unassignedServices.length}</span>
+                  </div>
+                  <div className="max-h-56 divide-y divide-slate-100 overflow-y-auto">
+                    {unassignedServices.length === 0 ? (
+                      <p className="rounded border border-emerald-100 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">Tutti i servizi sono in un giro.</p>
+                    ) : (
+                      unassignedServices.slice(0, 6).map((svc) => {
+                        const hotel = hotelMap.get(svc.hotel_id ?? "");
+                        const display = getPianoServiceDisplay(svc, hotel);
+                        return (
+                          <div key={svc.id} className="grid grid-cols-[52px_minmax(0,1fr)_44px] gap-2 py-2 text-xs">
+                            <p className="font-mono font-black text-slate-900">{display.primaryTime ?? serviceDisplayTime(svc)}</p>
+                            <div className="min-w-0">
+                              <p className="truncate font-black text-slate-800">{customerName(svc)}</p>
+                              <p className="truncate text-slate-500">{display.placeLabel || display.actionLabel}</p>
+                            </div>
+                            <p className="text-right font-semibold text-slate-600">{svc.pax} pax</p>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                  {unassignedServices.length > 6 ? (
+                    <p className="mt-2 text-xs font-semibold text-blue-700">... altri {unassignedServices.length - 6} servizi</p>
+                  ) : null}
+                  {unassignedServices.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !showUnassignedFull;
+                        setShowUnassignedFull(next);
+                        if (!showUnassignedFull) {
+                          setTimeout(() => unassignedSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+                        }
+                      }}
+                      className="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+                    >
+                      {showUnassignedFull ? "Nascondi vista completa" : "Apri vista completa"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={handleAutoAssign}
+                    disabled={availabilityLocked || autoAssigning || !token || !data}
+                    className="mt-3 w-full rounded-lg border border-blue-600 px-3 py-2 text-sm font-black text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    Auto assegna
+                  </button>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <h2 className="text-base font-black text-slate-950">Azioni rapide</h2>
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <button className="rounded-lg border border-slate-200 px-2 py-3 text-xs font-bold text-slate-700 hover:bg-slate-50" onClick={() => printDriverPlans(driverEntries, data?.trip_groups ?? [], tripServices, hotelMap, date, data?.ferry_schedules ?? [])}>
+                      ▤<span className="mt-1 block">Foglio</span>
+                    </button>
+                    <a href="/whatsapp" className="rounded-lg border border-slate-200 px-2 py-3 text-center text-xs font-bold text-slate-700 hover:bg-slate-50">
+                      ☘<span className="mt-1 block">WhatsApp</span>
+                    </a>
+                    <button
+                      className="rounded-lg border border-slate-200 px-2 py-3 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                      onClick={() => {
+                        if (!token) return;
+                        const url = `/api/ops/piano-giorno/export-excel?date=${date}`;
+                        void fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+                          .then(r => r.blob())
+                          .then(blob => {
+                            const a = document.createElement("a");
+                            a.href = URL.createObjectURL(blob);
+                            a.download = `piano-giorno-${date.replace(/-/g, "")}.xlsx`;
+                            a.click();
+                          });
+                      }}
+                    >
+                      Ⓧ<span className="mt-1 block">Excel</span>
+                    </button>
+                  </div>
+                </div>
+              </aside>
             </div>
           </div>
         )}
