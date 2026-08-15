@@ -15,7 +15,24 @@ function statusBadgeClass(status: ServiceStatus) {
 export default function DriverDetailPage() {
   const params = useParams<{ serviceId?: string | string[] }>();
   const serviceId = Array.isArray(params.serviceId) ? params.serviceId[0] : params.serviceId;
-  const { loading, tenantId, userId, role, errorMessage, data, refresh } = useTenantOperationalData();
+
+  // Sprint Performance 13: this page only ever needs the current service and,
+  // if it's part of a round-trip pair, its linked_service_id counterpart —
+  // never the tenant's full service history. linked_service_id is only known
+  // once the primary service row arrives, so this is a two-phase ids scope:
+  // first render fetches just [serviceId]; once `service.linked_service_id`
+  // resolves, `ids` grows to include it, which changes the hook's requestKey
+  // and triggers exactly one extra scoped refetch (cheap — at most 2 rows).
+  const [linkedId, setLinkedId] = useState<string | null>(null);
+  const ids = useMemo(() => (serviceId ? [serviceId, ...(linkedId ? [linkedId] : [])] : []), [serviceId, linkedId]);
+  const { loading, tenantId, userId, role, errorMessage, data, refresh } = useTenantOperationalData(
+    ids.length > 0
+      ? {
+          datasets: { services: true, hotels: true, assignments: true, statusEvents: true },
+          serviceScope: { mode: "ids", ids }
+        }
+      : undefined
+  );
   const [savingStatus, setSavingStatus] = useState<ServiceStatus | null>(null);
   const [message, setMessage] = useState("");
 
@@ -24,6 +41,13 @@ export default function DriverDetailPage() {
   const assignment = useMemo(() => (service ? data.assignments.find((item) => item.service_id === service.id) : null), [data.assignments, service]);
   const linkedService = useMemo(() => (service?.linked_service_id ? data.services.find((item) => item.id === service.linked_service_id) : null), [data.services, service]);
   const isMine = role === "driver" ? assignment?.driver_user_id === userId : true;
+
+  // Render-time state adjustment (not an effect): once `service` resolves and
+  // reveals a linked_service_id we don't have yet, expand `ids` immediately —
+  // React re-renders before commit, so this never flashes a stale ids scope.
+  if (service?.linked_service_id && service.linked_service_id !== linkedId) {
+    setLinkedId(service.linked_service_id);
+  }
 
   const pickupNotes = useMemo(() => {
     if (!service || !hotel) return null;

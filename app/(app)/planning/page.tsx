@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { DragEvent } from "react";
 import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { buildOperationalInstances, type OperationalInstance } from "@/lib/operational-service-instances";
+import { computePlanningRangeScope, resolveNearestDateResult, shouldRequestNearestDate } from "@/lib/planning-date-fallback";
 import { formatIsoDateShort } from "@/lib/service-display";
+import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { supabase } from "@/lib/supabase/client";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import type { Service, ServiceType } from "@/lib/types";
@@ -65,9 +67,24 @@ function lineLabel(instance: OperationalInstance) {
 }
 
 export default function PlanningPage() {
-  const { loading, liveConnected, tenantId, errorMessage, data, refresh } = useTenantOperationalData();
   const [viewMode, setViewMode] = useState<"day" | "week">("day");
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Sprint Performance 13: Planning's actually-rendered window is, at most,
+  // the selected week (day or week view) plus the "next 7 days" panel — see
+  // weekStart/weekDates/futureCutoffDate below, all derived from
+  // effectiveSelectedDate which never strays more than 6 days from
+  // selectedDate. [-7, +14] days is a generous, conservative superset of that.
+  //
+  // Targeted fix (Sprint 13 follow-up): the pre-Sprint-13 "jump to the
+  // earliest date with any data anywhere in tenant history" fallback (used
+  // when the selected date itself has zero services) is restored via a
+  // dedicated lightweight lookup below (see the fallback effect after
+  // `availableDates`), instead of requiring the full history to be loaded
+  // here. The normal load stays scoped to this range regardless.
+  const { loading, liveConnected, tenantId, errorMessage, data, refresh } = useTenantOperationalData({
+    datasets: { services: true, assignments: true, memberships: true },
+    serviceScope: computePlanningRangeScope(selectedDate)
+  });
   const [driverFilter, setDriverFilter] = useState<string>("all");
   const [serviceTypeFilter, setServiceTypeFilter] = useState<ServiceType | "all">("all");
   const [draggingServiceId, setDraggingServiceId] = useState<string | null>(null);
@@ -110,6 +127,38 @@ export default function PlanningPage() {
 
   const availableDates = useMemo(() => [...new Set(filteredInstances.map((instance) => instance.date))].sort(), [filteredInstances]);
   const effectiveSelectedDate = availableDates.includes(selectedDate) ? selectedDate : availableDates[0] ?? selectedDate;
+
+  // Targeted fix: restores the pre-Sprint-13 "jump to the earliest date with
+  // any data" behavior. Fires only when the selected date has zero services
+  // in the currently-loaded (scoped) window — the common case (selected date
+  // has data) never reaches this, so it adds no extra query in normal use.
+  // On finding a date, it updates `selectedDate` itself (not just a local
+  // display value) so the hook's range scope recenters around it and loads
+  // normally — never re-introducing a full-history fetch.
+  const [lastFallbackAttempt, setLastFallbackAttempt] = useState<string | null>(null);
+  useEffect(() => {
+    if (!shouldRequestNearestDate({ loading, selectedDate, availableDates, lastAttemptedDate: lastFallbackAttempt })) return;
+    let cancelled = false;
+    // Marked synchronously (not inside the async callback below) so a rapid
+    // second effect run for the same selectedDate can't slip past the
+    // shouldRequestNearestDate guard before the first lookup's fetch settles.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLastFallbackAttempt(selectedDate);
+    void (async () => {
+      const session = await getClientSessionContext();
+      if (cancelled || !session.accessToken) return;
+      const response = await fetch("/api/ops/services-nearest-date", {
+        headers: { Authorization: `Bearer ${session.accessToken}` }
+      });
+      const payload = (await response.json().catch(() => null)) as { ok?: boolean; date?: string | null } | null;
+      if (cancelled || !response.ok || !payload?.ok) return;
+      const nextDate = resolveNearestDateResult(payload.date ?? null, selectedDate);
+      if (nextDate !== selectedDate) setSelectedDate(nextDate);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, selectedDate, availableDates, lastFallbackAttempt]);
 
   const dayInstances = useMemo(() => filteredInstances.filter((instance) => instance.date === effectiveSelectedDate), [effectiveSelectedDate, filteredInstances]);
   const dayArrivals = useMemo(() => dayInstances.filter((instance) => instance.direction === "arrival"), [dayInstances]);

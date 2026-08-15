@@ -286,9 +286,19 @@ function AgencyKindBadge({ service }: { service: Service }) {
 }
 
 export default function DeparturesPage() {
-  const { loading, errorMessage, data, refresh } = useTenantOperationalData();
   const todayIso = new Date().toISOString().slice(0, 10);
   const [selectedDate, setSelectedDate] = useState(todayIso);
+  // Sprint Performance 13: same date-scope rationale as Arrivals (see that
+  // page for details) — Departures only ever shows/exports one business date
+  // at a time, so scope services to it instead of the full tenant history.
+  // Note: the agency-filter dropdown (`agencyNames`, derived from data.services
+  // below) now only lists agencies present on the loaded date's services
+  // instead of the entire tenant history — a direct, documented consequence of
+  // scoping, not a business-rule change.
+  const { loading, errorMessage, data, refresh } = useTenantOperationalData({
+    datasets: { services: true, assignments: true, hotels: true, memberships: true },
+    serviceScope: { mode: "date", date: selectedDate }
+  });
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [timeBand, setTimeBand] = useState<"all" | "morning" | "afternoon" | "evening">("all");

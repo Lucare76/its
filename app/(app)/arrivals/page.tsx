@@ -552,9 +552,18 @@ ${buildTable(departures)}
 type AgencyOption = { id: string; name: string };
 
 export default function ArrivalsPage() {
-  const { loading, errorMessage, data, refresh, tenantId: tenantIdFromHook } = useTenantOperationalData();
   const todayIso = new Date().toISOString().slice(0, 10);
   const [selectedDate, setSelectedDate] = useState(todayIso);
+  // Sprint Performance 13: Arrivals only ever displays/exports the selected
+  // business date (arrival_date, or `date` for direction=arrival legacy rows —
+  // see lib/operational-service-instances.ts), so scope services to that date
+  // server-side instead of fetching the tenant's entire service history.
+  // Datasets are narrowed to what this page actually reads: no statusEvents,
+  // busLotConfigs or inboundEmails here.
+  const { loading, errorMessage, data, refresh, tenantId: tenantIdFromHook } = useTenantOperationalData({
+    datasets: { services: true, assignments: true, hotels: true, memberships: true },
+    serviceScope: { mode: "date", date: selectedDate }
+  });
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
   const [search, setSearch] = useState("");

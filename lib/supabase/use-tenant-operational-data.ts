@@ -1,14 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { supabase } from "@/lib/supabase/client";
 import { createDedupedAsync, startTenantDataLifecycle } from "@/lib/supabase/tenant-data-lifecycle";
+import { buildTenantDataRequest, type TenantOperationalDataOptions } from "@/lib/supabase/tenant-data-request";
 import type { Assignment, BusLotConfig, Hotel, InboundEmail, Membership, Service, StatusEvent, UserRole } from "@/lib/types";
 
-type Options = {
-  includeInboundEmails?: boolean;
-};
+export type { TenantOperationalDataOptions } from "@/lib/supabase/tenant-data-request";
 
 export type TenantOperationalData = {
   services: Service[];
@@ -20,44 +19,64 @@ export type TenantOperationalData = {
   inboundEmails: InboundEmail[];
 };
 
-export function useTenantOperationalData(options?: Options) {
-  const includeInboundEmails = options?.includeInboundEmails === true;
+const EMPTY_DATA: TenantOperationalData = {
+  services: [],
+  assignments: [],
+  busLotConfigs: [],
+  statusEvents: [],
+  hotels: [],
+  memberships: [],
+  inboundEmails: []
+};
+
+export function useTenantOperationalData(options?: TenantOperationalDataOptions) {
+  // Sprint Performance 13: `options` is typically a fresh object literal every
+  // render (call-sites write `useTenantOperationalData({ serviceScope: {...} })`
+  // inline). buildTenantDataRequest() is pure/cheap so it's safe to call every
+  // render — what matters is that everything below keys off the DERIVED
+  // primitive `requestKey`/`queryString`, not the `options` object identity,
+  // so an options literal that resolves to the *same* scope never triggers a
+  // spurious refetch (that was the Sprint 10 double-fetch bug, in a new guise).
+  const { searchParams, requestKey } = buildTenantDataRequest(options);
+  const queryString = searchParams.toString();
+  const subscribesInboundEmails = options?.includeInboundEmails === true || options?.datasets?.inboundEmails === true;
+
   const [loading, setLoading] = useState(true);
   const [liveConnected, setLiveConnected] = useState(false);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [role, setRole] = useState<UserRole | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [data, setData] = useState<TenantOperationalData>({
-      services: [],
-      assignments: [],
-      busLotConfigs: [],
-      statusEvents: [],
-    hotels: [],
-    memberships: [],
-    inboundEmails: []
-  });
+  const [data, setData] = useState<TenantOperationalData>(EMPTY_DATA);
+
+  // Sprint Performance 13 — FASE 26/27: when the scope changes rapidly (e.g.
+  // user flips Arrivals from Aug 15 to Aug 16 before the first request lands),
+  // the OLD in-flight request must never be allowed to overwrite state with
+  // stale-scope data once it finally resolves. This ref always holds the
+  // requestKey of the scope the UI *currently* wants; each in-flight
+  // runRefresh call compares against it before touching state and silently
+  // discards itself if it's been superseded. Synced via effect (not written
+  // during render) — by the time any awaited fetch actually resolves (real
+  // network latency), this render's effects have long since flushed, so the
+  // ref is always current before it's ever read.
+  const latestRequestKeyRef = useRef(requestKey);
+  useEffect(() => {
+    latestRequestKeyRef.current = requestKey;
+  }, [requestKey]);
 
   const runRefresh = useCallback(async () => {
+    const thisRequestKey = requestKey;
+    const isStale = () => latestRequestKeyRef.current !== thisRequestKey;
+
     const session = await getClientSessionContext();
-    // Sprint Performance 12: the session context already carries the access
-    // token it resolved (or found cached). Calling supabase.auth.getSession()
-    // again here was a pure duplicate of work getClientSessionContext() just
-    // did.
+    if (isStale()) return false;
+
     const accessToken = session.accessToken;
     if (!supabase) {
       setTenantId(null);
       setUserId(null);
       setRole(null);
-      setData({
-        services: [],
-        assignments: [],
-        busLotConfigs: [],
-        statusEvents: [],
-        hotels: [],
-        memberships: [],
-        inboundEmails: []
-      });
+      setData(EMPTY_DATA);
       setErrorMessage("Supabase non configurato o non disponibile.");
       setLoading(false);
       return false;
@@ -66,15 +85,7 @@ export function useTenantOperationalData(options?: Options) {
       setTenantId(null);
       setUserId(null);
       setRole(null);
-      setData({
-        services: [],
-        assignments: [],
-        busLotConfigs: [],
-        statusEvents: [],
-        hotels: [],
-        memberships: [],
-        inboundEmails: []
-      });
+      setData(EMPTY_DATA);
       setErrorMessage("Sessione non valida o scaduta. Effettua di nuovo il login.");
       setLoading(false);
       return false;
@@ -83,15 +94,7 @@ export function useTenantOperationalData(options?: Options) {
       setTenantId(null);
       setUserId(session.userId);
       setRole(session.role);
-      setData({
-        services: [],
-        assignments: [],
-        busLotConfigs: [],
-        statusEvents: [],
-        hotels: [],
-        memberships: [],
-        inboundEmails: []
-      });
+      setData(EMPTY_DATA);
       setErrorMessage("Sessione non valida o scaduta. Effettua di nuovo il login.");
       setLoading(false);
       return false;
@@ -100,15 +103,7 @@ export function useTenantOperationalData(options?: Options) {
       setTenantId(null);
       setUserId(session.userId);
       setRole(session.role);
-      setData({
-        services: [],
-        assignments: [],
-        busLotConfigs: [],
-        statusEvents: [],
-        hotels: [],
-        memberships: [],
-        inboundEmails: []
-      });
+      setData(EMPTY_DATA);
       setErrorMessage("Tenant non configurato per questo utente. Completa onboarding.");
       setLoading(false);
       return false;
@@ -118,7 +113,7 @@ export function useTenantOperationalData(options?: Options) {
     setUserId(session.userId);
     setRole(session.role);
 
-    const response = await fetch(`/api/ops/tenant-data?include_inbound_emails=${includeInboundEmails ? "true" : "false"}`, {
+    const response = await fetch(`/api/ops/tenant-data?${queryString}`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     const payload = (await response.json().catch(() => null)) as
@@ -134,6 +129,8 @@ export function useTenantOperationalData(options?: Options) {
           inbound_emails?: InboundEmail[];
         }
       | null;
+
+    if (isStale()) return false;
 
     if (!response.ok || !payload?.ok) {
       setErrorMessage(payload?.error ?? "Errore caricamento dati tenant.");
@@ -153,28 +150,37 @@ export function useTenantOperationalData(options?: Options) {
     setErrorMessage(null);
     setLoading(false);
     return true;
-  }, [includeInboundEmails]);
+  }, [requestKey, queryString]);
 
-  // Concurrent triggers (fallback tick, realtime debounce, tab-regain refresh,
-  // manual refresh() calls from consumers) share a single in-flight execution
-  // instead of firing parallel duplicate requests.
+  // Concurrent triggers with the SAME scope (fallback tick, realtime debounce,
+  // tab-regain refresh, manual refresh() calls) share a single in-flight
+  // execution. Scope changes recreate runRefresh (new requestKey/queryString),
+  // which recreates this deduped wrapper too — so a new scope always gets its
+  // own fresh promise instead of being folded into an old scope's in-flight
+  // request (see FASE 26/27: same-key dedupe only, never cross-scope).
+  // runRefresh closes over latestRequestKeyRef but only reads it inside its
+  // async body (after await), never synchronously during this render;
+  // createDedupedAsync only stores the function reference here, it doesn't
+  // invoke it — so this is not an actual render-time ref read.
+  // eslint-disable-next-line react-hooks/refs
   const refresh = useMemo(() => createDedupedAsync(runRefresh), [runRefresh]);
 
-  // Bootstrap: exactly one refresh on mount. This effect intentionally does
-  // NOT depend on tenantId — depending on it was the root cause of the
-  // double-fetch bug (the effect restarted the instant tenantId resolved from
-  // null, firing a second refresh before the first had even finished).
+  // Bootstrap + scope-change reload: fires once on mount, and again whenever
+  // `refresh` changes identity — which happens exactly when requestKey changes
+  // (new date/range/ids/datasets). This intentionally does NOT depend on
+  // tenantId directly (that was the Sprint 10 double-fetch root cause).
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  // Realtime subscription + fallback polling. This effect depends on the
-  // resolved tenantId so a *genuine* tenant change later (not the initial
-  // null -> resolved transition, which no longer touches this effect's own
-  // refresh call) rebuilds the channel with the correct filter. It never
-  // triggers a refresh on setup — only in response to realtime events,
-  // fallback ticks, or tab-visibility regains — so it adds zero extra
-  // fetches at mount time.
+  // Realtime subscription + fallback polling. Depends on tenantId (rebuilds
+  // the channel on a genuine tenant change) and requestKey (rebuilds it when
+  // the scope changes, so the channel name stays unique per scope and the
+  // inbound_emails subscription reflects whether this scope actually wants
+  // that dataset). It never triggers a refresh on setup — only in response to
+  // realtime events, fallback ticks, or tab-visibility regains — and each such
+  // trigger calls the CURRENT scope's `refresh`, so it can never fall back to
+  // the legacy/full-history default (FASE 25).
   useEffect(() => {
     if (!tenantId || !supabase) return;
     const client = supabase;
@@ -183,14 +189,14 @@ export function useTenantOperationalData(options?: Options) {
       refresh,
       subscribeRealtime: (onEvent, onStatus) => {
         const channel = client
-          .channel(`tenant-live-${tenantId}-${includeInboundEmails ? "inbound" : "base"}`)
+          .channel(`tenant-live-${tenantId}-${encodeURIComponent(requestKey)}`)
           .on("postgres_changes", { event: "*", schema: "public", table: "services", filter: `tenant_id=eq.${tenantId}` }, onEvent)
           .on("postgres_changes", { event: "*", schema: "public", table: "assignments", filter: `tenant_id=eq.${tenantId}` }, onEvent)
           .on("postgres_changes", { event: "*", schema: "public", table: "status_events", filter: `tenant_id=eq.${tenantId}` }, onEvent)
           .on("postgres_changes", { event: "*", schema: "public", table: "hotels", filter: `tenant_id=eq.${tenantId}` }, onEvent)
           .on("postgres_changes", { event: "*", schema: "public", table: "memberships", filter: `tenant_id=eq.${tenantId}` }, onEvent);
 
-        if (includeInboundEmails) {
+        if (subscribesInboundEmails) {
           channel.on(
             "postgres_changes",
             { event: "*", schema: "public", table: "inbound_emails", filter: `tenant_id=eq.${tenantId}` },
@@ -218,7 +224,7 @@ export function useTenantOperationalData(options?: Options) {
     return () => {
       stopLifecycle();
     };
-  }, [tenantId, includeInboundEmails, refresh]);
+  }, [tenantId, requestKey, subscribesInboundEmails, refresh]);
 
   return {
     loading,

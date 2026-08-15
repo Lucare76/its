@@ -75,7 +75,10 @@ function normalizeDriverName(value?: string | null) {
 }
 
 export default function DriverFileImportPage() {
-  const { data, loading } = useTenantOperationalData();
+  // Sprint Performance 13: this page only reads data.memberships (drivers) —
+  // it never touches services/assignments/hotels/statusEvents/busLotConfigs/
+  // inboundEmails, so there's no reason to fetch any of them.
+  const { data, loading } = useTenantOperationalData({ datasets: { memberships: true } });
   const appDrivers = useMemo(
     () => data.memberships.filter((member) => member.role === "driver").sort((left, right) => left.full_name.localeCompare(right.full_name, "it")),
     [data.memberships]
