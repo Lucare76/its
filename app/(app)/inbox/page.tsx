@@ -10,6 +10,7 @@ import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 import { ensureSupabaseClientReady, getClientSessionContext } from "@/lib/supabase/client-session";
 import type { Hotel, InboundEmail, Membership, Service } from "@/lib/types";
 import { bookingListTransportTimes } from "@/lib/booking-list-display";
+import { dedupeAppend } from "@/lib/collection-utils";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -291,6 +292,9 @@ export default function InboxPage() {
   const [expandedServiceId, setExpandedServiceId] = useState<string | null>(null);
   const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [emailsHasMore, setEmailsHasMore] = useState(false);
+  const [loadingMoreEmails, setLoadingMoreEmails] = useState(false);
+  const nextEmailPageRef = useRef(2);
 
   const handleCopy = (text: string, field: string) => {
     void copyToClipboard(text).then(() => {
@@ -303,14 +307,20 @@ export default function InboxPage() {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
+  // Sprint Performance 11: Inbox usa la propria route leggera invece di
+  // /api/ops/dispatch-data (pensata per il Dispatch: storico servizi, assignments,
+  // vehicles, driver registry completi — dati che Inbox non usa, vedi audit).
+  // loadData ricarica sempre la prima pagina (usata da boot, refresh import,
+  // delete, approvazione, upload PDF); loadMoreEmails accoda le pagine successive.
   const loadData = async (token: string) => {
-    const response = await fetch("/api/ops/dispatch-data", {
+    const response = await fetch("/api/ops/inbox-data?page=1", {
       headers: { Authorization: `Bearer ${token}` }
     });
     const body = (await response.json().catch(() => null)) as {
       ok?: boolean; error?: string; tenant_id?: string;
       services?: unknown[]; hotels?: unknown[];
-      memberships?: unknown[]; inbound_emails?: unknown[];
+      drivers?: unknown[]; inbound_emails?: unknown[];
+      has_more?: boolean;
     } | null;
     if (!response.ok || !body?.ok) throw new Error(String(body?.error ?? "Errore caricamento inbox."));
 
@@ -318,9 +328,38 @@ export default function InboxPage() {
     setInboundEmails((body.inbound_emails ?? []) as InboundEmail[]);
     setServices((body.services ?? []) as Service[]);
     setHotels((body.hotels ?? []) as Hotel[]);
-    setDrivers(((body.memberships ?? []) as Membership[]).filter((m) => m.role === "driver"));
+    setDrivers(((body.drivers ?? []) as Membership[]).filter((m) => m.role === "driver"));
+    setEmailsHasMore(Boolean(body.has_more));
+    nextEmailPageRef.current = 2;
     if ((body.inbound_emails ?? []).length > 0) {
       setSelectedId(((body.inbound_emails ?? []) as InboundEmail[])[0]?.id ?? null);
+    }
+  };
+
+  const loadMoreEmails = async () => {
+    if (!accessToken || loadingMoreEmails || !emailsHasMore) return;
+    setLoadingMoreEmails(true);
+    try {
+      const page = nextEmailPageRef.current;
+      const response = await fetch(`/api/ops/inbox-data?page=${page}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const body = (await response.json().catch(() => null)) as {
+        ok?: boolean; error?: string;
+        services?: unknown[]; inbound_emails?: unknown[]; has_more?: boolean;
+      } | null;
+      if (!response.ok || !body?.ok) {
+        setMessage(String(body?.error ?? "Errore caricamento altre email."));
+        return;
+      }
+      const newEmails = (body.inbound_emails ?? []) as InboundEmail[];
+      setInboundEmails((current) => dedupeAppend(current, newEmails));
+      const newServices = (body.services ?? []) as Service[];
+      setServices((current) => dedupeAppend(current, newServices));
+      setEmailsHasMore(Boolean(body.has_more));
+      nextEmailPageRef.current = page + 1;
+    } finally {
+      setLoadingMoreEmails(false);
     }
   };
 
@@ -988,6 +1027,12 @@ export default function InboxPage() {
               );
             })
           )}
+          {emailsHasMore ? (
+            <button type="button" onClick={() => void loadMoreEmails()} disabled={loadingMoreEmails}
+              className="btn-secondary w-full py-2 text-xs disabled:opacity-50">
+              {loadingMoreEmails ? "Carico..." : "Carica altre"}
+            </button>
+          ) : null}
         </aside>
 
         {/* Pannello dettaglio */}
