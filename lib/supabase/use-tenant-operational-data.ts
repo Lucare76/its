@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { supabase } from "@/lib/supabase/client";
+import { createDedupedAsync, startTenantDataLifecycle } from "@/lib/supabase/tenant-data-lifecycle";
 import type { Assignment, BusLotConfig, Hotel, InboundEmail, Membership, Service, StatusEvent, UserRole } from "@/lib/types";
 
 type Options = {
@@ -37,7 +38,7 @@ export function useTenantOperationalData(options?: Options) {
     inboundEmails: []
   });
 
-  const refresh = useCallback(async () => {
+  const runRefresh = useCallback(async () => {
     const session = await getClientSessionContext();
     const authSession = supabase ? await supabase.auth.getSession() : null;
     const accessToken = authSession?.data.session?.access_token ?? null;
@@ -151,62 +152,70 @@ export function useTenantOperationalData(options?: Options) {
     return true;
   }, [includeInboundEmails]);
 
+  // Concurrent triggers (fallback tick, realtime debounce, tab-regain refresh,
+  // manual refresh() calls from consumers) share a single in-flight execution
+  // instead of firing parallel duplicate requests.
+  const refresh = useMemo(() => createDedupedAsync(runRefresh), [runRefresh]);
+
+  // Bootstrap: exactly one refresh on mount. This effect intentionally does
+  // NOT depend on tenantId — depending on it was the root cause of the
+  // double-fetch bug (the effect restarted the instant tenantId resolved from
+  // null, firing a second refresh before the first had even finished).
   useEffect(() => {
-    let active = true;
-    let refreshTimeout: number | null = null;
-    let fallbackInterval: number | null = null;
-    let activeChannel: ReturnType<NonNullable<typeof supabase>["channel"]> | null = null;
+    void refresh();
+  }, [refresh]);
 
-    const init = async () => {
-      const ok = await refresh();
-      if (!active || !ok || !supabase || !tenantId) return;
+  // Realtime subscription + fallback polling. This effect depends on the
+  // resolved tenantId so a *genuine* tenant change later (not the initial
+  // null -> resolved transition, which no longer touches this effect's own
+  // refresh call) rebuilds the channel with the correct filter. It never
+  // triggers a refresh on setup — only in response to realtime events,
+  // fallback ticks, or tab-visibility regains — so it adds zero extra
+  // fetches at mount time.
+  useEffect(() => {
+    if (!tenantId || !supabase) return;
+    const client = supabase;
 
-      const scheduleRefresh = () => {
-        if (!active) return;
-        if (refreshTimeout) window.clearTimeout(refreshTimeout);
-        refreshTimeout = window.setTimeout(() => {
-          void refresh();
-        }, 400);
-      };
+    const stopLifecycle = startTenantDataLifecycle({
+      refresh,
+      subscribeRealtime: (onEvent, onStatus) => {
+        const channel = client
+          .channel(`tenant-live-${tenantId}-${includeInboundEmails ? "inbound" : "base"}`)
+          .on("postgres_changes", { event: "*", schema: "public", table: "services", filter: `tenant_id=eq.${tenantId}` }, onEvent)
+          .on("postgres_changes", { event: "*", schema: "public", table: "assignments", filter: `tenant_id=eq.${tenantId}` }, onEvent)
+          .on("postgres_changes", { event: "*", schema: "public", table: "status_events", filter: `tenant_id=eq.${tenantId}` }, onEvent)
+          .on("postgres_changes", { event: "*", schema: "public", table: "hotels", filter: `tenant_id=eq.${tenantId}` }, onEvent)
+          .on("postgres_changes", { event: "*", schema: "public", table: "memberships", filter: `tenant_id=eq.${tenantId}` }, onEvent);
 
-      const channel = supabase
-        .channel(`tenant-live-${tenantId}-${includeInboundEmails ? "inbound" : "base"}`)
-        .on("postgres_changes", { event: "*", schema: "public", table: "services", filter: `tenant_id=eq.${tenantId}` }, scheduleRefresh)
-        .on("postgres_changes", { event: "*", schema: "public", table: "assignments", filter: `tenant_id=eq.${tenantId}` }, scheduleRefresh)
-        .on("postgres_changes", { event: "*", schema: "public", table: "status_events", filter: `tenant_id=eq.${tenantId}` }, scheduleRefresh)
-        .on("postgres_changes", { event: "*", schema: "public", table: "hotels", filter: `tenant_id=eq.${tenantId}` }, scheduleRefresh)
-        .on("postgres_changes", { event: "*", schema: "public", table: "memberships", filter: `tenant_id=eq.${tenantId}` }, scheduleRefresh);
+        if (includeInboundEmails) {
+          channel.on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "inbound_emails", filter: `tenant_id=eq.${tenantId}` },
+            onEvent
+          );
+        }
 
-      if (includeInboundEmails) {
-        channel.on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "inbound_emails", filter: `tenant_id=eq.${tenantId}` },
-          scheduleRefresh
-        );
-      }
+        channel.subscribe(onStatus);
+        return () => {
+          void client.removeChannel(channel);
+        };
+      },
+      getVisibilityState: () => document.visibilityState,
+      addVisibilityListener: (handler) => {
+        document.addEventListener("visibilitychange", handler);
+        return () => document.removeEventListener("visibilitychange", handler);
+      },
+      setTimeoutFn: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimeoutFn: (handle) => window.clearTimeout(handle as number),
+      setIntervalFn: (fn, ms) => window.setInterval(fn, ms),
+      clearIntervalFn: (handle) => window.clearInterval(handle as number),
+      onLiveConnectedChange: setLiveConnected
+    });
 
-      channel.subscribe((status) => {
-        if (!active) return;
-        setLiveConnected(status === "SUBSCRIBED");
-      });
-      activeChannel = channel;
-
-      fallbackInterval = window.setInterval(() => {
-        void refresh();
-      }, 20000);
-    };
-
-    void init();
     return () => {
-      active = false;
-      setLiveConnected(false);
-      if (refreshTimeout) window.clearTimeout(refreshTimeout);
-      if (fallbackInterval) window.clearInterval(fallbackInterval);
-      if (activeChannel && supabase) {
-        void supabase.removeChannel(activeChannel);
-      }
+      stopLifecycle();
     };
-  }, [includeInboundEmails, refresh, tenantId]);
+  }, [tenantId, includeInboundEmails, refresh]);
 
   return {
     loading,
