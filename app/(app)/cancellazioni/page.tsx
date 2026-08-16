@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase/client";
@@ -184,34 +184,73 @@ export default function CancellazioniPage() {
   const archived = requests
     .filter((r) => r.status === "closed" || r.status === "approved")
     .filter(matchesSearch);
+  const agencyCount = requests.filter((req) => req.services?.agencies).length;
+  const refundCount = requests.filter((req) => (req.penalty_cents ?? 0) > 0 || req.agency_response === "counter").length;
+  const urgentCount = requests.filter((req) => req.agency_response === "rejected" || (req.penalty_cents ?? 0) > 0).length;
   return (
-    <section className="page-section">
-      <div className="section-head">
+    <section className="space-y-5 pb-8">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h1 className="section-title">Cancellazioni</h1>
-          <p className="section-subtitle">Richieste di cancellazione in attesa di gestione.</p>
+          <h1 className="text-4xl font-extrabold tracking-tight text-slate-950">Cancellazioni</h1>
+          <p className="mt-1 text-lg text-slate-600">Richieste annullamento e servizi cancellati</p>
         </div>
-        <input
-          type="search"
-          placeholder="Cerca cliente, agenzia, hotel..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="input-saas w-64"
-        />
+        <div className="flex flex-wrap items-center gap-3">
+          <button className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm">▣ Esporta Excel</button>
+          <button className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm">🖨️ Stampa</button>
+          <button className="rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-6 py-3 text-sm font-extrabold text-white shadow-lg shadow-blue-500/20">＋ Nuova cancellazione</button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+        {[
+          { icon: "🧾", label: "Da gestire", value: pending.length, tint: "bg-amber-50 text-amber-700" },
+          { icon: "🛡️", label: "Rimborsi", value: refundCount, tint: "bg-emerald-50 text-emerald-700" },
+          { icon: "📅", label: "Cancellate", value: archived.length, tint: "bg-blue-50 text-blue-700" },
+          { icon: "👥", label: "Agenzie", value: agencyCount, tint: "bg-violet-50 text-violet-700" },
+          { icon: "🔔", label: "Urgenze", value: urgentCount, tint: "bg-rose-50 text-rose-700" },
+        ].map((kpi) => (
+          <div key={kpi.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className="flex items-center gap-4">
+              <span className={`grid h-12 w-12 place-items-center rounded-2xl text-xl ${kpi.tint}`}>{kpi.icon}</span>
+              <div>
+                <p className="text-sm font-semibold text-slate-500">{kpi.label}</p>
+                <p className="text-3xl font-extrabold text-slate-950">{kpi.value}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row">
+          <input
+            type="search"
+            placeholder="Cerca cliente, agenzia, hotel..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-12 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-blue-400 focus:bg-white"
+          />
+          <div className="flex flex-wrap gap-2 text-xs font-bold">
+            <span className="rounded-full bg-blue-600 px-3 py-2 text-white">Tutte</span>
+            <span className="rounded-full border border-slate-200 px-3 py-2 text-slate-600">Da approvare</span>
+            <span className="rounded-full border border-slate-200 px-3 py-2 text-slate-600">Agenzia</span>
+            <span className="rounded-full border border-slate-200 px-3 py-2 text-slate-600">Urgenti</span>
+          </div>
+        </div>
       </div>
 
       {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
 
       {loading ? (
-        <div className="card p-6 text-sm text-slate-400">Caricamento...</div>
+        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-sm text-slate-400 shadow-sm">Caricamento cancellazioni...</div>
       ) : pending.length === 0 ? (
-        <div className="card p-8 text-center">
-          <p className="text-2xl mb-2">✓</p>
-          <p className="text-sm font-medium text-slate-600">Nessuna richiesta pendente</p>
-          <p className="text-xs text-slate-400 mt-1">Tutte le richieste di cancellazione sono state gestite.</p>
+        <div className="rounded-3xl border border-emerald-200 bg-white p-10 text-center shadow-sm">
+          <p className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-emerald-50 text-3xl text-emerald-700">✓</p>
+          <p className="mt-4 text-xl font-extrabold text-slate-900">Nessuna richiesta pendente</p>
+          <p className="mt-1 text-sm text-slate-500">Tutte le richieste di cancellazione sono state gestite.</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="grid gap-4 xl:grid-cols-2">
           {pending.map((req) => {
             const svc = req.services;
             const agency = Array.isArray(svc?.agencies) ? svc.agencies[0] : svc?.agencies;
@@ -220,11 +259,11 @@ export default function CancellazioniPage() {
             const needsAction = req.status === "pending_review" || req.status === "pending_agency_approval";
 
             return (
-              <div key={req.id} className={`card p-4 space-y-3 ${needsAction ? "border-amber-200" : "border-slate-200"}`}>
+              <div key={req.id} className={`rounded-3xl border bg-white p-5 shadow-sm space-y-4 ${needsAction ? "border-amber-200" : "border-slate-200"}`}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-bold uppercase text-slate-800">{svc?.customer_name}</span>
+                      <span className="text-lg font-extrabold uppercase text-slate-900">{svc?.customer_name}</span>
                       <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${st.className}`}>{st.label}</span>
                       <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-500">{legLabel(req.cancel_legs)}</span>
                     </div>
@@ -241,11 +280,11 @@ export default function CancellazioniPage() {
                     </div>
                   </div>
 
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     {needsAction && (
                       <button
                         onClick={() => openModal(req)}
-                        className="rounded-xl bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 transition"
+                        className="rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-4 py-2 text-xs font-extrabold text-white shadow-lg shadow-blue-500/20 transition"
                       >
                         {req.status === "pending_review"
                           ? "Gestisci"
@@ -257,14 +296,14 @@ export default function CancellazioniPage() {
                     <button
                       onClick={() => void restoreRequest(req.id)}
                       disabled={restoring === req.id}
-                      className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 transition disabled:opacity-50"
+                      className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100 transition disabled:opacity-50"
                     >
                       {restoring === req.id ? "..." : "Ripristina"}
                     </button>
                     {isAdmin && (
                       <button
                         onClick={() => confirmDelete(svc.id, svc.customer_name)}
-                        className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition"
+                        className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100 transition"
                       >
                         Elimina
                       </button>
