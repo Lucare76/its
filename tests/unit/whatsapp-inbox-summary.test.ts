@@ -42,9 +42,14 @@ function makeAdmin(rows: Row[], options: { countError?: { message: string }; lat
               return row[field] === null || row[field] === undefined;
             }
             if (parts[1] === "eq") return String(row[field]) === parts[2];
+            if (parts[1] === "gt") return Number(row[field] ?? 0) > Number(parts[2]);
             return true;
           })
         );
+        return builder;
+      }),
+      eq: vi.fn((field: string, value: unknown) => {
+        filtered = filtered.filter((r) => r[field] === value);
         return builder;
       }),
       neq: vi.fn((field: string, value: unknown) => {
@@ -125,6 +130,10 @@ describe("GET /api/ops/whatsapp-inbox/summary", () => {
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.unread_count).toBe(2);
+    expect(body.open_count).toBe(2);
+    expect(body.associated_count).toBe(0);
+    expect(body.unassociated_count).toBe(2);
+    expect(body.urgent_count).toBe(2);
     expect(body.latest_thread_id).toBe("thread-2");
     expect(body.latest_preview).toBe("Ultima");
   });
@@ -153,6 +162,25 @@ describe("GET /api/ops/whatsapp-inbox/summary", () => {
     const body = await response.json();
 
     expect(body.unread_count).toBe(73);
+  });
+
+  it("returns global KPI counts independent from the selected inbox filter", async () => {
+    const admin = makeAdmin([
+      threadRow("open-unread", TENANT_A, { unread_count: 2, status: "open", match_status: "needs_review" }),
+      threadRow("open-matched", TENANT_A, { unread_count: 0, status: "open", match_status: "matched" }),
+      threadRow("open-unmatched", TENANT_A, { unread_count: 0, status: "open", match_status: "needs_review" }),
+      threadRow("closed-unread", TENANT_A, { unread_count: 4, status: "closed", match_status: "matched" }),
+    ]);
+    authorizeAs(admin, "operator", TENANT_A);
+
+    const response = await callGet();
+    const body = await response.json();
+
+    expect(body.unread_count).toBe(1);
+    expect(body.open_count).toBe(3);
+    expect(body.associated_count).toBe(1);
+    expect(body.unassociated_count).toBe(2);
+    expect(body.urgent_count).toBe(2);
   });
 
   it("returns 500 without throwing when the DB errors, and does not touch a services.message_id-style column", async () => {

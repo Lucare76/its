@@ -94,6 +94,23 @@ type SendReplyPayload = {
   thread_id?: string | null;
 };
 
+type InboxStats = {
+  unread: number;
+  open: number;
+  associated: number;
+  unassociated: number;
+  urgent: number;
+};
+
+type InboxSummaryPayload = {
+  ok?: boolean;
+  unread_count?: number;
+  open_count?: number;
+  associated_count?: number;
+  unassociated_count?: number;
+  urgent_count?: number;
+};
+
 type TemplateOption = {
   key: string;
   label: string;
@@ -944,6 +961,7 @@ export default function WhatsAppInboxPage() {
   const [threadsPage, setThreadsPage] = useState(1);
   const [threadsHasMore, setThreadsHasMore] = useState(false);
   const [loadingMoreThreads, setLoadingMoreThreads] = useState(false);
+  const [globalInboxStats, setGlobalInboxStats] = useState<InboxStats | null>(null);
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [templateOptions, setTemplateOptions] = useState<TemplateOption[]>([]);
   const [templateFetchError, setTemplateFetchError] = useState<string>("");
@@ -1011,6 +1029,7 @@ export default function WhatsAppInboxPage() {
     [threads, selectedThreadId],
   );
   const inboxStats = useMemo(() => {
+    if (globalInboxStats) return globalInboxStats;
     const unread = threads.reduce((sum, thread) => sum + (thread.unread_count > 0 ? 1 : 0), 0);
     const associated = threads.filter((thread) => thread.match_status === "matched").length;
     const unassociated = threads.filter((thread) => thread.match_status !== "matched").length;
@@ -1022,7 +1041,7 @@ export default function WhatsAppInboxPage() {
       unassociated,
       urgent,
     };
-  }, [threads]);
+  }, [globalInboxStats, threads]);
   const latestFailedOutbound = useMemo(
     () =>
       [...messages]
@@ -1174,6 +1193,24 @@ export default function WhatsAppInboxPage() {
         if (showBlockingLoading) setLoading(false);
         return;
       }
+      fetch("/api/ops/whatsapp-inbox/summary", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      })
+        .then((summaryResponse) => summaryResponse.json())
+        .then((summary: InboxSummaryPayload) => {
+          if (!summary?.ok) return;
+          setGlobalInboxStats({
+            unread: summary.unread_count ?? 0,
+            open: summary.open_count ?? 0,
+            associated: summary.associated_count ?? 0,
+            unassociated: summary.unassociated_count ?? 0,
+            urgent: summary.urgent_count ?? 0,
+          });
+        })
+        .catch(() => {
+          // La lista principale resta utilizzabile anche se la summary globale non risponde.
+        });
       const keepNewChatDraft = newChatModeRef.current && !nextThreadId;
       const nextSelectedThreadId = keepNewChatDraft ? null : body.selected_thread_id ?? null;
       const currentSelectedThreadId = selectedThreadIdRef.current;
