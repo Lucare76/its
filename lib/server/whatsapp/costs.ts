@@ -203,9 +203,13 @@ async function calculateCostPatch(
   const deliveredAt = input.deliveredAt;
   if (!deliveredAt) {
     return {
+      applied_rate_id: null,
+      applied_rate_source: null,
+      applied_rate_valid_from: null,
       estimated_cost: input.existing?.estimated_cost ?? null,
       estimated_currency: input.existing?.estimated_currency ?? "EUR",
       cost_status: input.existing?.cost_status ?? "pending",
+      cost_calculated_at: null,
     };
   }
 
@@ -223,9 +227,13 @@ async function calculateCostPatch(
 
   if (input.billable !== true || !input.pricingCategory || !input.countryCode) {
     return {
+      applied_rate_id: null,
+      applied_rate_source: null,
+      applied_rate_valid_from: null,
       estimated_cost: input.existing?.estimated_cost ?? null,
       estimated_currency: input.existing?.estimated_currency ?? "EUR",
       cost_status: input.existing?.cost_status ?? "pending",
+      cost_calculated_at: null,
     };
   }
 
@@ -335,7 +343,7 @@ export async function upsertWhatsAppCostEvent(
 
   const { error } = await admin
     .from("whatsapp_message_events")
-    .upsert(payload, { onConflict: "tenant_id,wamid" });
+    .upsert(payload as Record<string, unknown>, { onConflict: "tenant_id,wamid" });
   if (error) throw error;
   return { ok: true as const, costStatus: payload.cost_status };
 }

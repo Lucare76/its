@@ -1008,6 +1008,19 @@ export default function WhatsAppInboxPage() {
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
     [threads, selectedThreadId],
   );
+  const inboxStats = useMemo(() => {
+    const unread = threads.reduce((sum, thread) => sum + (thread.unread_count > 0 ? 1 : 0), 0);
+    const associated = threads.filter((thread) => thread.match_status === "matched").length;
+    const unassociated = threads.filter((thread) => thread.match_status !== "matched").length;
+    const urgent = threads.filter((thread) => thread.unread_count > 0 || thread.status === "needs_review" || thread.match_status === "needs_review").length;
+    return {
+      unread,
+      open: threads.filter((thread) => thread.status !== "closed").length,
+      associated,
+      unassociated,
+      urgent,
+    };
+  }, [threads]);
   const latestFailedOutbound = useMemo(
     () =>
       [...messages]
@@ -1700,19 +1713,19 @@ export default function WhatsAppInboxPage() {
   return (
     <section className="page-section">
 
-      {/* ── Compact page header ── */}
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
-              <span>Operazioni</span>
-              <span>/</span>
-              <span className="font-medium text-slate-600">WhatsApp</span>
+      {/* ── Mock-style page header ── */}
+      <div className="flex flex-col gap-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500 text-2xl text-white shadow-lg shadow-emerald-500/25">
+              ☎
+            </span>
+            <div>
+              <h1 className="text-3xl font-black tracking-tight text-slate-950">Inbox WhatsApp</h1>
+              <p className="mt-0.5 text-base text-slate-500">Messaggi clienti e conferme operative</p>
             </div>
-            <h1 className="text-xl font-bold text-slate-900">Inbox WhatsApp</h1>
-            <p className="mt-0.5 text-sm text-slate-500">Risposte clienti ricevute da WhatsApp Business Platform.</p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
             onClick={() => {
@@ -1725,15 +1738,15 @@ export default function WhatsAppInboxPage() {
               setError("");
               setMobileView("chat");
             }}
-            className="flex shrink-0 items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
+            className="flex h-12 shrink-0 items-center gap-2 rounded-xl bg-blue-600 px-6 text-sm font-black text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700"
           >
             <IconPlus />
-            Nuovo
+            Nuovo messaggio
           </button>
 
           {/* Notification status pill */}
           {notifPermission === "granted" ? (
-            <span className="flex shrink-0 items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+            <span className="flex h-12 shrink-0 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-700">
               <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20">
                 <path d="M10 2a6 6 0 0 0-6 6v3.586l-.707.707A1 1 0 0 0 4 14h12a1 1 0 0 0 .707-1.707L16 11.586V8a6 6 0 0 0-6-6ZM10 18a3 3 0 0 1-2.83-2h5.66A3 3 0 0 1 10 18Z" />
               </svg>
@@ -1750,7 +1763,7 @@ export default function WhatsAppInboxPage() {
                 }
                 void Notification.requestPermission().then((perm) => setNotifPermission(perm));
               }}
-              className="flex shrink-0 items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
+              className="flex h-12 shrink-0 items-center gap-2 rounded-xl border border-slate-300 bg-white px-5 text-sm font-bold text-slate-800 shadow-sm transition hover:bg-slate-50"
             >
               <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20">
                 <path d="M10 2a6 6 0 0 0-6 6v3.586l-.707.707A1 1 0 0 0 4 14h12a1 1 0 0 0 .707-1.707L16 11.586V8a6 6 0 0 0-6-6ZM10 18a3 3 0 0 1-2.83-2h5.66A3 3 0 0 1 10 18Z" />
@@ -1761,9 +1774,46 @@ export default function WhatsAppInboxPage() {
           </div>
         </div>
 
+        <div className="grid gap-4 md:grid-cols-5">
+          {[
+            { label: "Da leggere", value: inboxStats.unread, icon: "●", tone: "emerald" },
+            { label: "Aperte", value: inboxStats.open, icon: "●", tone: "blue" },
+            { label: "Associate", value: inboxStats.associated, icon: "↗", tone: "violet" },
+            { label: "Non associate", value: inboxStats.unassociated, icon: "↯", tone: "orange" },
+            { label: "Urgenti", value: inboxStats.urgent, icon: "!", tone: "rose" },
+          ].map((stat) => (
+            <div key={stat.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center gap-4">
+                <span className={`flex h-14 w-14 items-center justify-center rounded-xl text-2xl font-black ${
+                  stat.tone === "emerald" ? "bg-emerald-50 text-emerald-600"
+                  : stat.tone === "blue" ? "bg-blue-50 text-blue-600"
+                  : stat.tone === "violet" ? "bg-violet-50 text-violet-600"
+                  : stat.tone === "orange" ? "bg-orange-50 text-orange-600"
+                  : "bg-rose-50 text-rose-600"
+                }`}>
+                  {stat.icon}
+                </span>
+                <span>
+                  <span className="block text-sm font-semibold text-slate-500">{stat.label}</span>
+                  <span className={`block text-4xl font-black leading-none ${
+                    stat.tone === "emerald" ? "text-emerald-600"
+                    : stat.tone === "blue" ? "text-blue-600"
+                    : stat.tone === "violet" ? "text-violet-600"
+                    : stat.tone === "orange" ? "text-orange-600"
+                    : "text-rose-600"
+                  }`}>
+                    {stat.value}
+                  </span>
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+
         {/* ── Filter tabs + search ── */}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex h-11 w-48 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 transition focus-within:border-indigo-500 focus-within:bg-white focus-within:shadow-[0_0_0_3px_rgba(99,102,241,.13)] sm:w-56">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex h-12 w-full items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 transition focus-within:border-blue-500 focus-within:shadow-[0_0_0_3px_rgba(37,99,235,.12)] sm:w-80">
             <span className="pointer-events-none flex shrink-0 items-center text-slate-400">
               <IconSearch />
             </span>
@@ -1771,7 +1821,7 @@ export default function WhatsAppInboxPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="min-w-0 flex-1 bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
-              placeholder="Cerca nome, telefono…"
+              placeholder="Cerca nome, telefono, pratica..."
             />
           </div>
           {filters.map((item) => {
@@ -1783,7 +1833,7 @@ export default function WhatsAppInboxPage() {
                 onClick={() => setFilter(item.value)}
                 className={`flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition ${
                   active
-                    ? "border-indigo-600 bg-indigo-600 text-white shadow-sm"
+                    ? "border-blue-600 bg-blue-600 text-white shadow-sm"
                     : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
                 }`}
               >
@@ -1796,6 +1846,7 @@ export default function WhatsAppInboxPage() {
               </button>
             );
           })}
+          </div>
         </div>
       </div>
 
@@ -1810,10 +1861,10 @@ export default function WhatsAppInboxPage() {
       )}
 
       {/* ── Main layout ── */}
-      <div className="grid min-h-[640px] gap-2 rounded-2xl bg-slate-100 p-2 lg:grid-cols-[340px_1fr]">
+      <div className="grid min-h-[720px] gap-4 rounded-2xl bg-slate-100/70 p-3 xl:grid-cols-[420px_minmax(0,1fr)_360px]">
 
         {/* ── LEFT: Thread list ── */}
-        <div className={`flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ${mobileView === "chat" ? "hidden lg:flex" : "flex"}`}>
+        <div className={`flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ${mobileView === "chat" ? "hidden xl:flex" : "flex"}`}>
           <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-4 py-3">
             <div>
               <p className="text-sm font-semibold text-slate-900">Conversazioni</p>
@@ -1919,7 +1970,7 @@ export default function WhatsAppInboxPage() {
         </div>
 
         {/* ── RIGHT: Chat panel ── */}
-        <div className={`flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ${mobileView === "list" ? "hidden lg:flex" : "flex"}`}>
+        <div className={`flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ${mobileView === "list" ? "hidden xl:flex" : "flex"}`}>
           {showChat ? (
             <>
               {/* Chat header */}
@@ -2791,6 +2842,154 @@ export default function WhatsAppInboxPage() {
             </div>
           )}
         </div>
+
+        <aside className="hidden space-y-4 xl:block">
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-base font-black text-slate-950">Scheda cliente</h2>
+              {!newChatMode && selectedThread ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNameDraft(selectedThread.whatsapp_contacts?.manual_contact_name?.trim() ?? "");
+                    setNameEditThreadId(selectedThread.id);
+                  }}
+                  className="rounded-lg p-1.5 text-blue-700 hover:bg-blue-50"
+                  title="Modifica nome contatto"
+                >
+                  ✎
+                </button>
+              ) : null}
+            </div>
+            {selectedThread ? (
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500">Telefono</span>
+                  <span className="font-semibold text-slate-900">{selectedThread.phone_e164 ?? selectedThread.wa_id}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500">Passeggeri</span>
+                  <span className="font-semibold text-slate-900">{selectedThread.service ? "Da prenotazione" : "—"}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500">Agenzia</span>
+                  <span className="text-right font-semibold text-slate-900">{selectedThread.service?.booking_service_kind ?? "—"}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500">Hotel</span>
+                  <span className="text-right font-semibold text-slate-900">{selectedThread.service?.hotels?.name ?? "Non collegato"}</span>
+                </div>
+              </div>
+            ) : (
+              <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                Seleziona una conversazione per vedere la scheda cliente.
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-base font-black text-slate-950">Prenotazione collegata</h2>
+              {selectedThread?.booking_id ? (
+                <span className="rounded-full bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">
+                  {selectedThread.booking_id.slice(0, 8).toUpperCase()}
+                </span>
+              ) : null}
+            </div>
+            {selectedThread?.service ? (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="rounded bg-emerald-600 px-2 py-1 text-xs font-black uppercase text-white">Servizio</span>
+                    <span className="font-mono text-sm font-bold text-slate-900">{selectedThread.service.date ?? "—"}</span>
+                  </div>
+                  <div className="grid gap-2 text-sm">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Cliente</span>
+                      <span className="text-right font-semibold text-slate-900">{serviceDisplayCustomerName(selectedThread.service) ?? threadDisplayName(selectedThread)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Orario</span>
+                      <span className="font-semibold text-slate-900">{String(selectedThread.service.time ?? "—").slice(0, 5)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Hotel</span>
+                      <span className="text-right font-semibold text-slate-900">{selectedThread.service.hotels?.name ?? "—"}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-4 text-sm font-medium text-amber-800">
+                Nessuna prenotazione collegata. Usa “Associa a prenotazione”.
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-black text-slate-950">Azioni rapide</h2>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!selectedThread) return;
+                  setAssociateMode((current) => !current);
+                  const initialQuery = threadDisplayName(selectedThread);
+                  setAssociateQuery(initialQuery ?? "");
+                  if (initialQuery) void searchServicesForAssociation(initialQuery);
+                }}
+                disabled={!selectedThread || busyAction !== null}
+                className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+              >
+                Associa pratica
+              </button>
+              <button
+                type="button"
+                onClick={() => setDraft("Buongiorno, ci conferma gentilmente orario e luogo di pickup?")}
+                disabled={busyAction === "reply"}
+                className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+              >
+                Richiedi dati
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAction("mark_read")}
+                disabled={!selectedThread || busyAction !== null}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Segna risolto
+              </button>
+              <button
+                type="button"
+                onClick={() => setDraft("Confermiamo il pickup. Grazie e buona giornata.")}
+                disabled={busyAction === "reply"}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Conferma pickup
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-violet-100 bg-violet-50/70 p-4 shadow-sm">
+            <h2 className="text-base font-black text-slate-950">Suggerimenti AI</h2>
+            <div className="mt-3 space-y-2">
+              <button
+                type="button"
+                onClick={() => setDraft("Buongiorno, le confermiamo il pickup come da prenotazione.")}
+                className="w-full rounded-lg border border-violet-100 bg-white px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-violet-50"
+              >
+                Il cliente chiede conferma pickup: proponi risposta pronta.
+              </button>
+              <button
+                type="button"
+                onClick={() => setComposerMode("template")}
+                className="w-full rounded-lg border border-violet-100 bg-white px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-violet-50"
+              >
+                Usa un template approvato se la finestra WhatsApp è chiusa.
+              </button>
+            </div>
+          </div>
+        </aside>
       </div>
     </section>
   );

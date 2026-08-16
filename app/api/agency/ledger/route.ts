@@ -4,6 +4,21 @@ import { parseRole } from "@/lib/rbac";
 
 export const runtime = "nodejs";
 
+type AgencyLedgerServiceRow = {
+  id: string;
+  customer_name: string | null;
+  customer_first_name: string | null;
+  customer_last_name: string | null;
+  booking_service_kind: string | null;
+  arrival_date: string | null;
+  pax: number | null;
+  agency_quoted_price_cents: number | null;
+  agency_payment_status: string | null;
+  agency_paid_at: string | null;
+  agencies: { id: string | null; name: string | null } | { id: string | null; name: string | null }[] | null;
+  hotels: { name: string | null } | { name: string | null }[] | null;
+};
+
 async function authorize(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
@@ -48,7 +63,7 @@ export async function GET(request: NextRequest) {
         .eq("tenant_id", ctx.tenantId)
         .not("agency_quoted_price_cents", "is", null)
         .neq("status", "cancelled")
-        .order("arrival_date", { ascending: true });
+        .order("arrival_date", { ascending: true }) as any;
       if (agencyId) q = q.eq("agency_id", agencyId);
       else q = q.not("agency_id", "is", null);
       return q.limit(2000);
@@ -59,7 +74,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: servicesRes.error.message }, { status: 500 });
   }
 
-  const entries = (servicesRes.data ?? []).map((s) => {
+  const entries = ((servicesRes.data ?? []) as AgencyLedgerServiceRow[]).map((s) => {
     const isPaid = s.agency_payment_status === "paid";
     const isWaived = s.agency_payment_status === "waived";
     return {
