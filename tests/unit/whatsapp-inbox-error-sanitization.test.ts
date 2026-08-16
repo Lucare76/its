@@ -549,6 +549,119 @@ describe("SEC-06 — PATCH /api/ops/whatsapp-inbox", () => {
 });
 
 describe("SEC-06 — POST /api/ops/whatsapp-inbox (invio manuale)", () => {
+  it("finestra 24h aperta: ultimo inbound cliente entro 24 ore -> testo libero consentito", async () => {
+    const fake = createFakeAdmin({
+      whatsapp_threads: [threadRow(THREAD_A1, TENANT_A)],
+      whatsapp_messages: [
+        { id: "msg-in-1", tenant_id: TENANT_A, thread_id: THREAD_A1, direction: "inbound", timestamp: "2026-08-16T10:00:00.000Z", created_at: "2026-08-16T10:00:01.000Z" },
+      ],
+    });
+    authorizeAs(fake.admin);
+    mocks.isWhatsAppCustomerCareWindowOpen.mockReturnValue(true);
+    mocks.sendWhatsAppTextMessage.mockResolvedValue({ ok: true, messageId: "wamid.open", phoneE164: "+393331234567" });
+
+    const res = await callPost({ thread_id: THREAD_A1, mode: "text", text: "Ciao!" });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(mocks.isWhatsAppCustomerCareWindowOpen).toHaveBeenCalledWith("2026-08-16T10:00:00.000Z");
+    expect(mocks.sendWhatsAppTextMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("finestra 24h chiusa: ultimo inbound cliente oltre 24 ore -> testo libero bloccato con 409", async () => {
+    const fake = createFakeAdmin({
+      whatsapp_threads: [threadRow(THREAD_A1, TENANT_A)],
+      whatsapp_messages: [
+        { id: "msg-in-old", tenant_id: TENANT_A, thread_id: THREAD_A1, direction: "inbound", timestamp: "2026-08-14T10:00:00.000Z", created_at: "2026-08-14T10:00:01.000Z" },
+      ],
+    });
+    authorizeAs(fake.admin);
+    mocks.isWhatsAppCustomerCareWindowOpen.mockReturnValue(false);
+
+    const res = await callPost({ thread_id: THREAD_A1, mode: "text", text: "Ciao!" });
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body).toMatchObject({
+      ok: false,
+      code: "WHATSAPP_CUSTOMER_CARE_WINDOW_CLOSED",
+      error: "La finestra WhatsApp di 24 ore è chiusa. Per ricontattare il cliente devi utilizzare un template approvato da Meta.",
+      conversation_window: { is_open: false, last_inbound_at: "2026-08-14T10:00:00.000Z" },
+    });
+    expect(mocks.sendWhatsAppTextMessage).not.toHaveBeenCalled();
+    expect(fake.calls["whatsapp_messages:insert"]).toBeUndefined();
+  });
+
+  it("finestra chiusa: template approvato consentito senza controllo testo libero", async () => {
+    const fake = createFakeAdmin({
+      whatsapp_threads: [threadRow(THREAD_A1, TENANT_A)],
+      whatsapp_messages: [],
+      whatsapp_templates: [
+        { tenant_id: TENANT_A, name: "transfer_reminder", language_code: "it", body_text: "Template conferma", body_parameter_count: 0, header_format: null, raw_json: { components: [] } },
+      ],
+    });
+    authorizeAs(fake.admin);
+    mocks.isWhatsAppCustomerCareWindowOpen.mockReturnValue(false);
+    mocks.sendWhatsAppMessage.mockResolvedValue({ ok: true, messageId: "wamid.tpl", phoneE164: "+393331234567" });
+
+    const res = await callPost({ thread_id: THREAD_A1, mode: "template", template_name: "transfer_reminder", template_language: "it", template_variables: [] });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(mocks.isWhatsAppCustomerCareWindowOpen).not.toHaveBeenCalled();
+    expect(mocks.sendWhatsAppMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("nessun messaggio inbound disponibile: testo libero bloccato", async () => {
+    const fake = createFakeAdmin({ whatsapp_threads: [threadRow(THREAD_A1, TENANT_A)], whatsapp_messages: [] });
+    authorizeAs(fake.admin);
+    mocks.isWhatsAppCustomerCareWindowOpen.mockReturnValue(false);
+
+    const res = await callPost({ thread_id: THREAD_A1, mode: "text", text: "Ciao!" });
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.code).toBe("WHATSAPP_CUSTOMER_CARE_WINDOW_CLOSED");
+    expect(body.conversation_window.last_inbound_at).toBeNull();
+    expect(mocks.isWhatsAppCustomerCareWindowOpen).toHaveBeenCalledWith(null);
+    expect(mocks.sendWhatsAppTextMessage).not.toHaveBeenCalled();
+  });
+
+  it("ultimo evento outbound ITS non riapre la finestra: conta solo direction inbound", async () => {
+    const fake = createFakeAdmin({
+      whatsapp_threads: [threadRow(THREAD_A1, TENANT_A)],
+      whatsapp_messages: [
+        { id: "msg-out-1", tenant_id: TENANT_A, thread_id: THREAD_A1, direction: "outbound", timestamp: "2026-08-16T10:00:00.000Z", created_at: "2026-08-16T10:00:01.000Z" },
+      ],
+    });
+    authorizeAs(fake.admin);
+    mocks.isWhatsAppCustomerCareWindowOpen.mockReturnValue(false);
+
+    const res = await callPost({ thread_id: THREAD_A1, mode: "text", text: "Ciao!" });
+
+    expect(res.status).toBe(409);
+    expect(mocks.isWhatsAppCustomerCareWindowOpen).toHaveBeenCalledWith(null);
+    expect(mocks.sendWhatsAppTextMessage).not.toHaveBeenCalled();
+  });
+
+  it("finestra mostrata aperta nel browser ma scaduta prima dell'invio: il server blocca comunque la richiesta diretta", async () => {
+    const fake = createFakeAdmin({
+      whatsapp_threads: [threadRow(THREAD_A1, TENANT_A)],
+      whatsapp_messages: [
+        { id: "msg-in-expired", tenant_id: TENANT_A, thread_id: THREAD_A1, direction: "inbound", timestamp: "2026-08-15T09:00:00.000Z", created_at: "2026-08-15T09:00:01.000Z" },
+      ],
+    });
+    authorizeAs(fake.admin);
+    mocks.isWhatsAppCustomerCareWindowOpen.mockReturnValue(false);
+
+    const res = await callPost({ thread_id: THREAD_A1, mode: "text", text: "Messaggio forzato via API" });
+
+    expect(res.status).toBe(409);
+    expect(mocks.sendWhatsAppTextMessage).not.toHaveBeenCalled();
+  });
+
   it("business/provider error preservato: sendWhatsAppTextMessage risponde ok:false (non un'eccezione) -> messaggio provider invariato", async () => {
     const fake = createFakeAdmin({ whatsapp_threads: [threadRow(THREAD_A1, TENANT_A)] });
     authorizeAs(fake.admin);
@@ -563,6 +676,9 @@ describe("SEC-06 — POST /api/ops/whatsapp-inbox (invio manuale)", () => {
 
     expect(res.status).toBe(502);
     expect(body).toEqual({ error: "Recipient phone number not in allowed list" });
+    expect(fake.tables.whatsapp_messages).toHaveLength(1);
+    expect(fake.tables.whatsapp_messages[0]?.status).toBe("failed");
+    expect(fake.tables.whatsapp_messages[0]?.status).not.toBe("sent");
   });
 
   it("10. catch/internal Error sanitizzato: eccezione interna imprevista durante l'invio -> messaggio generico, nessun raw", async () => {

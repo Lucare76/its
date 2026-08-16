@@ -189,6 +189,8 @@ const quickReplies = [
   "Perfetto, ti aspettiamo.",
 ] as const;
 const maxAttachmentBytes = 16 * 1024 * 1024;
+const WHATSAPP_WINDOW_CLOSED_ERROR =
+  "La finestra WhatsApp di 24 ore è chiusa. Per ricontattare il cliente devi utilizzare un template approvato da Meta.";
 
 // ─── Visual helpers ────────────────────────────────────────────────────────
 
@@ -1609,7 +1611,8 @@ export default function WhatsAppInboxPage() {
     const text = draft.trim();
     if (composerMode === "text" && !text && !attachment) { setError("Inserisci un messaggio o allega un file prima di inviare."); return; }
     if (composerMode === "text" && textModeUnavailable) {
-      setError("La finestra WhatsApp di 24 ore è chiusa. Usa un template approvato per contattare il cliente.");
+      setError(WHATSAPP_WINDOW_CLOSED_ERROR);
+      setComposerMode("template");
       return;
     }
     if (composerMode === "template" && !selectedTemplate) { setError("Seleziona un template prima di inviare."); return; }
@@ -1679,7 +1682,16 @@ export default function WhatsAppInboxPage() {
   };
 
   const appendEmoji = (emoji: (typeof quickEmojis)[number]) => setDraft((c) => `${c}${emoji}`);
-  const applyQuickReply = (text: (typeof quickReplies)[number]) => setDraft(text);
+  const applyFreeTextQuickAction = (text: string) => {
+    if (textModeUnavailable) {
+      setError(WHATSAPP_WINDOW_CLOSED_ERROR);
+      setComposerMode("template");
+      return;
+    }
+    setError("");
+    setComposerMode("text");
+    setDraft(text);
+  };
   const handleAttachmentChange = (file: File | null) => {
     if (!file) {
       setAttachment(null);
@@ -2780,7 +2792,7 @@ export default function WhatsAppInboxPage() {
                           <button
                             key={reply}
                             type="button"
-                            onClick={() => applyQuickReply(reply)}
+                            onClick={() => applyFreeTextQuickAction(reply)}
                             disabled={busyAction === "reply"}
                             className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:bg-slate-100"
                           >
@@ -2945,7 +2957,7 @@ export default function WhatsAppInboxPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setDraft("Buongiorno, ci conferma gentilmente orario e luogo di pickup?")}
+                onClick={() => applyFreeTextQuickAction("Buongiorno, ci conferma gentilmente orario e luogo di pickup?")}
                 disabled={busyAction === "reply"}
                 className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-50"
               >
@@ -2961,7 +2973,7 @@ export default function WhatsAppInboxPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setDraft("Confermiamo il pickup. Grazie e buona giornata.")}
+                onClick={() => applyFreeTextQuickAction("Confermiamo il pickup. Grazie e buona giornata.")}
                 disabled={busyAction === "reply"}
                 className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
@@ -2975,7 +2987,7 @@ export default function WhatsAppInboxPage() {
             <div className="mt-3 space-y-2">
               <button
                 type="button"
-                onClick={() => setDraft("Buongiorno, le confermiamo il pickup come da prenotazione.")}
+                onClick={() => applyFreeTextQuickAction("Buongiorno, le confermiamo il pickup come da prenotazione.")}
                 className="w-full rounded-lg border border-violet-100 bg-white px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-violet-50"
               >
                 Il cliente chiede conferma pickup: proponi risposta pronta.

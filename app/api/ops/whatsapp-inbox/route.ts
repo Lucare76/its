@@ -68,6 +68,8 @@ const postSchema = z.object({
 
 const maxAttachmentBytes = 16 * 1024 * 1024;
 const outboundMediaTypes = new Set(["image", "video", "audio", "document"]);
+const WHATSAPP_WINDOW_CLOSED_ERROR =
+  "La finestra WhatsApp di 24 ore è chiusa. Per ricontattare il cliente devi utilizzare un template approvato da Meta.";
 
 function textFormValue(form: FormData, key: string) {
   const value = form.get(key);
@@ -1162,8 +1164,13 @@ export async function POST(request: NextRequest) {
     if (!isWhatsAppCustomerCareWindowOpen(lastInboundAt)) {
       return NextResponse.json({
         ok: false,
-        error: "La finestra WhatsApp di 24 ore è chiusa. Usa un template approvato per contattare il cliente."
-      }, { status: 400 });
+        code: "WHATSAPP_CUSTOMER_CARE_WINDOW_CLOSED",
+        error: WHATSAPP_WINDOW_CLOSED_ERROR,
+        conversation_window: {
+          is_open: false,
+          last_inbound_at: lastInboundAt
+        }
+      }, { status: 409 });
     }
   }
 
