@@ -4,20 +4,17 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { OperationsSuggestions } from "@/components/operations-suggestions";
 import { EmptyState, SidePanel } from "@/components/ui";
-import { needsInboxReview } from "@/lib/inbox-review";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
-import { isInboxPdfReviewOpen, isInboxPdfTestNoise } from "@/lib/pdf/parser";
 import { formatDisplayUppercase, formatServiceSlot, getCustomerFullName, getOutboundTime } from "@/lib/service-display";
-import { getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
 import { supabase } from "@/lib/supabase/client";
-import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
-import type { Hotel, Service } from "@/lib/types";
+import { useDashboardData } from "@/lib/supabase/use-dashboard-data";
+import type { Service } from "@/lib/types";
 
 interface SuggestedGroup {
   id: string;
   vessel: string;
   windowLabel: string;
-  zone: Hotel["zone"];
+  zone: string;
   services: Service[];
   totalPax: number;
   suggestedVehicle: "VAN" | "CAR";
@@ -38,7 +35,6 @@ function floorToThirtyMinutes(time: string) {
 const INITIAL_ALERT_NOW_MS = Date.UTC(2026, 0, 1, 0, 0, 0);
 
 export default function OperatorDashboardPage() {
-  const { loading, liveConnected, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData({ includeInboundEmails: true });
   const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
   const [appliedGroupIds, setAppliedGroupIds] = useState<string[]>([]);
   const [skippedGroupIds, setSkippedGroupIds] = useState<string[]>([]);
@@ -54,6 +50,13 @@ export default function OperatorDashboardPage() {
   const [directionFilter, setDirectionFilter] = useState<"all" | "arrival" | "departure">("all");
   const [timeBandFilter, setTimeBandFilter] = useState<"all" | "morning" | "afternoon" | "evening">("all");
   const [operationsPage, setOperationsPage] = useState(1);
+
+  // Sprint Performance 14B: same formulas as before (untouched), just now
+  // also doubling as the /api/ops/dashboard-data request window instead of
+  // only being in-memory filter boundaries over a full-history fetch.
+  const todayIso = new Date(alertNowMs + dayOffset * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const next48hIso = new Date(alertNowMs + 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const { loading, liveConnected, errorMessage, data, refresh } = useDashboardData({ today: todayIso, next48h: next48hIso });
 
   useEffect(() => {
     if (!supabase) return;
@@ -159,23 +162,25 @@ export default function OperatorDashboardPage() {
     );
   }
 
-  const todayIso = new Date(alertNowMs + dayOffset * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const isShuttleService = (service: Service) => service.booking_service_kind === "navetta" || service.booking_service_kind === "shuttle_hotel" || service.vessel?.trim().toLocaleLowerCase("it") === "navetta";
-  const allTodayInstances = buildOperationalInstances(data.services).filter((instance) => instance.date === todayIso);
+  const allTodayInstances = buildOperationalInstances(data.windowServices).filter((instance) => instance.date === todayIso);
   const todayInstances = allTodayInstances.filter((instance) => serviceView === "shuttles" ? isShuttleService(instance.service) : !isShuttleService(instance.service));
   const shuttleInstancesCount = allTodayInstances.filter((instance) => isShuttleService(instance.service)).length;
-  const next48hIso = new Date(alertNowMs + 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const todayServiceIds = new Set(todayInstances.map((instance) => instance.serviceId));
-  const todayServices = data.services.filter((service) => todayServiceIds.has(service.id));
+  const todayServices = data.windowServices.filter((service) => todayServiceIds.has(service.id));
   const todayArrivals = todayInstances.filter((instance) => instance.direction === "arrival").length;
   const todayDepartures = todayInstances.filter((instance) => instance.direction === "departure").length;
-  const todayPdfNeedsAttention = todayServices.filter((service) => getServicePdfOperationalMeta(service, data.inboundEmails).reviewRecommended);
-  const inboxPdfNeedsReview = data.inboundEmails.filter((email) => {
-    const parsedJson = (email.parsed_json ?? null) as Record<string, unknown> | null;
-    return !isInboxPdfTestNoise({ subject: email.subject, parsedJson }) && isInboxPdfReviewOpen(parsedJson);
-  });
-  const inboxToReview = data.inboundEmails.filter((email) => needsInboxReview(email.parsed_json));
-  const futureInstances = buildOperationalInstances(data.services).filter((instance) => instance.date > todayIso && instance.date <= next48hIso && (serviceView === "shuttles" ? isShuttleService(instance.service) : !isShuttleService(instance.service)));
+  // Sprint Performance 14B: today's PDF-review-recommended count and the two
+  // inbox review counts are now computed server-side (see
+  // lib/server/dashboard-data.ts), reusing the exact same pure helpers
+  // (getServicePdfOperationalMeta, isInboxPdfReviewOpen/isInboxPdfTestNoise,
+  // needsInboxReview) instead of scanning the full tenant history/mailbox in
+  // the browser. todayPdfNeedsAttentionCount mirrors the legacy
+  // todayPdfNeedsAttention array (never rendered — kept for parity/future
+  // use, now with the corrected isPdf semantics).
+  const inboxPdfNeedsReviewCount = data.inboxPdfNeedsReviewCount;
+  const inboxToReviewCount = data.inboxToReviewCount;
+  const futureInstances = buildOperationalInstances(data.windowServices).filter((instance) => instance.date > todayIso && instance.date <= next48hIso && (serviceView === "shuttles" ? isShuttleService(instance.service) : !isShuttleService(instance.service)));
   const nextArrivals48h = futureInstances.filter((instance) => instance.direction === "arrival").slice(0, 6);
   const nextDepartures48h = futureInstances.filter((instance) => instance.direction === "departure").slice(0, 6);
   const isBusLine = (instance: (typeof futureInstances)[number]) => instance.service.service_type_code === "bus_line" || instance.service.booking_service_kind === "bus_city_hotel";
@@ -246,15 +251,15 @@ export default function OperatorDashboardPage() {
   });
 
   const coveredBySuggestions = new Set(suggestedGroups.flatMap((group) => group.services.map((service) => service.id))).size;
+  // Sprint Performance 14B: undelivered-reminder count/sample now come from
+  // lib/server/dashboard-data.ts (SQL-pushed predicate + isUndeliveredReminder
+  // from lib/service-reminder.ts as a defensive re-check on the sample),
+  // instead of scanning every service ever created in the browser.
+  // reminderAlertMinutes is kept client-side purely for the banner's display
+  // text — same env var the server reads for the actual filtering.
   const reminderAlertMinutes = Number(process.env.NEXT_PUBLIC_REMINDER_ALERT_MINUTES ?? "30");
-  const reminderAlertThresholdMs = (Number.isFinite(reminderAlertMinutes) ? reminderAlertMinutes : 30) * 60 * 1000;
-  const nowMs = alertNowMs;
-  const undeliveredReminderAlerts = data.services.filter((service) => {
-    if (service.reminder_status !== "sent" || !service.sent_at) return false;
-    const sentAtMs = new Date(service.sent_at).getTime();
-    if (!Number.isFinite(sentAtMs)) return false;
-    return nowMs - sentAtMs > reminderAlertThresholdMs;
-  });
+  const undeliveredReminderCount = data.undeliveredReminderCount;
+  const undeliveredReminderSample = data.undeliveredReminderSample;
   const pending = todayServices.filter((service) => service.status === "new").length;
   const totalPax = todayServices.reduce((sum, service) => sum + service.pax, 0);
 
@@ -364,7 +369,7 @@ export default function OperatorDashboardPage() {
           { icon: "✈️", label: "Arrivi oggi",     value: todayArrivals,         color: "#0369a1", bg: "#e0f2fe", href: "/arrivals" },
           { icon: "🚀", label: "Partenze oggi",   value: todayDepartures,       color: "#7c3aed", bg: "#f5f3ff", href: "/departures" },
           { icon: "👥", label: "Passeggeri",      value: totalPax,              color: "#0f766e", bg: "#f0fdfa", href: "/arrivals" },
-          { icon: "⚠️", label: "Anomalie", value: pending + inboxPdfNeedsReview.length + inboxToReview.length, color: pending + inboxPdfNeedsReview.length + inboxToReview.length > 0 ? "#dc2626" : "#64748b", bg: "#fef2f2", href: "/dispatch" },
+          { icon: "⚠️", label: "Anomalie", value: pending + inboxPdfNeedsReviewCount + inboxToReviewCount, color: pending + inboxPdfNeedsReviewCount + inboxToReviewCount > 0 ? "#dc2626" : "#64748b", bg: "#fef2f2", href: "/dispatch" },
         ].map(({ icon, label, value, color, bg, href }) => {
           const inner = (
             <div className={`flex min-h-[106px] items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md ${href ? "cursor-pointer hover:border-indigo-200" : ""}`}>
@@ -424,26 +429,26 @@ export default function OperatorDashboardPage() {
         <aside className="pms-panel p-5">
           <h2 className="text-lg font-extrabold text-slate-950">Avvisi e attività</h2>
           <div className="mt-3 divide-y divide-slate-100">
-            {[["Prenotazioni da verificare", inboxToReview.length, "bg-rose-100 text-rose-700"], ["Servizi senza autista", unassignedServices.length, "bg-amber-100 text-amber-700"], ["Revisioni agenzie", pendingAgencyReviewCount, "bg-indigo-100 text-indigo-700"], ["Bus attivi GPS", activeBusGps ?? 0, "bg-violet-100 text-violet-700"]].map(([label, value, tone]) => <div key={String(label)} className="flex items-center justify-between gap-3 py-3 text-sm"><span className="font-medium text-slate-700">{label}</span><span className={`min-w-8 rounded-lg px-2 py-1 text-center text-xs font-extrabold ${tone}`}>{value}</span></div>)}
+            {[["Prenotazioni da verificare", inboxToReviewCount, "bg-rose-100 text-rose-700"], ["Servizi senza autista", unassignedServices.length, "bg-amber-100 text-amber-700"], ["Revisioni agenzie", pendingAgencyReviewCount, "bg-indigo-100 text-indigo-700"], ["Bus attivi GPS", activeBusGps ?? 0, "bg-violet-100 text-violet-700"]].map(([label, value, tone]) => <div key={String(label)} className="flex items-center justify-between gap-3 py-3 text-sm"><span className="font-medium text-slate-700">{label}</span><span className={`min-w-8 rounded-lg px-2 py-1 text-center text-xs font-extrabold ${tone}`}>{value}</span></div>)}
           </div>
           <Link href="/dispatch" className="btn-secondary mt-5 w-full">Vedi tutte le attività</Link>
         </aside>
       </div>
 
       {/* ── Avvisi operativi ─────────────────────────────────────────────── */}
-      {undeliveredReminderAlerts.length > 0 && (
+      {undeliveredReminderCount > 0 && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
-          <p className="font-semibold mb-1">⏱ Reminder non consegnati oltre {Number.isFinite(reminderAlertMinutes) ? reminderAlertMinutes : 30} min: {undeliveredReminderAlerts.length}</p>
+          <p className="font-semibold mb-1">⏱ Reminder non consegnati oltre {Number.isFinite(reminderAlertMinutes) ? reminderAlertMinutes : 30} min: {undeliveredReminderCount}</p>
           <ul className="space-y-0.5 text-xs text-amber-800">
-            {undeliveredReminderAlerts.slice(0, 5).map((service) => (
+            {undeliveredReminderSample.slice(0, 5).map((service) => (
               <li key={service.id}>• {formatServiceSlot(service)} — {getCustomerFullName(service)}</li>
             ))}
           </ul>
         </div>
       )}
-      {inboxToReview.length > 0 && (
+      {inboxToReviewCount > 0 && (
         <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-900">
-          <p className="font-semibold">📧 Inbox da processare: {inboxToReview.length}</p>
+          <p className="font-semibold">📧 Inbox da processare: {inboxToReviewCount}</p>
           <p className="mt-1 text-xs text-red-700">
             Apri <Link href="/inbox" className="underline font-semibold">Posta in arrivo</Link> per revisionare e confermare i draft.
           </p>
