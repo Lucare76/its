@@ -185,6 +185,7 @@ const filters = [
   { value: "all", label: "Tutte" },
   { value: "open", label: "Aperte" },
   { value: "unread", label: "Da leggere" },
+  { value: "urgent", label: "Urgenti" },
   { value: "needs_review", label: "Da rivedere" },
   { value: "associated", label: "Associate" },
   { value: "unassociated", label: "Non associate" },
@@ -1829,7 +1830,7 @@ export default function WhatsAppInboxPage() {
             { label: "Aperte", value: inboxStats.open, icon: "●", tone: "blue", filterValue: "open" },
             { label: "Associate", value: inboxStats.associated, icon: "↗", tone: "violet", filterValue: "associated" },
             { label: "Non associate", value: inboxStats.unassociated, icon: "↯", tone: "orange", filterValue: "unassociated" },
-            { label: "Urgenti", value: inboxStats.urgent, icon: "!", tone: "rose", filterValue: "needs_review" },
+            { label: "Urgenti", value: inboxStats.urgent, icon: "!", tone: "rose", filterValue: "urgent" },
           ].map((stat) => (
             <button
               key={stat.label}

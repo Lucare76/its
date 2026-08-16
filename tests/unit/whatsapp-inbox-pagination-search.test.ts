@@ -44,7 +44,7 @@ function matchIlike(row: Row, field: string, rawPattern: string): boolean {
 }
 
 function evalOrClause(row: Row, clause: string): boolean {
-  const match = clause.match(/^([a-zA-Z_.]+)\.(not\.)?(eq|is|ilike|in)\.(.*)$/);
+  const match = clause.match(/^([a-zA-Z_.]+)\.(not\.)?(eq|gt|is|ilike|in)\.(.*)$/);
   if (!match) return false;
   const [, field, notPrefix, op, rawValue] = match;
   let result: boolean;
@@ -56,6 +56,8 @@ function evalOrClause(row: Row, clause: string): boolean {
   } else if (op === "in") {
     const ids = rawValue.replace(/^\(/, "").replace(/\)$/, "").split(",").filter(Boolean);
     result = ids.includes(String(fieldValue(row, field)));
+  } else if (op === "gt") {
+    result = Number(fieldValue(row, field) ?? 0) > Number(rawValue);
   } else {
     result = String(fieldValue(row, field)) === rawValue;
   }
@@ -261,6 +263,29 @@ describe("Sprint 4 — paginazione lista thread WhatsApp", () => {
     expect(res.status).toBe(200);
     expect((body.threads as Row[]).every((t) => t.status === "closed")).toBe(true);
     expect(body.threads).toHaveLength(1);
+  });
+
+  it("filtro urgent: include non lette e review, esclude chiuse e chat tranquille", async () => {
+    const fake = createFakeAdmin({
+      whatsapp_threads: [
+        thread("thread-unread", TENANT_A, { unread_count: 2, status: "open", match_status: "matched" }),
+        thread("thread-status-review", TENANT_A, { unread_count: 0, status: "needs_review", match_status: "matched" }),
+        thread("thread-match-review", TENANT_A, { unread_count: 0, status: "open", match_status: "needs_review" }),
+        thread("thread-quiet", TENANT_A, { unread_count: 0, status: "open", match_status: "matched" }),
+        thread("thread-closed-unread", TENANT_A, { unread_count: 3, status: "closed", match_status: "needs_review" }),
+      ],
+    });
+    authorizeAs(fake.admin);
+
+    const res = await callGet("?filter=urgent");
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect((body.threads as Row[]).map((t) => t.id)).toEqual([
+      "thread-unread",
+      "thread-status-review",
+      "thread-match-review",
+    ]);
   });
 });
 
