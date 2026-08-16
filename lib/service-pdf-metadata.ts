@@ -28,17 +28,25 @@ function safeRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, any>) : {};
 }
 
+// safeRecord() always returns at least {} (never null/undefined), so
+// Boolean(safeRecord(x)) is always true regardless of x. isPdf must check
+// the RAW pre-safeRecord value's shape instead, or it's always "true".
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function getServicePdfOperationalMeta(service: Service, inboundEmails: InboundEmail[]): ServicePdfOperationalMeta {
   const linkedInbound = service.inbound_email_id ? inboundEmails.find((email) => email.id === service.inbound_email_id) ?? null : null;
   const parsedJson = safeRecord(linkedInbound?.parsed_json);
-  const pdfImport = safeRecord(parsedJson.pdf_import);
+  const rawPdfImport = parsedJson.pdf_import;
+  const pdfImport = safeRecord(rawPdfImport);
   const pdfParser = safeRecord(parsedJson.pdf_parser);
   const effectiveNormalized = safeRecord(pdfImport.effective_normalized);
   const normalized = safeRecord(pdfImport.normalized);
   const originalNormalized = safeRecord(pdfImport.original_normalized);
   const dedupe = safeRecord(pdfImport.dedupe);
   const excursionSource = clean(String((safeRecord(service.excursion_details)).source ?? ""));
-  const isPdf = excursionSource === "pdf" || noteMarker(service.notes, "source") === "pdf" || Boolean(pdfImport);
+  const isPdf = excursionSource === "pdf" || noteMarker(service.notes, "source") === "pdf" || isPlainObject(rawPdfImport);
   const parsingQuality = clean(String(pdfImport?.parsing_quality ?? noteMarker(service.notes, "parsing_quality") ?? ""));
   const parserMode = clean(String(pdfParser?.mode ?? ""));
   const manualReview = Boolean(pdfImport?.has_manual_review) || noteMarker(service.notes, "manual_review") === "true";

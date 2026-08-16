@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ExportServicesButton } from "@/components/export-services-button";
 import { WhatsAppButton } from "@/components/whatsapp-button";
 import { Timeline } from "@/components/timeline";
@@ -20,17 +20,20 @@ import {
   getTransportReferenceReturn
 } from "@/lib/service-display";
 import { getServiceOperationalSource, getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
+import { isUndeliveredReminder } from "@/lib/service-reminder";
+import { buildServicesListRequest, type ServicesListFilters } from "@/lib/services-list-request";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import type { Assignment, Hotel, InboundEmail, Membership, Service, ServiceStatus, ServiceType, StatusEvent } from "@/lib/types";
 import { SERVICE_STATUS_LABELS, SERVICE_TYPE_LABELS } from "@/lib/ui-labels";
 
+const PAGE_SIZE = 50;
+const SEARCH_DEBOUNCE_MS = 300;
+
 interface ServicesTableProps {
-  services: Service[];
   hotels: Hotel[];
-  assignments: Assignment[];
   memberships: Membership[];
-  statusEvents: StatusEvent[];
-  inboundEmails: InboundEmail[];
+  /** Bump to force a reload of the current page/filters (e.g. parent "Aggiorna" button). */
+  refreshToken?: number;
 }
 
 function statusClass(status: ServiceStatus) {
@@ -43,15 +46,6 @@ function statusClass(status: ServiceStatus) {
   return "status-badge status-badge-cancelled";
 }
 
-function isUndeliveredReminder(service: Service) {
-  if (service.reminder_status !== "sent" || !service.sent_at) return false;
-  const alertMinutes = Number(process.env.NEXT_PUBLIC_REMINDER_ALERT_MINUTES ?? "30");
-  const thresholdMs = (Number.isFinite(alertMinutes) ? alertMinutes : 30) * 60 * 1000;
-  const sentAtMs = new Date(service.sent_at).getTime();
-  if (!Number.isFinite(sentAtMs)) return false;
-  return Date.now() - sentAtMs > thresholdMs;
-}
-
 function getServiceTypeBadgeTone(service: Service) {
   const isExcursion = service.booking_service_kind === "excursion" || service.service_type_code === "excursion";
   if (isExcursion) return "bg-purple-100 text-purple-700";
@@ -59,7 +53,25 @@ function getServiceTypeBadgeTone(service: Service) {
   return "bg-blue-100 text-blue-700";
 }
 
-export function ServicesTable({ services, hotels, assignments, memberships, statusEvents, inboundEmails }: ServicesTableProps) {
+type ServicesListStats = {
+  totale: number;
+  needsAttention: number;
+  lineeBus: number;
+  altriServizi: number;
+  daAssegnareInternamente: number;
+  promemoriaDaVerificare: number;
+};
+
+const EMPTY_STATS: ServicesListStats = {
+  totale: 0,
+  needsAttention: 0,
+  lineeBus: 0,
+  altriServizi: 0,
+  daAssegnareInternamente: 0,
+  promemoriaDaVerificare: 0
+};
+
+export function ServicesTable({ hotels, memberships, refreshToken = 0 }: ServicesTableProps) {
   const [statusFilter, setStatusFilter] = useState<ServiceStatus | "all">("all");
   const [vesselFilter, setVesselFilter] = useState<string>("all");
   const [serviceTypeFilter, setServiceTypeFilter] = useState<ServiceType | "all">("all");
@@ -70,50 +82,69 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
   const [qualityFilter, setQualityFilter] = useState<"all" | "low">("all");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(1);
+
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
-  const [serverServices, setServerServices] = useState<Service[] | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const [shareMessage, setShareMessage] = useState<string>("");
   const [shareUrlByServiceId, setShareUrlByServiceId] = useState<Record<string, string>>({});
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteMessage, setDeleteMessage] = useState<string>("");
-  const [deletedServiceIds, setDeletedServiceIds] = useState<Set<string>>(() => new Set());
 
-  const assignedMap = useMemo(() => new Map(assignments.map((item) => [item.service_id, item])), [assignments]);
-  const drivers = memberships.filter((member) => member.role === "driver");
-  const vessels = [...new Set(services.map((service) => service.vessel))];
-  const zones = [...new Set(hotels.map((hotel) => hotel.zone))];
-  const pdfMetaByServiceId = useMemo(
-    () => new Map(services.map((service) => [service.id, getServicePdfOperationalMeta(service, inboundEmails)])),
-    [inboundEmails, services]
-  );
-  const sourceByServiceId = useMemo(
-    () => new Map(services.map((service) => [service.id, getServiceOperationalSource(service, inboundEmails)])),
-    [inboundEmails, services]
-  );
-  const agencies = [...new Set(services.map((service) => pdfMetaByServiceId.get(service.id)?.agencyName).filter(Boolean))] as string[];
-  const tenantId = services[0]?.tenant_id ?? null;
+  const [pageServices, setPageServices] = useState<Service[]>([]);
+  const [pageAssignments, setPageAssignments] = useState<Assignment[]>([]);
+  const [pageStatusEvents, setPageStatusEvents] = useState<StatusEvent[]>([]);
+  const [pageInboundEmails, setPageInboundEmails] = useState<InboundEmail[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [listLoading, setListLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [knownVessels, setKnownVessels] = useState<string[]>([]);
+  const [knownAgencies, setKnownAgencies] = useState<string[]>([]);
+  const [listStats, setListStats] = useState<ServicesListStats>(EMPTY_STATS);
+
+  const tenantId = memberships[0]?.tenant_id ?? hotels[0]?.tenant_id ?? null;
 
   useEffect(() => {
-    let active = true;
+    const handle = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(handle);
+  }, [search]);
 
-    const loadFilteredServices = async () => {
-      if (!hasSupabaseEnv || !supabase || !tenantId) {
-        setServerServices(null);
+  const filters: ServicesListFilters = useMemo(
+    () => ({
+      status: statusFilter,
+      serviceType: serviceTypeFilter,
+      vessel: vesselFilter,
+      zone: zoneFilter,
+      driverUserId: driverFilter,
+      search: debouncedSearch,
+      source: sourceFilter,
+      reviewed: reviewedFilter,
+      agency: agencyFilter,
+      quality: qualityFilter
+    }),
+    [statusFilter, serviceTypeFilter, vesselFilter, zoneFilter, driverFilter, debouncedSearch, sourceFilter, reviewedFilter, agencyFilter, qualityFilter]
+  );
+  const latestRequestKeyRef = useRef<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+    const { body, requestKey } = buildServicesListRequest({ tenantId: tenantId ?? "", filters, page, pageSize: PAGE_SIZE });
+    latestRequestKeyRef.current = requestKey;
+
+    const load = async () => {
+      if (!tenantId || !hasSupabaseEnv || !supabase) {
+        setListLoading(false);
         return;
       }
-
-      const sortedDates = [...new Set(services.map((service) => service.date))].sort();
-      const dateFrom = sortedDates[0];
-      const dateTo = sortedDates[sortedDates.length - 1];
-      if (!dateFrom || !dateTo) {
-        setServerServices([]);
-        return;
-      }
-
-      const { data, error } = await supabase.auth.getSession();
-      if (error || !data.session?.access_token) {
-        setServerServices(null);
+      setListLoading(true);
+      setListError(null);
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (cancelled || latestRequestKeyRef.current !== requestKey) return;
+      if (sessionError || !sessionData.session?.access_token) {
+        setListError("Sessione non valida.");
+        setListLoading(false);
         return;
       }
 
@@ -121,78 +152,72 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${data.session.access_token}`
+          Authorization: `Bearer ${sessionData.session.access_token}`
         },
-        body: JSON.stringify({
-          tenant_id: tenantId,
-          dateFrom,
-          dateTo,
-          status: statusFilter === "all" ? [] : [statusFilter],
-          ship: vesselFilter === "all" ? "" : vesselFilter,
-          zone: zoneFilter === "all" ? "" : zoneFilter,
-          search
-        })
+        body: JSON.stringify(body)
       });
+      if (cancelled || latestRequestKeyRef.current !== requestKey) return;
 
-      if (!response.ok) {
-        setServerServices(null);
+      const responsePayload = (await response.json().catch(() => null)) as {
+        services?: Service[];
+        assignments?: Assignment[];
+        status_events?: StatusEvent[];
+        inbound_emails?: InboundEmail[];
+        has_more?: boolean;
+        stats?: ServicesListStats;
+        known_vessels?: string[];
+        known_agencies?: string[];
+        error?: string;
+      } | null;
+
+      if (!response.ok || !responsePayload) {
+        setListError(responsePayload?.error ?? "Errore caricamento servizi.");
+        setListLoading(false);
         return;
       }
 
-      const payload = (await response.json().catch(() => null)) as { services?: Service[] } | null;
-      if (!active) return;
-      setServerServices(payload?.services ?? []);
+      setPageServices(responsePayload.services ?? []);
+      setPageAssignments(responsePayload.assignments ?? []);
+      setPageStatusEvents(responsePayload.status_events ?? []);
+      setPageInboundEmails(responsePayload.inbound_emails ?? []);
+      setHasMore(Boolean(responsePayload.has_more));
+      setListStats(responsePayload.stats ?? EMPTY_STATS);
+      // Sprint Performance 14A fix: these come from lightweight server-side
+      // lookups scoped to the whole filtered dataset, not accumulated from
+      // pages the user happened to visit — see
+      // lib/server/services-list-aggregates.ts.
+      setKnownVessels(responsePayload.known_vessels ?? []);
+      setKnownAgencies(responsePayload.known_agencies ?? []);
+      setListLoading(false);
     };
 
-    void loadFilteredServices();
-
+    void load();
     return () => {
-      active = false;
+      cancelled = true;
     };
-  }, [search, services, statusFilter, tenantId, vesselFilter, zoneFilter]);
+  }, [tenantId, filters, page, reloadToken]);
 
-  const baseServices = useMemo(
-    () => (serverServices ?? services).filter((service) => !deletedServiceIds.has(service.id)),
-    [deletedServiceIds, serverServices, services]
+  const assignedMap = useMemo(() => new Map(pageAssignments.map((item) => [item.service_id, item])), [pageAssignments]);
+  const drivers = memberships.filter((member) => member.role === "driver");
+  const zones = [...new Set(hotels.map((hotel) => hotel.zone))];
+  const pdfMetaByServiceId = useMemo(
+    () => new Map(pageServices.map((service) => [service.id, getServicePdfOperationalMeta(service, pageInboundEmails)])),
+    [pageInboundEmails, pageServices]
+  );
+  const sourceByServiceId = useMemo(
+    () => new Map(pageServices.map((service) => [service.id, getServiceOperationalSource(service, pageInboundEmails)])),
+    [pageInboundEmails, pageServices]
   );
 
-  const filtered = useMemo(() => {
-    return baseServices.filter((service) => {
-      const assignment = assignedMap.get(service.id);
-      const pdfMeta = pdfMetaByServiceId.get(service.id);
-      const byServiceType = serviceTypeFilter === "all" || (service.service_type ?? "transfer") === serviceTypeFilter;
-      const byDriver = driverFilter === "all" || assignment?.driver_user_id === driverFilter;
-      const serviceSource = sourceByServiceId.get(service.id) ?? "manual";
-      const bySource = sourceFilter === "all" || serviceSource === sourceFilter;
-      const byReviewed =
-        reviewedFilter === "all" ||
-        (reviewedFilter === "yes" ? Boolean(pdfMeta?.manualReview) : Boolean(pdfMeta?.isPdf && !pdfMeta.manualReview));
-      const byAgency = agencyFilter === "all" || pdfMeta?.agencyName === agencyFilter;
-      const byQuality = qualityFilter === "all" || (pdfMeta?.isPdf && pdfMeta.parsingQuality === "low");
-      return byServiceType && byDriver && bySource && byReviewed && byAgency && byQuality;
-    });
-  }, [agencyFilter, assignedMap, baseServices, driverFilter, pdfMetaByServiceId, qualityFilter, reviewedFilter, serviceTypeFilter, sourceByServiceId, sourceFilter]);
+  // Sprint Performance 14A fix: source/reviewed/agency/quality are now
+  // applied server-side against the whole filtered dataset (see
+  // lib/server/services-list-aggregates.ts), so the page already only
+  // contains matching rows — no client-side re-filtering needed here.
+  const baseServices = pageServices;
+  const filtered = baseServices;
 
   const selectedService = selectedServiceId ? baseServices.find((item) => item.id === selectedServiceId) : null;
-  const filteredOperationalStats = useMemo(() => {
-    const needsAttention = filtered.filter((service) => {
-      const pdfMeta = pdfMetaByServiceId.get(service.id);
-      return Boolean(pdfMeta?.reviewRecommended);
-    }).length;
-    const lineaBus = filtered.filter(
-      (service) => service.service_type_code === "bus_line" || service.booking_service_kind === "bus_city_hotel"
-    ).length;
-    const daAssegnareInternamente = filtered.filter((service) => !assignedMap.get(service.id)?.driver_user_id).length;
-    const promemoriaDaVerificare = filtered.filter((service) => isUndeliveredReminder(service)).length;
-    return {
-      totale: filtered.length,
-      needsAttention,
-      lineeBus: lineaBus,
-      altriServizi: filtered.length - lineaBus,
-      daAssegnareInternamente,
-      promemoriaDaVerificare
-    };
-  }, [assignedMap, filtered, pdfMetaByServiceId]);
+  const filteredOperationalStats = listStats;
   const selectedShareUrl = useMemo(() => {
     if (!selectedService) return "";
     const fromAction = shareUrlByServiceId[selectedService.id];
@@ -311,26 +336,22 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
       return;
     }
 
-    const deletedId = selectedService.id;
-    setDeletedServiceIds((prev) => {
-      const next = new Set(prev);
-      next.add(deletedId);
-      return next;
-    });
-    setServerServices((prev) => (prev ? prev.filter((service) => service.id !== deletedId) : prev));
     setSelectedServiceId(null);
     setDeleteLoading(false);
     setDeleteMessage("Prenotazione eliminata.");
+    // Sprint Performance 14A — FASE B16: reload the CURRENT page/filters only,
+    // never fall back to a full-history refetch.
+    setReloadToken((value) => value + 1);
   };
   const selectedTimeline = useMemo(() => {
     if (!selectedService) return [];
 
     const usersById = new Map(memberships.map((item) => [item.user_id, item.full_name]));
-    const serviceStatusEvents = statusEvents
+    const serviceStatusEvents = pageStatusEvents
       .filter((event) => event.service_id === selectedService.id)
       .sort((a, b) => a.at.localeCompare(b.at));
 
-    const assignment = assignments.find((item) => item.service_id === selectedService.id);
+    const assignment = pageAssignments.find((item) => item.service_id === selectedService.id);
     const assignedStatusEvent = [...serviceStatusEvents].reverse().find((event) => event.status === "assigned");
     const assignedDriverName = assignment?.driver_user_id ? usersById.get(assignment.driver_user_id) ?? assignment.driver_user_id : "Non assegnato";
 
@@ -350,7 +371,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
         ]
       : [];
 
-    const linkedInbound = inboundEmails.filter((email) => {
+    const linkedInbound = pageInboundEmails.filter((email) => {
       const byNotes = selectedService.notes.includes(email.id);
       const byParsedFields =
         email.parsed_json.customer_name === getCustomerFullName(selectedService) &&
@@ -378,10 +399,17 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
     }));
 
     return [...statusTimelineEvents, ...assignmentEvent, ...communicationEvents].sort((a, b) => b.at.localeCompare(a.at));
-  }, [selectedService, memberships, statusEvents, assignments, inboundEmails]);
-  const sortedDates = [...new Set(services.map((service) => service.date))].sort();
-  const defaultDateFrom = sortedDates[0] ?? new Date().toISOString().slice(0, 10);
-  const defaultDateTo = sortedDates[sortedDates.length - 1] ?? defaultDateFrom;
+  }, [selectedService, memberships, pageStatusEvents, pageAssignments, pageInboundEmails]);
+
+  const exportDefaults = useMemo(() => {
+    const today = new Date();
+    const past = new Date(today);
+    past.setDate(past.getDate() - 30);
+    const future = new Date(today);
+    future.setDate(future.getDate() + 30);
+    return { from: past.toISOString().slice(0, 10), to: future.toISOString().slice(0, 10) };
+  }, []);
+
   const serviceMeta = (service: Service) => {
     const hotel = hotels.find((item) => item.id === service.hotel_id);
     const assignment = assignedMap.get(service.id);
@@ -402,23 +430,68 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
     setAgencyFilter("all");
     setQualityFilter("all");
     setSearch("");
+    setPage(1);
   };
 
-  if (services.length === 0) {
-    return <EmptyState title="Nessun servizio oggi." compact />;
+  const noServerFiltersActive =
+    statusFilter === "all" &&
+    vesselFilter === "all" &&
+    serviceTypeFilter === "all" &&
+    zoneFilter === "all" &&
+    driverFilter === "all" &&
+    search.trim().length === 0 &&
+    sourceFilter === "all" &&
+    reviewedFilter === "all" &&
+    agencyFilter === "all" &&
+    qualityFilter === "all";
+
+  if (listLoading && pageServices.length === 0) {
+    return <div className="card p-4 text-sm text-slate-500">Caricamento servizi...</div>;
   }
+
+  if (!listLoading && !listError && page === 1 && !hasMore && baseServices.length === 0 && noServerFiltersActive) {
+    return <EmptyState title="Nessun servizio registrato." compact />;
+  }
+
+  const paginationControls = (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <p className="text-xs text-muted">
+        Pagina {page}
+        {hasMore ? "" : " (ultima)"}
+      </p>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          className="btn-secondary px-3 py-1.5 text-xs disabled:opacity-50"
+          disabled={page <= 1 || listLoading}
+          onClick={() => setPage((value) => Math.max(1, value - 1))}
+        >
+          Precedente
+        </button>
+        <button
+          type="button"
+          className="btn-secondary px-3 py-1.5 text-xs disabled:opacity-50"
+          disabled={!hasMore || listLoading}
+          onClick={() => setPage((value) => value + 1)}
+        >
+          Successiva
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <section className="page-section">
       <div className="section-head">
         <h2 className="section-title text-base">Lista servizi</h2>
-        <ExportServicesButton defaultDateFrom={defaultDateFrom} defaultDateTo={defaultDateTo} />
+        <ExportServicesButton defaultDateFrom={exportDefaults.from} defaultDateTo={exportDefaults.to} />
       </div>
+      {listError ? <div className="card border-red-200 bg-red-50 p-3 text-sm text-red-700">{listError}</div> : null}
       <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
         <button type="button" onClick={resetOperationalFilters} className="card p-3 text-left transition hover:border-primary/40 hover:shadow-sm">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Totale visibili</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Totale</p>
           <p className="mt-2 text-2xl font-semibold text-slate-900">{filteredOperationalStats.totale}</p>
-          <p className="mt-1 text-xs text-muted">Reset filtri e torna alla vista completa.</p>
+          <p className="mt-1 text-xs text-muted">Reset filtri e torna alla prima pagina.</p>
         </button>
         <button
           type="button"
@@ -426,6 +499,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
             setSourceFilter("pdf");
             setQualityFilter("low");
             setReviewedFilter("no");
+            setPage(1);
           }}
           className="card p-3 text-left transition hover:border-amber-300 hover:shadow-sm"
         >
@@ -445,7 +519,10 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
         </div>
         <button
           type="button"
-          onClick={() => setDriverFilter("all")}
+          onClick={() => {
+            setDriverFilter("all");
+            setPage(1);
+          }}
           className="card p-3 text-left transition hover:border-primary/40 hover:shadow-sm"
         >
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Da gestire internamente</p>
@@ -461,7 +538,10 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
       <FilterBar colsClassName="lg:grid-cols-4 xl:grid-cols-9">
         <select
           value={statusFilter}
-          onChange={(event) => setStatusFilter(event.target.value as ServiceStatus | "all")}
+          onChange={(event) => {
+            setStatusFilter(event.target.value as ServiceStatus | "all");
+            setPage(1);
+          }}
           className="input-saas"
         >
           <option value="all">Stato: tutti</option>
@@ -475,7 +555,10 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
         </select>
         <select
           value={serviceTypeFilter}
-          onChange={(event) => setServiceTypeFilter(event.target.value as ServiceType | "all")}
+          onChange={(event) => {
+            setServiceTypeFilter(event.target.value as ServiceType | "all");
+            setPage(1);
+          }}
           className="input-saas"
         >
           <option value="all">Tipo: tutti</option>
@@ -484,11 +567,14 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
         </select>
         <select
           value={vesselFilter}
-          onChange={(event) => setVesselFilter(event.target.value)}
+          onChange={(event) => {
+            setVesselFilter(event.target.value);
+            setPage(1);
+          }}
           className="input-saas"
         >
           <option value="all">Nave: tutte</option>
-          {vessels.map((vessel) => (
+          {knownVessels.map((vessel) => (
             <option key={vessel} value={vessel}>
               {vessel}
             </option>
@@ -496,7 +582,10 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
         </select>
         <select
           value={zoneFilter}
-          onChange={(event) => setZoneFilter(event.target.value)}
+          onChange={(event) => {
+            setZoneFilter(event.target.value);
+            setPage(1);
+          }}
           className="input-saas"
         >
           <option value="all">Zona: tutte</option>
@@ -508,7 +597,10 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
         </select>
         <select
           value={driverFilter}
-          onChange={(event) => setDriverFilter(event.target.value)}
+          onChange={(event) => {
+            setDriverFilter(event.target.value);
+            setPage(1);
+          }}
           className="input-saas"
         >
           <option value="all">Driver: tutti</option>
@@ -518,33 +610,68 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
             </option>
           ))}
         </select>
-        <select data-testid="services-source-filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as "all" | "pdf" | "agency" | "manual")} className="input-saas">
+        <select
+          data-testid="services-source-filter"
+          value={sourceFilter}
+          onChange={(event) => {
+            setSourceFilter(event.target.value as "all" | "pdf" | "agency" | "manual");
+            setPage(1);
+          }}
+          className="input-saas"
+        >
           <option value="all">Origine: tutte</option>
           <option value="pdf">Solo PDF</option>
           <option value="agency">Solo agenzia</option>
           <option value="manual">Solo manuali</option>
         </select>
-        <select data-testid="services-reviewed-filter" value={reviewedFilter} onChange={(event) => setReviewedFilter(event.target.value as "all" | "yes" | "no")} className="input-saas">
+        <select
+          data-testid="services-reviewed-filter"
+          value={reviewedFilter}
+          onChange={(event) => {
+            setReviewedFilter(event.target.value as "all" | "yes" | "no");
+            setPage(1);
+          }}
+          className="input-saas"
+        >
           <option value="all">Reviewed: tutti</option>
           <option value="yes">Reviewed si</option>
           <option value="no">Reviewed no</option>
         </select>
-        <select data-testid="services-agency-filter" value={agencyFilter} onChange={(event) => setAgencyFilter(event.target.value)} className="input-saas">
+        <select
+          data-testid="services-agency-filter"
+          value={agencyFilter}
+          onChange={(event) => {
+            setAgencyFilter(event.target.value);
+            setPage(1);
+          }}
+          className="input-saas"
+        >
           <option value="all">Agenzia: tutte</option>
-          {agencies.map((agency) => (
+          {knownAgencies.map((agency) => (
             <option key={agency} value={agency}>
               {agency}
             </option>
           ))}
         </select>
-        <select data-testid="services-quality-filter" value={qualityFilter} onChange={(event) => setQualityFilter(event.target.value as "all" | "low")} className="input-saas">
+        <select
+          data-testid="services-quality-filter"
+          value={qualityFilter}
+          onChange={(event) => {
+            setQualityFilter(event.target.value as "all" | "low");
+            setPage(1);
+          }}
+          className="input-saas"
+        >
           <option value="all">Qualita: tutte</option>
           <option value="low">Qualita low</option>
         </select>
         <input
           data-testid="services-search"
           value={search}
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={(event) => {
+            setSearch(event.target.value);
+            setPage(1);
+          }}
           placeholder="Cerca cliente, telefono, hotel, pax, data, orario..."
           className="input-saas"
         />
@@ -555,7 +682,7 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
       ) : (
         <>
           <div className="space-y-2 md:hidden">
-            <p className="text-xs text-muted">Risultati: {filtered.length}</p>
+            <p className="text-xs text-muted">Risultati pagina: {filtered.length}</p>
             {filtered.map((service) => {
               const { hotel, driverName, pdfMeta, source } = serviceMeta(service);
               return (
@@ -591,16 +718,19 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
                 </article>
               );
             })}
+            {paginationControls}
           </div>
           <div className="hidden md:block">
             <DataTable
               minWidthClassName="min-w-[1320px]"
+              loading={listLoading}
               toolbar={
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs text-muted">Risultati: {filtered.length}</p>
+                  <p className="text-xs text-muted">Risultati pagina: {filtered.length}</p>
                   <p className="text-xs text-muted">Scorri orizzontalmente per vedere tutte le colonne.</p>
                 </div>
               }
+              footer={paginationControls}
               stickyActions={
                 selectedService ? (
                   <div className="flex items-center justify-between gap-2">
@@ -868,4 +998,3 @@ export function ServicesTable({ services, hotels, assignments, memberships, stat
     </section>
   );
 }
-

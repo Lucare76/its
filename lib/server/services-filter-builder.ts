@@ -17,7 +17,9 @@ export const serviceQueryFiltersSchema = z
     tenant_id: z.string().uuid(),
     agency_id: z.string().uuid().optional(),
     created_by: z.string().uuid().optional(),
-    search: z.string().max(200).optional().default("")
+    search: z.string().max(200).optional().default(""),
+    service_type: z.enum(["transfer", "bus_tour"]).optional(),
+    driver_user_id: z.string().uuid().optional()
   })
   .refine((value) => !value.dateFrom || !value.dateTo || value.dateFrom <= value.dateTo, {
     message: "Intervallo date non valido",
@@ -58,6 +60,24 @@ export async function buildServicesQuery({ admin, filters, select }: BuildServic
 
   if (parsed.hotel_id) {
     query = query.eq("hotel_id", parsed.hotel_id);
+  }
+
+  if (parsed.service_type) {
+    query =
+      parsed.service_type === "transfer"
+        ? query.or("service_type.is.null,service_type.eq.transfer")
+        : query.eq("service_type", parsed.service_type);
+  }
+
+  if (parsed.driver_user_id) {
+    const { data: driverAssignments, error: driverAssignmentsError } = await admin
+      .from("assignments")
+      .select("service_id")
+      .eq("tenant_id", parsed.tenant_id)
+      .eq("driver_user_id", parsed.driver_user_id);
+    if (driverAssignmentsError) throw driverAssignmentsError;
+    const driverServiceIds = Array.from(new Set((driverAssignments ?? []).map((row) => row.service_id as string)));
+    query = query.in("id", driverServiceIds.length > 0 ? driverServiceIds : [nilUuid]);
   }
 
   if (parsed.search.trim()) {
