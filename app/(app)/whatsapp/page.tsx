@@ -966,7 +966,7 @@ export default function WhatsAppInboxPage() {
   const [templateOptions, setTemplateOptions] = useState<TemplateOption[]>([]);
   const [templateFetchError, setTemplateFetchError] = useState<string>("");
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<(typeof filters)[number]["value"]>("open");
+  const [filter, setFilter] = useState<(typeof filters)[number]["value"]>("unread");
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
   const [attachment, setAttachment] = useState<File | null>(null);
@@ -2221,7 +2221,7 @@ export default function WhatsAppInboxPage() {
                         disabled={busyAction !== null}
                         className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                       >
-                        {busyAction === "close" || busyAction === "reopen" ? "…" : selectedThread.status === "closed" ? "Ripristina" : "Archivia"}
+                        {busyAction === "close" || busyAction === "reopen" ? "…" : selectedThread.status === "closed" ? "Ripristina" : "Chiudi chat"}
                       </button>
 
                       {/* Divider */}
