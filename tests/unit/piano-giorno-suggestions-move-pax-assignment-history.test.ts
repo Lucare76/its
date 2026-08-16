@@ -42,7 +42,7 @@ const RAW_DB_ERROR = { message: 'connection to server "internal-db-host.example"
 
 /** Fake Supabase in-memory, tenant-aware — schema minimo per le tabelle usate da executeMovePax. */
 function createTenantAwareSupabase(
-  seed: Partial<Record<"services" | "assignments" | "hotels" | "bus_lot_configs" | "operations_suggestions", Row[]>> = {}
+  seed: Partial<Record<"services" | "assignments" | "hotels" | "bus_lot_configs" | "operations_suggestions" | "memberships", Row[]>> = {}
 ) {
   const tables: Record<string, Row[]> = {
     services: [...(seed.services ?? [])],
@@ -50,6 +50,14 @@ function createTenantAwareSupabase(
     hotels: [...(seed.hotels ?? [])],
     bus_lot_configs: [...(seed.bus_lot_configs ?? [])],
     operations_suggestions: [...(seed.operations_suggestions ?? [])],
+    // HARDENING SPRINT 1: markResolved() -> getOperatorName() queries
+    // "memberships" (full_name lookup) on every successful executeMovePax
+    // call. This table was never seeded, so any test reaching that code
+    // path crashed on `.eq()` reading `undefined.filter` — a test-infra gap,
+    // not a production bug (getOperatorName() already falls back to
+    // auth.user.email when no row matches, exercised by leaving this empty
+    // unless a test explicitly seeds it).
+    memberships: [...(seed.memberships ?? [])],
   };
 
   const tableErrors: Record<string, { message: string } | undefined> = {};
@@ -64,6 +72,27 @@ function createTenantAwareSupabase(
       eq(field: string, value: unknown) {
         filtered = filtered.filter((r) => r[field] === value);
         return builder;
+      },
+      // Sprint Performance 14F: GET's fetchActiveServicesForSuggestions()
+      // chains .not()/.order()/.range() on the services select. This test
+      // exercises executeMovePax (POST), which reads services via the plain
+      // loadState() Promise.all — no filter-semantics assertions here (those
+      // are covered by tests/unit/operations-suggestions-parity.test.ts and
+      // tests/unit/operations-suggestions-cache.test.ts), so these are inert
+      // chain no-ops that just keep the builder callable end-to-end.
+      not() {
+        return builder;
+      },
+      order() {
+        return builder;
+      },
+      range() {
+        return builder;
+      },
+      // getOperatorName() calls .maybeSingle() on the memberships lookup.
+      maybeSingle() {
+        if (tableErrors[table]) return Promise.resolve({ data: null, error: tableErrors[table] });
+        return Promise.resolve({ data: filtered[0] ? { ...filtered[0] } : null, error: null });
       },
       then(resolve: (v: { data: Row[] | null; error: { message: string } | null }) => unknown, reject?: (e: unknown) => unknown) {
         if (

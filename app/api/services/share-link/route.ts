@@ -57,7 +57,15 @@ export async function POST(request: NextRequest) {
     .select("id, share_token, share_expires_at")
     .maybeSingle();
 
-  if (error || !data?.share_token) {
+  if (error) {
+    // HARDENING SPRINT 1 — FASE 8/9: distinguish a real DB/schema error (500,
+    // logged server-side for operators) from "no matching service" (404).
+    // Never log the token/customer data here, only the Postgres error
+    // message and the service id (a UUID, not personal data).
+    console.error("[share-link] update failed", { service_id: parsed.data.service_id, message: error.message });
+    return NextResponse.json({ error: "Errore interno" }, { status: 500 });
+  }
+  if (!data?.share_token) {
     return NextResponse.json({ error: "Service not found" }, { status: 404 });
   }
 
@@ -93,6 +101,7 @@ export async function DELETE(request: NextRequest) {
     .eq("tenant_id", auth.tenantId);
 
   if (error) {
+    console.error("[share-link] revoke failed", { service_id: parsed.data.service_id, message: error.message });
     return NextResponse.json({ error: "Revoke failed" }, { status: 500 });
   }
 

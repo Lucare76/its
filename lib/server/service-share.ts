@@ -34,7 +34,14 @@ export async function getSharedServiceByToken(token: string): Promise<PublicShar
     .eq("share_token", token)
     .maybeSingle();
 
-  if (error || !data) return null;
+  if (error) {
+    // HARDENING SPRINT 1 — FASE 8/9: real DB/schema error vs. legitimate
+    // "token not found" are different situations; log only the Postgres
+    // error message here, never the token itself.
+    console.error("[service-share] lookup failed", { message: error.message });
+    return null;
+  }
+  if (!data) return null;
 
   if (data.share_expires_at) {
     const expiresAtMs = new Date(data.share_expires_at).getTime();

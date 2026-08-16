@@ -44,21 +44,28 @@ export async function GET(request: NextRequest) {
     .order("name");
 
   // Servizi con prezzo dichiarato
-  let q = ctx.admin
-    .from("services")
-    .select("id, customer_name, customer_first_name, customer_last_name, booking_service_kind, arrival_date, departure_date, pax, status, approval_status, agency_quoted_price_cents, agency_payment_status, agency_paid_at, created_at, hotels(name), agencies(id, name)")
-    .eq("tenant_id", ctx.tenantId)
-    .not("agency_quoted_price_cents", "is", null)
-    .neq("status", "cancelled")
-    .order("arrival_date", { ascending: false });
+  const baseQuery = () =>
+    ctx.admin
+      .from("services")
+      .select("id, customer_name, customer_first_name, customer_last_name, booking_service_kind, arrival_date, departure_date, pax, status, approval_status, agency_quoted_price_cents, agency_payment_status, agency_paid_at, created_at, hotels(name), agencies(id, name)")
+      .eq("tenant_id", ctx.tenantId)
+      .not("agency_quoted_price_cents", "is", null)
+      .neq("status", "cancelled")
+      .order("arrival_date", { ascending: false });
 
-  if (agencyId) {
-    q = q.eq("agency_id", agencyId);
-  } else {
-    q = q.not("agency_id", "is", null);
-  }
-
-  const { data: services, error } = await q.limit(1000);
+  // TS2589 fix: the previous `let q = ...; q = q.eq(...) / q = q.not(...)`
+  // pattern forced TypeScript to reconcile two differently-narrowed
+  // PostgrestFilterBuilder chain types (one per branch) against a single
+  // mutable variable, on top of the already-deep type produced by the
+  // embedded-resource select string (hotels(name), agencies(id, name)) —
+  // that reassignment/union-narrowing is what blew past the instantiation
+  // depth limit. Building the two fully-resolved branches independently
+  // (each awaited/destructured on its own) avoids the reassignment
+  // narrowing entirely; runtime behavior is unchanged (same filters, same
+  // final query per branch).
+  const { data: services, error } = agencyId
+    ? await baseQuery().eq("agency_id", agencyId).limit(1000)
+    : await baseQuery().not("agency_id", "is", null).limit(1000);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const rows = (services ?? []).map((s) => ({
