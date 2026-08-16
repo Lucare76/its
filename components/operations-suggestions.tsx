@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { startSuggestionsPolling } from "@/lib/operations-suggestions-poll";
 import { supabase } from "@/lib/supabase/client";
 import type { Suggestion, SuggestionPriority } from "@/lib/operations-suggestions";
 
@@ -119,8 +120,21 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
     [maxItems, suggestions]
   );
 
+  // Sprint Performance 14F. isMountedRef/requestIdRef give load() a stale-
+  // response guard (FASE 9): if a newer load() starts before an older one's
+  // fetch resolves, the older response is discarded instead of overwriting
+  // fresher state. The separate hidden-tab/in-flight guard for the automatic
+  // polling triggers (mount/interval/visibilitychange) lives in
+  // startSuggestionsPolling() below — the manual "Aggiorna" button and
+  // post-action refreshes still call load() directly and unconditionally,
+  // exactly as before, so those UX guarantees are unchanged.
+  const isMountedRef = useRef(true);
+  const latestRequestIdRef = useRef(0);
+
   const load = useCallback(async () => {
+    const requestId = ++latestRequestIdRef.current;
     const token = await getAccessToken();
+    if (!isMountedRef.current || requestId !== latestRequestIdRef.current) return;
     if (!token) {
       setLoading(false);
       setMessage("Sessione non valida.");
@@ -132,6 +146,7 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
       cache: "no-store"
     });
     const body = (await response.json().catch(() => null)) as { ok?: boolean; suggestions?: Suggestion[]; error?: string } | null;
+    if (!isMountedRef.current || requestId !== latestRequestIdRef.current) return;
     if (!response.ok || !body?.ok) {
       setMessage(body?.error ?? "Suggerimenti non disponibili.");
       setLoading(false);
@@ -143,18 +158,29 @@ export function OperationsSuggestions({ refreshIntervalMs = 30_000, maxItems = 6
     setLoading(false);
   }, []);
 
+  // Hidden-tab guard, in-flight guard, and visibility-restore refresh — the
+  // decision logic lives in the framework-free startSuggestionsPolling()
+  // (lib/operations-suggestions-poll.ts, unit-tested without jsdom) so it
+  // mirrors app/(app)/layout.tsx's refreshWhatsAppSummary behavior: skip
+  // entirely while the tab isn't visible, skip if a poll-triggered request is
+  // already running (finally always releases the guard, even on error —
+  // FASE 8), and immediately re-poll when the tab becomes visible again.
   useEffect(() => {
-    let active = true;
-    const run = async () => {
-      if (!active) return;
-      await load();
-    };
-
-    void run();
-    const interval = window.setInterval(() => void run(), refreshIntervalMs);
+    isMountedRef.current = true;
+    const stop = startSuggestionsPolling({
+      refresh: load,
+      getVisibilityState: () => (typeof document === "undefined" ? "visible" : document.visibilityState),
+      addVisibilityListener: (handler) => {
+        document.addEventListener("visibilitychange", handler);
+        return () => document.removeEventListener("visibilitychange", handler);
+      },
+      setIntervalFn: (fn, ms) => window.setInterval(fn, ms),
+      clearIntervalFn: (handle) => window.clearInterval(handle as number),
+      intervalMs: refreshIntervalMs
+    });
     return () => {
-      active = false;
-      window.clearInterval(interval);
+      isMountedRef.current = false;
+      stop();
     };
   }, [load, refreshIntervalMs]);
 
