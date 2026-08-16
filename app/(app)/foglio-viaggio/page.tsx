@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DateInput } from "@/components/ui";
 import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 
@@ -260,6 +260,8 @@ export default function FoglioViaggioPage() {
   const [data, setData] = useState<FoglioData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [selectedVehicle, setSelectedVehicle] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -273,7 +275,10 @@ export default function FoglioViaggioPage() {
       });
       const body = await res.json().catch(() => null);
       if (active) {
-        if (body?.ok) setData(body);
+        if (body?.ok) {
+          setData(body);
+          setSelectedVehicle((current) => current ?? body.groups?.[0]?.vehicle_label ?? (body.unassigned?.length ? "__unassigned" : null));
+        }
         else setError(body?.error ?? "Errore caricamento.");
         setLoading(false);
       }
@@ -290,43 +295,97 @@ export default function FoglioViaggioPage() {
   };
 
   const totalAssigned = data ? data.groups.reduce((s, g) => s + g.services.length, 0) : 0;
+  const allGroups = useMemo(() => {
+    if (!data) return [];
+    const groups = data.groups.map((group) => ({ ...group, isUnassigned: false }));
+    if (data.unassigned.length > 0) {
+      groups.unshift({ vehicle_label: "__unassigned", services: data.unassigned, isUnassigned: true });
+    }
+    return groups;
+  }, [data]);
+  const filteredGroups = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return allGroups;
+    return allGroups.filter((group) => {
+      const label = group.isUnassigned ? "non assegnati" : group.vehicle_label;
+      return label.toLowerCase().includes(q) || group.services.some((service) =>
+        clientName(service).toLowerCase().includes(q) ||
+        (service.hotel_name ?? "").toLowerCase().includes(q) ||
+        (service.vessel ?? "").toLowerCase().includes(q),
+      );
+    });
+  }, [allGroups, search]);
+  const selectedGroup = useMemo(() => {
+    if (!data) return null;
+    return allGroups.find((group) => group.vehicle_label === selectedVehicle) ?? allGroups[0] ?? null;
+  }, [allGroups, data, selectedVehicle]);
+  const selectedServices = selectedGroup?.services ?? [];
+  const selectedPax = selectedServices.reduce((sum, service) => sum + service.pax, 0);
+  const missingPhones = selectedServices.filter((service) => !service.phone).length;
+  const missingHotels = selectedServices.filter((service) => !service.hotel_name && !service.meeting_point).length;
+  const warningCount = missingPhones + missingHotels + (selectedPax > 30 ? 1 : 0);
+  const firstService = selectedServices[0] ?? null;
+
+  const changeDay = (days: number) => {
+    const next = new Date(`${date}T12:00:00`);
+    next.setDate(next.getDate() + days);
+    setSelectedVehicle(null);
+    setDate(next.toISOString().slice(0, 10));
+  };
+
+  const routeText = (service: ServiceRow) => {
+    const destination = service.hotel_name ?? service.meeting_point ?? "Destinazione da verificare";
+    return service.direction === "arrival"
+      ? `${service.vessel ?? "Provenienza"} → ${destination}`
+      : `${destination} → ${service.vessel ?? "Partenza"}`;
+  };
 
   return (
-    <section className="space-y-5">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="space-y-5 pb-8">
+      <header className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-800">Foglio di viaggio</h1>
-          <p className="text-sm text-slate-500">Servizi del giorno raggruppati per veicolo</p>
+          <h1 className="text-4xl font-extrabold tracking-tight text-slate-950">Foglio di viaggio</h1>
+          <p className="mt-1 text-lg text-slate-600">{fmtDate(date)}</p>
         </div>
-        <div className="flex items-center gap-3">
-          <DateInput
-            value={date}
-            onChange={(iso) => setDate(iso)}
-            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-          />
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <button onClick={() => changeDay(-1)} className="px-4 text-xl font-bold text-slate-700 hover:bg-slate-50">‹</button>
+            <DateInput value={date} onChange={(iso) => { setSelectedVehicle(null); setDate(iso); }} className="border-x border-slate-200 px-5 py-3 text-center text-base font-semibold" />
+            <button onClick={() => changeDay(1)} className="px-4 text-xl font-bold text-slate-700 hover:bg-slate-50">›</button>
+          </div>
+          <button onClick={handlePrint} disabled={!data?.total_services} className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm hover:border-blue-200 disabled:opacity-50">🖨️ Stampa tutto</button>
+          <button disabled={!data?.total_services} className="rounded-xl border border-emerald-200 bg-white px-5 py-3 text-sm font-bold text-emerald-700 shadow-sm disabled:opacity-50">🟢 Invia WhatsApp</button>
+          <button disabled={!data?.total_services} className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm disabled:opacity-50">▣ Esporta Excel</button>
           {data && data.total_services > 0 && (
-            <button
-              onClick={handlePrint}
-              className="flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-900">
-              🖨️ Stampa PDF
-            </button>
+            <button onClick={handlePrint} className="rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-6 py-3 text-sm font-extrabold text-white shadow-lg shadow-blue-500/20">▤ Genera fogli</button>
           )}
         </div>
-      </div>
+      </header>
 
-      {/* KPI */}
       {data && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-sm font-bold ${data.unassigned.length > 0 ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>
+          <span>{data.unassigned.length > 0 ? `⚠️ ${data.unassigned.length} servizi da assegnare prima dell'invio` : `✅ Piano del giorno pronto — ${data.groups.length} giri pronti per la stampa`}</span>
+          <span className="text-xs opacity-70">{data.total_services} servizi · {data.total_pax} pax</span>
+        </div>
+      )}
+
+      {data && (
+        <div className="grid grid-cols-2 gap-4 xl:grid-cols-5">
           {[
-            { label: "Servizi totali", value: data.total_services, color: "text-slate-800" },
-            { label: "Pax totali", value: data.total_pax, color: "text-blue-700" },
-            { label: "Veicoli", value: data.groups.length, color: "text-emerald-700" },
-            { label: "Non assegnati", value: data.unassigned.length, color: data.unassigned.length > 0 ? "text-rose-600" : "text-slate-400" },
+            { icon: "🧭", label: "Giri", value: data.groups.length, tint: "bg-blue-50 text-blue-700" },
+            { icon: "👤", label: "Autisti", value: data.groups.length, tint: "bg-violet-50 text-violet-700" },
+            { icon: "🚐", label: "Mezzi", value: data.groups.length, tint: "bg-sky-50 text-sky-700" },
+            { icon: "💼", label: "Servizi", value: data.total_services, tint: "bg-emerald-50 text-emerald-700" },
+            { icon: "📨", label: "Da inviare", value: Math.max(data.groups.length - 1, 0), tint: "bg-orange-50 text-orange-600" },
           ].map((kpi) => (
-            <div key={kpi.label} className="card p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-400">{kpi.label}</p>
-              <p className={`mt-1 text-3xl font-bold ${kpi.color}`}>{kpi.value}</p>
+            <div key={kpi.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center gap-4">
+                <span className={`grid h-14 w-14 place-items-center rounded-2xl text-2xl ${kpi.tint}`}>{kpi.icon}</span>
+                <div>
+                  <p className="text-sm font-semibold text-slate-500">{kpi.label}</p>
+                  <p className="text-4xl font-extrabold text-slate-950">{kpi.value}</p>
+                </div>
+              </div>
             </div>
           ))}
         </div>
@@ -336,38 +395,151 @@ export default function FoglioViaggioPage() {
       {loading && <p className="text-sm text-slate-500">Caricamento...</p>}
       {error && <p className="text-sm text-rose-600">{error}</p>}
 
-      {data && !loading && (
-        <div className="space-y-4">
-          {/* Non assegnati — in cima se presenti */}
-          {data.unassigned.length > 0 && (
-            <VehicleGroupBlock
-              group={{ vehicle_label: "", services: data.unassigned }}
-              isUnassigned
-            />
-          )}
+      {data && !loading && data.total_services === 0 && (
+        <div className="rounded-3xl border border-slate-200 bg-white p-12 text-center shadow-sm">
+          <p className="text-xl font-extrabold text-slate-900">Nessun servizio per questa data</p>
+          <p className="mt-2 text-slate-500">Seleziona un altro giorno o verifica le prenotazioni.</p>
+        </div>
+      )}
 
-          {/* Gruppi per veicolo */}
-          {data.groups.length === 0 && data.unassigned.length === 0 && (
-            <div className="card p-10 text-center text-slate-400">
-              <p className="text-lg font-semibold">Nessun servizio per questa data</p>
-              <p className="mt-1 text-sm">Seleziona un altro giorno o verifica le prenotazioni.</p>
+      {data && !loading && data.total_services > 0 && (
+        <div className="grid gap-5 xl:grid-cols-[390px_minmax(0,1fr)_330px]">
+          <aside className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-2xl font-extrabold text-slate-950">Autisti / Giri</h2>
+              <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">{filteredGroups.length}</span>
             </div>
-          )}
-          {data.groups.map((group) => (
-            <VehicleGroupBlock key={group.vehicle_label} group={group} />
-          ))}
+            <div className="flex gap-2">
+              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cerca autista, mezzo, cliente..." className="h-12 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-blue-400 focus:bg-white" />
+              <button className="h-12 w-12 rounded-xl border border-slate-200 bg-white text-slate-600">≡</button>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
+              <span className="rounded-full bg-blue-600 px-3 py-1.5 text-white">Tutti</span>
+              <span className="rounded-full border border-slate-200 px-3 py-1.5 text-slate-600">Con giri</span>
+              <span className="rounded-full border border-slate-200 px-3 py-1.5 text-slate-600">Da inviare</span>
+              <span className="rounded-full border border-slate-200 px-3 py-1.5 text-slate-600">Sovraccarichi</span>
+            </div>
+            <div className="mt-4 max-h-[620px] space-y-2 overflow-y-auto pr-1">
+              {filteredGroups.map((group) => {
+                const isSelected = selectedGroup?.vehicle_label === group.vehicle_label;
+                const pax = group.services.reduce((sum, service) => sum + service.pax, 0);
+                const first = group.services[0];
+                return (
+                  <button key={group.vehicle_label} onClick={() => setSelectedVehicle(group.vehicle_label)} className={`w-full rounded-2xl border p-4 text-left transition ${isSelected ? "border-blue-500 bg-gradient-to-r from-blue-600 to-violet-600 text-white shadow-lg shadow-blue-500/20" : "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"}`}>
+                    <div className="flex items-center gap-3">
+                      <span className={`grid h-10 w-10 place-items-center rounded-full text-sm font-extrabold ${isSelected ? "bg-white/20 text-white" : group.isUnassigned ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-500"}`}>{group.isUnassigned ? "!" : group.vehicle_label.slice(0, 2).toUpperCase()}</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-extrabold">{group.isUnassigned ? "Non assegnati" : group.vehicle_label}</p>
+                        <p className={`truncate text-xs ${isSelected ? "text-white/80" : "text-slate-500"}`}>{first ? routeText(first) : "Nessun servizio"}</p>
+                      </div>
+                      <div className="text-right text-xs font-bold">
+                        <p>{group.services.length} servizi</p>
+                        <p>{pax} pax</p>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
 
-          {/* Riepilogo finale */}
-          {data.total_services > 0 && (
-            <div className="card p-4 flex flex-wrap gap-6 text-sm text-slate-600">
-              <span>✅ Assegnati: <strong className="text-slate-800">{totalAssigned}</strong></span>
-              <span>📊 Totale: <strong className="text-slate-800">{data.total_services}</strong></span>
-              <span>👥 Pax: <strong className="text-slate-800">{data.total_pax}</strong></span>
-              {data.unassigned.length > 0 && (
-                <span className="text-rose-600">⚠️ Non assegnati: <strong>{data.unassigned.length}</strong></span>
-              )}
+          <main className="space-y-4">
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+                <div className="flex items-center gap-4">
+                  <span className="grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-blue-600 to-violet-600 text-lg font-extrabold text-white">{selectedGroup?.isUnassigned ? "!" : selectedGroup?.vehicle_label.slice(0, 2).toUpperCase()}</span>
+                  <div>
+                    <h2 className="text-2xl font-extrabold text-slate-950">Foglio autista</h2>
+                    <p className="font-bold text-slate-700">{selectedGroup?.isUnassigned ? "Servizi non assegnati" : selectedGroup?.vehicle_label}</p>
+                    <p className="text-sm text-slate-500">{selectedServices.length} servizi · {selectedPax} pax</p>
+                  </div>
+                </div>
+                <span className={`rounded-full px-3 py-1 text-xs font-extrabold ${warningCount > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>{warningCount > 0 ? `${warningCount} controlli` : "Pronto per la stampa"}</span>
+              </div>
+              <div className="overflow-hidden rounded-2xl border border-slate-200">
+                <table className="min-w-full text-[15px]">
+                  <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-4 py-3">Ora</th>
+                      <th className="px-4 py-3">Servizio</th>
+                      <th className="px-4 py-3">Percorso</th>
+                      <th className="px-4 py-3 text-center">Pax</th>
+                      <th className="px-4 py-3">Note</th>
+                      <th className="px-4 py-3">Stato</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {selectedServices.map((service) => {
+                      const dir = directionLabel(service);
+                      return (
+                        <tr key={service.id} className="hover:bg-slate-50">
+                          <td className="px-4 py-4 font-mono text-xl font-extrabold text-blue-700">{service.time.slice(0, 5)}</td>
+                          <td className="px-4 py-4">
+                            <p className="text-base font-extrabold uppercase text-slate-900">{clientName(service)}</p>
+                            <p className="text-xs text-slate-500">{dir.icon} {dir.label}</p>
+                          </td>
+                          <td className="px-4 py-4">
+                            <p className="text-base font-extrabold text-slate-800">{service.vessel ?? "—"}</p>
+                            <p className="text-sm text-slate-600">→ {service.hotel_name ?? service.meeting_point ?? "Da verificare"}</p>
+                          </td>
+                          <td className="px-4 py-4 text-center text-base font-extrabold">{service.pax}</td>
+                          <td className="px-4 py-4"><span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">{service.notes || "—"}</span></td>
+                          <td className="px-4 py-4"><span className={`rounded-full px-3 py-1 text-xs font-bold ${statusBadge(service.status)}`}>{statusLabel(service.status)}</span></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-4">
+                <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-bold text-slate-400">Totale servizi</p><p className="text-2xl font-extrabold">{selectedServices.length}</p></div>
+                <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-bold text-slate-400">Totale pax</p><p className="text-2xl font-extrabold">{selectedPax}</p></div>
+                <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-bold text-slate-400">Prima corsa</p><p className="text-2xl font-extrabold">{firstService?.time.slice(0, 5) ?? "—"}</p></div>
+                <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-bold text-slate-400">Controlli</p><p className="text-2xl font-extrabold">{warningCount}</p></div>
+              </div>
             </div>
-          )}
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="text-xl font-extrabold text-slate-950">Anteprima messaggio WhatsApp</h3>
+              <div className="mt-4 rounded-2xl bg-emerald-50 p-4 text-sm leading-6 text-slate-800">
+                Ciao, ecco il tuo foglio di viaggio per {fmtDate(date)}. Hai {selectedServices.length} servizi, {selectedPax} pax totali. Prima corsa prevista alle {firstService?.time.slice(0, 5) ?? "—"}. Buon lavoro! 🚌
+              </div>
+            </div>
+          </main>
+
+          <aside className="space-y-4">
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-xl font-extrabold text-slate-950">Controlli foglio</h2>
+                <span className="rounded-full bg-rose-50 px-3 py-1 text-xs font-bold text-rose-700">{warningCount} segnalazioni</span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                <div className="flex items-center justify-between py-3"><span>Telefono mancante</span><strong>{missingPhones}</strong></div>
+                <div className="flex items-center justify-between py-3"><span>Hotel da verificare</span><strong>{missingHotels}</strong></div>
+                <div className="flex items-center justify-between py-3"><span>Giro sovraccarico</span><strong>{selectedPax > 30 ? 1 : 0}</strong></div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-xl font-extrabold text-slate-950">Azioni rapide</h2>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <button className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm font-bold text-emerald-700">WhatsApp</button>
+                <button onClick={handlePrint} className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm font-bold text-blue-700">Scarica PDF</button>
+                <button className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-bold text-slate-700">Apri giro</button>
+                <button className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-bold text-slate-700">Modifica giro</button>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-xl font-extrabold text-slate-950">Riepilogo</h2>
+              <div className="mt-4 space-y-3 text-sm">
+                <div className="flex justify-between"><span>Assegnati</span><strong>{totalAssigned}</strong></div>
+                <div className="flex justify-between"><span>Totale servizi</span><strong>{data.total_services}</strong></div>
+                <div className="flex justify-between"><span>Totale pax</span><strong>{data.total_pax}</strong></div>
+                <div className="flex justify-between"><span>Non assegnati</span><strong>{data.unassigned.length}</strong></div>
+              </div>
+            </div>
+          </aside>
         </div>
       )}
     </section>
