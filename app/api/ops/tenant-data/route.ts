@@ -93,24 +93,59 @@ export async function GET(request: NextRequest) {
     const rawScopeMode = params.get("service_scope");
 
     // ---- LEGACY PATH: no service_scope param (or explicitly "legacy") ----
-    // Byte-for-byte identical to the pre-Sprint-13 behavior: every dataset,
-    // fetchAllServices() for the full tenant history. This is what keeps every
-    // non-migrated consumer working unchanged.
+    // Sprint Performance 14D: still the full-tenant-history path (services via
+    // fetchAllServices(), no date/range/ids narrowing) — that part is
+    // unchanged. What's new is that `datasets` is now honored here too, not
+    // only in the scoped branch below. When the caller omits `datasets`
+    // entirely (params.get returns null — the "pure legacy" request shape
+    // buildTenantDataRequest() builds for callers that pass neither
+    // `datasets` nor `serviceScope`), behavior is byte-for-byte identical to
+    // before: every dataset is fetched, `include_inbound_emails` alone
+    // decides inbound_emails. When `datasets` IS present, only the requested
+    // datasets are queried — same whitelist/parsing as the scoped branch.
     if (!rawScopeMode || rawScopeMode === "legacy") {
-      const includeInboundEmails = params.get("include_inbound_emails") === "true";
+      const legacyDatasetsParam = params.get("datasets");
+      let legacyDatasets: Set<Dataset> | null = null;
+      if (legacyDatasetsParam !== null) {
+        const legacyDatasetsParseResult = z
+          .array(z.enum(DATASET_VALUES))
+          .safeParse(legacyDatasetsParam.split(",").map((value) => value.trim()).filter(Boolean));
+        if (!legacyDatasetsParseResult.success) {
+          return NextResponse.json({ ok: false, error: "Parametro 'datasets' non valido" }, { status: 400 });
+        }
+        legacyDatasets = new Set<Dataset>(legacyDatasetsParseResult.data);
+      }
+      // null = no `datasets` param at all = the original "fetch everything" behavior.
+      const wantsLegacy = (name: Dataset) => legacyDatasets === null || legacyDatasets.has(name);
+      // `datasets` (when present) is the source of truth for inbound_emails,
+      // but include_inbound_emails keeps working as a legacy alias on top of
+      // it — either signal asking for it is enough, matching the pre-existing
+      // "pure legacy" behavior exactly when `datasets` is absent.
+      const wantsInboundEmails =
+        legacyDatasets !== null
+          ? legacyDatasets.has("inboundEmails") || params.get("include_inbound_emails") === "true"
+          : params.get("include_inbound_emails") === "true";
 
       const [servicesResult, assignmentsResult, busLotConfigsResult, statusEventsResult, hotelsResult, membershipsResult, inboundResult] =
         await Promise.all([
-          fetchAllServices(auth.admin, tenantId),
-          auth.admin.from("assignments").select("*").eq("tenant_id", tenantId),
-          (async () => {
-            const result = await auth.admin.from("bus_lot_configs").select("*").eq("tenant_id", tenantId);
-            return result.error ? { data: [], error: null } : result;
-          })(),
-          auth.admin.from("status_events").select("*").eq("tenant_id", tenantId),
-          auth.admin.from("hotels").select("*").eq("tenant_id", tenantId),
-          auth.admin.from("memberships").select("user_id, tenant_id, role, full_name").eq("tenant_id", tenantId),
-          includeInboundEmails
+          wantsLegacy("services") ? fetchAllServices(auth.admin, tenantId) : Promise.resolve({ data: [], error: null }),
+          wantsLegacy("assignments")
+            ? auth.admin.from("assignments").select("*").eq("tenant_id", tenantId)
+            : Promise.resolve({ data: [], error: null }),
+          wantsLegacy("busLotConfigs")
+            ? (async () => {
+                const result = await auth.admin.from("bus_lot_configs").select("*").eq("tenant_id", tenantId);
+                return result.error ? { data: [], error: null } : result;
+              })()
+            : Promise.resolve({ data: [], error: null }),
+          wantsLegacy("statusEvents")
+            ? auth.admin.from("status_events").select("*").eq("tenant_id", tenantId)
+            : Promise.resolve({ data: [], error: null }),
+          wantsLegacy("hotels") ? auth.admin.from("hotels").select("*").eq("tenant_id", tenantId) : Promise.resolve({ data: [], error: null }),
+          wantsLegacy("memberships")
+            ? auth.admin.from("memberships").select("user_id, tenant_id, role, full_name").eq("tenant_id", tenantId)
+            : Promise.resolve({ data: [], error: null }),
+          wantsInboundEmails
             ? auth.admin.from("inbound_emails").select("*").eq("tenant_id", tenantId)
             : Promise.resolve({ data: [], error: null })
         ]);

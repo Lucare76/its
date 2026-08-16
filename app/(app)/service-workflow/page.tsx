@@ -34,7 +34,12 @@ function appendInternalTags(notes: string, extraNote: string, markHandled: boole
 }
 
 export default function ServiceWorkflowPage() {
-  const { data, loading, errorMessage, liveConnected, tenantId, userId, refresh } = useTenantOperationalData();
+  // Sprint Performance 14D: only services, assignments, memberships,
+  // statusEvents (verified via grep) — still full-history services (no
+  // serviceScope): the status funnel and search are lifetime, not date-bound.
+  const { data, loading, errorMessage, liveConnected, tenantId, userId, refresh } = useTenantOperationalData({
+    datasets: { services: true, assignments: true, memberships: true, statusEvents: true }
+  });
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [savingStatus, setSavingStatus] = useState<ServiceStatus | null>(null);

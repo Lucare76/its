@@ -7,7 +7,13 @@ import { getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 
 export default function NotificationsPage() {
-  const { loading, errorMessage, data } = useTenantOperationalData({ includeInboundEmails: true });
+  // Sprint Performance 14D: only the datasets this page actually reads
+  // (services, assignments, busLotConfigs, inboundEmails — verified via
+  // grep). Still full-history services (no serviceScope) since alerts are
+  // computed across the whole tenant, not a date window.
+  const { loading, errorMessage, data } = useTenantOperationalData({
+    datasets: { services: true, assignments: true, busLotConfigs: true, inboundEmails: true }
+  });
 
   const assignmentsByServiceId = useMemo(() => new Map(data.assignments.map((item) => [item.service_id, item])), [data.assignments]);
   const busLots = useMemo(() => buildBusLotAggregates(data.services.filter((service) => isBusLineService(service)), data.busLotConfigs), [data.services, data.busLotConfigs]);

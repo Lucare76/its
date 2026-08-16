@@ -328,3 +328,157 @@ describe("GET /api/ops/tenant-data — legacy default", () => {
     expect(body.inbound_emails).toHaveLength(1);
   });
 });
+
+/**
+ * Sprint Performance 14D — the legacy branch (no service_scope, or
+ * service_scope=legacy) now honors `datasets` too, instead of always
+ * fetching every table regardless of what's requested. `datasets` absent
+ * entirely still means "fetch everything" (case 1, already covered by the
+ * "legacy default" tests above) — these cover `datasets` PRESENT in legacy
+ * mode.
+ */
+describe("GET /api/ops/tenant-data — legacy path respects `datasets`", () => {
+  function fullFixture() {
+    return createFakeAdmin({
+      services: [service(ID_1, TENANT_A)],
+      assignments: [{ id: "a1", tenant_id: TENANT_A, service_id: ID_1 }],
+      status_events: [{ id: "e1", tenant_id: TENANT_A, service_id: ID_1 }],
+      hotels: [{ id: "h1", tenant_id: TENANT_A }],
+      memberships: [{ user_id: "u1", tenant_id: TENANT_A, role: "driver", full_name: "Mario" }],
+      bus_lot_configs: [{ id: "b1", tenant_id: TENANT_A }],
+      inbound_emails: [{ id: "ie1", tenant_id: TENANT_A }]
+    });
+  }
+
+  it("1. legacy, no `datasets` param at all: every table is still queried (full backward-compat)", async () => {
+    const fake = fullFixture();
+    authorizeAs(fake.admin);
+    const res = await GET(req(""));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.services).toHaveLength(1);
+    expect(body.assignments).toHaveLength(1);
+    expect(body.status_events).toHaveLength(1);
+    expect(body.hotels).toHaveLength(1);
+    expect(body.memberships).toHaveLength(1);
+    expect(body.bus_lot_configs).toHaveLength(1);
+    // inbound_emails follows the pre-existing include_inbound_emails flag, absent here.
+    expect(body.inbound_emails).toEqual([]);
+    expect(fake.callCounts.assignments ?? 0).toBeGreaterThan(0);
+    expect(fake.callCounts.hotels ?? 0).toBeGreaterThan(0);
+    expect(fake.callCounts.memberships ?? 0).toBeGreaterThan(0);
+    expect(fake.callCounts.bus_lot_configs ?? 0).toBeGreaterThan(0);
+    expect(fake.callCounts.status_events ?? 0).toBeGreaterThan(0);
+  });
+
+  it("2. legacy, datasets=services: only services is queried", async () => {
+    const fake = fullFixture();
+    authorizeAs(fake.admin);
+    const res = await GET(req("?datasets=services"));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.services).toHaveLength(1);
+    expect(body.assignments).toEqual([]);
+    expect(body.status_events).toEqual([]);
+    expect(body.hotels).toEqual([]);
+    expect(body.memberships).toEqual([]);
+    expect(body.bus_lot_configs).toEqual([]);
+    expect(body.inbound_emails).toEqual([]);
+    expect(fake.callCounts.assignments ?? 0).toBe(0);
+    expect(fake.callCounts.status_events ?? 0).toBe(0);
+    expect(fake.callCounts.hotels ?? 0).toBe(0);
+    expect(fake.callCounts.memberships ?? 0).toBe(0);
+    expect(fake.callCounts.bus_lot_configs ?? 0).toBe(0);
+    expect(fake.callCounts.inbound_emails ?? 0).toBe(0);
+  });
+
+  it("3. legacy, datasets=hotels: zero fetchAllServices, only hotels queried", async () => {
+    const fake = fullFixture();
+    authorizeAs(fake.admin);
+    const res = await GET(req("?datasets=hotels"));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.services).toEqual([]);
+    expect(body.hotels).toHaveLength(1);
+    expect(fake.callCounts.services ?? 0).toBe(0);
+    expect(fake.callCounts.assignments ?? 0).toBe(0);
+    expect(fake.callCounts.status_events ?? 0).toBe(0);
+    expect(fake.callCounts.memberships ?? 0).toBe(0);
+    expect(fake.callCounts.bus_lot_configs ?? 0).toBe(0);
+    expect(fake.callCounts.inbound_emails ?? 0).toBe(0);
+  });
+
+  it("4. legacy, datasets=services,hotels: services + hotels queried, nothing else", async () => {
+    const fake = fullFixture();
+    authorizeAs(fake.admin);
+    const res = await GET(req("?datasets=services,hotels"));
+    const body = await res.json();
+    expect(body.services).toHaveLength(1);
+    expect(body.hotels).toHaveLength(1);
+    expect(body.assignments).toEqual([]);
+    expect(body.status_events).toEqual([]);
+    expect(body.memberships).toEqual([]);
+    expect(body.bus_lot_configs).toEqual([]);
+    expect(body.inbound_emails).toEqual([]);
+    expect(fake.callCounts.assignments ?? 0).toBe(0);
+    expect(fake.callCounts.status_events ?? 0).toBe(0);
+    expect(fake.callCounts.memberships ?? 0).toBe(0);
+    expect(fake.callCounts.bus_lot_configs ?? 0).toBe(0);
+  });
+
+  it("5. legacy, datasets=assignments,memberships: assignments + memberships queried, zero services", async () => {
+    const fake = fullFixture();
+    authorizeAs(fake.admin);
+    const res = await GET(req("?datasets=assignments,memberships"));
+    const body = await res.json();
+    expect(body.assignments).toHaveLength(1);
+    expect(body.memberships).toHaveLength(1);
+    expect(body.services).toEqual([]);
+    expect(fake.callCounts.services ?? 0).toBe(0);
+    expect(fake.callCounts.hotels ?? 0).toBe(0);
+    expect(fake.callCounts.status_events ?? 0).toBe(0);
+    expect(fake.callCounts.bus_lot_configs ?? 0).toBe(0);
+    expect(fake.callCounts.inbound_emails ?? 0).toBe(0);
+  });
+
+  it("6. legacy, datasets=inboundEmails: only inbound emails queried", async () => {
+    const fake = fullFixture();
+    authorizeAs(fake.admin);
+    const res = await GET(req("?datasets=inboundEmails"));
+    const body = await res.json();
+    expect(body.inbound_emails).toHaveLength(1);
+    expect(body.services).toEqual([]);
+    expect(fake.callCounts.services ?? 0).toBe(0);
+    expect(fake.callCounts.assignments ?? 0).toBe(0);
+    expect(fake.callCounts.status_events ?? 0).toBe(0);
+    expect(fake.callCounts.hotels ?? 0).toBe(0);
+    expect(fake.callCounts.memberships ?? 0).toBe(0);
+    expect(fake.callCounts.bus_lot_configs ?? 0).toBe(0);
+  });
+
+  it("7. legacy, an invalid dataset value: 400, consistent with the scoped branch's whitelist", async () => {
+    const fake = fullFixture();
+    authorizeAs(fake.admin);
+    const res = await GET(req("?datasets=services,not_a_real_dataset"));
+    expect(res.status).toBe(400);
+  });
+
+  it("include_inbound_emails=true still works as a legacy alias even when datasets is present but omits inboundEmails", async () => {
+    const fake = fullFixture();
+    authorizeAs(fake.admin);
+    const res = await GET(req("?datasets=services&include_inbound_emails=true"));
+    const body = await res.json();
+    expect(body.inbound_emails).toHaveLength(1);
+  });
+
+  it("datasets=[] (empty) requests nothing at all, including services", async () => {
+    const fake = fullFixture();
+    authorizeAs(fake.admin);
+    const res = await GET(req("?datasets="));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.services).toEqual([]);
+    expect(fake.callCounts.services ?? 0).toBe(0);
+    expect(fake.callCounts.hotels ?? 0).toBe(0);
+  });
+});

@@ -657,7 +657,10 @@ const PROFILE_FIELD_LABELS: Record<string, string> = {
 // ── Pagina principale ─────────────────────────────────────────────────────────
 
 export default function CrmAgenciesPage() {
-  const { data: tenantData } = useTenantOperationalData();
+  // Sprint Performance 14D: only services + hotels (verified via grep) —
+  // still full-history services (no serviceScope) since per-agency lifetime
+  // stats need the whole tenant history, not a date window.
+  const { data: tenantData } = useTenantOperationalData({ datasets: { services: true, hotels: true } });
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [agencies, setAgencies] = useState<AgencyRow[]>([]);

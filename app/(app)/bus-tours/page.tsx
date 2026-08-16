@@ -40,7 +40,13 @@ function buildLotAlerts(input: {
 }
 
 export default function BusToursPage() {
-  const { loading, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData();
+  // Sprint Performance 14D: only services, assignments, hotels, memberships,
+  // busLotConfigs (verified via grep) — still full-history services (no
+  // serviceScope): the date dropdown lists ALL historical dates, there is no
+  // "today/next N days" business rule in this page to scope by.
+  const { loading, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData({
+    datasets: { services: true, assignments: true, hotels: true, memberships: true, busLotConfigs: true }
+  });
   const [dateFilter, setDateFilter] = useState("all");
   const [tourNameFilter, setTourNameFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<ServiceStatus | "all">("all");
