@@ -1788,13 +1788,21 @@ export default function WhatsAppInboxPage() {
 
         <div className="grid gap-4 md:grid-cols-5">
           {[
-            { label: "Da leggere", value: inboxStats.unread, icon: "●", tone: "emerald" },
-            { label: "Aperte", value: inboxStats.open, icon: "●", tone: "blue" },
-            { label: "Associate", value: inboxStats.associated, icon: "↗", tone: "violet" },
-            { label: "Non associate", value: inboxStats.unassociated, icon: "↯", tone: "orange" },
-            { label: "Urgenti", value: inboxStats.urgent, icon: "!", tone: "rose" },
+            { label: "Da leggere", value: inboxStats.unread, icon: "●", tone: "emerald", filterValue: "unread" },
+            { label: "Aperte", value: inboxStats.open, icon: "●", tone: "blue", filterValue: "open" },
+            { label: "Associate", value: inboxStats.associated, icon: "↗", tone: "violet", filterValue: "associated" },
+            { label: "Non associate", value: inboxStats.unassociated, icon: "↯", tone: "orange", filterValue: "unassociated" },
+            { label: "Urgenti", value: inboxStats.urgent, icon: "!", tone: "rose", filterValue: "needs_review" },
           ].map((stat) => (
-            <div key={stat.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <button
+              key={stat.label}
+              type="button"
+              onClick={() => setFilter(stat.filterValue as (typeof filters)[number]["value"])}
+              aria-pressed={filter === stat.filterValue}
+              className={`rounded-xl border bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${
+                filter === stat.filterValue ? "border-blue-300 ring-2 ring-blue-500/15" : "border-slate-200"
+              }`}
+            >
               <div className="flex items-center gap-4">
                 <span className={`flex h-14 w-14 items-center justify-center rounded-xl text-2xl font-black ${
                   stat.tone === "emerald" ? "bg-emerald-50 text-emerald-600"
@@ -1818,7 +1826,7 @@ export default function WhatsAppInboxPage() {
                   </span>
                 </span>
               </div>
-            </div>
+            </button>
           ))}
         </div>
 
