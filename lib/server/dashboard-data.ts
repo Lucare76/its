@@ -3,7 +3,6 @@ import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { needsInboxReview } from "@/lib/inbox-review";
 import { isInboxPdfReviewOpen, isInboxPdfTestNoise } from "@/lib/pdf/parser";
 import { getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
-import { isUndeliveredReminder } from "@/lib/service-reminder";
 import type { InboundEmail, Service } from "@/lib/types";
 
 // Sprint Performance 14B. Dashboard used to run useTenantOperationalData() in
@@ -12,9 +11,10 @@ import type { InboundEmail, Service } from "@/lib/types";
 // date-scoped KPIs. This module fetches only the bounded slices those KPIs
 // actually need and reuses the SAME pure formulas the client used to run
 // in-browser (buildOperationalInstances, getServicePdfOperationalMeta,
-// isInboxPdfReviewOpen/isInboxPdfTestNoise, needsInboxReview,
-// isUndeliveredReminder) so results stay byte-identical — never
-// reimplemented as fragile hand-rolled SQL/JS duplicates.
+// isInboxPdfReviewOpen/isInboxPdfTestNoise, needsInboxReview) so results stay
+// byte-identical — never reimplemented as fragile hand-rolled SQL/JS
+// duplicates. The undelivered-reminder KPI is hardcoded to empty — see the
+// BUGFIX comment below computeDashboardData for why.
 
 const SERVICE_ID_CHUNK_SIZE = 300;
 
@@ -93,41 +93,18 @@ export async function computeDashboardData({ admin, tenantId, today, next48h }: 
   const windowServices = await fetchWindowServices(admin, tenantId, rangeFrom, rangeTo);
   const serviceIds = windowServices.map((service) => service.id);
 
-  // Same formula as lib/service-reminder.ts's isUndeliveredReminder, pushed
-  // into SQL: unlike the PDF metadata rules (nested JSON + notes-marker
-  // fallbacks), this is a plain 2-field comparison, safe to translate
-  // directly. The JS helper is still reused below as a defensive check on
-  // the tiny 5-row sample, so the shared function stays the source of truth.
-  const reminderAlertMinutes = Number(process.env.NEXT_PUBLIC_REMINDER_ALERT_MINUTES ?? "30");
-  const reminderAlertThresholdMs = (Number.isFinite(reminderAlertMinutes) ? reminderAlertMinutes : 30) * 60 * 1000;
-  const thresholdIso = new Date(Date.now() - reminderAlertThresholdMs).toISOString();
-
-  const [hotelsResult, assignments, inboundResult, reminderResult] = await Promise.all([
+  const [hotelsResult, assignments, inboundResult] = await Promise.all([
     admin.from("hotels").select("id, name, zone").eq("tenant_id", tenantId),
     fetchAssignmentsForServiceIds(admin, tenantId, serviceIds),
     // Minimal projection: needsInboxReview/isInboxPdfReviewOpen/
     // isInboxPdfTestNoise only ever read parsed_json (+ subject for the
     // noise check) — never raw_text/body_html/body_text/raw_json, which is
     // most of an inbound_emails row's actual size.
-    admin.from("inbound_emails").select("id, subject, parsed_json").eq("tenant_id", tenantId),
-    admin
-      .from("services")
-      .select(
-        "id, date, arrival_date, time, arrival_time, outbound_time, departure_time, return_time, customer_name, reminder_status, sent_at",
-        { count: "exact" }
-      )
-      .eq("tenant_id", tenantId)
-      .eq("reminder_status", "sent")
-      .not("sent_at", "is", null)
-      .lt("sent_at", thresholdIso)
-      .order("created_at", { ascending: true })
-      .order("id", { ascending: true })
-      .limit(5)
+    admin.from("inbound_emails").select("id, subject, parsed_json").eq("tenant_id", tenantId)
   ]);
 
   if (hotelsResult.error) throw hotelsResult.error;
   if (inboundResult.error) throw inboundResult.error;
-  if (reminderResult.error) throw reminderResult.error;
 
   const inboundEmails = (inboundResult.data ?? []) as unknown as InboundEmail[];
 
@@ -144,9 +121,23 @@ export async function computeDashboardData({ admin, tenantId, today, next48h }: 
   }).length;
   const inboxToReviewCount = inboundEmails.filter((email) => needsInboxReview(email.parsed_json)).length;
 
-  const undeliveredReminderSample = ((reminderResult.data ?? []) as DashboardReminderSampleService[]).filter((service) =>
-    isUndeliveredReminder(service)
-  );
+  // BUGFIX (post-14B): supabase/migrations/0001_schema.sql declares
+  // services.reminder_status/sent_at, but this project's actual services
+  // table does not have them (verified directly against Supabase: PostgREST
+  // 42703 "column services.reminder_status does not exist" — the migration
+  // was apparently never applied here). The legacy pre-14B client code read
+  // these same fields off a `select("*")` fetch, which silently returns
+  // `undefined` for missing columns instead of erroring, so
+  // service.reminder_status was always `undefined` there too and this KPI
+  // was always empty in practice. An explicit-column select (unlike `*`)
+  // makes PostgREST reject unknown columns outright, which is what broke
+  // GET /api/ops/dashboard-data with a 500. Hardcoding the same
+  // (already-real) empty result here removes the crash without querying
+  // columns that don't exist and without changing the KPI's actual value.
+  // Once those columns are truly migrated in, reintroduce the query and
+  // reuse lib/service-reminder.ts's isUndeliveredReminder() as before.
+  const undeliveredReminderCount = 0;
+  const undeliveredReminderSample: DashboardReminderSampleService[] = [];
 
   return {
     windowServices,
@@ -155,7 +146,7 @@ export async function computeDashboardData({ admin, tenantId, today, next48h }: 
     todayPdfNeedsAttentionCount,
     inboxPdfNeedsReviewCount,
     inboxToReviewCount,
-    undeliveredReminderCount: reminderResult.count ?? 0,
+    undeliveredReminderCount,
     undeliveredReminderSample
   };
 }

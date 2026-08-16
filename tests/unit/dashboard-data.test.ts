@@ -276,62 +276,47 @@ describe("computeDashboardData — inbox review counts (minimal projection, not 
   });
 });
 
-describe("computeDashboardData — reminder KPI (delivered vs undelivered, historical services included)", () => {
-  it("12. reminder sent recently (within threshold) is NOT counted as undelivered", async () => {
-    const recentIso = new Date(Date.now() - 5 * 60 * 1000).toISOString(); // 5 min ago, default threshold 30 min
+describe("computeDashboardData — reminder KPI (disabled: services.reminder_status/sent_at do not exist in this DB)", () => {
+  // Post-Sprint-14B bugfix: supabase/migrations/0001_schema.sql declares
+  // services.reminder_status/sent_at, but the live services table in this
+  // Supabase project genuinely has neither column (verified directly via
+  // PostgREST: 42703 "column services.reminder_status does not exist"). The
+  // legacy pre-14B client code silently got `undefined` for these fields via
+  // a select("*") fetch, so this KPI was always empty in real usage. An
+  // explicit-column query (unlike `*`) makes PostgREST reject unknown
+  // columns, which broke the endpoint with a 500 — fixed by hardcoding the
+  // same already-real empty result instead of querying nonexistent columns.
+  it("12. always returns 0/[] regardless of reminder-shaped fixture data (columns don't exist — never queried)", async () => {
+    const staleIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const { admin } = createFakeAdmin({
-      services: [service("recent-reminder", { reminder_status: "sent", sent_at: recentIso })]
+      services: [
+        service("stale-reminder", { reminder_status: "sent", sent_at: staleIso }),
+        service("another-stale", { date: "2020-01-01", reminder_status: "sent", sent_at: staleIso })
+      ]
     });
     const result = await computeDashboardData({ admin, tenantId: TENANT_A, today: "2026-08-16", next48h: "2026-08-18" });
     expect(result.undeliveredReminderCount).toBe(0);
+    expect(result.undeliveredReminderSample).toEqual([]);
   });
 
-  it("13. reminder sent long ago (beyond threshold) IS counted as undelivered", async () => {
-    const staleIso = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 60 min ago
-    const { admin } = createFakeAdmin({
-      services: [service("stale-reminder", { reminder_status: "sent", sent_at: staleIso })]
-    });
-    const result = await computeDashboardData({ admin, tenantId: TENANT_A, today: "2026-08-16", next48h: "2026-08-18" });
-    expect(result.undeliveredReminderCount).toBe(1);
-    expect(result.undeliveredReminderSample.map((s) => s.id)).toEqual(["stale-reminder"]);
-  });
-
-  it("14. reminder_status='delivered' (already delivered) is never counted regardless of sent_at", async () => {
-    const staleIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const { admin } = createFakeAdmin({
-      services: [service("delivered", { reminder_status: "delivered", sent_at: staleIso })]
-    });
-    const result = await computeDashboardData({ admin, tenantId: TENANT_A, today: "2026-08-16", next48h: "2026-08-18" });
-    expect(result.undeliveredReminderCount).toBe(0);
-  });
-
-  it("15. sent_at = null is never counted even if reminder_status='sent'", async () => {
-    const { admin } = createFakeAdmin({
-      services: [service("no-sent-at", { reminder_status: "sent", sent_at: null })]
-    });
-    const result = await computeDashboardData({ admin, tenantId: TENANT_A, today: "2026-08-16", next48h: "2026-08-18" });
-    expect(result.undeliveredReminderCount).toBe(0);
-  });
-
-  it("16. a HISTORICAL service (date far outside the window) with an undelivered reminder is still counted — reminder KPI is not date-bounded", async () => {
-    const staleIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const { admin } = createFakeAdmin({
-      services: [service("historical-reminder", { date: "2020-01-01", reminder_status: "sent", sent_at: staleIso })]
-    });
-    const result = await computeDashboardData({ admin, tenantId: TENANT_A, today: "2026-08-16", next48h: "2026-08-18" });
-    // Not part of the bounded window fetch...
-    expect(result.windowServices).toEqual([]);
-    // ...but still surfaced by the separate, unbounded reminder query.
-    expect(result.undeliveredReminderCount).toBe(1);
-  });
-
-  it("17. reminder sample is capped at 5 even when more than 5 match, but the count reflects the true total", async () => {
-    const staleIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const services = Array.from({ length: 8 }, (_, i) => service(`stale-${i}`, { reminder_status: "sent", sent_at: staleIso }));
-    const { admin } = createFakeAdmin({ services });
-    const result = await computeDashboardData({ admin, tenantId: TENANT_A, today: "2026-08-16", next48h: "2026-08-18" });
-    expect(result.undeliveredReminderCount).toBe(8);
-    expect(result.undeliveredReminderSample).toHaveLength(5);
+  it("13. does not issue any query against reminder_status/sent_at columns", async () => {
+    const { admin, tables } = createFakeAdmin({ services: [service("s1")] });
+    let sawExplicitReminderSelect = false;
+    const originalFrom = admin.from.bind(admin);
+    admin.from = (table: string) => {
+      const builder = originalFrom(table);
+      const originalSelect = builder.select.bind(builder);
+      builder.select = (cols?: string, opts?: unknown) => {
+        if (table === "services" && typeof cols === "string" && cols.includes("reminder_status")) {
+          sawExplicitReminderSelect = true;
+        }
+        return originalSelect(cols, opts);
+      };
+      return builder;
+    };
+    await computeDashboardData({ admin, tenantId: TENANT_A, today: "2026-08-16", next48h: "2026-08-18" });
+    expect(sawExplicitReminderSelect).toBe(false);
+    expect(tables.services).toHaveLength(1); // sanity: fixture untouched
   });
 });
 
