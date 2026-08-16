@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { SidePanel } from "@/components/ui/side-panel";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
-import type { Hotel } from "@/lib/types";
 import type { ShuttleSchedule } from "@/lib/shuttle-schedules";
+
+type MinimalHotel = { id: string; name: string };
 
 const DAYS_LABEL = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"];
 
@@ -34,9 +35,9 @@ type ScheduleFormData = {
   notes: string;
 };
 
-type TenantDataResponse = {
+type HotelsListResponse = {
   ok: boolean;
-  hotels: Hotel[];
+  hotels: MinimalHotel[];
   error?: string;
 };
 
@@ -74,7 +75,7 @@ function formatDisplayDate(isoDate: string) {
 export default function ShuttleSchedulesPage() {
   const [token, setToken] = useState<string | null>(null);
   const [schedules, setSchedules] = useState<ShuttleSchedule[]>([]);
-  const [hotels, setHotels] = useState<Hotel[]>([]);
+  const [hotels, setHotels] = useState<MinimalHotel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState(todayIsoDate());
@@ -109,14 +110,14 @@ export default function ShuttleSchedulesPage() {
         headers: { authorization: `Bearer ${accessToken}` },
         cache: "no-store",
       }),
-      fetch("/api/ops/tenant-data", {
+      fetch("/api/ops/hotels-list", {
         headers: { authorization: `Bearer ${accessToken}` },
         cache: "no-store",
       }),
     ]);
 
     const schedulesBody = await schedulesRes.json().catch(() => null) as { ok?: boolean; schedules?: ShuttleSchedule[]; error?: string } | null;
-    const hotelsBody = await hotelsRes.json().catch(() => null) as TenantDataResponse | null;
+    const hotelsBody = await hotelsRes.json().catch(() => null) as HotelsListResponse | null;
 
     if (!schedulesRes.ok || !schedulesBody?.ok) {
       throw new Error(schedulesBody?.error ?? "Errore nel caricamento navette.");
