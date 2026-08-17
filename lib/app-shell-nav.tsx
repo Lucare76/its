@@ -249,16 +249,23 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/inbox", label: "Prenotazioni", icon: "I" },
   { href: "/disponibilita", label: "Disponibilità", icon: "✅" },
   { href: "/piano-giorno", label: "Piano del Giorno", icon: "📋" },
-  { href: "/services", label: "Servizi", icon: "B" },
-  { href: "/dispatch", label: "Assegnazioni", icon: "G" },
-  { href: "/foglio-viaggio", label: "Foglio di viaggio", icon: "📋" },
-  { href: "/cancellazioni", label: "Cancellazioni", icon: "✕" },
-  { href: "/richieste-modifica", label: "Richieste modifica", icon: "✏️" },
   { href: "/whatsapp", label: "Inbox WhatsApp", icon: "WA" },
-  { href: "/whatsapp-log", label: "WhatsApp Log", icon: "💬" },
-  { href: "/whatsapp-costs", label: "Costi WhatsApp", icon: "€", adminOnly: true },
-  { href: "/bus-convocations", label: "Convocazioni Bus", icon: "📣" },
 ];
+
+export const GESTIONE_GROUP: NavMainGroup = {
+  type: "group",
+  key: "gestione",
+  label: "Gestione",
+  icon: "G",
+  items: [
+    { href: "/services", label: "Servizi", icon: "B" },
+    { href: "/dispatch", label: "Assegnazioni", icon: "G" },
+    { href: "/foglio-viaggio", label: "Foglio di viaggio", icon: "📋" },
+    { href: "/cancellazioni", label: "Cancellazioni", icon: "✕" },
+    { href: "/richieste-modifica", label: "Richieste modifica", icon: "✏️" },
+    { href: "/bus-convocations", label: "Convocazioni Bus", icon: "📣" },
+  ]
+};
 
 export const AGENZIE_GROUP: NavMainGroup = {
   type: "group",
@@ -372,6 +379,8 @@ export const SETTINGS_GROUPS: NavGroup[] = [
     title: "Sistema",
     items: [
       { href: "/settings/whatsapp", label: "WhatsApp", icon: "W" },
+      { href: "/whatsapp-log", label: "WhatsApp Log", icon: "💬" },
+      { href: "/whatsapp-costs", label: "Costi WhatsApp", icon: "€", adminOnly: true },
       { href: "/notifications", label: "Notifiche", icon: "!" },
       { href: "/scheduler", label: "Scheduler", icon: "J" },
       { href: "/service-workflow", label: "Workflow servizi", icon: "K" },
@@ -384,6 +393,9 @@ export const SETTINGS_GROUPS: NavGroup[] = [
 
 const ALL_NAV_ITEMS = [
   ...Object.values(MAIN_NAV_BY_ROLE).flat(),
+  ...GESTIONE_GROUP.items,
+  ...AGENZIE_GROUP.items,
+  ...OPERATIVO_GROUP.items,
   ...MARIO_BOSS_GROUP.items,
   ...KARMEN_PEACH_GROUP.items,
   ...SETTINGS_GROUPS.flatMap((group) => group.items)
@@ -430,6 +442,7 @@ export function pageTitle(pathname: string) {
 
 const FAV_ALL_ITEMS: NavItem[] = [
   ...Object.values(MAIN_NAV_BY_ROLE).flat(),
+  ...GESTIONE_GROUP.items,
   ...AGENZIE_GROUP.items,
   ...OPERATIVO_GROUP.items,
   ...MARIO_BOSS_GROUP.items,

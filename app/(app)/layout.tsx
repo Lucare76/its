@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isAllowed, isAllowedWithOverrides, type CapabilityOverrides, parseRole } from "@/lib/rbac";
 import {
   AGENZIE_GROUP,
+  GESTIONE_GROUP,
   HeaderBellIcon,
   KARMEN_PEACH_GROUP,
   MAIN_NAV_BY_ROLE,
@@ -34,6 +35,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [gestioneOpen, setGestioneOpen] = useState(false);
   const [agenzieOpen, setAgenzieOpen] = useState(false);
   const [operativoOpen, setOperativoOpen] = useState(false);
   const [marioBossOpen, setMarioBossOpen] = useState(false);
@@ -842,7 +844,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   return (
     <>
       <section className={`grid min-h-screen w-full max-w-none grid-cols-1 gap-5 px-3 py-4 sm:px-4 md:py-5 lg:px-5 xl:px-6 ${authRole === "driver" || authRole === "autista" ? "" : "md:grid-cols-[auto_minmax(0,1fr)] md:gap-5"}`}>
-      <aside className={`sticky top-5 h-fit transition-all duration-200 ${authRole === "driver" || authRole === "autista" ? "hidden" : `hidden md:block ${collapsed ? "w-[72px]" : "w-[240px]"}`}`}>
+      <aside className={`sticky top-5 h-fit transition-all duration-200 ${authRole === "driver" || authRole === "autista" ? "hidden" : `hidden md:block ${collapsed ? "w-[72px]" : "w-[280px]"}`}`}>
         <div className="overflow-hidden rounded-[26px] border border-slate-800 bg-[#082b4c] p-3 shadow-[0_18px_45px_rgba(8,43,76,0.22)]">
 
           {/* Brand + collapse */}
@@ -970,6 +972,82 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 </div>
               );
             })}
+
+            {/* Gestione — gruppo collassabile */}
+            {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
+              const groupActive = GESTIONE_GROUP.items.some((i) => matchesPath(pathname, i.href));
+              const isExpanded = groupActive || gestioneOpen;
+              const groupBadge = pendingCancellationsCount > 0 ? pendingCancellationsCount : 0;
+              return (
+                <div className="mt-2 border-t border-white/10 pt-2">
+                  <button
+                    type="button"
+                    title={collapsed ? GESTIONE_GROUP.label : undefined}
+                    onClick={() => { if (!collapsed) setGestioneOpen((v) => !v); }}
+                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+                      groupActive
+                        ? "bg-gradient-to-r from-indigo-600/85 to-violet-600/75 text-white"
+                        : "text-slate-200 hover:bg-white/10 hover:text-white"
+                    } ${collapsed ? "justify-center" : ""}`}
+                  >
+                    <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center transition">
+                      {renderNavIcon(GESTIONE_GROUP.icon)}
+                    </span>
+                    {!collapsed ? (
+                      <span className="flex min-w-0 flex-1 items-center justify-between gap-1">
+                        <span className="truncate text-sm font-semibold uppercase tracking-[0.08em]">{GESTIONE_GROUP.label}</span>
+                        <span className="flex items-center gap-1.5">
+                          {groupBadge > 0 && !isExpanded ? (
+                            <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                              {groupBadge > 99 ? "99+" : groupBadge}
+                            </span>
+                          ) : null}
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className={`h-3 w-3 shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} aria-hidden="true">
+                            <path d="M6 3.5l4 4.5-4 4.5" />
+                          </svg>
+                        </span>
+                      </span>
+                    ) : groupBadge > 0 ? (
+                      <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[9px] font-semibold text-white">
+                        {groupBadge > 9 ? "9+" : groupBadge}
+                      </span>
+                    ) : null}
+                  </button>
+                  {!collapsed && isExpanded && (
+                    <div className="ml-4 mt-1 space-y-0.5 border-l-2 border-indigo-400/30 pl-2">
+                      {GESTIONE_GROUP.items.map((item) => {
+                        const active = matchesPath(pathname, item.href);
+                        const isFav = favorites.includes(item.href);
+                        const itemBadge = item.href === "/cancellazioni" && pendingCancellationsCount > 0 ? pendingCancellationsCount : 0;
+                        return (
+                          <div key={item.href} className="group/fav relative">
+                            <Link href={item.href}
+                              className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
+                                active ? "bg-indigo-600 text-white font-semibold" : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
+                              } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
+                            >
+                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
+                                {renderNavIcon(item.icon)}
+                              </span>
+                              <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                                <span className="truncate">{item.label}</span>
+                                {itemBadge > 0 ? <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">{itemBadge > 99 ? "99+" : itemBadge}</span> : null}
+                              </span>
+                            </Link>
+                            {isFav || favoritesEditMode ? (
+                              <button type="button" onClick={() => toggleFavorite(item.href)}
+                                title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
+                                className={`absolute right-1.5 top-1/2 -translate-y-1/2 z-10 text-xs transition-all ${isFav ? "text-amber-400 hover:text-rose-500 opacity-100" : "text-slate-300 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"}`}
+                              >{isFav ? "★" : "☆"}</button>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Agenzie — gruppo collassabile */}
             {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
