@@ -5,3 +5,5 @@ import "@/lib/mcp/tools/get-driver-availability";
 import "@/lib/mcp/tools/get-fleet-status";
 import "@/lib/mcp/tools/preview-assign-driver";
 import "@/lib/mcp/tools/assign-driver";
+import "@/lib/mcp/tools/preview-update-service-status";
+import "@/lib/mcp/tools/update-service-status";

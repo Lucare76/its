@@ -62,7 +62,7 @@ describe("mcp production tool registry (its.* reali)", () => {
     await import("@/lib/mcp/tools/index");
   });
 
-  it("registra esattamente i 7 tool attesi dopo Sprint 2 (6 READ + 1 WRITE)", () => {
+  it("registra esattamente i 9 tool attesi dopo Sprint 3 (7 READ + 2 WRITE)", () => {
     const names = listTools()
       .map((tool) => tool.name)
       .sort();
@@ -74,7 +74,9 @@ describe("mcp production tool registry (its.* reali)", () => {
         "its.get_service",
         "its.search_services",
         "its.preview_assign_driver",
+        "its.preview_update_service_status",
         "its.assign_driver",
+        "its.update_service_status",
       ].sort()
     );
   });
@@ -92,11 +94,17 @@ describe("mcp production tool registry (its.* reali)", () => {
     }
   });
 
-  it("esattamente un tool WRITE (its.assign_driver), nessun DESTRUCTIVE/EXTERNAL_ACTION", () => {
-    const nonReadTools = listTools().filter((tool) => tool.category !== "READ");
-    expect(nonReadTools.map((tool) => ({ name: tool.name, category: tool.category }))).toEqual([
-      { name: "its.assign_driver", category: "WRITE" },
-    ]);
+  it("esattamente due tool WRITE (its.assign_driver, its.update_service_status), nessun DESTRUCTIVE/EXTERNAL_ACTION", () => {
+    const nonReadTools = listTools()
+      .filter((tool) => tool.category !== "READ")
+      .map((tool) => ({ name: tool.name, category: tool.category }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    expect(nonReadTools).toEqual(
+      [
+        { name: "its.assign_driver", category: "WRITE" },
+        { name: "its.update_service_status", category: "WRITE" },
+      ].sort((a, b) => a.name.localeCompare(b.name))
+    );
   });
 
   it("nessun tool espone nomi di query/CRUD generico o SQL diretto", () => {

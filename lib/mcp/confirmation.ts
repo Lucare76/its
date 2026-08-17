@@ -151,3 +151,90 @@ export function claimConfirmationToken(jti: string): boolean {
 export function __resetConfirmationRegistryForTests() {
   consumedTokenIds.clear();
 }
+
+/**
+ * MCP Sprint 3: its.preview_update_service_status -> its.update_service_status.
+ * Stessa infrastruttura di sopra (nessun secondo sistema): stesso
+ * AGENCY_ACTION_SECRET, stesso TTL, stesso registro single-use condiviso
+ * (claimConfirmationToken sopra), stesso schema token opaco HMAC-SHA256. Solo
+ * il payload e il "purpose" cambiano, per legare il token esattamente a
+ * questa azione (un token emesso per assign_driver non deve mai validare qui
+ * e viceversa — il campo "purpose" nel payload lo garantisce).
+ *
+ * currentStatus e' incluso nel payload come snapshot: its.update_service_status
+ * lo confronta con lo stato live al momento dell'esecuzione (FASE 14) e lo
+ * passa a updateServiceStatusCore come expectedCurrentStatus per l'update
+ * condizionale atomico (FASE 19) — il token da solo non autorizza mai una
+ * scrittura contro uno stato diverso da quello effettivamente visto in preview.
+ */
+export type UpdateServiceStatusConfirmationPayload = {
+  purpose: "mcp_update_service_status";
+  jti: string;
+  userId: string;
+  tenantId: string;
+  serviceId: string;
+  currentStatus: string;
+  targetStatus: string;
+  iat: number;
+  exp: number;
+};
+
+export function generateUpdateServiceStatusConfirmationToken(payload: {
+  userId: string;
+  tenantId: string;
+  serviceId: string;
+  currentStatus: string;
+  targetStatus: string;
+}): { token: string; expiresAt: string } {
+  const iat = Math.floor(Date.now() / 1000);
+  const exp = iat + CONFIRMATION_TTL_SECONDS;
+  const full: UpdateServiceStatusConfirmationPayload = {
+    purpose: "mcp_update_service_status",
+    jti: base64url(randomBytes(18)),
+    userId: payload.userId,
+    tenantId: payload.tenantId,
+    serviceId: payload.serviceId,
+    currentStatus: payload.currentStatus,
+    targetStatus: payload.targetStatus,
+    iat,
+    exp,
+  };
+  const encodedPayload = base64url(JSON.stringify(full));
+  const sig = base64url(createHmac("sha256", getSecret()).update(encodedPayload).digest());
+  return { token: `${encodedPayload}.${sig}`, expiresAt: new Date(exp * 1000).toISOString() };
+}
+
+export type VerifyUpdateServiceStatusConfirmationResult =
+  | { ok: true; payload: UpdateServiceStatusConfirmationPayload }
+  | { ok: false; reason: "invalid" | "expired" };
+
+export function verifyUpdateServiceStatusConfirmationToken(token: string): VerifyUpdateServiceStatusConfirmationResult {
+  try {
+    const dot = token.lastIndexOf(".");
+    if (dot < 0) return { ok: false, reason: "invalid" };
+    const encodedPayload = token.slice(0, dot);
+    const sig = token.slice(dot + 1);
+    const expectedSig = base64url(createHmac("sha256", getSecret()).update(encodedPayload).digest());
+
+    const a = Buffer.from(fromBase64url(sig), "base64");
+    const b = Buffer.from(fromBase64url(expectedSig), "base64");
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, reason: "invalid" };
+
+    const payload = JSON.parse(Buffer.from(fromBase64url(encodedPayload), "base64").toString()) as UpdateServiceStatusConfirmationPayload;
+    if (payload.purpose !== "mcp_update_service_status") return { ok: false, reason: "invalid" };
+    if (
+      typeof payload.jti !== "string" ||
+      typeof payload.userId !== "string" ||
+      typeof payload.tenantId !== "string" ||
+      typeof payload.serviceId !== "string" ||
+      typeof payload.currentStatus !== "string" ||
+      typeof payload.targetStatus !== "string"
+    ) {
+      return { ok: false, reason: "invalid" };
+    }
+    if (payload.exp <= Math.floor(Date.now() / 1000)) return { ok: false, reason: "expired" };
+    return { ok: true, payload };
+  } catch {
+    return { ok: false, reason: "invalid" };
+  }
+}

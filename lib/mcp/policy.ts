@@ -18,11 +18,11 @@ export const ENABLED_TOOL_CATEGORIES: readonly McpToolCategory[] = ["READ"];
 
 /**
  * Allowlist esplicita, per nome, dei tool WRITE abilitati (Sprint 2:
- * its.assign_driver, con flusso preview -> confirmation token -> execute).
- * Aggiungere un tool WRITE qui e' una decisione deliberata, non un effetto
- * collaterale della registrazione.
+ * its.assign_driver; Sprint 3: its.update_service_status — stesso flusso
+ * preview -> confirmation token -> execute). Aggiungere un tool WRITE qui
+ * e' una decisione deliberata, non un effetto collaterale della registrazione.
  */
-export const ENABLED_WRITE_TOOLS: readonly string[] = ["its.assign_driver"];
+export const ENABLED_WRITE_TOOLS: readonly string[] = ["its.assign_driver", "its.update_service_status"];
 
 /**
  * Policy centralizzata: il singolo tool NON decide da solo se un ruolo puo'
