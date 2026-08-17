@@ -270,7 +270,8 @@ export const BUS_LINES_2026: BusLineCatalogEntry[] = [
       { city: "AMELIA",                  time: "06:10", pickupNote: note("Agenzia Tiva Viaggi"),                   lat: 42.55, lng: 12.41 },
       { city: "ORTE",                    time: "07:10", pickupNote: note("Hotel Tevere"),                          lat: 42.45, lng: 12.39 },
       { city: "ROMA TIBURTINA",          time: "07:45", pickupNote: note("Largo Mazzoni, fronte negozio Smea"),    lat: 41.90, lng: 12.53 },
-      { city: "ROMA ANAGNINA",           time: "08:15", pickupNote: note("Fermata Atac 502, piazzale del Mercatino"), lat: 41.84, lng: 12.59 }
+      { city: "ROMA ANAGNINA",           time: "08:15", pickupNote: note("Fermata Atac 502, piazzale del Mercatino"), lat: 41.84, lng: 12.59 },
+      { city: "VALMONTONE",              time: "08:45", pickupNote: note("Casello"),                              lat: 41.78, lng: 12.92 }
     ]
   },
   {

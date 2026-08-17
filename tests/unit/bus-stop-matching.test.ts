@@ -137,10 +137,10 @@ describe("resolveBusStop — catalogo linee", () => {
     expect(result!.familyCode).toBe("CENTRO");
   });
 
-  it("VALMONTONE → ITALIA", () => {
+  it("VALMONTONE → CENTRO", () => {
     const result = resolveBusStop("VALMONTONE");
     expect(result).not.toBeNull();
-    expect(result!.familyCode).toBe("ITALIA");
+    expect(result!.familyCode).toBe("CENTRO");
   });
 
   it("PERUGIA → CENTRO", () => {
