@@ -218,19 +218,12 @@ export function createMedmarIssueOrchestrator(deps?: {
       if (existing) return existing;
     }
 
-    const mutationClient = deps?.mutationClient ?? createMedmarMutationClient();
-    const sessionContextResult = await (deps?.resolveSessionContext ?? resolveMedmarIssueSessionContext)({ mutationClient });
-    if (!sessionContextResult.ok) {
-      return {
-        ok: false,
-        status: sessionContextResult.status,
-        idempotency_key: idempotencyKey,
-        error: sessionContextResult.error,
-        retry_allowed: sessionContextResult.retry_allowed,
-      };
-    }
-    const sessionContext = sessionContextResult.context;
-
+    // Fase 2C recovery — l'attempt locale DEVE esistere prima di qualunque
+    // mutazione Medmar, openTurn incluso: un fallimento di persistenza dopo
+    // openTurn lascerebbe altrimenti una mutazione remota non tracciata
+    // (esattamente quanto accaduto nel primo test reale su GERARDO
+    // D'ADDIO). resolveSessionContext (che apre il turno) e' quindi
+    // spostato piu' avanti, subito prima del lock — vedi sotto.
     const acquired = await repo.acquireAttempt({
       tenantId: input.tenantId,
       idempotencyKey,
@@ -298,6 +291,60 @@ export function createMedmarIssueOrchestrator(deps?: {
       await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "manual_review", eventType: "payload_not_ready", errorCode: sanitizeError(err) });
       return { ok: false, status: "manual_review", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Payload Medmar non costruibile con dati verificati.", retry_allowed: false };
     }
+
+    // Fase 2C recovery — resolveSessionContext (che chiama openTurn, prima
+    // mutazione Medmar reale del flusso) avviene qui, DOPO che l'attempt e'
+    // gia' persistito e le validazioni locali sono passate: se fallisce, lo
+    // stato viene scritto subito sull'attempt, cosi' nessuna mutazione
+    // Medmar puo' mai restare non tracciata localmente.
+    //
+    // Trattamento del fallimento, riusando SOLO stati gia' esistenti
+    // (nessun nuovo status introdotto):
+    // - esito ambiguo (rete/timeout dopo l'invio) -> remote_state_unknown,
+    //   stesso stato terminale non-retryable usato altrove nel file per
+    //   qualunque mutazione Medmar dall'esito incerto;
+    // - fallimento pulito (es. auth Medmar non pronta, nessuna chiamata
+    //   partita o rifiutata in modo netto) -> lock_failed, lo stesso stato
+    //   gia' usato per "nulla e' stato congelato, sicuro da ritentare" —
+    //   semanticamente il piu' vicino: siamo un passo prima del lock, zero
+    //   posti toccati.
+    const mutationClient = deps?.mutationClient ?? createMedmarMutationClient();
+    const sessionContextResult = await (deps?.resolveSessionContext ?? resolveMedmarIssueSessionContext)({ mutationClient });
+    if (!sessionContextResult.ok) {
+      const remoteUnknownContext = sessionContextResult.status === "remote_state_unknown";
+      await transition({
+        repo,
+        attempt,
+        tenantId: input.tenantId,
+        userId: input.userId,
+        next: remoteUnknownContext ? "remote_state_unknown" : "lock_failed",
+        eventType: remoteUnknownContext ? "remote_state_unknown" : "session_context_not_ready",
+        patch: { remote_state_unknown: remoteUnknownContext, last_error_message: sessionContextResult.error },
+        errorCode: sessionContextResult.status,
+      });
+      return {
+        ok: false,
+        status: sessionContextResult.status,
+        idempotency_key: idempotencyKey,
+        attempt_id: attempt.id,
+        error: sessionContextResult.error,
+        retry_allowed: sessionContextResult.retry_allowed,
+      };
+    }
+    const sessionContext = sessionContextResult.context;
+    // Persistenza immediata del turno risolto: nessuna colonna dedicata sul
+    // record attempt (fuori scope aggiungerne una in questo recovery), quindi
+    // tracciato come evento sul log esistente — stesso stato dell'attempt,
+    // solo audit trail del turnoId/clienteId/postazioneId risolti.
+    await repo.addEvent({
+      tenantId: input.tenantId,
+      attemptId: attempt.id,
+      previousStatus: attempt.status,
+      newStatus: attempt.status,
+      eventType: "session_context_resolved",
+      createdBy: input.userId,
+      details: { turno_id: sessionContext.turnoId, cliente_id: sessionContext.clienteId, postazione_id: sessionContext.postazioneId },
+    });
 
     // Nulla e' ancora congelato in questo blocco: un fallimento qui (timeout,
     // rete, rifiuto definitivo, o persist locale) non richiede scongela.

@@ -276,10 +276,11 @@ describe("medmar issue orchestrator", () => {
     expect(client.lockAvailability).not.toHaveBeenCalled();
   });
 
-  it("session context non pronto -> nessun attempt e zero mutazioni", async () => {
+  it("Fase 2C recovery — session context non pronto -> ATTEMPT COMUNQUE CREATO (persistito prima di openTurn), stato lock_failed, zero mutazioni lock/booking/payment", async () => {
     const { createMedmarIssueOrchestrator } = await import("@/lib/server/medmar-booking/issue-orchestrator");
     const repo = makeRepo();
     const acquireSpy = vi.spyOn(repo, "acquireAttempt");
+    const updateSpy = vi.spyOn(repo, "updateAttempt");
     const client = mutationClient();
     const result = await createMedmarIssueOrchestrator({
       repo,
@@ -292,9 +293,96 @@ describe("medmar issue orchestrator", () => {
     })({ admin: {} as never, tenantId: TENANT, userId: USER, serviceIds: [SVC] });
     expect(result.ok).toBe(false);
     expect(result.status).toBe("not_ready");
-    expect(acquireSpy).not.toHaveBeenCalled();
+    // Fase 2C: a differenza del comportamento precedente, l'attempt DEVE
+    // esistere PRIMA che resolveSessionContext (openTurn) venga tentato —
+    // altrimenti un openTurn riuscito ma un fallimento locale successivo
+    // lascerebbe una mutazione Medmar non tracciata (bug reale osservato
+    // sul primo test D'Addio).
+    expect(acquireSpy).toHaveBeenCalledTimes(1);
+    // Il fallimento pulito (non ambiguo) viene scritto sull'attempt come
+    // lock_failed (nessun nuovo stato introdotto — vedi commento in
+    // issue-orchestrator.ts).
+    expect(updateSpy).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: "lock_failed" }), expect.any(String));
+    expect(client.openTurn).not.toHaveBeenCalled(); // il fallimento e' nel resolver, non nella chiamata reale
     expect(client.lockAvailability).not.toHaveBeenCalled();
     expect(client.createBooking).not.toHaveBeenCalled();
+    expect(client.payManual).not.toHaveBeenCalled();
+  });
+
+  it("Fase 2C recovery — session context remote_state_unknown -> attempt creato e marcato remote_state_unknown, zero lock/booking/payment", async () => {
+    const { createMedmarIssueOrchestrator } = await import("@/lib/server/medmar-booking/issue-orchestrator");
+    const repo = makeRepo();
+    const acquireSpy = vi.spyOn(repo, "acquireAttempt");
+    const updateSpy = vi.spyOn(repo, "updateAttempt");
+    const client = mutationClient();
+    const result = await createMedmarIssueOrchestrator({
+      repo,
+      mutationClient: client,
+      runPreflight: vi.fn().mockResolvedValue(preflight()),
+      fetchVendibili: vi.fn().mockResolvedValue(vendibili()),
+      resolveSessionContext: vi.fn().mockResolvedValue({ ok: false, status: "remote_state_unknown", error: "Apertura turno ambigua.", retry_allowed: false }),
+      config: { enabled: true, causaleId: 1, modalitaId: 5, vettoreAndataId: 1, vettoreRitornoId: 1 },
+      loadPassengerComposition: vi.fn().mockResolvedValue(passengerComposition()) as never,
+    })({ admin: {} as never, tenantId: TENANT, userId: USER, serviceIds: [SVC] });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("remote_state_unknown");
+    expect(acquireSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: "remote_state_unknown", remote_state_unknown: true }), expect.any(String));
+    expect(client.lockAvailability).not.toHaveBeenCalled();
+    expect(client.createBooking).not.toHaveBeenCalled();
+    expect(client.payManual).not.toHaveBeenCalled();
+    // 6. remote_state_unknown resta non retryable: un secondo tentativo
+    // sulla stessa idempotency key deve fermarsi subito, zero mutazioni.
+    const client2 = mutationClient();
+    const retryResolveSessionContextSpy = vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT });
+    const retryResult = await createMedmarIssueOrchestrator({
+      repo,
+      mutationClient: client2,
+      runPreflight: vi.fn().mockResolvedValue(preflight()),
+      fetchVendibili: vi.fn().mockResolvedValue(vendibili()),
+      resolveSessionContext: retryResolveSessionContextSpy,
+      config: { enabled: true, causaleId: 1, modalitaId: 5, vettoreAndataId: 1, vettoreRitornoId: 1 },
+      loadPassengerComposition: vi.fn().mockResolvedValue(passengerComposition()) as never,
+    })({ admin: {} as never, tenantId: TENANT, userId: USER, serviceIds: [SVC] });
+    expect(retryResult.ok).toBe(false);
+    expect(retryResult.status).toBe("remote_state_unknown");
+    expect(retryResolveSessionContextSpy).not.toHaveBeenCalled();
+    expect(client2.lockAvailability).not.toHaveBeenCalled();
+  });
+
+  it("Fase 2C recovery — sensitivity ordine chiamate: acquireAttempt avviene SEMPRE prima di resolveSessionContext/openTurn (happy path)", async () => {
+    const repo = makeRepo();
+    const callOrder: string[] = [];
+    const acquireAttemptOriginal = repo.acquireAttempt.bind(repo);
+    vi.spyOn(repo, "acquireAttempt").mockImplementation(async (...args) => {
+      callOrder.push("acquireAttempt");
+      return acquireAttemptOriginal(...args);
+    });
+    const resolveSessionContextSpy = vi.fn().mockImplementation(async () => {
+      callOrder.push("resolveSessionContext");
+      return { ok: true, context: SESSION_CONTEXT };
+    });
+    const client = mutationClient({
+      lockAvailability: vi.fn().mockImplementation(async (...args: Parameters<MedmarMutationClient["lockAvailability"]>) => {
+        callOrder.push("lockAvailability");
+        return mutationClient().lockAvailability(...args);
+      }),
+    });
+    const result = await run({ mutationClient: client, repo, resolveSessionContext: resolveSessionContextSpy });
+    expect(result.ok).toBe(true);
+    expect(callOrder).toEqual(["acquireAttempt", "resolveSessionContext", "lockAvailability"]);
+  });
+
+  it("Fase 2C recovery — repeated execution con attempt gia' in preflight_ok (bloccante) non chiama MAI resolveSessionContext/openTurn una seconda volta", async () => {
+    const repo = makeRepo(attempt({ status: "preflight_ok" }));
+    const resolveSessionContextSpy = vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT });
+    const client = mutationClient();
+    const result = await run({ repo, mutationClient: client, resolveSessionContext: resolveSessionContextSpy });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("already_in_progress");
+    expect(resolveSessionContextSpy).not.toHaveBeenCalled();
+    expect(client.openTurn).not.toHaveBeenCalled();
+    expect(client.lockAvailability).not.toHaveBeenCalled();
   });
 
   it("lock nonDisponibili -> lock_failed senza booking", async () => {
