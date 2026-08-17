@@ -371,22 +371,45 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
         : `Nessuna regola tariffaria trovata | agenzia: ${agencyMatch?.reason ?? "n/d"} | tratta: ${routeMatch?.reason ?? "n/d"}`
     };
 
-    const { data: importRow } = await admin.from("inbound_booking_imports").insert(importPayload).select("id").single();
+    const { data: importRow, error: importInsertError } = await admin.from("inbound_booking_imports").insert(importPayload).select("id").single();
+    if (importInsertError) {
+      // HARDENING SPRINT 2A — FASE 12: this insert previously failed silently
+      // (result discarded). Only service_id/tenant_id/error.message are
+      // logged — never the source email text, extracted payload, or agency
+      // data that importPayload/sourceText carry.
+      console.error("[pricing-matching] inbound_booking_imports insert failed", {
+        service_id: input.serviceId,
+        tenant_id: input.tenantId,
+        message: importInsertError.message
+      });
+    }
     const importId = importRow?.id ?? null;
 
     if (!selectedRule) {
-      await admin
+      const { error: fallbackUpdateError } = await admin
         .from("services")
         .update({
           agency_id: agencyMatch?.id ?? null,
           route_id: routeMatch?.id ?? null,
           import_id: importId,
           pricing_apply_mode: "fallback",
-          pricing_confidence: matchConfidence || null,
+          // Hardening Sprint 2A.1: services.pricing_confidence (legacy TEXT,
+          // 'low'/'medium'/'high') is a different, unrelated column from an
+          // abandoned older schema — writing this numeric match score there
+          // would violate its CHECK constraint. pricing_match_confidence is
+          // the new, separately-added integer 0-100 column for this engine.
+          pricing_match_confidence: matchConfidence || null,
           pricing_applied_at: new Date().toISOString()
         })
         .eq("id", input.serviceId)
         .eq("tenant_id", input.tenantId);
+      if (fallbackUpdateError) {
+        console.error("[pricing-matching] services fallback update failed", {
+          service_id: input.serviceId,
+          tenant_id: input.tenantId,
+          message: fallbackUpdateError.message
+        });
+      }
       return;
     }
 
@@ -398,7 +421,7 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
     const margin = finalPrice - internalCost;
     const currency = selectedPriceList?.currency ?? "EUR";
 
-    await admin.from("service_pricing").insert({
+    const { error: servicePricingInsertError } = await admin.from("service_pricing").insert({
       tenant_id: input.tenantId,
       service_id: input.serviceId,
       price_list_id: selectedPriceList?.id ?? null,
@@ -423,8 +446,15 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
       },
       created_at: new Date().toISOString()
     });
+    if (servicePricingInsertError) {
+      console.error("[pricing-matching] service_pricing insert failed", {
+        service_id: input.serviceId,
+        tenant_id: input.tenantId,
+        message: servicePricingInsertError.message
+      });
+    }
 
-    await admin
+    const { error: matchedUpdateError } = await admin
       .from("services")
       .update({
         agency_id: agencyMatch?.id ?? null,
@@ -439,12 +469,21 @@ export async function tryMatchAndApplyPricing(admin: AdminClient, input: MatchIn
         final_price_cents: finalPrice,
         margin_cents: margin,
         pricing_apply_mode: "auto_rule",
-        pricing_confidence: matchConfidence || null,
+        // Hardening Sprint 2A.1: see the fallback branch above — this is
+        // the new, collision-free pricing_match_confidence column.
+        pricing_match_confidence: matchConfidence || null,
         pricing_manual_override: false,
         pricing_applied_at: new Date().toISOString()
       })
       .eq("id", input.serviceId)
       .eq("tenant_id", input.tenantId);
+    if (matchedUpdateError) {
+      console.error("[pricing-matching] services matched update failed", {
+        service_id: input.serviceId,
+        tenant_id: input.tenantId,
+        message: matchedUpdateError.message
+      });
+    }
   } catch (error) {
     console.error("Pricing match/apply failed", error);
   }

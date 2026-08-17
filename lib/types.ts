@@ -120,7 +120,12 @@ export interface Service {
   source_quote_leg?: "arrival" | "departure" | null;
   margin_cents?: number | null;
   pricing_apply_mode?: "manual" | "auto_rule" | "fallback" | null;
-  pricing_confidence?: number | null;
+  /** Legacy column from an abandoned older pricing schema — no application
+   *  code reads or writes it (verified Hardening Sprint 2A.1); kept only
+   *  because the column still exists on the real DB. Use
+   *  pricing_match_confidence for the current pricing engine's 0-100 score. */
+  pricing_confidence?: "low" | "medium" | "high" | null;
+  pricing_match_confidence?: number | null;
   pricing_applied_at?: string | null;
   pricing_manual_override?: boolean | null;
   pricing_manual_override_reason?: string | null;

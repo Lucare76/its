@@ -88,7 +88,10 @@ export async function POST(request: NextRequest) {
         final_price_cents: finalPrice,
         margin_cents: margin,
         pricing_apply_mode: "manual",
-        pricing_confidence: 100,
+        // Hardening Sprint 2A.1: pricing_confidence (legacy TEXT
+        // low/medium/high) is unrelated — pricing_match_confidence is the
+        // integer 0-100 column this engine writes to.
+        pricing_match_confidence: 100,
         pricing_manual_override: true,
         pricing_manual_override_reason: parsed.data.reason,
         pricing_applied_at: new Date().toISOString()
