@@ -86,7 +86,10 @@ export function deriveBusFamily(code?: string | null, name?: string | null): { f
   }
 
   // Line number takes priority over name keywords
-  // CENTRO: only line 7
+  if (normalized.includes("centro")) {
+    return { family_code: "CENTRO", family_name: "Linea Centro" };
+  }
+  // CENTRO: line 7 and explicit Centro variants
   if (lineNumber === 7) {
     return { family_code: "CENTRO", family_name: "Linea Centro" };
   }

@@ -75,6 +75,13 @@ const MANUAL_IMPORT_STOP_OVERRIDES: ManualImportStopOverride[] = [
     pickupNote: note("Import Excel cliente - fermata manuale da confermare")
   },
   {
+    city: "VALMONTONE",
+    time: "08:45",
+    lineCode: "LINEA_8_CENTRO_2",
+    lineName: "Linea 8 Centro 2",
+    pickupNote: note("Casello")
+  },
+  {
     city: "COLLEFERRO",
     time: "09:15",
     lineCode: "LINEA_8_CENTRO_2",
@@ -120,6 +127,7 @@ const MANUAL_IMPORT_STOP_OVERRIDES: ManualImportStopOverride[] = [
 
 function deriveFamilyFromLineCode(code: string): { familyCode: "ITALIA" | "CENTRO" | "ADRIATICA"; familyName: string } {
   const normalized = code.toLowerCase();
+  if (normalized.includes("centro")) return { familyCode: "CENTRO", familyName: "Linea Centro" };
   const match = normalized.match(/linea[_\s-]*(\d{1,2})/);
   const lineNumber = match ? Number(match[1]) : null;
   if (lineNumber === 7) return { familyCode: "CENTRO", familyName: "Linea Centro" };
@@ -281,7 +289,6 @@ export const BUS_LINES_2026: BusLineCatalogEntry[] = [
     validTo: "2026-10-11",
     notes: null,
     stops: [
-      { city: "VALMONTONE",     time: "08:45", pickupNote: note("Casello"),                                    lat: 41.78, lng: 12.92 },
       { city: "CASSINO",        time: "10:30", pickupNote: note("Casello"),                                    lat: 41.49, lng: 13.83 },
       { city: "CASERTA",        time: "11:10", pickupNote: note("Casello nord"),                               lat: 41.07, lng: 14.33 }
     ]

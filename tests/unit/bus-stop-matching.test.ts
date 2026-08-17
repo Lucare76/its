@@ -6,6 +6,7 @@ import {
   stopMatchesFuzzy,
 } from "@/lib/server/bus-service-resolver";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
+import { getDefaultStopsForLine } from "@/lib/server/bus-network";
 
 const makeStop = (stop_name: string, city?: string) => ({
   id: "stop-1",
@@ -159,5 +160,17 @@ describe("resolveBusStop — catalogo linee", () => {
     const result = resolveBusStop("CASSINO");
     expect(result).not.toBeNull();
     expect(result!.familyCode).toBe("ITALIA");
+  });
+});
+
+describe("getDefaultStopsForLine — famiglie bus", () => {
+  it("include VALMONTONE nella Linea Centro", () => {
+    const centroStops = getDefaultStopsForLine("CENTRO");
+    expect(centroStops.some((stop) => stop.stop_name === "VALMONTONE")).toBe(true);
+  });
+
+  it("non include VALMONTONE nella Linea Italia", () => {
+    const italiaStops = getDefaultStopsForLine("ITALIA");
+    expect(italiaStops.some((stop) => stop.stop_name === "VALMONTONE")).toBe(false);
   });
 });
