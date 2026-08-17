@@ -41,20 +41,55 @@ function extractFromNotes(rawNotes: string) {
 }
 
 const HEADER_COLOR = "1E3A5F";
+const BRAND_BLUE = "0B2D4F";
 const HEADER_BG = "E8EDF3";
+const SUBTLE_ROW_BG = "F8FBFF";
+const GRID_COLOR = "B9C4D0";
 const TOTAL_BG = "FFF3CD";
 const SCARICO_BG = "D4EDDA";
 
+function applyGrid(row: ExcelJS.Row, colCount: number, options?: { alternate?: boolean }) {
+  row.alignment = { vertical: "middle", wrapText: true };
+  for (let c = 1; c <= colCount; c++) {
+    const cell = row.getCell(c);
+    cell.border = {
+      top: { style: "thin", color: { argb: `FF${GRID_COLOR}` } },
+      left: { style: "thin", color: { argb: `FF${GRID_COLOR}` } },
+      bottom: { style: "thin", color: { argb: `FF${GRID_COLOR}` } },
+      right: { style: "thin", color: { argb: `FF${GRID_COLOR}` } },
+    };
+    if (options?.alternate) {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${SUBTLE_ROW_BG}` } };
+    }
+  }
+}
+
 function styleHeaderRow(row: ExcelJS.Row, colCount: number) {
-  row.font = { bold: true, size: 10, color: { argb: `FF${HEADER_COLOR}` } };
+  row.font = { bold: true, size: 11, color: { argb: `FF${HEADER_COLOR}` } };
   row.alignment = { horizontal: "center", vertical: "middle" };
   for (let c = 1; c <= colCount; c++) {
     const cell = row.getCell(c);
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${HEADER_BG}` } };
     cell.border = {
-      bottom: { style: "thin", color: { argb: "FF999999" } },
+      top: { style: "thin", color: { argb: `FF${GRID_COLOR}` } },
+      left: { style: "thin", color: { argb: `FF${GRID_COLOR}` } },
+      bottom: { style: "thin", color: { argb: `FF${GRID_COLOR}` } },
+      right: { style: "thin", color: { argb: `FF${GRID_COLOR}` } },
     };
   }
+}
+
+function setupPrintSheet(ws: ExcelJS.Worksheet, printArea: string) {
+  ws.pageSetup = {
+    orientation: "landscape",
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    paperSize: 9,
+    margins: { left: 0.25, right: 0.25, top: 0.35, bottom: 0.35, header: 0.15, footer: 0.15 },
+    printArea,
+  };
+  ws.views = [{ state: "frozen", ySplit: 3 }];
 }
 
 export async function fetchLogoBase64(): Promise<string | null> {
@@ -77,8 +112,8 @@ export function addLogo(wb: ExcelJS.Workbook, ws: ExcelJS.Worksheet, logoBase64:
   const base64Data = logoBase64.split(",")[1] ?? logoBase64;
   const imageId = wb.addImage({ base64: base64Data, extension: "png" });
   ws.addImage(imageId, {
-    tl: { col: 0, row: 0 },
-    ext: { width: 120, height: 80 },
+    tl: { col: 0.15, row: 0.15 },
+    ext: { width: 92, height: 42 },
   });
 }
 
@@ -91,7 +126,7 @@ export async function buildArrivalWorkbook(
 ): Promise<ExcelJS.Workbook> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Andata");
-  ws.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
+  setupPrintSheet(ws, "A1:H200");
 
   const logoBase64 = preloadedLogo ?? await fetchLogoBase64();
 
@@ -115,20 +150,31 @@ export async function buildArrivalWorkbook(
     { width: 14 }, // note
     { width: 20 }, // agenzia
   ];
+  [26, 34, 8, 34, 20, 28, 18, 22].forEach((width, index) => {
+    ws.getColumn(index + 1).width = width;
+  });
 
   // Logo + titolo
-  let startRow = 1;
+  let startRow = 2;
+  ws.getRow(1).height = 36;
   if (logoBase64) {
     addLogo(wb, ws, logoBase64);
-    ws.getRow(1).height = 60;
-    startRow = 2;
   }
+  ws.mergeCells(1, 3, 1, 8);
+  const brandCell = ws.getCell(1, 3);
+  brandCell.value = "ISCHIA TRANSFER SERVICE";
+  brandCell.font = { bold: true, size: 12, color: { argb: `FF${BRAND_BLUE}` } };
+  brandCell.alignment = { horizontal: "right", vertical: "middle" };
   ws.mergeCells(startRow, 1, startRow, 8);
   const titleCell = ws.getCell(startRow, 1);
   titleCell.value = "ARRIVI";
-  titleCell.font = { bold: true, size: 14, color: { argb: `FF${HEADER_COLOR}` } };
+  titleCell.font = { bold: true, size: 18, color: { argb: `FF${HEADER_COLOR}` } };
   titleCell.alignment = { horizontal: "center", vertical: "middle" };
-  ws.getRow(startRow).height = 24;
+  titleCell.border = {
+    top: { style: "medium", color: { argb: `FF${HEADER_COLOR}` } },
+    bottom: { style: "medium", color: { argb: `FF${HEADER_COLOR}` } },
+  };
+  ws.getRow(startRow).height = 28;
 
   // Header
   const headerRow = ws.addRow(["orario", "punto di carico", "n° pax", "nominativo", "cell", "HOTEL", "note", "agenzia"]);
@@ -136,7 +182,7 @@ export async function buildArrivalWorkbook(
 
   // Data rows
   let totalPax = 0;
-  for (const alloc of sorted) {
+  for (const [index, alloc] of sorted.entries()) {
     const { hotelFromNotes, agencyFromNotes, cleanNote } = extractFromNotes(alloc.notes ?? "");
     const stopTime = alloc.stop_pickup_time ?? "";
     const orario = stopTime ? `${stopTime.slice(0, 5)} ${alloc.stop_name}` : alloc.stop_name;
@@ -152,6 +198,10 @@ export async function buildArrivalWorkbook(
     ]);
     row.font = { size: 10 };
     row.getCell(1).font = { size: 10, bold: true };
+    row.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
+    row.getCell(4).alignment = { horizontal: "left", vertical: "middle" };
+    row.getCell(5).alignment = { horizontal: "center", vertical: "middle" };
+    applyGrid(row, 8, { alternate: index % 2 === 1 });
     totalPax += alloc.pax_assigned;
   }
 
@@ -159,13 +209,17 @@ export async function buildArrivalWorkbook(
   ws.addRow([]);
   const totRow = ws.addRow(["", "TOTALE", totalPax, "", "", "", "", ""]);
   totRow.font = { bold: true, size: 11 };
+  applyGrid(totRow, 8);
   totRow.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${TOTAL_BG}` } };
   totRow.getCell(3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${TOTAL_BG}` } };
+  totRow.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
 
   // Autista
   ws.addRow([]);
   const driverRow = ws.addRow([`AUTISTA : ${driverName || "N/D"}  ${driverPhone || ""}`]);
   driverRow.font = { bold: true, size: 11, color: { argb: `FF${HEADER_COLOR}` } };
+  ws.mergeCells(driverRow.number, 1, driverRow.number, 8);
+  driverRow.getCell(1).alignment = { horizontal: "left", vertical: "middle" };
 
   return wb;
 }
@@ -179,7 +233,7 @@ export async function buildDepartureWorkbook(
 ): Promise<ExcelJS.Workbook> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Ritorno");
-  ws.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
+  setupPrintSheet(ws, "A1:H220");
 
   const logoBase64 = preloadedLogo ?? await fetchLogoBase64();
 
@@ -203,20 +257,31 @@ export async function buildDepartureWorkbook(
     { width: 20 }, // agenzia
     { width: 22 }, // note
   ];
+  [12, 28, 8, 34, 20, 40, 22, 22].forEach((width, index) => {
+    ws.getColumn(index + 1).width = width;
+  });
 
   // Logo + titolo
-  let startRow = 1;
+  let startRow = 2;
+  ws.getRow(1).height = 36;
   if (logoBase64) {
     addLogo(wb, ws, logoBase64);
-    ws.getRow(1).height = 60;
-    startRow = 2;
   }
+  ws.mergeCells(1, 3, 1, 8);
+  const brandCell = ws.getCell(1, 3);
+  brandCell.value = "ISCHIA TRANSFER SERVICE";
+  brandCell.font = { bold: true, size: 12, color: { argb: `FF${BRAND_BLUE}` } };
+  brandCell.alignment = { horizontal: "right", vertical: "middle" };
   ws.mergeCells(startRow, 1, startRow, 8);
   const titleCell = ws.getCell(startRow, 1);
   titleCell.value = "PARTENZE";
-  titleCell.font = { bold: true, size: 14, color: { argb: `FF${HEADER_COLOR}` } };
+  titleCell.font = { bold: true, size: 18, color: { argb: `FF${HEADER_COLOR}` } };
   titleCell.alignment = { horizontal: "center", vertical: "middle" };
-  ws.getRow(startRow).height = 24;
+  titleCell.border = {
+    top: { style: "medium", color: { argb: `FF${HEADER_COLOR}` } },
+    bottom: { style: "medium", color: { argb: `FF${HEADER_COLOR}` } },
+  };
+  ws.getRow(startRow).height = 28;
 
   // Header
   const headerRow = ws.addRow(["pickup", "hotel partenza", "n° pax", "nominativo", "cell", "destinazione", "agenzia", "note"]);
@@ -224,7 +289,7 @@ export async function buildDepartureWorkbook(
 
   // Data rows
   let totalPax = 0;
-  for (const alloc of sorted) {
+  for (const [index, alloc] of sorted.entries()) {
     const { hotelFromNotes, agencyFromNotes, cleanNote } = extractFromNotes(alloc.notes ?? "");
     const hotelPartenza = shortenHotelName(alloc.hotel_name || hotelFromNotes || "");
     const stopNote = alloc.stop_pickup_note ?? "";
@@ -242,6 +307,10 @@ export async function buildDepartureWorkbook(
     ]);
     row.font = { size: 10 };
     if (pickupTime) row.getCell(1).font = { size: 10, bold: true };
+    row.getCell(1).alignment = { horizontal: "center", vertical: "middle" };
+    row.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
+    row.getCell(5).alignment = { horizontal: "center", vertical: "middle" };
+    applyGrid(row, 8, { alternate: index % 2 === 1 });
     totalPax += alloc.pax_assigned;
   }
 
@@ -249,8 +318,10 @@ export async function buildDepartureWorkbook(
   ws.addRow([]);
   const totRow = ws.addRow(["", "TOTALE", totalPax, "", "", "", "", ""]);
   totRow.font = { bold: true, size: 11 };
+  applyGrid(totRow, 8);
   totRow.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${TOTAL_BG}` } };
   totRow.getCell(3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${TOTAL_BG}` } };
+  totRow.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
 
   // Scarico
   const usedStopNames = new Set(sorted.map((a) => a.stop_name.toUpperCase()));
@@ -267,9 +338,12 @@ export async function buildDepartureWorkbook(
     const scaricoHeader = ws.addRow(["SCARICO"]);
     scaricoHeader.font = { bold: true, size: 11, color: { argb: `FF${HEADER_COLOR}` } };
     scaricoHeader.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${SCARICO_BG}` } };
+    ws.mergeCells(scaricoHeader.number, 1, scaricoHeader.number, 8);
     for (const stop of usedStops) {
       const label = stop.pickup_note ? `${stop.stop_name} - ${stop.pickup_note}` : stop.stop_name;
-      ws.addRow([label]);
+      const stopRow = ws.addRow([label]);
+      ws.mergeCells(stopRow.number, 1, stopRow.number, 8);
+      stopRow.getCell(1).alignment = { vertical: "middle", wrapText: true };
     }
   }
 
@@ -277,6 +351,8 @@ export async function buildDepartureWorkbook(
   ws.addRow([]);
   const driverRow = ws.addRow([`AUTISTA : ${driverName || "N/D"}  ${driverPhone || ""}`]);
   driverRow.font = { bold: true, size: 11, color: { argb: `FF${HEADER_COLOR}` } };
+  ws.mergeCells(driverRow.number, 1, driverRow.number, 8);
+  driverRow.getCell(1).alignment = { horizontal: "left", vertical: "middle" };
 
   return wb;
 }
