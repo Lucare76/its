@@ -12,6 +12,12 @@ export type McpToolDefinition<TInput = unknown, TOutput = unknown> = {
   outputSchema: ZodType<TOutput>;
   allowedRoles: readonly UserRole[];
   handler: (context: McpContext, input: TInput) => Promise<TOutput>;
+  /**
+   * Opzionale: costruisce l'input_summary sanitizzato da scrivere in
+   * mcp_audit_logs per una chiamata riuscita (mai PII, mai il token di
+   * conferma). Se assente, l'audit non include un input_summary.
+   */
+  buildAuditSummary?: (input: TInput, output: TOutput) => Record<string, unknown>;
 };
 
 const registry = new Map<string, McpToolDefinition<any, any>>();

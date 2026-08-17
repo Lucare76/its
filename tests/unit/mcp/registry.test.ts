@@ -62,7 +62,7 @@ describe("mcp production tool registry (its.* reali)", () => {
     await import("@/lib/mcp/tools/index");
   });
 
-  it("registra esattamente i 5 tool READ dello Sprint 1", () => {
+  it("registra esattamente i 7 tool attesi dopo Sprint 2 (6 READ + 1 WRITE)", () => {
     const names = listTools()
       .map((tool) => tool.name)
       .sort();
@@ -73,6 +73,8 @@ describe("mcp production tool registry (its.* reali)", () => {
         "its.get_fleet_status",
         "its.get_service",
         "its.search_services",
+        "its.preview_assign_driver",
+        "its.assign_driver",
       ].sort()
     );
   });
@@ -90,9 +92,11 @@ describe("mcp production tool registry (its.* reali)", () => {
     }
   });
 
-  it("nessun tool WRITE/DESTRUCTIVE/EXTERNAL_ACTION e' registrato nello Sprint 1", () => {
+  it("esattamente un tool WRITE (its.assign_driver), nessun DESTRUCTIVE/EXTERNAL_ACTION", () => {
     const nonReadTools = listTools().filter((tool) => tool.category !== "READ");
-    expect(nonReadTools).toEqual([]);
+    expect(nonReadTools.map((tool) => ({ name: tool.name, category: tool.category }))).toEqual([
+      { name: "its.assign_driver", category: "WRITE" },
+    ]);
   });
 
   it("nessun tool espone nomi di query/CRUD generico o SQL diretto", () => {

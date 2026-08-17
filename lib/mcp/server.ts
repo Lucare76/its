@@ -37,6 +37,7 @@ async function runTool(context: McpContext, tool: McpToolDefinition, rawInput: u
       category: tool.category,
       success: true,
       durationMs: Date.now() - startedAt,
+      inputSummary: tool.buildAuditSummary?.(parsedInput.data, output),
     });
 
     return { content: [{ type: "text" as const, text: JSON.stringify(output) }] };
