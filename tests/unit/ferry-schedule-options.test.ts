@@ -57,10 +57,18 @@ const rows: FerryScheduleRow[] = [
 describe("findArrivalScheduleForService", () => {
   it("usa ferry_schedules per SNAV e calcola l'arrivo senza lookup hardcoded per orario", () => {
     const result = findArrivalScheduleForService(rows, "2026-04-26", "08:30", "formula_snav");
+    // Hardening Sprint 3 — PARTE A: `departurePort` è un campo obbligatorio
+    // di FerryArrivalMatch (lib/ferry-schedule-options.ts), sempre popolato
+    // da findArrivalScheduleForService() con match.departure_port (mai
+    // opzionale in produzione). La fixture qui sotto era obsoleta — non
+    // includeva questo campo, che è invece già correttamente presente nella
+    // fixture equivalente di findDepartureScheduleForService più sotto in
+    // questo stesso file. Verdetto: TEST OBSOLETO, non bug di produzione.
     expect(result).toEqual({
       company: "snav",
       departureTime: "08:30",
       arrivalTime: "09:35",
+      departurePort: "napoli_beverello",
       arrivalPort: "casamicciola",
     });
   });
@@ -70,9 +78,22 @@ describe("findArrivalScheduleForService", () => {
     const fromPozzuoli = findArrivalScheduleForService(rows, "2026-04-26", "12:00", "formula_medmar_pozzuoli");
 
     expect(fromNaples?.arrivalTime).toBe("15:50");
+    expect(fromNaples?.departurePort).toBe("napoli_beverello");
     expect(fromNaples?.arrivalPort).toBe("ischia_porto");
     expect(fromPozzuoli?.arrivalTime).toBe("13:00");
+    expect(fromPozzuoli?.departurePort).toBe("pozzuoli");
     expect(fromPozzuoli?.arrivalPort).toBe("casamicciola");
+  });
+
+  it("PARTE A3: departurePort riflette sempre il porto di partenza reale della corsa individuata, non un valore fisso", () => {
+    // Stessa direzione/company/orario logico ma porti di partenza diversi
+    // (Napoli vs Pozzuoli per Medmar) devono produrre departurePort diversi
+    // — non è un campo statico/derivabile solo dalla company.
+    const fromNaples = findArrivalScheduleForService(rows, "2026-04-26", "14:20", "formula_medmar_napoli");
+    const fromPozzuoli = findArrivalScheduleForService(rows, "2026-04-26", "12:00", "formula_medmar_pozzuoli");
+    expect(fromNaples?.departurePort).not.toBe(fromPozzuoli?.departurePort);
+    expect(fromNaples?.departurePort).toBe("napoli_beverello");
+    expect(fromPozzuoli?.departurePort).toBe("pozzuoli");
   });
 });
 

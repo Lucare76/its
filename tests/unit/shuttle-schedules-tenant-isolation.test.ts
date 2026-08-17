@@ -443,8 +443,15 @@ describe("Tenant isolation — shuttle-schedules API (M1-03 / F-07)", () => {
     });
 
     it("15/F/B. id costruito con la chiave di una programmazione del tenant B modifica esclusivamente le righe del tenant A", async () => {
-      const tenantARow = serviceRow(TENANT_A, { date: "2026-08-10" });
-      const tenantBRow = serviceRow(TENANT_B, { date: "2026-08-10" });
+      // Hardening Sprint 3 — PARTE B: la data hardcoded "2026-08-10" diventava
+      // passato rispetto all'orologio reale, escludendo tenantARow dal
+      // filtro "solo righe future" del guard PATCH — la riga non veniva mai
+      // trovata/sostituita e l'assert su tenantARow "deve essere sparita"
+      // falliva. TOMORROW (già usato identicamente nel test 20 di questo
+      // stesso file) è sempre nel futuro, indipendentemente da quando il
+      // test viene eseguito.
+      const tenantARow = serviceRow(TENANT_A, { date: TOMORROW });
+      const tenantBRow = serviceRow(TENANT_B, { date: TOMORROW });
       const fake = createTenantAwareSupabase({ services: [tenantARow, tenantBRow], assignments: [] });
       authorizeAs(TENANT_A, fake);
 

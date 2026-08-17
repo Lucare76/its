@@ -469,16 +469,27 @@ describe("shuttle-schedules API — aggregated audit log (M1-08 / F-04)", () => 
     });
 
     it("17. riduzione periodo è visibile nel diff (validTo diverso)", async () => {
-      const rowA = serviceRow(TENANT_A, { date: "2026-08-05" });
-      const rowB = serviceRow(TENANT_A, { date: "2026-08-25" });
+      // Hardening Sprint 3 — PARTE B: date hardcoded assolute ("2026-08-05"
+      // ecc.) diventavano nel passato rispetto all'orologio reale non appena
+      // quella data veniva superata, facendo scattare la guardia F-01/F-10
+      // sul range invalido (valid_from > valid_to) prima ancora di arrivare
+      // al diff che il test vuole verificare. Come già fa il resto di questo
+      // file (es. test 13/14/15), le date sono ora relative a TODAY tramite
+      // isoDate(offsetDays) — stesso risultato indipendentemente da quando
+      // il test viene eseguito.
+      const dateA = isoDate(2);
+      const dateB = isoDate(20);
+      const reducedValidTo = isoDate(5);
+      const rowA = serviceRow(TENANT_A, { date: dateA });
+      const rowB = serviceRow(TENANT_A, { date: dateB });
       const fake = createFakeSupabase({ services: [rowA, rowB], assignments: [] });
       authorizeAs(TENANT_A, fake);
 
-      await callPatch(SHARED_SCHEDULE_ID, basePayload({ valid_from: TODAY, valid_to: "2026-08-10" }));
+      await callPatch(SHARED_SCHEDULE_ID, basePayload({ valid_from: TODAY, valid_to: reducedValidTo }));
 
       const [event] = eventsNamed("shuttle_schedule_updated");
-      expect(event.details.previous.validTo).toBe("2026-08-25");
-      expect(event.details.next.validTo).toBe("2026-08-10");
+      expect(event.details.previous.validTo).toBe(dateB);
+      expect(event.details.next.validTo).toBe(reducedValidTo);
     });
 
     it("18. modifica giorni è visibile nel diff quando i giorni precedenti sono ricostruibili dalle righe esistenti", async () => {
@@ -643,8 +654,15 @@ describe("shuttle-schedules API — aggregated audit log (M1-08 / F-04)", () => 
     });
 
     it("30. deletedCount e range corretti", async () => {
-      const rowA = serviceRow(TENANT_A, { date: "2026-09-01" });
-      const rowB = serviceRow(TENANT_A, { date: "2026-09-05" });
+      // Hardening Sprint 3 — PARTE B (fix preventivo): DELETE opera solo su
+      // righe future; date assolute future oggi ("2026-09-01") sarebbero
+      // diventate passato entro poche settimane, silenziosamente escluse
+      // dalla query e rompendo deletedCount. Stesso pattern isoDate() già
+      // usato altrove in questo file.
+      const dateA = isoDate(3);
+      const dateB = isoDate(7);
+      const rowA = serviceRow(TENANT_A, { date: dateA });
+      const rowB = serviceRow(TENANT_A, { date: dateB });
       const fake = createFakeSupabase({ services: [rowA, rowB], assignments: [] });
       authorizeAs(TENANT_A, fake);
 
@@ -652,8 +670,8 @@ describe("shuttle-schedules API — aggregated audit log (M1-08 / F-04)", () => 
 
       const [event] = eventsNamed("shuttle_schedule_deleted");
       expect(event.details.deletedCount).toBe(2);
-      expect(event.details.deletedDateFrom).toBe("2026-09-01");
-      expect(event.details.deletedDateTo).toBe("2026-09-05");
+      expect(event.details.deletedDateFrom).toBe(dateA);
+      expect(event.details.deletedDateTo).toBe(dateB);
     });
 
     it("31. F-01 blocca senza evento di successo", async () => {
