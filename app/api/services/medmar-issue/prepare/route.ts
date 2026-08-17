@@ -21,6 +21,8 @@ import { buildIssueCustomer, MedmarIssuePayloadError } from "@/lib/server/medmar
 import { createIssueRepository } from "@/lib/server/medmar-booking/issue-repository";
 import { createConfirmationToken } from "@/lib/server/medmar-booking/issue-confirmation";
 import { getMedmarIssueConfig } from "@/lib/server/medmar-booking/issue-config";
+import { loadAgencyRecipient } from "@/lib/server/medmar-booking/recipient-repository";
+import { resolveMedmarDelivery } from "@/lib/server/medmar-booking/recipient-resolver";
 
 export const runtime = "nodejs";
 
@@ -60,8 +62,35 @@ export async function POST(request: NextRequest) {
     if (services.length !== parsed.data.service_ids.length) {
       return NextResponse.json({ ok: false, status: "manual_review", error: "Servizi non trovati nel tenant corrente." }, { status: 422 });
     }
+
+    // Fase 2B.6 — due controlli distinti, PRIMA del confirmation_token:
+    // email tecnica Medmar (fissa, server-side) e destinatario finale ITS
+    // (agenzia se presente, altrimenti cliente — mai fallback silenzioso).
+    // Fail-closed con codici distinti, zero token emesso se manca uno dei due.
+    const primaryService = services[0]!;
+    const agencyRecipient = primaryService.agency_id
+      ? await loadAgencyRecipient(admin, tenantId, primaryService.agency_id)
+      : null;
+    const delivery = resolveMedmarDelivery({
+      agency: agencyRecipient,
+      customerName: primaryService.customer_name,
+      customerEmail: primaryService.customer_email,
+    });
+    if (!delivery.ok) {
+      auditLog({
+        event: "medmar_issue_prepare",
+        level: "warn",
+        tenantId,
+        userId: auth.user.id,
+        role: auth.membership.role,
+        outcome: delivery.code,
+        details: { service_count: parsed.data.service_ids.length },
+      });
+      return NextResponse.json({ ok: false, status: delivery.code, error: delivery.error }, { status: 422 });
+    }
+
     try {
-      buildIssueCustomer(services);
+      buildIssueCustomer(services, delivery.medmar_recipient.email);
     } catch (err) {
       const message = err instanceof MedmarIssuePayloadError ? err.message : "Dati cliente incompleti.";
       return NextResponse.json({ ok: false, status: "manual_review", error: message }, { status: 422 });
@@ -100,6 +129,9 @@ export async function POST(request: NextRequest) {
       // process.env.MEDMAR_ISSUING_ENABLED: la UI la usa per sapere se la
       // CTA finale potrebbe mai essere abilitata, senza dover indovinare.
       issuing_enabled: getMedmarIssueConfig().enabled,
+      // Fase 2B.6 — solo diagnostico: il browser non può mai scegliere o
+      // sovrascrivere questi valori, sono già stati risolti server-side sopra.
+      delivery: { medmar_recipient: delivery.medmar_recipient, final_recipient: delivery.final_recipient },
     });
   } catch {
     auditLog({

@@ -33,6 +33,10 @@ function preparedPayload(overrides: Partial<MedmarPrepareSuccessPayload> = {}): 
     pax: 1,
     issuing_enabled: false,
     service_ids: [SVC_A],
+    delivery: {
+      medmar_recipient: { type: "technical", email: "info@ischiatransferservice.it" },
+      final_recipient: { type: "customer", name: "Mario Rossi", email: "mario@example.test" },
+    },
     ...overrides,
   };
 }

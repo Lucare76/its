@@ -85,7 +85,15 @@ export type MedmarIssueResult =
          * Nessun attempt viene creato per questo stato: non è
          * "in_progress" né terminale, solo un rifiuto locale immediato.
          */
-        | "child_issue_payload_not_verified";
+        | "child_issue_payload_not_verified"
+        /**
+         * Fase 2B.6 — destinatari email irrisolvibili: stesso pattern del
+         * pre-check minori sopra, eseguito PRIMA di openTurn/lock/booking/
+         * payment. Nessun attempt creato.
+         */
+        | "medmar_delivery_email_not_configured"
+        | "agency_recipient_email_missing"
+        | "customer_recipient_email_missing";
       idempotency_key?: string;
       attempt_id?: string;
       error: string;
@@ -106,6 +114,8 @@ export type MedmarIssueServiceRow = {
   customer_email: string | null;
   customer_phone: string | null;
   pax: number | null;
+  /** Fase 2B.6 — opzionale per non rompere fixture di test preesistenti che non lo popolano. */
+  agency_id?: string | null;
 };
 
 export type MedmarIssueConfig = {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
@@ -68,14 +68,23 @@ function preflightOk(overrides: Record<string, unknown> = {}) {
 }
 
 describe("POST /api/services/medmar-issue/prepare — contratto (Fase 2B.4)", () => {
+  const ORIGINAL_MEDMAR_DELIVERY_EMAIL = process.env.MEDMAR_DELIVERY_EMAIL;
   beforeEach(() => {
     vi.clearAllMocks();
+    // Fase 2B.6 — email tecnica configurata di default: i test di questo
+    // blocco esercitano il contratto preesistente del prepare (nessuna
+    // agenzia collegata nelle fixture -> destinatario finale = cliente via
+    // customer_email), non la gate email in sé (coperta in un blocco dedicato).
+    process.env.MEDMAR_DELIVERY_EMAIL = "info@ischiatransferservice.it";
     mocks.authorizePricingRequest.mockResolvedValue(makeAuthContext());
     mocks.loadServices.mockResolvedValue([
       { id: SVC, tenant_id: TENANT, customer_name: "Mario Rossi", customer_email: "mario@example.test", customer_phone: "123456", pax: 1 },
     ]);
     mocks.createConfirmationToken.mockResolvedValue({ confirmation_token: "tok-1", expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString() });
     mocks.getMedmarIssueConfig.mockReturnValue({ enabled: false, causaleId: 1, modalitaId: 5, vettoreAndataId: 1, vettoreRitornoId: 1 });
+  });
+  afterEach(() => {
+    process.env.MEDMAR_DELIVERY_EMAIL = ORIGINAL_MEDMAR_DELIVERY_EMAIL;
   });
 
   it("preflight ok + issuing OFF -> 200, issuing_enabled: false, token creato una volta", async () => {
@@ -121,6 +130,39 @@ describe("POST /api/services/medmar-issue/prepare — contratto (Fase 2B.4)", ()
     mocks.runMedmarPreflight.mockResolvedValue(preflightOk({ expected_total_cents: null }));
     const res = await POST(makeRequest({ service_ids: [SVC] }));
     expect(res.status).toBe(422);
+    expect(mocks.createConfirmationToken).not.toHaveBeenCalled();
+  });
+
+  it("Fase 2B.6 — 14/15. preflight ok + nessuna agenzia -> response include delivery { medmar_recipient tecnico, final_recipient cliente }", async () => {
+    mocks.runMedmarPreflight.mockResolvedValue(preflightOk());
+    const res = await POST(makeRequest({ service_ids: [SVC] }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.delivery).toEqual({
+      medmar_recipient: { type: "technical", email: "info@ischiatransferservice.it" },
+      final_recipient: { type: "customer", name: "Mario Rossi", email: "mario@example.test" },
+    });
+  });
+
+  it("Fase 2B.6 — 5/17. email tecnica Medmar non configurata -> 422, medmar_delivery_email_not_configured, zero token", async () => {
+    delete process.env.MEDMAR_DELIVERY_EMAIL;
+    mocks.runMedmarPreflight.mockResolvedValue(preflightOk());
+    const res = await POST(makeRequest({ service_ids: [SVC] }));
+    const body = await res.json();
+    expect(res.status).toBe(422);
+    expect(body.status).toBe("medmar_delivery_email_not_configured");
+    expect(mocks.createConfirmationToken).not.toHaveBeenCalled();
+  });
+
+  it("Fase 2B.6 — 10/17. nessuna agenzia + email cliente mancante -> 422, customer_recipient_email_missing (NON 'mail cliente mancante' generico), zero token", async () => {
+    mocks.runMedmarPreflight.mockResolvedValue(preflightOk());
+    mocks.loadServices.mockResolvedValue([
+      { id: SVC, tenant_id: TENANT, customer_name: "Mario Rossi", customer_email: null, customer_phone: "123456", pax: 1 },
+    ]);
+    const res = await POST(makeRequest({ service_ids: [SVC] }));
+    const body = await res.json();
+    expect(res.status).toBe(422);
+    expect(body.status).toBe("customer_recipient_email_missing");
     expect(mocks.createConfirmationToken).not.toHaveBeenCalled();
   });
 

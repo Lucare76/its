@@ -21,6 +21,13 @@ export type MedmarPrepareRouteLeg = {
   source: "live" | "local_fallback" | null;
 };
 
+export type MedmarDeliveryDiagnostics = {
+  medmar_recipient: { type: "technical"; email: string };
+  final_recipient:
+    | { type: "agency"; name: string; email: string }
+    | { type: "customer"; name: string; email: string };
+};
+
 export type MedmarPrepareSuccessPayload = {
   confirmation_token: string;
   expires_at: string;
@@ -29,6 +36,7 @@ export type MedmarPrepareSuccessPayload = {
   pax: number;
   issuing_enabled: boolean;
   service_ids: string[];
+  delivery: MedmarDeliveryDiagnostics;
 };
 
 export type MedmarIssueSuccessResult = {

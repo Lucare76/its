@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IssueRepository, MedmarIssueAttempt, MedmarIssueSessionContext, MedmarMutationClient } from "@/lib/server/medmar-booking/issue-types";
 import { MedmarMutationRemoteUnknownError } from "@/lib/server/medmar-booking/medmar-mutation-client";
 
@@ -166,7 +166,18 @@ async function run(input: {
 }
 
 describe("medmar issue orchestrator", () => {
-  beforeEach(() => vi.clearAllMocks());
+  const ORIGINAL_MEDMAR_DELIVERY_EMAIL = process.env.MEDMAR_DELIVERY_EMAIL;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Fase 2B.6 — email tecnica configurata di default: i test qui sopra
+    // esercitano il flusso pre-esistente (nessuna agenzia collegata nelle
+    // fixture -> destinatario finale = cliente, già presente via
+    // customer_email), non la gate email in sé (coperta a parte).
+    process.env.MEDMAR_DELIVERY_EMAIL = "info@ischiatransferservice.it";
+  });
+  afterEach(() => {
+    process.env.MEDMAR_DELIVERY_EMAIL = ORIGINAL_MEDMAR_DELIVERY_EMAIL;
+  });
 
   it("happy path mock -> completed", async () => {
     const client = mutationClient();
@@ -445,6 +456,66 @@ describe("medmar issue orchestrator", () => {
     expect(result.ok).toBe(false);
     expect(result.status).toBe("manual_review");
     expect(client.lockAvailability).not.toHaveBeenCalled();
+  });
+
+  it("Fase 2B.6 — 17/18/19/20. email tecnica Medmar non configurata -> fail-closed, ZERO resolveSessionContext/openTurn/lock/booking/payment, nessun attempt acquisito", async () => {
+    delete process.env.MEDMAR_DELIVERY_EMAIL;
+    const client = mutationClient();
+    const repo = makeRepo();
+    const acquireSpy = vi.spyOn(repo, "acquireAttempt");
+    const resolveSessionContextSpy = vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT });
+    const result = await run({ mutationClient: client, repo, resolveSessionContext: resolveSessionContextSpy });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("medmar_delivery_email_not_configured");
+    expect(acquireSpy).not.toHaveBeenCalled();
+    expect(resolveSessionContextSpy).not.toHaveBeenCalled();
+    expect(client.openTurn).not.toHaveBeenCalled();
+    expect(client.lockAvailability).not.toHaveBeenCalled();
+    expect(client.createBooking).not.toHaveBeenCalled();
+    expect(client.payManual).not.toHaveBeenCalled();
+  });
+
+  it("Fase 2B.6 — 17/18/19/20. destinatario finale ITS irrisolvibile (cliente senza email, nessuna agenzia) -> fail-closed, ZERO openTurn/lock/booking/payment", async () => {
+    const client = mutationClient();
+    const repo = makeRepo();
+    vi.spyOn(repo, "loadServices").mockResolvedValue([
+      { id: SVC, tenant_id: TENANT, customer_name: "Mario Rossi", customer_email: null, customer_phone: "123456", pax: 1, agency_id: null },
+    ]);
+    const acquireSpy = vi.spyOn(repo, "acquireAttempt");
+    const resolveSessionContextSpy = vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT });
+    const result = await run({ mutationClient: client, repo, resolveSessionContext: resolveSessionContextSpy });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("customer_recipient_email_missing");
+    expect(acquireSpy).not.toHaveBeenCalled();
+    expect(resolveSessionContextSpy).not.toHaveBeenCalled();
+    expect(client.openTurn).not.toHaveBeenCalled();
+    expect(client.lockAvailability).not.toHaveBeenCalled();
+  });
+
+  it("11/12/13. D'ADDIO: agenzia ALESTE VIAGGI con email -> final recipient agenzia, payload usa email tecnica, happy path invariato", async () => {
+    const client = mutationClient();
+    const repo = makeRepo();
+    vi.spyOn(repo, "loadServices").mockResolvedValue([
+      { id: SVC, tenant_id: TENANT, customer_name: "Gerardo D'Addio", customer_email: "gerardo.daddio@example.test", customer_phone: "3271152378", pax: 2, agency_id: "agency-aleste" },
+    ]);
+    const loadAgencyRecipientSpy = vi.fn().mockResolvedValue({ name: "ALESTE VIAGGI", email: "booking@alesteviaggi.test" });
+    const { createMedmarIssueOrchestrator } = await import("@/lib/server/medmar-booking/issue-orchestrator");
+    const result = await createMedmarIssueOrchestrator({
+      repo,
+      mutationClient: client,
+      runPreflight: vi.fn().mockResolvedValue(preflight()),
+      fetchVendibili: vi.fn().mockResolvedValue(vendibili()),
+      resolveSessionContext: vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT }),
+      config: { enabled: true, causaleId: 1, modalitaId: 5, vettoreAndataId: 1, vettoreRitornoId: 1 },
+      loadPassengerComposition: vi.fn().mockResolvedValue(passengerComposition({ adults: 2 })) as never,
+      loadAgencyRecipient: loadAgencyRecipientSpy,
+    })({ admin: {} as never, tenantId: TENANT, userId: USER, serviceIds: [SVC] });
+    expect(result.ok).toBe(true);
+    expect(loadAgencyRecipientSpy).toHaveBeenCalledWith({}, TENANT, "agency-aleste");
+    const bookingPayload = (client.createBooking as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(bookingPayload.cliente_sito.email).toBe("info@ischiatransferservice.it");
+    expect(bookingPayload.cliente_sito.email).not.toBe("gerardo.daddio@example.test");
+    expect(bookingPayload.cliente_sito.email).not.toBe("booking@alesteviaggi.test");
   });
 
   it("tassa di sbarco con id_tipologia_passeggero diverso da 32 -> manual_review, zero lock (fail-closed)", async () => {

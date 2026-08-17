@@ -155,6 +155,7 @@ describe("issue-payload — buildBookingPayload (difesa in profondità, Fase 2B.
         frozenAdults: [frozen()],
         config,
         sessionContext,
+        technicalEmail: "info@ischiatransferservice.it",
       })
     ).toThrow(MedmarIssuePayloadError);
   });

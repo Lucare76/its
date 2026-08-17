@@ -115,7 +115,7 @@ export function createIssueRepository(admin: SupabaseClient): IssueRepository {
       // non toccare la shape MedmarIssueServiceRow usata a valle.
       const result = await admin
         .from("services")
-        .select("id, tenant_id, customer_name, customer_email, customer_phone:phone, pax")
+        .select("id, tenant_id, customer_name, customer_email, customer_phone:phone, pax, agency_id")
         .in("id", serviceIds)
         .eq("tenant_id", tenantId);
       if (result.error) throw new Error("medmar_issue_services_lookup_failed");

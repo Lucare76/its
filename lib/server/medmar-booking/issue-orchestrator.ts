@@ -9,6 +9,8 @@ import { createIssueRepository } from "./issue-repository";
 import { createMedmarMutationClient, MedmarMutationRemoteUnknownError } from "./medmar-mutation-client";
 import { buildBookingPayload, buildIssueCustomer, buildLockTickets, validateAdultFrozenTickets } from "./issue-payload";
 import { resolveMedmarIssueSessionContext } from "./issue-session-context";
+import { loadAgencyRecipient } from "./recipient-repository";
+import { resolveMedmarDelivery } from "./recipient-resolver";
 import type {
   IssueOrchestratorInput,
   IssueRepository,
@@ -148,6 +150,7 @@ export function createMedmarIssueOrchestrator(deps?: {
   fetchVendibili?: typeof fetchBigliettiVendibiliReadOnly;
   config?: ReturnType<typeof getMedmarIssueConfig>;
   loadPassengerComposition?: typeof loadPassengerComposition;
+  loadAgencyRecipient?: typeof loadAgencyRecipient;
   resolveSessionContext?: (input: { mutationClient: MedmarMutationClient }) => Promise<
     | { ok: true; context: MedmarIssueSessionContext }
     | { ok: false; status: "not_ready" | "remote_state_unknown"; error: string; retry_allowed: boolean }
@@ -183,8 +186,32 @@ export function createMedmarIssueOrchestrator(deps?: {
       };
     }
 
-    const idempotencyKey = buildIdempotencyKey(input.serviceIds);
     const repo = deps?.repo ?? createIssueRepository(input.admin);
+
+    // Fase 2B.6 — pre-check LOCALE destinatari email (mail tecnica Medmar
+    // fissa + destinatario finale ITS agenzia/cliente), stesso pattern del
+    // pre-check minori sopra: PRIMA di qualunque chiamata Medmar (openTurn
+    // incluso), nessun attempt creato, rifiuto locale immediato se un
+    // destinatario non è risolvibile. Il payload verso Medmar userà SOLO
+    // l'email tecnica (delivery.medmar_recipient), mai il destinatario
+    // finale ITS.
+    const recipientServices = await repo.loadServices(input.tenantId, input.serviceIds);
+    if (recipientServices.length !== input.serviceIds.length) {
+      return { ok: false, status: "manual_review", error: "Servizi non trovati nel tenant corrente.", retry_allowed: false };
+    }
+    const recipientPrimary = recipientServices[0]!;
+    const loadAgency = deps?.loadAgencyRecipient ?? loadAgencyRecipient;
+    const recipientAgency = recipientPrimary.agency_id ? await loadAgency(input.admin, input.tenantId, recipientPrimary.agency_id) : null;
+    const delivery = resolveMedmarDelivery({
+      agency: recipientAgency,
+      customerName: recipientPrimary.customer_name,
+      customerEmail: recipientPrimary.customer_email,
+    });
+    if (!delivery.ok) {
+      return { ok: false, status: delivery.code, error: delivery.error, retry_allowed: false };
+    }
+
+    const idempotencyKey = buildIdempotencyKey(input.serviceIds);
     const existingAttempt = await repo.findAttempt(input.tenantId, idempotencyKey);
     if (existingAttempt) {
       const existing = existingAttemptResult(existingAttempt, idempotencyKey);
@@ -242,16 +269,15 @@ export function createMedmarIssueOrchestrator(deps?: {
       patch: { preflight_snapshot: preflight, expected_total_cents: preflight.expected_total_cents },
     });
 
-    const services = await repo.loadServices(input.tenantId, input.serviceIds);
-    if (services.length !== input.serviceIds.length) {
-      await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "manual_review", eventType: "services_missing", errorCode: "services_missing" });
-      return { ok: false, status: "manual_review", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Servizi non trovati nel tenant corrente.", retry_allowed: false };
-    }
+    // Nota: services già caricati e validati (count + destinatari) nel
+    // pre-check Fase 2B.6 sopra, prima di openTurn — riuso qui la stessa
+    // riga senza ricaricarla.
+    const services = recipientServices;
 
     // Validazioni puramente locali (dati cliente) PRIMA di qualunque
     // chiamata Medmar: un dato mancante non deve mai costare un lock reale.
     try {
-      buildIssueCustomer(services);
+      buildIssueCustomer(services, delivery.medmar_recipient.email);
     } catch (err) {
       await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "manual_review", eventType: "customer_data_invalid", errorCode: sanitizeError(err) });
       return { ok: false, status: "manual_review", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Dati cliente incompleti per l'emissione Medmar.", retry_allowed: false };
@@ -317,7 +343,7 @@ export function createMedmarIssueOrchestrator(deps?: {
     try {
       frozenAdults = validateAdultFrozenTickets(lockTickets, lock.congelati);
       attempt = await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "locked", eventType: "locked", patch: { lock_snapshot: { frozen_adults: frozenAdults } } });
-      bookingPayload = buildBookingPayload({ preflight, services, vendibiliByCorsa, frozenAdults, config, sessionContext });
+      bookingPayload = buildBookingPayload({ preflight, services, vendibiliByCorsa, frozenAdults, config, sessionContext, technicalEmail: delivery.medmar_recipient.email });
       attempt = await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "booking_started", eventType: "booking_started", patch: { booking_payload_hash: hashPayload(bookingPayload) } });
     } catch (preSendErr) {
       let unlockedSafely = true;

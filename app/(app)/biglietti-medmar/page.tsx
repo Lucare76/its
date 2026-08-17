@@ -18,6 +18,7 @@ import {
   isRetryableIssueFailure,
   serviceIdsMatch,
   type MedmarPrepareState,
+  type MedmarDeliveryDiagnostics,
 } from "@/lib/medmar-issue-flow";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -207,6 +208,7 @@ type MedmarPrepareApiResponse =
       pax: number;
       service_ids: string[];
       issuing_enabled: boolean;
+      delivery: MedmarDeliveryDiagnostics;
     }
   | { ok: false; status: string; error: string };
 
@@ -358,6 +360,7 @@ export default function BigliettiMedmarPage() {
             pax: data.pax,
             issuing_enabled: data.issuing_enabled,
             service_ids: data.service_ids,
+            delivery: data.delivery,
           },
         });
       } else {
@@ -1342,6 +1345,13 @@ export default function BigliettiMedmarPage() {
                   })}
                   <p className="text-xs text-indigo-800">Passeggeri: {medmarPrepareState.pax}</p>
                   <p className="text-sm font-semibold text-indigo-900">Prezzo totale da confermare: {formatEur(medmarPrepareState.expected_total_cents)}</p>
+                  <div className="rounded-lg border border-indigo-200 bg-white px-2.5 py-2 text-[11px] text-slate-600 space-y-0.5">
+                    <p><span className="font-semibold text-slate-500">Destinatario originale Medmar:</span> {medmarPrepareState.delivery.medmar_recipient.email}</p>
+                    <p>
+                      <span className="font-semibold text-slate-500">Destinatario finale ITS:</span>{" "}
+                      {medmarPrepareState.delivery.final_recipient.type === "agency" ? "Agenzia" : "Cliente"} — {medmarPrepareState.delivery.final_recipient.name} ({medmarPrepareState.delivery.final_recipient.email})
+                    </p>
+                  </div>
                   {isTokenExpired(medmarPrepareState) ? (
                     <p className="text-xs font-semibold text-rose-700">Conferma scaduta. Ripeti la verifica.</p>
                   ) : (

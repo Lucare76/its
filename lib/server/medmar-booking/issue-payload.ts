@@ -43,7 +43,14 @@ function splitName(fullName: string | null): { nome: string; cognome: string } {
   return { nome: parts.slice(0, -1).join(" "), cognome: parts.at(-1)! };
 }
 
-export function buildIssueCustomer(services: MedmarIssueServiceRow[]): MedmarIssueCustomer {
+/**
+ * Fase 2B.6 — `email` nel payload Medmar è SEMPRE l'email tecnica ITS
+ * (risolta server-side via resolveMedmarTechnicalRecipient, mai da
+ * services.customer_email/agencies.*): il cliente Medmar "cliente_sito" è
+ * un dato tecnico verso il fornitore, distinto dal destinatario finale ITS
+ * (agenzia/cliente) che non entra mai in questo payload.
+ */
+export function buildIssueCustomer(services: MedmarIssueServiceRow[], technicalEmail: string): MedmarIssueCustomer {
   const first = services[0];
   if (!first) throw new MedmarIssuePayloadError("servizio mancante.");
   const name = splitName(first.customer_name);
@@ -51,7 +58,7 @@ export function buildIssueCustomer(services: MedmarIssueServiceRow[]): MedmarIss
     nome: name.nome,
     cognome: name.cognome,
     telefono_1: requiredText(first.customer_phone, "telefono cliente"),
-    email: requiredText(first.customer_email, "email cliente"),
+    email: requiredText(technicalEmail, "email tecnica Medmar"),
   };
 }
 
@@ -223,6 +230,7 @@ export function buildBookingPayload(input: {
   frozenAdults: MedmarLockedTicket[];
   config: MedmarIssueConfig;
   sessionContext: MedmarIssueSessionContext;
+  technicalEmail: string;
 }): MedmarBookingPayload {
   assertNoMinorsInPreflight(input.preflight);
   const dettaglio: MedmarBookingDetailLine[] = [];
@@ -282,7 +290,7 @@ export function buildBookingPayload(input: {
   }
 
   return {
-    cliente_sito: buildIssueCustomer(input.services),
+    cliente_sito: buildIssueCustomer(input.services, input.technicalEmail),
     dettaglio,
     dettaglioMezzo: [],
     id_causale: input.config.causaleId,
