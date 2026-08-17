@@ -54,11 +54,35 @@ export function collapseLinkedBookingPairs<T extends BookingSearchRecord>(record
 }
 
 /**
+ * Hardening Sprint 2B: shared with app/api/ops/search/route.ts's DB-level
+ * phoneFilters (moved here so both stay in sync — see that file's comment
+ * for why phone_e164 is intentionally never queried). Strips non-digits and
+ * adds a "39"-country-code-stripped variant and a last-10-digit variant, so
+ * a query typed as "+39 333 1234567", "393331234567" or "3331234567" all
+ * normalize to a candidate set containing whichever bare-local-number form
+ * is most likely to be a substring of however `phone` is actually stored.
+ */
+export function phoneNeedles(value: string): string[] {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return [];
+  const candidates = [digits];
+  if (digits.startsWith("39") && digits.length > 6) candidates.push(digits.slice(2));
+  if (digits.length > 10) candidates.push(digits.slice(-10));
+  return Array.from(new Set(candidates.filter((candidate) => candidate.length >= 4)));
+}
+
+/**
  * Case-insensitive match against name and/or phone, plus an independent
  * agency filter. Phone comparison strips everything but digits (`\D`) on
  * both sides so "+39 333-123 4567" and "3331234567" match — but only when
  * the query itself contains at least one digit, otherwise a letters-only
  * query would normalize to "" and match every phone via `"x".includes("")`.
+ * Hardening Sprint 2B: matches against ANY phoneNeedles() candidate of the
+ * query (not just the raw digit string), so a query with a country-code
+ * prefix (+39/39...) also matches a phone stored WITHOUT one, and vice
+ * versa — previously only the direction "query digits are a substring of
+ * the stored digits" worked; the reverse (stored phone shorter than the
+ * query, e.g. bare local number vs. a +39-prefixed query) silently failed.
  */
 export function matchesBookingSearch(
   record: BookingSearchRecord,
@@ -70,7 +94,6 @@ export function matchesBookingSearch(
   const ag = normalizeText(agencyFilter);
   const hasQuery = q.length >= 1;
   const hasAgency = ag.length >= 1;
-  const qDigits = q.replace(/\D/g, "");
   const agencyName = record.billing_party_name
     ?? (record.agency_id ? agencyNameById.get(record.agency_id) : null)
     ?? "";
@@ -108,9 +131,10 @@ export function matchesBookingSearch(
     record.id,
   ].map((value) => normalizeText(value)).join(" ");
 
+  const phoneHaystack = `${record.phone ?? ""} ${record.phone_e164 ?? ""}`.replace(/\D/g, "");
   const matchQuery = !hasQuery
     || searchableText.includes(q)
-    || (qDigits.length > 0 && `${record.phone ?? ""} ${record.phone_e164 ?? ""}`.replace(/\D/g, "").includes(qDigits));
+    || phoneNeedles(searchQuery).some((needle) => phoneHaystack.includes(needle));
 
   const matchAgency = !hasAgency || normalizeText(bookingOwnerLabel).includes(ag);
 
@@ -160,8 +184,8 @@ function bookingSearchRelevance(record: BookingSearchRecord, searchQuery: string
   if (names.some((name) => name.split(/\s+/).some((part) => part.startsWith(query)))) return 350;
   if (names.some((name) => name.includes(query))) return 300;
 
-  const phoneDigits = query.replace(/\D/g, "");
-  if (phoneDigits && `${record.phone ?? ""} ${record.phone_e164 ?? ""}`.replace(/\D/g, "").includes(phoneDigits)) return 250;
+  const phoneHaystack = `${record.phone ?? ""} ${record.phone_e164 ?? ""}`.replace(/\D/g, "");
+  if (phoneNeedles(searchQuery).some((needle) => phoneHaystack.includes(needle))) return 250;
   return 100;
 }
 

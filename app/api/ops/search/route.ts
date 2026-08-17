@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { collapseLinkedBookingPairs, filterBookingsBySearch } from "@/lib/booking-search";
+import { collapseLinkedBookingPairs, filterBookingsBySearch, phoneNeedles } from "@/lib/booking-search";
 import { ferryPortLabel, findArrivalScheduleForService, findDepartureScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
 import { getPickupRuleByRange, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { findFerryPickupRule, resolveAgencyLogic, type FerryPickupRule } from "@/lib/ferry-pickup-rules";
@@ -148,15 +148,6 @@ function textTokens(value: string): string[] {
       .filter((token) => token.length >= 2)
       .slice(0, 5)
   ));
-}
-
-function phoneNeedles(value: string): string[] {
-  const digits = value.replace(/\D/g, "");
-  if (!digits) return [];
-  const candidates = [digits];
-  if (digits.startsWith("39") && digits.length > 6) candidates.push(digits.slice(2));
-  if (digits.length > 10) candidates.push(digits.slice(-10));
-  return Array.from(new Set(candidates.filter((candidate) => candidate.length >= 4)));
 }
 
 function isPrivateNeedle(value: string): boolean {
@@ -374,6 +365,15 @@ async function querySearchCandidates(
         `customer_last_name.ilike.${tokenPattern}`,
       ].join(",")));
     }
+    // Hardening Sprint 2B: `phone` only, deliberately — services.phone_e164
+    // is confirmed absent on the real DB (information_schema.columns check),
+    // so filtering on it would fail with PostgREST 42703. phoneNeedles()
+    // already strips all non-digits from the query and generates the "39"
+    // -stripped / last-10-digit variants, so an E.164-formatted query
+    // (+39 333 1234567), a bare-digit query (393331234567/3331234567) or a
+    // spaced query (333 123 4567) all normalize to the same needle(s) and
+    // match phone regardless of which of those formats phone itself is
+    // stored in — no phone_e164 column is needed for this to work.
     const phoneFilters = phoneNeedles(input.q).flatMap((needle) => [
       `phone.ilike.%${needle}%`,
     ]);

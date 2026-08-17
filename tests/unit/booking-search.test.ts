@@ -116,6 +116,17 @@ describe("matchesBookingSearch — campo nome/cognome/telefono", () => {
     expect(matchesBookingSearch(gerardo, "1112233", "", agencyNameById)).toBe(true);
   });
 
+  // Hardening Sprint 2B: gerardo.phone è memorizzato SENZA prefisso paese
+  // ("3491112233"). Prima del fix, una query con prefisso +39/39 (più cifre
+  // della stringa memorizzata) non veniva mai trovata: il confronto era solo
+  // "le cifre della query sono una sottostringa delle cifre memorizzate", mai
+  // il contrario. phoneNeedles() genera anche la variante senza prefisso
+  // della query, quindi ora il confronto funziona in entrambe le direzioni.
+  it("trova per telefono E.164 (+39) quando il numero e' memorizzato SENZA prefisso paese", () => {
+    expect(matchesBookingSearch(gerardo, "+393491112233", "", agencyNameById)).toBe(true);
+    expect(matchesBookingSearch(gerardo, "393491112233", "", agencyNameById)).toBe(true);
+  });
+
   it("non trova nulla per query senza corrispondenza", () => {
     expect(matchesBookingSearch(marcotulli, "Bianchi", "", agencyNameById)).toBe(false);
   });

@@ -220,13 +220,42 @@ describe("GET /api/ops/search — campi di ricerca ripristinati", () => {
     expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
   });
 
-  it("cerca per telefono normalizzato (phone_e164), assente da phone", async () => {
-    const fake = createFakeAdmin({
-      services: [service("s1", TENANT_A, { phone: "0392 111222", phone_e164: "+393331112222" })],
-    });
+  // Hardening Sprint 2B: services.phone_e164 is confirmed absent on the real
+  // DB (information_schema.columns audit) — a search filter can never
+  // legitimately rely on that column, and a fixture that puts the matchable
+  // value only in phone_e164 (absent from phone) tests a scenario that can
+  // never occur in production. The real, achievable requirement is that the
+  // *query* can be typed in any common phone format and still match
+  // whatever format `phone` (the only real column) actually holds, via the
+  // existing phoneNeedles() digit normalization — see route.ts's
+  // phoneFilters comment for the reasoning.
+  it("cerca per telefono in formato E.164 (+39...), phone memorizzato senza prefisso", async () => {
+    const fake = createFakeAdmin({ services: [service("s1", TENANT_A, { phone: "3331112222" })] });
     authorizeAs(fake.admin);
-    const body = await (await callGet("?q=3331112222")).json();
+    const body = await (await callGet("?q=%2B393331112222")).json();
     expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+  });
+
+  it("cerca per telefono con spazi/formattazione, phone memorizzato come cifre pure", async () => {
+    const fake = createFakeAdmin({ services: [service("s1", TENANT_A, { phone: "3331112222" })] });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=333%20111%202222")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+  });
+
+  it("cerca per telefono con prefisso 39 senza +, phone memorizzato senza prefisso", async () => {
+    const fake = createFakeAdmin({ services: [service("s1", TENANT_A, { phone: "3331112222" })] });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=393331112222")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+  });
+
+  it("numero non presente in phone: nessun risultato, nessun errore", async () => {
+    const fake = createFakeAdmin({ services: [service("s1", TENANT_A, { phone: "3331112222" })] });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=%2B393339998888")).json();
+    expect(body.ok).toBe(true);
+    expect(body.results).toEqual([]);
   });
 
   it("cerca per email cliente", async () => {
