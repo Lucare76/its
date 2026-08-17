@@ -23,6 +23,8 @@ export type ServicesListExtraFilters = z.infer<typeof servicesListExtraFiltersSc
 
 const AGGREGATE_SELECT =
   "id, vessel, notes, excursion_details, agency_id, inbound_email_id, service_type_code, booking_service_kind, reminder_status, sent_at";
+const AGGREGATE_SELECT_COMPAT =
+  "id, vessel, notes, excursion_details, agency_id, inbound_email_id, service_type_code, booking_service_kind";
 
 type AggregateRow = {
   id: string;
@@ -67,8 +69,27 @@ export async function computeServicesListAggregates({
   extraFilters
 }: ComputeArgs): Promise<ServicesListAggregates> {
   const { query } = await buildServicesQuery({ admin, filters: baseFilters, select: AGGREGATE_SELECT });
-  const { data, error } = await query;
-  if (error) throw error;
+  let reminderStatsAvailable = true;
+  let { data, error } = await query;
+  if (error) {
+    const message = String(error.message ?? "");
+    const isSchemaDrift =
+      message.includes("reminder_status") ||
+      message.includes("sent_at") ||
+      message.includes("Could not find") ||
+      message.includes("column");
+    if (!isSchemaDrift) throw error;
+
+    // Some environments have not applied the reminder tracking columns yet.
+    // The services list must still load; only the optional "undelivered
+    // reminders" statistic is unavailable in that case.
+    const fallback = await buildServicesQuery({ admin, filters: baseFilters, select: AGGREGATE_SELECT_COMPAT });
+    const fallbackResult = await fallback.query;
+    if (fallbackResult.error) throw fallbackResult.error;
+    data = fallbackResult.data;
+    error = null;
+    reminderStatsAvailable = false;
+  }
   const rows = (data ?? []) as AggregateRow[];
 
   const inboundEmailIds = Array.from(
@@ -130,7 +151,7 @@ export async function computeServicesListAggregates({
     if (pdfMeta?.reviewRecommended) needsAttention++;
     if (row.service_type_code === "bus_line" || row.booking_service_kind === "bus_city_hotel") lineeBus++;
     if (!driverByServiceId.get(row.id)) daAssegnareInternamente++;
-    if (isUndeliveredReminder(row)) promemoriaDaVerificare++;
+    if (reminderStatsAvailable && isUndeliveredReminder(row)) promemoriaDaVerificare++;
   }
 
   return {

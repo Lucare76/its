@@ -481,17 +481,21 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
   );
 
   return (
-    <section className="page-section">
-      <div className="section-head">
-        <h2 className="section-title text-base">Lista servizi</h2>
+    <section className="space-y-5">
+      <div className="flex flex-col gap-3 rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 className="text-xl font-black tracking-tight text-slate-950">Controllo servizi</h2>
+          <p className="mt-1 text-sm font-medium text-slate-500">Filtra, verifica e apri le pratiche operative senza caricare tutto il database.</p>
+        </div>
         <ExportServicesButton defaultDateFrom={exportDefaults.from} defaultDateTo={exportDefaults.to} />
       </div>
       {listError ? <div className="card border-red-200 bg-red-50 p-3 text-sm text-red-700">{listError}</div> : null}
-      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <button type="button" onClick={resetOperationalFilters} className="card p-3 text-left transition hover:border-primary/40 hover:shadow-sm">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Totale</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{filteredOperationalStats.totale}</p>
-          <p className="mt-1 text-xs text-muted">Reset filtri e torna alla prima pagina.</p>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <button type="button" onClick={resetOperationalFilters} className="group rounded-3xl border border-slate-200 bg-white p-4 text-left shadow-[0_14px_34px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_18px_42px_rgba(37,99,235,0.10)]">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-lg text-blue-700">▣</span>
+          <p className="mt-3 text-sm font-bold text-slate-500">Totale visibili</p>
+          <p className="text-3xl font-black tracking-tight text-slate-950">{filteredOperationalStats.totale}</p>
+          <p className="mt-1 text-xs font-medium text-slate-500">Reset vista completa.</p>
         </button>
         <button
           type="button"
@@ -501,21 +505,24 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
             setReviewedFilter("no");
             setPage(1);
           }}
-          className="card p-3 text-left transition hover:border-amber-300 hover:shadow-sm"
+          className="group rounded-3xl border border-slate-200 bg-white p-4 text-left shadow-[0_14px_34px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:border-amber-200 hover:shadow-[0_18px_42px_rgba(245,158,11,0.10)]"
         >
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Da verificare</p>
-          <p className="mt-2 text-2xl font-semibold text-amber-700">{filteredOperationalStats.needsAttention}</p>
-          <p className="mt-1 text-xs text-muted">PDF con review consigliata o qualita bassa.</p>
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-50 text-lg text-amber-700">!</span>
+          <p className="mt-3 text-sm font-bold text-slate-500">Da verificare</p>
+          <p className="text-3xl font-black tracking-tight text-amber-700">{filteredOperationalStats.needsAttention}</p>
+          <p className="mt-1 text-xs font-medium text-slate-500">PDF o qualità bassa.</p>
         </button>
-        <div className="card p-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Linea bus</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{filteredOperationalStats.lineeBus}</p>
-          <p className="mt-1 text-xs text-muted">Servizi classificati `bus_line` o `bus_city_hotel`.</p>
+        <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-50 text-lg text-cyan-700">▤</span>
+          <p className="mt-3 text-sm font-bold text-slate-500">Linea bus</p>
+          <p className="text-3xl font-black tracking-tight text-slate-950">{filteredOperationalStats.lineeBus}</p>
+          <p className="mt-1 text-xs font-medium text-slate-500">Bus linea / città-hotel.</p>
         </div>
-        <div className="card p-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Altri servizi</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{filteredOperationalStats.altriServizi}</p>
-          <p className="mt-1 text-xs text-muted">Formula nave, aeroporto, stazione e transfer diretti.</p>
+        <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-50 text-lg text-violet-700">↗</span>
+          <p className="mt-3 text-sm font-bold text-slate-500">Altri servizi</p>
+          <p className="text-3xl font-black tracking-tight text-slate-950">{filteredOperationalStats.altriServizi}</p>
+          <p className="mt-1 text-xs font-medium text-slate-500">Nave, aeroporto, stazione.</p>
         </div>
         <button
           type="button"
@@ -523,19 +530,21 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
             setDriverFilter("all");
             setPage(1);
           }}
-          className="card p-3 text-left transition hover:border-primary/40 hover:shadow-sm"
+          className="group rounded-3xl border border-slate-200 bg-white p-4 text-left shadow-[0_14px_34px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:border-rose-200 hover:shadow-[0_18px_42px_rgba(244,63,94,0.10)]"
         >
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Da gestire internamente</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{filteredOperationalStats.daAssegnareInternamente}</p>
-          <p className="mt-1 text-xs text-muted">Servizi senza autista assegnato nel pannello interno.</p>
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-50 text-lg text-rose-700">⌁</span>
+          <p className="mt-3 text-sm font-bold text-slate-500">Da gestire</p>
+          <p className="text-3xl font-black tracking-tight text-slate-950">{filteredOperationalStats.daAssegnareInternamente}</p>
+          <p className="mt-1 text-xs font-medium text-slate-500">Senza autista interno.</p>
         </button>
-        <div className="card p-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Promemoria da verificare</p>
-          <p className="mt-2 text-2xl font-semibold text-amber-700">{filteredOperationalStats.promemoriaDaVerificare}</p>
-          <p className="mt-1 text-xs text-muted">Promemoria inviati ma ancora non consegnati.</p>
+        <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-50 text-lg text-orange-700">◷</span>
+          <p className="mt-3 text-sm font-bold text-slate-500">Promemoria</p>
+          <p className="text-3xl font-black tracking-tight text-amber-700">{filteredOperationalStats.promemoriaDaVerificare}</p>
+          <p className="mt-1 text-xs font-medium text-slate-500">Non consegnati.</p>
         </div>
       </div>
-      <FilterBar colsClassName="lg:grid-cols-4 xl:grid-cols-9">
+      <FilterBar className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)]" colsClassName="lg:grid-cols-4 xl:grid-cols-9">
         <select
           value={statusFilter}
           onChange={(event) => {
@@ -681,17 +690,20 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
         <EmptyState title="Nessun risultato per i filtri impostati." compact />
       ) : (
         <>
-          <div className="space-y-2 md:hidden">
+          <div className="space-y-3 md:hidden">
             <p className="text-xs text-muted">Risultati pagina: {filtered.length}</p>
             {filtered.map((service) => {
               const { hotel, driverName, pdfMeta, source } = serviceMeta(service);
               return (
-                <article key={`mobile-${service.id}`} className="card space-y-2 p-3">
+                <article key={`mobile-${service.id}`} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
                   <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm font-semibold">{formatServiceSlot(service)} - {getCustomerFullName(service)}</p>
+                    <div>
+                      <p className="text-xs font-black text-blue-700">{formatServiceSlot(service)}</p>
+                      <p className="mt-1 text-base font-black leading-5 text-slate-950">{getCustomerFullName(service)}</p>
+                    </div>
                     <span className={statusClass(service.status)}>{SERVICE_STATUS_LABELS[service.status]}</span>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
                     <span className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getServiceTypeBadgeTone(service)}`}>
                       {SERVICE_TYPE_LABELS[(service.service_type ?? "transfer") as ServiceType]}
                     </span>
@@ -722,12 +734,13 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
           </div>
           <div className="hidden md:block">
             <DataTable
-              minWidthClassName="min-w-[1320px]"
+              minWidthClassName="min-w-[1180px]"
               loading={listLoading}
+              className="overflow-hidden rounded-[28px] border-slate-200 shadow-[0_18px_45px_rgba(15,23,42,0.06)]"
               toolbar={
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs text-muted">Risultati pagina: {filtered.length}</p>
-                  <p className="text-xs text-muted">Scorri orizzontalmente per vedere tutte le colonne.</p>
+                  <p className="text-sm font-black text-slate-950">Risultati pagina: {filtered.length}</p>
+                  <p className="text-xs font-medium text-slate-500">Pagina {page}{hasMore ? "" : " · ultima"}</p>
                 </div>
               }
               footer={paginationControls}
@@ -744,26 +757,26 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
             >
               <thead>
                 <tr>
-                  <th className="w-[150px] px-4 py-3">Data / Ora</th>
+                  <th className="w-[130px] px-4 py-3">Data / ora</th>
                   <th className="w-[210px] px-4 py-3">Cliente</th>
-                  <th className="w-[120px] px-4 py-3">Tipo</th>
+                  <th className="w-[105px] px-4 py-3">Tipo</th>
                   <th className="w-[150px] px-4 py-3">Mezzo</th>
-                  <th className="w-[220px] px-4 py-3">Hotel / Zona</th>
-                  <th className="w-[120px] px-4 py-3">Origine</th>
-                  <th className="w-[170px] px-4 py-3">Riferimento</th>
-                  <th className="w-[150px] px-4 py-3">Driver</th>
-                  <th className="w-[130px] px-4 py-3">Stato</th>
-                  <th className="w-[110px] px-4 py-3 text-right">Azione</th>
+                  <th className="w-[190px] px-4 py-3">Hotel / zona</th>
+                  <th className="w-[105px] px-4 py-3">Origine</th>
+                  <th className="w-[165px] px-4 py-3">Riferimento</th>
+                  <th className="w-[130px] px-4 py-3">Driver</th>
+                  <th className="w-[120px] px-4 py-3">Stato</th>
+                  <th className="w-[105px] px-4 py-3 text-right">Azione</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((service) => {
                   const { hotel, driverName, pdfMeta, source } = serviceMeta(service);
                   return (
-                    <tr key={service.id}>
-                      <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-700">{formatServiceSlot(service)}</td>
+                    <tr key={service.id} className="transition hover:bg-blue-50/40">
+                      <td className="whitespace-nowrap px-4 py-4 text-sm font-black text-blue-700">{formatServiceSlot(service)}</td>
                       <td className="px-4 py-3">
-                        <p className="line-clamp-2 text-sm font-semibold leading-5 text-slate-900" title={getCustomerFullName(service)}>
+                        <p className="line-clamp-2 text-sm font-black leading-5 text-slate-950" title={getCustomerFullName(service)}>
                           {getCustomerFullName(service)}
                         </p>
                         <div className="mt-0.5 flex items-center gap-1.5">
@@ -845,7 +858,7 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
                           type="button"
                           onClick={() => setSelectedServiceId(service.id)}
                           title="Apri"
-                          className="btn-secondary whitespace-nowrap px-3 py-1.5 text-xs"
+                          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
                         >
                           <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />
                           Apri
