@@ -64,6 +64,12 @@ function applyGrid(row: ExcelJS.Row, colCount: number, options?: { alternate?: b
   }
 }
 
+function centerRow(row: ExcelJS.Row, colCount: number) {
+  for (let c = 1; c <= colCount; c++) {
+    row.getCell(c).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  }
+}
+
 function styleHeaderRow(row: ExcelJS.Row, colCount: number) {
   row.font = { bold: true, size: 11, color: { argb: `FF${HEADER_COLOR}` } };
   row.alignment = { horizontal: "center", vertical: "middle" };
@@ -198,10 +204,8 @@ export async function buildArrivalWorkbook(
     ]);
     row.font = { size: 10 };
     row.getCell(1).font = { size: 10, bold: true };
-    row.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
-    row.getCell(4).alignment = { horizontal: "left", vertical: "middle" };
-    row.getCell(5).alignment = { horizontal: "center", vertical: "middle" };
     applyGrid(row, 8, { alternate: index % 2 === 1 });
+    centerRow(row, 8);
     totalPax += alloc.pax_assigned;
   }
 
@@ -210,9 +214,9 @@ export async function buildArrivalWorkbook(
   const totRow = ws.addRow(["", "TOTALE", totalPax, "", "", "", "", ""]);
   totRow.font = { bold: true, size: 11 };
   applyGrid(totRow, 8);
+  centerRow(totRow, 8);
   totRow.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${TOTAL_BG}` } };
   totRow.getCell(3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${TOTAL_BG}` } };
-  totRow.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
 
   // Autista
   ws.addRow([]);
@@ -307,10 +311,8 @@ export async function buildDepartureWorkbook(
     ]);
     row.font = { size: 10 };
     if (pickupTime) row.getCell(1).font = { size: 10, bold: true };
-    row.getCell(1).alignment = { horizontal: "center", vertical: "middle" };
-    row.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
-    row.getCell(5).alignment = { horizontal: "center", vertical: "middle" };
     applyGrid(row, 8, { alternate: index % 2 === 1 });
+    centerRow(row, 8);
     totalPax += alloc.pax_assigned;
   }
 
@@ -319,9 +321,9 @@ export async function buildDepartureWorkbook(
   const totRow = ws.addRow(["", "TOTALE", totalPax, "", "", "", "", ""]);
   totRow.font = { bold: true, size: 11 };
   applyGrid(totRow, 8);
+  centerRow(totRow, 8);
   totRow.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${TOTAL_BG}` } };
   totRow.getCell(3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${TOTAL_BG}` } };
-  totRow.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
 
   // Scarico
   const usedStopNames = new Set(sorted.map((a) => a.stop_name.toUpperCase()));

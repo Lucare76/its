@@ -1019,6 +1019,27 @@ export default function BusNetworkPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busCards, date, direction, selectedLine]);
 
+  const exportPdf = useCallback(async () => {
+    const { openBusLinePdf } = await import("@/lib/bus-export-pdf");
+    const { fetchLogoBase64 } = await import("@/lib/bus-export-excel");
+    const logo = await fetchLogoBase64();
+    const lineStopsForExport = payload.stops
+      .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === direction)
+      .sort((a, b) => a.stop_order - b.stop_order);
+    const allAllocs = busCards.flatMap((c) => c.allocations);
+    const firstUnit = busCards[0]?.unit;
+    openBusLinePdf({
+      direction,
+      lineName: selectedLine?.name ?? "Linea Bus",
+      dateIso: date,
+      driverName: direction === "departure" ? firstUnit?.driver_name_return : firstUnit?.driver_name_outbound,
+      driverPhone: direction === "departure" ? firstUnit?.driver_phone_return : firstUnit?.driver_phone_outbound,
+      allocations: allAllocs,
+      stops: lineStopsForExport,
+      logoBase64: logo,
+    });
+  }, [busCards, date, direction, selectedLine, payload.stops]);
+
   // Export singolo bus: un foglio Andata + un foglio Ritorno
   const exportSingleBus = useCallback(async () => {
     const { buildArrivalWorkbook, buildDepartureWorkbook, downloadWorkbook, fetchLogoBase64, addLogo } = await import("@/lib/bus-export-excel");
@@ -1065,8 +1086,29 @@ export default function BusNetworkPage() {
     const lineCode = selectedLine?.code ?? "bus";
     const busLabel = targetCard.unit.label.replace(/\s+/g, "_");
     await downloadWorkbook(combinedWb, `${lineCode}_${busLabel}_${date}.xlsx`);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busCards, selectedBusUnitId, date, direction, selectedLine, payload.allocation_details]);
+  }, [busCards, selectedBusUnitId, date, selectedLine, payload.allocation_details, payload.stops]);
+
+  const exportSingleBusPdf = useCallback(async () => {
+    const { openBusLinePdf } = await import("@/lib/bus-export-pdf");
+    const { fetchLogoBase64 } = await import("@/lib/bus-export-excel");
+    const targetCard = busCards.find((c) => c.unit.id === selectedBusUnitId) ?? busCards[0];
+    if (!targetCard) return;
+    const logo = await fetchLogoBase64();
+    const lineStopsForExport = payload.stops
+      .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === direction)
+      .sort((a, b) => a.stop_order - b.stop_order);
+    openBusLinePdf({
+      direction,
+      lineName: selectedLine?.name ?? "Linea Bus",
+      busLabel: targetCard.unit.label,
+      dateIso: date,
+      driverName: direction === "departure" ? targetCard.unit.driver_name_return : targetCard.unit.driver_name_outbound,
+      driverPhone: direction === "departure" ? targetCard.unit.driver_phone_return : targetCard.unit.driver_phone_outbound,
+      allocations: targetCard.allocations,
+      stops: lineStopsForExport,
+      logoBase64: logo,
+    });
+  }, [busCards, selectedBusUnitId, date, direction, selectedLine, payload.stops]);
 
   // Export tutte le linee: un foglio per bus×direzione (1 bus = 1 sheet)
   const exportAllLines = useCallback(async () => {
@@ -1123,7 +1165,6 @@ export default function BusNetworkPage() {
     }
     if (wb.worksheets.length === 0) return;
     await downloadWorkbook(wb, `bus_tutte_linee_${date}.xlsx`);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payload, date]);
 
   const saveDriver = useCallback(async (unitId: string) => {
@@ -1335,8 +1376,14 @@ export default function BusNetworkPage() {
                   <button onClick={() => void exportExcel()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50" title="Esporta tutti i bus della linea selezionata">
                     📥 Esporta linea
                   </button>
+                  <button onClick={() => void exportPdf()} className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50" title="Apri PDF elegante della linea selezionata">
+                    🧾 PDF linea
+                  </button>
                   <button onClick={() => void exportSingleBus()} disabled={busCards.length === 0} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40" title={selectedBusUnitId ? "Esporta bus selezionato" : "Esporta primo bus (seleziona un bus dalla lista per sceglierne uno specifico)"}>
                     📥 Esporta bus{selectedBusUnitId ? " ✓" : ""}
+                  </button>
+                  <button onClick={() => void exportSingleBusPdf()} disabled={busCards.length === 0} className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-40" title={selectedBusUnitId ? "Apri PDF elegante del bus selezionato" : "Apri PDF elegante del primo bus"}>
+                    🧾 PDF bus{selectedBusUnitId ? " ✓" : ""}
                   </button>
                   <button onClick={() => void autoAssign()} disabled={saving}
                     className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-40">
