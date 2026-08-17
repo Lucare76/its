@@ -1306,6 +1306,47 @@ export async function POST(request: NextRequest) {
 
       const moved: Array<{ customer_name: string; from_bus: string; to_bus: string; stop_name: string; pax: number }> = [];
       const errors: string[] = [];
+      const currentAllocs = allocs.map((alloc) => ({ ...alloc }));
+      const unitById = new Map(units.map((unit) => [unit.id, unit]));
+      const admin = auth.admin;
+      const userId = auth.user.id;
+
+      async function moveOptimizationAllocation(alloc: OptAlloc, toBusId: string, reason: string) {
+        const sourceUnit = unitById.get(alloc.bus_unit_id);
+        const targetUnit = unitById.get(toBusId);
+        if (!sourceUnit || !targetUnit || sourceUnit.id === targetUnit.id) return false;
+
+        const { error } = await admin.rpc("move_bus_allocation", {
+          p_tenant_id: tenantId,
+          p_allocation_id: alloc.allocation_id,
+          p_to_bus_unit_id: targetUnit.id,
+          p_pax_moved: alloc.pax_assigned,
+          p_reason: reason,
+          p_created_by_user_id: userId,
+        });
+        if (error) {
+          errors.push(`${alloc.customer_name}: ${error.message}`);
+          return false;
+        }
+
+        busPax.set(sourceUnit.id, (busPax.get(sourceUnit.id) ?? 0) - alloc.pax_assigned);
+        busPax.set(targetUnit.id, (busPax.get(targetUnit.id) ?? 0) + alloc.pax_assigned);
+
+        const mutableAlloc = currentAllocs.find((item) => item.allocation_id === alloc.allocation_id);
+        if (mutableAlloc) {
+          mutableAlloc.bus_unit_id = targetUnit.id;
+          mutableAlloc.bus_label = targetUnit.label;
+        }
+
+        moved.push({
+          customer_name: alloc.customer_name,
+          from_bus: sourceUnit.label,
+          to_bus: targetUnit.label,
+          stop_name: alloc.stop_name,
+          pax: alloc.pax_assigned,
+        });
+        return true;
+      }
 
       for (const [, busMap] of stopBuses) {
         if (busMap.size <= 1) continue; // già su un solo bus
@@ -1322,35 +1363,39 @@ export async function POST(request: NextRequest) {
         // Sposta dal bus secondario al principale
         for (let i = 1; i < sorted.length; i++) {
           const [secondaryBusId, secondaryData] = sorted[i];
-          const secondaryUnit = units.find((u) => u.id === secondaryBusId);
-          const secondaryLabel = secondaryUnit?.label ?? "?";
-
           for (const alloc of secondaryData.allocs) {
             if (primaryCurrentPax + alloc.pax_assigned > primaryCapacity) continue; // non entra
 
-            const { error } = await auth.admin.rpc("move_bus_allocation", {
-              p_tenant_id: tenantId,
-              p_allocation_id: alloc.allocation_id,
-              p_to_bus_unit_id: primaryBusId,
-              p_pax_moved: alloc.pax_assigned,
-              p_reason: "Ottimizzazione raggruppamento fermate",
-              p_created_by_user_id: auth.user.id,
-            });
-            if (error) {
-              errors.push(`${alloc.customer_name}: ${error.message}`);
-              continue;
-            }
-            primaryCurrentPax += alloc.pax_assigned;
-            busPax.set(primaryBusId, primaryCurrentPax);
-            busPax.set(secondaryBusId, (busPax.get(secondaryBusId) ?? 0) - alloc.pax_assigned);
-            moved.push({
-              customer_name: alloc.customer_name,
-              from_bus: secondaryLabel,
-              to_bus: primaryUnit.label,
-              stop_name: alloc.stop_name,
-              pax: alloc.pax_assigned,
-            });
+            const movedOk = await moveOptimizationAllocation(alloc, primaryBusId, "Ottimizzazione raggruppamento fermate");
+            if (movedOk) primaryCurrentPax += alloc.pax_assigned;
           }
+        }
+      }
+
+      const unitsByLine = new Map<string, typeof units>();
+      for (const unit of units.filter((unit) => unit.status !== "closed" && unit.status !== "completed")) {
+        const lineUnits = unitsByLine.get(unit.bus_line_id) ?? [];
+        lineUnits.push(unit);
+        unitsByLine.set(unit.bus_line_id, lineUnits);
+      }
+
+      for (const [lineId, lineUnits] of unitsByLine) {
+        const sortedUnits = [...lineUnits].sort((a, b) => a.sort_order - b.sort_order);
+        const unitIndex = new Map(sortedUnits.map((unit, index) => [unit.id, index]));
+        const lineAllocs = currentAllocs
+          .filter((alloc) => alloc.bus_line_id === lineId)
+          .sort((a, b) => (unitIndex.get(a.bus_unit_id) ?? 9999) - (unitIndex.get(b.bus_unit_id) ?? 9999));
+
+        for (const alloc of lineAllocs) {
+          const sourceIndex = unitIndex.get(alloc.bus_unit_id) ?? -1;
+          if (sourceIndex <= 0) continue;
+
+          const target = sortedUnits
+            .slice(0, sourceIndex)
+            .find((unit) => unit.capacity - (busPax.get(unit.id) ?? 0) >= alloc.pax_assigned);
+          if (!target) continue;
+
+          await moveOptimizationAllocation(alloc, target.id, "Ottimizzazione compattazione bus");
         }
       }
 
