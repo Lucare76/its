@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await auth.admin
     .from("services")
-    .select("id, customer_name, customer_first_name, customer_last_name, phone, date, time, booking_service_kind, hotels(name)")
+    .select("id, customer_name, customer_first_name, customer_last_name, phone, date, time, booking_service_kind, billing_party_name, agency_id, hotels(name), agencies(name)")
     .eq("tenant_id", auth.membership.tenant_id)
     .or(orFilter)
     .order("date", { ascending: false })

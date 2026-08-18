@@ -32,6 +32,9 @@ type ThreadRow = {
     date?: string | null;
     time?: string | null;
     booking_service_kind?: string | null;
+    billing_party_name?: string | null;
+    agency_id?: string | null;
+    agencies?: { name?: string | null } | null;
     hotels?: { name?: string | null } | null;
   } | null;
 };
@@ -135,6 +138,9 @@ type ServiceSearchResult = {
   date?: string | null;
   time?: string | null;
   booking_service_kind?: string | null;
+  billing_party_name?: string | null;
+  agency_id?: string | null;
+  agencies?: { name?: string | null } | null;
   hotels?: { name?: string | null } | null;
 };
 
@@ -153,6 +159,11 @@ type LoadOptions = {
 };
 
 type MessagesCursor = { threadId: string; createdAt: string; id: string };
+
+function serviceAgencyLabel(service: ThreadRow["service"] | ServiceSearchResult | null | undefined) {
+  if (!service) return "—";
+  return service.billing_party_name?.trim() || service.agencies?.name?.trim() || "Privato";
+}
 
 // Fase 6: accoda solo i messaggi davvero nuovi (poll incrementale), senza
 // buttare via quelli già in stato — a differenza di mergeMessagesStable, che
@@ -2931,7 +2942,7 @@ export default function WhatsAppInboxPage() {
                 </div>
                 <div className="flex justify-between gap-3">
                   <span className="text-slate-500">Agenzia</span>
-                  <span className="text-right font-semibold text-slate-900">{selectedThread.service?.booking_service_kind ?? "—"}</span>
+                  <span className="text-right font-semibold text-slate-900">{serviceAgencyLabel(selectedThread.service)}</span>
                 </div>
                 <div className="flex justify-between gap-3">
                   <span className="text-slate-500">Hotel</span>
