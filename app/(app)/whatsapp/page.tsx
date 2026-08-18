@@ -1520,7 +1520,28 @@ export default function WhatsAppInboxPage() {
     if (!response.ok || !body?.ok) {
       setError(body?.error ?? "Azione non riuscita.");
     } else {
-      await load(selectedThreadId, { silent: true });
+      if (action === "mark_read") {
+        const selectedWasUnread = (selectedThread?.unread_count ?? 0) > 0;
+        const selectedWasUrgentOnlyForUnread =
+          selectedWasUnread &&
+          selectedThread?.status !== "needs_review" &&
+          selectedThread?.match_status !== "needs_review";
+        setThreads((current) =>
+          current.map((thread) =>
+            thread.id === selectedThreadId ? { ...thread, unread_count: 0, updated_at: new Date().toISOString() } : thread
+          )
+        );
+        setGlobalInboxStats((current) =>
+          current
+            ? {
+              ...current,
+              unread: selectedWasUnread ? Math.max(0, current.unread - 1) : current.unread,
+              urgent: selectedWasUrgentOnlyForUnread ? Math.max(0, current.urgent - 1) : current.urgent,
+            }
+            : current
+        );
+      }
+      await load(selectedThreadId, { silent: true, resetThreadsPagination: action === "mark_read" && filter === "unread" });
     }
     setBusyAction(null);
   };
