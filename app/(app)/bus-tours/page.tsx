@@ -315,35 +315,38 @@ export default function BusToursPage() {
     }
 
     setBusyId(serviceId);
-    if (existingAssignment) {
-      const { error: updateAssignmentError } = await supabase
-        .from("assignments")
-        .update({ driver_user_id: nextDriverId, vehicle_label: nextBusLabel })
-        .eq("id", existingAssignment.id)
-        .eq("tenant_id", tenantId);
-      if (updateAssignmentError) {
-        setBusyId(null);
-        setMessage("Errore aggiornamento assegnazione.");
-        return;
-      }
-    } else {
-      const { error: insertAssignmentError } = await supabase.from("assignments").insert({
-        tenant_id: tenantId,
-        service_id: serviceId,
-        driver_user_id: nextDriverId,
-        vehicle_label: nextBusLabel
+    // ML Data Collection Sprint 3 (chiusura bypass P0-1): l'assegnazione
+    // passa ora dal core canonico via /api/ops/assign-service — niente piu'
+    // scrittura diretta supabase.from("assignments") dal browser. Il
+    // tenant_id viene derivato server-side dalla sessione (authorizePricingRequest),
+    // non da questo body: qui e' solo un vincolo di lettura per la UI locale.
+    let assignRes: Response;
+    try {
+      assignRes = await fetch("/api/ops/assign-service", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          service_id: serviceId,
+          driver_user_id: nextDriverId,
+          vehicle_label: nextBusLabel,
+          source: "bus_tours",
+        }),
       });
-      if (insertAssignmentError) {
-        setBusyId(null);
-        setMessage("Errore creazione assegnazione.");
-        return;
-      }
+    } catch {
+      setBusyId(null);
+      setMessage("Errore di rete durante l'assegnazione.");
+      return;
+    }
+    if (!assignRes.ok) {
+      setBusyId(null);
+      setMessage("Errore assegnazione tour bus.");
+      return;
     }
 
-    await supabase.from("services").update({ status: "assigned", bus_plate: nextBusLabel }).eq("id", serviceId).eq("tenant_id", tenantId);
-    if (userId) {
-      await supabase.from("status_events").insert({ tenant_id: tenantId, service_id: serviceId, status: "assigned", by_user_id: userId });
-    }
+    // bus_plate resta un campo di visualizzazione specifico di questa
+    // pagina, non gestito dal core condiviso (che aggiorna solo
+    // assignments/trip_groups/services.status/status_events).
+    await supabase.from("services").update({ bus_plate: nextBusLabel }).eq("id", serviceId).eq("tenant_id", tenantId);
     await refresh();
     setBusyId(null);
     setMessage("Tour bus assegnato.");

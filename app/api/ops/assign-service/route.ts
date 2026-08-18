@@ -29,12 +29,22 @@ export async function POST(request: NextRequest) {
       driver_profile_id?: string | null;
       vehicle_label?: string | null;
       action?: "assign" | "remove";
+      source?: string | null;
     };
 
     const body = (await request.json().catch(() => null)) as Body | null;
     if (!body?.service_id) {
       return NextResponse.json({ ok: false, error: "service_id obbligatorio." }, { status: 400 });
     }
+
+    // ML Data Collection Sprint 3 (chiusura bypass P0): source opzionale,
+    // whitelisted — mai un valore libero dal client dentro
+    // driver_assignment_history.features. Assente -> nessun cambiamento per
+    // i chiamanti esistenti (arrivals/dashboard/departures/dispatch/
+    // service-workflow), che continuano a ricevere il default di
+    // assignServiceCore ("manual_assign_service").
+    const ALLOWED_SOURCES = new Set(["bus_tours", "map"]);
+    const source = body.source && ALLOWED_SOURCES.has(body.source) ? body.source : undefined;
 
     const result = await assignServiceCore(auth.admin, {
       tenantId: auth.membership.tenant_id,
@@ -44,6 +54,7 @@ export async function POST(request: NextRequest) {
       driverProfileId: body.driver_profile_id ?? null,
       vehicleLabel: body.vehicle_label ?? null,
       action: body.action ?? "assign",
+      source,
     });
 
     return NextResponse.json(result.body, { status: result.status });

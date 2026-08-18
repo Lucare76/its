@@ -80,37 +80,32 @@ export default function MapPage() {
     if (!service || !targetDriver || !supabase || !tenantId || !userId) return;
 
     const vehicleLabel = service.pax >= 6 ? "VAN" : "CAR";
-    const existing = data.assignments.find((item) => item.service_id === serviceId && item.tenant_id === tenantId);
-    if (existing) {
-      const { error: updateAssignmentError } = await supabase
-        .from("assignments")
-        .update({ driver_user_id: targetDriver.user_id, vehicle_label: vehicleLabel })
-        .eq("id", existing.id)
-        .eq("tenant_id", tenantId);
-      if (updateAssignmentError) {
-        setMessage(updateAssignmentError.message);
-        return;
-      }
-    } else {
-      const { error: insertAssignmentError } = await supabase.from("assignments").insert({
-        tenant_id: tenantId,
-        service_id: serviceId,
-        driver_user_id: targetDriver.user_id,
-        vehicle_label: vehicleLabel
+    // ML Data Collection Sprint 3 (chiusura bypass P0-2): passa dal core
+    // canonico via /api/ops/assign-service — niente piu' scrittura diretta
+    // supabase.from("assignments") dal browser. tenant_id e' derivato
+    // server-side dalla sessione, non da questo body.
+    let assignRes: Response;
+    try {
+      assignRes = await fetch("/api/ops/assign-service", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          service_id: serviceId,
+          driver_user_id: targetDriver.user_id,
+          vehicle_label: vehicleLabel,
+          source: "map",
+        }),
       });
-      if (insertAssignmentError) {
-        setMessage(insertAssignmentError.message);
-        return;
-      }
+    } catch {
+      setMessage("Errore di rete durante l'assegnazione.");
+      return;
+    }
+    if (!assignRes.ok) {
+      const body = await assignRes.json().catch(() => null);
+      setMessage(typeof body?.message === "string" ? body.message : "Errore assegnazione.");
+      return;
     }
 
-    await supabase.from("services").update({ status: "assigned" }).eq("id", serviceId).eq("tenant_id", tenantId);
-    await supabase.from("status_events").insert({
-      tenant_id: tenantId,
-      service_id: serviceId,
-      status: "assigned",
-      by_user_id: userId
-    });
     await refresh();
     setMessage(`Assegnato a ${targetDriver.full_name}`);
   };

@@ -3,11 +3,14 @@ import path from "node:path";
 import * as XLSX from "xlsx";
 import { createClient } from "@supabase/supabase-js";
 import { resolveHotelMatch } from "@/lib/server/hotel-matching";
+import { extractFeatures, buildAssignmentDecisionFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
+import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
 
 type HotelRow = {
   id: string;
   name: string;
   normalized_name?: string | null;
+  zone?: string | null;
   aliases?: string[];
 };
 
@@ -252,9 +255,19 @@ async function main() {
   const tenantId = driverMembership.tenant_id as string;
   const driverUserId = driverMembership.user_id as string;
 
+  // ML Data Collection Sprint 3: lookup singolo (non per riga) per popolare
+  // toDriverProfileId nello storico — stesso driver per l'intero batch.
+  const { data: driverProfileRow } = await admin
+    .from("driver_profiles")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("user_id", driverUserId)
+    .maybeSingle();
+  const driverProfileId = (driverProfileRow?.id as string | undefined) ?? null;
+
   const { data: hotels, error: hotelsError } = await admin
     .from("hotels")
-    .select("id, name, normalized_name")
+    .select("id, name, normalized_name, zone")
     .eq("tenant_id", tenantId)
     .order("name", { ascending: true });
   if (hotelsError) throw new Error(hotelsError.message);
@@ -384,6 +397,75 @@ async function main() {
     }))
   );
   if (eventsError) throw new Error(eventsError.message);
+
+  // ML Data Collection Sprint 3 (chiusura bypass P0-3): registra lo storico
+  // strutturato per ogni servizio importato, riusando gli stessi helper
+  // condivisi di assign-service-core.ts (extractFeatures/
+  // buildAssignmentDecisionFeatures/logAssignmentChange) — non una seconda
+  // business logic di assegnazione. changeType "driver_swap" perche' un
+  // driver viene impostato (from null, prima inesistente) esattamente come
+  // negli altri chiamanti quando from->to cambia. Nessun candidate/proposal
+  // qui: e' un import diretto, non una proposta con ranking. Non passa da
+  // assignServiceCore() (vedi commento sopra la sua importazione, se
+  // presente, o il report di sprint): il gate daily_availability_confirmations
+  // e il guard di overlap driver a 30 minuti bloccherebbero sistematicamente
+  // le corse consecutive reali dello stesso autista che un import di
+  // giornata intera produce fisiologicamente.
+  const zoneByHotelId = new Map<string, string | null>(hotelRows.map((hotel) => [hotel.id, hotel.zone ?? null]));
+  const { data: importedServices, error: importedServicesError } = await admin
+    .from("services")
+    .select("id, date, time, direction, hotel_id, vessel, pax, booking_service_kind")
+    .eq("tenant_id", tenantId)
+    .in("id", insertedIds);
+  if (importedServicesError) throw new Error(importedServicesError.message);
+
+  const historyEntries = ((importedServices ?? []) as Array<{
+    id: string; date: string; time: string; direction: "arrival" | "departure";
+    hotel_id: string | null; vessel: string | null; pax: number | null; booking_service_kind: string | null;
+  }>).map((service) => {
+    const isNavetta = service.booking_service_kind === "shuttle_hotel" || service.booking_service_kind === "bus_city_hotel";
+    const baseFeatures = extractFeatures({
+      serviceDate: service.date,
+      changeType: "driver_swap",
+      toDriverProfileId: driverProfileId,
+      direction: service.direction,
+      zone: service.hotel_id ? zoneByHotelId.get(service.hotel_id) ?? null : null,
+      time: service.time,
+      vessel: service.vessel,
+      pax: service.pax,
+      isNavetta,
+    });
+    const features = buildAssignmentDecisionFeatures(baseFeatures, {
+      source: "driver_file_import",
+      proposal_id: null,
+      chosen_rank: null,
+      candidate_count: null,
+      was_override: false,
+    });
+    return {
+      tenantId,
+      serviceDate: service.date,
+      serviceId: service.id,
+      groupId: null,
+      changeType: "driver_swap" as const,
+      toDriverProfileId: driverProfileId,
+      features,
+      operatorId: driverUserId,
+    };
+  });
+
+  if (historyEntries.length > 0) {
+    // Non fire-and-forget: lo script termina subito dopo main(), una promise
+    // non attesa verrebbe scartata prima di scrivere. Un fallimento qui non
+    // deve pero' invalidare l'import gia' riuscito (services/assignments/
+    // status_events sono gia' committati) — loggato, non rilanciato.
+    try {
+      await logAssignmentChange(admin, historyEntries);
+      await updateLearnedPatterns(admin, tenantId);
+    } catch (historyError) {
+      console.error("Attenzione: import riuscito ma driver_assignment_history non scritto:", historyError instanceof Error ? historyError.message : String(historyError));
+    }
+  }
 
   console.log(JSON.stringify({
     tenant_id: tenantId,
