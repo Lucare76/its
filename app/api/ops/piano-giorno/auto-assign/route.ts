@@ -2026,12 +2026,18 @@ export async function POST(request: NextRequest) {
         }
 
         if (allServiceIds.length > 0) {
-          // Tutti e tre i write in parallelo
-          const [assignRes, svcRes, statusRes] = await Promise.all([
-            batchAdmin.from("assignments").upsert(allAssignRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false }),
-            auth.admin.from("services").update({ status: "assigned" }).in("id", allServiceIds).eq("tenant_id", tenantId),
-            batchAdmin.from("status_events").insert(allStatusEvents),
-          ]);
+          // Data Integrity Sprint 5: scritture sequenziali e condizionate
+          // (non più Promise.all indipendente) per garantire l'invariante
+          // status='assigned' ⇒ assignment esiste. Ordine: 1) assignments,
+          // 2) controllo errore, 3) services.status, 4) controllo errore
+          // (con un retry + compensating delete se persiste), 5) status_events
+          // (best-effort, non altera l'invariante primario), 6) history.
+          // Nessuna transazione DB introdotta (nessuna migration in questo
+          // sprint): la sequenza + il compensating delete sono l'unica difesa
+          // possibile lato applicazione con le query multiple esistenti.
+          const assignRes = await batchAdmin
+            .from("assignments")
+            .upsert(allAssignRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false });
 
           if (assignRes.error) {
             auditLog({
@@ -2043,25 +2049,68 @@ export async function POST(request: NextRequest) {
             });
             errors.push("Errore salvataggio assegnazioni.");
           }
-          if (svcRes.error) {
-            auditLog({
-              event: "piano_auto_assign_write_failed",
-              level: "error",
-              tenantId,
-              userId,
-              details: { step: "services_update", message: svcRes.error.message },
-            });
-            errors.push("Errore aggiornamento stato servizi.");
+
+          // services.status viene tentato SOLO se l'assignment è stato
+          // scritto con successo — mai più in parallelo/incondizionato.
+          let svcRes: { error: { message: string } | null } = { error: null };
+          let statusUpdateCompensated = false;
+          if (!assignRes.error) {
+            svcRes = await auth.admin.from("services").update({ status: "assigned" }).in("id", allServiceIds).eq("tenant_id", tenantId);
+            if (svcRes.error) {
+              // Un solo retry (fallimento tipicamente transitorio) prima di
+              // compensare: preferito a introdurre una transazione DB.
+              const retryRes = await auth.admin.from("services").update({ status: "assigned" }).in("id", allServiceIds).eq("tenant_id", tenantId);
+              svcRes = retryRes;
+            }
+            if (svcRes.error) {
+              // FASE fix: assignment scritto ma status non aggiornabile —
+              // mai lasciare "assignment presente + status non aggiornato"
+              // (invariante 2). Compensating delete degli assignment appena
+              // scritti in questo batch (chiave service_id+tenant_id, la
+              // stessa dell'upsert), non dell'intera tabella.
+              const compensateRes = await batchAdmin
+                .from("assignments")
+                .delete()
+                .eq("tenant_id", tenantId)
+                .in("service_id", allServiceIds);
+              statusUpdateCompensated = !compensateRes.error;
+              auditLog({
+                event: "piano_auto_assign_write_failed",
+                level: "error",
+                tenantId,
+                userId,
+                details: {
+                  step: "services_update",
+                  message: svcRes.error.message,
+                  compensating_delete_applied: statusUpdateCompensated,
+                  compensating_delete_error: compensateRes.error?.message ?? null,
+                },
+              });
+              errors.push(
+                statusUpdateCompensated
+                  ? "Errore aggiornamento stato servizi: assegnazioni annullate per evitare incoerenza."
+                  : "Errore aggiornamento stato servizi: incoerenza NON risolta automaticamente, richiede verifica manuale."
+              );
+            }
           }
-          if (statusRes.error) {
-            auditLog({
-              event: "piano_auto_assign_write_failed",
-              level: "error",
-              tenantId,
-              userId,
-              details: { step: "status_events", message: statusRes.error.message },
-            });
-            errors.push("Errore registrazione eventi stato.");
+
+          // status_events è best-effort SOLO dopo che l'invariante primario
+          // (assignment + status coerenti) è già soddisfatto — un suo
+          // fallimento non altera né riapre assignments/status, che restano
+          // corretti indipendentemente dall'esito di questo insert.
+          let statusRes: { error: { message: string } | null } = { error: null };
+          if (!assignRes.error && !svcRes.error) {
+            statusRes = await batchAdmin.from("status_events").insert(allStatusEvents);
+            if (statusRes.error) {
+              auditLog({
+                event: "piano_auto_assign_write_failed",
+                level: "error",
+                tenantId,
+                userId,
+                details: { step: "status_events", message: statusRes.error.message },
+              });
+              errors.push("Errore registrazione eventi stato.");
+            }
           }
 
           if (!assignRes.error && !svcRes.error) {

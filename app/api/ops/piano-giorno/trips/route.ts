@@ -608,10 +608,12 @@ export async function POST(request: NextRequest) {
 
       // Se passati nuovi service_ids, riassegna (add/remove dal gruppo)
       if (verifiedServiceIds !== null) {
-        // Rimuovi servizi che non sono più nel gruppo
+        // Rimuovi servizi che non sono più nel gruppo — select("*") (non solo
+        // id/service_id) per poter ripristinare la riga completa se il
+        // rollback dello status fallisse (Data Integrity Sprint 5).
         const { data: existing } = await auth.admin
           .from("assignments")
-          .select("id, service_id")
+          .select("*")
           .eq("group_id", group_id)
           .eq("tenant_id", tenantId);
 
@@ -621,10 +623,62 @@ export async function POST(request: NextRequest) {
         // Servizi rimossi dal gruppo → cancella assignment o svincola
         const toRemove = (existing ?? []).filter((a) => !newIds.has(a.service_id as string));
         if (toRemove.length > 0) {
-          await Promise.all([
-            auth.admin.from("assignments").delete().in("id", toRemove.map((a) => a.id)).eq("tenant_id", tenantId),
-            auth.admin.from("services").update({ status: "new" }).in("id", toRemove.map((a) => a.service_id)).eq("tenant_id", tenantId),
-          ]);
+          // Data Integrity Sprint 5: sequenziale e controllato — mai più
+          // Promise.all incondizionato. Se assignments.delete fallisce, lo
+          // status non viene toccato (nessun mismatch). Se il delete riesce
+          // ma il successivo services.update(status:'new') fallisce anche
+          // dopo un retry, si ripristinano le righe assignment cancellate
+          // (compensating restore) per non lasciare "assigned" senza
+          // assignment.
+          const deleteRes = await auth.admin.from("assignments").delete().in("id", toRemove.map((a) => a.id)).eq("tenant_id", tenantId);
+          if (deleteRes.error) {
+            auditLog({
+              event: "trips_remove_services_write_failed",
+              level: "error",
+              tenantId,
+              userId,
+              details: { step: "assignments_delete", message: deleteRes.error.message, groupId: group_id },
+            });
+            return NextResponse.json({ ok: false, error: "Errore rimozione servizi dal giro." }, { status: 500 });
+          }
+
+          let statusRollbackRes = await auth.admin.from("services").update({ status: "new" }).in("id", toRemove.map((a) => a.service_id)).eq("tenant_id", tenantId);
+          if (statusRollbackRes.error) {
+            statusRollbackRes = await auth.admin.from("services").update({ status: "new" }).in("id", toRemove.map((a) => a.service_id)).eq("tenant_id", tenantId);
+          }
+          if (statusRollbackRes.error) {
+            // Data Integrity Sprint 5: gli assignment sono già stati
+            // cancellati sopra — senza return qui la risposta tornerebbe
+            // comunque ok:true (partial success silenzioso), anche quando la
+            // compensating restore fallisce e l'orphan resta reale.
+            const restoreRows = toRemove.map((row) => {
+              const { id: _id, ...rest } = row as Record<string, unknown>;
+              return rest;
+            });
+            const restoreRes = await auth.admin.from("assignments").insert(restoreRows);
+            auditLog({
+              event: "trips_remove_services_write_failed",
+              level: "error",
+              tenantId,
+              userId,
+              details: {
+                step: "services_status_rollback",
+                message: statusRollbackRes.error.message,
+                groupId: group_id,
+                compensating_restore_applied: !restoreRes.error,
+                compensating_restore_error: restoreRes.error?.message ?? null,
+              },
+            });
+            return NextResponse.json(
+              {
+                ok: false,
+                error: restoreRes.error
+                  ? "Errore rimozione servizi dal giro: incoerenza NON risolta automaticamente, richiede verifica manuale."
+                  : "Errore rimozione servizi dal giro: operazione annullata per evitare incoerenza.",
+              },
+              { status: 500 }
+            );
+          }
         }
 
         // Servizi aggiunti → nuovi assignments
@@ -804,22 +858,75 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: false, error: confirmationError }, { status: 409 });
       }
 
-      // Recupera service_ids del gruppo prima di cancellare
+      // Recupera service_ids del gruppo prima di cancellare — select("*") per
+      // poter ripristinare le righe se il rollback dello status fallisse
+      // (Data Integrity Sprint 5).
       const { data: groupAssignments } = await auth.admin
         .from("assignments")
-        .select("id, service_id")
+        .select("*")
         .eq("group_id", group_id)
         .eq("tenant_id", tenantId);
 
       const serviceIds = (groupAssignments ?? []).map((a) => a.service_id as string);
 
-      await Promise.all([
+      // Data Integrity Sprint 5: assignments.delete controllato prima di
+      // toccare services.status — trip_groups.status="cancelled" resta in
+      // Promise.all con il delete perché non fa parte dell'invariante
+      // assignment/status (solo un flag di visualizzazione sul gruppo).
+      const [deleteRes] = await Promise.all([
         auth.admin.from("assignments").delete().eq("group_id", group_id).eq("tenant_id", tenantId),
         auth.admin.from("trip_groups").update({ status: "cancelled", updated_at: now }).eq("id", group_id).eq("tenant_id", tenantId),
       ]);
 
+      if (deleteRes.error) {
+        auditLog({
+          event: "trips_cancel_trip_write_failed",
+          level: "error",
+          tenantId,
+          userId,
+          details: { step: "assignments_delete", message: deleteRes.error.message, groupId: group_id },
+        });
+        return NextResponse.json({ ok: false, error: "Errore durante la cancellazione del giro." }, { status: 500 });
+      }
+
       if (serviceIds.length > 0) {
-        await auth.admin.from("services").update({ status: "new" }).in("id", serviceIds).eq("tenant_id", tenantId);
+        let statusRollbackRes = await auth.admin.from("services").update({ status: "new" }).in("id", serviceIds).eq("tenant_id", tenantId);
+        if (statusRollbackRes.error) {
+          statusRollbackRes = await auth.admin.from("services").update({ status: "new" }).in("id", serviceIds).eq("tenant_id", tenantId);
+        }
+        if (statusRollbackRes.error) {
+          // Data Integrity Sprint 5: gli assignment sono già stati cancellati
+          // sopra — senza return qui la risposta tornerebbe comunque
+          // ok:true (partial success silenzioso), anche quando la
+          // compensating restore fallisce e l'orphan resta reale.
+          const restoreRows = (groupAssignments ?? []).map((row) => {
+            const { id: _id, ...rest } = row as Record<string, unknown>;
+            return rest;
+          });
+          const restoreRes = await auth.admin.from("assignments").insert(restoreRows);
+          auditLog({
+            event: "trips_cancel_trip_write_failed",
+            level: "error",
+            tenantId,
+            userId,
+            details: {
+              step: "services_status_rollback",
+              message: statusRollbackRes.error.message,
+              groupId: group_id,
+              compensating_restore_applied: !restoreRes.error,
+              compensating_restore_error: restoreRes.error?.message ?? null,
+            },
+          });
+          return NextResponse.json(
+            {
+              ok: false,
+              error: restoreRes.error
+                ? "Errore cancellazione giro: incoerenza NON risolta automaticamente, richiede verifica manuale."
+                : "Errore cancellazione giro: operazione annullata per evitare incoerenza.",
+            },
+            { status: 500 }
+          );
+        }
       }
 
       return NextResponse.json({ ok: true });

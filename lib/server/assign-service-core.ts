@@ -546,6 +546,45 @@ async function cleanupCreatedTripGroup(
   }
 }
 
+// Data Integrity Sprint 5: ripristina, in modo best-effort, un assignment
+// "orfano da gruppo" (senza group_id) cancellato subito prima di tentare la
+// creazione di un nuovo trip_group/assignment — se quel tentativo fallisce,
+// senza questo ripristino il servizio potrebbe restare status='assigned'
+// senza alcuna riga in assignments (l'update dello status avviene solo più
+// avanti, in caso di successo, quindi non è questa la causa di un mismatch
+// diretto — ma un secondo tentativo di assegnazione sullo stesso servizio
+// leggerebbe "nessun assignment esistente" mentre lo status resta ancora
+// quello della vecchia assegnazione già cancellata). Re-inserisce la riga
+// catturata prima della delete, omettendo "id" (nuovo id generato dal DB).
+async function restoreDeletedOrphanAssignment(
+  admin: SupabaseClient,
+  tenantId: string,
+  deletedRow: Record<string, unknown>
+): Promise<boolean> {
+  try {
+    const { id: _id, ...rest } = deletedRow;
+    const { error } = await admin.from("assignments").insert(rest);
+    if (error) {
+      auditLog({
+        event: "assignment_orphan_restore_failed",
+        level: "error",
+        tenantId,
+        details: { error: error.message },
+      });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    auditLog({
+      event: "assignment_orphan_restore_failed",
+      level: "error",
+      tenantId,
+      details: { error: err instanceof Error ? err.message : "Errore sconosciuto." },
+    });
+    return false;
+  }
+}
+
 export type AssignServiceCoreParams = {
   tenantId: string;
   userId: string;
@@ -641,10 +680,13 @@ export async function assignServiceCore(admin: SupabaseClient, params: AssignSer
     };
   }
 
-  // Recupera assignment esistente
+  // Recupera assignment esistente — select("*") (Data Integrity Sprint 5,
+  // non solo i campi letti sotto) per poter ripristinare la riga completa se
+  // il ramo "assignment orfano da gruppo" più sotto cancella questa riga e
+  // il successivo re-inserimento fallisce.
   const { data: existingAssignment } = await admin
     .from("assignments")
-    .select("id, group_id, driver_profile_id, vehicle_label")
+    .select("*")
     .eq("service_id", serviceId)
     .eq("tenant_id", tenantId)
     .maybeSingle();
@@ -752,7 +794,13 @@ export async function assignServiceCore(admin: SupabaseClient, params: AssignSer
       }).eq("id", existingAssignment.id).eq("tenant_id", tenantId),
     ]);
   } else {
-    // Rimuovi eventuale assignment vecchio senza group_id
+    // Rimuovi eventuale assignment vecchio senza group_id — la riga
+    // completa viene conservata (deletedOrphanAssignment) per un eventuale
+    // ripristino se la creazione del nuovo gruppo/assignment sotto fallisse
+    // (Data Integrity Sprint 5, edge case verificato: senza questo, un
+    // secondo tentativo di lettura vedrebbe "nessun assignment" mentre lo
+    // status del servizio resta ancora quello dell'assegnazione cancellata).
+    const deletedOrphanAssignment = existingAssignment ? { ...existingAssignment } : null;
     if (existingAssignment) {
       await admin.from("assignments").delete().eq("id", existingAssignment.id).eq("tenant_id", tenantId);
     }
@@ -773,6 +821,7 @@ export async function assignServiceCore(admin: SupabaseClient, params: AssignSer
       .single();
 
     if (groupErr || !newGroup?.id) {
+      if (deletedOrphanAssignment) await restoreDeletedOrphanAssignment(admin, tenantId, deletedOrphanAssignment);
       return { status: 500, body: { ok: false, error: groupErr?.message ?? "Errore creazione giro." } };
     }
 
@@ -790,6 +839,7 @@ export async function assignServiceCore(admin: SupabaseClient, params: AssignSer
 
     if (assignmentInsertError) {
       const cleanupSucceeded = await cleanupCreatedTripGroup(admin, tenantId, groupId);
+      if (deletedOrphanAssignment) await restoreDeletedOrphanAssignment(admin, tenantId, deletedOrphanAssignment);
 
       if (assignmentInsertError.code === "23505") {
         auditLog({
