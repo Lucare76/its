@@ -284,6 +284,107 @@ describe("live-parser — findArTariffAndTax (selezione da dati live, schema rea
   });
 });
 
+describe("live-parser — findArTariffAndTax: tassa di sbarco via collegati[] (Fase 2C, root cause GERARDO D'ADDIO)", () => {
+  /** Entry collegati[] reale osservata live (corsa 132178/131721): tassa SOLO annidata, mai riga sorella top-level. */
+  function collegatoTassa(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id_master: 370,
+      id_corsa: 132178,
+      id_biglietto: 413,
+      id_tipologia_passeggero: TASSA_SBARCO_TIPOLOGIA_PASSEGGERO,
+      unita_allocata: 0,
+      nome: "TASSA SBARCO",
+      descrizione: "TASSA DI SBARCO",
+      flag_prevendita_obbligatorio: 0,
+      flag_targa: 0,
+      id_log: 55851,
+      id_tariffa: 6,
+      id_iva: 8,
+      prezzo: 0,
+      prezzo_ar: 0,
+      prezzo_prevendita: 0,
+      quantita: 1,
+      cumulativo: 0,
+      orePrevendita: 24,
+      ...overrides,
+    };
+  }
+
+  it("tassa SOLO in collegati[] (nessuna riga top-level, caso reale D'ADDIO) -> kind found, tassaSbarco derivata da collegati, taxIssue null", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow({ collegati: [collegatoTassa()] })]));
+    const result = findArTariffAndTax(rows);
+    expect(result.kind).toBe("found");
+    if (result.kind === "found") {
+      expect(result.tassaSbarco?.id_biglietto).toBe(413);
+      expect(result.tassaSbarco?.id_log).toBe(55851);
+      expect(result.tassaSbarco?.id_tipologia_passeggero).toBe(TASSA_SBARCO_TIPOLOGIA_PASSEGGERO);
+      expect(result.taxIssue).toBeNull();
+    }
+  });
+
+  it("tassa presente sia in collegati[] SIA come riga top-level, COERENTI (stesso id_biglietto) -> un'unica tassa logica, taxIssue null", () => {
+    const { rows } = parseBigliettiVendibiliResponse(
+      realEnvelope([bigliettoRow({ collegati: [collegatoTassa({ id_biglietto: 413 })] }), tassaRow({ id_biglietto: 413 })])
+    );
+    const result = findArTariffAndTax(rows);
+    expect(result.kind).toBe("found");
+    if (result.kind === "found") {
+      expect(result.tassaSbarco?.id_biglietto).toBe(413);
+      expect(result.taxIssue).toBeNull();
+    }
+  });
+
+  it("tassa presente sia in collegati[] SIA come riga top-level, DISCORDANTI (id_biglietto diverso) -> taxIssue ambiguous, fail-closed", () => {
+    const { rows } = parseBigliettiVendibiliResponse(
+      realEnvelope([bigliettoRow({ collegati: [collegatoTassa({ id_biglietto: 413 })] }), tassaRow({ id_biglietto: 999 })])
+    );
+    const result = findArTariffAndTax(rows);
+    expect(result.kind).toBe("found");
+    if (result.kind === "found") {
+      expect(result.taxIssue).toBe("ambiguous");
+      expect(result.tassaSbarco).toBeNull();
+    }
+  });
+
+  it("più di una tassa candidata SOLO dentro collegati[] -> taxIssue ambiguous, nessuna scelta arbitraria", () => {
+    const { rows } = parseBigliettiVendibiliResponse(
+      realEnvelope([bigliettoRow({ collegati: [collegatoTassa({ id_biglietto: 413 }), collegatoTassa({ id_biglietto: 414 })] })])
+    );
+    const result = findArTariffAndTax(rows);
+    expect(result.kind).toBe("found");
+    if (result.kind === "found") expect(result.taxIssue).toBe("ambiguous");
+  });
+
+  it("tassa in collegati[] senza prezzo valido -> taxIssue price_missing, fail-closed", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow({ collegati: [collegatoTassa({ prezzo: null })] })]));
+    const result = findArTariffAndTax(rows);
+    expect(result.kind).toBe("found");
+    if (result.kind === "found") expect(result.taxIssue).toBe("price_missing");
+  });
+
+  it("regressione: tassa SOLO top-level (nessun collegati) continua a funzionare come prima (fallback legacy invariato)", () => {
+    const { rows } = parseBigliettiVendibiliResponse(realEnvelope([bigliettoRow(), tassaRow()]));
+    const result = findArTariffAndTax(rows);
+    expect(result.kind).toBe("found");
+    if (result.kind === "found") {
+      expect(result.tassaSbarco?.id_biglietto).toBe(999);
+      expect(result.taxIssue).toBeNull();
+    }
+  });
+
+  it("collegati[] con entry non-tassa (es. CONDUCENTE VEICOLO) -> ignorata, non confusa con la tassa", () => {
+    const { rows } = parseBigliettiVendibiliResponse(
+      realEnvelope([bigliettoRow({ collegati: [{ id_biglietto: 23, id_tipologia_passeggero: 1, descrizione: "CONDUCENTE VEICOLO", nome: null, prezzo: 0 }] })])
+    );
+    const result = findArTariffAndTax(rows);
+    expect(result.kind).toBe("found");
+    if (result.kind === "found") {
+      expect(result.tassaSbarco).toBeNull();
+      expect(result.taxIssue).toBeNull();
+    }
+  });
+});
+
 describe("live-parser — classifyPassengerTicket / selectPassengerTariffs / deriveTaxLinkage (Fase 2B.5)", () => {
   /** Riga reale osservata corsa 133760 — BAMBINO (4-12 anni), id_tipologia_passeggero=1 come l'adulto. */
   function bambinoRow(overrides: Partial<BigliettoVendibileRaw> = {}): Record<string, unknown> {

@@ -214,6 +214,122 @@ export type ArTariffSelectionResult =
     };
 
 /**
+ * Fase 2C — converte una entry grezza di collegati[] (struttura osservata
+ * live, diversa da una riga vendibili top-level: contiene anche id_master/
+ * unita_allocata/quantita/cumulativo/orePrevendita, non modellati) in un
+ * BigliettoVendibileRaw parziale, riusando gli stessi reader difensivi di
+ * parseBigliettoRow. Campi non presenti nella struttura collegati
+ * (flag_ar_obbligatorio, quantita_min/max_per_esclusivo) restano null: non
+ * sono mai stati osservati lì e non vanno indovinati. collegati annidati
+ * dentro un collegato non sono supportati (mai osservati, un solo livello
+ * di nesting è quanto confermato dai dati reali).
+ */
+function parseCollegatoRow(row: Record<string, unknown>): BigliettoVendibileRaw {
+  return {
+    id_corsa: asStringOrNumber(row.id_corsa),
+    id_biglietto: asStringOrNumber(row.id_biglietto),
+    id_tipologia_passeggero: asNumber(row.id_tipologia_passeggero),
+    id_tariffa: asStringOrNumber(row.id_tariffa),
+    id_iva: asStringOrNumber(row.id_iva),
+    id_log: asStringOrNumber(row.id_log),
+    nome: asString(row.nome),
+    descrizione: asString(row.descrizione),
+    prezzo: asNumber(row.prezzo),
+    prezzo_ar: asNumber(row.prezzo_ar),
+    prezzo_prevendita: asNumber(row.prezzo_prevendita),
+    flag_ar_obbligatorio: null,
+    flag_targa: asFlag(row.flag_targa),
+    quantita_min_per_esclusivo: null,
+    quantita_max_per_esclusivo: null,
+    collegati: null,
+  };
+}
+
+/**
+ * Fase 2C — estrae i candidati tassa di sbarco annidati in passengerRow.collegati.
+ *
+ * Root cause confermata su dati live reali (corsa 132178/131721, GERARDO
+ * D'ADDIO): Medmar può esprimere la tassa di sbarco SOLO come entry dentro
+ * collegati[] della tariffa passeggero, senza alcuna riga sorella top-level
+ * nella risposta biglietti/vendibili — findArTariffAndTax cercava la tassa
+ * SOLO a livello top-level e la perdeva silenziosamente in questo caso.
+ *
+ * Criterio di identificazione (nessun hardcode di id_biglietto/id_log,
+ * sempre derivati dalla risposta live): id_tipologia_passeggero === 32
+ * (TASSA_SBARCO_TIPOLOGIA_PASSEGGERO) e/o label coerente con "TASSA DI
+ * SBARCO" — stesso doppio segnale già usato altrove nel file (mai un solo
+ * criterio come regola assoluta).
+ */
+function extractNestedTaxCandidates(passengerRow: BigliettoVendibileRaw): BigliettoVendibileRaw[] {
+  if (!Array.isArray(passengerRow.collegati)) return [];
+  const parsed = passengerRow.collegati
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+    .map(parseCollegatoRow);
+  return parsed.filter((row) => {
+    if (row.id_tipologia_passeggero === TASSA_SBARCO_TIPOLOGIA_PASSEGGERO) return true;
+    const label = resolveBigliettoLabel(row).label;
+    return label !== null && TASSA_SBARCO_HINT.test(label);
+  });
+}
+
+function taxIdentity(row: BigliettoVendibileRaw): string | null {
+  if (row.id_biglietto != null) return `id_biglietto:${row.id_biglietto}`;
+  if (row.id_log != null) return `id_log:${row.id_log}`;
+  return null;
+}
+
+/**
+ * Fase 2C — unifica la tassa individuata dentro collegati[] (fonte
+ * primaria, riflette la struttura live reale) con quella individuata dalla
+ * ricerca top-level esistente (fallback, compatibile con risposte Medmar
+ * legacy/altre corse dove la tassa è davvero una riga sorella — vedi corsa
+ * 133760 nei test, comportamento INVARIATO in quel caso).
+ *
+ * - più di un candidato su UNA SOLA delle due fonti -> ambiguous (nessuna
+ *   scelta arbitraria tra più tasse candidate).
+ * - un candidato su entrambe le fonti -> devono riferirsi alla STESSA tassa
+ *   (stesso id_biglietto, o id_log se id_biglietto assente su un lato):
+ *   coerenti -> un'unica tassa logica; discordanti o non confrontabili
+ *   (identità non derivabile su un lato) -> ambiguous, fail-closed.
+ * - un candidato su una sola fonte -> quello, nessuna preferenza arbitraria
+ *   dato che le fonti non si sovrappongono in questo caso.
+ * - zero candidati su entrambe -> nessuna tassa (comportamento invariato
+ *   per corse senza tassa).
+ *
+ * Prezzo mancante sulla tassa selezionata -> price_missing, SEMPRE
+ * controllato dopo la selezione (mai silenzioso).
+ */
+function unifyTaxSelection(
+  nested: BigliettoVendibileRaw[],
+  topLevel: BigliettoVendibileRaw[]
+): { tax: BigliettoVendibileRaw | null; issue: "ambiguous" | "price_missing" | null } {
+  if (nested.length > 1 || topLevel.length > 1) {
+    return { tax: null, issue: "ambiguous" };
+  }
+
+  let selected: BigliettoVendibileRaw | null = null;
+  if (nested.length === 1 && topLevel.length === 1) {
+    const nestedId = taxIdentity(nested[0]!);
+    const topLevelId = taxIdentity(topLevel[0]!);
+    if (nestedId === null || topLevelId === null || nestedId !== topLevelId) {
+      return { tax: null, issue: "ambiguous" };
+    }
+    selected = nested[0]!;
+  } else if (nested.length === 1) {
+    selected = nested[0]!;
+  } else if (topLevel.length === 1) {
+    selected = topLevel[0]!;
+  } else {
+    return { tax: null, issue: null };
+  }
+
+  if (selected.prezzo == null) {
+    return { tax: selected, issue: "price_missing" };
+  }
+  return { tax: selected, issue: null };
+}
+
+/**
  * Individua il biglietto "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR" e
  * l'eventuale "TASSA DI SBARCO" tra i biglietti vendibili di una corsa.
  *
@@ -235,6 +351,10 @@ export type ArTariffSelectionResult =
  * silenziosamente come adulto. Se più di un candidato adulto corrisponde,
  * kind "ambiguous_tariff": scegliere il primo silenziosamente sarebbe un
  * falso positivo potenziale, non un fail-safe.
+ *
+ * Tassa di sbarco (Fase 2C): individuata unificando collegati[] della
+ * tariffa adulto selezionata (fonte primaria, vedi extractNestedTaxCandidates)
+ * con la ricerca top-level storica (fallback legacy) — vedi unifyTaxSelection.
  */
 export function findArTariffAndTax(rows: BigliettoVendibileRaw[]): ArTariffSelectionResult {
   const withLabel = rows.map((row) => ({ row, resolved: resolveBigliettoLabel(row) }));
@@ -256,27 +376,18 @@ export function findArTariffAndTax(rows: BigliettoVendibileRaw[]): ArTariffSelec
   }
   const { row: adult, resolved: adultLabel } = adults[0]!;
 
-  const taxMatches = withLabel.filter(
-    ({ resolved }) => resolved.label !== null && TASSA_SBARCO_HINT.test(resolved.label)
-  );
-  let tassaSbarco: BigliettoVendibileRaw | null = null;
-  let taxIssue: "ambiguous" | "price_missing" | null = null;
-
-  if (taxMatches.length > 1) {
-    taxIssue = "ambiguous";
-  } else if (taxMatches.length === 1) {
-    tassaSbarco = taxMatches[0]!.row;
-    if (tassaSbarco.prezzo == null) {
-      taxIssue = "price_missing";
-    }
-  }
+  const topLevelTaxMatches = withLabel
+    .filter(({ resolved }) => resolved.label !== null && TASSA_SBARCO_HINT.test(resolved.label))
+    .map(({ row }) => row);
+  const nestedTaxCandidates = extractNestedTaxCandidates(adult);
+  const unified = unifyTaxSelection(nestedTaxCandidates, topLevelTaxMatches);
 
   return {
     kind: "found",
     tariff: adult,
     labelSource: adultLabel.source as "descrizione" | "nome",
-    tassaSbarco,
-    taxIssue,
+    tassaSbarco: unified.tax,
+    taxIssue: unified.issue,
   };
 }
 

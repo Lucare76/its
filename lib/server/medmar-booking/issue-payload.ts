@@ -88,6 +88,18 @@ function assertNoMinorsInPreflight(preflight: MedmarPreflightResult): void {
   }
 }
 
+/**
+ * Fase 2D — root cause confermata confrontando il PDF Medmar reale D'ADDIO
+ * (One Click, aggregato: 1 riga adulto quantita=2 per gamba, 2 numeri
+ * biglietto totali) con il PDF Medmar reale PISCITELLI (2 adulti A/R,
+ * struttura Medmar nativa: 4 numeri biglietto distinti, 1 riga adulto
+ * quantita=1 + 1 riga tassa quantita=1 PER passeggero PER gamba — 8 righe
+ * dettaglio[] totali). Il formato aggregato ha funzionato per D'Addio (booking
+ * 735462 completata), ma non riflette la granularità nativa Medmar osservata
+ * su un booking manuale strutturalmente identico — questa funzione ora
+ * genera una riga (lock) per singolo passeggero, mai un'unica riga
+ * aggregata, sia per l'adulto sia per l'eventuale tassa collegata.
+ */
 export function buildLockTickets(preflight: MedmarPreflightResult, vendibiliByCorsa: Map<string, BigliettoVendibileRaw[]>): MedmarMutationTicketLine[] {
   assertNoMinorsInPreflight(preflight);
   const lines: MedmarMutationTicketLine[] = [];
@@ -95,41 +107,65 @@ export function buildLockTickets(preflight: MedmarPreflightResult, vendibiliByCo
     const vendibili = vendibiliByCorsa.get(String(leg.id_corsa)) ?? [];
     const selection = findArTariffAndTax(vendibili);
     if (selection.kind !== "found") throw new MedmarIssuePayloadError("tariffa AR live non disponibile.");
-    const label = resolveBigliettoLabel(selection.tariff).label;
-    lines.push({
-      id_corsa: leg.id_corsa!,
-      quantita: preflight.pax,
-      id_log: selection.tariff.id_log ?? "",
-      descrizione: requiredText(label, "descrizione biglietto adulto"),
-    });
-    if (selection.tassaSbarco) {
-      assertTassaSbarcoTipologia(selection.tassaSbarco);
-      const taxLabel = resolveBigliettoLabel(selection.tassaSbarco).label;
+    if (selection.taxIssue) {
+      throw new MedmarIssuePayloadError(`tassa di sbarco non determinabile con certezza (${selection.taxIssue}).`);
+    }
+    const adultDescrizione = requiredText(resolveBigliettoLabel(selection.tariff).label, "descrizione biglietto adulto");
+    for (let i = 0; i < preflight.pax; i++) {
       lines.push({
         id_corsa: leg.id_corsa!,
-        quantita: preflight.pax,
-        id_log: selection.tassaSbarco.id_log ?? "",
-        descrizione: requiredText(taxLabel, "descrizione tassa"),
+        quantita: 1,
+        id_log: selection.tariff.id_log ?? "",
+        descrizione: adultDescrizione,
       });
+    }
+    if (selection.tassaSbarco) {
+      assertTassaSbarcoTipologia(selection.tassaSbarco);
+      const taxDescrizione = requiredText(resolveBigliettoLabel(selection.tassaSbarco).label, "descrizione tassa");
+      for (let i = 0; i < preflight.pax; i++) {
+        lines.push({
+          id_corsa: leg.id_corsa!,
+          quantita: 1,
+          id_log: selection.tassaSbarco.id_log ?? "",
+          descrizione: taxDescrizione,
+        });
+      }
     }
   }
   return lines;
 }
 
+function ticketLineKey(line: { id_corsa: number | string; id_log: number | string; quantita: number; descrizione: string }): string {
+  return `${line.id_corsa}|${line.id_log}|${line.quantita}|${line.descrizione}`;
+}
+
+/**
+ * Fase 2D — con buildLockTickets che ora emette una riga per singolo
+ * passeggero (mai più un'unica riga aggregata quantita=pax), più righe
+ * richieste possono condividere ESATTAMENTE lo stesso contenuto (stesso
+ * id_corsa/id_log/quantita=1/descrizione, un passeggero identico all'altro).
+ * Il matching non può più pretendere un candidato unico per riga: raggruppa
+ * per contenuto e richiede che il NUMERO di frozen candidati coincida
+ * esattamente col numero di richieste identiche — mai una scelta arbitraria
+ * su quale frozen vada a quale passeggero (sono interscambiabili per
+ * costruzione, stesso id_log/descrizione/quantita).
+ */
 export function validateAdultFrozenTickets(requestedAdultLines: MedmarMutationTicketLine[], frozen: MedmarLockedTicket[]): MedmarLockedTicket[] {
   const adultLines = requestedAdultLines.filter((line) => /PASSAGGIO PONTE ADULTO/i.test(line.descrizione));
-  const matched: MedmarLockedTicket[] = [];
+
+  const requestedCountByKey = new Map<string, number>();
   for (const line of adultLines) {
-    const candidates = frozen.filter((row) =>
-      String(row.id_corsa) === String(line.id_corsa) &&
-      String(row.id_log) === String(line.id_log) &&
-      row.quantita === line.quantita &&
-      row.descrizione === line.descrizione
-    );
-    if (candidates.length !== 1) {
+    const key = ticketLineKey(line);
+    requestedCountByKey.set(key, (requestedCountByKey.get(key) ?? 0) + 1);
+  }
+
+  const matched: MedmarLockedTicket[] = [];
+  for (const [key, count] of requestedCountByKey) {
+    const candidates = frozen.filter((row) => ticketLineKey(row) === key);
+    if (candidates.length !== count) {
       throw new MedmarIssuePayloadError("frozen adulto mancante o ambiguo.");
     }
-    matched.push(candidates[0]!);
+    matched.push(...candidates);
   }
   return matched;
 }
@@ -146,20 +182,27 @@ const PASSENGER_LINE_HINT = /^PASSAGGIO PONTE (ADULTO|BAMBINO|INFANT)\b/i;
  * solo-adulti già in produzione) — usata solo da
  * buildMixedPassengerLockTickets/test, non wired a nessuna mutazione reale.
  */
+/**
+ * Fase 2D — stesso adattamento a matching-per-conteggio di
+ * validateAdultFrozenTickets (vedi commento lì): buildMixedPassengerLockTickets
+ * ora emette righe multiple identiche per passeggeri della stessa categoria.
+ */
 export function validatePassengerFrozenTickets(requestedPassengerLines: MedmarMutationTicketLine[], frozen: MedmarLockedTicket[]): MedmarLockedTicket[] {
   const passengerLines = requestedPassengerLines.filter((line) => PASSENGER_LINE_HINT.test(line.descrizione));
-  const matched: MedmarLockedTicket[] = [];
+
+  const requestedCountByKey = new Map<string, number>();
   for (const line of passengerLines) {
-    const candidates = frozen.filter((row) =>
-      String(row.id_corsa) === String(line.id_corsa) &&
-      String(row.id_log) === String(line.id_log) &&
-      row.quantita === line.quantita &&
-      row.descrizione === line.descrizione
-    );
-    if (candidates.length !== 1) {
+    const key = ticketLineKey(line);
+    requestedCountByKey.set(key, (requestedCountByKey.get(key) ?? 0) + 1);
+  }
+
+  const matched: MedmarLockedTicket[] = [];
+  for (const [key, count] of requestedCountByKey) {
+    const candidates = frozen.filter((row) => ticketLineKey(row) === key);
+    if (candidates.length !== count) {
       throw new MedmarIssuePayloadError("frozen passeggero mancante o ambiguo.");
     }
-    matched.push(candidates[0]!);
+    matched.push(...candidates);
   }
   return matched;
 }
@@ -173,6 +216,16 @@ export function validatePassengerFrozenTickets(requestedPassengerLines: MedmarMu
  * eseguire alcun lock reale — l'emissione minori resta bloccata dal gate
  * dell'orchestratore molto prima che questa funzione possa essere
  * raggiunta in produzione.
+ */
+/**
+ * Fase 2D — stessa granularità per-passeggero applicata a buildLockTickets
+ * (vedi commento lì): una riga quantita=1 per singolo passeggero di ciascuna
+ * categoria, mai una riga aggregata quantita=count. Idem per la tassa
+ * collegata: una riga quantita=1 per ciascun passeggero a cui risulta
+ * collegata (non più un'unica riga con quantita=taxQuantity aggregato).
+ * Resta FIXTURE ONLY (non wired a nessuna mutazione reale, vedi commento
+ * sulla funzione più sotto) — nessun payload di prenotazione mixed-passenger
+ * esiste ancora in produzione, l'emissione minori resta bloccata a monte.
  */
 export function buildMixedPassengerLockTickets(
   preflight: MedmarPreflightResult,
@@ -196,13 +249,15 @@ export function buildMixedPassengerLockTickets(
     for (const [category, count, categorySelection, fieldLabel] of categories) {
       if (count <= 0) continue;
       if (categorySelection.kind !== "found") throw new MedmarIssuePayloadError(`tariffa ${category} live non disponibile.`);
-      const label = resolveBigliettoLabel(categorySelection.ticket).label;
-      lines.push({
-        id_corsa: leg.id_corsa!,
-        quantita: count,
-        id_log: categorySelection.ticket.id_log ?? "",
-        descrizione: requiredText(label, fieldLabel),
-      });
+      const label = requiredText(resolveBigliettoLabel(categorySelection.ticket).label, fieldLabel);
+      for (let i = 0; i < count; i++) {
+        lines.push({
+          id_corsa: leg.id_corsa!,
+          quantita: 1,
+          id_log: categorySelection.ticket.id_log ?? "",
+          descrizione: label,
+        });
+      }
 
       const linkage = deriveTaxLinkage(category, categorySelection.ticket, selection.taxRows);
       if (linkage.linked) taxQuantity += count;
@@ -211,18 +266,30 @@ export function buildMixedPassengerLockTickets(
     if (taxQuantity > 0 && selection.taxRows.length === 1) {
       const tax = selection.taxRows[0]!;
       assertTassaSbarcoTipologia(tax);
-      const taxLabel = resolveBigliettoLabel(tax).label;
-      lines.push({
-        id_corsa: leg.id_corsa!,
-        quantita: taxQuantity,
-        id_log: tax.id_log ?? "",
-        descrizione: requiredText(taxLabel, "descrizione tassa"),
-      });
+      const taxLabel = requiredText(resolveBigliettoLabel(tax).label, "descrizione tassa");
+      for (let i = 0; i < taxQuantity; i++) {
+        lines.push({
+          id_corsa: leg.id_corsa!,
+          quantita: 1,
+          id_log: tax.id_log ?? "",
+          descrizione: taxLabel,
+        });
+      }
     }
   }
   return lines;
 }
 
+/**
+ * Fase 2D — root cause confermata confrontando D'ADDIO (One Click, aggregato:
+ * 1 riga adulto quantita=2, 2 numeri biglietto totali) con PISCITELLI (2
+ * adulti A/R, struttura Medmar nativa: 4 numeri biglietto distinti, 1 riga
+ * adulto + 1 riga tassa PER passeggero PER gamba = 8 righe totali). Genera
+ * ora una riga dettaglio[] per singolo passeggero (mai un'unica riga
+ * aggregata quantita=pax), ciascuna col proprio id_biglietto_congelato
+ * individuale (mai lo stesso frozen condiviso tra più passeggeri) e la
+ * propria riga tassa collegata via id_child_riga.
+ */
 export function buildBookingPayload(input: {
   preflight: MedmarPreflightResult;
   services: MedmarIssueServiceRow[];
@@ -235,57 +302,82 @@ export function buildBookingPayload(input: {
   assertNoMinorsInPreflight(input.preflight);
   const dettaglio: MedmarBookingDetailLine[] = [];
   let idRiga = 1;
+
+  // Coda di biglietti congelati per corsa: ogni passeggero individuale
+  // consuma UN frozen distinto, mai riusato per un altro passeggero della
+  // stessa gamba (i frozen adulto sono interscambiabili per costruzione —
+  // stesso id_log/descrizione/quantita — quindi l'ordine di consumo non è
+  // significativo, ma il CONTEGGIO sì).
+  const frozenQueueByCorsa = new Map<string, MedmarLockedTicket[]>();
+  for (const row of input.frozenAdults) {
+    const key = String(row.id_corsa);
+    const queue = frozenQueueByCorsa.get(key) ?? [];
+    queue.push(row);
+    frozenQueueByCorsa.set(key, queue);
+  }
+
   for (const { leg, flagAr } of legsFromPreflight(input.preflight)) {
     const vendibili = input.vendibiliByCorsa.get(String(leg.id_corsa)) ?? [];
     const selection = findArTariffAndTax(vendibili);
     if (selection.kind !== "found") throw new MedmarIssuePayloadError("tariffa AR live non disponibile.");
+    if (selection.taxIssue) {
+      throw new MedmarIssuePayloadError(`tassa di sbarco non determinabile con certezza (${selection.taxIssue}).`);
+    }
     const adult = selection.tariff;
     const adultLabel = requiredText(resolveBigliettoLabel(adult).label, "label adulto");
-    const frozen = input.frozenAdults.find((row) => String(row.id_corsa) === String(leg.id_corsa) && String(row.id_log) === String(adult.id_log));
-    if (!frozen) throw new MedmarIssuePayloadError("id_biglietto_congelato adulto mancante.");
-    const adultRowId = idRiga;
-    dettaglio.push({
-      biglietto: adultLabel,
-      checkin: true,
-      flag_ar: flagAr,
-      flag_collegabile: 0,
-      flag_targa: 0,
-      id_biglietto_congelato: frozen.id_biglietto_congelato,
-      id_corsa: leg.id_corsa!,
-      id_gruppo: 1,
-      id_iva: adult.id_iva,
-      id_log: adult.id_log ?? "",
-      id_riga: adultRowId,
-      id_tariffa: adult.id_tariffa,
-      id_tipologia_passeggero: adult.id_tipologia_passeggero,
-      prezzo: toNumber(adult.prezzo, "prezzo adulto"),
-      prezzo_prevendita: adult.prezzo_prevendita ?? 0,
-      quantita: input.preflight.pax,
-      re: false,
-    });
-    idRiga += 1;
+    const tax = selection.tassaSbarco;
+    if (tax) assertTassaSbarcoTipologia(tax);
+    const taxLabel = tax ? requiredText(resolveBigliettoLabel(tax).label, "label tassa") : null;
 
-    if (selection.tassaSbarco) {
-      const tax = selection.tassaSbarco;
-      assertTassaSbarcoTipologia(tax);
+    const legFrozenQueue = frozenQueueByCorsa.get(String(leg.id_corsa)) ?? [];
+
+    for (let passengerIndex = 0; passengerIndex < input.preflight.pax; passengerIndex++) {
+      const frozen = legFrozenQueue.shift();
+      if (!frozen || String(frozen.id_log) !== String(adult.id_log)) {
+        throw new MedmarIssuePayloadError("id_biglietto_congelato adulto mancante per uno o più passeggeri.");
+      }
+      const passengerRowId = idRiga;
       dettaglio.push({
-        biglietto: requiredText(resolveBigliettoLabel(tax).label, "label tassa"),
+        biglietto: adultLabel,
+        checkin: true,
         flag_ar: flagAr,
         flag_collegabile: 0,
         flag_targa: 0,
-        id_child_riga: adultRowId,
+        id_biglietto_congelato: frozen.id_biglietto_congelato,
         id_corsa: leg.id_corsa!,
         id_gruppo: 1,
-        id_iva: tax.id_iva,
-        id_log: tax.id_log ?? "",
-        id_riga: idRiga,
-        id_tariffa: null,
-        id_tipologia_passeggero: tax.id_tipologia_passeggero,
-        prezzo: tax.prezzo ?? 0,
-        prezzo_prevendita: tax.prezzo_prevendita ?? 0,
-        quantita: input.preflight.pax,
+        id_iva: adult.id_iva,
+        id_log: adult.id_log ?? "",
+        id_riga: passengerRowId,
+        id_tariffa: adult.id_tariffa,
+        id_tipologia_passeggero: adult.id_tipologia_passeggero,
+        prezzo: toNumber(adult.prezzo, "prezzo adulto"),
+        prezzo_prevendita: adult.prezzo_prevendita ?? 0,
+        quantita: 1,
+        re: false,
       });
       idRiga += 1;
+
+      if (tax) {
+        dettaglio.push({
+          biglietto: taxLabel!,
+          flag_ar: flagAr,
+          flag_collegabile: 0,
+          flag_targa: 0,
+          id_child_riga: passengerRowId,
+          id_corsa: leg.id_corsa!,
+          id_gruppo: 1,
+          id_iva: tax.id_iva,
+          id_log: tax.id_log ?? "",
+          id_riga: idRiga,
+          id_tariffa: null,
+          id_tipologia_passeggero: tax.id_tipologia_passeggero,
+          prezzo: tax.prezzo ?? 0,
+          prezzo_prevendita: tax.prezzo_prevendita ?? 0,
+          quantita: 1,
+        });
+        idRiga += 1;
+      }
     }
   }
 
