@@ -192,6 +192,8 @@ export default function OpsNewBookingPage() {
   const [hotels, setHotels] = useState<HotelOption[]>([]);
   const [agencies, setAgencies] = useState<AgencyOption[]>([]);
   const [ferryScheduleRows, setFerryScheduleRows] = useState<FerryScheduleRow[]>([]);
+  const [dataLoadWarning, setDataLoadWarning] = useState<string | null>(null);
+  const [reloadingData, setReloadingData] = useState(false);
 
   const [addingHotel, setAddingHotel] = useState(false);
   const [newHotelName, setNewHotelName] = useState("");
@@ -258,6 +260,33 @@ export default function OpsNewBookingPage() {
     onDepartureTimeChange: handleBusDepartureTimeChange,
   });
 
+  const loadOperationalData = useCallback(async (activeTenantId: string, opts?: { silent?: boolean }) => {
+    if (!supabase) return;
+    if (!opts?.silent) setDataLoadWarning(null);
+
+    const [hotelRes, agencyRes, snavScheduleRes] = await Promise.all([
+      supabase.from("hotels").select("id, name, zone").eq("tenant_id", activeTenantId).order("name").limit(2000),
+      supabase.from("agencies").select("id, name").eq("tenant_id", activeTenantId).eq("active", true).order("name"),
+      supabase
+        .from("ferry_schedules")
+        .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to")
+        .in("company", ["snav", "medmar"])
+    ]);
+
+    const failedParts: string[] = [];
+    if (hotelRes.error) failedParts.push("hotel");
+    if (agencyRes.error) failedParts.push("agenzie");
+    if (snavScheduleRes.error) failedParts.push("orari traghetto");
+
+    setHotels((hotelRes.data ?? []) as HotelOption[]);
+    setAgencies((agencyRes.data ?? []) as AgencyOption[]);
+    setFerryScheduleRows((snavScheduleRes.data ?? []) as FerryScheduleRow[]);
+
+    if (failedParts.length > 0) {
+      setDataLoadWarning(`Caricamento incompleto (${failedParts.join(", ")}). Riprova o ricarica la pagina prima di procedere.`);
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
     const boot = async () => {
@@ -280,30 +309,21 @@ export default function OpsNewBookingPage() {
       const { data: tokenData } = await supabase.auth.getSession();
       setAccessToken(tokenData.session?.access_token ?? null);
 
-      const [hotelRes, agencyRes, snavScheduleRes] = await Promise.all([
-        supabase.from("hotels").select("id, name, zone").eq("tenant_id", session.tenantId).order("name").limit(2000),
-        supabase.from("agencies").select("id, name").eq("tenant_id", session.tenantId).eq("active", true).order("name"),
-        supabase
-          .from("ferry_schedules")
-          .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to")
-          .in("company", ["snav", "medmar"])
-      ]);
-
+      await loadOperationalData(session.tenantId);
       if (!active) return;
-      if (hotelRes.error) { setMessage("Errore caricamento hotel."); setLoading(false); return; }
-
-      const hotelRows = (hotelRes.data ?? []) as HotelOption[];
-      setHotels(hotelRows);
-
-      const agencyRows = (agencyRes.data ?? []) as AgencyOption[];
-      setAgencies(agencyRows);
-      setFerryScheduleRows((snavScheduleRes.data ?? []) as FerryScheduleRow[]);
 
       setLoading(false);
     };
     void boot();
     return () => { active = false; };
-  }, [setForm]);
+  }, [setForm, loadOperationalData]);
+
+  const retryLoadOperationalData = useCallback(async () => {
+    if (!tenantId) return;
+    setReloadingData(true);
+    await loadOperationalData(tenantId);
+    setReloadingData(false);
+  }, [tenantId, loadOperationalData]);
 
   const createHotel = async () => {
     if (!supabase || !tenantId || !newHotelName.trim()) return;
@@ -511,7 +531,16 @@ export default function OpsNewBookingPage() {
         <p>Le prenotazioni ricevute da <strong>ALESTE VIAGGI</strong> e dalle altre agenzie vengono precompilate automaticamente. Verifica i dati nella coda prima di confermare.</p>
       </div>
 
-      {!hasHotels ? (
+      {dataLoadWarning ? (
+        <article className="card space-y-2 border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 mb-4">
+          <p className="font-semibold">{dataLoadWarning}</p>
+          <button type="button" onClick={() => void retryLoadOperationalData()} disabled={reloadingData} className="btn-secondary px-3 py-1.5 text-xs disabled:opacity-60">
+            {reloadingData ? "Ricaricamento..." : "Riprova a caricare i dati"}
+          </button>
+        </article>
+      ) : null}
+
+      {!hasHotels && !dataLoadWarning ? (
         <article className="card space-y-2 border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 mb-4">
           <p className="font-semibold">Nessun hotel disponibile.</p>
           <Link href="/hotels" className="btn-secondary px-3 py-1.5 text-xs">Apri hotel</Link>
