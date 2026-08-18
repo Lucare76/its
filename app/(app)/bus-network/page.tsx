@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DateInput, PageHeader, SectionCard } from "@/components/ui";
+import { DateInput, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import BusImportModal from "./BusImportModal";
 
@@ -263,6 +263,7 @@ export default function BusNetworkPage() {
   const [bulkMoveModalOpen, setBulkMoveModalOpen] = useState(false);
   const [bulkMoveTargetUnitId, setBulkMoveTargetUnitId] = useState("");
   const [bulkMoveReason, setBulkMoveReason] = useState("");
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   // Transfer to another line modal (admin only)
   const [transferAlloc, setTransferAlloc] = useState<AllocationDetail | null>(null);
@@ -1232,8 +1233,7 @@ export default function BusNetworkPage() {
   if (loading) return <div className="p-8 text-slate-500">Caricamento rete bus...</div>;
 
   return (
-    <div className="flex h-full flex-col">
-      <PageHeader title="Gestione Bus" subtitle="Linee nazionali — allocazione e spostamento passeggeri" />
+    <div className="flex h-full flex-col bg-slate-50/80">
 
       {message && (
         <div className="mx-6 mb-0 mt-2 rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-700">{message}</div>
@@ -1250,51 +1250,97 @@ export default function BusNetworkPage() {
       )}
 
       {/* Top bar */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-6 py-3">
+      <div className="mx-6 mt-5 rounded-2xl border border-slate-200 bg-white/95 px-5 py-4 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-black tracking-tight text-slate-950">Linea Bus</h1>
+            <p className="mt-1 text-sm text-slate-500">Linee nazionali — allocazione e smistamento passeggeri</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => void autoAssign()} disabled={saving}
+              className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-indigo-200 hover:from-blue-700 hover:to-violet-700 disabled:opacity-40">
+              ⚡ Auto-assegna
+            </button>
+            <button onClick={() => void optimizeStopGrouping()} disabled={saving}
+              className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-emerald-100 hover:from-teal-600 hover:to-emerald-600 disabled:opacity-40"
+              title="Raggruppa passeggeri della stessa fermata sullo stesso bus">
+              🔀 Ottimizza fermate
+            </button>
+            {direction === "arrival" && (
+              <button
+                onClick={() => {
+                  const hasExisting = payload.ischia_dist_buses.some(b => b.date === date);
+                  if (hasExisting && !smistamentoConfirm) { setSmistamentoConfirm(true); return; }
+                  setSmistamentoConfirm(false);
+                  void post("smista_ischia", { date });
+                }}
+                disabled={saving}
+                className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-bold text-white shadow-lg disabled:opacity-40 ${smistamentoConfirm ? "bg-rose-600 shadow-rose-100 hover:bg-rose-700" : "bg-gradient-to-r from-violet-600 to-indigo-600 shadow-indigo-200 hover:from-violet-700 hover:to-indigo-700"}`}
+              >
+                {smistamentoConfirm ? "⚠ Conferma smistamento" : "⚡ Smista per zona"}
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
         {/* Date nav */}
-        <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1">
+        <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 shadow-inner">
           <button onClick={() => setDate(shiftSunday(date, -1))} className="rounded p-1 text-slate-500 hover:bg-white hover:text-slate-800">←</button>
           <DateInput value={date}
             onChange={(iso) => { if (iso) setDate(iso); }}
-            className="w-36 rounded-md border-0 bg-transparent px-2 py-0.5 text-sm font-medium text-slate-700 focus:outline-none" />
+            className="w-36 rounded-md border-0 bg-transparent px-2 py-0.5 text-sm font-semibold text-slate-800 focus:outline-none" />
           <button onClick={() => setDate(shiftSunday(date, 1))} className="rounded p-1 text-slate-500 hover:bg-white hover:text-slate-800">→</button>
         </div>
 
         {/* Direction */}
-        <div className="flex overflow-hidden rounded-lg border border-slate-200">
+        <div className="flex overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-1">
           <button onClick={() => setDirection("arrival")}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${direction === "arrival" ? "bg-indigo-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+            className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${direction === "arrival" ? "bg-gradient-to-r from-blue-600 to-violet-600 text-white shadow-md shadow-indigo-200" : "text-slate-600 hover:bg-white"}`}>
             🚌 Andata (Nord → Sud)
           </button>
           <button onClick={() => setDirection("departure")}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${direction === "departure" ? "bg-indigo-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+            className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${direction === "departure" ? "bg-gradient-to-r from-blue-600 to-violet-600 text-white shadow-md shadow-indigo-200" : "text-slate-600 hover:bg-white"}`}>
             🏠 Ritorno (Sud → Nord)
           </button>
         </div>
 
         <div className="ml-auto flex items-center gap-3 text-sm">
-          <span className="text-slate-500 capitalize">{fmtDate(date)}</span>
-          <span className="font-medium text-slate-700">{totalPaxToday} pax assegnati</span>
+          <span className="rounded-xl bg-slate-100 px-3 py-2 text-slate-600 capitalize">{fmtDate(date)}</span>
+          <span className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 font-bold text-slate-900">{totalPaxToday} pax assegnati</span>
           {unassigned.length > 0 && (
-            <span className="rounded-full bg-amber-100 px-3 py-0.5 text-sm font-semibold text-amber-700">
+            <span className="rounded-xl bg-amber-100 px-3 py-2 text-sm font-bold text-amber-700">
               {unassigned.length} da assegnare
             </span>
           )}
         </div>
+        </div>
       </div>
 
       {/* Body: sidebar + main */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden px-6 pb-6 pt-4">
 
         {/* Left sidebar: lines */}
-        <div className="w-44 flex-shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50">
+        <div className="w-64 flex-shrink-0 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div className="mb-3 flex items-center justify-between px-1">
+            <div>
+              <h3 className="text-base font-black text-slate-900">Linee nazionali</h3>
+              <p className="text-xs text-slate-500">Carichi, capacità e criticità</p>
+            </div>
+            <button
+              onClick={() => setShowStopManager(true)}
+              className="rounded-xl border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-500 hover:bg-slate-50"
+              title="Apri gestione fermate"
+            >
+              ⚙
+            </button>
+          </div>
           {lineSummary.length === 0 && (
             <div className="p-4 text-xs text-slate-400">Nessuna linea. Vai su Impostazioni per caricare le linee base.</div>
           )}
           {lineSummary.map((line) => (
             <div key={line.id}
-              className={`border-b border-slate-100 transition-colors ${
-                selectedLineId === line.id ? "border-l-4 border-l-indigo-500 bg-white" : ""
+              className={`mb-3 rounded-2xl border p-1 transition-all ${
+                selectedLineId === line.id ? "border-indigo-400 bg-indigo-50/70 shadow-sm ring-1 ring-indigo-100" : "border-slate-200 bg-white hover:border-indigo-200"
               }`}>
               <div className="flex items-center gap-1 px-3 pt-3">
                 {editingLineId === line.id ? (
@@ -1312,7 +1358,7 @@ export default function BusNetworkPage() {
                 ) : (
                   <>
                     <button className="flex-1 text-left" onClick={() => setSelectedLineId(line.id)}>
-                      <div className={`text-sm font-medium leading-tight ${selectedLineId === line.id ? "text-indigo-700 font-semibold" : "text-slate-700"}`}>
+                      <div className={`text-sm font-bold leading-tight ${selectedLineId === line.id ? "text-indigo-700" : "text-slate-800"}`}>
                         {line.name}
                       </div>
                     </button>
@@ -1328,15 +1374,16 @@ export default function BusNetworkPage() {
               <button className="w-full px-3 pb-3 text-left" onClick={() => setSelectedLineId(line.id)}>
                 {line.totalCapacity > 0 && (
                   <div className="mt-1.5">
-                    <div className="mb-0.5 flex items-center justify-between text-[10px] tabular-nums text-slate-400">
-                      <span>{line.paxToday}/{line.totalCapacity}</span>
+                    <div className="mb-1 flex items-center justify-between text-[11px] tabular-nums text-slate-500">
+                      <span>Assegnati</span>
+                      <span className="font-bold text-slate-700">{line.paxToday}/{line.totalCapacity} pax</span>
                       {line.unassignedToday > 0 && (
-                        <span className="font-medium text-amber-600">+{line.unassignedToday}</span>
+                        <span className="rounded-full bg-amber-100 px-1.5 font-bold text-amber-700">+{line.unassignedToday}</span>
                       )}
                     </div>
-                    <div className="h-1 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
                       <div
-                        className={`h-1 rounded-full transition-all ${
+                        className={`h-2 rounded-full transition-all ${
                           line.totalCapacity > 0 && line.paxToday / line.totalCapacity >= 0.9
                             ? "bg-rose-400"
                             : line.totalCapacity > 0 && line.paxToday / line.totalCapacity >= 0.7
@@ -1357,51 +1404,49 @@ export default function BusNetworkPage() {
         </div>
 
         {/* Main */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto pl-5">
 
           {!selectedLine ? (
             <p className="text-slate-400 text-sm">Seleziona una linea.</p>
           ) : (
             <>
               {/* Toolbar */}
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium text-slate-600">
-                  {selectedLine.name} — {direction === "arrival" ? "Andata" : "Ritorno"} — {fmtDate(date)}
-                  {totalPaxToday > 0 && <span className="ml-2 text-slate-400">({totalPaxToday} pax allocati)</span>}
-                </p>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => void exportAllLines()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50" title="Esporta tutte le linee in un unico file Excel">
-                    📥 Esporta tutte linee
-                  </button>
-                  <button onClick={() => void exportExcel()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50" title="Esporta tutti i bus della linea selezionata">
-                    📥 Esporta linea
-                  </button>
-                  <button onClick={() => void exportPdf()} className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50" title="Apri PDF elegante della linea selezionata">
-                    🧾 PDF linea
-                  </button>
-                  <button onClick={() => void exportSingleBus()} disabled={busCards.length === 0} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40" title={selectedBusUnitId ? "Esporta bus selezionato" : "Esporta primo bus (seleziona un bus dalla lista per sceglierne uno specifico)"}>
-                    📥 Esporta bus{selectedBusUnitId ? " ✓" : ""}
-                  </button>
-                  <button onClick={() => void exportSingleBusPdf()} disabled={busCards.length === 0} className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-40" title={selectedBusUnitId ? "Apri PDF elegante del bus selezionato" : "Apri PDF elegante del primo bus"}>
-                    🧾 PDF bus{selectedBusUnitId ? " ✓" : ""}
-                  </button>
-                  <button onClick={() => void autoAssign()} disabled={saving}
-                    className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-40">
-                    ⚡ Auto-assegna
-                  </button>
-                  <button onClick={() => void optimizeStopGrouping()} disabled={saving}
-                    className="flex items-center gap-1.5 rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-600 hover:bg-teal-50 disabled:opacity-40"
-                    title="Raggruppa passeggeri della stessa fermata sullo stesso bus">
-                    🔀 Ottimizza fermate
-                  </button>
-                  <button onClick={() => setResetModalOpen(true)} disabled={saving}
-                    className="flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-40">
-                    🗑 Svuota data
-                  </button>
-                  <button onClick={() => setImportModalOpen(true)}
-                    className="flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50">
-                    📥 Importa Excel
-                  </button>
+              <div className="mb-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.22em] text-slate-400">Linea selezionata</p>
+                    <p className="text-lg font-black text-slate-900">
+                      {selectedLine.name} — {direction === "arrival" ? "Andata" : "Ritorno"}
+                      {totalPaxToday > 0 && <span className="ml-2 text-sm font-semibold text-slate-400">({totalPaxToday} pax allocati)</span>}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button onClick={() => setImportModalOpen(true)}
+                      className="flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50">
+                      📥 Importa Excel
+                    </button>
+                    <div className="relative">
+                      <button
+                        onClick={() => setExportMenuOpen((open) => !open)}
+                        className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        Esporta ▾
+                      </button>
+                      {exportMenuOpen && (
+                        <div className="absolute right-0 z-30 mt-2 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-xl">
+                          <button onClick={() => { setExportMenuOpen(false); void exportAllLines(); }} className="block w-full px-3 py-2 text-left hover:bg-slate-50">📥 Excel tutte le linee</button>
+                          <button onClick={() => { setExportMenuOpen(false); void exportExcel(); }} className="block w-full px-3 py-2 text-left hover:bg-slate-50">📥 Excel linea</button>
+                          <button onClick={() => { setExportMenuOpen(false); void exportPdf(); }} className="block w-full px-3 py-2 text-left hover:bg-blue-50">🧾 PDF linea</button>
+                          <button onClick={() => { setExportMenuOpen(false); void exportSingleBus(); }} disabled={busCards.length === 0} className="block w-full px-3 py-2 text-left hover:bg-slate-50 disabled:opacity-40">📥 Excel bus{selectedBusUnitId ? " selezionato" : ""}</button>
+                          <button onClick={() => { setExportMenuOpen(false); void exportSingleBusPdf(); }} disabled={busCards.length === 0} className="block w-full px-3 py-2 text-left hover:bg-blue-50 disabled:opacity-40">🧾 PDF bus{selectedBusUnitId ? " selezionato" : ""}</button>
+                        </div>
+                      )}
+                    </div>
+                    <button onClick={() => setResetModalOpen(true)} disabled={saving}
+                      className="flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-600 hover:bg-rose-100 disabled:opacity-40">
+                      🗑 Svuota data
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1411,15 +1456,15 @@ export default function BusNetworkPage() {
                   (p) => p.bus_line_id === selectedLine?.id && p.direction === direction && p.travel_date === date
                 );
                 return (
-                  <div className="flex gap-0 overflow-hidden rounded-xl border border-slate-200 text-sm">
+                  <div className="mb-4 flex w-fit gap-1 rounded-2xl border border-slate-200 bg-white p-1 text-sm shadow-sm">
                     <button
                       onClick={() => setActiveTab("bus")}
-                      className={`px-4 py-2 font-medium transition-colors ${activeTab === "bus" ? "bg-indigo-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+                      className={`rounded-xl px-4 py-2 font-bold transition-colors ${activeTab === "bus" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"}`}>
                       🚌 Bus
                     </button>
                     <button
                       onClick={() => setActiveTab("da_validare")}
-                      className={`flex items-center gap-2 px-4 py-2 font-medium transition-colors ${activeTab === "da_validare" ? "bg-amber-500 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+                      className={`flex items-center gap-2 rounded-xl px-4 py-2 font-bold transition-colors ${activeTab === "da_validare" ? "bg-amber-500 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"}`}>
                       ⚠ Da validare
                       {linePending.length > 0 && (
                         <span className={`rounded-full px-1.5 py-0.5 text-xs font-bold ${activeTab === "da_validare" ? "bg-white/30 text-white" : "bg-amber-100 text-amber-700"}`}>
@@ -1452,24 +1497,48 @@ export default function BusNetworkPage() {
                 const visibleStops = hideEmptyStops ? stopsWithPax.filter(s => s.pax > 0 || s.pendingPax > 0) : stopsWithPax;
                 const stopsWithPaxCount = stopsWithPax.filter(s => s.pax > 0 || s.pendingPax > 0).length;
                 return (
-                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                    <div className="flex w-full items-center justify-between px-4 py-2.5">
+                  <div className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    <div className="flex w-full flex-wrap items-center justify-between gap-3 px-4 py-3">
                       <button
                         onClick={() => setShowRouteStrip((v) => !v)}
-                        className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-700">
-                        <span>🗺 Percorso — {hideEmptyStops ? `${stopsWithPaxCount} / ${lineStops.length} fermate` : `${lineStops.length} fermate`}</span>
+                        className="flex items-center gap-2 text-left hover:text-indigo-700">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">🗺</span>
+                        <span>
+                          <span className="block text-base font-black text-slate-900">Fermate e percorso</span>
+                          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            {hideEmptyStops ? `${stopsWithPaxCount} / ${lineStops.length} fermate visibili` : `${lineStops.length} fermate`}
+                          </span>
+                        </span>
                         <span className="text-slate-300">{showRouteStrip ? "▲" : "▼"}</span>
                       </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => setShowStopManager((open) => !open)}
+                          className={`rounded-xl px-3 py-2 text-xs font-bold transition-colors ${showStopManager ? "bg-indigo-600 text-white" : "border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"}`}
+                        >
+                          ⚙ Gestisci fermate
+                        </button>
+                        <button onClick={() => void timeSortStops()} disabled={saving}
+                          title="Riordina le fermate in base all'orario di partenza (crescente)"
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">
+                          🕐 Riallinea per orario
+                        </button>
+                        <button onClick={() => void geoSortStops()} disabled={saving || geoSorting}
+                          title="Geocodifica le fermate e le ordina automaticamente per latitudine"
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">
+                          {geoSorting ? "⏳ Geocoding..." : "🌍 Ordina per geografia"}
+                        </button>
                       {stopsWithPaxCount > 0 && (
                         <button
                           onClick={() => setHideEmptyStops(v => !v)}
-                          className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${hideEmptyStops ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
+                          className={`rounded-xl px-3 py-2 text-xs font-bold transition-colors ${hideEmptyStops ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
                           {hideEmptyStops ? "👁 Mostra tutte" : "👁 Nascondi vuote"}
                         </button>
                       )}
+                      </div>
                     </div>
                     {showRouteStrip && (
-                      <div className="overflow-x-auto border-t border-slate-100 px-3 py-3">
+                      <div className="overflow-x-auto border-t border-slate-100 px-4 py-5">
                         <div className="flex min-w-max items-start gap-0">
                           {visibleStops.map(({ stop, pax, pendingPax }, idx) => {
                             const hasPax = pax > 0 || pendingPax > 0;
@@ -1478,8 +1547,8 @@ export default function BusNetworkPage() {
                                 {idx > 0 && (
                                   <div className={`h-0.5 w-5 flex-shrink-0 ${hasPax ? "bg-emerald-300" : "bg-slate-200"}`} />
                                 )}
-                                <div className={`group flex w-[88px] flex-shrink-0 flex-col items-center rounded-xl border px-2 py-2 text-center transition-colors ${
-                                  hasPax ? "border-emerald-200 bg-emerald-50" : "border-slate-100 bg-slate-50"
+                                <div className={`group flex w-[104px] flex-shrink-0 flex-col items-center rounded-2xl border px-2 py-3 text-center transition-colors ${
+                                  hasPax ? "border-emerald-200 bg-emerald-50 shadow-sm" : "border-slate-100 bg-slate-50"
                                 }`}>
                                   <span className="mb-0.5 text-[9px] font-bold tabular-nums text-slate-300">{stop.stop_order}</span>
                                   <span className={`text-[10px] font-bold leading-tight ${hasPax ? "text-emerald-800" : "text-slate-500"}`} style={{ wordBreak: "break-word" }}>
@@ -1521,10 +1590,23 @@ export default function BusNetworkPage() {
 
               {/* Bus cards */}
               {activeTab === "bus" && <>
-              <div ref={topScrollRef} className="overflow-x-auto" onScroll={() => syncScroll("top")}>
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Bus linea</h3>
+                    <p className="text-xs text-slate-500">Trascina i passeggeri tra i bus, seleziona più righe o modifica autista, capienza e fermate.</p>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+                    <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">● OK</span>
+                    <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700">● Quasi pieno</span>
+                    <span className="rounded-full bg-rose-50 px-2.5 py-1 text-rose-700">● Pieno</span>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1">{busCards.length} bus</span>
+                  </div>
+                </div>
+              <div ref={topScrollRef} className="overflow-x-auto rounded-full bg-slate-100/70 p-1 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-indigo-300 [&::-webkit-scrollbar-track]:bg-transparent" onScroll={() => syncScroll("top")}>
                 <div ref={topScrollInnerRef} style={{ height: 1 }} />
               </div>
-              <div ref={busCardsRef} className="flex flex-nowrap gap-4 overflow-x-auto pb-2" onScroll={() => syncScroll("bottom")}>
+              <div ref={busCardsRef} className="mt-3 flex flex-nowrap gap-4 overflow-x-auto pb-2 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-indigo-300 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-slate-100" onScroll={() => syncScroll("bottom")}>
                 {busCards.map(({ unit, allocations: cardAllocs }) => {
                   const paxTotal = cardAllocs.reduce((sum, a) => sum + a.pax_assigned, 0);
                   const remainingSeats = Math.max(0, unit.capacity - paxTotal);
@@ -1553,7 +1635,7 @@ export default function BusNetworkPage() {
                       onDragLeave={() => setDragOverUnitId("")}
                       onDrop={(e) => { if (unit.tag === "esclusivo") return; e.preventDefault(); handleDrop(unit.id); }}
                       onClick={() => setSelectedBusUnitId(isSelected ? null : unit.id)}
-                      className={`relative flex w-72 flex-shrink-0 flex-col rounded-2xl border-2 bg-white shadow-sm transition-all cursor-pointer ${
+                      className={`relative flex w-80 flex-shrink-0 flex-col rounded-2xl border bg-white shadow-sm transition-all cursor-pointer ${
                         isSelected ? "border-indigo-500 ring-2 ring-indigo-200" :
                         dragOverUnitId === unit.id ? "border-indigo-400 bg-indigo-50 shadow-indigo-100" :
                         isClosed ? "border-slate-200 opacity-60" :
@@ -1721,7 +1803,7 @@ export default function BusNetworkPage() {
                       </div>
 
                       {/* Passenger list grouped by stop */}
-                      <div className="flex-1 divide-y divide-slate-50 overflow-y-auto" onDragOver={(e) => e.preventDefault()}>
+                      <div className="flex-1 divide-y divide-slate-100 overflow-y-auto bg-slate-50/35" onDragOver={(e) => e.preventDefault()}>
                         {[...stopGroups.map(({ stop, allocs }) => (
                           <div key={stop.id} className="px-3 py-2">
                             <div className="mb-1 flex items-center justify-between">
@@ -2088,6 +2170,7 @@ export default function BusNetworkPage() {
                     + Aggiungi bus
                   </button>
                 </div>
+              </div>
               </div></>}
 
               {/* ── Distribuzione Ischia ── */}
