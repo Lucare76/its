@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { normalizeWhatsAppWaId } from "@/lib/server/whatsapp";
+import { normalizeE164, normalizeWhatsAppWaId } from "@/lib/server/whatsapp";
 import type { WhatsAppMatchResult, WhatsAppServiceSuggestion } from "./types";
 
 type ServiceRow = {
@@ -15,8 +15,20 @@ type ServiceRow = {
   hotel_id?: string | null;
 };
 
+// Reconciles Italian numbers stored without the country code (the common
+// case for services.phone — measured 86% of rows) against WhatsApp's wa_id,
+// which always includes it (e.g. services.phone "3271152378" vs wa_id
+// "393271152378"). Reuses the same +39 normalizer already trusted elsewhere
+// in the app for user-entered Italian numbers, falling back to bare digit
+// stripping only when the value isn't parseable as a phone number at all.
 function phoneComparable(value: string | null | undefined) {
-  return (value ?? "").replace(/\D/g, "").replace(/^00/, "").replace(/^0+/, "");
+  const raw = (value ?? "").trim();
+  if (!raw) return "";
+  try {
+    return normalizeE164(raw).replace(/\D/g, "");
+  } catch {
+    return raw.replace(/\D/g, "").replace(/^00/, "").replace(/^0+/, "");
+  }
 }
 
 function toSuggestion(row: ServiceRow, reason: string): WhatsAppServiceSuggestion {

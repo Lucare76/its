@@ -475,7 +475,11 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
         bookingId: replyTarget.booking_id,
         transferId: replyTarget.transfer_id,
         customerId: replyTarget.customer_id,
-        status: "matched" as const,
+        // Reusing the reply target's tenant/booking is safe even when it has
+        // no booking_id (e.g. a generic template reply) — but the status
+        // must reflect that, not be hardcoded, or the thread ends up flagged
+        // "matched" with nothing actually linked.
+        status: replyTarget.booking_id || replyTarget.transfer_id ? ("matched" as const) : ("unmatched" as const),
         suggestions: [] as WhatsAppMatchResult["suggestions"],
       }
     : await matchWhatsAppInboundMessage(admin, {
@@ -500,12 +504,12 @@ async function processMessage(admin: SupabaseClient, value: MetaChangeValue, mes
         bookingId: fb.booking_id as string | null,
         transferId: fb.transfer_id as string | null,
         customerId: fb.customer_id as string | null,
-        status: "matched",
+        status: fb.booking_id || fb.transfer_id ? "matched" : "unmatched",
         suggestions: [],
       };
     }
   }
-  const effectiveMatchStatus = replyTarget?.tenant_id ? "matched" : match.tenantId ? match.status : "needs_review";
+  const effectiveMatchStatus = match.tenantId ? match.status : "needs_review";
 
   const contactRow = await upsertContact(admin, { tenantId: match.tenantId, contact, waId: message.from, phoneE164 });
   const timestamp = unixToIso(message.timestamp);
