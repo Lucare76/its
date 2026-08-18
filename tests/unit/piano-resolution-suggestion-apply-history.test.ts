@@ -95,6 +95,7 @@ vi.mock("@/lib/piano-conflict-resolution-preview", () => ({
 vi.mock("@/lib/server/assignment-history", () => ({
   extractFeatures: mocks.extractFeatures,
   logAssignmentChange: mocks.logAssignmentChange,
+  buildAssignmentDecisionFeatures: (base, decision = {}) => ({ ...base, ...Object.fromEntries(Object.entries(decision).filter(([, v]) => v !== undefined)) }),
 }));
 
 import { POST } from "@/app/api/ops/piano-giorno/apply-resolution-suggestion/route";

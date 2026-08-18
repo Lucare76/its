@@ -104,6 +104,10 @@ registerTool({
         driverProfileId: driver.id,
         vehicleLabel,
         action: "assign",
+        // ML Data Collection Sprint 2 (FASE 8): MCP non ha oggi un
+        // recommendation layer con candidati/ranking propri — solo la
+        // source viene etichettata, il resto resta null/non passato.
+        source: "mcp",
       });
 
       if (result.status !== 200) {

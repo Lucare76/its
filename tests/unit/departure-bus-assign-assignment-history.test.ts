@@ -208,6 +208,7 @@ vi.mock("@/lib/server/geo-assignment", () => ({
 vi.mock("@/lib/server/assignment-history", () => ({
   extractFeatures: mocks.extractFeatures,
   logAssignmentChange: mocks.logAssignmentChange,
+  buildAssignmentDecisionFeatures: (base, decision = {}) => ({ ...base, ...Object.fromEntries(Object.entries(decision).filter(([, v]) => v !== undefined)) }),
 }));
 vi.mock("@/lib/server/learned-patterns", () => ({
   updateLearnedPatterns: mocks.updateLearnedPatterns,

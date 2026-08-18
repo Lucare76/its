@@ -13,7 +13,7 @@ import { validateResolutionSuggestionApply } from "@/lib/piano-resolution-apply-
 import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { insertOperatorDecision, loadConfirmedOperatorDecisions, supersedeOverlappingOperatorDecisions } from "@/lib/server/piano-operator-decisions";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
+import { extractFeatures, logAssignmentChange, buildAssignmentDecisionFeatures } from "@/lib/server/assignment-history";
 
 export const runtime = "nodejs";
 
@@ -259,17 +259,26 @@ export async function POST(request: NextRequest) {
       before_json: preview.before,
       after_json: preview.after,
     });
-    const features = extractFeatures({
+    const baseFeatures = extractFeatures({
       serviceDate: date,
       changeType: "resolution_suggestion",
     });
+    // FASE 10: nessun ranking/proposta correlabile disponibile in questo
+    // path (la suggestion risolve un conflitto di sequenza, non propone una
+    // lista di autisti candidati) e nessun driver "precedente" tracciato qui
+    // — was_override resta null (non determinabile) invece di un valore
+    // inventato.
+    const features = buildAssignmentDecisionFeatures(
+      { ...baseFeatures, action: decision.suggestion.recommended_action },
+      { source: "resolution_suggestion", proposal_id: null, chosen_rank: null, was_override: null }
+    );
     void logAssignmentChange(auth.admin, serviceIds.map((serviceId) => ({
       tenantId: auth.membership.tenant_id,
       serviceDate: date,
       serviceId,
       groupId: decision.suggestion.group_id,
       changeType: "resolution_suggestion" as const,
-      features: { ...features, action: decision.suggestion.recommended_action },
+      features,
       operatorId: auth.user.id,
     }))).catch(() => undefined);
 

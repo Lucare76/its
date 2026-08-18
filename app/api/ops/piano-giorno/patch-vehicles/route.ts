@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { extractFeatures, logAssignmentChange, type AssignmentHistoryEntry } from "@/lib/server/assignment-history";
+import { extractFeatures, logAssignmentChange, buildAssignmentDecisionFeatures, type AssignmentHistoryEntry } from "@/lib/server/assignment-history";
 import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
 import { effectiveServiceDisembarkTime, type FerryArrivalServiceLike } from "@/lib/piano-arrival-time";
 
@@ -232,7 +232,7 @@ export async function POST(req: NextRequest) {
         const historyEntries: AssignmentHistoryEntry[] = historyCandidates.map((candidate) => {
           const service = featureServiceMap.get(candidate.serviceId);
           const hotel = service?.hotel_id ? featureHotelMap.get(service.hotel_id) : null;
-          const features = extractFeatures({
+          const baseFeatures = extractFeatures({
             serviceDate: date,
             changeType: "vehicle_binding",
             fromVehicleLabel: candidate.fromVehicleLabel,
@@ -243,6 +243,12 @@ export async function POST(req: NextRequest) {
             vessel: service?.vessel ?? service?.barca_compagnia ?? null,
             pax: service?.pax ?? null,
             isNavetta: service ? isNavettaFeatureRow(service) : false,
+          });
+          const features = buildAssignmentDecisionFeatures(baseFeatures, {
+            source: "vehicle_binding",
+            proposal_id: null,
+            chosen_rank: null,
+            was_override: candidate.fromVehicleLabel != null,
           });
           return {
             tenantId,

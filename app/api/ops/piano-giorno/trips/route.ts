@@ -25,7 +25,7 @@ import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import { canDriverCoverInterval } from "@/lib/piano-driver-availability";
 import { effectiveServiceDisembarkTime } from "@/lib/piano-arrival-time";
 import { type SupabaseClient } from "@supabase/supabase-js";
-import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
+import { extractFeatures, logAssignmentChange, buildAssignmentDecisionFeatures } from "@/lib/server/assignment-history";
 import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
 import { auditLog } from "@/lib/server/ops-audit";
 
@@ -327,7 +327,7 @@ export async function POST(request: NextRequest) {
             const driverFields = driverChanged
               ? { fromDriverProfileId: prevDriverProfileId, toDriverProfileId: newDriverProfileId }
               : {};
-            const features = extractFeatures({
+            const baseFeatures = extractFeatures({
               serviceDate: date,
               changeType,
               ...driverFields,
@@ -339,6 +339,12 @@ export async function POST(request: NextRequest) {
               vessel: service?.vessel ?? service?.barca_compagnia ?? null,
               pax: service?.pax ?? null,
               isNavetta: service ? isNavettaService(service) : false,
+            });
+            const features = buildAssignmentDecisionFeatures(baseFeatures, {
+              source: driverChanged ? "manual_swap" : "vehicle_binding",
+              proposal_id: null,
+              chosen_rank: null,
+              was_override: driverChanged ? prevDriverProfileId != null : prevVehicleLabel != null,
             });
             return [{
               tenantId,
@@ -652,7 +658,7 @@ export async function POST(request: NextRequest) {
         const entries = allServiceIds.map((serviceId) => {
           const service = featureServiceMap.get(serviceId);
           const hotel = service?.hotel_id ? featureHotelMap.get(service.hotel_id) : null;
-          const features = extractFeatures({
+          const baseFeatures = extractFeatures({
             serviceDate: groupDate!,
             changeType: "driver_swap",
             fromDriverProfileId: prevDriverProfileId,
@@ -665,6 +671,12 @@ export async function POST(request: NextRequest) {
             vessel: service?.vessel ?? service?.barca_compagnia ?? null,
             pax: service?.pax ?? null,
             isNavetta: service ? isNavettaService(service) : false,
+          });
+          const features = buildAssignmentDecisionFeatures(baseFeatures, {
+            source: "manual_swap",
+            proposal_id: null,
+            chosen_rank: null,
+            was_override: prevDriverProfileId != null,
           });
           return {
             tenantId,
@@ -729,7 +741,7 @@ export async function POST(request: NextRequest) {
               const prevLabel = (previous?.vehicle_label ?? null) || null;
               const service = featureServiceMap.get(serviceId);
               const hotel = service?.hotel_id ? featureHotelMap.get(service.hotel_id) : null;
-              const features = extractFeatures({
+              const baseFeatures = extractFeatures({
                 serviceDate: groupDate!,
                 changeType: "vehicle_binding",
                 fromVehicleLabel: prevLabel,
@@ -740,6 +752,12 @@ export async function POST(request: NextRequest) {
                 vessel: service?.vessel ?? service?.barca_compagnia ?? null,
                 pax: service?.pax ?? null,
                 isNavetta: service ? isNavettaService(service) : false,
+              });
+              const features = buildAssignmentDecisionFeatures(baseFeatures, {
+                source: "vehicle_binding",
+                proposal_id: null,
+                chosen_rank: null,
+                was_override: prevLabel != null,
               });
               return {
                 tenantId,
@@ -1163,7 +1181,7 @@ export async function POST(request: NextRequest) {
             const driverFields = driverChanged
               ? { fromDriverProfileId: prevDriverProfileId, toDriverProfileId: newDriverProfileId }
               : {};
-            const features = extractFeatures({
+            const baseFeatures = extractFeatures({
               serviceDate: effectiveDate,
               changeType,
               ...driverFields,
@@ -1175,6 +1193,12 @@ export async function POST(request: NextRequest) {
               vessel: service?.vessel ?? service?.barca_compagnia ?? null,
               pax: service?.pax ?? null,
               isNavetta: service ? isNavettaService(service) : false,
+            });
+            const features = buildAssignmentDecisionFeatures(baseFeatures, {
+              source: driverChanged ? "manual_swap" : "vehicle_binding",
+              proposal_id: null,
+              chosen_rank: null,
+              was_override: driverChanged ? prevDriverProfileId != null : prevVehicleLabel != null,
             });
             return [{
               tenantId,
@@ -1379,7 +1403,7 @@ export async function POST(request: NextRequest) {
             const prevVehicleLabel = (previous?.vehicle_label ?? null) || null;
             const service = featureServiceMap.get(serviceId);
             const hotel = service?.hotel_id ? featureHotelMap.get(service.hotel_id) : null;
-            const features = extractFeatures({
+            const baseFeatures = extractFeatures({
               serviceDate: date,
               changeType: "driver_swap",
               fromDriverProfileId: prevDriverProfileId,
@@ -1392,6 +1416,12 @@ export async function POST(request: NextRequest) {
               vessel: service?.vessel ?? service?.barca_compagnia ?? null,
               pax: service?.pax ?? null,
               isNavetta: service ? isNavettaService(service) : false,
+            });
+            const features = buildAssignmentDecisionFeatures(baseFeatures, {
+              source: "manual_swap",
+              proposal_id: null,
+              chosen_rank: null,
+              was_override: prevDriverProfileId != null,
             });
             return [{
               tenantId,
@@ -1542,7 +1572,7 @@ export async function POST(request: NextRequest) {
 
             const service = featureServiceMap.get(serviceId);
             const hotel = service?.hotel_id ? featureHotelMap.get(service.hotel_id) : null;
-            const features = extractFeatures({
+            const baseFeatures = extractFeatures({
               serviceDate: date,
               changeType: "vehicle_binding",
               fromVehicleLabel: prevVehicleLabel,
@@ -1553,6 +1583,12 @@ export async function POST(request: NextRequest) {
               vessel: service?.vessel ?? service?.barca_compagnia ?? null,
               pax: service?.pax ?? null,
               isNavetta: service ? isNavettaService(service) : false,
+            });
+            const features = buildAssignmentDecisionFeatures(baseFeatures, {
+              source: "vehicle_binding",
+              proposal_id: null,
+              chosen_rank: null,
+              was_override: prevVehicleLabel != null,
             });
             return [{
               tenantId,

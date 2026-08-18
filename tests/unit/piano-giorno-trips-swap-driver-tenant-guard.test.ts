@@ -247,6 +247,7 @@ vi.mock("@/lib/server/web-push", () => ({
 vi.mock("@/lib/server/assignment-history", () => ({
   extractFeatures: vi.fn().mockReturnValue({}),
   logAssignmentChange: mocks.logAssignmentChange,
+  buildAssignmentDecisionFeatures: (base, decision = {}) => ({ ...base, ...Object.fromEntries(Object.entries(decision).filter(([, v]) => v !== undefined)) }),
 }));
 vi.mock("@/lib/server/learned-patterns", () => ({
   updateLearnedPatterns: mocks.updateLearnedPatterns,

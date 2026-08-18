@@ -202,6 +202,7 @@ vi.mock("@/lib/server/learned-patterns", () => ({
 vi.mock("@/lib/server/assignment-history", () => ({
   extractFeatures: mocks.extractFeatures,
   logAssignmentChange: mocks.logAssignmentChange,
+  buildAssignmentDecisionFeatures: (base, decision = {}) => ({ ...base, ...Object.fromEntries(Object.entries(decision).filter(([, v]) => v !== undefined)) }),
 }));
 vi.mock("@/lib/piano-global-planner", () => ({
   assignGlobalPlanner: mocks.assignGlobalPlanner,

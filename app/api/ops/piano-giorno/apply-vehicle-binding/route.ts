@@ -14,7 +14,7 @@ import {
   validateVehicleBindingPreviewForApply,
 } from "@/lib/server/piano-vehicle-binding-preview";
 import { insertOperatorDecision } from "@/lib/server/piano-operator-decisions";
-import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
+import { extractFeatures, logAssignmentChange, buildAssignmentDecisionFeatures } from "@/lib/server/assignment-history";
 import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
 
 export const runtime = "nodejs";
@@ -141,11 +141,17 @@ export async function POST(request: NextRequest) {
 
     const historyEntries = preview.changes.flatMap((change) =>
       change.service_ids.map((serviceId) => {
-        const features = extractFeatures({
+        const baseFeatures = extractFeatures({
           serviceDate: body.data.date,
           changeType: "vehicle_binding",
           fromVehicleLabel: change.current_vehicle_label,
           toVehicleLabel: change.proposed_vehicle_label,
+        });
+        const features = buildAssignmentDecisionFeatures(baseFeatures, {
+          source: "vehicle_binding",
+          proposal_id: null,
+          chosen_rank: null,
+          was_override: change.current_vehicle_label != null,
         });
         return {
           tenantId: auth.membership.tenant_id,

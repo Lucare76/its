@@ -35,6 +35,58 @@ type FeatureInput = {
   isNavetta?: boolean;
 };
 
+// Features v2 (ML Data Collection Sprint 2) — snapshot proposta→decisione,
+// riusa driver_assignment_history.features (jsonb, nessuna migration). Ogni
+// campo è opzionale: chi non li passa continua a produrre esattamente il
+// payload v1 di extractFeatures(), letto invariato da learned-patterns.ts
+// (pattern_key resta nella stessa posizione/formato).
+export type CandidateSnapshot = {
+  driver_profile_id: string;
+  score: number;
+  rank: number;
+  hard_ok: true;
+};
+
+export type AssignmentDecisionFeatures = {
+  proposal_id?: string | null;
+  source?: string | null;
+  was_override?: boolean | null;
+  chosen_rank?: number | null;
+  candidate_count?: number | null;
+  candidates?: CandidateSnapshot[] | null;
+  is_sunday?: boolean | null;
+  weekday?: number | null;
+  learned_score_adjustment?: number | null;
+};
+
+const DECISION_FEATURE_KEYS = [
+  "proposal_id",
+  "source",
+  "was_override",
+  "chosen_rank",
+  "candidate_count",
+  "candidates",
+  "is_sunday",
+  "weekday",
+  "learned_score_adjustment",
+] as const;
+
+// Unisce il payload v1 (extractFeatures) con il contesto decisionale v2,
+// omettendo le chiavi v2 non fornite (undefined) invece di scriverle come
+// null esplicito — non aggiunge rumore ai payload dei chiamanti che non
+// hanno ancora dati di proposta/candidati.
+export function buildAssignmentDecisionFeatures(
+  baseFeatures: Record<string, unknown>,
+  decision: AssignmentDecisionFeatures = {}
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...baseFeatures };
+  for (const key of DECISION_FEATURE_KEYS) {
+    const value = decision[key];
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged;
+}
+
 function timeSlot(time: string): string {
   const hour = parseInt((time ?? "").split(":")[0] ?? "0", 10);
   if (hour >= 6 && hour < 12) return "mattina";

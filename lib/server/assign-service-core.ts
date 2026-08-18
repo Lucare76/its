@@ -20,7 +20,7 @@ import { auditLog } from "@/lib/server/ops-audit";
 import { validateDriverGeographicBatch } from "@/lib/server/geo-assignment";
 import { vehicleIntervalsOverlap } from "@/lib/piano-vehicle-timeline";
 import { effectiveServiceDisembarkTime, minutesFromHHMM } from "@/lib/piano-arrival-time";
-import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
+import { extractFeatures, logAssignmentChange, buildAssignmentDecisionFeatures, type CandidateSnapshot } from "@/lib/server/assignment-history";
 import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
 
 export type AssignServiceOutcome = { status: number; body: Record<string, unknown> };
@@ -554,6 +554,16 @@ export type AssignServiceCoreParams = {
   driverProfileId?: string | null;
   vehicleLabel?: string | null;
   action?: "assign" | "remove";
+  // ML Data Collection Sprint 2 (opzionali, non-breaking): contesto
+  // proposta→decisione da propagare in driver_assignment_history.features.
+  // Chi non li passa (route HTTP esistente) ottiene lo stesso comportamento
+  // di prima — wasOverride viene comunque calcolato internamente da questa
+  // funzione (non richiede input dal chiamante) in base al driver/mezzo
+  // precedente già letto da existingAssignment.
+  source?: string | null;
+  proposalId?: string | null;
+  candidateSnapshot?: CandidateSnapshot[] | null;
+  chosenRank?: number | null;
 };
 
 /**
@@ -863,7 +873,7 @@ export async function assignServiceCore(admin: SupabaseClient, params: AssignSer
     const driverFields = driverChanged
       ? { fromDriverProfileId: prevDriverProfileId, toDriverProfileId: newDriverProfileId }
       : {};
-    const features = extractFeatures({
+    const baseFeatures = extractFeatures({
       serviceDate: date,
       changeType,
       ...driverFields,
@@ -875,6 +885,21 @@ export async function assignServiceCore(admin: SupabaseClient, params: AssignSer
       vessel: (service.vessel as string | null) ?? (service.barca_compagnia as string | null) ?? null,
       pax: (service.pax as number | null) ?? null,
       isNavetta,
+    });
+    // FASE 6/7 (Sprint 2): was_override = c'era un valore precedente diverso
+    // che questa scrittura sostituisce (driver per driver_swap, mezzo per
+    // vehicle_binding) — calcolato qui internamente, non richiede input dal
+    // chiamante. source di default riusa la stringa già scritta su
+    // assignments.assignment_source per questo stesso path (nessun valore
+    // nuovo inventato); i chiamanti (es. MCP) possono sovrascriverla.
+    const wasOverride = driverChanged ? prevDriverProfileId != null : prevVehicleLabel != null;
+    const features = buildAssignmentDecisionFeatures(baseFeatures, {
+      source: params.source ?? manualAssignmentLock.assignment_source,
+      proposal_id: params.proposalId ?? null,
+      was_override: wasOverride,
+      chosen_rank: params.chosenRank ?? null,
+      candidate_count: params.candidateSnapshot?.length ?? null,
+      candidates: params.candidateSnapshot ?? null,
     });
     void logAssignmentChange(admin, [{
       tenantId,

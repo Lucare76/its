@@ -33,7 +33,7 @@ import { vehicleIntervalsOverlap, vehicleResourceKey } from "@/lib/piano-vehicle
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import { assignGlobalPlanner, type GlobalPlannerDriver, type GlobalPlannerUnit, type GlobalPlannerVehicle } from "@/lib/piano-global-planner";
 import { effectiveServiceDisembarkTime } from "@/lib/piano-arrival-time";
-import { extractFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
+import { extractFeatures, logAssignmentChange, buildAssignmentDecisionFeatures, type CandidateSnapshot } from "@/lib/server/assignment-history";
 import { loadLearnedPatterns, updateLearnedPatterns } from "@/lib/server/learned-patterns";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { auditLog } from "@/lib/server/ops-audit";
@@ -1521,7 +1521,18 @@ export async function POST(request: NextRequest) {
       driverTimes.set(profileId, times);
     }
 
-    const draftAssignments: Array<{ draft: TripDraft; profileId: string | null; userId: string | null; suggestedVehicleLabel: string | null }> = [
+    // ML Data Collection Sprint 2: candidateScores/learnedScoreAdjustment sono
+    // opzionali — le entry del turno hotel (San Nicola/President/Cristallo,
+    // hotelShiftResult) non passano da chooseCandidate() e restano senza
+    // ranking (nessun dato fabbricato), esattamente come i rami backtracking.
+    const draftAssignments: Array<{
+      draft: TripDraft;
+      profileId: string | null;
+      userId: string | null;
+      suggestedVehicleLabel: string | null;
+      candidateScores?: Array<{ driver_key: string; score: number }> | null;
+      learnedScoreAdjustment?: number | null;
+    }> = [
       ...hotelShiftResult.draftAssignments,
     ];
     const geographicSkips: string[] = [];
@@ -1642,7 +1653,14 @@ export async function POST(request: NextRequest) {
           const draftGeoWindow = draftToGeographicWindow(draft, serviceMap, hotelMap);
           driverGeoWindows.set(profileId, [...(driverGeoWindows.get(profileId) ?? []), draftGeoWindow]);
         }
-        draftAssignments.push({ draft, profileId, userId, suggestedVehicleLabel });
+        draftAssignments.push({
+          draft,
+          profileId,
+          userId,
+          suggestedVehicleLabel,
+          candidateScores: gpa?.assigned ? (gpa.candidate_scores ?? null) : null,
+          learnedScoreAdjustment: gpa?.assigned && profileId ? (gpa.learned_driver_scores?.[profileId] ?? null) : null,
+        });
       }
     } catch {
       plannerUsed = "greedy_fallback";
@@ -1653,6 +1671,10 @@ export async function POST(request: NextRequest) {
         const draftGeoWindow = draftToGeographicWindow(draft, serviceMap, hotelMap);
         let assignedProfileId: string | null = null;
         let assignedUserId: string | null = null;
+        // ML Data Collection Sprint 2: dichiarato fuori dal blocco if così da
+        // essere leggibile anche dal push finale di draftAssignments sotto,
+        // senza duplicare il calcolo del ranking.
+        let rankedCandidates: Array<{ driver: DriverRow; score: number }> = [];
 
         if (drivers.length > 0) {
           const timeAvailable = [...drivers].filter((d) =>
@@ -1670,7 +1692,7 @@ export async function POST(request: NextRequest) {
             }))
             .filter((candidate) => candidate.geoIssue?.severity !== "block");
 
-          const best = candidates
+          rankedCandidates = candidates
             .map(({ driver, geoIssue }) => {
               const times = driverTimes.get(driver.profile_id) ?? [];
               const conflictPenalty = times.some((t) => Math.abs(t - tripMin) < 75) ? 100_000 : 0;
@@ -1680,7 +1702,8 @@ export async function POST(request: NextRequest) {
               const warningPenalty = geoIssue?.severity === "warning" ? 20 : 0;
               return { driver, score: conflictPenalty + times.length * 100 + zonePenalty + warningPenalty };
             })
-            .sort((a, b) => a.score - b.score)[0];
+            .sort((a, b) => a.score - b.score);
+          const best = rankedCandidates[0];
 
           if (best) {
             assignedProfileId = best.driver.profile_id;
@@ -1695,7 +1718,16 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        draftAssignments.push({ draft, profileId: assignedProfileId, userId: assignedUserId, suggestedVehicleLabel: null });
+        draftAssignments.push({
+          draft,
+          profileId: assignedProfileId,
+          userId: assignedUserId,
+          suggestedVehicleLabel: null,
+          candidateScores: assignedProfileId
+            ? rankedCandidates.map((c) => ({ driver_key: c.driver.profile_id, score: c.score }))
+            : null,
+          learnedScoreAdjustment: null,
+        });
       }
     }
 
@@ -1813,6 +1845,8 @@ export async function POST(request: NextRequest) {
         profileId: string;
         driverUserId: string | null;
         vehicle: VehicleRow | null;
+        candidateScores?: Array<{ driver_key: string; score: number }> | null;
+        learnedScoreAdjustment?: number | null;
       }> = [];
       const plannedDriverVehicleEvents = new Map(
         [...driverVehicleEvents.entries()].map(([profileId, events]) => [profileId, [...events]])
@@ -1849,7 +1883,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      for (const { draft, profileId, userId: driverUserId } of draftAssignments) {
+      for (const { draft, profileId, userId: driverUserId, candidateScores, learnedScoreAdjustment } of draftAssignments) {
         if (!profileId) continue;
         const tripMin = timeToMin(draft.time);
         // Regola 3: rispetta la fascia mezzo dichiarata (vehicle_2 sovrascrive vehicle_1 se attiva)
@@ -1864,7 +1898,7 @@ export async function POST(request: NextRequest) {
           plannedDriverVehicleEvents,
           plannedVehicleScheduleEvents
         );
-        prepared.push({ draft, profileId, driverUserId, vehicle });
+        prepared.push({ draft, profileId, driverUserId, vehicle, candidateScores, learnedScoreAdjustment });
         plannedDriverVehicleEvents.set(profileId, [
           ...(plannedDriverVehicleEvents.get(profileId) ?? []),
           { time: tripMin, vehicleLabel: vehicle?.label ?? null },
@@ -2031,12 +2065,54 @@ export async function POST(request: NextRequest) {
           }
 
           if (!assignRes.error && !svcRes.error) {
-            const historyEntries = prepared.flatMap(({ draft, profileId, vehicle }, idx) => {
+            // ML Data Collection Sprint 2 (FASE 5/6): weekday/is_sunday sono
+            // gli stessi per l'intero batch (una sola data). prevDriverByService
+            // riusa la snapshot assignments già caricata a inizio richiesta
+            // (assignmentsRes, "prima" della scrittura di questo run) — nessuna
+            // query aggiuntiva.
+            const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+            const isSunday = weekday === 0;
+            const prevDriverByService = new Map<string, string | null>(
+              (assignmentsRes.data ?? []).map((a) => [
+                a.service_id as string,
+                (a.driver_profile_id as string | null | undefined) ?? null,
+              ])
+            );
+            // Un candidate snapshot elenca ogni driver una sola volta (il
+            // ranking reale di chooseCandidate/greedy è per coppia
+            // driver×mezzo): a parità di driver si tiene lo score migliore
+            // (più basso), poi si riordina — stesso ordinamento, nessun dato
+            // ricostruito, solo collassato a livello driver per lo snapshot.
+            const dedupeCandidatesByDriver = (
+              scores: Array<{ driver_key: string; score: number }> | null | undefined
+            ): CandidateSnapshot[] | null => {
+              if (!scores || scores.length === 0) return null;
+              const bestByDriver = new Map<string, number>();
+              for (const c of scores) {
+                const prev = bestByDriver.get(c.driver_key);
+                if (prev === undefined || c.score < prev) bestByDriver.set(c.driver_key, c.score);
+              }
+              return Array.from(bestByDriver.entries())
+                .sort((a, b) => a[1] - b[1])
+                .map(([driver_profile_id, score], index) => ({
+                  driver_profile_id,
+                  score,
+                  rank: index + 1,
+                  hard_ok: true as const,
+                }));
+            };
+
+            const historyEntries = prepared.flatMap(({ draft, profileId, vehicle, candidateScores, learnedScoreAdjustment }, idx) => {
               const groupId = (createdGroups[idx] as { id: string } | undefined)?.id ?? null;
+              const candidates = dedupeCandidatesByDriver(candidateScores);
+              const chosenRank = candidates?.find((c) => c.driver_profile_id === profileId)?.rank ?? null;
+              const proposalId = crypto.randomUUID();
               return draft.serviceIds.map((serviceId) => {
                 const service = serviceMap.get(serviceId);
                 const hotel = service?.hotel_id ? hotelMap.get(service.hotel_id) : undefined;
-                const features = extractFeatures({
+                const prevDriverProfileId = prevDriverByService.get(serviceId) ?? null;
+                const wasOverride = prevDriverProfileId != null && prevDriverProfileId !== profileId;
+                const baseFeatures = extractFeatures({
                   serviceDate: date,
                   changeType: "auto_assign_accepted",
                   toDriverProfileId: profileId,
@@ -2045,6 +2121,17 @@ export async function POST(request: NextRequest) {
                   zone: hotel?.zone ?? draft.zoneLabel,
                   time: draft.time,
                   isNavetta: draft.isNavetta,
+                });
+                const features = buildAssignmentDecisionFeatures(baseFeatures, {
+                  proposal_id: proposalId,
+                  source: "auto_assign",
+                  was_override: wasOverride,
+                  chosen_rank: chosenRank,
+                  candidate_count: candidates?.length ?? null,
+                  candidates,
+                  is_sunday: isSunday,
+                  weekday,
+                  learned_score_adjustment: learnedScoreAdjustment ?? null,
                 });
                 return {
                   tenantId,

@@ -39,6 +39,13 @@ export type GlobalPlannerAssignment<TUnit extends GlobalPlannerUnit = GlobalPlan
   assigned: boolean;
   reason: string;
   blocker?: string | null;
+  // ML Data Collection Sprint 2: ranking reale (driver_key/score, già ordinato
+  // per score crescente = migliore prima) prodotto da chooseCandidate() per
+  // questa unit, esposto invece di essere scartato dopo la scelta. Presente
+  // solo per assegnazioni dirette (non per esiti da backtracking/non
+  // assegnati, dove un ranking analogo non è disponibile) — mai ricostruito
+  // a posteriori.
+  candidate_scores?: Array<{ driver_key: string; score: number }>;
   backtracking_moves?: Array<{
     unit_id: string;
     unit_label: string;
@@ -186,7 +193,8 @@ function chooseCandidate<TUnit extends GlobalPlannerUnit>(
       candidates.push({ driver, vehicle, score });
     }
   }
-  return candidates.sort((a, b) => a.score - b.score)[0] ?? null;
+  const ranked = candidates.sort((a, b) => a.score - b.score);
+  return ranked.length > 0 ? { ...ranked[0]!, ranked } : null;
 }
 
 function tryLocalBacktrack<TUnit extends GlobalPlannerUnit>(
@@ -303,6 +311,7 @@ export function assignGlobalPlanner<TUnit extends GlobalPlannerUnit>(args: {
         reason: "riallineamento globale con vincoli autista/mezzo",
         assigned: true,
         blocker: null,
+        candidate_scores: chosen.ranked.map((c) => ({ driver_key: c.driver.key, score: c.score })),
       });
       continue;
     }
