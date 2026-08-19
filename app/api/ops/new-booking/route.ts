@@ -43,7 +43,7 @@ function vesselFromKind(kind: BookingKind, transportCode: string, busCityOrigin?
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await authorizePricingRequest(request, ["admin", "operator"]);
+    const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
     if (auth instanceof NextResponse) return auth;
     const tenantId = auth.membership.tenant_id;
 

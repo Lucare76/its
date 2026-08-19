@@ -20,7 +20,7 @@ import {
   type HotelOption,
 } from "./_hooks";
 
-type OpsRole = "admin" | "operator";
+type OpsRole = "admin" | "operator" | "supervisor";
 
 interface AgencyOption {
   id: string;
@@ -298,7 +298,7 @@ export default function OpsNewBookingPage() {
         setLoading(false);
         return;
       }
-      if (session.role !== "admin" && session.role !== "operator") {
+      if (session.role !== "admin" && session.role !== "operator" && session.role !== "supervisor") {
         setMessage("Ruolo non autorizzato per questa sezione.");
         setLoading(false);
         return;
@@ -517,7 +517,7 @@ export default function OpsNewBookingPage() {
     <section className="mx-auto w-full max-w-[1400px] page-section">
       <div className="section-head mb-1">
         <h1 className="section-title">Nuova prenotazione</h1>
-        <p className="section-subtitle">Inserimento diretto da {role === "admin" ? "amministratore" : "operatore"}.</p>
+        <p className="section-subtitle">Inserimento diretto da {role === "admin" ? "amministratore" : role === "supervisor" ? "supervisore" : "operatore"}.</p>
       </div>
       <div className="mb-4 flex flex-col gap-3 border-b border-slate-200 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex min-w-0 overflow-x-auto">
