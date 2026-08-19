@@ -244,9 +244,19 @@ export async function PATCH(
     if (!current) return NextResponse.json({ error: "Servizio non trovato." }, { status: 404 });
     const currentSnapshot = current as ServiceSnapshot;
 
+    // "date" è il campo autorevole usato ovunque (raggruppamento, Biglietti
+    // MEDMAR, matching preflight Medmar) per identificare la data operativa
+    // di QUESTA riga — arrival_date/departure_date sono invece i campi che
+    // il form di modifica espone all'operatore. Prima di questo fix, un
+    // edit di arrival_date/departure_date non toccava mai "date": la riga
+    // restava agganciata alla data vecchia ovunque tranne che nel form.
     const mainUpdate = compactUpdate({
       ...(ordinaryUpdates as Record<string, unknown>),
       ...(ordinaryUpdates.notes === null ? { notes: "" } : {}),
+      ...(ordinaryUpdates.arrival_date !== undefined && currentSnapshot.direction === "arrival"
+        ? { date: ordinaryUpdates.arrival_date } : {}),
+      ...(ordinaryUpdates.departure_date !== undefined && currentSnapshot.direction === "departure"
+        ? { date: ordinaryUpdates.departure_date } : {}),
     });
     if (Object.keys(mainUpdate).length > 0) {
       const { error } = await auth.admin
@@ -267,6 +277,46 @@ export async function PATCH(
         after: afterMain,
         fields: Object.keys(mainUpdate)
       });
+    }
+
+    // Prenotazioni A/R modellate su 2 righe (linked_service_id): il form di
+    // modifica presenta arrival_date/departure_date come UN'unica coppia di
+    // date per l'intera prenotazione, ma li scrive solo sulla riga aperta.
+    // Senza questa propagazione la riga gemella (l'altra gamba) restava
+    // silenziosamente sulla data vecchia — bug reale osservato in produzione
+    // (BEATRICE PAPA, riprogrammata 19->23/30 agosto: solo la riga arrival
+    // veniva aggiornata, la riga departure restava al 19).
+    if (current.linked_service_id
+      && (ordinaryUpdates.arrival_date !== undefined || ordinaryUpdates.departure_date !== undefined)) {
+      const linkedId = current.linked_service_id;
+      const { data: linkedCurrent } = await auth.admin.from("services")
+        .select("*").eq("id", linkedId).eq("tenant_id", tenantId).maybeSingle();
+      if (linkedCurrent) {
+        const linkedSnapshot = linkedCurrent as ServiceSnapshot;
+        const linkedUpdate = compactUpdate({
+          ...(ordinaryUpdates.arrival_date !== undefined ? { arrival_date: ordinaryUpdates.arrival_date } : {}),
+          ...(ordinaryUpdates.departure_date !== undefined ? { departure_date: ordinaryUpdates.departure_date } : {}),
+          ...(ordinaryUpdates.arrival_date !== undefined && linkedSnapshot.direction === "arrival"
+            ? { date: ordinaryUpdates.arrival_date } : {}),
+          ...(ordinaryUpdates.departure_date !== undefined && linkedSnapshot.direction === "departure"
+            ? { date: ordinaryUpdates.departure_date } : {}),
+        });
+        if (Object.keys(linkedUpdate).length > 0) {
+          const { error: linkedError } = await auth.admin.from("services")
+            .update(linkedUpdate).eq("id", linkedId).eq("tenant_id", tenantId);
+          if (linkedError) return NextResponse.json({ error: linkedError.message }, { status: 500 });
+          const linkedAfter = await readServiceSnapshot(auth, tenantId, linkedId);
+          await logServiceChange({
+            auth,
+            tenantId,
+            serviceId: linkedId,
+            rootServiceId: serviceId,
+            before: linkedSnapshot,
+            after: linkedAfter,
+            fields: Object.keys(linkedUpdate)
+          });
+        }
+      }
     }
 
     if (outbound_ferry_departure_time !== undefined || outbound_ferry_arrival_time !== undefined
