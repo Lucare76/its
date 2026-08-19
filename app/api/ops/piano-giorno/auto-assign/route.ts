@@ -2026,20 +2026,62 @@ export async function POST(request: NextRequest) {
         }
 
         if (allServiceIds.length > 0) {
+          // Data Integrity Sprint 6: snapshot degli assignment già presenti
+          // per i service_id di questo batch, letta SUBITO PRIMA
+          // dell'upsert sotto (quindi dopo l'eventuale cleanup
+          // regenerate_all al passo 2 sopra) — è lo stato "vero" da cui
+          // l'upsert sta per partire. In regenerate_all il cleanup cancella
+          // solo gli assignment agganciati a un trip_group attivo di quella
+          // data: un assignment "orfano" (group_id nullo, es. residuo di un
+          // fallimento precedente) o legato a un gruppo non più "active" gli
+          // sopravvive e può quindi essere sovrascritto (non ri-creato) da
+          // upsert(onConflict "service_id,tenant_id") — è esattamente questo
+          // il caso che una compensating delete cieca perderebbe. Riga
+          // completa (select "*") per poter ripristinare esattamente i
+          // valori precedenti, non solo cancellare. Una sola query batch,
+          // tenant+service_id scoped — nessuna query per-servizio.
+          const { data: preExistingAssignmentRows, error: preExistingErr } = await batchAdmin
+            .from("assignments")
+            .select("*")
+            .eq("tenant_id", tenantId)
+            .in("service_id", allServiceIds);
+
+          const preExistingByServiceId = new Map<string, Record<string, unknown>>(
+            (preExistingAssignmentRows ?? []).map((row) => [row.service_id as string, row as Record<string, unknown>])
+          );
+
+          if (preExistingErr) {
+            // Senza questa snapshot non è possibile distinguere, in caso di
+            // fallimento più sotto, un assignment da ripristinare da uno da
+            // cancellare: fail-closed, la scrittura del batch non parte
+            // (stesso principio già in uso per gli altri guard di questo
+            // file, es. checkVehicleOverlap in assign-service-core.ts).
+            auditLog({
+              event: "piano_auto_assign_write_failed",
+              level: "error",
+              tenantId,
+              userId,
+              details: { step: "assignments_snapshot", message: preExistingErr.message },
+            });
+            errors.push("Errore lettura assegnazioni preesistenti: nessuna scrittura effettuata per questo batch.");
+          }
+
           // Data Integrity Sprint 5: scritture sequenziali e condizionate
           // (non più Promise.all indipendente) per garantire l'invariante
           // status='assigned' ⇒ assignment esiste. Ordine: 1) assignments,
           // 2) controllo errore, 3) services.status, 4) controllo errore
-          // (con un retry + compensating delete se persiste), 5) status_events
+          // (con un retry + compensation se persiste), 5) status_events
           // (best-effort, non altera l'invariante primario), 6) history.
           // Nessuna transazione DB introdotta (nessuna migration in questo
-          // sprint): la sequenza + il compensating delete sono l'unica difesa
+          // sprint): la sequenza + la compensazione sono l'unica difesa
           // possibile lato applicazione con le query multiple esistenti.
-          const assignRes = await batchAdmin
-            .from("assignments")
-            .upsert(allAssignRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false });
+          const assignRes = preExistingErr
+            ? { error: preExistingErr as { message: string } }
+            : await batchAdmin
+                .from("assignments")
+                .upsert(allAssignRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false });
 
-          if (assignRes.error) {
+          if (assignRes.error && !preExistingErr) {
             auditLog({
               event: "piano_auto_assign_write_failed",
               level: "error",
@@ -2063,17 +2105,57 @@ export async function POST(request: NextRequest) {
               svcRes = retryRes;
             }
             if (svcRes.error) {
-              // FASE fix: assignment scritto ma status non aggiornabile —
-              // mai lasciare "assignment presente + status non aggiornato"
-              // (invariante 2). Compensating delete degli assignment appena
-              // scritti in questo batch (chiave service_id+tenant_id, la
-              // stessa dell'upsert), non dell'intera tabella.
-              const compensateRes = await batchAdmin
-                .from("assignments")
-                .delete()
-                .eq("tenant_id", tenantId)
-                .in("service_id", allServiceIds);
-              statusUpdateCompensated = !compensateRes.error;
+              // Data Integrity Sprint 6: assignment scritto ma status non
+              // aggiornabile — mai lasciare "assignment presente + status
+              // non aggiornato" (invariante 2), MA una compensating delete
+              // cieca su tutto il batch perderebbe un assignment valido
+              // preesistente (snapshot sopra) che l'upsert ha sovrascritto
+              // invece di creare da zero. Per ogni service_id del batch:
+              // CASO A (nessuna riga nella snapshot, l'upsert l'ha creata
+              // ex-novo) → cancellare la riga appena creata. CASO B (una
+              // riga esisteva già nella snapshot) → ripristinarla
+              // esattamente (upsert sugli stessi valori pre-batch, stessa
+              // chiave service_id+tenant_id dell'upsert originale — nessun
+              // delete+insert separato, un solo round trip). services.status
+              // NON viene toccato qui: l'update sopra è una singola
+              // istruzione SQL fallita per intero (nessuna riga
+              // effettivamente modificata), quindi resta già al valore
+              // precedente il batch — nessuna query aggiuntiva necessaria.
+              const restoreRows: Array<Record<string, unknown>> = [];
+              const deleteOnlyIds: string[] = [];
+              for (const sid of allServiceIds) {
+                const prev = preExistingByServiceId.get(sid);
+                if (prev) {
+                  const { id: _id, ...rest } = prev;
+                  restoreRows.push(rest);
+                } else {
+                  deleteOnlyIds.push(sid);
+                }
+              }
+
+              let restoredCount = 0;
+              let restoreError: string | null = null;
+              if (restoreRows.length > 0) {
+                const restoreRes = await batchAdmin
+                  .from("assignments")
+                  .upsert(restoreRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false });
+                if (restoreRes.error) restoreError = restoreRes.error.message;
+                else restoredCount = restoreRows.length;
+              }
+
+              let deletedCount = 0;
+              let deleteError: string | null = null;
+              if (deleteOnlyIds.length > 0) {
+                const deleteRes = await batchAdmin
+                  .from("assignments")
+                  .delete()
+                  .eq("tenant_id", tenantId)
+                  .in("service_id", deleteOnlyIds);
+                if (deleteRes.error) deleteError = deleteRes.error.message;
+                else deletedCount = deleteOnlyIds.length;
+              }
+
+              statusUpdateCompensated = !restoreError && !deleteError;
               auditLog({
                 event: "piano_auto_assign_write_failed",
                 level: "error",
@@ -2082,13 +2164,17 @@ export async function POST(request: NextRequest) {
                 details: {
                   step: "services_update",
                   message: svcRes.error.message,
-                  compensating_delete_applied: statusUpdateCompensated,
-                  compensating_delete_error: compensateRes.error?.message ?? null,
+                  service_count: allServiceIds.length,
+                  compensation_restored_previous: restoredCount,
+                  compensation_deleted_new: deletedCount,
+                  compensation_failed: !statusUpdateCompensated,
+                  compensation_restore_error: restoreError,
+                  compensation_delete_error: deleteError,
                 },
               });
               errors.push(
                 statusUpdateCompensated
-                  ? "Errore aggiornamento stato servizi: assegnazioni annullate per evitare incoerenza."
+                  ? "Errore aggiornamento stato servizi: assegnazioni ripristinate/annullate per evitare incoerenza."
                   : "Errore aggiornamento stato servizi: incoerenza NON risolta automaticamente, richiede verifica manuale."
               );
             }

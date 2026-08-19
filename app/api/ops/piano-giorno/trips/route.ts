@@ -234,7 +234,7 @@ export async function POST(request: NextRequest) {
       }
 
       // 2. Assignments + status update per ogni servizio
-      await _assignServicesToGroup(
+      const assignResult = await _assignServicesToGroup(
         auth.admin,
         tenantId,
         verifiedServiceIds,
@@ -245,6 +245,14 @@ export async function POST(request: NextRequest) {
         userId,
         now
       );
+      if (!assignResult.ok) {
+        // Data Integrity Sprint 6: il trip_group è già stato creato sopra
+        // (residual inconsistency nota, fuori scope — vedi NEW INTEGRITY
+        // FINDING nel report), ma nessun assignment/status incoerente viene
+        // mai riportato come successo: niente history, niente push, risposta
+        // ok:false sanificata.
+        return NextResponse.json({ ok: false, error: assignResult.message }, { status: 500 });
+      }
 
       // CONC-07: registra lo storico strutturato per ogni service_id
       // realmente assegnato al nuovo giro. _assignServicesToGroup (helper
@@ -684,7 +692,10 @@ export async function POST(request: NextRequest) {
         // Servizi aggiunti → nuovi assignments
         const toAdd = verifiedServiceIds.filter((id) => !existingIds.has(id));
         if (toAdd.length > 0) {
-          await _assignServicesToGroup(auth.admin, tenantId, toAdd, group_id, driver_user_id ?? null, driver_profile_id ?? null, vehicle_label ?? null, userId, now);
+          const addResult = await _assignServicesToGroup(auth.admin, tenantId, toAdd, group_id, driver_user_id ?? null, driver_profile_id ?? null, vehicle_label ?? null, userId, now);
+          if (!addResult.ok) {
+            return NextResponse.json({ ok: false, error: addResult.message }, { status: 500 });
+          }
         }
       }
 
@@ -2121,6 +2132,16 @@ async function verifyTripDriverIsOperational(
   return { ok: true };
 }
 
+type AssignServicesToGroupResult =
+  | { ok: true }
+  | { ok: false; error: "ASSIGNMENT_WRITE_FAILED" | "STATUS_UPDATE_FAILED" | "COMPENSATION_FAILED"; message: string };
+
+// Data Integrity Sprint 6: mirror del path "remove" già corretto sopra
+// (Sprint 5) — sequenza controllata e compensazione, mai più upsert +
+// services.update senza controllo errori. Ritorna un esito esplicito:
+// i chiamanti (create_trip, update_trip add-services) devono propagarlo
+// come ok:false invece di rispondere ok:true su un'operazione che ha
+// scritto assignment senza il coerente status "assigned" (o viceversa).
 async function _assignServicesToGroup(
   admin: SupabaseClient,
   tenantId: string,
@@ -2131,7 +2152,36 @@ async function _assignServicesToGroup(
   vehicleLabel: string | null,
   byUserId: string,
   now: string
-) {
+): Promise<AssignServicesToGroupResult> {
+  if (serviceIds.length === 0) return { ok: true };
+
+  // Snapshot delle righe assignments già presenti per questi service_id,
+  // letta PRIMA dell'upsert sotto — un servizio può già avere un assignment
+  // preesistente (altro gruppo, auto-assign, o residuo orfano) che l'upsert
+  // sovrascrive invece di creare da zero. Serve a poter ripristinare
+  // esattamente la riga precedente (non solo cancellarla) se la sequenza
+  // fallisce più sotto. Una sola query batch, tenant+service_id scoped.
+  const { data: preExistingRows, error: snapshotErr } = await admin
+    .from("assignments")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .in("service_id", serviceIds);
+
+  if (snapshotErr) {
+    auditLog({
+      event: "trips_assign_services_write_failed",
+      level: "error",
+      tenantId,
+      userId: byUserId,
+      details: { step: "assignments_snapshot", message: snapshotErr.message, groupId, serviceCount: serviceIds.length },
+    });
+    return { ok: false, error: "ASSIGNMENT_WRITE_FAILED", message: "Errore lettura assegnazioni preesistenti." };
+  }
+
+  const preExistingByServiceId = new Map<string, Record<string, unknown>>(
+    (preExistingRows ?? []).map((row) => [row.service_id as string, row as Record<string, unknown>])
+  );
+
   // Upsert assignments
   const assignRows = serviceIds.map((sid) => ({
     tenant_id: tenantId,
@@ -2147,13 +2197,102 @@ async function _assignServicesToGroup(
     lock_reason: "manual_assignment_from_daily_plan",
   }));
 
-  await admin
+  const assignRes = await admin
     .from("assignments")
     .upsert(assignRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false });
 
-  // Status → assigned + status_events
-  await admin.from("services").update({ status: "assigned" }).in("id", serviceIds).eq("tenant_id", tenantId);
+  if (assignRes.error) {
+    // assignments.upsert fallito: lo status non deve essere toccato, niente
+    // status_events, niente history — questi service_id non vanno
+    // considerati assegnati dal chiamante.
+    auditLog({
+      event: "trips_assign_services_write_failed",
+      level: "error",
+      tenantId,
+      userId: byUserId,
+      details: { step: "assignments", message: assignRes.error.message, groupId, serviceCount: serviceIds.length },
+    });
+    return { ok: false, error: "ASSIGNMENT_WRITE_FAILED", message: "Errore salvataggio assegnazioni al giro." };
+  }
 
+  // Status → assigned, con un retry (fallimento tipicamente transitorio)
+  // prima di compensare — stesso pattern del path "remove" sopra e di
+  // auto-assign/route.ts.
+  let svcRes = await admin.from("services").update({ status: "assigned" }).in("id", serviceIds).eq("tenant_id", tenantId);
+  if (svcRes.error) {
+    svcRes = await admin.from("services").update({ status: "assigned" }).in("id", serviceIds).eq("tenant_id", tenantId);
+  }
+
+  if (svcRes.error) {
+    // Assignment scritto ma status non aggiornabile — mai lasciare
+    // "assignment presente + status non aggiornato" (invariante 2), MA una
+    // delete cieca su tutto il batch perderebbe un assignment valido
+    // preesistente (snapshot sopra, es. group_id di un altro giro) che
+    // l'upsert ha sovrascritto invece di creare da zero. Per ogni
+    // service_id: CASO A (nessuna riga nella snapshot) → cancellare la riga
+    // appena creata. CASO B (riga preesistente) → ripristinarla esattamente
+    // (stessa chiave service_id+tenant_id, un solo round trip, nessun
+    // delete+insert separato). services.status non viene toccato qui:
+    // l'update sopra è una singola istruzione SQL fallita per intero
+    // (nessuna riga effettivamente modificata), resta già al valore
+    // precedente il batch.
+    const restoreRows: Array<Record<string, unknown>> = [];
+    const deleteOnlyIds: string[] = [];
+    for (const sid of serviceIds) {
+      const prev = preExistingByServiceId.get(sid);
+      if (prev) {
+        const { id: _id, ...rest } = prev;
+        restoreRows.push(rest);
+      } else {
+        deleteOnlyIds.push(sid);
+      }
+    }
+
+    let restoreError: string | null = null;
+    if (restoreRows.length > 0) {
+      const restoreRes = await admin
+        .from("assignments")
+        .upsert(restoreRows, { onConflict: "service_id,tenant_id", ignoreDuplicates: false });
+      if (restoreRes.error) restoreError = restoreRes.error.message;
+    }
+
+    let deleteError: string | null = null;
+    if (deleteOnlyIds.length > 0) {
+      const deleteRes = await admin
+        .from("assignments")
+        .delete()
+        .eq("tenant_id", tenantId)
+        .in("service_id", deleteOnlyIds);
+      if (deleteRes.error) deleteError = deleteRes.error.message;
+    }
+
+    const compensationFailed = Boolean(restoreError || deleteError);
+    auditLog({
+      event: "trips_assign_services_write_failed",
+      level: "error",
+      tenantId,
+      userId: byUserId,
+      details: {
+        step: "services_update",
+        message: svcRes.error.message,
+        groupId,
+        serviceCount: serviceIds.length,
+        compensation_restored_previous: restoreRows.length,
+        compensation_deleted_new: deleteOnlyIds.length,
+        compensation_failed: compensationFailed,
+        compensation_restore_error: restoreError,
+        compensation_delete_error: deleteError,
+      },
+    });
+
+    return compensationFailed
+      ? { ok: false, error: "COMPENSATION_FAILED", message: "Errore aggiornamento stato servizi: incoerenza NON risolta automaticamente, richiede verifica manuale." }
+      : { ok: false, error: "STATUS_UPDATE_FAILED", message: "Errore aggiornamento stato servizi: assegnazioni ripristinate/annullate per evitare incoerenza." };
+  }
+
+  // status_events best-effort SOLO dopo che l'invariante primario
+  // (assignment + status coerenti) è già soddisfatto — un suo fallimento
+  // non altera né riapre assignments/status.
   const statusEventRows = serviceIds.map((sid) => ({
     tenant_id: tenantId,
     service_id: sid,
@@ -2161,7 +2300,20 @@ async function _assignServicesToGroup(
     at: now,
     by_user_id: byUserId,
   }));
-  await admin.from("status_events").upsert(statusEventRows, { onConflict: "tenant_id,service_id,status", ignoreDuplicates: true });
+  const statusEventsRes = await admin
+    .from("status_events")
+    .upsert(statusEventRows, { onConflict: "tenant_id,service_id,status", ignoreDuplicates: true });
+  if (statusEventsRes.error) {
+    auditLog({
+      event: "trips_assign_services_write_failed",
+      level: "error",
+      tenantId,
+      userId: byUserId,
+      details: { step: "status_events", message: statusEventsRes.error.message, groupId, serviceCount: serviceIds.length },
+    });
+  }
+
+  return { ok: true };
 }
 
 async function resolveVehicleAssignment(

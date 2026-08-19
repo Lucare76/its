@@ -673,12 +673,13 @@ describe("CONC-07 — storico strutturato (driver_assignment_history) su create_
     const res = await callPost(createTripBody());
     const body = await res.json();
 
-    // La mutazione principale resta best-effort (comportamento preesistente
-    // di _assignServicesToGroup, non toccato): la risposta HTTP resta 200.
-    // La "conferma successo" del blocco history non trova però alcuna riga
-    // con group_id = groupId (upsert fallito), quindi zero eventi.
-    expect(res.status).toBe(200);
-    expect(body.ok).toBe(true);
+    // Data Integrity Sprint 6: _assignServicesToGroup ora propaga l'esito —
+    // assignments.upsert fallito produce ok:false/500 invece di un 200 su un
+    // giro creato senza alcun assignment scritto. Nessun history (mai
+    // scritto quando l'upsert fallisce, per costruzione: la funzione ritorna
+    // prima di arrivare a services.status/history).
+    expect(res.status).toBe(500);
+    expect(body.ok).toBe(false);
     expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
   });
 
@@ -695,19 +696,26 @@ describe("CONC-07 — storico strutturato (driver_assignment_history) su create_
     expect(JSON.stringify(body)).not.toMatch(/driver_assignment_history/);
   });
 
-  it("24. snapshot previous fallisce: creazione riuscita, zero history", async () => {
+  it("24. select assignments rotta dalla 2a chiamata in poi: fail-closed, zero history", async () => {
     const fake = baseSeed();
     // 1a select assignments: validateTripPayload (otherAssignments, guard
-    // preesistente, deve continuare a funzionare); 2a: lo snapshot CONC-07
-    // sotto test.
+    // preesistente); 2a: lo snapshot CONC-07 (history "previous"), che fallisce
+    // -> previousSnapshotFailed. Data Integrity Sprint 6: la stessa rottura
+    // persistente colpisce anche la 3a select assignments, cioè lo snapshot
+    // di sicurezza interno a _assignServicesToGroup (necessario per poter
+    // ripristinare un assignment preesistente se la sequenza fallisse più
+    // sotto) — senza quello snapshot la funzione fallisce chiusa (fail-closed,
+    // non scrive nulla) invece di procedere alla cieca. La richiesta
+    // fallisce quindi nel suo complesso: comportamento corretto, non più il
+    // "200 con zero history" di prima del fix.
     fake.setError("assignments", RAW_DB_ERROR, 2);
     authorizeAs(fake);
 
     const res = await callPost(createTripBody());
     const body = await res.json();
 
-    expect(res.status).toBe(200);
-    expect(body.ok).toBe(true);
+    expect(res.status).toBe(500);
+    expect(body.ok).toBe(false);
     expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
   });
 
